@@ -1,0 +1,393 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-class-isinstance tag obj cls)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:|| (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Inst)) (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Constant))))
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :w) cpp:index))
+        (gen:build :mov (result-reg) 0)
+        (gen:if (gen:! (gen:&& (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Constant)) (gen:!= (tag-val tag) (gen:name :LUA_TOBJECT))))
+          (gen:block
+            (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                      [done (:type "Label")])
+              (gen:if (gen:! (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Constant)))
+                (gen:block
+                  (gen:build :cmp (reg-op tag) (gen:cast "uint16_t" (gen:name :LUA_TOBJECT)))
+                  (gen:build :b (gen:enum :ConditionA64 :NotEqual) done)))
+              (gen:build :ldr temp (a64:mem (reg-op obj) (gen:offsetof :LuauObject.lclass)))
+              (gen:build :cmp temp (reg-op cls))
+              (gen:build :cset (result-reg) (gen:enum :ConditionA64 :Equal))
+              (gen:build :setLabel done)))))]
+    [:x64
+      (gen:seq
+        (gen:assert (gen:|| (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Inst)) (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Constant))))
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :dword) cpp:index))
+        (gen:build :xor_ (result-reg) (result-reg))
+        (gen:if (gen:! (gen:&& (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Constant)) (gen:!= (tag-val tag) (gen:name :LUA_TOBJECT))))
+          (gen:block
+            (gen:let ([done (:type "Label")])
+              (gen:if (gen:! (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Constant)))
+                (gen:block
+                  (gen:build :cmp (reg-op tag) (gen:name :LUA_TOBJECT))
+                  (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) done)))
+              (gen:build :cmp (reg-op cls) (gen:index (gen:name :qword) (gen:+ (reg-op obj) (gen:offsetof :LuauObject.lclass))))
+              (gen:build :setcc (gen:enum :ConditionX64 :Equal) (gen:call :byteReg (result-reg)))
+              (gen:build :setLabel done)))))]))
+
+(define (lower-try-object-member-addr obj pc k mismatch-op write)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([abort (:type "Label")]
+                  [mismatch (:ref) (gen:? (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef)) abort (label-of mismatch-op))])
+          (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+          (gen:let ([slotw (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                    [slotx (gen:call :castReg (gen:enum :KindA64 :x) slotw)]
+                    [lclass (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                    [tempw (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                    [tempx (gen:call :castReg (gen:enum :KindA64 :x) tempw)]
+                    [key (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+            (gen:if (gen:<= (uint-val pc) (gen:name :AddressA64::kMaxOffset))
+              (gen:block
+                (gen:build :ldr tempw (a64:mem (a64:reg :rCode) (gen:* (uint-val pc) (gen:sizeof "Instruction")))))
+              (gen:block
+                (gen:build :mov tempx (gen:* (uint-val pc) (gen:sizeof "Instruction")))
+                (gen:build :ldr tempw (a64:mem (a64:reg :rCode) tempx))))
+            (gen:assert (gen:== (gen:name :kOffsetOfInstructionC) 3))
+            (gen:build :ubfx slotw tempw 24 8)
+            (gen:build :ldr lclass (a64:mem (reg-op obj) (gen:offsetof :LuauObject.lclass)))
+            (gen:build :ldr tempw (a64:mem lclass (gen:offsetof :LuauClass.numberofinstancemembers)))
+            (gen:build :cmp slotw tempw)
+            (gen:build :b (gen:enum :ConditionA64 :CarrySet) mismatch)
+            (gen:let ([written (gen:? (gen:&& (gen:call :HAS_OP_E cpp:inst) (gen:!= (uint-val write) 0)) (reg-op obj) (a64:reg :noreg))])
+              (gen:call :emitClassMemberAuthA64 cpp:build lclass slotx written mismatch
+                        (result-reg) tempw (a64:cast :w key))
+              (gen:build :ldr tempx (a64:mem lclass (gen:offsetof :LuauClass.offsettomember)))
+              (gen:build :add tempx tempx slotx 3)
+              (gen:build :ldr tempx (a64:mem tempx 0))
+              (gen:build :ldr key (gen:method cpp:lowering :tempAddr k (gen:offsetof :TValue.value) key))
+              (gen:build :cmp tempx key)
+              (gen:build :b (gen:enum :ConditionA64 :NotEqual) mismatch)
+              (gen:build :add (result-reg) (reg-op obj) (gen:cast "uint16_t" (gen:name :LUAR_OBJECT_MEMBERS_OFFSET)))
+              (gen:build :add (result-reg) (result-reg) slotx (gen:name :kTValueSizeLog2))
+              (gen:if (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef))
+                (gen:block
+                  (gen:call :emitAbort cpp:build abort)))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([abort (:type "Label")]
+                  [mismatch (:ref) (gen:? (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef)) abort (label-of mismatch-op))])
+          (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :qword) cpp:index))
+          (gen:let ([lclass (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                    [slot (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                    [key (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+            (gen:build :mov (x64:scoped-reg slot) (gen:name :sCode))
+            (gen:build :movzx (gen:call :dwordReg (x64:scoped-reg slot)) (gen:index (gen:name :byte) (gen:+ (gen:+ (x64:scoped-reg slot) (gen:* (uint-val pc) (gen:sizeof "Instruction"))) (gen:name :kOffsetOfInstructionC))))
+            (gen:build :mov (x64:scoped-reg lclass) (gen:index (gen:name :qword) (gen:+ (reg-op obj) (gen:offsetof :LuauObject.lclass))))
+            (gen:build :cmp (gen:call :dwordReg (x64:scoped-reg slot)) (gen:index (gen:name :dword) (gen:+ (x64:scoped-reg lclass) (gen:offsetof :LuauClass.numberofinstancemembers))))
+            (gen:build :jcc (gen:enum :ConditionX64 :AboveEqual) mismatch)
+            (gen:let ([written (gen:? (gen:&& (gen:call :HAS_OP_E cpp:inst) (gen:!= (uint-val write) 0)) (reg-op obj) (x64:reg :noreg))])
+              (gen:call :emitClassMemberAuthX64 cpp:build cpp:regs (x64:scoped-reg lclass) (x64:scoped-reg slot) written mismatch)
+              (gen:build :mov (x64:scoped-reg key) (gen:call :luauConstantValue (gen:call :vmConstOp k)))
+              (gen:build :mov (x64:scoped-reg lclass) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg lclass) (gen:offsetof :LuauClass.offsettomember))))
+              (gen:build :cmp (x64:scoped-reg key) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg lclass) (gen:* (x64:scoped-reg slot) 8))))
+              (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) mismatch)
+              (gen:build :shl (x64:scoped-reg slot) (gen:name :kTValueSizeLog2))
+              (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:+ (gen:+ (reg-op obj) (x64:scoped-reg slot)) (gen:name :LUAR_OBJECT_MEMBERS_OFFSET))))
+              (gen:if (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef))
+                (gen:block
+                  (gen:let ([skip (:type "Label")])
+                    (gen:build :jmp skip)
+                    (gen:build :setLabel abort)
+                    (gen:build :ud2)
+                    (gen:build :setLabel skip))))))))]))
+
+(define (lower-check-class-fields-constructible cls fail)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([fresh-label (:type "Label")]
+                  [fail-label (:ref) (gen:method cpp:lowering :getTargetLabel fail cpp:index fresh-label)]
+                  [class-reg (reg-op cls)]
+                  [tempw (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                  [tempx (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                  [constructible (:type "Label")])
+          (gen:build :ldr tempx (a64:mem class-reg (gen:offsetof :LuauClass.memberdefaults)))
+          (gen:build :cbnz tempx fail-label)
+          (gen:build :ldrb tempw (a64:mem class-reg (gen:offsetof :LuauClass.hascustominit)))
+          (gen:build :cbz tempw constructible)
+          (gen:build :ldr tempx (a64:mem class-reg (gen:offsetof :LuauClass.memberflags)))
+          (gen:build :ldr tempw (a64:mem class-reg (gen:offsetof :LuauClass.initoffset)))
+          (gen:build :ldrb tempw (a64:mem tempx (gen:call :castReg (gen:enum :KindA64 :x) tempw)))
+          (gen:build :tst tempw (gen:cast "uint32_t" (gen:name :LBC_CLASSMEMBER_PRIVATE)))
+          (gen:build :b (gen:enum :ConditionA64 :Equal) constructible)
+          (gen:build :ldr tempx (a64:mem (a64:reg :rClosure) (gen:offsetof :Closure.l.p)))
+          (gen:build :ldr tempx (a64:mem tempx (gen:offsetof :Proto.ownerclass)))
+          (gen:build :cmp tempx class-reg)
+          (gen:build :b (gen:enum :ConditionA64 :NotEqual) fail-label)
+          (gen:build :setLabel constructible)
+          (gen:method cpp:lowering :finalizeTargetLabel fail cpp:index fresh-label)))]
+    [:x64
+      (gen:seq
+        (gen:let ([fresh-label (:type "Label")]
+                  [fail-label (:ref) (gen:method cpp:lowering :getTargetLabel fail cpp:index fresh-label)]
+                  [class-reg (reg-op cls)]
+                  [flags (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                  [offset (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                  [constructible (:type "Label")])
+          (gen:build :cmp (gen:index (gen:name :qword) (gen:+ class-reg (gen:offsetof :LuauClass.memberdefaults))) 0)
+          (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) fail-label)
+          (gen:build :cmp (gen:index (gen:name :byte) (gen:+ class-reg (gen:offsetof :LuauClass.hascustominit))) 0)
+          (gen:build :jcc (gen:enum :ConditionX64 :Equal) constructible)
+          (gen:build :mov (x64:scoped-reg flags) (gen:index (gen:name :qword) (gen:+ class-reg (gen:offsetof :LuauClass.memberflags))))
+          (gen:build :mov (gen:call :dwordReg (x64:scoped-reg offset)) (gen:index (gen:name :dword) (gen:+ class-reg (gen:offsetof :LuauClass.initoffset))))
+          (gen:build :test (gen:index (gen:name :byte) (gen:+ (x64:scoped-reg flags) (x64:scoped-reg offset))) (gen:cast "int8_t" (gen:name :LBC_CLASSMEMBER_PRIVATE)))
+          (gen:build :jcc (gen:enum :ConditionX64 :Zero) constructible)
+          (gen:build :mov (x64:scoped-reg flags) (gen:name :sClosure))
+          (gen:build :mov (x64:scoped-reg flags) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg flags) (gen:offsetof :Closure.l.p))))
+          (gen:build :cmp (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg flags) (gen:offsetof :Proto.ownerclass))) class-reg)
+          (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) fail-label)
+          (gen:build :setLabel constructible)
+          (gen:method cpp:lowering :finalizeTargetLabel fail cpp:index fresh-label)))]))
+
+(define (lower-try-class-member-addr cls pc k mismatch-op)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([abort (:type "Label")]
+                  [mismatch (:ref) (gen:? (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef)) abort (label-of mismatch-op))])
+          (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+          (gen:let ([slotw (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                    [slotx (gen:call :castReg (gen:enum :KindA64 :x) slotw)]
+                    [tempw (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                    [tempx (gen:call :castReg (gen:enum :KindA64 :x) tempw)]
+                    [key (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+            (gen:if (gen:<= (uint-val pc) (gen:name :AddressA64::kMaxOffset))
+              (gen:block
+                (gen:build :ldr tempw (a64:mem (a64:reg :rCode) (gen:* (uint-val pc) (gen:sizeof "Instruction")))))
+              (gen:block
+                (gen:build :mov tempx (gen:* (uint-val pc) (gen:sizeof "Instruction")))
+                (gen:build :ldr tempw (a64:mem (a64:reg :rCode) tempx))))
+            (gen:assert (gen:== (gen:name :kOffsetOfInstructionC) 3))
+            (gen:build :ubfx slotw tempw 24 8)
+            (gen:build :ldr tempw (a64:mem (reg-op cls) (gen:offsetof :LuauClass.numberofinstancemembers)))
+            (gen:build :cmp slotw tempw)
+            (gen:build :b (gen:enum :ConditionA64 :CarryClear) mismatch)
+            (gen:build :ldr tempw (a64:mem (reg-op cls) (gen:offsetof :LuauClass.numberofallmembers)))
+            (gen:build :cmp slotw tempw)
+            (gen:build :b (gen:enum :ConditionA64 :CarrySet) mismatch)
+            (gen:call :emitClassMemberAuthA64 cpp:build (reg-op cls) slotx (a64:reg :noreg) mismatch
+                      (result-reg) tempw (a64:cast :w key))
+            (gen:build :ldr tempx (a64:mem (reg-op cls) (gen:offsetof :LuauClass.offsettomember)))
+            (gen:build :add tempx tempx slotx 3)
+            (gen:build :ldr tempx (a64:mem tempx 0))
+            (gen:build :ldr key (gen:method cpp:lowering :tempAddr k (gen:offsetof :TValue.value) key))
+            (gen:build :cmp tempx key)
+            (gen:build :b (gen:enum :ConditionA64 :NotEqual) mismatch)
+            (gen:build :ldr tempw (a64:mem (reg-op cls) (gen:offsetof :LuauClass.numberofinstancemembers)))
+            (gen:build :sub slotw slotw tempw)
+            (gen:build :ldr (result-reg) (a64:mem (reg-op cls) (gen:offsetof :LuauClass.staticmembers)))
+            (gen:build :add (result-reg) (result-reg) slotx (gen:name :kTValueSizeLog2))
+            (gen:if (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef))
+              (gen:block
+                (gen:call :emitAbort cpp:build abort))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([abort (:type "Label")]
+                  [mismatch (:ref) (gen:? (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef)) abort (label-of mismatch-op))])
+          (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :qword) cpp:index))
+          (gen:let ([slot (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                    [tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                    [key (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+            (gen:build :mov (x64:scoped-reg slot) (gen:name :sCode))
+            (gen:build :movzx (gen:call :dwordReg (x64:scoped-reg slot)) (gen:index (gen:name :byte) (gen:+ (gen:+ (x64:scoped-reg slot) (gen:* (uint-val pc) (gen:sizeof "Instruction"))) (gen:name :kOffsetOfInstructionC))))
+            (gen:build :cmp (gen:call :dwordReg (x64:scoped-reg slot)) (gen:index (gen:name :dword) (gen:+ (reg-op cls) (gen:offsetof :LuauClass.numberofinstancemembers))))
+            (gen:build :jcc (gen:enum :ConditionX64 :Below) mismatch)
+            (gen:build :cmp (gen:call :dwordReg (x64:scoped-reg slot)) (gen:index (gen:name :dword) (gen:+ (reg-op cls) (gen:offsetof :LuauClass.numberofallmembers))))
+            (gen:build :jcc (gen:enum :ConditionX64 :AboveEqual) mismatch)
+            (gen:call :emitClassMemberAuthX64 cpp:build cpp:regs (reg-op cls) (x64:scoped-reg slot) (x64:reg :noreg) mismatch)
+            (gen:build :mov (x64:scoped-reg key) (gen:call :luauConstantValue (gen:call :vmConstOp k)))
+            (gen:build :mov (x64:scoped-reg tmp) (gen:index (gen:name :qword) (gen:+ (reg-op cls) (gen:offsetof :LuauClass.offsettomember))))
+            (gen:build :cmp (x64:scoped-reg key) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg tmp) (gen:* (x64:scoped-reg slot) 8))))
+            (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) mismatch)
+            (gen:build :sub (gen:call :dwordReg (x64:scoped-reg slot)) (gen:index (gen:name :dword) (gen:+ (reg-op cls) (gen:offsetof :LuauClass.numberofinstancemembers))))
+            (gen:build :shl (x64:scoped-reg slot) (gen:name :kTValueSizeLog2))
+            (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (reg-op cls) (gen:offsetof :LuauClass.staticmembers))))
+            (gen:build :add (result-reg) (x64:scoped-reg slot))
+            (gen:if (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef))
+              (gen:block
+                (gen:let ([skip (:type "Label")])
+                  (gen:build :jmp skip)
+                  (gen:build :setLabel abort)
+                  (gen:build :ud2)
+                  (gen:build :setLabel skip)))))))]))
+
+(define (lower-try-object-namecall-addr obj pc k mismatch-op)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([abort (:type "Label")]
+                  [mismatch (:ref) (gen:? (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef)) abort (label-of mismatch-op))])
+          (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+          (gen:let ([slotw (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                    [slotx (gen:call :castReg (gen:enum :KindA64 :x) slotw)]
+                    [lclass (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                    [tempw (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                    [tempx (gen:call :castReg (gen:enum :KindA64 :x) tempw)]
+                    [key (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                    [ninstance tempw])
+            (gen:if (gen:<= (uint-val pc) (gen:name :AddressA64::kMaxOffset))
+              (gen:block
+                (gen:build :ldr tempw (a64:mem (a64:reg :rCode) (gen:* (uint-val pc) (gen:sizeof "Instruction")))))
+              (gen:block
+                (gen:build :mov tempx (gen:* (uint-val pc) (gen:sizeof "Instruction")))
+                (gen:build :ldr tempw (a64:mem (a64:reg :rCode) tempx))))
+            (gen:assert (gen:== (gen:name :kOffsetOfInstructionC) 3))
+            (gen:build :ubfx slotw tempw 24 8)
+            (gen:build :ldr lclass (a64:mem (reg-op obj) (gen:offsetof :LuauObject.lclass)))
+            (gen:build :ldr tempw (a64:mem lclass (gen:offsetof :LuauClass.numberofallmembers)))
+            (gen:build :cmp slotw tempw)
+            (gen:build :b (gen:enum :ConditionA64 :CarrySet) mismatch)
+            (gen:call :emitClassMemberAuthA64 cpp:build lclass slotx (a64:reg :noreg) mismatch
+                      (result-reg) tempw (a64:cast :w key))
+            (gen:build :ldr tempx (a64:mem lclass (gen:offsetof :LuauClass.offsettomember)))
+            (gen:build :add tempx tempx slotx 3)
+            (gen:build :ldr tempx (a64:mem tempx 0))
+            (gen:build :ldr key (gen:method cpp:lowering :tempAddr k (gen:offsetof :TValue.value) key))
+            (gen:build :cmp tempx key)
+            (gen:build :b (gen:enum :ConditionA64 :NotEqual) mismatch)
+            (gen:let ([is-static (:type "Label")]
+                      [done (:type "Label")])
+              (gen:build :ldr ninstance (a64:mem lclass (gen:offsetof :LuauClass.numberofinstancemembers)))
+              (gen:build :cmp slotw ninstance)
+              (gen:build :b (gen:enum :ConditionA64 :CarrySet) is-static)
+              (gen:build :add (result-reg) (reg-op obj) (gen:cast "uint16_t" (gen:name :LUAR_OBJECT_MEMBERS_OFFSET)))
+              (gen:build :add (result-reg) (result-reg) slotx (gen:name :kTValueSizeLog2))
+              (gen:build :b done)
+              (gen:build :setLabel is-static)
+              (gen:build :sub slotw slotw ninstance)
+              (gen:build :ldr (result-reg) (a64:mem lclass (gen:offsetof :LuauClass.staticmembers)))
+              (gen:build :add (result-reg) (result-reg) slotx (gen:name :kTValueSizeLog2))
+              (gen:build :setLabel done)
+              (gen:if (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef))
+                (gen:block
+                  (gen:call :emitAbort cpp:build abort)))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([abort (:type "Label")]
+                  [mismatch (:ref) (gen:? (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef)) abort (label-of mismatch-op))])
+          (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :qword) cpp:index))
+          (gen:let ([lclass (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                    [slot (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                    [key (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+            (gen:build :mov (x64:scoped-reg slot) (gen:name :sCode))
+            (gen:build :movzx (gen:call :dwordReg (x64:scoped-reg slot)) (gen:index (gen:name :byte) (gen:+ (gen:+ (x64:scoped-reg slot) (gen:* (uint-val pc) (gen:sizeof "Instruction"))) (gen:name :kOffsetOfInstructionC))))
+            (gen:build :mov (x64:scoped-reg lclass) (gen:index (gen:name :qword) (gen:+ (reg-op obj) (gen:offsetof :LuauObject.lclass))))
+            (gen:build :cmp (gen:call :dwordReg (x64:scoped-reg slot)) (gen:index (gen:name :dword) (gen:+ (x64:scoped-reg lclass) (gen:offsetof :LuauClass.numberofallmembers))))
+            (gen:build :jcc (gen:enum :ConditionX64 :AboveEqual) mismatch)
+            (gen:call :emitClassMemberAuthX64 cpp:build cpp:regs (x64:scoped-reg lclass) (x64:scoped-reg slot) (x64:reg :noreg) mismatch)
+            (gen:build :mov (x64:scoped-reg key) (gen:call :luauConstantValue (gen:call :vmConstOp k)))
+            (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg lclass) (gen:offsetof :LuauClass.offsettomember))))
+            (gen:build :cmp (x64:scoped-reg key) (gen:index (gen:name :qword) (gen:+ (result-reg) (gen:* (x64:scoped-reg slot) 8))))
+            (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) mismatch)
+            (gen:let ([is-static (:type "Label")]
+                      [done (:type "Label")])
+              (gen:build :cmp (gen:call :dwordReg (x64:scoped-reg slot)) (gen:index (gen:name :dword) (gen:+ (x64:scoped-reg lclass) (gen:offsetof :LuauClass.numberofinstancemembers))))
+              (gen:build :jcc (gen:enum :ConditionX64 :AboveEqual) is-static)
+              (gen:build :shl (x64:scoped-reg slot) (gen:name :kTValueSizeLog2))
+              (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:+ (gen:+ (reg-op obj) (x64:scoped-reg slot)) (gen:name :LUAR_OBJECT_MEMBERS_OFFSET))))
+              (gen:build :jmp done)
+              (gen:build :setLabel is-static)
+              (gen:build :sub (gen:call :dwordReg (x64:scoped-reg slot)) (gen:index (gen:name :dword) (gen:+ (x64:scoped-reg lclass) (gen:offsetof :LuauClass.numberofinstancemembers))))
+              (gen:build :shl (x64:scoped-reg slot) (gen:name :kTValueSizeLog2))
+              (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg lclass) (gen:offsetof :LuauClass.staticmembers))))
+              (gen:build :add (result-reg) (x64:scoped-reg slot))
+              (gen:build :setLabel done)
+              (gen:if (gen:== (gen:field mismatch-op :kind) (gen:enum :IrOpKind :Undef))
+                (gen:block
+                  (gen:let ([skip (:type "Label")])
+                    (gen:build :jmp skip)
+                    (gen:build :setLabel abort)
+                    (gen:build :ud2)
+                    (gen:build :setLabel skip))))))))]))
+
+(define (lower-newclosure nupvalues env proto-index)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([reg (reg-op env)])
+          (gen:method cpp:regs :spill cpp:index (gen:init-list reg))
+          (gen:build :mov (a64:reg :x2) reg)
+          (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+          (gen:build :mov (a64:reg :w1) (uint-val nupvalues))
+          (gen:if (gen:name :FFlag::LuauCIProto)
+            (gen:block
+              (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :rState) (gen:offsetof :lua_State.ci)))
+              (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :x3) (gen:offsetof :CallInfo.p))))
+            (gen:block
+              (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :rClosure) (gen:offsetof :Closure.l.p)))))
+          (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :x3) (gen:offsetof :Proto.p)))
+          (gen:let ([proto-offset (:type "int") (gen:cast "int" (gen:* (gen:sizeof "Proto*") (uint-val proto-index)))])
+            (gen:if (gen:<= (uint-val proto-index) (gen:name :AddressA64::kMaxOffset))
+              (gen:block
+                (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :x3) proto-offset)))
+              (gen:block
+                (gen:build :mov (a64:reg :x4) proto-offset)
+                (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :x3) (a64:reg :x4)))))
+            (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaF_newLclosure)))
+            (gen:build :blr (a64:reg :x4))
+            (gen:set! (result-reg) (gen:method cpp:regs :takeReg (a64:reg :x0) cpp:index)))))]
+    [:x64
+      (gen:seq
+        (gen:let ([tmp2 (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:method tmp2 :alloc (gen:enum :SizeX64 :qword))
+          (gen:if (gen:name :FFlag::LuauCIProto)
+            (gen:block
+              (gen:build :mov (x64:scoped-reg tmp2) (gen:index (gen:name :qword) (gen:+ (x64:reg :rState) (gen:offsetof :lua_State.ci))))
+              (gen:build :mov (x64:scoped-reg tmp2) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg tmp2) (gen:offsetof :CallInfo.p)))))
+            (gen:block
+              (gen:build :mov (x64:scoped-reg tmp2) (gen:name :sClosure))
+              (gen:build :mov (x64:scoped-reg tmp2) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg tmp2) (gen:offsetof :Closure.l.p))))))
+          (gen:build :mov (x64:scoped-reg tmp2) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg tmp2) (gen:offsetof :Proto.p))))
+          (gen:build :mov (x64:scoped-reg tmp2) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg tmp2) (gen:* (gen:sizeof "Proto*") (uint-val proto-index)))))
+          (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+            (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+            (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (uint-val nupvalues) nupvalues)
+            (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (reg-op env) env)
+            (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) tmp2)
+            (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.luaF_newLclosure))))
+            (gen:set! (result-reg) (gen:method cpp:regs :takeReg (x64:reg :rax) cpp:index)))))]))
+
+(define (lower-jump-cmp-protoid closure protoid if-eq if-ne)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field closure :kind) (gen:enum :IrOpKind :Inst)))
+        (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                  [tempw (gen:call :castReg (gen:enum :KindA64 :w) temp)])
+          (gen:build :ldrb tempw (a64:mem (reg-op closure) (gen:offsetof :Closure.isC)))
+          (gen:build :cbnz tempw (label-of if-ne))
+          (gen:build :ldr temp (a64:mem (reg-op closure) (gen:offsetof :Closure.l.p)))
+          (gen:build :ldr tempw (a64:mem temp (gen:offsetof :Proto.funid)))
+          (gen:let ([proto-id (:type "unsigned") (uint-val protoid)])
+            (gen:if (gen:<= proto-id (gen:name :AssemblyBuilderA64::kMaxImmediate))
+              (gen:block
+                (gen:build :cmp tempw (gen:cast "uint16_t" proto-id)))
+              (gen:block
+                (gen:let ([temp2 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+                  (gen:build :mov temp2 proto-id)
+                  (gen:build :cmp tempw temp2))))
+            (gen:build :b (gen:enum :ConditionA64 :NotEqual) (label-of if-ne))
+            (gen:method cpp:lowering :jumpOrFallthrough (block-of if-eq) cpp:next))))]
+    [:x64
+      (gen:seq
+        (gen:assert (gen:== (gen:field closure :kind) (gen:enum :IrOpKind :Inst)))
+        (gen:build :cmp (gen:index (gen:name :byte) (gen:+ (reg-op closure) (gen:offsetof :Closure.isC))) 0)
+        (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) (label-of if-ne))
+        (gen:block
+          (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+            (gen:build :mov (x64:scoped-reg tmp) (gen:index (gen:name :qword) (gen:+ (reg-op closure) (gen:offsetof :Closure.l.p))))
+            (gen:build :cmp (gen:index (gen:name :dword) (gen:+ (x64:scoped-reg tmp) (gen:offsetof :Proto.funid))) (uint-val protoid))
+            (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) (label-of if-ne))))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of if-eq) cpp:next))]))

@@ -1,10 +1,3 @@
-~ The address of byte `index` of the data `a` points into. The tag (a constant) says what that is: a buffer's data
-~ (a points at it), a userdata's or a vector's.
-(define (buffer-address a index tag)
-  (Field (Index a index 1)
-         (gen:typed :size_t (gen:? (gen:== (tag-val tag) :LUA_TBUFFER) 0
-                                   (gen:? (gen:== (tag-val tag) :LUA_TVECTOR) (gen:offsetof :LuauVector :v) (gen:offsetof :Udata :data))))))
-
 ~ Guard against access at specified offset with [min, max) range of bytes overflowing the buffer length
 ~ When base offset source number is provided, instruction will additionally validate that the integer and double versions of base are exact
 ~ A: pointer (buffer)
@@ -22,18 +15,7 @@
             [exact :double|:undef]
             [fail :block|:vmexit|:undef])
   (class :guard)
-  (lowering
-    (choose (gen:! (op-kind? exact :Undef))
-            ~ the offset came from a double: it has to be that double exactly
-            (Guard (FCmp :eq :F64 (IntToFloat :s :F64 :I32 offset) exact) fail))
-    (choose (gen:&& (constant? offset) (gen:! (fflag "LuauCodegenFixBufferLenCheck")))
-            (Guard (ICmp :ugt :I32 (Load :I32 (Field buffer :Buffer.len)) (gen:+ (int-val offset) (gen:- (int-val max) (int-val min)))) fail)
-            ~ [offset + min, offset + max) fits in the buffer: offset + min is taken in 32 bits and zero-extended, so a
-            ~ negative start is too large, and adding the access size in 64 bits can't wrap
-            (Guard (ICmp :ule :I64
-                         (Add :I64 (Extend :z :32 :I64 (Add :I32 offset (int-val min))) (gen:- (int-val max) (int-val min)))
-                         (Extend :z :32 :I64 (Load :I32 (Field buffer :Buffer.len))))
-                   fail))))
+  (lowering (lower-check-buffer-len buffer offset min max exact fail)))
 
 ~ Read i8 (sign-extended to int) from buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -45,8 +27,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
   (facts (reads (buffer a b 1)))
-  (lowering
-    (Load :S8 (buffer-address a b tag))))
+  (lowering (lower-buffer-readi8 a b tag)))
 
 ~ Read u8 (zero-extended to int) from buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -58,8 +39,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
   (facts (reads (buffer a b 1)))
-  (lowering
-    (Load :U8 (buffer-address a b tag))))
+  (lowering (lower-buffer-readu8 a b tag)))
 
 ~ Write i8/u8 value (int argument is truncated) to buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -70,8 +50,7 @@
   (operands [a :pointer] [b :int] [val :int] [tag :tag])
   (class :effect)
   (facts (writes (buffer a b 1) val))
-  (lowering
-    (Store :U8 (buffer-address a b tag) val)))
+  (lowering (lower-buffer-writei8 a b val tag)))
 
 ~ Read i16 (sign-extended to int) from buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -83,8 +62,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
   (facts (reads (buffer a b 2)))
-  (lowering
-    (Load :S16 (buffer-address a b tag))))
+  (lowering (lower-buffer-readi16 a b tag)))
 
 ~ Read u16 (zero-extended to int) from buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -96,8 +74,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
   (facts (reads (buffer a b 2)))
-  (lowering
-    (Load :U16 (buffer-address a b tag))))
+  (lowering (lower-buffer-readu16 a b tag)))
 
 ~ Write i16/u16 value (int argument is truncated) to buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -108,8 +85,7 @@
   (operands [a :pointer] [b :int] [val :int] [tag :tag])
   (class :effect)
   (facts (writes (buffer a b 2) val))
-  (lowering
-    (Store :U16 (buffer-address a b tag) val)))
+  (lowering (lower-buffer-writei16 a b val tag)))
 
 ~ Read i32 value from buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -121,8 +97,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
   (facts (reads (buffer a b 4)))
-  (lowering
-    (Load :I32 (buffer-address a b tag))))
+  (lowering (lower-buffer-readi32 a b tag)))
 
 ~ Write i32/u32 value to buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -133,8 +108,7 @@
   (operands [a :pointer] [b :int] [val :int] [tag :tag])
   (class :effect)
   (facts (writes (buffer a b 4) val))
-  (lowering
-    (Store :I32 (buffer-address a b tag) val)))
+  (lowering (lower-buffer-writei32 a b val tag)))
 
 ~ Read float value (use FLOAT_TO_NUM to convert to double) from buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -146,8 +120,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
   (facts (reads (buffer a b 4)))
-  (lowering
-    (Load :F32 (buffer-address a b tag))))
+  (lowering (lower-buffer-readf32 a b tag)))
 
 ~ Write float value (use NUM_TO_FLOAT to convert from double) to buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -158,8 +131,7 @@
   (operands [a :pointer] [b :int] [val :float] [tag :tag])
   (class :effect)
   (facts (writes (buffer a b 4) val))
-  (lowering
-    (Store :F32 (buffer-address a b tag) val)))
+  (lowering (lower-buffer-writef32 a b val tag)))
 
 ~ Read double value from buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -171,8 +143,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
   (facts (reads (buffer a b 8)))
-  (lowering
-    (Load :F64 (buffer-address a b tag))))
+  (lowering (lower-buffer-readf64 a b tag)))
 
 ~ Write double value to buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -183,8 +154,7 @@
   (operands [a :pointer] [b :int] [val :double] [tag :tag])
   (class :effect)
   (facts (writes (buffer a b 8) val))
-  (lowering
-    (Store :F64 (buffer-address a b tag) val)))
+  (lowering (lower-buffer-writef64 a b val tag)))
 
 ~ Read int64 value from buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -196,8 +166,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
   (facts (reads (buffer a b 8)))
-  (lowering
-    (Load :I64 (buffer-address a b tag))))
+  (lowering (lower-buffer-readi64 a b tag)))
 
 ~ Write i64/u64 value to buffer storage at specified offset
 ~ A: pointer (buffer)
@@ -208,5 +177,4 @@
   (operands [a :pointer] [b :int] [val :int64] [tag :tag])
   (class :effect)
   (facts (writes (buffer a b 8) val))
-  (lowering
-    (Store :I64 (buffer-address a b tag) val)))
+  (lowering (lower-buffer-writei64 a b val tag)))

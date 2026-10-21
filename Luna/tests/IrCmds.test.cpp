@@ -28,10 +28,10 @@ TEST_CASE_FIXTURE(IrCmdFixture, "commands_generate_the_enum_and_command_informat
             "(define-ircmd FIRST (operands [a :any] [b :any]) (result :int) (class :value) (lowering 0))\n"
             "~ Shared docs\n"
             "~ A: int\n"
-            "(define-ircmd SECOND (operands [a :any] [b :block]) (class :guard) (flags :deprecated/is-unsafe-to-sink) (lowering (Abort)))\n"
+            "(define-ircmd SECOND (operands [a :any] [b :block]) (class :guard) (flags :deprecated/is-unsafe-to-sink) (lowering (gen:seq)))\n"
             "\n"
             "(define-ircmd THIRD (class :terminator) (heap-effects :invalidates-safe-env) (flags :dirty-high-bits :deprecated/has-side-effects)\n"
-            "  (lowering (Abort)))");
+            "  (lowering (gen:seq)))");
     requireOk();
     CHECK(out.find("3 output(s) updated") != std::string::npos);
 
@@ -74,7 +74,7 @@ TEST_CASE_FIXTURE(IrCmdFixture, "command_errors")
         const char* error;
     };
 
-    std::string cmd = "(define-ircmd C (operands [a :any] [b :any]) (class :effect) (lowering (Abort)))\n";
+    std::string cmd = "(define-ircmd C (operands [a :any] [b :any]) (class :effect) (lowering (gen:seq)))\n";
     std::string manyPseudo;
     for (int i = 0; i < 257; ++i)
         manyPseudo += "(define-ircmd C" + std::to_string(i) + " (class :pseudo))\n";
@@ -91,9 +91,9 @@ TEST_CASE_FIXTURE(IrCmdFixture, "command_errors")
         {"unknown flag", "(define-ircmd C (class :pseudo) (flags :bogus))", "Unknown flag ':bogus'"},
         {"unknown heap effect", "(define-ircmd C (class :pseudo) (heap-effects :bogus))", "Unknown heap effect ':bogus'"},
         {"missing class", "(define-ircmd C (result :int))", "C needs a (class ...) clause"},
-        {"value without result", "(define-ircmd C (class :value) (lowering (Abort)))", "is a :value command but has no (result ...)"},
-        {"effect with result", "(define-ircmd C (result :int) (class :effect) (lowering (Abort)))", "is an :effect command but has a result"},
-        {"pseudo with lowering", "(define-ircmd C (class :pseudo) (lowering (Abort)))", "C is a pseudo-instruction and isn't lowered"},
+        {"value without result", "(define-ircmd C (class :value) (lowering (gen:seq)))", "is a :value command but has no (result ...)"},
+        {"effect with result", "(define-ircmd C (result :int) (class :effect) (lowering (gen:seq)))", "is an :effect command but has a result"},
+        {"pseudo with lowering", "(define-ircmd C (class :pseudo) (lowering (gen:seq)))", "C is a pseudo-instruction and isn't lowered"},
         {"missing lowering", "(define-ircmd C (class :effect))", "C needs a (lowering ...) clause"},
         {"too many operands", "(define-ircmd C (operands [a :any] [b :any] [c :any] [d :any] [e :any] [f :any] [g :any] [h :any]) (class :pseudo))", "C has 8 operands"},
         {"duplicate operand", "(define-ircmd C (operands [a :any] [a :any]) (class :pseudo))", "Duplicate operand 'a'"},
@@ -114,7 +114,7 @@ TEST_CASE_FIXTURE(IrCmdFixture, "operand_kinds_generate_the_operand_table")
             "(define-ircmd GUARD (operands [a :Rn|:Kn] [b :const-tag] [c :block|:vmexit|:undef] [d :int|:none])\n"
             "  (target-specific [:x64 [a :inst-pointer]] [:a64 [d :Kn]])\n"
             "  (flag-specific [:DebugLuauAbortingChecks [b :tag]])\n"
-            "  (class :guard) (facts (reads (tvalue a))) (lowering (Abort)))");
+            "  (class :guard) (facts (reads (tvalue a))) (lowering (gen:seq)))");
     requireOk();
 
     std::string info = read("out/IrCmdInfo.h");
@@ -177,27 +177,27 @@ TEST_CASE_FIXTURE(IrCmdFixture, "facts_generate_the_effects_table")
             "  (facts (writes (vm-slots (+ ra 3) (low-byte n))) (reads (vm-slot ra) (tvalue k) (vm-slots (+ ra 1) m)) (writes (vm-slot ra))\n"
             "    (may-write (vm-slots (+ ra 2) :to-top)))\n"
             "  (heap-effects :reenters-vm)\n"
-            "  (lowering (Abort)))\n"
+            "  (lowering (gen:seq)))\n"
             // A load whose result is the field restores the location; one whose result isn't doesn't
             "(define-ircmd LOADD (operands [a :Rn|:Kn]) (result :double) (class :value) (facts (reads (tvalue a :value :double))) (lowering 0.0))\n"
             "(define-ircmd CMPT (operands [a :Rn|:tag]) (result :int) (class :value) (facts (reads (tvalue a :tag))) (lowering 0))\n"
             // Stores pick the dead-store engine, the store hint and the location effects from the field
-            "(define-ircmd STORED (operands [a :Rn|:inst-pointer] [val :double]) (class :effect) (facts (writes (tvalue a :value :double) val)) (lowering (Abort)))\n"
-            "(define-ircmd STORET (operands [a :Rn] [tag :tag]) (class :effect) (facts (writes (tvalue a :tag) tag)) (lowering (Abort)))\n"
+            "(define-ircmd STORED (operands [a :Rn|:inst-pointer] [val :double]) (class :effect) (facts (writes (tvalue a :value :double) val)) (lowering (gen:seq)))\n"
+            "(define-ircmd STORET (operands [a :Rn] [tag :tag]) (class :effect) (facts (writes (tvalue a :tag) tag)) (lowering (gen:seq)))\n"
             "(define-ircmd STORES (operands [a :Rn|:pointer] [tag :tag] [val :int] [offset :const-int]) (class :effect)\n"
-            "  (facts (writes (tvalue a offset :split) tag val)) (lowering (Abort)))\n"
+            "  (facts (writes (tvalue a offset :split) tag val)) (lowering (gen:seq)))\n"
             // Buffers and allocations
-            "(define-ircmd BUFW (operands [a :pointer] [b :int] [v :int]) (class :effect) (facts (writes (buffer a b 4) v)) (heap-effects :may-gc) (lowering (Abort)))\n"
+            "(define-ircmd BUFW (operands [a :pointer] [b :int] [v :int]) (class :effect) (facts (writes (buffer a b 4) v)) (heap-effects :may-gc) (lowering (gen:seq)))\n"
             "(define-ircmd ALLOC (operands [a :int]) (result :pointer) (class :value) (facts (allocates :buffer-data)) (lowering 0))\n"
-            "(define-ircmd CHK (operands [a :tag] [b :const-tag] [fail :block]) (class :guard) (facts (establishes (tag-of a) b)) (lowering (Abort)))\n"
+            "(define-ircmd CHK (operands [a :tag] [b :const-tag] [fail :block]) (class :guard) (facts (establishes (tag-of a) b)) (lowering (gen:seq)))\n"
             // Kills, and results recomputed from an operand
             "(define-ircmd DEAD (operands [a :Rn] [n :const-int]) (class :pseudo) (facts (no-vm-effects) (kills (vm-slots a n))))\n"
             "(define-ircmd TONUM (operands [a :int]) (result :double) (class :value) (lowering 0.0))\n"
             "(define-ircmd TOINT (operands [a :double]) (result :int) (class :value) (facts (rematerialize-from a :via TONUM)) (lowering 0))\n"
             // Class defaults and overrides
-            "(define-ircmd UPV (operands [a :Rn]) (class :effect) (facts (no-vm-effects)) (lowering (Abort)))\n"
-            "(define-ircmd JMP (operands [a :block]) (class :terminator) (lowering (Abort)))\n"
-            "(define-ircmd LOOP (operands [a :block]) (class :terminator) (dead-store :visit) (lowering (Abort)))");
+            "(define-ircmd UPV (operands [a :Rn]) (class :effect) (facts (no-vm-effects)) (lowering (gen:seq)))\n"
+            "(define-ircmd JMP (operands [a :block]) (class :terminator) (lowering (gen:seq)))\n"
+            "(define-ircmd LOOP (operands [a :block]) (class :terminator) (dead-store :visit) (lowering (gen:seq)))");
     requireOk();
 
     std::string effects = read("out/IrCmdEffects.h");
@@ -247,10 +247,10 @@ TEST_CASE_FIXTURE(IrCmdFixture, "conditional_facts_generate_variants_and_a_selec
             "(define-ircmd NEWOBJ (operands [ra :Rn] [form :const-int] [count :const-int]) (class :effect)\n"
             "  (facts (cond [(= form :FORM_INIT) (when (> count 0) (reads (vm-slots (+ ra 3) count))) (writes (vm-slots ra 3))]\n"
             "               [else (writes (vm-slot ra))]))\n"
-            "  (lowering (Abort)))\n"
+            "  (lowering (gen:seq)))\n"
             "(define-ircmd CAP (operands [ra :Rn|:UPn] [kind :const-uint]) (class :effect)\n"
             "  (facts (reads (tvalue ra)) (when (and (= kind 1) (not (kind? ra :VmUpvalue))) (captures (vm-slot ra))))\n"
-            "  (lowering (Abort)))");
+            "  (lowering (gen:seq)))");
     requireOk();
 
     std::string effects = read("out/IrCmdEffects.h");
@@ -295,7 +295,7 @@ TEST_CASE_FIXTURE(IrCmdFixture, "fact_and_effect_errors")
     };
 
     auto cmd = [&](const std::string& operands, const std::string& clauses, const char* cls = ":effect") {
-        return "(define-ircmd C (operands " + operands + ") (class " + cls + ") " + clauses + " (lowering (Abort)))\n";
+        return "(define-ircmd C (operands " + operands + ") (class " + cls + ") " + clauses + " (lowering (gen:seq)))\n";
     };
 
     Case cases[] = {

@@ -1,18 +1,3 @@
-~ (k tag) with the tag of `a`: a VM register's is loaded from it, a tag operand is used as it is
-(define (with-tag a k)
-  (choose (op-kind? a :VmReg)
-          (let* ([tag (Load :I32 (Field a :TValue.tt))]) (k tag))
-          (k a)))
-
-~ Branches to if-false when the TValue at a is falsy (nil, none or false), else to if-true
-(define (branch-on-truthiness a if-true if-false)
-  (let* ([tag (Load :I32 (Field a :TValue.tt))]) (seq
-    (Guard (ICmp :ne :I32 tag :LUA_TNIL) if-false)
-    (Guard (ICmp :ne :I32 tag :LUA_TSYMNONE) if-false)
-    ~ anything other than nil, none and booleans is truthy
-    (Guard (ICmp :eq :I32 tag :LUA_TBOOLEAN) if-true)
-    (Branch (ICmp :ne :I32 (Load :I32 (Field a :TValue.value)) 0) if-true if-false))))
-
 ~ Compute Luau 'not' operation on destructured TValue
 ~ A: tag
 ~ B: int (value)
@@ -20,13 +5,7 @@
   (operands [tag :tag] [val :int])
   (result :int)
   (class :value)
-  (lowering
-    ~ 1 for the falsy values: nil, none and false. A constant tag is a boolean (constant folding removes the others).
-    (choose (constant? tag)
-            (Select :I32 (ICmp :eq :I32 val 0) 1 0)
-            (Select :I32 (ICmp :eq :I32 tag :LUA_TNIL) 1
-                    (Select :I32 (ICmp :eq :I32 tag :LUA_TSYMNONE) 1
-                            (Select :I32 (ICmp :eq :I32 tag :LUA_TBOOLEAN) (Select :I32 (ICmp :eq :I32 val 0) 1 0) 0))))))
+  (lowering (lower-not-any tag val)))
 
 ~ Perform a comparison of two tags. Result is an integer register containing 0 or 1
 ~ A: tag or Rn
@@ -37,8 +16,7 @@
   (result :int)
   (class :value)
   (facts (reads (tvalue a :tag)))
-  (lowering
-    (with-tag a (lambda (t) (Select :I32 (ICmp cond :I32 t b) 1 0)))))
+  (lowering (lower-cmp-tag a b cond)))
 
 ~ Jump if TValue is truthy
 ~ A: Rn
@@ -48,8 +26,7 @@
   (operands [a :Rn] [if-true :block] [if-false :block])
   (class :terminator)
   (facts (reads (vm-slot a)))
-  (lowering
-    (branch-on-truthiness a if-true if-false)))
+  (lowering (lower-jump-if-truthy a if-true if-false)))
 
 ~ Jump if TValue is falsy
 ~ A: Rn
@@ -59,5 +36,4 @@
   (operands [a :Rn] [if-false :block] [if-true :block])
   (class :terminator)
   (facts (reads (vm-slot a)))
-  (lowering
-    (branch-on-truthiness a if-true if-false)))
+  (lowering (lower-jump-if-falsy a if-false if-true)))

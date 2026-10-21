@@ -8,29 +8,7 @@
   (operands [bfid :const-uint] [ra :Rn] [arg :Rn] [nresults :const-int])
   (class :effect)
   (facts (reads (vm-slot arg)) (writes (vm-slots ra nresults)))
-  (lowering
-    (choose (gen:== bfid :LBF_MATH_FREXP)
-            (let ([res (CallC :F64 (native-fn :libm_frexp)
-                              (list :F64 (Load :F64 (Field arg :TValue.value.n)))
-                              (list :Ptr (Root :Scratch)))])
-              (seq
-                (Store :F64 (Field ra :TValue.value.n) res)
-                (Store :I32 (Field ra :TValue.tt) :LUA_TNUMBER)
-                (choose (gen:> nresults 1)
-                        (seq
-                          (Store :F64 (Field ra (gen:+ sizeof-TValue (gen:offsetof :TValue :value)))
-                                 (IntToFloat :s :F64 :I32 (Load :I32 (Root :Scratch))))
-                          (Store :I32 (Field ra (gen:+ sizeof-TValue (gen:offsetof :TValue :tt))) :LUA_TNUMBER)))))
-            (let ([res (CallC :F64 (native-fn :libm_modf)
-                              (list :F64 (Load :F64 (Field arg :TValue.value.n)))
-                              (list :Ptr (Root :Scratch)))])
-              (seq
-                (Store :F64 (Field ra :TValue.value.n) (Load :F64 (Root :Scratch)))
-                (Store :I32 (Field ra :TValue.tt) :LUA_TNUMBER)
-                (choose (gen:> nresults 1)
-                        (seq
-                          (Store :F64 (Field ra (gen:+ sizeof-TValue (gen:offsetof :TValue :value))) res)
-                          (Store :I32 (Field ra (gen:+ sizeof-TValue (gen:offsetof :TValue :tt))) :LUA_TNUMBER))))))))
+  (lowering (lower-fastcall bfid ra arg nresults)))
 
 ~ Call the fastcall builtin function
 ~ A: unsigned int (builtin id)
@@ -60,32 +38,7 @@
           [(= nparams 1) (reads (vm-slot arg))])
     ; ADJUST_STACK_TO_REG would semantically define the result range; this defines it immediately
     (writes (vm-slots ra nresults)))
-  (lowering
-    (let ([args-ptr (variable :Ptr)]
-          [actual-nparams (variable :I32)])
-      (seq
-        (choose (gen:! (op-kind? arg3 :Undef))
-                (let ([top (LoadPtr (Root :State) :lua_State.top)])
-                  (seq
-                    (Store :V128 (Field top 0) (Load :V128 (Field args 0)))
-                    (Store :V128 (Field top sizeof-TValue) (Load :V128 (Field arg3 0)))
-                    (Set args-ptr top)))
-                (choose (gen:|| (op-kind? args :VmReg) (op-kind? args :VmConst))
-                        (Set args-ptr (AddressOf args))
-                        (Set args-ptr 0)))
-        (choose (gen:== nparams :LUA_MULTRET)
-                (Set actual-nparams
-                     (Reduce (ShrU :I64 (Sub :I64 (LoadPtr (Root :State) :lua_State.top)
-                                             (AddressOf (Field ra sizeof-TValue)))
-                                   :kTValueSizeLog2)))
-                (Set actual-nparams nparams))
-        (CallC :I32 (Field (Root :NativeContext) (gen:+ (gen:offsetof :NativeContext :luauF_table) (gen:* bfid (gen:sizeof :luau_FastFunction))))
-               (list :Ptr (Root :State))
-               (list :Ptr (AddressOf ra))
-               (list :Ptr (AddressOf arg))
-               (list :I32 nresults)
-               (list :Ptr args-ptr)
-               (list :I32 actual-nparams))))))
+  (lowering (lower-invoke-fastcall bfid ra arg args arg3 nparams nresults)))
 
 ~ Calls native libm function with 1 or 2 arguments
 ~ A: builtin function ID
@@ -95,12 +48,4 @@
   (operands [func :const-uint] [a :double] [b :double|:int])
   (result :double)
   (class :value)
-  (lowering
-    (let ([fn (Field (Root :NativeContext) (libm-offset func))])
-      (choose-cond
-        [(gen:&& (has-op? b) (int-operand? b))
-         (CallC :F64 fn (list :F64 a) (list :I32 b))]
-        [(has-op? b)
-         (CallC :F64 fn (list :F64 a) (list :F64 b))]
-        [else
-         (CallC :F64 fn (list :F64 a))]))))
+  (lowering (lower-invoke-libm func a b)))

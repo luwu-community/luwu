@@ -1,0 +1,504 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-bitlshift-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:let ([source (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([amount (gen:method cpp:lowering :tempInt64 b)])
+            (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                      [done (:type "Label")]
+                      [negative (:type "Label")]
+                      [out-of-range (:type "Label")])
+              (gen:build :add temp amount (gen:cast "uint16_t" 63))
+              (gen:build :cmp temp (gen:cast "uint16_t" 126))
+              (gen:build :b (gen:enum :ConditionA64 :UnsignedGreater) out-of-range)
+              (gen:build :cmp amount (gen:cast "uint16_t" 0))
+              (gen:build :b (gen:enum :ConditionA64 :Less) negative)
+              (gen:build :lsl (result-reg) source amount)
+              (gen:build :b done)
+              (gen:build :setLabel negative)
+              (gen:build :neg temp amount)
+              (gen:build :lsr (result-reg) source temp)
+              (gen:build :b done)
+              (gen:build :setLabel out-of-range)
+              (gen:build :mov (result-reg) 0)
+              (gen:build :setLabel done)))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+            (gen:block
+              (gen:method shift-tmp :take (x64:reg :rcx))))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+          (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op a))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:if (gen:< (int64-val b) 0)
+                (gen:block
+                  (gen:if (gen:> (gen:cast "uint8_t" (gen:- (int64-val b))) 63)
+                    (gen:block
+                      (gen:build :xor_ (result-reg) (result-reg)))
+                    (gen:block
+                      (gen:build :shr (result-reg) (gen:cast "int8_t" (gen:cast "uint8_t" (gen:- (int64-val b))))))))
+                (gen:if (gen:> (int64-val b) 63)
+                  (gen:block
+                    (gen:build :xor_ (result-reg) (result-reg)))
+                  (gen:block
+                    (gen:build :shl (result-reg) (gen:cast "int8_t" (int64-val b)))))))
+            (gen:block
+              (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                        [negative (:type "Label")]
+                        [out-of-range (:type "Label")]
+                        [done (:type "Label")])
+                (gen:build :mov (x64:scoped-reg shift-tmp) (gen:method cpp:lowering :memRegInt64Op b))
+                (gen:build :lea (x64:scoped-reg tmp) (gen:index (gen:name :addr) (gen:+ (x64:scoped-reg shift-tmp) 63)))
+                (gen:build :cmp (x64:scoped-reg tmp) 126)
+                (gen:build :jcc (gen:enum :ConditionX64 :Above) out-of-range)
+                (gen:build :test (x64:scoped-reg shift-tmp) (x64:scoped-reg shift-tmp))
+                (gen:build :jcc (gen:enum :ConditionX64 :Less) negative)
+                (gen:build :shl (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))
+                (gen:build :jmp done)
+                (gen:build :setLabel negative)
+                (gen:build :neg (x64:scoped-reg shift-tmp))
+                (gen:build :shr (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))
+                (gen:build :jmp done)
+                (gen:build :setLabel out-of-range)
+                (gen:build :xor_ (result-reg) (result-reg))
+                (gen:build :setLabel done))))))]))
+
+(define (lower-bitrshift-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:let ([source (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([amount (gen:method cpp:lowering :tempInt64 b)])
+            (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                      [done (:type "Label")]
+                      [negative (:type "Label")]
+                      [out-of-range (:type "Label")])
+              (gen:build :add temp amount (gen:cast "uint16_t" 63))
+              (gen:build :cmp temp (gen:cast "uint16_t" 126))
+              (gen:build :b (gen:enum :ConditionA64 :UnsignedGreater) out-of-range)
+              (gen:build :cmp amount (gen:cast "uint16_t" 0))
+              (gen:build :b (gen:enum :ConditionA64 :Less) negative)
+              (gen:build :lsr (result-reg) source amount)
+              (gen:build :b done)
+              (gen:build :setLabel negative)
+              (gen:build :neg temp amount)
+              (gen:build :lsl (result-reg) source temp)
+              (gen:build :b done)
+              (gen:build :setLabel out-of-range)
+              (gen:build :mov (result-reg) 0)
+              (gen:build :setLabel done)))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+            (gen:block
+              (gen:method shift-tmp :take (x64:reg :rcx))))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+          (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op a))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:if (gen:< (int64-val b) 0)
+                (gen:block
+                  (gen:if (gen:> (gen:cast "uint8_t" (gen:- (int64-val b))) 63)
+                    (gen:block
+                      (gen:build :xor_ (result-reg) (result-reg)))
+                    (gen:block
+                      (gen:build :shl (result-reg) (gen:cast "int8_t" (gen:cast "uint8_t" (gen:- (int64-val b))))))))
+                (gen:if (gen:> (int64-val b) 63)
+                  (gen:block
+                    (gen:build :xor_ (result-reg) (result-reg)))
+                  (gen:block
+                    (gen:build :shr (result-reg) (gen:cast "int8_t" (int64-val b)))))))
+            (gen:block
+              (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                        [negative (:type "Label")]
+                        [out-of-range (:type "Label")]
+                        [done (:type "Label")])
+                (gen:build :mov (x64:scoped-reg shift-tmp) (gen:method cpp:lowering :memRegInt64Op b))
+                (gen:build :lea (x64:scoped-reg tmp) (gen:index (gen:name :addr) (gen:+ (x64:scoped-reg shift-tmp) 63)))
+                (gen:build :cmp (x64:scoped-reg tmp) 126)
+                (gen:build :jcc (gen:enum :ConditionX64 :Above) out-of-range)
+                (gen:build :test (x64:scoped-reg shift-tmp) (x64:scoped-reg shift-tmp))
+                (gen:build :jcc (gen:enum :ConditionX64 :Less) negative)
+                (gen:build :shr (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))
+                (gen:build :jmp done)
+                (gen:build :setLabel negative)
+                (gen:build :neg (x64:scoped-reg shift-tmp))
+                (gen:build :shl (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))
+                (gen:build :jmp done)
+                (gen:build :setLabel out-of-range)
+                (gen:build :xor_ (result-reg) (result-reg))
+                (gen:build :setLabel done))))))]))
+
+(define (lower-bitarshift-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:let ([source (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([amount (gen:method cpp:lowering :tempInt64 b)])
+            (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                      [done (:type "Label")]
+                      [negative (:type "Label")]
+                      [out-of-range-positive (:type "Label")]
+                      [out-of-range-negative (:type "Label")])
+              (gen:build :cmp amount (gen:cast "uint16_t" 63))
+              (gen:build :b (gen:enum :ConditionA64 :Greater) out-of-range-positive)
+              (gen:build :add temp amount (gen:cast "uint16_t" 63))
+              (gen:build :cmp temp (gen:cast "uint16_t" 0))
+              (gen:build :b (gen:enum :ConditionA64 :Less) out-of-range-negative)
+              (gen:build :cmp amount (gen:cast "uint16_t" 0))
+              (gen:build :b (gen:enum :ConditionA64 :Less) negative)
+              (gen:build :asr (result-reg) source amount)
+              (gen:build :b done)
+              (gen:build :setLabel negative)
+              (gen:build :neg temp amount)
+              (gen:build :lsl (result-reg) source temp)
+              (gen:build :b done)
+              (gen:build :setLabel out-of-range-positive)
+              (gen:build :asr (result-reg) source (gen:cast "uint8_t" (gen:& (gen:cast "unsigned" 63) 63)))
+              (gen:build :b done)
+              (gen:build :setLabel out-of-range-negative)
+              (gen:build :mov (result-reg) 0)
+              (gen:build :setLabel done)))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+            (gen:block
+              (gen:method shift-tmp :take (x64:reg :rcx))))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+          (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op a))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:if (gen:< (int64-val b) (gen:- 63))
+                (gen:block
+                  (gen:build :xor_ (result-reg) (result-reg)))
+                (gen:if (gen:< (int64-val b) 0)
+                  (gen:block
+                    (gen:build :shl (result-reg) (gen:cast "int8_t" (gen:cast "uint8_t" (gen:- (int64-val b))))))
+                  (gen:if (gen:> (int64-val b) 63)
+                    (gen:block
+                      (gen:build :sar (result-reg) (gen:cast "int8_t" 63)))
+                    (gen:block
+                      (gen:build :sar (result-reg) (gen:cast "int8_t" (int64-val b))))))))
+            (gen:block
+              (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                        [negative (:type "Label")]
+                        [out-of-range-positive (:type "Label")]
+                        [out-of-range-negative (:type "Label")]
+                        [done (:type "Label")])
+                (gen:build :mov (x64:scoped-reg shift-tmp) (gen:method cpp:lowering :memRegInt64Op b))
+                (gen:build :cmp (x64:scoped-reg shift-tmp) 63)
+                (gen:build :jcc (gen:enum :ConditionX64 :Greater) out-of-range-positive)
+                (gen:build :lea (x64:scoped-reg tmp) (gen:index (gen:name :addr) (gen:+ (x64:scoped-reg shift-tmp) 63)))
+                (gen:build :test (x64:scoped-reg tmp) (x64:scoped-reg tmp))
+                (gen:build :jcc (gen:enum :ConditionX64 :Less) out-of-range-negative)
+                (gen:build :test (x64:scoped-reg shift-tmp) (x64:scoped-reg shift-tmp))
+                (gen:build :jcc (gen:enum :ConditionX64 :Less) negative)
+                (gen:build :sar (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))
+                (gen:build :jmp done)
+                (gen:build :setLabel negative)
+                (gen:build :neg (x64:scoped-reg shift-tmp))
+                (gen:build :shl (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))
+                (gen:build :jmp done)
+                (gen:build :setLabel out-of-range-positive)
+                (gen:build :sar (result-reg) (gen:cast "int8_t" 63))
+                (gen:build :jmp done)
+                (gen:build :setLabel out-of-range-negative)
+                (gen:build :xor_ (result-reg) (result-reg))
+                (gen:build :setLabel done))))))]))
+
+(define (lower-bitlrotate-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list b)))
+        (gen:let ([source (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([amount (gen:method cpp:lowering :tempInt64 b)])
+            (gen:build :neg (result-reg) amount)
+            (gen:build :ror (result-reg) source (result-reg)))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+            (gen:block
+              (gen:method shift-tmp :take (x64:reg :rcx))))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+          (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op a))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :rol (result-reg) (gen:cast "int8_t" (gen:cast "unsigned" (int64-val b)))))
+            (gen:block
+              (gen:build :mov (x64:scoped-reg shift-tmp) (gen:method cpp:lowering :memRegInt64Op b))
+              (gen:build :rol (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))))))]))
+
+(define (lower-bitrrotate-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:let ([source (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([amount (gen:method cpp:lowering :tempInt64 b)])
+            (gen:build :ror (result-reg) source amount))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+            (gen:block
+              (gen:method shift-tmp :take (x64:reg :rcx))))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+          (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op a))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :ror (result-reg) (gen:cast "int8_t" (gen:cast "unsigned" (int64-val b)))))
+            (gen:block
+              (gen:build :mov (x64:scoped-reg shift-tmp) (gen:method cpp:lowering :memRegInt64Op b))
+              (gen:build :ror (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))))))]))
+
+(define (lower-bitcountlz-int64 a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a)))
+        (gen:let ([temp (gen:method cpp:lowering :tempInt64 a)])
+          (gen:build :clz (result-reg) temp)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+        (gen:let ([zero (:type "Label")]
+                  [exit (:type "Label")])
+          (gen:build :test (reg-op a) (reg-op a))
+          (gen:build :jcc (gen:enum :ConditionX64 :Equal) zero)
+          (gen:build :bsr (result-reg) (reg-op a))
+          (gen:build :xor_ (result-reg) 63)
+          (gen:build :jmp exit)
+          (gen:build :setLabel zero)
+          (gen:build :mov (result-reg) 64)
+          (gen:build :setLabel exit)))]))
+
+(define (lower-bitcountrz-int64 a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a)))
+        (gen:let ([temp (gen:method cpp:lowering :tempInt64 a)])
+          (gen:build :rbit (result-reg) temp)
+          (gen:build :clz (result-reg) (result-reg))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+        (gen:let ([zero (:type "Label")]
+                  [exit (:type "Label")])
+          (gen:build :test (reg-op a) (reg-op a))
+          (gen:build :jcc (gen:enum :ConditionX64 :Equal) zero)
+          (gen:build :bsf (result-reg) (reg-op a))
+          (gen:build :jmp exit)
+          (gen:build :setLabel zero)
+          (gen:build :mov (result-reg) 64)
+          (gen:build :setLabel exit)))]))
+
+(define (lower-bitlshift-uint a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+          (gen:block
+            (gen:build :lsl (result-reg) (reg-op a) (gen:cast "uint8_t" (gen:& (gen:cast "unsigned" (int-val b)) 31))))
+          (gen:block
+            (gen:let ([temp1 (gen:method cpp:lowering :tempInt a)])
+              (gen:let ([temp2 (gen:method cpp:lowering :tempInt b)])
+                (gen:build :lsl (result-reg) temp1 temp2))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+            (gen:block
+              (gen:method shift-tmp :take (x64:reg :ecx))))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+          (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegUintOp a))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :shl (result-reg) (gen:cast "int8_t" (gen:cast "unsigned" (int-val b)))))
+            (gen:block
+              (gen:build :mov (x64:scoped-reg shift-tmp) (gen:method cpp:lowering :memRegUintOp b))
+              (gen:build :shl (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))))))]))
+
+(define (lower-bitrshift-uint a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+          (gen:block
+            (gen:build :lsr (result-reg) (reg-op a) (gen:cast "uint8_t" (gen:& (gen:cast "unsigned" (int-val b)) 31))))
+          (gen:block
+            (gen:let ([temp1 (gen:method cpp:lowering :tempInt a)])
+              (gen:let ([temp2 (gen:method cpp:lowering :tempInt b)])
+                (gen:build :lsr (result-reg) temp1 temp2))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+            (gen:block
+              (gen:method shift-tmp :take (x64:reg :ecx))))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+          (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegUintOp a))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :shr (result-reg) (gen:cast "int8_t" (gen:cast "unsigned" (int-val b)))))
+            (gen:block
+              (gen:build :mov (x64:scoped-reg shift-tmp) (gen:method cpp:lowering :memRegUintOp b))
+              (gen:build :shr (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))))))]))
+
+(define (lower-bitarshift-uint a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+          (gen:block
+            (gen:build :asr (result-reg) (reg-op a) (gen:cast "uint8_t" (gen:& (gen:cast "unsigned" (int-val b)) 31))))
+          (gen:block
+            (gen:let ([temp1 (gen:method cpp:lowering :tempInt a)])
+              (gen:let ([temp2 (gen:method cpp:lowering :tempInt b)])
+                (gen:build :asr (result-reg) temp1 temp2))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+            (gen:block
+              (gen:method shift-tmp :take (x64:reg :ecx))))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+          (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegUintOp a))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :sar (result-reg) (gen:cast "int8_t" (gen:cast "unsigned" (int-val b)))))
+            (gen:block
+              (gen:build :mov (x64:scoped-reg shift-tmp) (gen:method cpp:lowering :memRegUintOp b))
+              (gen:build :sar (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))))))]))
+
+(define (lower-bitlrotate-uint a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:if (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+          (gen:block
+            (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a)))
+            (gen:build :ror (result-reg) (reg-op a) (gen:cast "uint8_t" (gen:& (gen:- 32 (gen:cast "unsigned" (int-val b))) 31))))
+          (gen:block
+            (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list b)))
+            (gen:let ([temp1 (gen:method cpp:lowering :tempInt a)])
+              (gen:let ([temp2 (gen:method cpp:lowering :tempInt b)])
+                (gen:build :neg (result-reg) temp2)
+                (gen:build :ror (result-reg) temp1 (result-reg)))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+            (gen:block
+              (gen:method shift-tmp :take (x64:reg :ecx))))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+          (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegUintOp a))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :rol (result-reg) (gen:cast "int8_t" (gen:cast "unsigned" (int-val b)))))
+            (gen:block
+              (gen:build :mov (x64:scoped-reg shift-tmp) (gen:method cpp:lowering :memRegUintOp b))
+              (gen:build :rol (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))))))]))
+
+(define (lower-bitrrotate-uint a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+          (gen:block
+            (gen:build :ror (result-reg) (reg-op a) (gen:cast "uint8_t" (gen:& (gen:cast "unsigned" (int-val b)) 31))))
+          (gen:block
+            (gen:let ([temp1 (gen:method cpp:lowering :tempInt a)])
+              (gen:let ([temp2 (gen:method cpp:lowering :tempInt b)])
+                (gen:build :ror (result-reg) temp1 temp2))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))
+            (gen:block
+              (gen:method shift-tmp :take (x64:reg :ecx))))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+          (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegUintOp a))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :ror (result-reg) (gen:cast "int8_t" (gen:cast "unsigned" (int-val b)))))
+            (gen:block
+              (gen:build :mov (x64:scoped-reg shift-tmp) (gen:method cpp:lowering :memRegUintOp b))
+              (gen:build :ror (result-reg) (gen:call :byteReg (x64:scoped-reg shift-tmp)))))))]))
+
+(define (lower-bitcountlz-uint a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a)))
+        (gen:let ([temp (gen:method cpp:lowering :tempInt a)])
+          (gen:build :clz (result-reg) temp)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+        (gen:let ([zero (:type "Label")]
+                  [exit (:type "Label")])
+          (gen:build :test (reg-op a) (reg-op a))
+          (gen:build :jcc (gen:enum :ConditionX64 :Equal) zero)
+          (gen:build :bsr (result-reg) (reg-op a))
+          (gen:build :xor_ (result-reg) 31)
+          (gen:build :jmp exit)
+          (gen:build :setLabel zero)
+          (gen:build :mov (result-reg) 32)
+          (gen:build :setLabel exit)))]))
+
+(define (lower-bitcountrz-uint a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a)))
+        (gen:let ([temp (gen:method cpp:lowering :tempInt a)])
+          (gen:build :rbit (result-reg) temp)
+          (gen:build :clz (result-reg) (result-reg))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+        (gen:let ([zero (:type "Label")]
+                  [exit (:type "Label")])
+          (gen:build :test (reg-op a) (reg-op a))
+          (gen:build :jcc (gen:enum :ConditionX64 :Equal) zero)
+          (gen:build :bsf (result-reg) (reg-op a))
+          (gen:build :jmp exit)
+          (gen:build :setLabel zero)
+          (gen:build :mov (result-reg) 32)
+          (gen:build :setLabel exit)))]))

@@ -1,22 +1,13 @@
-;; ============================================================================
-;; Assembler instructions: their signatures, and gen:build checked against them
-;; ============================================================================
-
-;; Per target, the instructions declared so far: (insn exact? returns overloads), where an overload is a list of
-;; parameters (type defaulted?), types as C++ strings
 (define %assembler nil) ; ((target instructions) ...)
 
 (define (%type-string t) (cond [(symbol? t) (symbol->string t)] [(keyword? t) (keyword->string t)] [else t]))
 
-~ A declared parameter: (type defaulted?), from a type with = at its end for a defaulted one
 (define (%parameter t)
   (let ([s (%type-string t)])
     (if (string-suffix? s "=")
         (list (substring s 0 (- (string-length s) 1)) #t)
         (list s #f))))
 
-~ One instruction entry (insn options... (ParamType...)...) as (insn exact? returns overloads). Options: :exact (integer
-~ arguments have to be of exactly the declared type) and :returns T (the instruction makes a value of type T).
 (define (%instruction entry)
   (let loop ([parts (rest entry)] [exact #f] [returns #f])
     (cond [(and (pair? parts) (equal? (first parts) :exact)) (loop (rest parts) #t returns)]
@@ -24,8 +15,6 @@
           [(and (pair? parts) (keyword? (first parts))) (error "define-assembler entry options are :exact and :returns T, got" (first parts))]
           [else (list (first entry) exact returns (map (lambda (overload) (map %parameter overload)) parts))])))
 
-~ Declares assembler instructions for a target: (define-assembler :a64 (add (RegisterA64 RegisterA64 RegisterA64) ...) ...),
-~ each overload's parameter types (a trailing = marks a defaulted one); gen:build calls are checked against them
 (define-macro (define-assembler target . entries)
   `(%declare-instructions! ,target ',entries))
 
@@ -40,14 +29,12 @@
   (let ([table (assoc target %assembler)])
     (and table (assoc insn (second table)))))
 
-~ Whether an argument of C++ type `arg` (#f when unknown, which always fits) can be passed for parameter type `param`
 (define (%fits? arg param exact)
   (cond [(or (not arg) (equal? arg param)) #t]
-        ;; A64 deletes the template overloads that would convert integers implicitly: those need a cast first
         [(cpp-integral-type? param) (and (not exact) (cpp-integral-type? arg))]
         [(member? param '("double" "float")) (and (not exact) (or (cpp-integral-type? arg) (member? arg '("double" "float"))))]
-        [(and (equal? %target :x64) (equal? param "OperandX64")) (or (equal? arg "RegisterX64") (cpp-integral-type? arg))]
-        [(and (equal? %target :a64) (equal? param "AddressA64")) (equal? arg "RegisterA64")]
+        [(and (equal? (current-target) :x64) (equal? param "OperandX64")) (or (equal? arg "RegisterX64") (cpp-integral-type? arg))]
+        [(and (equal? (current-target) :a64) (equal? param "AddressA64")) (equal? arg "RegisterA64")]
         [else #f]))
 
 (define (%overload-fits? overload types exact)
@@ -58,10 +45,9 @@
 (define (%join strings separator)
   (if (null? strings) "" (foldl (lambda (s x) (str s separator x)) (first strings) (rest strings))))
 
-~ Checks build.insn with arguments of C++ types `types` (#f when unknown) against the target's declarations
 (define (%check-instruction insn types)
-  (when %target
-    (let ([declared (%instruction-of %target insn)] [target (keyword->string %target)])
+  (when (current-target)
+    (let ([declared (%instruction-of (current-target) insn)] [target (keyword->string (current-target))])
       (unless declared
         (error (str "build." (symbol->string insn) " isn't a declared :" target " instruction (declare it with define-assembler in defs/cpp/"
                     target "-assembler.luna)")))
@@ -74,10 +60,29 @@
 
 ~ (gen:build :insn args...): build.insn(args...), an assembler instruction, checked against the target's
 ~ define-assembler signatures; typed by the declared :returns type when it makes a value
+(define (%check-register-shapes insn args)
+  (when (and (equal? (current-target) :x64) (equal? insn :lea) (> (length args) 1))
+    (let ([size (gen:fact-of (second args) 'memory-size)])
+      (when (and size (not (equal? size :addr))) (error "build.lea requires an unsized address, got" size))))
+  (when (and (equal? (current-target) :a64) (pair? args))
+    (let* ([kinds (map (lambda (a) (gen:fact-of a 'register-kind)) args)] [dest (first kinds)]
+           [allowed
+            (cond [(member? insn '(:add :sub :neg :mul :sdiv :udiv :msub :rem :and_ :orr :eor :bic :mvn_ :csel :clz :rbit :rev)) '(:w :x)]
+                  [(equal? insn :dup_4s) '(:q)]
+                  [(member? insn '(:fcsel :fsqrt :fcmp :fcmpz)) '(:s :d)]
+                  [(member? insn '(:fadd :fsub :fmul :fdiv :fmla :fabs :fneg :frinta :frintm :frintp :frintz)) '(:s :d :q)]
+                  [(member? insn '(:bit :bif :fcmeq_4s :fcmgt_4s :ins_4s)) '(:q)]
+                  [else #f])])
+      (when (and allowed dest (not (member? dest allowed)))
+        (error "build." insn "has invalid destination register kind" dest "; expected" allowed))
+      (when (and (equal? insn :dup_4s) (> (length kinds) 1) (second kinds) (not (equal? (second kinds) :q)))
+        (error "build.dup_4s requires a vector source")))))
+
 (define (gen:build insn . args)
   (let* ([name (string->symbol (keyword->string insn))]
-         [call (apply gen:method cpp:build insn args)]
+         [call (record-with (apply gen:method cpp:build insn args) 'kind 'target-insn)]
          [types (map cpp-type (rest (nth (gen:parts call) 2)))]
-         [declared (and %target (%instruction-of %target name))])
+         [declared (and (current-target) (%instruction-of (current-target) name))])
     (%check-instruction name types)
+    (%check-register-shapes insn args)
     (if (and declared (nth declared 2)) (gen:typed (string->keyword (nth declared 2)) call) call)))

@@ -1,14 +1,120 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Core/Value.h"
+#include "Core/Bytecode.h"
 #include "Core/Record.h"
 
 #include <cmath>
 #include <sstream>
+#include <limits>
+#include <set>
 
 #include "Core/CompileError.h"
 
 namespace Luwu::Dsl
 {
+
+Value* Env::find(const std::string& name)
+{
+    for (Env* e = this; e; e = e->parent)
+    {
+        if (e->layout)
+        {
+            auto slot = e->layout->localIndices.find(name);
+            if (slot != e->layout->localIndices.end())
+            {
+                uint32_t index = slot->second;
+                if (e->captured[index] && e->captured[index]->bound) return &e->captured[index]->value;
+                if (!e->captured[index] && e->bound[index]) return &e->slots[index];
+            }
+            auto capture = e->layout->captureIndices.find(name);
+            if (capture != e->layout->captureIndices.end())
+                if (Value* value = e->procedure->upvalues[capture->second]->get()) return value;
+        }
+        auto it = e->vars.find(name);
+        if (it != e->vars.end()) return &it->second;
+    }
+    return nullptr;
+}
+
+const Value* Env::lookup(const std::string& name) const
+{
+    return const_cast<Env*>(this)->find(name);
+}
+
+void Env::define(const std::string& name, Value value)
+{
+    if (layout)
+    {
+        auto slot = layout->localIndices.find(name);
+        if (slot != layout->localIndices.end())
+        {
+            uint32_t index = slot->second;
+            if (captured[index]) { captured[index]->value = std::move(value); captured[index]->bound = true; }
+            else { slots[index] = std::move(value); bound[index] = true; }
+            return;
+        }
+    }
+    vars[name] = std::move(value);
+}
+
+Value* Env::local(uint32_t slot)
+{
+    if (captured[slot]) return captured[slot]->get();
+    if (bound[slot]) return &slots[slot];
+    auto inherited = layout->captureIndices.find(layout->localNames[slot]);
+    if (inherited != layout->captureIndices.end()) return procedure->upvalues[inherited->second]->get();
+    return parent ? parent->find(layout->localNames[slot]) : nullptr;
+}
+
+Upvalue* Env::capture(uint32_t slot)
+{
+    if (!captured[slot])
+    {
+        Upvalue* cell = gcAlloc<Upvalue>();
+        cell->value = std::move(slots[slot]);
+        slots[slot] = Value::nil();
+        cell->bound = bound[slot];
+        cell->fallback = parent;
+        cell->name = layout->localNames[slot];
+        auto inherited = layout->captureIndices.find(cell->name);
+        if (inherited != layout->captureIndices.end()) cell->fallbackCell = procedure->upvalues[inherited->second];
+        captured[slot] = cell;
+    }
+    return captured[slot];
+}
+
+Value* Upvalue::get()
+{
+    return bound ? &value : fallbackCell ? fallbackCell->get() : fallback ? fallback->find(name) : nullptr;
+}
+
+void Upvalue::markChildren(std::vector<const GcCell*>& worklist) const
+{
+    if (const GcCell* cell = value.cell()) worklist.push_back(cell);
+    if (!bound && fallback) worklist.push_back(fallback);
+    if (!bound && fallbackCell) worklist.push_back(fallbackCell);
+}
+
+void Env::markChildren(std::vector<const GcCell*>& worklist) const
+{
+    if (parent) worklist.push_back(parent);
+    if (layout) worklist.push_back(layout);
+    if (procedure) worklist.push_back(procedure);
+    for (const auto& entry : vars)
+        if (const GcCell* cell = entry.second.cell()) worklist.push_back(cell);
+    for (const Value& value : slots)
+        if (const GcCell* cell = value.cell()) worklist.push_back(cell);
+    for (const Upvalue* cell : captured)
+        if (cell) worklist.push_back(cell);
+}
+
+void Closure::markChildren(std::vector<const GcCell*>& worklist) const
+{
+    if (env) worklist.push_back(env);
+    if (datumTransformer) worklist.push_back(datumTransformer);
+    if (bytecode) worklist.push_back(bytecode);
+    for (const Upvalue* cell : upvalues) worklist.push_back(cell);
+}
 
 static GcCell* s_gcHead = nullptr;
 static size_t s_gcCount = 0;
@@ -57,8 +163,66 @@ Value Value::string(std::string s)
 {
     Value v;
     v.kind = ValueKind::String;
-    v.text = std::move(s);
+    v.rope = gcAlloc<Rope>(std::move(s));
     return v;
+}
+
+const std::string& Rope::flatten() const
+{
+    if (!flat)
+    {
+        std::string result;
+        result.reserve(size);
+        std::vector<const Rope*> todo{this};
+        while (!todo.empty())
+        {
+            const Rope* node = todo.back();
+            todo.pop_back();
+            if (node->flat) result += node->bytes;
+            else { todo.push_back(node->right); todo.push_back(node->left); }
+        }
+        bytes = std::move(result);
+        flat = true;
+    }
+    return bytes;
+}
+
+Value Value::string(const Rope* rope)
+{
+    Value v;
+    v.kind = ValueKind::String;
+    v.rope = rope;
+    return v;
+}
+
+const std::string& Value::stringValue() const { return rope->flatten(); }
+size_t Value::stringSize() const { return rope->size; }
+
+Value Value::concat(const std::vector<Value>& strings)
+{
+    const Rope* result = nullptr;
+    for (const Value& s : strings)
+    {
+        if (!s.rope->size) continue;
+        if (result && s.rope->size > std::numeric_limits<size_t>::max() - result->size)
+            throw std::length_error("Luna string is too long");
+        result = result ? gcAlloc<Rope>(result, s.rope) : s.rope;
+    }
+    return result ? Value::string(result) : Value::string(std::string{});
+}
+
+void Vector::markChildren(std::vector<const GcCell*>& worklist) const
+{
+    for (const Value& v : items) if (const GcCell* c = v.cell()) worklist.push_back(c);
+}
+
+void Table::markChildren(std::vector<const GcCell*>& worklist) const
+{
+    for (const Entry& e : entries) if (e.live)
+    {
+        if (const GcCell* c = e.key.cell()) worklist.push_back(c);
+        if (const GcCell* c = e.value.cell()) worklist.push_back(c);
+    }
 }
 
 Value Value::symbol(std::string s)
@@ -90,6 +254,14 @@ Value Value::of(const Record* record)
     Value v;
     v.kind = ValueKind::Record;
     v.record = record;
+    return v;
+}
+
+Value Value::of(const Syntax* syntax)
+{
+    Value v;
+    v.kind = ValueKind::Syntax;
+    v.syntax = syntax;
     return v;
 }
 
@@ -150,7 +322,7 @@ std::string toString(const Value& v)
         return s;
     }
     case ValueKind::String:
-        return quoteString(v.text);
+        return quoteString(v.stringValue());
     case ValueKind::Symbol:
     case ValueKind::Keyword:
         return v.text;
@@ -171,6 +343,18 @@ std::string toString(const Value& v)
             s += " . " + toString(*cur); // an improper list
         return s + ")";
     }
+    case ValueKind::Vector:
+    {
+        static thread_local std::set<const Vector*> printing;
+        if (!printing.insert(v.vector).second) return "#<cycle>";
+        std::string s = "#(";
+        for (size_t i = 0; i < v.vector->items.size(); ++i) s += (i ? " " : "") + toString(v.vector->items[i]);
+        printing.erase(v.vector);
+        return s + ")";
+    }
+    case ValueKind::Table: return "#<table " + std::to_string(v.table->count) + ">";
+    case ValueKind::Set: return "#<set " + std::to_string(v.table->count) + ">";
+    case ValueKind::Parameter: return "#<parameter>";
     case ValueKind::Closure:
         return v.closure->name.empty() ? "#<procedure>" : "#<procedure " + v.closure->name + ">";
     case ValueKind::Builtin:
@@ -179,6 +363,8 @@ std::string toString(const Value& v)
         return "#<macro " + v.closure->name + ">";
     case ValueKind::Record:
         return v.record->show();
+    case ValueKind::Syntax:
+        return v.syntax->isIdentifier() ? "#<syntax " + v.syntax->text + ">" : "#<syntax>";
     case ValueKind::Unassigned:
         return "#<unassigned>";
     }
@@ -210,60 +396,143 @@ std::string describeKind(const Value& v)
         return "a procedure";
     case ValueKind::Macro:
         return "a macro";
+    case ValueKind::Vector: return "a vector";
+    case ValueKind::Table: return "a table";
+    case ValueKind::Set: return "a set";
+    case ValueKind::Parameter: return "a parameter";
     case ValueKind::Record:
         return v.record->kindName();
+    case ValueKind::Syntax:
+        return "a syntax object";
     case ValueKind::Unassigned:
         return "an unassigned variable";
     }
     return "a value";
 }
 
+bool valuesIdentical(const Value& a, const Value& b)
+{
+    if (a.kind == b.kind && (a.kind == ValueKind::Pair || a.kind == ValueKind::Vector)) return a.cell() == b.cell();
+    return valuesEqual(a, b);
+}
+
 bool valuesEqual(const Value& a, const Value& b)
 {
+    // Compiler code compares symbols and small atoms very frequently. Keep the
+    // common path allocation-free; only compound comparisons need a worklist.
     if (a.kind != b.kind)
-    {
-        if (a.isNumber() && b.isNumber())
-            return (a.kind == ValueKind::Int ? double(a.intValue) : a.doubleValue) == (b.kind == ValueKind::Int ? double(b.intValue) : b.doubleValue);
-        return false;
-    }
+        return a.isNumber() && b.isNumber() &&
+            (a.kind == ValueKind::Int ? double(a.intValue) : a.doubleValue) ==
+            (b.kind == ValueKind::Int ? double(b.intValue) : b.doubleValue);
     switch (a.kind)
     {
-    case ValueKind::Nil:
-        return true;
-    case ValueKind::Bool:
-        return a.boolValue == b.boolValue;
-    case ValueKind::Int:
-        return a.intValue == b.intValue;
-    case ValueKind::Double:
-        return a.doubleValue == b.doubleValue;
-    case ValueKind::String:
-    case ValueKind::Symbol:
-    case ValueKind::Keyword:
-        return a.text == b.text;
-    case ValueKind::Pair:
+    case ValueKind::Nil: case ValueKind::Unassigned: return true;
+    case ValueKind::Bool: return a.boolValue == b.boolValue;
+    case ValueKind::Int: return a.intValue == b.intValue;
+    case ValueKind::Double: return a.doubleValue == b.doubleValue;
+    case ValueKind::String: return a.stringValue() == b.stringValue();
+    case ValueKind::Symbol: case ValueKind::Keyword: return a.text == b.text;
+    case ValueKind::Pair: case ValueKind::Vector: break;
+    default: return a.cell() == b.cell();
+    }
+    std::vector<std::pair<Value, Value>> todo{{a, b}};
+    std::set<std::pair<const GcCell*, const GcCell*>> seen;
+    while (!todo.empty())
     {
-        const Value* x = &a;
-        const Value* y = &b;
-        while (x->kind == ValueKind::Pair && y->kind == ValueKind::Pair)
+        auto pair = std::move(todo.back()); todo.pop_back();
+        const Value& x = pair.first; const Value& y = pair.second;
+        if (x.kind != y.kind)
         {
-            if (!valuesEqual(x->pair->car, y->pair->car))
-                return false;
-            x = &x->pair->cdr;
-            y = &y->pair->cdr;
+            if (x.isNumber() && y.isNumber() &&
+                (x.kind == ValueKind::Int ? double(x.intValue) : x.doubleValue) ==
+                (y.kind == ValueKind::Int ? double(y.intValue) : y.doubleValue)) continue;
+            return false;
         }
-        return valuesEqual(*x, *y);
+        switch (x.kind)
+        {
+        case ValueKind::Nil: case ValueKind::Unassigned: break;
+        case ValueKind::Bool: if (x.boolValue != y.boolValue) return false; break;
+        case ValueKind::Int: if (x.intValue != y.intValue) return false; break;
+        case ValueKind::Double: if (x.doubleValue != y.doubleValue) return false; break;
+        case ValueKind::String: if (x.stringValue() != y.stringValue()) return false; break;
+        case ValueKind::Symbol: case ValueKind::Keyword: if (x.text != y.text) return false; break;
+        case ValueKind::Pair:
+            if (seen.emplace(x.cell(), y.cell()).second)
+            {
+                todo.emplace_back(x.pair->car, y.pair->car);
+                todo.emplace_back(x.pair->cdr, y.pair->cdr);
+            }
+            break;
+        case ValueKind::Vector:
+            if (x.vector->items.size() != y.vector->items.size()) return false;
+            if (seen.emplace(x.cell(), y.cell()).second)
+                for (size_t i = 0; i < x.vector->items.size(); ++i) todo.emplace_back(x.vector->items[i], y.vector->items[i]);
+            break;
+        default: if (x.cell() != y.cell()) return false; break;
+        }
     }
-    case ValueKind::Closure:
-    case ValueKind::Macro:
-        return a.closure == b.closure;
-    case ValueKind::Builtin:
-        return a.builtin == b.builtin;
-    case ValueKind::Record:
-        return a.record == b.record;
-    case ValueKind::Unassigned:
-        return true;
+    return true;
+}
+
+size_t valueHash(const Value& value, bool identity, const SExpr& call)
+{
+    size_t hash = 0;
+    std::vector<Value> todo{value};
+    while (!todo.empty())
+    {
+        Value v = std::move(todo.back()); todo.pop_back();
+        if (v.kind == ValueKind::Double && std::isnan(v.doubleValue))
+            throw CompileError(call, "NaN cannot be a table/set key");
+        size_t part = size_t(v.kind);
+        if (v.isNumber()) part = std::hash<double>{}(v.kind == ValueKind::Int ? double(v.intValue) : v.doubleValue);
+        else if (v.kind == ValueKind::String) part ^= std::hash<std::string>{}(v.stringValue());
+        else if (v.kind == ValueKind::Symbol || v.kind == ValueKind::Keyword) part ^= std::hash<std::string>{}(v.text);
+        else if (v.kind == ValueKind::Bool) part ^= size_t(v.boolValue);
+        else if (v.kind == ValueKind::Pair && !identity)
+        {
+            todo.push_back(v.pair->cdr); todo.push_back(v.pair->car);
+        }
+        else if (v.kind == ValueKind::Vector && !identity)
+            throw CompileError(call, "Mutable vectors cannot be structural table/set keys; use :identity");
+        else if (const GcCell* c = v.cell()) part ^= std::hash<const void*>{}(c);
+        hash ^= part + size_t(0x9e3779b9) + (hash << 6) + (hash >> 2);
     }
-    return false;
+    return hash;
+}
+
+size_t Table::find(const Value& key, const SExpr& call) const
+{
+    auto it = buckets.find(valueHash(key, identity, call));
+    if (it != buckets.end()) for (size_t i : it->second)
+        if (entries[i].live && (identity ? valuesIdentical(entries[i].key, key) : valuesEqual(entries[i].key, key))) return i;
+    return size_t(-1);
+}
+
+bool Table::put(const Value& key, Value value, const SExpr& call)
+{
+    size_t i = find(key, call);
+    if (i != size_t(-1)) { entries[i].value = std::move(value); return false; }
+    size_t hash = valueHash(key, identity, call);
+    buckets[hash].push_back(entries.size()); entries.push_back({key, std::move(value), true}); ++count;
+    return true;
+}
+
+bool Table::erase(const Value& key, const SExpr& call)
+{
+    size_t i = find(key, call);
+    if (i == size_t(-1)) return false;
+    entries[i].live = false; entries[i].key = {}; entries[i].value = {}; --count;
+    // Worklists repeatedly remove and reinsert keys. Reclaim tombstones without
+    // changing the insertion order of surviving keys.
+    if (count == 0) { entries.clear(); buckets.clear(); }
+    else if (entries.size() > count * 2 + 64)
+    {
+        std::vector<Entry> compact;
+        for (const Entry& e : entries) if (e.live) compact.push_back(e);
+        entries = std::move(compact); buckets.clear();
+        for (size_t j = 0; j < entries.size(); ++j) buckets[valueHash(entries[j].key, identity, call)].push_back(j);
+    }
+    return true;
 }
 
 Value datumFromSExpr(const SExpr& e, DatumOrigins* origins)
@@ -273,7 +542,11 @@ Value datumFromSExpr(const SExpr& e, DatumOrigins* origins)
     case SExprKind::Symbol:
         if (e.text == "#t" || e.text == "#f")
             return Value::boolean(e.text == "#t");
-        return Value::symbol(e.text);
+        {
+            Value v = Value::symbol(e.text);
+            v.datumSyntax = e.syntax;
+            return v;
+        }
     case SExprKind::Keyword:
         return Value::keyword(e.text);
     case SExprKind::Number:
@@ -326,9 +599,13 @@ SExpr sexprFromDatum(const Value& v, const DatumOrigins& origins, const SourceLo
     case ValueKind::Double:
         return SExpr::atom(SExprKind::Number, toString(v), loc);
     case ValueKind::String:
-        return SExpr::atom(SExprKind::String, v.text, loc);
+        return SExpr::atom(SExprKind::String, v.stringValue(), loc);
     case ValueKind::Symbol:
-        return SExpr::atom(SExprKind::Symbol, v.text, loc);
+        {
+            SExpr e = SExpr::atom(SExprKind::Symbol, v.text, loc);
+            e.syntax = v.datumSyntax;
+            return e;
+        }
     case ValueKind::Keyword:
         return SExpr::atom(SExprKind::Keyword, v.text, loc);
     case ValueKind::Pair:
@@ -356,8 +633,13 @@ SExpr sexprFromDatum(const Value& v, const DatumOrigins& origins, const SourceLo
     case ValueKind::Closure:
     case ValueKind::Builtin:
     case ValueKind::Macro:
+    case ValueKind::Vector:
+    case ValueKind::Table:
+    case ValueKind::Set:
+    case ValueKind::Parameter:
     case ValueKind::Record:
     case ValueKind::Unassigned:
+    case ValueKind::Syntax:
         break;
     }
     throw CompileError(loc, "A macro expansion can't contain " + describeKind(v) + " (" + toString(v) + "); expand to code that refers to it by name");

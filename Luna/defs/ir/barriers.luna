@@ -1,25 +1,3 @@
-~ A forward GC barrier: calls NativeContext function `handler` (L, obj, gc) when obj is black and the value written
-~ into it is a white collectable object. tag is the value's tag when known (a constant, else undef), tag-value its
-~ tag and gc its gcvalue.
-(define (forward-barrier handler obj tag tag-value gc)
-  (labels (skip)
-    (choose (gen:|| (op-kind? tag :Undef) (gen:! (gen:call :isGCO (tag-val tag))))
-            ~ iscollectable(value)
-            (Guard (ICmp :sge :I32 tag-value :LUA_TSTRING) skip))
-    ~ isblack(obj)
-    (Guard (ICmp :ne :I32 (And :I32 (Load :U8 (Field obj :GCheader.marked)) black-mask) 0) skip)
-    (let* ([object gc]) (seq
-      ~ iswhite(gcvalue(value))
-      (Guard (ICmp :ne :I32 (And :I32 (Load :U8 (Field object :GCheader.marked)) white-mask) 0) skip)
-      (native-call :None handler :Ptr (Root :State) :Ptr obj :Ptr object)))
-    (Label skip)))
-
-~ A forward barrier for the TValue `value` written into obj: a VM register or constant, or a TValue instruction result
-(define (tvalue-barrier handler obj value tag)
-  (choose (op-kind? value :Inst)
-          (forward-barrier handler obj tag (ExtractLane :I32 value 3) (ExtractLane :I64 value 0))
-          (forward-barrier handler obj tag (Load :I32 (Field value :TValue.tt)) (LoadPtr value :TValue.value))))
-
 ~ Store TValue into a function upvalue
 ~ A: UPn
 ~ B: TValue
@@ -28,12 +6,7 @@
   (operands [up :UPn] [val :tvalue] [tag :tag|:undef])
   (class :effect)
   (facts (no-vm-effects))
-  (lowering
-    (let* ([upval (Load :Ptr (Field (Index (Field (Root :Closure) :Closure.l.uprefs) up sizeof-TValue) :TValue.value.gc))]) (seq
-      (Store :V128 (Field (LoadPtr upval :UpVal.v) 0) val)
-      ~ no barrier for a value that's known not to be collectable
-      (choose (gen:|| (op-kind? tag :Undef) (gen:call :isGCO (tag-val tag)))
-              (forward-barrier :luaC_barrierf upval tag (ExtractLane :I32 val 3) (ExtractLane :I64 val 0)))))))
+  (lowering (lower-set-upvalue up val tag)))
 
 ~ Handle GC write barrier (forward)
 ~ A: pointer (GCObject)
@@ -43,20 +16,14 @@
   (operands [obj :pointer] [ra :Rn] [tag :tag|:undef])
   (class :effect)
   (facts (reads (tvalue ra)))
-  (lowering
-    (tvalue-barrier :luaC_barrierf obj ra tag)))
+  (lowering (lower-barrier-obj obj ra tag)))
 
 ~ Handle GC write barrier (backwards) for a write into a table
 ~ A: pointer (LuaTable)
 (define-ircmd BARRIER_TABLE_BACK
   (operands [table :pointer])
   (class :effect)
-  (lowering
-    (labels (skip)
-      ~ only a black table needs the barrier
-      (Guard (ICmp :ne :I32 (And :I32 (Load :U8 (Field table :GCheader.marked)) black-mask) 0) skip)
-      (native-call :None :luaC_barrierback :Ptr (Root :State) :Ptr table :Ptr (AddressOf (Field table :LuaTable.gclist)))
-      (Label skip))))
+  (lowering (lower-barrier-table-back table)))
 
 ~ Handle GC write barrier (forward) for a write into a table
 ~ A: pointer (LuaTable)
@@ -66,5 +33,4 @@
   (operands [table :pointer] [ra :Rn|:Kn] [tag :tag|:undef])
   (class :effect)
   (facts (reads (tvalue ra)))
-  (lowering
-    (tvalue-barrier :luaC_barriertable table ra tag)))
+  (lowering (lower-barrier-table-forward table ra tag)))

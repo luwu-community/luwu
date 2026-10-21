@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,6 +31,85 @@ struct SourceLocation
     }
 };
 
+struct ScopeSet
+{
+    std::vector<uint32_t> ids; // Kept sorted
+
+    bool contains(uint32_t id) const
+    {
+        for (uint32_t x : ids)
+            if (x == id) return true;
+        return false;
+    }
+
+    void add(uint32_t id)
+    {
+        for (size_t i = 0; i < ids.size(); ++i)
+        {
+            if (ids[i] == id) return;
+            if (ids[i] > id)
+            {
+                ids.insert(ids.begin() + i, id);
+                return;
+            }
+        }
+        ids.push_back(id);
+    }
+
+    void remove(uint32_t id)
+    {
+        for (auto it = ids.begin(); it != ids.end(); ++it)
+        {
+            if (*it == id)
+            {
+                ids.erase(it);
+                return;
+            }
+        }
+    }
+
+    void flip(uint32_t id)
+    {
+        if (contains(id))
+            remove(id);
+        else
+            add(id);
+    }
+
+    bool isSubsetOf(const ScopeSet& other) const
+    {
+        size_t j = 0;
+        for (size_t i = 0; i < ids.size(); ++i)
+        {
+            while (j < other.ids.size() && other.ids[j] < ids[i])
+                ++j;
+            if (j == other.ids.size() || other.ids[j] != ids[i])
+                return false;
+            ++j;
+        }
+        return true;
+    }
+
+    bool operator==(const ScopeSet& other) const
+    {
+        return ids == other.ids;
+    }
+
+    bool operator!=(const ScopeSet& other) const
+    {
+        return ids != other.ids;
+    }
+};
+
+struct SyntaxData
+{
+    ScopeSet scopes;
+    bool globalBinding = false;
+    SourceLocation loc;
+    std::vector<std::string> docs;
+    std::optional<std::string> trailingDoc;
+};
+
 enum class SExprKind
 {
     Symbol,
@@ -53,6 +133,9 @@ struct SExpr
     // expression, a trailing one follows it on the line where it ends.
     std::vector<std::string> docs;
     std::optional<std::string> trailingDoc;
+
+    // Self-contained syntax context (scopes and origins for hygienic macro expansion)
+    std::shared_ptr<SyntaxData> syntax;
 
     bool hasDocs() const { return !docs.empty() || trailingDoc.has_value(); }
 

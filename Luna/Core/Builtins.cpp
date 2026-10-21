@@ -116,7 +116,7 @@ static Args listArg(const Args& args, size_t i, const std::string& fn, const SEx
 // Formats a value for display in (str ...) and error messages without string quotes.
 static std::string display(const Value& v)
 {
-    return v.kind == ValueKind::String ? v.text : toString(v);
+    return v.kind == ValueKind::String ? v.stringValue() : toString(v);
 }
 
 void installBuiltins(Env& env, int64_t& gensymCounter)
@@ -231,9 +231,7 @@ void installBuiltins(Env& env, int64_t& gensymCounter)
     add(env, "equal?", 2, 2, [](const Args& a, const SExpr&) { return Value::boolean(valuesEqual(a[0], a[1])); });
     // Compares atomic values by equality and lists or procedures by pointer identity.
     add(env, "eq?", 2, 2, [](const Args& a, const SExpr&) {
-        if (a[0].kind == ValueKind::Pair && a[1].kind == ValueKind::Pair)
-            return Value::boolean(a[0].pair == a[1].pair);
-        return Value::boolean(valuesEqual(a[0], a[1]));
+        return Value::boolean(valuesIdentical(a[0], a[1]));
     });
 
     // List manipulation functions.
@@ -285,16 +283,15 @@ void installBuiltins(Env& env, int64_t& gensymCounter)
 
     // String, symbol, and keyword conversion and manipulation functions.
     add(env, "str", 0, -1, [](const Args& a, const SExpr&) {
-        std::string s;
-        for (const auto& v : a)
-            s += display(v);
-        return Value::string(s);
+        std::vector<Value> strings;
+        for (const auto& v : a) strings.push_back(v.kind == ValueKind::String ? v : Value::string(toString(v)));
+        return Value::concat(strings);
     });
     add(env, "string-length", 1, 1, [](const Args& a, const SExpr& c) {
-        return Value::integer(int64_t(need(a, 0, ValueKind::String, "a string", "string-length", c).text.size()));
+        return Value::integer(int64_t(need(a, 0, ValueKind::String, "a string", "string-length", c).stringSize()));
     });
     add(env, "substring", 2, 3, [](const Args& a, const SExpr& c) {
-        const std::string& s = need(a, 0, ValueKind::String, "a string", "substring", c).text;
+        const std::string& s = need(a, 0, ValueKind::String, "a string", "substring", c).stringValue();
         int64_t from = need(a, 1, ValueKind::Int, "an int", "substring", c).intValue;
         int64_t to = a.size() == 3 ? need(a, 2, ValueKind::Int, "an int", "substring", c).intValue : int64_t(s.size());
         if (from < 0 || to < from || to > int64_t(s.size()))
@@ -302,22 +299,22 @@ void installBuiltins(Env& env, int64_t& gensymCounter)
         return Value::string(s.substr(size_t(from), size_t(to - from)));
     });
     add(env, "string-suffix?", 2, 2, [](const Args& a, const SExpr& c) {
-        const std::string& s = need(a, 0, ValueKind::String, "a string", "string-suffix?", c).text;
-        const std::string& suffix = need(a, 1, ValueKind::String, "a string", "string-suffix?", c).text;
+        const std::string& s = need(a, 0, ValueKind::String, "a string", "string-suffix?", c).stringValue();
+        const std::string& suffix = need(a, 1, ValueKind::String, "a string", "string-suffix?", c).stringValue();
         return Value::boolean(s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0);
     });
     add(env, "string-upcase", 1, 1, [](const Args& a, const SExpr& c) {
-        std::string s = need(a, 0, ValueKind::String, "a string", "string-upcase", c).text;
+        std::string s = need(a, 0, ValueKind::String, "a string", "string-upcase", c).stringValue();
         for (char& ch : s)
             ch = char(std::toupper(static_cast<unsigned char>(ch)));
         return Value::string(s);
     });
     add(env, "string<?", 2, 2, [](const Args& a, const SExpr& c) {
-        return Value::boolean(need(a, 0, ValueKind::String, "a string", "string<?", c).text < need(a, 1, ValueKind::String, "a string", "string<?", c).text);
+        return Value::boolean(need(a, 0, ValueKind::String, "a string", "string<?", c).stringValue() < need(a, 1, ValueKind::String, "a string", "string<?", c).stringValue());
     });
     add(env, "string-search", 2, 3, [](const Args& a, const SExpr& c) {
-        const std::string& s = need(a, 0, ValueKind::String, "a string", "string-search", c).text;
-        const std::string& part = need(a, 1, ValueKind::String, "a string", "string-search", c).text;
+        const std::string& s = need(a, 0, ValueKind::String, "a string", "string-search", c).stringValue();
+        const std::string& part = need(a, 1, ValueKind::String, "a string", "string-search", c).stringValue();
         int64_t from = a.size() == 3 ? need(a, 2, ValueKind::Int, "an int", "string-search", c).intValue : 0;
         if (from < 0 || from > int64_t(s.size()))
             throw CompileError(c, "string-search: " + std::to_string(from) + " is out of range for a string of " + std::to_string(s.size()));
@@ -325,8 +322,8 @@ void installBuiltins(Env& env, int64_t& gensymCounter)
         return at == std::string::npos ? Value::boolean(false) : Value::integer(int64_t(at));
     });
     add(env, "string-split", 2, 2, [](const Args& a, const SExpr& c) {
-        const std::string& s = need(a, 0, ValueKind::String, "a string", "string-split", c).text;
-        const std::string& separator = need(a, 1, ValueKind::String, "a string", "string-split", c).text;
+        const std::string& s = need(a, 0, ValueKind::String, "a string", "string-split", c).stringValue();
+        const std::string& separator = need(a, 1, ValueKind::String, "a string", "string-split", c).stringValue();
         if (separator.empty())
             throw CompileError(c, "string-split needs a separator that isn't empty");
         std::vector<Value> parts;
@@ -345,37 +342,38 @@ void installBuiltins(Env& env, int64_t& gensymCounter)
         std::vector<Value> items;
         if (!listToVector(a[0], items))
             throw CompileError(c, "string-join takes a list of strings, got " + toString(a[0]));
-        const std::string& separator = need(a, 1, ValueKind::String, "a string", "string-join", c).text;
-        std::string s;
+        need(a, 1, ValueKind::String, "a string", "string-join", c);
+        std::vector<Value> strings;
         for (size_t i = 0; i < items.size(); ++i)
         {
             if (items[i].kind != ValueKind::String)
                 throw CompileError(c, "string-join takes a list of strings, got " + toString(items[i]) + " in it");
-            s += (i == 0 ? "" : separator) + items[i].text;
+            if (i) strings.push_back(a[1]);
+            strings.push_back(items[i]);
         }
-        return Value::string(s);
+        return Value::concat(strings);
     });
     add(env, "string-downcase", 1, 1, [](const Args& a, const SExpr& c) {
-        std::string s = need(a, 0, ValueKind::String, "a string", "string-downcase", c).text;
+        std::string s = need(a, 0, ValueKind::String, "a string", "string-downcase", c).stringValue();
         for (char& ch : s)
             ch = char(std::tolower(static_cast<unsigned char>(ch)));
         return Value::string(s);
     });
     add(env, "symbol->string", 1, 1, [](const Args& a, const SExpr& c) { return Value::string(need(a, 0, ValueKind::Symbol, "a symbol", "symbol->string", c).text); });
-    add(env, "string->symbol", 1, 1, [](const Args& a, const SExpr& c) { return Value::symbol(need(a, 0, ValueKind::String, "a string", "string->symbol", c).text); });
+    add(env, "string->symbol", 1, 1, [](const Args& a, const SExpr& c) { return Value::symbol(need(a, 0, ValueKind::String, "a string", "string->symbol", c).stringValue()); });
     // Keyword values retain their leading colon; keyword->string strips it.
     add(env, "keyword->string", 1, 1, [](const Args& a, const SExpr& c) {
         return Value::string(need(a, 0, ValueKind::Keyword, "a keyword", "keyword->string", c).text.substr(1));
     });
     add(env, "string->keyword", 1, 1, [](const Args& a, const SExpr& c) {
-        return Value::keyword(":" + need(a, 0, ValueKind::String, "a string", "string->keyword", c).text);
+        return Value::keyword(":" + need(a, 0, ValueKind::String, "a string", "string->keyword", c).stringValue());
     });
     add(env, "number->string", 1, 1, [](const Args& a, const SExpr& c) {
         needNumber(a, 0, "number->string", c);
         return Value::string(toString(a[0]));
     });
     add(env, "string-escape", 1, 1, [](const Args& a, const SExpr& c) {
-        const std::string& text = need(a, 0, ValueKind::String, "a string", "string-escape", c).text;
+        const std::string& text = need(a, 0, ValueKind::String, "a string", "string-escape", c).stringValue();
         std::string s = "\"";
         for (char ch : text)
         {
@@ -393,7 +391,7 @@ void installBuiltins(Env& env, int64_t& gensymCounter)
 
     // Generates an uninterned unique symbol (#:prefixN) to prevent hygiene violations in macro expansions.
     add(env, "gensym", 0, 1, [&gensymCounter](const Args& a, const SExpr& c) {
-        std::string prefix = a.empty() ? "g" : need(a, 0, ValueKind::String, "a string", "gensym", c).text;
+        std::string prefix = a.empty() ? "g" : need(a, 0, ValueKind::String, "a string", "gensym", c).stringValue();
         return Value::symbol("#:" + prefix + std::to_string(++gensymCounter));
     });
 

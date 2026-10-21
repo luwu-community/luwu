@@ -1,33 +1,3 @@
-(define (member-slot pc)
-  (Load :U8 (Field (Index (Root :Code) pc sizeof-Instruction) :kOffsetOfInstructionC)))
-
-(define (check-member-key cls slot k mismatch)
-  (Guard (ICmp :eq :Ptr (Load :Ptr (Index (LoadPtr cls :LuauClass.offsettomember) slot (gen:sizeof :TString* 8))) (LoadPtr k :TValue.value)) mismatch))
-
-(define (class-member-auth cls slot write? written-obj mismatch)
-  (let ([flag (Load :U8 (Index (LoadPtr cls :LuauClass.memberflags) slot 1))]
-        [restrict-bits (gen:typed :int (gen:? write?
-                                              (gen:| :LBC_CLASSMEMBER_PRIVATE :LBC_CLASSMEMBER_CONST)
-                                              (gen:| :LBC_CLASSMEMBER_PRIVATE :LBC_CLASSMEMBER_INITBLOCKED)))])
-    (labels (authorized)
-      (Guard (ICmp :ne :I32 (And :I32 flag restrict-bits) 0) authorized)
-      (let ([owner (LoadPtr (Root :Closure) :Closure.l.p :Proto.ownerclass)])
-        (seq
-          (Guard (ICmp :eq :Ptr owner cls) mismatch)
-          (choose write?
-                  (seq
-                    (Guard (ICmp :ne :I32 (And :I32 flag :LBC_CLASSMEMBER_CONST) 0) authorized)
-                    (Guard (ICmp :ne :I32 (Load :U8 (Field owner :LuauClass.hascustominit)) 0) mismatch)
-                    (let* ([idx (Sub :I32 (Load :I32 (Field owner :LuauClass.initoffset))
-                                          (Load :I32 (Field owner :LuauClass.numberofinstancemembers)))]
-                           [init-cl (Load :Ptr (Field (Index (LoadPtr owner :LuauClass.staticmembers) idx sizeof-TValue) :TValue.value.gc))])
-                      (seq
-                        (Guard (ICmp :eq :Ptr init-cl (Root :Closure)) mismatch)
-                        (Guard (ICmp :eq :I32 (Load :I32 (Field (Root :Stack) :TValue.tt)) :LUA_TOBJECT) mismatch)
-                        (Guard (ICmp :eq :Ptr (LoadPtr (Root :Stack) :TValue.value.gc) written-obj) mismatch))))
-                  (Guard (ICmp :eq :I32 (And :I32 flag :LBC_CLASSMEMBER_INITBLOCKED) 0) mismatch))))
-      (Label authorized))))
-
 ~ Luwu Classes (rfcs/classes): compute class.isinstance(value, class) as an int 0/1 --
 ~ true iff the value is an object whose class is exactly the given class.
 ~ A: tag (of the value)
@@ -37,17 +7,7 @@
   (operands [tag :tag] [obj :pointer] [cls :pointer])
   (result :int)
   (class :value)
-  (lowering
-    (let ([res (variable :I32)])
-      (seq
-        (Set res 0)
-        (choose (gen:! (gen:&& (constant? tag) (gen:!= (tag-val tag) :LUA_TOBJECT)))
-                (labels (done)
-                  (choose (gen:! (constant? tag))
-                          (Guard (ICmp :eq :I32 tag :LUA_TOBJECT) done))
-                  (Set res (Select :I32 (ICmp :eq :Ptr (LoadPtr obj :LuauObject.lclass) cls) 1 0))
-                  (Label done)))
-        res))))
+  (lowering (lower-class-isinstance tag obj cls)))
 
 ~ Try to get the address of an instance member (field) on a Luwu Classes object using the cached
 ~ member slot at the given bytecode position, or jump if the slot is stale (out of range for
@@ -65,15 +25,8 @@
   (operands [obj :pointer] [pc :const-uint] [k :Kn] [mismatch-op :block|:undef] [write :const-uint])
   (result :pointer)
   (class :guard)
-  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
-  (lowering
-    (let ([slot (member-slot pc)]
-          [lclass (LoadPtr obj :LuauObject.lclass)])
-      (seq
-        (Guard (ICmp :ult :I32 slot (Load :I32 (Field lclass :LuauClass.numberofinstancemembers))) mismatch-op)
-        (class-member-auth lclass slot (gen:&& (has-op? (ir-operand :OP_E)) (gen:!= write 0)) obj mismatch-op)
-        (check-member-key lclass slot k mismatch-op)
-        (AddressOf (Index (Field obj :LUAR_OBJECT_MEMBERS_OFFSET) slot sizeof-TValue))))))
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: emit:branch-both operand targets a fallback block: can't appear in an exit sync sequence
+  (lowering (lower-try-object-member-addr obj pc k mismatch-op write)))
 
 ~ Luwu Classes (rfcs/classes): guard that NEWOBJECT's FIELDS form can construct this class
 ~ natively, as a plain member-by-member copy. The compiler guarantees the class's shape (see
@@ -90,15 +43,7 @@
   (operands [cls :pointer] [fail :block|:vmexit|:undef])
   (class :guard)
   (dead-store :live-ins-no-exit-sync)
-  (lowering
-    (labels (constructible)
-      (Guard (ICmp :eq :Ptr (LoadPtr cls :LuauClass.memberdefaults) 0) fail)
-      (Guard (ICmp :ne :I32 (Load :U8 (Field cls :LuauClass.hascustominit)) 0) constructible)
-      (let ([flag (Load :U8 (Index (LoadPtr cls :LuauClass.memberflags) (Load :I32 (Field cls :LuauClass.initoffset)) 1))])
-        (Guard (ICmp :ne :I32 (And :I32 flag :LBC_CLASSMEMBER_PRIVATE) 0) constructible))
-      ~ private: only from one of the class's own methods (or a closure nested in one)
-      (Guard (ICmp :eq :Ptr (LoadPtr (Root :Closure) :Closure.l.p :Proto.ownerclass) cls) fail)
-      (Label constructible))))
+  (lowering (lower-check-class-fields-constructible cls fail)))
 
 ~ Try to get the address of a static member on a Luwu Classes class object using the cached
 ~ member slot at the given bytecode position, or jump if the slot is stale (out of range for
@@ -112,17 +57,8 @@
   (operands [cls :pointer] [pc :const-uint] [k :Kn] [mismatch-op :block|:undef])
   (result :pointer)
   (class :guard)
-  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
-  (lowering
-    (let ([slot (member-slot pc)])
-      (seq
-        (Guard (ICmp :uge :I32 slot (Load :I32 (Field cls :LuauClass.numberofinstancemembers))) mismatch-op)
-        (Guard (ICmp :ult :I32 slot (Load :I32 (Field cls :LuauClass.numberofallmembers))) mismatch-op)
-        (class-member-auth cls slot (gen:bool #f) cls mismatch-op)
-        (check-member-key cls slot k mismatch-op)
-        (AddressOf (Index (LoadPtr cls :LuauClass.staticmembers)
-                          (Sub :I32 slot (Load :I32 (Field cls :LuauClass.numberofinstancemembers)))
-                          sizeof-TValue))))))
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: emit:branch-both operand targets a fallback block: can't appear in an exit sync sequence
+  (lowering (lower-try-class-member-addr cls pc k mismatch-op)))
 
 ~ Try to get the address of any member (instance field or static method) on a Luwu Classes
 ~ object using the cached member slot at the given bytecode position, or jump if the slot is
@@ -136,24 +72,8 @@
   (operands [obj :pointer] [pc :const-uint] [k :Kn] [mismatch-op :block|:undef])
   (result :pointer)
   (class :guard)
-  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
-  (lowering
-    (let ([slot (member-slot pc)]
-          [lclass (LoadPtr obj :LuauObject.lclass)]
-          [res (variable :Ptr)])
-      (seq
-        (Guard (ICmp :ult :I32 slot (Load :I32 (Field lclass :LuauClass.numberofallmembers))) mismatch-op)
-        (class-member-auth lclass slot (gen:bool #f) obj mismatch-op)
-        (check-member-key lclass slot k mismatch-op)
-        (let ([ninstance (Load :I32 (Field lclass :LuauClass.numberofinstancemembers))])
-          (labels (is-static done)
-            (Guard (ICmp :ult :I32 slot ninstance) is-static)
-            (Set res (AddressOf (Index (Field obj :LUAR_OBJECT_MEMBERS_OFFSET) slot sizeof-TValue)))
-            (Goto done)
-            (Label is-static)
-            (Set res (AddressOf (Index (LoadPtr lclass :LuauClass.staticmembers) (Sub :I32 slot ninstance) sizeof-TValue)))
-            (Label done)))
-        res))))
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: emit:branch-both operand targets a fallback block: can't appear in an exit sync sequence
+  (lowering (lower-try-object-namecall-addr obj pc k mismatch-op)))
 
 ~ Create closure from a child proto
 ~ A: unsigned int (nups)
@@ -164,17 +84,7 @@
   (result :pointer)
   (class :value)
   (location-tracking :none)
-  (lowering
-    (let ([proto (variable :Ptr)])
-      (seq
-        (choose (fflag "LuauCIProto")
-                (Set proto (LoadPtr (Root :State) :lua_State.ci :CallInfo.p))
-                (Set proto (LoadPtr (Root :Closure) :Closure.l.p)))
-        (native-call :Ptr :luaF_newLclosure
-                     :Ptr (Root :State)
-                     :I32 nupvalues
-                     :Ptr env
-                     :Ptr (Load :Ptr (Index (LoadPtr proto :Proto.p) proto-index (gen:sizeof :Proto* 8))))))))
+  (lowering (lower-newclosure nupvalues env proto-index)))
 
 ~ Perform a conditional jump based on the result of Proto ID comparison
 ~ A: closure pointer
@@ -184,7 +94,4 @@
 (define-ircmd JUMP_CMP_PROTOID
   (operands [closure :pointer] [protoid :const-uint] [if-eq :block] [if-ne :block])
   (class :terminator)
-  (lowering
-    ~ C closures never match
-    (Guard (ICmp :eq :I32 (Load :U8 (Field closure :Closure.isC)) 0) if-ne)
-    (Branch (ICmp :eq :I32 (Load :I32 (Field (LoadPtr closure :Closure.l.p) :Proto.funid)) protoid) if-eq if-ne)))
+  (lowering (lower-jump-cmp-protoid closure protoid if-eq if-ne)))

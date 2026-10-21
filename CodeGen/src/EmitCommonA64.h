@@ -30,6 +30,40 @@ namespace A64
 
 struct IrRegAllocA64;
 
+// After spilling, move three double arguments into d0-d2. Once only cycles
+// remain, every source outside d0-d2 has been consumed, so d31 is safe scratch.
+inline void emitMoveDoubleArguments3(AssemblyBuilderA64& build, RegisterA64 x, RegisterA64 y, RegisterA64 z)
+{
+    CODEGEN_ASSERT(x.kind == KindA64::d && y.kind == KindA64::d && z.kind == KindA64::d);
+    RegisterA64 dsts[] = {d0, d1, d2};
+    RegisterA64 srcs[] = {x, y, z};
+    unsigned remaining = 3;
+    while (remaining)
+    {
+        bool moved = false;
+        for (unsigned i = 0; i < remaining; ++i)
+        {
+            bool needed = false;
+            for (unsigned j = 0; j < remaining; ++j)
+                needed |= i != j && dsts[i] == srcs[j];
+            if (dsts[i] != srcs[i] && needed)
+                continue;
+            if (dsts[i] != srcs[i])
+                build.fmov(dsts[i], srcs[i]);
+            --remaining;
+            dsts[i] = dsts[remaining];
+            srcs[i] = srcs[remaining];
+            moved = true;
+            break;
+        }
+        if (!moved) // only cycles remain
+        {
+            build.fmov(d31, srcs[0]);
+            srcs[0] = d31;
+        }
+    }
+}
+
 // Lowering helpers shared by IrLoweringA64.cpp and the generated lowering rules
 void emitAbort(AssemblyBuilderA64& build, Label& abort);
 void emitFallback(AssemblyBuilderA64& build, int offset, int pcpos);
@@ -37,11 +71,13 @@ void emitInvokeLibm1P(AssemblyBuilderA64& build, size_t func, int arg);
 bool emitBuiltin(AssemblyBuilderA64& build, IrFunction& function, IrRegAllocA64& regs, int bfid, int res, int arg, int nresults);
 void emitClassMemberAuthA64(
     AssemblyBuilderA64& build,
-    IrRegAllocA64& regs,
     RegisterA64 classReg,
     RegisterA64 slotReg,
     RegisterA64 writtenObject,
-    Label& mismatch
+    Label& mismatch,
+    RegisterA64 owner,
+    RegisterA64 flagw,
+    RegisterA64 maskw
 );
 
 inline ConditionA64 getConditionFP(IrCondition cond)
@@ -279,193 +315,6 @@ inline void emitLoadFloatBits(AssemblyBuilderA64& build, RegisterA64 dst, Regist
     {
         build.adr(scratch, val);
         build.ldr(dst, scratch);
-    }
-}
-
-// A register move of either kind (omitted when the registers are the same)
-inline void emitMoveA64(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 src)
-{
-    if (dst == src)
-        return;
-    if (dst.kind == KindA64::s || dst.kind == KindA64::d)
-        build.fmov(dst, src);
-    else
-        build.mov(dst, src); // general-purpose and vector registers
-}
-
-// A floating-point constant (a compile-time value, not an IR operand) into dst; scratch is a 64-bit register
-inline void emitLoadFpConst(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 scratch, double val)
-{
-    if (dst.kind == KindA64::s)
-    {
-        if (AssemblyBuilderA64::isFmovSupportedFp32(float(val)))
-            build.fmov(dst, float(val));
-        else
-            emitLoadFloatBits(build, dst, scratch, float(val));
-    }
-    else if (AssemblyBuilderA64::isFmovSupportedFp64(val))
-        build.fmov(dst, val);
-    else
-        emitLoadDoubleBits(build, dst, scratch, val);
-}
-
-// Moves values into call argument registers as one parallel move: no source is overwritten before it's read. x16 and
-// q31 break cycles. The sources stay live across the spill before the call (see sources()).
-struct ArgMovesA64
-{
-    RegisterA64 dsts[16];
-    RegisterA64 srcs[16];
-    size_t count = 0;
-
-    void add(RegisterA64 dst, RegisterA64 src)
-    {
-        CODEGEN_ASSERT(count < 16);
-        dsts[count] = dst;
-        srcs[count] = src;
-        ++count;
-    }
-
-    const RegisterA64* sources() const
-    {
-        return srcs;
-    }
-
-    static bool sameReg(RegisterA64 a, RegisterA64 b)
-    {
-        bool fa = a.kind == KindA64::s || a.kind == KindA64::d || a.kind == KindA64::q;
-        bool fb = b.kind == KindA64::s || b.kind == KindA64::d || b.kind == KindA64::q;
-        return fa == fb && a.index == b.index;
-    }
-
-    void emit(AssemblyBuilderA64& build)
-    {
-        bool done[16] = {};
-        size_t remaining = count;
-        for (size_t i = 0; i < count; ++i)
-        {
-            if (sameReg(dsts[i], srcs[i]))
-            {
-                done[i] = true;
-                --remaining;
-            }
-        }
-
-        while (remaining)
-        {
-            bool progress = false;
-            for (size_t i = 0; i < count; ++i)
-            {
-                if (done[i])
-                    continue;
-                // A destination still holding another pending move's source has to wait
-                bool blocked = false;
-                for (size_t j = 0; j < count && !blocked; ++j)
-                    blocked = j != i && !done[j] && sameReg(srcs[j], dsts[i]);
-                if (blocked)
-                    continue;
-                move(build, dsts[i], srcs[i]);
-                done[i] = true;
-                --remaining;
-                progress = true;
-            }
-            if (progress)
-                continue;
-
-            // Only cycles are left: park one source in scratch and redirect its readers
-            for (size_t i = 0; i < count; ++i)
-            {
-                if (done[i])
-                    continue;
-                bool fp = srcs[i].kind == KindA64::s || srcs[i].kind == KindA64::d || srcs[i].kind == KindA64::q;
-                RegisterA64 scratch = fp ? castReg(srcs[i].kind, q31) : castReg(srcs[i].kind == KindA64::w ? KindA64::w : KindA64::x, x16);
-                RegisterA64 parked = srcs[i];
-                move(build, scratch, parked);
-                for (size_t j = 0; j < count; ++j)
-                {
-                    if (!done[j] && sameReg(srcs[j], parked))
-                        srcs[j] = castReg(srcs[j].kind, scratch);
-                }
-                break;
-            }
-        }
-    }
-
-    static void move(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 src)
-    {
-        bool fd = dst.kind == KindA64::s || dst.kind == KindA64::d || dst.kind == KindA64::q;
-        bool fs = src.kind == KindA64::s || src.kind == KindA64::d || src.kind == KindA64::q;
-        if (fd != fs)
-            build.fmov(dst, src);
-        else if (fd)
-            build.fmov(dst, src);
-        else
-            build.mov(dst, src);
-    }
-};
-
-inline void emitLoadInt64(AssemblyBuilderA64& build, RegisterA64 dst, int64_t val)
-{
-    uint64_t u = uint64_t(val);
-
-    // Count non-zero halfwords (movz path) vs non-0xFFFF halfwords (movn path)
-    int movzCount = 0;
-    int movnCount = 0;
-    for (int shift = 0; shift < 64; shift += 16)
-    {
-        uint16_t hw = uint16_t(u >> shift);
-        if (hw != 0)
-            movzCount++;
-        if (hw != 0xFFFF)
-            movnCount++;
-    }
-
-    if (movzCount <= movnCount)
-    {
-        // movz path: emit movz for first non-zero halfword, movk for rest
-        bool first = true;
-        for (int shift = 0; shift < 64; shift += 16)
-        {
-            uint16_t hw = uint16_t(u >> shift);
-            if (hw != 0)
-            {
-                if (first)
-                {
-                    build.movz(dst, hw, shift);
-                    first = false;
-                }
-                else
-                {
-                    build.movk(dst, hw, shift);
-                }
-            }
-        }
-
-        if (first)
-            build.movz(dst, 0);
-    }
-    else
-    {
-        // movn path: use movn for first non-0xFFFF halfword, movk for rest
-        bool first = true;
-        for (int shift = 0; shift < 64; shift += 16)
-        {
-            uint16_t hw = uint16_t(u >> shift);
-            if (hw != 0xFFFF)
-            {
-                if (first)
-                {
-                    build.movn(dst, uint16_t(~hw), shift);
-                    first = false;
-                }
-                else
-                {
-                    build.movk(dst, hw, shift);
-                }
-            }
-        }
-
-        if (first)
-            build.movn(dst, 0);
     }
 }
 

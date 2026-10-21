@@ -5,53 +5,7 @@
   (operands [ra :Rn] [count :const-int])
   (class :terminator)
   (facts (reads (vm-slots ra count)))
-  (lowering
-    (choose-cond
-      [(gen:&& (gen:== count 1) (gen:! (variadic?)))
-       (Store :V128 (Field (Root :Stack) (gen:- 0 (gen:cast :int sizeof-TValue))) (Load :V128 (Field ra 0)))
-       (Exit :return_ (list :Ptr (Root :Stack)) (list :I32 1))]
-      [else
-       (let ([res (variable :Ptr)])
-         (seq
-           (choose (variadic?)
-                   (Set res (LoadPtr (Root :State) :lua_State.ci :CallInfo.func))
-                   (Set res (Sub :Ptr (Root :Stack) sizeof-TValue)))
-           (choose-cond
-             [(gen:== count 0)
-              (Exit :return_ (list :Ptr res) (list :I32 0))]
-             [(gen:== count 1)
-              (Store :V128 (Field res 0) (Load :V128 (Field ra 0)))
-              (Exit :return_ (list :Ptr (Add :Ptr res sizeof-TValue)) (list :I32 1))]
-             [(gen:== count 2)
-              (Store :V128 (Field res 0) (Load :V128 (Field ra 0)))
-              (Store :V128 (Field res sizeof-TValue) (Load :V128 (Field ra sizeof-TValue)))
-              (Exit :return_ (list :Ptr (Add :Ptr res (gen:* 2 sizeof-TValue))) (list :I32 2))]
-             [(gen:== count 3)
-              (Store :V128 (Field res 0) (Load :V128 (Field ra 0)))
-              (Store :V128 (Field res sizeof-TValue) (Load :V128 (Field ra sizeof-TValue)))
-              (Store :V128 (Field res (gen:* 2 sizeof-TValue)) (Load :V128 (Field ra (gen:* 2 sizeof-TValue))))
-              (Exit :return_ (list :Ptr (Add :Ptr res (gen:* 3 sizeof-TValue))) (list :I32 3))]
-             [else
-              (let ([vali (variable :Ptr)]
-                    [valend (variable :Ptr)]
-                    [written (variable :I32)])
-                (seq
-                  (Set vali (AddressOf ra))
-                  (choose (gen:== count :LUA_MULTRET)
-                          (Set valend (LoadPtr (Root :State) :lua_State.top))
-                          (Set valend (AddressOf (Field ra (gen:* count sizeof-TValue)))))
-                  (Set written 0)
-                  (labels (repeat-value-loop exit-value-loop)
-                    (choose (gen:== count :LUA_MULTRET)
-                            (Guard (ICmp :ult :Ptr vali valend) exit-value-loop))
-                    (Label repeat-value-loop)
-                    (Store :V128 (Field res 0) (Load :V128 (Field vali 0)))
-                    (Set vali (Add :Ptr vali sizeof-TValue))
-                    (Set res (Add :Ptr res sizeof-TValue))
-                    (Set written (Add :I32 written 1))
-                    (Guard (ICmp :uge :Ptr vali valend) repeat-value-loop)
-                    (Label exit-value-loop))
-                  (Exit :return_ (list :Ptr res) (list :I32 written))))])))])))
+  (lowering (lower-return ra count)))
 
 ~ Adjust loop variables for one iteration of a generic for loop, jump back to the loop header if loop needs to continue
 ~ A: Rn (loop variable start, updates Rn+2 and 'B' number of registers starting from Rn+3)
@@ -67,42 +21,7 @@
     (may-write (vm-slots (+ ra 2) :to-top)))
   (heap-effects :reenters-vm)
   (dead-store :visit)
-  (lowering
-    (seq
-      (choose (gen:> nvars 2)
-              (let ([p (variable :Ptr)]
-                    [end (variable :Ptr)])
-                (seq
-                  (Set p (AddressOf (Field ra (gen:* 5 sizeof-TValue))))
-                  (Set end (AddressOf (Field ra (gen:* (gen:+ 3 nvars) sizeof-TValue))))
-                  (labels (clear-loop)
-                    (Label clear-loop)
-                    (Store :I32 (Field p :TValue.tt) :LUA_TNIL)
-                    (Set p (Add :Ptr p sizeof-TValue))
-                    (Guard (ICmp :uge :Ptr p end) clear-loop)))))
-      (let ([table (LoadPtr (Field ra sizeof-TValue) :TValue.value)]
-            [index (variable :I64)]
-            [elem-ptr (variable :Ptr)])
-        (seq
-          table
-          (Set index (Load :I64 (Field ra (gen:+ (gen:* 2 sizeof-TValue) (gen:offsetof :TValue :value)))))
-          (Set elem-ptr (AddressOf (Index (LoadPtr table :LuaTable.array) (Reduce index) sizeof-TValue)))
-          (labels (array-loop skip-array-nil skip-array)
-            (Label array-loop)
-            (Guard (ICmp :ult :I32 (Reduce index) (Load :I32 (Field table :LuaTable.sizearray))) skip-array)
-            (Set index (Add :I64 index 1))
-            (Guard (ICmp :ne :I32 (Load :I32 (Field elem-ptr :TValue.tt)) :LUA_TNIL) skip-array-nil)
-            (Store :I64 (Field ra (gen:+ (gen:* 2 sizeof-TValue) (gen:offsetof :TValue :value))) index)
-            (Store :F64 (Field ra (gen:+ (gen:* 3 sizeof-TValue) (gen:offsetof :TValue :value))) (IntToFloat :s :F64 :I32 (Reduce index)))
-            (Store :I32 (Field ra (gen:+ (gen:* 3 sizeof-TValue) (gen:offsetof :TValue :tt))) :LUA_TNUMBER)
-            (Store :V128 (Field ra (gen:* 4 sizeof-TValue)) (Load :V128 (Field elem-ptr 0)))
-            (Goto loop)
-            (Label skip-array-nil)
-            (Set elem-ptr (Add :Ptr elem-ptr sizeof-TValue))
-            (Goto array-loop)
-            (Label skip-array))
-          (let ([res (native-call :I32 :forgLoopNodeIter :Ptr (Root :State) :Ptr table :I64 index :Ptr (AddressOf ra))])
-            (Branch (ICmp :ne :I32 (And :I32 res 0xff) 0) loop exit)))))))
+  (lowering (lower-forgloop ra nvars loop exit)))
 
 ~ Handle LOP_FORGLOOP fallback when variable being iterated is not a table
 ~ A: Rn (loop state start, updates Rn+2 and 'B' number of registers starting from Rn+3)
@@ -118,20 +37,7 @@
     (writes (vm-slot (+ ra 2)) (vm-slots (+ ra 3) (low-byte nvars)))
     (may-write (vm-slots (+ ra 2) :to-top)))
   (dead-store :visit)
-  (lowering
-    (choose (fflag "LuauYieldIter2")
-            (let ([res (native-call :I32 :forgLoopNonTableFallback :Ptr (Root :State) :I32 (vm-reg ra) :I32 nvars)])
-              (seq
-                (reload-base)
-                (labels (check-loop)
-                  (Guard (ICmp :sge :I32 res 0) check-loop)
-                  (Branch (ICmp :sgt :I32 res 0) loop exit)
-                  (Label check-loop)
-                  (Exit :exitNoContinueVm))))
-            (let ([res (native-call :I32 :forgLoopNonTableFallback_DEPRECATED :Ptr (Root :State) :I32 (vm-reg ra) :I32 nvars)])
-              (seq
-                (reload-base)
-                (Branch (ICmp :ne :I32 (And :I32 res 0xff) 0) loop exit))))))
+  (lowering (lower-forgloop-fallback ra nvars loop exit)))
 
 ~ Fallback for generic for loop preparation when iterating over builtin pairs/ipairs
 ~ It raises an error if 'B' register is not a function
@@ -143,7 +49,4 @@
   (class :terminator)
   (facts (reads (vm-slot ra)))
   (dead-store :visit)
-  (lowering
-    (seq
-      (native-call :None :forgPrepXnextFallback :Ptr (Root :State) :Ptr (AddressOf ra) :I32 (gen:+ pc 1))
-      (Goto target))))
+  (lowering (lower-forgprep-xnext-fallback pc ra target)))

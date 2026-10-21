@@ -19,7 +19,8 @@ static const char* kUsage =
     "Usage: luwu-dsl-compiler <root.luna> <output-dir> [--public-output <dir>] [--lowering-output <dir>] [-MF <depfile> [-MT <target>]]\n"
     "       luwu-dsl-compiler --list-files <root.luna>\n"
     "       luwu-dsl-compiler --eval <file.luna>\n"
-    "       luwu-dsl-compiler --describe\n";
+    "       luwu-dsl-compiler --describe\n"
+    "       --dump-bytecode writes compiled register bytecode to stderr\n";
 
 // Leaves an up-to-date file untouched, so its timestamp doesn't trigger rebuilds of everything that includes it
 static bool writeIfChanged(const std::string& path, const std::string& text, bool& changed)
@@ -121,6 +122,7 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
     std::string loweringOutputDir;
     bool listFiles = false;
     bool evalOnly = false;
+    bool dumpBytecode = false;
 
     for (size_t i = 0; i < args.size(); ++i)
     {
@@ -137,7 +139,11 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
             out << kUsage << "\nLuna Metacompiler for Luwu NCG IR Lowering.\n";
             return 0;
         }
-        if (arg == "--list-files")
+        if (arg == "--dump-bytecode")
+        {
+            dumpBytecode = true;
+        }
+        else if (arg == "--list-files")
         {
             listFiles = true;
         }
@@ -183,6 +189,7 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
         // The program is evaluated; its define-ircmd forms register the commands the headers are made from
         Luwu::Dsl::Evaluator evaluator;
         std::vector<std::string> moduleFiles = Luwu::Dsl::installNcg(evaluator);
+        if (dumpBytecode) evaluator.bytecodeDump = &err;
         Luwu::Dsl::Value last = evaluator.evalProgram(program);
 
         // --eval prints the program's last value
@@ -218,20 +225,19 @@ int runDriver(const std::vector<std::string>& args, std::ostream& out, std::ostr
             std::vector<Luwu::Dsl::Value> parts;
             Luwu::Dsl::listToVector(g, parts);
             std::string dir = parts[0].text == ":lowering" ? trimDir(loweringOutputDir) : publicDir;
-            outputs.push_back({dir + "/" + parts[1].text, parts[2].text});
+            outputs.push_back({dir + "/" + parts[1].stringValue(), parts[2].stringValue()});
         }
 
-        // The micro-op pipeline's lowering, written where asked (CodeGen's LoweringRules headers are frozen until it lowers
-        // everything)
+        // Report commands still waiting for a lowering when generating backend headers.
         if (lowering)
         {
             std::vector<Luwu::Dsl::Value> notLowered;
             Luwu::Dsl::listToVector(call("ncg-not-lowered", {}), notLowered);
             if (!notLowered.empty())
             {
-                out << "luwu-dsl-compiler: " << notLowered.size() << " command(s) not lowered by the micro-op pipeline yet:";
+                out << "luwu-dsl-compiler: " << notLowered.size() << " command(s) without direct lowerings:";
                 for (const auto& name : notLowered)
-                    out << " " << name.text;
+                    out << " " << name.stringValue();
                 out << "\n";
             }
         }

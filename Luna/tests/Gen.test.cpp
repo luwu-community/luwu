@@ -33,7 +33,7 @@ struct GenFixture
         programs.push_back(parser.parseProgram());
         Value v = evaluator.evalProgram(programs.back());
         if (isRecord(v, "cpp"))
-            return evaluator.apply(*evaluator.globals()->lookup("cpp->string"), {v}, SExpr{}).text;
+            return evaluator.apply(*evaluator.globals()->lookup("cpp->string"), {v}, SExpr{}).stringValue();
         return toString(v);
     }
 

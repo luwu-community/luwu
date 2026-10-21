@@ -1,12 +1,3 @@
-(define (slot-match-checks node key fail)
-  (seq
-    ~ the node key tag must be a string
-    (Guard (ICmp :eq :I32 (And :I32 (Load :I32 (Field node (gen:typed :int (gen:+ (gen:offsetof :LuaNode :key) (gen:name :kOffsetOfTKeyTagNext))))) :kTKeyTagMask) :LUA_TSTRING) fail)
-    ~ the node key must be the expected string
-    (Guard (ICmp :eq :Ptr (LoadPtr node :LuaNode.key.value) (LoadPtr key :TValue.value)) fail)
-    ~ the node value must not be nil
-    (Guard (ICmp :ne :I32 (Load :I32 (Field node :LuaNode.val.tt)) :LUA_TNIL) fail)))
-
 ~ Perform a conditional jump based on cached table node slot matching the actual table node slot for a key
 ~ A: pointer (LuaNode)
 ~ B: Kn
@@ -15,9 +6,7 @@
 (define-ircmd JUMP_SLOT_MATCH
   (operands [node :pointer] [key :Kn] [match :block] [mismatch-op :block])
   (class :terminator)
-  (lowering
-    (slot-match-checks node key mismatch-op)
-    (Goto match)))
+  (lowering (lower-jump-slot-match node key match mismatch-op)))
 
 ~ Try to get pointer to tag method TValue inside the table's metatable or jump if there is no such value or metatable
 ~ A: table
@@ -27,21 +16,8 @@
   (operands [table :pointer] [tm :int] [fail :block])
   (result :pointer)
   (class :guard)
-  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Branch operand targets a fallback block: can't appear in an exit sync sequence
-  (lowering
-    (let ([mt (LoadPtr table :LuaTable.metatable)]
-          [tm-idx (int-val tm)])
-      (seq
-        (Guard (ICmp :ne :Ptr mt 0) fail)
-        ~ tmcache caches the absence of metamethods
-        (Guard (ICmp :eq :I32 (And :I32 (Load :U8 (Field mt :LuaTable.tmcache)) (gen:<< 1 tm-idx)) 0) fail)
-        (let ([res (native-call :Ptr :luaT_gettm
-                                :Ptr mt
-                                :I32 tm-idx
-                                :Ptr (Load :Ptr (Field (Root :Global) (gen:+ (gen:offsetof :global_State :tmname) (gen:* tm-idx (gen:sizeof :TString*))))))])
-          (seq
-            (Guard (ICmp :ne :Ptr res 0) fail)
-            res))))))
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: emit:branch-both operand targets a fallback block: can't appear in an exit sync sequence
+  (lowering (lower-try-call-fastgettm table tm fail)))
 
 ~ Store an import from constant or the import path
 ~ A: Rn (where to store the result)
@@ -53,15 +29,7 @@
   (class :effect)
   (facts (writes (vm-slot ra)))
   (heap-effects :may-gc :reenters-vm)
-  (lowering
-    (labels (cached done)
-      (Guard (ICmp :eq :I32 (Load :I32 (Field k :TValue.tt)) :LUA_TNIL) cached)
-      (native-call :None :getImport :Ptr (Root :State) :Ptr (AddressOf ra) :I32 import-id :I32 pc)
-      (reload-base)
-      (Goto done)
-      (Label cached)
-      (Store :V128 (Field ra 0) (Load :V128 (Field k 0)))
-      (Label done))))
+  (lowering (lower-get-cached-import ra k import-id pc)))
 
 ~ Guard against cached table node slot not matching the actual table node slot for a key
 ~ A: pointer (LuaNode)
@@ -71,5 +39,4 @@
 (define-ircmd CHECK_SLOT_MATCH
   (operands [node :pointer] [key :Kn] [fail :block|:undef])
   (class :guard)
-  (lowering
-    (slot-match-checks node key fail)))
+  (lowering (lower-check-slot-match node key fail)))

@@ -6,8 +6,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
   (facts (reads (tvalue a :tag)))
-  (lowering
-    (Load :I32 (Field a :TValue.tt))))
+  (lowering (lower-load-tag a)))
 
 ~ Load a pointer (*) from TValue
 ~ A: Rn or Kn or pointer (TValue)
@@ -17,8 +16,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
   (facts (reads (tvalue a :value :pointer)))
-  (lowering
-    (LoadPtr a :TValue.value)))
+  (lowering (lower-load-pointer a)))
 
 ~ Load a double number from TValue
 ~ A: Rn or Kn
@@ -28,8 +26,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
   (facts (reads (tvalue a :value :double)))
-  (lowering
-    (Load :F64 (Field a :TValue.value))))
+  (lowering (lower-load-double a)))
 
 ~ Load an int from TValue
 ~ A: Rn
@@ -39,8 +36,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
   (facts (reads (tvalue a :value :int)))
-  (lowering
-    (Load :I32 (Field a :TValue.value))))
+  (lowering (lower-load-int a)))
 
 ~ Load an int64 from TValue
 ~ A: Rn
@@ -50,8 +46,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
   (facts (reads (tvalue a :value :int64)))
-  (lowering
-    (Load :I64 (Field a :TValue.value))))
+  (lowering (lower-load-int64 a)))
 
 ~ Load a float field from vector (use FLOAT_TO_NUM to convert to double)
 ~ A: Rn or Kn
@@ -62,8 +57,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
   (facts (reads (tvalue a (component offset))))
-  (lowering
-    (Load :F32 (Field (Field a :TValue.value) offset))))
+  (lowering (lower-load-float a offset)))
 
 ~ Load a TValue from memory
 ~ A: Rn or Kn or pointer (TValue)
@@ -75,5 +69,4 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
   (facts (reads (tvalue a offset :tvalue)))
-  (lowering
-    (Load :V128 (Field a (gen:? (has-op? offset) (int-val offset) 0)))))
+  (lowering (lower-load-tvalue a offset c)))

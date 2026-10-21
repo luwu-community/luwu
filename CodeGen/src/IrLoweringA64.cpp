@@ -135,15 +135,17 @@ bool emitBuiltin(AssemblyBuilderA64& build, IrFunction& function, IrRegAllocA64&
 //
 // `slotReg` holds the raw member offset and must stay live across this call.
 //
-// Every temporary is reserved before the first branch. The branch to `authorized` rejoins the main
-// line, so a register evicted after it would be stored only on the path that didn't take it.
+// The caller supplies three dead registers as scratch. This avoids allocating or spilling inside
+// the helper, whose branches rejoin the main line at `authorized`.
 void emitClassMemberAuthA64(
     AssemblyBuilderA64& build,
-    IrRegAllocA64& regs,
     RegisterA64 classReg,
     RegisterA64 slotReg,
     RegisterA64 writtenObject,
-    Label& mismatch
+    Label& mismatch,
+    RegisterA64 owner,
+    RegisterA64 flagw,
+    RegisterA64 maskw
 )
 {
     bool isWrite = writtenObject != noreg;
@@ -153,15 +155,11 @@ void emitClassMemberAuthA64(
 
     Label authorized;
 
-    RegisterA64 owner = regs.allocTemp(KindA64::x);
-    RegisterA64 flagw = regs.allocTemp(KindA64::w);
-
     // flag = classReg->memberflags[slot]
     build.ldr(owner, mem(classReg, offsetof(LuauClass, memberflags)));
     build.ldrb(flagw, mem(owner, slotReg));
 
     // PRIVATE | INITBLOCKED (bits 0 and 7) has no logical-immediate encoding, so test against a register
-    RegisterA64 maskw = regs.allocTemp(KindA64::w);
     build.mov(maskw, int(restrictBits));
     build.tst(flagw, maskw);
     build.b(ConditionA64::Equal, authorized); // Z set: unrestricted member, no check needed

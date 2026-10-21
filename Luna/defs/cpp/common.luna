@@ -6,7 +6,7 @@
 ;; names themselves. Types (gen:typed) let templates tell registers, IR operands and constants apart (reg? ir? lit?)
 ;; and let gen:build check instructions' arguments.
 
-;; The lowering context variables available in every lower_<CMD> function.
+;; The lowering context variables available in each command case of lowerInstGenerated.
 (define cpp:lowering (gen:name :lowering))
 (define cpp:regs (gen:name :regs))
 (define cpp:build (gen:name :build))
@@ -26,11 +26,21 @@
 (define instruction-c-shift (gen:typed :int (gen:* (gen:name :kOffsetOfInstructionC) 8)))
 
 ~ Emits a lowering-time comparison testing whether IR operand op has the specified kind.
-(define (op-kind? op kind) (gen:== (gen:field op :kind) (gen:enum :IrOpKind kind)))
+(define (op-kind? op kind)
+  (let ([domain (and (cpp? op) (assoc 'kinds (cpp-facts op)))])
+    (cond [(and domain (not (member? (keyword->string kind) (second domain)))) #f]
+          [(and domain (= (length (second domain)) 1)) #t]
+          [else (gen:== (gen:field op :kind) (gen:enum :IrOpKind kind))])))
 ~ Emits a lowering-time test checking whether IR operand op is a constant.
 (define (constant? op) (op-kind? op :Constant))
 ~ Emits a lowering-time test checking whether IR operand op is an instruction.
 (define (inst? op) (op-kind? op :Inst))
+
+~ Tests whether an IR result may have nonzero high bits beyond its declared width.
+(define (dirty-high-bits? op)
+  (gen:&& (inst? op)
+          (gen:call :producesDirtyHighRegisterBits
+                    (gen:field (gen:method (gen:field cpp:lowering :function) :instOp op) :cmd))))
 
 ~ Retrieves the 32-bit signed integer value of constant IR operand op.
 (define (int-val op) (gen:typed :int (gen:method cpp:lowering :intOp op)))

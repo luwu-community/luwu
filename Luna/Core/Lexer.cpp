@@ -331,6 +331,7 @@ Token Lexer::nextToken()
         return lexString(curCol);
 
     // Booleans: #t and #f (read as the symbols "#t" and "#f", which evaluate to themselves)
+    // Syntax prefixes: #' (syntax), #` (quasisyntax), #, (unsyntax), #,@ (unsyntax-splicing)
     if (c == '#')
     {
         advance();
@@ -341,6 +342,21 @@ Token Lexer::nextToken()
             Token tok;
             tok.type = TokenType::Symbol;
             tok.text = v == 't' ? "#t" : "#f";
+            tok.line = curLine;
+            tok.col = curCol;
+            return tok;
+        }
+        if (v == '\'' || v == '`' || v == ',')
+        {
+            advance();
+            Token tok;
+            tok.type = TokenType::Prefix;
+            tok.text = std::string("#") + v;
+            if (v == ',' && !isAtEnd() && peek() == '@')
+            {
+                advance();
+                tok.text = "#,@";
+            }
             tok.line = curLine;
             tok.col = curCol;
             return tok;

@@ -19,6 +19,13 @@ struct Closure;
 struct Builtin;
 struct Record;
 struct Env;
+struct Rope;
+struct Vector;
+struct Table;
+struct Parameter;
+struct Syntax;
+struct BytecodeFunction;
+struct Upvalue;
 
 struct GcCell
 {
@@ -60,9 +67,14 @@ enum class ValueKind
     Pair,
     Closure,
     Builtin,
-    Macro, // a define-macro: a closure from the call's arguments (as data) to its expansion
+    Macro, // a define-syntax transformer: call syntax -> expansion syntax
     Record, // a record value (define-record)
+    Vector,
+    Table,
+    Set,
+    Parameter,
     Unassigned, // a letrec name before its value is computed
+    Syntax,     // a syntax object (syntax-case)
 };
 
 // A generation-time value. Lists are chains of pairs ending in Nil, as in Scheme.
@@ -78,25 +90,39 @@ struct Value
         const Closure* closure;
         const Builtin* builtin;
         const Record* record;
+        const Rope* rope;
+        Vector* vector;
+        Table* table;
+        Parameter* parameter;
+        const Syntax* syntax;
         const GcCell* gcCell;
     };
-    std::string text; // String, Symbol, Keyword
+    std::string text; // Symbol and Keyword; strings use an immutable rope.
+    // Legacy datum macros may rearrange identifiers originating in syntax.
+    std::shared_ptr<SyntaxData> datumSyntax;
 
     static Value nil() { return Value{}; }
     static Value boolean(bool b);
     static Value integer(int64_t i);
     static Value real(double d);
     static Value string(std::string s);
+    static Value string(const Rope* rope);
+    const std::string& stringValue() const;
+    size_t stringSize() const;
+    static Value concat(const std::vector<Value>& strings);
     static Value symbol(std::string s);
     static Value keyword(std::string s);
     static Value cons(Value car, Value cdr);
     static Value list(const std::vector<Value>& items);
     static Value of(const Record* record);
+    static Value of(const Syntax* syntax);
 
     const GcCell* cell() const
     {
         return (kind == ValueKind::Pair || kind == ValueKind::Closure || kind == ValueKind::Macro ||
-                kind == ValueKind::Builtin || kind == ValueKind::Record)
+                kind == ValueKind::Builtin || kind == ValueKind::Record || kind == ValueKind::String ||
+                kind == ValueKind::Vector || kind == ValueKind::Table || kind == ValueKind::Set ||
+                kind == ValueKind::Parameter || kind == ValueKind::Syntax)
             ? gcCell
             : nullptr;
     }
@@ -104,11 +130,62 @@ struct Value
     bool isNil() const { return kind == ValueKind::Nil; }
     bool isPair() const { return kind == ValueKind::Pair; }
     bool isNumber() const { return kind == ValueKind::Int || kind == ValueKind::Double; }
-    bool isProcedure() const { return kind == ValueKind::Closure || kind == ValueKind::Builtin; }
+    bool isProcedure() const { return kind == ValueKind::Closure || kind == ValueKind::Builtin || kind == ValueKind::Parameter; }
     bool isMacro() const { return kind == ValueKind::Macro; }
+    bool isSyntax() const { return kind == ValueKind::Syntax; }
     // Only #f is false; nil (the empty list) is true, as in Scheme
     bool isTruthy() const { return !(kind == ValueKind::Bool && !boolValue); }
 };
+
+// Ropes share immutable chunks. Flattening and GC traversal are iterative, so a
+// long left-associated concatenation cannot overflow the C++ stack.
+struct Rope : GcCell
+{
+    const Rope* left = nullptr;
+    const Rope* right = nullptr;
+    size_t size = 0;
+    mutable bool flat = true;
+    mutable std::string bytes;
+    explicit Rope(std::string bytes) : size(bytes.size()), bytes(std::move(bytes)) {}
+    Rope(const Rope* left, const Rope* right) : left(left), right(right), size(left->size + right->size), flat(false) {}
+    const std::string& flatten() const;
+    void markChildren(std::vector<const GcCell*>& worklist) const override
+    {
+        if (left) worklist.push_back(left);
+        if (right) worklist.push_back(right);
+    }
+};
+
+struct Vector : GcCell
+{
+    std::vector<Value> items;
+    void markChildren(std::vector<const GcCell*>& worklist) const override;
+};
+
+struct Parameter : GcCell
+{
+    Value value;
+    void markChildren(std::vector<const GcCell*>& worklist) const override
+    {
+        if (const GcCell* c = value.cell()) worklist.push_back(c);
+    }
+};
+
+struct Table : GcCell
+{
+    struct Entry { Value key; Value value; bool live = true; };
+    bool identity = false;
+    std::vector<Entry> entries;
+    std::unordered_map<size_t, std::vector<size_t>> buckets;
+    size_t count = 0;
+    void markChildren(std::vector<const GcCell*>& worklist) const override;
+    size_t find(const Value& key, const SExpr& call) const;
+    bool put(const Value& key, Value value, const SExpr& call);
+    bool erase(const Value& key, const SExpr& call);
+};
+
+bool valuesIdentical(const Value& a, const Value& b);
+size_t valueHash(const Value& value, bool identity, const SExpr& call);
 
 struct Pair : GcCell
 {
@@ -130,70 +207,98 @@ struct Pair : GcCell
     }
 };
 
+enum class SyntaxFormKind
+{
+    Identifier,
+    Constant,
+    List,
+    Vector,
+};
+
+struct Syntax : GcCell
+{
+    SyntaxFormKind formKind = SyntaxFormKind::Identifier;
+    std::string text;         // For Identifier or Keyword
+    Value datum;              // For Constant (Nil, Bool, Int, Double, String)
+    std::vector<Value> items; // For List or Vector (items are Values, usually ValueKind::Syntax)
+    bool isBracket = false;
+    bool dotted = false;      // When true, the last item in items is the dotted tail
+
+    ScopeSet scopes;
+    SourceLocation loc;
+    std::vector<std::string> docs;
+    std::optional<std::string> trailingDoc;
+
+    Syntax() = default;
+
+    bool isIdentifier() const { return formKind == SyntaxFormKind::Identifier; }
+    bool isConstant() const { return formKind == SyntaxFormKind::Constant; }
+    bool isList() const { return formKind == SyntaxFormKind::List; }
+    bool isVector() const { return formKind == SyntaxFormKind::Vector; }
+
+    void markChildren(std::vector<const GcCell*>& worklist) const override
+    {
+        if (const GcCell* c = datum.cell())
+            worklist.push_back(c);
+        for (const auto& item : items)
+        {
+            if (const GcCell* c = item.cell())
+                worklist.push_back(c);
+        }
+    }
+};
+
 // Lexical environment: a frame of bindings with a parent
 struct Env : GcCell
 {
     std::unordered_map<std::string, Value> vars;
     EnvPtr parent = nullptr;
+    const BytecodeFunction* layout = nullptr;
+    const Closure* procedure = nullptr;
+    std::vector<Value> slots;
+    std::vector<uint8_t> bound;
+    std::vector<Upvalue*> captured;
 
     explicit Env(EnvPtr parent = nullptr)
         : parent(parent)
     {
     }
 
-    Value* find(const std::string& name)
-    {
-        for (Env* e = this; e; e = e->parent)
-        {
-            auto it = e->vars.find(name);
-            if (it != e->vars.end())
-                return &it->second;
-        }
-        return nullptr;
-    }
-
-    const Value* lookup(const std::string& name) const
-    {
-        for (const Env* e = this; e; e = e->parent)
-        {
-            auto it = e->vars.find(name);
-            if (it != e->vars.end())
-                return &it->second;
-        }
-        return nullptr;
-    }
-
-    void define(const std::string& name, Value v) { vars[name] = std::move(v); }
-
-    void markChildren(std::vector<const GcCell*>& worklist) const override
-    {
-        if (parent)
-            worklist.push_back(parent);
-        for (const auto& [k, v] : vars)
-        {
-            if (const GcCell* c = v.cell())
-                worklist.push_back(c);
-        }
-    }
+    Value* find(const std::string& name);
+    const Value* lookup(const std::string& name) const;
+    void define(const std::string& name, Value v);
+    Value* local(uint32_t slot);
+    Upvalue* capture(uint32_t slot);
+    void markChildren(std::vector<const GcCell*>& worklist) const override;
 };
 
-// (lambda (params...) body...): the body is forms[bodyStart..] of the defining form, evaluated in a child of `env`
+// Captured locals are boxed only on first capture. Sibling closures share the
+// cell, so no pointers into movable register arrays or closing pass are needed.
+struct Upvalue : GcCell
+{
+    Value value;
+    bool bound = false;
+    EnvPtr fallback = nullptr; // Preserves lookup before an internal define runs.
+    Upvalue* fallbackCell = nullptr;
+    std::string name;
+    Value* get();
+    void markChildren(std::vector<const GcCell*>& worklist) const override;
+};
+
+// A compiled procedure, its captured cells, and its global/external environment.
 struct Closure : GcCell
 {
     std::string name; // for messages: the define'd name, or empty
     std::vector<std::string> params;
     std::string restParam; // after & in the parameter list, empty when none
-    const SExpr* form = nullptr;
-    size_t bodyStart = 0;
     EnvPtr env = nullptr;
     SourceLocation loc;
     std::vector<std::string> docs; // ~ comments on its define, for --describe
+    const Closure* datumTransformer = nullptr; // Signature of a define-macro compatibility adapter.
+    const BytecodeFunction* bytecode = nullptr;
+    std::vector<Upvalue*> upvalues;
 
-    void markChildren(std::vector<const GcCell*>& worklist) const override
-    {
-        if (env)
-            worklist.push_back(env);
-    }
+    void markChildren(std::vector<const GcCell*>& worklist) const override;
 };
 
 // A primitive. Builtins don't call back into the evaluator; `apply`, which does, is handled by the machine.

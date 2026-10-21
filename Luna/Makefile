@@ -15,8 +15,7 @@ TEST_TARGET = ../build/debug/luna-tests
 ROOT = defs/luwu.luna
 OUTPUT_DIR = ../CodeGen/src/generated
 PUBLIC_OUTPUT_DIR = ../CodeGen/include/Luau/generated
-# LoweringRules{A64,X64}.h in $(OUTPUT_DIR) are frozen while the micro-op pipeline replaces the rule compiler
-OUTPUTS = $(PUBLIC_OUTPUT_DIR)/IrCmdInfo.h $(PUBLIC_OUTPUT_DIR)/IrCmd.h $(PUBLIC_OUTPUT_DIR)/IrCmdEffects.h
+OUTPUTS = $(PUBLIC_OUTPUT_DIR)/IrCmdInfo.h $(PUBLIC_OUTPUT_DIR)/IrCmd.h $(PUBLIC_OUTPUT_DIR)/IrCmdEffects.h $(OUTPUT_DIR)/LoweringRulesA64.h $(OUTPUT_DIR)/LoweringRulesX64.h
 
 # Luna writes a depfile listing every file the root includes, so editing any of them reruns generation; the stamp
 # records the last successful run, since outputs that didn't change keep their old timestamps
@@ -37,7 +36,7 @@ generate: $(STAMP)
 # Missing outputs (e.g. deleted by hand) force a rerun even when the stamp is newer than every input
 $(STAMP): $(TARGET) $(ROOT) $(if $(filter-out $(wildcard $(OUTPUTS)),$(OUTPUTS)),FORCE)
 	@mkdir -p $(OUTPUT_DIR) $(PUBLIC_OUTPUT_DIR) $(STAMP_DIR)
-	$(TARGET) $(ROOT) $(OUTPUT_DIR) --public-output $(PUBLIC_OUTPUT_DIR) -MF $(DEPFILE) -MT $(STAMP)
+	$(TARGET) $(ROOT) $(OUTPUT_DIR) --public-output $(PUBLIC_OUTPUT_DIR) --lowering-output $(OUTPUT_DIR) -MF $(DEPFILE) -MT $(STAMP)
 	@touch $@
 
 FORCE:

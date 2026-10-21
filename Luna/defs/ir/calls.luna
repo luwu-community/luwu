@@ -6,8 +6,7 @@
   (class :value)
   (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Upvalue read: SET_UPVALUE to the same upvalue slot
   (facts (no-vm-effects))
-  (lowering
-    (Load :V128 (Field (LoadPtr (Load :Ptr (Field (Index (Field (Root :Closure) :Closure.l.uprefs) up sizeof-TValue) :TValue.value.gc)) :UpVal.v) 0))))
+  (lowering (lower-get-upvalue up)))
 
 ~ Call specified function
 ~ A: Rn (function, followed by arguments)
@@ -22,84 +21,4 @@
     (reads (vm-slot ra) (vm-slots (+ ra 1) nparams))
     (writes (vm-slots ra nresults))
     (may-write (vm-slots ra :to-top)))
-  (lowering
-    (let ([argtop (variable :Ptr)])
-      (seq
-        (choose (gen:== nparams :LUA_MULTRET)
-                (Set argtop (LoadPtr (Root :State) :lua_State.top))
-                (Set argtop (AddressOf (Field ra (gen:typed :int (gen:* (gen:+ 1 nparams) sizeof-TValue))))))
-        (let ([ccl (native-call :Ptr :callProlog
-                                :Ptr (Root :State)
-                                :Ptr (AddressOf ra)
-                                :Ptr argtop
-                                :I32 nresults)])
-          (seq
-            (reload-base)
-            (labels (c-func-call)
-              (Guard (ICmp :eq :I32 (Load :U8 (Field ccl :Closure.isC)) 0) c-func-call)
-              ~ Lua callee
-              (let ([ci (LoadPtr (Root :State) :lua_State.ci)]
-                    [proto (variable :Ptr)]
-                    [argi (variable :Ptr)]
-                    [argend (variable :Ptr)])
-                (seq
-                  ci
-                  (choose (fflag "LuauCIProto")
-                          (Set proto (LoadPtr ci :CallInfo.p))
-                          (Set proto (LoadPtr ccl :Closure.l.p)))
-                  (SetRoot :Closure ccl)
-                  (Set argi (LoadPtr (Root :State) :lua_State.top))
-                  (Set argend (AddressOf (Index (Root :Stack) (Load :U8 (Field proto :Proto.numparams)) sizeof-TValue)))
-                  (labels (fillnil exitfillnil)
-                    (Label fillnil)
-                    (Guard (ICmp :ult :Ptr argi argend) exitfillnil)
-                    (Store :I32 (Field argi :TValue.tt) :LUA_TNIL)
-                    (Set argi (Add :Ptr argi sizeof-TValue))
-                    (Goto fillnil)
-                    (Label exitfillnil))
-                  (Store :I64 (Field (Root :State) :lua_State.top)
-                         (Select :I64 (ICmp :ne :I32 (And :I32 (Load :U8 (Field proto :Proto.is_vararg)) 1) 0)
-                                 argi
-                                 (LoadPtr ci :CallInfo.top)))
-                  (let ([code (LoadPtr proto :Proto.code)])
-                    (seq
-                      (SetRoot :Code code)
-                      (Store :Ptr (Field ci :CallInfo.savedpc) code)))
-                  (SetRoot :Consts (LoadPtr proto :Proto.k))
-                  (let ([entry (LoadPtr proto :Proto.exectarget)])
-                    (labels (enter-native)
-                      (Guard (ICmp :eq :Ptr entry 0) enter-native)
-                      (Exit :exitContinueVm)
-                      (Label enter-native)
-                      (Store :I32 (Field ci :CallInfo.flags) :LUA_CALLINFO_NATIVE)
-                      (JumpIndirect entry)))))
-              ~ C callee
-              (Label c-func-call)
-              (let ([results (CallC :I32 (Field ccl :Closure.c.f) (list :Ptr (Root :State)))])
-                (seq
-                  (labels (no-yield)
-                    (Guard (ICmp :slt :I32 results 0) no-yield)
-                    (Exit :exitNoContinueVm)
-                    (Label no-yield))
-                  (choose (gen:&& (gen:!= nresults 0) (gen:!= nresults 1))
-                          (seq
-                            (native-call :None :callEpilogC :Ptr (Root :State) :I32 nresults :I32 results)
-                            (reload-base))
-                          (let* ([ci (LoadPtr (Root :State) :lua_State.ci)]
-                                 [cip (Sub :Ptr ci (gen:sizeof :CallInfo))])
-                            (seq
-                              (let ([base (LoadPtr cip :CallInfo.base)])
-                                (seq
-                                  (SetRoot :Stack base)
-                                  (Store :Ptr (Field (Root :State) :lua_State.base) base)))
-                              (choose (gen:== nresults 1)
-                                      (labels (skipnil)
-                                        (Store :V128 (Field ra 0)
-                                               (Load :V128 (Field (Sub :Ptr (LoadPtr (Root :State) :lua_State.top)
-                                                                            (Shl :I64 (Extend :s :32 :I64 results) :kTValueSizeLog2))
-                                                                  0)))
-                                        (Guard (ICmp :eq :I32 results 0) skipnil)
-                                        (Store :I32 (Field ra :TValue.tt) :LUA_TNIL)
-                                        (Label skipnil)))
-                              (Store :Ptr (Field (Root :State) :lua_State.ci) cip)
-                              (Store :Ptr (Field (Root :State) :lua_State.top) (LoadPtr cip :CallInfo.top))))))))))))))
+  (lowering (lower-call ra nparams nresults)))

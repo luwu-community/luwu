@@ -26,16 +26,16 @@
 
 ~ Returns the memory access size keyword (:byte, :word, :dword, :qword, :xmmword) for value type t.
 (define (x64:mem-size t)
-  (case t [(:U8 :S8) :byte] [(:U16 :S16) :word] [(:I32 :F32) :dword] [(:I64 :Ptr :F64) :qword] [:V128 :xmmword]))
+  (case t [(:U8 :S8) :byte] [(:U16 :S16) :word] [(:I32 :F32) :dword] [(:I64 :Ptr :F64) :qword] [:V128 :xmmword] [:Addr :addr]))
 
 ~ Emits a call converting register r to the specified size (:byte, :word, :dword, :qword).
 (define (x64:sized size r)
-  (gen:typed :RegisterX64 (gen:call (case size [:byte :byteReg] [:word :wordReg] [:dword :dwordReg] [:qword :qwordReg]) r)))
+  (gen:typed :RegisterX64
+    (gen:call (case size [:byte :byteReg] [:word :wordReg] [:dword :dwordReg] [:qword :qwordReg]) r)))
 
-~ Allocates a temporary scoped X64 register (ScopedRegX64) for value type t.
-(define (x64:temp-init t) (gen:typed :ScopedRegX64 (gen:call :ScopedRegX64 cpp:regs (x64:size t))))
 ~ Retrieves the underlying RegisterX64 from a ScopedRegX64 wrapper.
-(define (x64:scoped-reg scoped) (gen:typed :RegisterX64 (gen:field scoped :reg)))
+(define (x64:scoped-reg scoped)
+  (gen:typed :RegisterX64 (gen:field scoped :reg)))
 
 ~ Retrieves the RegisterX64 assigned to instruction result operand op.
 (define (x64:reg-op op) (gen:typed :RegisterX64 (gen:method cpp:lowering :regOp op)))
@@ -44,27 +44,32 @@
 (define (x64:value-operand t op)
   (gen:typed :OperandX64
     (case t
-      [:I32 (gen:method cpp:lowering :memRegUintOp op)]
+      [:I32 (if (equal? (gen:fact-of op 'constants) '("Tag"))
+                (gen:? (constant? op)
+                       (gen:typed :OperandX64 (gen:call :OperandX64 (gen:cast :int (tag-val op))))
+                       (gen:typed :OperandX64 (gen:method cpp:lowering :memRegTagOp op)))
+                (gen:method cpp:lowering :memRegUintOp op))]
       [:I64 (gen:method cpp:lowering :memRegInt64Op op)]
       [:F64 (gen:method cpp:lowering :memRegDoubleOp op)]
       [:F32 (gen:method cpp:lowering :memRegFloatOp op)]
       [else (x64:reg-op op)])))
 
 ~ Constructs an X64 memory operand at size[base + offset].
-(define (x64:mem size base offset) (gen:typed :OperandX64 (gen:index (gen:name size) (cpp-plus base offset))))
+(define (x64:mem size base offset)
+  (gen:fact (gen:typed :OperandX64 (gen:index (gen:name size) (cpp-plus base offset))) 'memory-size size))
 ~ Constructs an X64 indexed memory operand at size[base + index * scale + offset].
 (define (x64:mem-indexed size base index scale offset)
-  (gen:typed :OperandX64
-    (gen:index (gen:name size) (cpp-plus (gen:+ base (if (equal? (known-number scale) 1) (x64:sized :qword index) (gen:* (x64:sized :qword index) scale))) offset))))
+  (gen:fact (gen:typed :OperandX64
+    (gen:index (gen:name size) (cpp-plus (gen:+ base (if (equal? (known-number scale) 1) (x64:sized :qword index) (gen:* (x64:sized :qword index) scale))) offset))) 'memory-size size))
 
 ~ Returns an OperandX64 referencing the TValue of IR operand op with an additional byte offset.
 (define (x64:tvalue-mem size op offset)
-  (gen:typed :OperandX64
+  (gen:fact (gen:typed :OperandX64
     (gen:? (op-kind? op :VmReg)
            (gen:index (gen:name size) (gen:+ x64:rBase (cpp-plus (gen:* (vm-reg op) (gen:sizeof :TValue)) offset)))
            (gen:? (op-kind? op :VmConst)
                   (gen:index (gen:name size) (gen:+ x64:rConstants (cpp-plus (gen:* (vm-const op) (gen:sizeof :TValue)) offset)))
-                  (gen:index (gen:name size) (cpp-plus (x64:reg-op op) offset))))))
+                  (gen:index (gen:name size) (cpp-plus (x64:reg-op op) offset))))) 'memory-size size))
 
 ~ Emits a constant-pool memory operand for double value v.
 (define (x64:f64 v) (gen:typed :OperandX64 (gen:build :f64 (cpp-double v))))

@@ -71,7 +71,7 @@ static std::vector<std::string> strings(const Value& list)
     listToVector(list, items);
     std::vector<std::string> out;
     for (const auto& v : items)
-        out.push_back(v.text);
+        out.push_back(v.stringValue());
     return out;
 }
 

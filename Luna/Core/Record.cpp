@@ -3,6 +3,8 @@
 
 #include "Core/CompileError.h"
 #include "Core/Evaluator.h"
+#include <algorithm>
+#include <set>
 
 namespace Luwu::Dsl
 {
@@ -76,6 +78,27 @@ void installRecords(Evaluator& evaluator)
             throw CompileError(c, "record-type takes a record, got " + toString(a[0]));
         return Value::symbol(recordOf(a[0]).type);
     }, "(record-type r)", "Returns the type symbol of record r.");
+    defineBuiltin(env, "record-has?", 2, 2, [symbolArg](const Args& a, const SExpr& c) {
+        return Value::boolean(recordField(a[0], symbolArg(a[1], "record-has?", c)) != nullptr);
+    }, "(record-has? value 'field)", "Tests whether a value is a record containing a field.");
+    defineBuiltin(env, "%record-update", 2, 2, [symbolArg](const Args& a, const SExpr& c) {
+        if (!isRecord(a[0])) throw CompileError(c, "record-update requires a record");
+        Args updates;
+        if (!listToVector(a[1], updates)) throw CompileError(c, "record-update requires field/value pairs");
+        auto copy = gcAlloc<Record>(recordOf(a[0]));
+        std::set<std::string> seen;
+        for (const Value& update : updates)
+        {
+            Args pair;
+            if (!listToVector(update, pair) || pair.size() != 2) throw CompileError(c, "record-update requires field/value pairs");
+            std::string field = symbolArg(pair[0], "record-update", c);
+            if (!seen.insert(field).second) throw CompileError(c, "record-update repeats field " + field);
+            auto it = std::find(copy->fields.begin(), copy->fields.end(), field);
+            if (it == copy->fields.end()) throw CompileError(c, "record-update: no field " + field);
+            copy->values[size_t(it - copy->fields.begin())] = pair[1];
+        }
+        return Value::of(copy);
+    }, "(%record-update r field/value-pairs)", "Internal operation implementing one-copy record-update.");
     defineBuiltin(env, "record-ref", 2, 2, [symbolArg](const Args& a, const SExpr& c) {
         const Value* v = recordField(a[0], symbolArg(a[1], "record-ref", c));
         if (!v)

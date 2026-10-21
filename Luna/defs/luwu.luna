@@ -1,6 +1,5 @@
-;; Luwu NCG lowering rules
+;; Portable IR command metadata and explicit target assembly.
 
-;; The C++ bindings and micro-ops come first: the IR commands' helpers use them
 (include "cpp/common.luna")
 (include "cpp/a64.luna")
 (include "cpp/x64.luna")
@@ -8,10 +7,7 @@
 (include "ncg/assembler.luna")
 (include "cpp/a64-assembler.luna")
 (include "cpp/x64-assembler.luna")
-(include "ncg/microops.luna")
-(include "micro-ops.luna")
-(include "ncg/programs.luna")
-
+(include "lowering/common.luna")
 (include "ir/pseudo.luna")
 (include "ir/core.luna")
 (include "ir/int-compare.luna")
@@ -35,4 +31,25 @@
 (include "ir/loops.luna")
 (include "ir/calls.luna")
 (include "ir/classes.luna")
-
+(include "lowering/core.luna")
+(include "lowering/int-compare.luna")
+(include "lowering/loads.luna")
+(include "lowering/stores.luna")
+(include "lowering/float.luna")
+(include "lowering/vector.luna")
+(include "lowering/int64-div.luna")
+(include "lowering/bits.luna")
+(include "lowering/buffer.luna")
+(include "lowering/tags.luna")
+(include "lowering/compare.luna")
+(include "lowering/fallbacks.luna")
+(include "lowering/runtime.luna")
+(include "lowering/alloc.luna")
+(include "lowering/vm-state.luna")
+(include "lowering/table-addr.luna")
+(include "lowering/barriers.luna")
+(include "lowering/slots.luna")
+(include "lowering/fastcall.luna")
+(include "lowering/loops.luna")
+(include "lowering/calls.luna")
+(include "lowering/classes.luna")

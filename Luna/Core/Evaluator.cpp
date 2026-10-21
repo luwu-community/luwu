@@ -23,6 +23,9 @@ static const FormDoc kCoreForms[] = {
     {"set!", "(set! name value)", "Assigns a new value to an existing variable in the nearest enclosing scope."},
     {"begin", "(begin body...)", "Evaluates expressions sequentially and yields the value of the last expression."},
     {"define-macro", "(define-macro (name params...) body...)", "Defines a syntax transformer that receives AST arguments as data and returns expanded code."},
+    {"define-syntax", "(define-syntax name transformer)", "Defines a hygienic macro transformer (typically using syntax-case)."},
+    {"syntax-case", "(syntax-case val (literals...) [pattern fender output]...)", "Pattern matches syntax objects with ellipsis (...) and hygiene."},
+    {"syntax", "(syntax template) or #'template", "Constructs a syntax object with hygienic lexical scope and ellipsis transcription."},
     {"doc-comment", "~ text before an expression, or after it on its line; (doc-comment [:trailing] \"line\"... [expr])",
         "Attaches documentation to a definition or associates comments with generated code."},
     {"let", "(let ([x v]...) body...) or (let loop ([x v]...) body...)", "Binds local variables in parallel, or defines a named recursive loop."},
@@ -47,11 +50,12 @@ void Evaluator::getFormDocs(std::vector<FormDoc>& out) const
         if ((v.kind != ValueKind::Closure && v.kind != ValueKind::Macro) || v.closure->docs.empty())
             continue;
         const Closure& c = *v.closure;
+        const Closure& signatureClosure = c.datumTransformer ? *c.datumTransformer : c;
         std::string signature = "(" + name;
-        for (const auto& p : c.params)
+        for (const auto& p : signatureClosure.params)
             signature += " " + p;
-        if (!c.restParam.empty())
-            signature += " . " + c.restParam;
+        if (!signatureClosure.restParam.empty())
+            signature += " . " + signatureClosure.restParam;
         signature += ")";
         std::string desc;
         for (const auto& line : c.docs)
@@ -89,12 +93,59 @@ Evaluator::Evaluator()
             v.kind = ValueKind::Unassigned;
             return v;
         });
-        defineBuiltin(*global, "%make-macro", 1, 1, [](const std::vector<Value>& a, const SExpr& call) {
-            if (a[0].kind != ValueKind::Closure)
-                throw CompileError(call, "A macro is made from a procedure");
-            Value m = a[0];
-            m.kind = ValueKind::Macro;
-            return m;
+        defineBuiltin(*global, "%unassigned", 0, 0, [](const std::vector<Value>&, const SExpr&) {
+            Value v;
+            v.kind = ValueKind::Unassigned;
+            return v;
+        });
+        // The prelude derives define-macro from define-syntax. These helpers adapt its legacy
+        // datum procedure to the same syntax-in/syntax-out protocol as every other transformer.
+        defineBuiltin(*global, "%make-datum-transformer", 2, 2, [this](const std::vector<Value>& a, const SExpr& call) {
+            if (a[0].kind != ValueKind::Symbol || a[1].kind != ValueKind::Closure)
+                throw CompileError(call, "A datum transformer takes a name and a procedure");
+            Value procedure = a[1];
+            Closure* named = gcAlloc<Closure>(*procedure.closure);
+            named->name = a[0].text;
+            if (a[0].datumSyntax)
+                named->loc = a[0].datumSyntax->loc;
+            procedure.closure = named;
+            Roots roots(*this, {procedure});
+            EnvPtr adapterEnv = gcAlloc<Env>(global);
+            adapterEnv->define("#:datum-procedure", procedure);
+            SExpr input = SExpr::symbol("#:datum-input", call.loc);
+            SExpr adapter = SExpr::call("lambda", {SExpr::list({input}, call.loc),
+                SExpr::call("#:invoke-datum-transformer", {SExpr::symbol("#:datum-procedure", call.loc), input}, call.loc)}, call.loc);
+            Value wrapper = eval(adapter, adapterEnv);
+            const_cast<Closure*>(wrapper.closure)->datumTransformer = named;
+            const_cast<Closure*>(wrapper.closure)->loc = named->loc;
+            return wrapper;
+        });
+        defineBuiltin(*global, "#:invoke-datum-transformer", 2, 2, [this](const std::vector<Value>& a, const SExpr& call) {
+            if (a[0].kind != ValueKind::Closure || !a[1].isSyntax() || expansions.empty())
+                throw CompileError(call, "A datum transformer can only run during macro expansion");
+            // Use the original call to retain forwarded syntax context and datum source locations.
+            size_t frame = expansions.size() - 1;
+            const SExpr& original = *expansions[frame].call;
+            DatumOrigins origins;
+            Roots args(*this);
+            for (size_t i = 1; i < original.elements.size(); ++i)
+                args.values.push_back(datumFromSExpr(original.elements[i], &origins));
+            const DatumOrigins* previousOrigins = expansions[frame].origins;
+            expansions[frame].origins = &origins;
+            // Nested expansion may reallocate the vector; retain the index, not a frame reference.
+            struct RestoreOrigins
+            {
+                std::vector<Expansion>& frames;
+                size_t index;
+                const DatumOrigins* previous;
+                ~RestoreOrigins() { frames[index].origins = previous; }
+            } restore{expansions, frame, previousOrigins};
+            Value result = apply(a[0], args.values, original);
+            SExpr expanded = result.isNil() ? SExpr::symbol("nil", original.loc) : sexprFromDatum(result, origins, original.loc);
+            // Datum macros intentionally introduce no scope. Cancel the common invoker's flip,
+            // leaving any hygienic context on forwarded input untouched.
+            flipScope(expanded, currentIntroScope);
+            return syntaxFromSExpr(expanded);
         });
         // Built-in to expand macros into core forms as data.
         defineBuiltin(*global, "expand", 1, 1, [this](const std::vector<Value>& a, const SExpr& call) {
@@ -102,11 +153,82 @@ Evaluator::Evaluator()
         });
         installDocComments(*this);
         installRecords(*this);
+        installCollections(*this);
+
+        defineBuiltin(*global, "syntax?", 1, 1, [](const std::vector<Value>& a, const SExpr&) {
+            return Value::boolean(a[0].isSyntax());
+        }, "(syntax? x)", "Returns true if x is a syntax object, otherwise false.");
+
+        defineBuiltin(*global, "identifier?", 1, 1, [](const std::vector<Value>& a, const SExpr&) {
+            return Value::boolean(isIdentifier(a[0]));
+        }, "(identifier? x)", "Returns true if x is an identifier syntax object, otherwise false.");
+
+        defineBuiltin(*global, "syntax->datum", 1, 1, [](const std::vector<Value>& a, const SExpr&) {
+            return syntaxToDatum(a[0]);
+        }, "(syntax->datum stx)", "Recursively strips syntax wrappers from stx, yielding raw datums.");
+
+        defineBuiltin(*global, "datum->syntax", 2, 3, [](const std::vector<Value>& a, const SExpr& call) {
+            std::optional<SourceLocation> loc;
+            if (a.size() > 2)
+            {
+                if (a[2].kind != ValueKind::String)
+                    throw CompileError(call, "datum->syntax optional location must be a string");
+                loc = SourceLocation{a[2].stringValue(), 0, 0};
+            }
+            return datumToSyntax(a[0], a[1], loc);
+        }, "(datum->syntax ctxt datum [loc])", "Wraps datum as a syntax object inheriting lexical context from ctxt.");
+
+        defineBuiltin(*global, "bound-identifier=?", 2, 2, [](const std::vector<Value>& a, const SExpr& call) {
+            if (!isIdentifier(a[0]) || !isIdentifier(a[1]))
+                throw CompileError(call, "bound-identifier=? requires two identifier syntax objects");
+            return Value::boolean(boundIdentifierEqual(a[0], a[1]));
+        }, "(bound-identifier=? id1 id2)", "Returns true if two identifiers have identical names and scopes.");
+
+        defineBuiltin(*global, "free-identifier=?", 2, 2, [this](const std::vector<Value>& a, const SExpr& call) {
+            if (!isIdentifier(a[0]) || !isIdentifier(a[1]))
+                throw CompileError(call, "free-identifier=? requires two identifier syntax objects");
+            return Value::boolean(syntaxBindingKey(a[0].syntax->text, a[0].syntax->scopes) ==
+                                  syntaxBindingKey(a[1].syntax->text, a[1].syntax->scopes));
+        }, "(free-identifier=? id1 id2)", "Returns true if two identifiers refer to the same lexical binding.");
+
+        defineBuiltin(*global, "generate-temporaries", 1, 1, [this](const std::vector<Value>& a, const SExpr& call) -> Value {
+            size_t count = 0;
+            if (a[0].kind == ValueKind::Int)
+                count = a[0].intValue >= 0 ? size_t(a[0].intValue) : 0;
+            else if (a[0].isSyntax() && a[0].syntax->isList())
+                count = a[0].syntax->items.size();
+            else if (a[0].isPair())
+            {
+                std::vector<Value> v;
+                if (listToVector(a[0], v)) count = v.size();
+            }
+            else if (a[0].isNil())
+                count = 0;
+            else
+                throw CompileError(call, "generate-temporaries expects a list or integer");
+
+            std::vector<Value> out;
+            out.reserve(count);
+            for (size_t i = 0; i < count; ++i)
+            {
+                Syntax* s = gcAlloc<Syntax>();
+                s->formKind = SyntaxFormKind::Identifier;
+                s->text = "#:t" + std::to_string(++gensymCounter);
+                s->loc = call.loc;
+                if (currentIntroScope != 0)
+                    s->scopes.add(currentIntroScope);
+                out.push_back(Value::of(s));
+            }
+            return Value::list(out);
+        }, "(generate-temporaries l)", "Generates a list of fresh unique syntax identifiers.");
+
         // Raises a syntax error pointing to the source location of the provided AST datum or macro invocation.
         defineBuiltin(*global, "syntax-error", 2, -1, [this](const std::vector<Value>& a, const SExpr& call) -> Value {
             std::string msg;
             for (size_t i = 1; i < a.size(); ++i)
-                msg += (i == 1 ? "" : " ") + (a[i].kind == ValueKind::String ? a[i].text : toString(a[i]));
+                msg += (i == 1 ? "" : " ") + (a[i].kind == ValueKind::String ? a[i].stringValue() : toString(a[i]));
+            if (a[0].isSyntax())
+                throw CompileError(a[0].syntax->loc, msg);
             if (expansions.empty())
                 throw CompileError(call, msg);
             const Expansion& x = expansions.back();
@@ -142,14 +264,14 @@ Evaluator::Evaluator()
             }
             catch (const CompileError& e)
             {
-                throw CompileError(e.loc(), e.rawMessage() + " (" + a[0].text + ")");
+                throw CompileError(e.loc(), e.rawMessage() + " (" + a[0].stringValue() + ")");
             }
         }, "(with-error-context \"context\" thunk)", "Evaluates thunk, appending context description to any raised error.");
         out = &std::cout;
         // Writes values to the configured output stream.
         defineBuiltin(*global, "display", 0, -1, [this](const std::vector<Value>& a, const SExpr&) {
             for (const auto& v : a)
-                *out << (v.kind == ValueKind::String ? v.text : toString(v));
+                *out << (v.kind == ValueKind::String ? v.stringValue() : toString(v));
             return Value::nil();
         });
 
@@ -215,35 +337,6 @@ Value Evaluator::apply(const Value& fn, std::vector<Value> args, const SExpr& ca
     return run(nullptr, nullptr, &fn, &args, &call);
 }
 
-// Continuation frame representing pending work after evaluating an expression.
-struct Evaluator::Frame
-{
-    enum class Kind
-    {
-        Seq,    // Evaluates remaining expressions in a body sequence.
-        If,
-        Define, // Evaluates value for define.
-        Set,    // Evaluates value for set!.
-        Call,   // Evaluates head and argument expressions for a call.
-    };
-
-    Kind kind;
-    const SExpr* form;
-    EnvPtr env;
-    size_t idx = 0;
-    std::vector<Value> vals;
-};
-
-struct Evaluator::ActiveRun
-{
-    EnvPtr& env;
-    Value& val;
-    Value& applyFn;
-    std::vector<Value>& applyArgs;
-    std::vector<Frame>& stack;
-    ActiveRun* prev = nullptr;
-};
-
 void Evaluator::collectGarbage()
 {
     std::vector<const GcCell*> worklist;
@@ -252,6 +345,15 @@ void Evaluator::collectGarbage()
     {
         if (ev->global)
             worklist.push_back(ev->global);
+        for (const auto* roots : ev->nativeRoots)
+            for (const Value& v : *roots)
+                if (const GcCell* c = v.cell()) worklist.push_back(c);
+        std::function<void(const PatternTree&)> markPattern = [&](const PatternTree& tree) {
+            if (const GcCell* c = tree.leaf.cell()) worklist.push_back(c);
+            for (const PatternTree& child : tree.children) markPattern(child);
+        };
+        for (const PatternEnv& patterns : ev->patternEnvStack)
+            for (const auto& entry : patterns) markPattern(entry.second);
 
         for (const Expansion& exp : ev->expansions)
         {
@@ -265,30 +367,7 @@ void Evaluator::collectGarbage()
             }
         }
 
-        for (ActiveRun* r = ev->activeRun; r; r = r->prev)
-        {
-            if (r->env)
-                worklist.push_back(r->env);
-            if (const GcCell* c = r->val.cell())
-                worklist.push_back(c);
-            if (const GcCell* c = r->applyFn.cell())
-                worklist.push_back(c);
-            for (const Value& v : r->applyArgs)
-            {
-                if (const GcCell* c = v.cell())
-                    worklist.push_back(c);
-            }
-            for (const Frame& f : r->stack)
-            {
-                if (f.env)
-                    worklist.push_back(f.env);
-                for (const Value& v : f.vals)
-                {
-                    if (const GcCell* c = v.cell())
-                        worklist.push_back(c);
-                }
-            }
-        }
+        ev->markBytecode(worklist);
     }
 
     // Mark
@@ -324,15 +403,6 @@ void Evaluator::collectGarbage()
     gcThreshold() = std::max<size_t>(4096, live * 2);
 }
 
-static Value numberLiteral(const SExpr& e)
-{
-    const std::string& t = e.text;
-    bool isHex = t.size() > 2 && (t[1] == 'x' || t[1] == 'X' || (t.size() > 3 && (t[2] == 'x' || t[2] == 'X')));
-    if (!isHex && (t.find('.') != std::string::npos || t.find('e') != std::string::npos || t.find('E') != std::string::npos))
-        return Value::real(std::stod(t));
-    return Value::integer(e.intValue);
-}
-
 // Parses parameter lists of the form (params ...), [params ...], (params ... . rest), or a bare rest symbol.
 void parseParams(const SExpr& list, std::vector<std::string>& params, std::string& rest)
 {
@@ -359,340 +429,6 @@ void parseParams(const SExpr& list, std::vector<std::string>& params, std::strin
             if (prev == p.text)
                 throw CompileError(p, "Duplicate parameter '" + p.text + "'");
         params.push_back(p.text);
-    }
-}
-
-static Value makeClosure(const SExpr& paramList, const SExpr* form, size_t bodyStart, const EnvPtr& env)
-{
-    auto c = gcAlloc<Closure>();
-    parseParams(paramList, c->params, c->restParam);
-    c->form = form;
-    c->bodyStart = bodyStart;
-    c->env = env;
-    c->loc = form->loc;
-    Value v;
-    v.kind = ValueKind::Closure;
-    v.closure = c;
-    return v;
-}
-
-static std::string procName(const Value& fn)
-{
-    if (fn.kind == ValueKind::Builtin)
-        return fn.builtin->name;
-    return fn.closure->name.empty() ? "an anonymous lambda" : fn.closure->name;
-}
-
-Value Evaluator::run(const SExpr* startExpr, EnvPtr startEnv, const Value* startFn, std::vector<Value>* startArgs, const SExpr* startCall)
-{
-    using Kind = Frame::Kind;
-    std::vector<Frame> stack;
-
-    // Evaluates expr in env, or returns val to the top stack frame.
-    bool returning = false;
-    const SExpr* expr = startExpr;
-    EnvPtr env = std::move(startEnv);
-    Value val;
-
-    // Applies a procedure: builtins execute directly, while closures evaluate their body in tail position.
-    Value applyFn;
-    std::vector<Value> applyArgs;
-    const SExpr* applyCall = nullptr;
-    bool applying = startFn != nullptr;
-    if (applying)
-    {
-        applyFn = *startFn;
-        applyArgs = std::move(*startArgs);
-        applyCall = startCall;
-    }
-
-    struct ActiveRunScope
-    {
-        Evaluator* ev;
-        ActiveRun run;
-        ActiveRunScope(Evaluator* ev, EnvPtr& env, Value& val, Value& applyFn, std::vector<Value>& applyArgs, std::vector<Frame>& stack)
-            : ev(ev), run{env, val, applyFn, applyArgs, stack, ev->activeRun}
-        {
-            ev->activeRun = &run;
-        }
-        ~ActiveRunScope()
-        {
-            ev->activeRun = run.prev;
-        }
-    };
-    ActiveRunScope runScope(this, env, val, applyFn, applyArgs, stack);
-
-    // Sets up evaluation of expressions from start index onward as a sequence in bodyEnv.
-    auto startBody = [&](const SExpr* form, size_t start, EnvPtr bodyEnv) {
-        size_t n = form->elements.size();
-        if (start >= n)
-        {
-            val = Value::nil();
-            returning = true;
-            return;
-        }
-        if (start + 1 < n)
-            stack.push_back(Frame{Kind::Seq, form, bodyEnv, start + 1});
-        expr = &form->elements[start];
-        env = std::move(bodyEnv);
-        returning = false;
-    };
-
-    for (;;)
-    {
-        if (gcCount() > gcThreshold())
-            collectGarbage();
-
-        if (stack.size() > maxDepth)
-            maxDepth = stack.size();
-
-        if (applying)
-        {
-            applying = false;
-            const SExpr& call = *applyCall;
-
-            // Unpacks trailing list argument and re-applies the function in tail position.
-            while (applyFn.kind == ValueKind::Builtin && applyFn.builtin->name == "apply")
-            {
-                if (applyArgs.size() < 2)
-                    throw CompileError(call, "apply needs a procedure and a list: (apply f a ... list)");
-                Value f = applyArgs[0];
-                std::vector<Value> spread(applyArgs.begin() + 1, applyArgs.end() - 1);
-                if (!listToVector(applyArgs.back(), spread))
-                    throw CompileError(call, "apply's last argument must be a list, got " + describeKind(applyArgs.back()));
-                applyFn = std::move(f);
-                applyArgs = std::move(spread);
-            }
-
-            if (applyFn.kind == ValueKind::Builtin)
-            {
-                const Builtin& b = *applyFn.builtin;
-                int n = int(applyArgs.size());
-                if (n < b.minArgs || (b.maxArgs >= 0 && n > b.maxArgs))
-                {
-                    std::string expected = b.minArgs == b.maxArgs ? std::to_string(b.minArgs)
-                                           : b.maxArgs < 0       ? "at least " + std::to_string(b.minArgs)
-                                                                 : std::to_string(b.minArgs) + " to " + std::to_string(b.maxArgs);
-                    throw CompileError(call, b.name + " takes " + expected + " argument(s), got " + std::to_string(n));
-                }
-                val = b.fn(applyArgs, call);
-                applyFn = Value{};
-                applyArgs.clear();
-                returning = true;
-            }
-            else if (applyFn.kind == ValueKind::Closure)
-            {
-                const Closure& c = *applyFn.closure;
-                size_t n = applyArgs.size();
-                if (n < c.params.size() || (c.restParam.empty() && n > c.params.size()))
-                {
-                    throw CompileError(call, procName(applyFn) + " takes " + (c.restParam.empty() ? "" : "at least ") + std::to_string(c.params.size()) +
-                        " argument(s), got " + std::to_string(n) + " (defined at " + c.loc.toString() + ")");
-                }
-                auto callEnv = gcAlloc<Env>(c.env);
-                for (size_t i = 0; i < c.params.size(); ++i)
-                    callEnv->define(c.params[i], std::move(applyArgs[i]));
-                if (!c.restParam.empty())
-                    callEnv->define(c.restParam, Value::list(std::vector<Value>(applyArgs.begin() + c.params.size(), applyArgs.end())));
-                startBody(c.form, c.bodyStart, std::move(callEnv));
-                applyFn = Value{};
-                applyArgs.clear();
-            }
-            else if (applyFn.kind == ValueKind::Macro)
-            {
-                throw CompileError(call, procName(applyFn) + " is a macro, so it can't be called as a procedure (it's expanded where it's written)");
-            }
-            else
-            {
-                throw CompileError(call, toString(applyFn) + " (" + describeKind(applyFn) + ") isn't a procedure");
-            }
-            continue;
-        }
-
-        if (!returning)
-        {
-            const SExpr& e = *expr;
-            switch (e.kind)
-            {
-            case SExprKind::Number:
-                val = numberLiteral(e);
-                returning = true;
-                continue;
-            case SExprKind::String:
-                val = Value::string(e.text);
-                returning = true;
-                continue;
-            case SExprKind::Keyword:
-                val = Value::keyword(e.text);
-                returning = true;
-                continue;
-            case SExprKind::Symbol:
-            {
-                if (e.text == "#t" || e.text == "#f")
-                {
-                    val = Value::boolean(e.text == "#t");
-                    returning = true;
-                    continue;
-                }
-                const Value* v = env->lookup(e.text);
-                if (!v)
-                    throw CompileError(e, "Unbound symbol '" + e.text + "'");
-                if (v->kind == ValueKind::Unassigned)
-                    throw CompileError(e, "'" + e.text + "' is used before its letrec value is computed");
-                val = *v;
-                returning = true;
-                continue;
-            }
-            case SExprKind::BracketList: // Bracketed lists behave identically to parenthesized lists.
-            case SExprKind::List:
-                break;
-            }
-
-            if (e.elements.empty())
-                throw CompileError(e, std::string(e.kind == SExprKind::List ? "()" : "[]") + " isn't an expression; nil is the empty list");
-
-            const SExpr& head = e.elements[0];
-            if (head.isSymbol())
-            {
-                const std::string& h = head.text;
-
-                // Evaluates core syntactic forms.
-                if (h == "quote")
-                {
-                    val = datumFromSExpr(e.elements[1]);
-                    returning = true;
-                    continue;
-                }
-                if (h == "if")
-                {
-                    stack.push_back(Frame{Kind::If, &e, env});
-                    expr = &e.elements[1];
-                    continue;
-                }
-                if (h == "lambda")
-                {
-                    val = makeClosure(e.elements[1], &e, 2, env);
-                    returning = true;
-                    continue;
-                }
-                if (h == "begin")
-                {
-                    startBody(&e, 1, env);
-                    continue;
-                }
-                if (h == "define" || h == "set!")
-                {
-                    stack.push_back(Frame{h == "define" ? Kind::Define : Kind::Set, &e, env});
-                    expr = &e.elements[2];
-                    continue;
-                }
-            }
-
-            // Evaluates procedure and argument expressions from left to right.
-            stack.push_back(Frame{Kind::Call, &e, env, 1});
-            expr = &e.elements[0];
-            continue;
-        }
-
-        // Handles returning val to the enclosing continuation frame.
-        if (stack.empty())
-            return val;
-
-        Frame& f = stack.back();
-        const SExpr& form = *f.form;
-        switch (f.kind)
-        {
-        case Kind::Seq:
-        {
-            size_t i = f.idx;
-            EnvPtr bodyEnv = f.env;
-            if (i + 1 == form.elements.size())
-                stack.pop_back(); // The final expression is evaluated in tail position.
-            else
-                f.idx++;
-            expr = &form.elements[i];
-            env = std::move(bodyEnv);
-            returning = false;
-            break;
-        }
-        case Kind::If:
-        {
-            EnvPtr ifEnv = f.env;
-            stack.pop_back();
-            if (val.isTruthy())
-            {
-                expr = &form.elements[2];
-                env = std::move(ifEnv);
-                returning = false;
-            }
-            else if (form.elements.size() == 4)
-            {
-                expr = &form.elements[3];
-                env = std::move(ifEnv);
-                returning = false;
-            }
-            else
-            {
-                val = Value::nil();
-            }
-            break;
-        }
-        case Kind::Define:
-        {
-            // Attaches the binding name and doc comments to named closures or macros.
-            if ((val.kind == ValueKind::Closure || val.kind == ValueKind::Macro) && val.closure->name.empty())
-            {
-                auto named = gcAlloc<Closure>(*val.closure);
-                named->name = form.elements[1].text;
-                named->docs = form.docs;
-                if (form.trailingDoc)
-                    named->docs.push_back(*form.trailingDoc);
-                val.closure = named;
-            }
-            // Attaches doc comments to record instances that define a docs field.
-            else if (form.hasDocs() && recordField(val, "docs"))
-            {
-                std::vector<Value> lines;
-                for (const auto& line : form.docs)
-                    lines.push_back(Value::string(line));
-                if (form.trailingDoc)
-                    lines.push_back(Value::string(*form.trailingDoc));
-                val = recordWith(val, "docs", Value::list(lines));
-            }
-            f.env->define(form.elements[1].text, val);
-            stack.pop_back();
-            val = Value::nil();
-            break;
-        }
-        case Kind::Set:
-        {
-            Value* slot = f.env->find(form.elements[1].text);
-            if (!slot)
-                throw CompileError(form, "set! of '" + form.elements[1].text + "', which isn't bound (define it first)");
-            *slot = val;
-            stack.pop_back();
-            val = Value::nil();
-            break;
-        }
-        case Kind::Call:
-        {
-            f.vals.push_back(val);
-            if (f.idx < form.elements.size())
-            {
-                expr = &form.elements[f.idx++];
-                env = f.env;
-                returning = false;
-                break;
-            }
-            Frame done = std::move(f);
-            stack.pop_back();
-            applyFn = std::move(done.vals[0]);
-            applyArgs.assign(std::make_move_iterator(done.vals.begin() + 1), std::make_move_iterator(done.vals.end()));
-            applyCall = &form;
-            applying = true;
-            break;
-        }
-        }
     }
 }
 

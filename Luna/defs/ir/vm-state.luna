@@ -7,8 +7,7 @@
   (class :effect)
   (facts (writes (vm-slots ra :to-top)))
   (dead-store :none)
-  (lowering
-    (Store :Ptr (Field (Root :State) :lua_State.top) (AddressOf (Index ra count sizeof-TValue)))))
+  (lowering (lower-adjust-stack-to-reg ra count)))
 
 ~ Check interrupt handler
 ~ A: unsigned int (pcpos)
@@ -17,22 +16,13 @@
   (class :effect)
   (facts (no-vm-effects))
   (heap-effects :may-gc)
-  (lowering
-    (Interrupt pc)))
+  (lowering (lower-interrupt pc)))
 
 ~ Check and run GC assist if necessary
 (define-ircmd CHECK_GC
   (class :effect)
   (heap-effects :may-gc)
-  (lowering
-    (labels (skip)
-      ~ a GC step is due when totalbytes has reached GCthreshold
-      (Guard (ICmp :ule :I64 (Load :I64 (Field (Root :Global) :global_State.GCthreshold))
-                             (Load :I64 (Field (Root :Global) :global_State.totalbytes)))
-             skip)
-      (native-call :None :luaC_step :Ptr (Root :State) :I32 1)
-      (reload-base)
-      (Label skip))))
+  (lowering (lower-check-gc)))
 
 ~ Close open upvalues for registers at specified index or higher
 ~ A: Rn (starting register index)
@@ -40,14 +30,7 @@
   (operands [ra :Rn])
   (class :effect)
   (facts (no-vm-effects))
-  (lowering
-    (labels (skip)
-      ~ only when there's an open upvalue at ra or above: L->openupval && ra <= L->openupval->v
-      (let* ([open (LoadPtr (Root :State) :lua_State.openupval)]) (seq
-        (Guard (ICmp :ne :Ptr open 0) skip)
-        (Guard (ICmp :ule :Ptr (AddressOf ra) (LoadPtr open :UpVal.v)) skip)))
-      (native-call :None :luaF_close :Ptr (Root :State) :Ptr (AddressOf ra))
-      (Label skip))))
+  (lowering (lower-close-upvals ra)))
 
 ~ While capture is a no-op right now, it might be useful to track register/upvalue lifetimes
 ~ A: Rn or UPn
@@ -58,9 +41,7 @@
   (facts
     (reads (tvalue ra))
     (when (= kind :LCT_REF) (captures (vm-slot ra))))
-  (lowering
-    ~ a no-op for now
-    (seq)))
+  (lowering (lower-capture ra kind)))
 
 ~ Set a list of values to table in target register
 ~ A: unsigned int (bytecode instruction index)
@@ -79,73 +60,14 @@
   (class :effect)
   (facts (reads (vm-slot ra) (vm-slots rb count)))
   (heap-effects :reenters-vm)
-  (lowering
-    (seq
-      (choose (gen:|| (gen:== count :LUA_MULTRET) (gen:|| (op-kind? known-size :Undef) (gen:< (uint-val known-size) (gen:- (gen:+ index-op count) 1))))
-              (let ([table0 (LoadPtr ra :TValue.value)]
-                    [last (variable :I32)])
-                (seq
-                  (choose (gen:== count :LUA_MULTRET)
-                          (Set last (Add :I32 (Reduce (ShrU :I64 (Sub :I64 (LoadPtr (Root :State) :lua_State.top) (AddressOf rb)) :kTValueSizeLog2))
-                                         (gen:- index-op 1)))
-                          (Set last (gen:- (gen:+ index-op count) 1)))
-                  (labels (skip-resize)
-                    (Guard (ICmp :ult :I32 (Load :I32 (Field table0 :LuaTable.sizearray)) last) skip-resize)
-                    (native-call :None :luaH_resizearray :Ptr (Root :State) :Ptr table0 :I32 last)
-                    (Label skip-resize)))))
-      (let ([array-dst (LoadPtr ra :TValue.value :LuaTable.array)])
-        (choose-cond
-          [(gen:&& (gen:!= count :LUA_MULTRET) (gen:<= count 4))
-           (seq
-             (choose (gen:> count 0)
-                     (Store :V128 (Field array-dst (gen:typed :int (gen:* (gen:- index-op 1) sizeof-TValue)))
-                            (Load :V128 (Field rb 0))))
-             (choose (gen:> count 1)
-                     (Store :V128 (Field array-dst (gen:typed :int (gen:* index-op sizeof-TValue)))
-                            (Load :V128 (Field rb sizeof-TValue))))
-             (choose (gen:> count 2)
-                     (Store :V128 (Field array-dst (gen:typed :int (gen:* (gen:+ index-op 1) sizeof-TValue)))
-                            (Load :V128 (Field rb (gen:* 2 sizeof-TValue)))))
-             (choose (gen:> count 3)
-                     (Store :V128 (Field array-dst (gen:typed :int (gen:* (gen:+ index-op 2) sizeof-TValue)))
-                            (Load :V128 (Field rb (gen:* 3 sizeof-TValue))))))]
-          [else
-           (let ([src (variable :Ptr)]
-                 [src-end (variable :Ptr)]
-                 [dst (variable :Ptr)])
-             (seq
-               (Set src (AddressOf rb))
-               (Set dst (AddressOf (Field array-dst (gen:typed :int (gen:* (gen:- index-op 1) sizeof-TValue)))))
-               (choose (gen:== count :LUA_MULTRET)
-                       (seq
-                         (Set src-end (LoadPtr (Root :State) :lua_State.top))
-                         (Store :Ptr (Field (Root :State) :lua_State.top) (LoadPtr (Root :State) :lua_State.ci :CallInfo.top)))
-                       (Set src-end (AddressOf (Field rb (gen:typed :int (gen:* count sizeof-TValue))))))
-               (labels (repeat-loop end-loop)
-                 (choose (gen:== count :LUA_MULTRET)
-                         (Guard (ICmp :ult :Ptr src src-end) end-loop))
-                 (Label repeat-loop)
-                 (Store :V128 (Field dst 0) (Load :V128 (Field src 0)))
-                 (Set src (Add :Ptr src sizeof-TValue))
-                 (Set dst (Add :Ptr dst sizeof-TValue))
-                 (Guard (ICmp :uge :Ptr src src-end) repeat-loop)
-                 (Label end-loop))))]))
-      (let ([table (LoadPtr ra :TValue.value)])
-        (labels (skip-barrier)
-          (Guard (ICmp :ne :I32 (And :I32 (Load :U8 (Field table :GCheader.marked)) black-mask) 0) skip-barrier)
-          (native-call :None :luaC_barrierback :Ptr (Root :State) :Ptr table :Ptr (AddressOf (Field table :LuaTable.gclist)))
-          (Label skip-barrier))))))
+  (lowering (lower-setlist pc ra rb count index-op known-size)))
 
 ~ Increment coverage data (saturating 24 bit add)
 ~ A: unsigned int (bytecode instruction index)
 (define-ircmd COVERAGE
   (operands [pc :const-uint])
   (class :effect)
-  (lowering
-    (let* ([insn (Load :I32 (Index (Root :Code) pc sizeof-Instruction))]
-          [bumped (Add :I32 insn 256)])
-      ~ the hit count is the top 24 bits (E): one more, unless that reaches the sign bit (it saturates at 2^23 - 1)
-      (Store :I32 (Index (Root :Code) pc sizeof-Instruction) (Select :I32 (ICmp :slt :I32 bumped 0) insn bumped)))))
+  (lowering (lower-coverage pc)))
 
 ~ Find or create an upval at the given level
 ~ A: Rn (level)
@@ -154,5 +76,4 @@
   (result :pointer)
   (class :value)
   (facts (reads (vm-slot ra)))
-  (lowering
-    (native-call :Ptr :luaF_findupval :Ptr (Root :State) :Ptr (AddressOf ra))))
+  (lowering (lower-findupval ra)))

@@ -2,13 +2,19 @@
 ;; C++ code generation module
 ;; ============================================================================
 
-(define-record cpp (kind text declared-type kids ctor-args cases ref? id ctype known-value lines comments))
+(define-record cpp (kind text declared-type kids ctor-args cases ref? id ctype known-value lines comments facts))
 (define-record cpp-case (labels body))
 
 (define (cpp-code? x) (cpp? x))
 
 (define (%make-node kind text declared-type kids ctor-args cases ref? id ctype known-value lines comments)
-  (make-cpp kind text declared-type kids ctor-args cases ref? id ctype known-value lines comments))
+  (make-cpp kind text declared-type kids ctor-args cases ref? id ctype known-value lines comments nil))
+
+(define (%bool-value x)
+  (cond [(bool? x) (list x)]
+        [(and (cpp? x) (equal? (cpp-kind x) 'literal) (equal? (cpp-ctype x) "bool"))
+         (list (equal? (cpp-text x) "true"))]
+        [else #f]))
 
 (define (%cpp-statement? k)
   (case k
@@ -17,7 +23,7 @@
 
 (define (%cpp-effectful? k)
   (case k
-    [(call method with-value) #t]
+    [(call method with-value target-insn) #t]
     [else #f]))
 
 (define (%cpp-has-comments? code)
@@ -164,8 +170,8 @@
      v]
     [(int? v)
      (if (and (>= v -2147483648) (<= v 2147483647))
-         (%make-node 'literal (%int-literal v "") "int" nil nil nil #f 0 "int" #f nil nil)
-         (%make-node 'literal (str "int64_t(" (%int-literal v "ll") ")") "int64_t" nil nil nil #f 0 "int64_t" #f nil nil))]
+         (%make-node 'literal (%int-literal v "") "int" nil nil nil #f 0 "int" v nil nil)
+         (%make-node 'literal (str "int64_t(" (%int-literal v "ll") ")") "int64_t" nil nil nil #f 0 "int64_t" v nil nil))]
     [(double? v)
      (%make-node 'literal (%double-literal v) "double" nil nil nil #f 0 "double" #f nil nil)]
     [(bool? v)
@@ -246,20 +252,20 @@
 (define (gen:int v)
   (unless (and (int? v) (>= v -2147483648) (<= v 2147483647))
     (error (str "gen:int expects an int in the 32-bit range, got " (%to-string v))))
-  (%make-node 'literal (%int-literal v "") "int" nil nil nil #f 0 "int" #f nil nil))
+  (%make-node 'literal (%int-literal v "") "int" nil nil nil #f 0 "int" v nil nil))
 
 ~ Constructs an unsigned 32-bit integer literal node with a 'u' suffix.
 (define (gen:uint v)
   (unless (and (int? v) (>= v 0) (<= v 4294967295))
     (error (str "gen:uint expects an int in the unsigned 32-bit range, got " (%to-string v))))
-  (%make-node 'literal (str v "u") "unsigned" nil nil nil #f 0 "unsigned" #f nil nil))
+  (%make-node 'literal (str v "u") "unsigned" nil nil nil #f 0 "unsigned" v nil nil))
 
 ~ Constructs a signed 64-bit integer literal node, formatted as int64_t(...).
 (define (gen:i64 v)
   (unless (int? v)
     (error (str "gen:i64 expects an int, got " (%to-string v))))
   (let ([suffix (if (or (> v 2147483647) (< v -2147483648)) "ll" "")])
-    (%make-node 'literal (str "int64_t(" (%int-literal v suffix) ")") "int64_t" nil nil nil #f 0 "int64_t" #f nil nil)))
+    (%make-node 'literal (str "int64_t(" (%int-literal v suffix) ")") "int64_t" nil nil nil #f 0 "int64_t" v nil nil)))
 
 ~ Constructs a double-precision floating-point literal node.
 (define (gen:double v)
@@ -297,6 +303,12 @@
   (let ([t (%type-arg type "gen:typed")])
     (record-with (%to-expr e "gen:typed") 'ctype t)))
 
+(define (gen:fact code key value)
+  (record-with code 'facts (cons (list key value) (filter (lambda (f) (not (equal? (first f) key))) (cpp-facts code)))))
+
+(define (gen:fact-of code key)
+  (let ([p (and (cpp? code) (assoc key (cpp-facts code)))]) (and p (second p))))
+
 ~ Constructs a field access expression node (obj.name).
 (define (gen:field obj name)
   (%make-node 'field (%cpp-name-arg name "gen:field") ""
@@ -311,10 +323,11 @@
 
 ~ Constructs a functional cast expression node converting e to type.
 (define (gen:cast type e)
-  (let ([t (%type-arg type "gen:cast")])
+  (let* ([t (%type-arg type "gen:cast")]
+         [expr (%to-expr e "gen:cast")])
     (%make-node 'cast "" t
-                (list (%to-expr e "gen:cast"))
-                nil nil #f 0 t #f nil nil)))
+                (list expr)
+                nil nil #f 0 t (known-number expr) nil nil)))
 
 ~ Constructs a braced initializer list node ({args...}).
 (define (gen:init-list . args)
@@ -324,11 +337,13 @@
 
 ~ Constructs a ternary conditional expression node (c ? a : b).
 (define (gen:? c a b)
+  (if (%bool-value c)
+      (%to-expr (if (first (%bool-value c)) a b) "gen:?")
   (let* ([ce (%to-expr c "gen:?")]
          [ae (%to-expr a "gen:?")]
          [be (%to-expr b "gen:?")]
          [ctype (if (equal? (cpp-ctype ae) (cpp-ctype be)) (cpp-ctype ae) "")])
-    (%make-node 'ternary "" "" (list ce ae be) nil nil #f 0 ctype #f nil nil)))
+    (%make-node 'ternary "" "" (list ce ae be) nil nil #f 0 ctype #f nil nil))))
 
 (define (%binary op args)
   (let* ([fn (str "gen:" op)]
@@ -343,7 +358,26 @@
                               [(and (not (equal? t0 "")) (equal? t0 t1)) t0]
                               [(and (%integral-cpp-type? t0) (%integral-cpp-type? t1)) "int64_t"]
                               [else ""])])
-            (loop (%make-node 'binary op "" (list acc rhs) nil nil #f 0 ctype #f nil nil)
+            (loop (cond [(and (equal? op "&&") (%bool-value acc)) (if (first (%bool-value acc)) rhs (%to-expr #f fn))]
+                        [(and (equal? op "&&") (%bool-value rhs)) (if (first (%bool-value rhs)) acc (%to-expr #f fn))]
+                        [(and (equal? op "||") (%bool-value acc)) (if (first (%bool-value acc)) (%to-expr #t fn) rhs)]
+                        [(and (equal? op "||") (%bool-value rhs)) (if (first (%bool-value rhs)) (%to-expr #t fn) acc)]
+                        [else
+                         (let* ([k0 (known-number acc)]
+                                [k1 (known-number rhs)]
+                                [known (and (int? k0) (int? k1)
+                                            (cond [(equal? op "+") (+ k0 k1)]
+                                                  [(equal? op "-") (- k0 k1)]
+                                                  [(equal? op "*") (* k0 k1)]
+                                                  [(and (equal? op "/") (not (= k1 0))) (/ k0 k1)]
+                                                  [(and (equal? op "%") (not (= k1 0))) (remainder k0 k1)]
+                                                  [(equal? op "&") (bit-and k0 k1)]
+                                                  [(equal? op "|") (bit-or k0 k1)]
+                                                  [(equal? op "^") (bit-xor k0 k1)]
+                                                  [(and (equal? op "<<") (>= k1 0) (< k1 64)) (shl k0 k1)]
+                                                  [(and (equal? op ">>") (>= k1 0) (< k1 64)) (shr k0 k1)]
+                                                  [else #f]))])
+                           (%make-node 'binary op "" (list acc rhs) nil nil #f 0 ctype known nil nil))])
                   (rest rest-args)))))))
 
 ~ Constructs an addition expression node. When given a single operand, returns the operand itself.
@@ -386,7 +420,10 @@
 (define (gen:- a . rest)
   (if (pair? rest)
       (%binary "-" (cons a rest))
-      (%make-node 'unary "-" "" (list (%to-expr a "gen:-")) nil nil #f 0 "" #f nil nil)))
+      (let* ([e (%to-expr a "gen:-")]
+             [k (known-number e)]
+             [known (and (int? k) (- k))])
+        (%make-node 'unary "-" "" (list e) nil nil #f 0 "" known nil nil))))
 
 ~ Constructs an address-of expression node (&x) typed as const void*.
 (define (gen:address-of x)
@@ -394,11 +431,15 @@
 
 ~ Constructs a logical NOT unary expression node (!a).
 (define (gen:! a)
-  (%make-node 'unary "!" "" (list (%to-expr a "gen:!")) nil nil #f 0 "" #f nil nil))
+  (if (%bool-value a) (%to-expr (not (first (%bool-value a))) "gen:!")
+      (%make-node 'unary "!" "" (list (%to-expr a "gen:!")) nil nil #f 0 "" #f nil nil)))
 
 ~ Constructs a bitwise NOT unary expression node (~a).
 (define (gen:compl a)
-  (%make-node 'unary "~" "" (list (%to-expr a "gen:compl")) nil nil #f 0 "" #f nil nil))
+  (let* ([e (%to-expr a "gen:compl")]
+         [k (known-number e)]
+         [known (and (int? k) (bit-not k))])
+    (%make-node 'unary "~" "" (list e) nil nil #f 0 "" known nil nil)))
 
 ;; ---- Statements & Sequences ------------------------------------------------
 
@@ -431,7 +472,8 @@
         (if (not value)
             (%make-node kind "" "" seq-kids nil nil #f 0 "" #f nil nil)
             (let ([seq-node (%make-node kind "" "" seq-kids nil nil #f 0 "" #f nil nil)])
-              (%make-node 'with-value "" "" (list seq-node value) nil nil #f 0 (cpp-ctype value) #f nil nil))))))
+              (record-with (%make-node 'with-value "" "" (list seq-node value) nil nil #f 0 (cpp-ctype value) #f nil nil)
+                           'facts (cpp-facts value)))))))
 
 ~ Constructs a sequence of statements executed in order. When the last element is a gen:value, the sequence produces that value.
 (define (gen:seq . args)
@@ -443,12 +485,14 @@
 
 ~ Constructs a C++ if statement with an optional else branch.
 (define (gen:if c then . maybe-else)
+  (if (%bool-value c)
+      (or (%statement-arg (if (first (%bool-value c)) then (if (pair? maybe-else) (first maybe-else) nil)) "gen:if") (gen:seq))
   (let ([ce (%to-expr c "gen:if")]
         [te (%statement-arg then "gen:if")]
         [ee (if (and (pair? maybe-else) (not (null? (first maybe-else))))
                 (%statement-arg (first maybe-else) "gen:if")
                 nil)])
-    (%make-node 'if "" "" (if ee (list ce te ee) (list ce te)) nil nil #f 0 "" #f nil nil)))
+    (%make-node 'if "" "" (if ee (list ce te ee) (list ce te)) nil nil #f 0 "" #f nil nil))))
 
 ~ Yields value expr after executing stmts. When used as an operand, the prepended statements are emitted prior to the enclosing statement.
 (define (gen:value first-arg . rest-args)
@@ -460,7 +504,8 @@
     (when (equal? (cpp-kind seq) 'with-value)
       (error "gen:value's statements can't have a value themselves"))
     (let ([val (%to-expr expr "gen:value")])
-      (%make-node 'with-value "" "" (list seq val) nil nil #f 0 (cpp-ctype val) #f nil nil))))
+      (record-with (%make-node 'with-value "" "" (list seq val) nil nil #f 0 (cpp-ctype val) #f nil nil)
+                   'facts (cpp-facts val)))))
 
 ~ Emits a CODEGEN_ASSERT statement node for condition c.
 (define (gen:assert c)
@@ -511,14 +556,16 @@
          [ctype (if (not (equal? t-str ""))
                     t-str
                     (if (pair? kids) (cpp-ctype (first kids)) ""))])
-    (%make-node 'decl name t-str kids ctors nil is-ref? (%next-id) ctype #f nil nil)))
+    (record-with (%make-node 'decl name t-str kids ctors nil is-ref? (%next-id) ctype #f nil nil)
+                 'facts (if (pair? kids) (cpp-facts (first kids)) nil))))
 
 (define (%gen-loop-var name)
   (%make-node 'for name "" nil nil nil #f (%next-id) "" #f nil nil))
 
 (define (%gen-local node)
   (let ([ctype (if (equal? (cpp-kind node) 'for) "int" (cpp-ctype node))])
-    (%make-node 'local (cpp-text node) "" nil nil nil #f (cpp-id node) ctype #f nil nil)))
+    (record-with (%make-node 'local (cpp-text node) "" nil nil nil #f (cpp-id node) ctype #f nil nil)
+                 'facts (cpp-facts node))))
 
 (define (%gen-let-body decls . body)
   (let ([items (append decls body)])
@@ -622,7 +669,7 @@
         `(let* ,(reverse let*-bindings)
            (%gen-let-body (list ,@(reverse decls)) ,@body)))))
 
-~ Emits a C++ for loop counting from 'from' up to 'to' with the induction variable bound in body.
+~ Emits a C++ for loop counting from 'from' up to 'to' with the induction register-local bound in body.
 (define-macro (gen:for spec . body)
   (unless (and (pair? spec) (= (length spec) 3) (symbol? (first spec)))
     (error "gen:for is (gen:for (i from to) body...)"))
@@ -823,6 +870,8 @@
                  (if (not it)
                      (error (str "The local '" (cpp-text e) "' is used outside the gen:let (or gen:for) that declares it"))
                      (second it)))]
+              [(target-insn)
+               (%expression (record-with e 'kind 'method) min-prec parent-op names-map)]
               [(call)
                (let ([args (string-join (map (lambda (k) (%expression k 0 "" names-map)) (cpp-kids e)) ", ")])
                  (str (cpp-text e) "(" args ")"))]
@@ -1047,7 +1096,7 @@
           [(with-value)
            (statement (first (cpp-kids n)))
            (let ([val (second (cpp-kids n))])
-             (when (member? (cpp-kind val) '(call method))
+             (when (%cpp-effectful? (cpp-kind val))
                (statement val)))]
           [else
            (let ([no-comments (record-with np 'comments nil)])

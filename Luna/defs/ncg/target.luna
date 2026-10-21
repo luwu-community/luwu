@@ -2,20 +2,17 @@
 ;; The target being generated for, and the classes of template arguments
 ;; ============================================================================
 
-(define %target #f) ; :a64 or :x64 while generating, else #f
+(define current-target (make-parameter #f))
 
-~ Whether code is being generated for target (:a64 or :x64)
+~ Whether code is being generated for target (:a64 or :x64).
 (define (target? target)
-  (unless %target (error "target? is only known while generating for a target"))
-  (equal? target %target))
+  (let ([actual (current-target)])
+    (unless actual (error "target? is only known while generating for a target"))
+    (equal? target actual)))
 
-~ (thunk), with code generated for target (:a64 or :x64)
+~ Evaluates thunk in a target context, restoring the previous context even on errors.
 (define (%with-target target thunk)
-  (let ([saved %target])
-    (set! %target target)
-    (let ([value (thunk)])
-      (set! %target saved)
-      value)))
+  (parameterize ([current-target target]) (thunk)))
 
 ~ Whether v is an IR operand: a register or a constant, which is known only when lowering
 (define (ir? v) (equal? (cpp-type v) "IrOp"))

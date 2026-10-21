@@ -4,8 +4,7 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering
-    (DivS :I64 a b)))
+  (lowering (lower-div-int64 a b)))
 
 ~ Signed floored division
 ~ A, B: int64
@@ -13,11 +12,7 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering
-    (let* ([q (DivS :I64 a b)]
-          [r (Sub :I64 a (Mul :I64 q b))])
-      ~ rounds toward -infinity: one less when there's a remainder whose sign differs from b's
-      (Select :I64 (ICmp :ne :I64 r 0) (Select :I64 (ICmp :slt :I64 (Xor :I64 r b) 0) (Sub :I64 q 1) q) q))))
+  (lowering (lower-idiv-int64 a b)))
 
 ~ Unsigned division
 ~ A, B: int64
@@ -25,8 +20,7 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering
-    (DivU :I64 a b)))
+  (lowering (lower-udiv-int64 a b)))
 
 ~ Signed truncating remainder
 ~ A, B: int64
@@ -34,9 +28,7 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering
-    ~ a % -1 is 0, like a % 1, which can't overflow when a is INT64_MIN
-    (RemS :I64 a (Select :I64 (ICmp :eq :I64 b -1) 1 b))))
+  (lowering (lower-rem-int64 a b)))
 
 ~ Unsigned remainder
 ~ A, B: int64
@@ -44,8 +36,7 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering
-    (RemU :I64 a b)))
+  (lowering (lower-urem-int64 a b)))
 
 ~ Signed floored modulus
 ~ A, B: int64
@@ -53,10 +44,7 @@
   (operands [a :int64] [b :int64])
   (result :int64)
   (class :value)
-  (lowering
-    (let* ([r (RemS :I64 a (Select :I64 (ICmp :eq :I64 b -1) 1 b))])
-      ~ floored: plus b when there's a remainder whose sign differs from b's
-      (Select :I64 (ICmp :ne :I64 r 0) (Select :I64 (ICmp :slt :I64 (Xor :I64 r b) 0) (Add :I64 r b) r) r))))
+  (lowering (lower-mod-int64 a b)))
 
 ~ Guard against int64 RFC behavior
 ~ If b is 0, throws a division by zero error.
@@ -67,10 +55,4 @@
   (operands [a :int64] [b :int64] [fail :block|:vmexit|:undef])
   (class :guard)
   (dead-store :live-ins-no-exit-sync)
-  (lowering
-    (Guard (ICmp :ne :I64 b 0) fail)
-    ~ INT64_MIN / -1 overflows
-    (labels (no-overflow)
-      (Guard (ICmp :eq :I64 b -1) no-overflow)
-      (Guard (ICmp :ne :I64 a int64-min) fail)
-      (Label no-overflow))))
+  (lowering (lower-check-div-int64 a b fail)))

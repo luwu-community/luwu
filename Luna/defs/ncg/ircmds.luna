@@ -1,6 +1,5 @@
 ;; ============================================================================
 ;; IR commands: define-ircmd's records, their checks, and the headers generated from them
-;; (~/luna-plan/ircmds-in-luna.md)
 ;; ============================================================================
 
 ;; ---- Text ----------------------------------------------------------------------
@@ -1058,38 +1057,16 @@
 ;; Returns the program's IR commands after performing whole-program validation.
 (define (program-ircmds) (check-ircmds %ircmds))
 
-;; Returns the micro-op type corresponding to a command's result kind for its lowering body.
-(define (%lowering-type cmd)
-  (let ([t (assoc (ircmd-result cmd) '(("Int" :I32) ("Tag" :I32) ("Int64" :I64) ("Pointer" :Ptr) ("Double" :F64) ("Float" :F32) ("Tvalue" :V128)))])
-    (if t (second t) (error (ircmd-name cmd) "has a result of kind" (ircmd-result cmd) ", which a lowering body can't produce"))))
-
-;; Determines the representation of operand i within a lowering body.
-;; Constant-only operands resolve to compile-time constants for micro-ops,
-;; upvalues resolve to their index, instruction results resolve to their register,
-;; and other operands resolve to the raw IR operand.
-(define (%operand-binding cmd i)
-  (let* ([op (%operand-at cmd i)]
-         [slot (string->keyword (str "OP_" (substring "ABCDEFG" i (+ i 1))))]
-         [kinds (%union (cons (operand-kinds op)
-                              (map (lambda (e) (operand-kinds e))
-                                   (filter (lambda (e) (equal? (operand-name e) (operand-name op)))
-                                           (apply append (map extras-operands (append (ircmd-target-specific cmd) (ircmd-flag-specific cmd))))))))]
-         [constant (and (= (length kinds) 1)
-                        (assoc (first kinds) '(("const-int" int-val) ("const-uint" uint-val) ("const-int64" int64-val) ("const-double" double-val)
-                                               ("const-tag" tag-val) ("import" import-val) ("UPn" upvalue-index))))])
-    (cond [(all? (lambda (k) (and (> (string-length k) 5) (equal? (substring k 0 5) "inst-"))) kinds) `(inst-operand ,slot)]
-          [constant `(,(second constant) (ir-operand ,slot))]
-          [else `(ir-operand ,slot)])))
-
-;; Constructs a procedure expression that lowers cmd into C++ by binding its operands
-;; and wrapping its body forms with lower-body.
+~ Binds each named operand to its IrOp and emits the explicitly authored lowering.
 (define (%lowering-procedure cmd)
-  (if (ircmd-lowering cmd)
-      `(lambda ()
-         (let ,(map (lambda (pair) (list (operand-name (first pair)) (%operand-binding cmd (second pair))))
-                    (zip (ircmd-operands cmd) (range 0 (length (ircmd-operands cmd)))))
-           (lower-body ,(if (ircmd-result cmd) (%lowering-type cmd) #f) (list ,@(ircmd-lowering cmd)))))
-      #f))
+  (and (ircmd-lowering cmd)
+       `(lambda ()
+          (let ,(map (lambda (pair)
+                       (let ([operand (first pair)] [i (second pair)])
+                         (list (operand-name operand)
+                               `(ir-operand ,(string->keyword (str "OP_" (substring "ABCDEFG" i (+ i 1))))))))
+                     (zip (ircmd-operands cmd) (range 0 (length (ircmd-operands cmd)))))
+            (gen:seq ,@(ircmd-lowering cmd))))))
 
 ~ Declares an IR command (an IrCmd enumerator, in declaration order with NOP first).
 ~
@@ -1118,7 +1095,7 @@
 ~
 ~ Result kinds include :tag, :int, :int64, :pointer, :float, :double, :tvalue, and :unknown.
 ~ Class can be :value, :effect, :guard, :terminator, or :pseudo.
-~ Lowering specifies the micro-op forms that lower this command to machine instructions.
+~ Lowering calls an ordinary Scheme procedure that explicitly emits target assembly.
 (define-macro (define-ircmd . args)
   (let* ([form (cons 'define-ircmd args)]
          ;; parsed now for its errors, which point at the clause or operand they're about; again when it's evaluated
@@ -1133,7 +1110,6 @@
     (when (and (equal? name 'NOP) (not (null? %ircmds)))
       (syntax-error 1 "NOP must be the first define-ircmd, so a zero-initialized instruction is a no-op"))
     (when (>= (length %ircmds) %max-commands) (syntax-error 1 "More than 256 IR commands; IrCmd is a uint8_t"))
-    (when (and (ircmd-lowering cmd) (ircmd-result cmd)) (%lowering-type cmd))
     `(begin
        (define ,record (record-with (record-with (parse-ircmd ',form nil) 'lower ,(%lowering-procedure cmd)) 'location ,(macro-argument-location 1)))
        (set! %ircmds (append %ircmds (list ,record))))))
@@ -1142,21 +1118,13 @@
 
 (define (%lowered? cmd) (and (not (equal? (ircmd-class cmd) "pseudo")) (ircmd-lower cmd)))
 
-~ Returns the names of IR commands not lowered by the pipeline yet, as a list of strings.
+~ Returns the names of IR commands without direct lowerings, as a list of strings.
 (define (ncg-not-lowered)
   (map %name-of (filter (lambda (cmd) (and (not (equal? (ircmd-class cmd) "pseudo")) (not (%lowered? cmd)))) (program-ircmds))))
 
 (define %word-chars "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 (define (%word-char-at? text i)
   (and (>= i 0) (< i (string-length text)) (string-search %word-chars (substring text i (+ i 1)))))
-
-;; Returns true if word appears in text as a whole word.
-(define (%mentions? text word)
-  (let loop ([from 0])
-    (let ([at (string-search text word from)])
-      (cond [(not at) #f]
-            [(or (%word-char-at? text (- at 1)) (%word-char-at? text (+ at (string-length word)))) (loop (+ at 1))]
-            [else #t]))))
 
 ;; Returns a sorted, deduplicated list of fast flag names (FFlag::Name) referenced in text.
 (define (%fast-flags text)
@@ -1168,33 +1136,32 @@
                  [end (let scan ([i start]) (if (%word-char-at? text i) (scan (+ i 1)) i))])
             (loop end (if (> end start) (cons (substring text start end) found) found)))))))
 
-;; Generates the C++ function that lowers cmd for the given target architecture.
-(define (%lowering-function cmd target cls)
+(define (%lowering-case cmd target)
   (let* ([name (%name-of cmd)]
-         [code (with-error-context (str "lowering " name " for " (keyword->string target)) (lambda () (%with-target target (ircmd-lower cmd))))]
-         [text (with-error-context (str "printing " name " for " (keyword->string target)) (lambda () (cpp->string code 1)))])
-    (str "inline void lower_" name "(" cls "& lowering, IrInst& inst, uint32_t index, const IrBlock& next)\n{\n"
-         (if (%mentions? text "build") "    auto& build = lowering.build;\n" "")
-         (if (%mentions? text "regs") "    auto& regs = lowering.regs;\n" "")
-         (apply str (map (lambda (w) (if (%mentions? text w) "" (str "    (void)" w ";\n"))) '("inst" "index" "next")))
-         "\n" text "\n}\n\n")))
+         [code (with-error-context (str "lowering " name " for " (keyword->string target))
+                 (lambda () (%with-target target (ircmd-lower cmd))))]
+         [text (with-error-context (str "printing " name " for " (keyword->string target))
+                 (lambda () (cpp->string code 2)))])
+    (str "    case IrCmd::" name ":\n    {\n" text "\n        break;\n    }\n")))
 
 ~ Generates LoweringRules{A64,X64}.h for the target architecture, containing lowering
-~ functions for all lowered commands and the lowerInstGenerated dispatch switch.
+~ cases for all lowered commands in one lowerInstGenerated dispatch function.
 (define (ircmd-lowering-header target cmds)
   (let* ([a64 (equal? target :a64)]
          [cls (if a64 "IrLoweringA64" "IrLoweringX64")]
          [ns (if a64 "A64" "X64")]
          [lowered (filter %lowered? cmds)]
-         [body (apply str (map (lambda (cmd) (%lowering-function cmd target cls)) lowered))]
-         [flags (%fast-flags body)]
-         [sizes (filter (lambda (s) (string-search body (first s))) (gen:assumed-sizes))]
+         [body (apply str (map (lambda (cmd) (%lowering-case cmd target)) lowered))]
+         [full-text body]
+         [flags (%fast-flags full-text)]
+         [sizes (filter (lambda (s) (string-search full-text (first s))) (gen:assumed-sizes))]
          [pseudo (filter (lambda (cmd) (equal? (ircmd-class cmd) "pseudo")) cmds)]
          [missing (filter (lambda (cmd) (and (not (equal? (ircmd-class cmd) "pseudo")) (not (%lowered? cmd)))) cmds)])
     (str "// Auto-generated by luwu-dsl-compiler from Luna/defs/luwu.luna. DO NOT EDIT!\n#pragma once\n\n"
          "#include \"" cls ".h\"\n"
          (if a64 "#include \"EmitCommonA64.h\"\n" "#include \"EmitCommonX64.h\"\n#include \"EmitInstructionX64.h\"\n")
          "#include \"lstate.h\"\n#include \"lgc.h\"\n\n"
+         (if a64 "#include <array>\n\n" "")
          ;; the fast flags the code reads
          (apply str (map (lambda (f) (str "LUAU_FASTFLAG(" f ")\n")) flags))
          (if (null? flags) "" "\n")
@@ -1202,13 +1169,11 @@
          ;; the sizes Luna was told (gen:sizeof with a size) and the code relies on
          (apply str (map (lambda (s) (str "static_assert(" (first s) " == " (second s) ", \"the Luna definitions assume " (first s) " is " (second s) "\");\n")) sizes))
          (if (null? sizes) "" "\n")
-         body
          "// Lowers `inst` with the code its define-ircmd's lowering makes; pseudo-instructions are never lowered\n"
-         "inline void lowerInstGenerated(" cls "& lowering, IrInst& inst, uint32_t index, const IrBlock& next)\n{\n    switch (inst.cmd)\n    {\n"
-         (apply str (map (lambda (cmd) (str "    case IrCmd::" (%name-of cmd) ":\n        lower_" (%name-of cmd) "(lowering, inst, index, next);\n        break;\n"))
-                         lowered))
+         "inline void lowerInstGenerated(" cls "& lowering, IrInst& inst, uint32_t index, const IrBlock& next)\n{\n    auto& build = lowering.build;\n    auto& regs = lowering.regs;\n    switch (inst.cmd)\n    {\n"
+         body
          (apply str (map (lambda (cmd) (str "    case IrCmd::" (%name-of cmd) ":\n")) missing))
-         (if (null? missing) "" "        CODEGEN_ASSERT(!\"This instruction isn't lowered by the micro-op pipeline yet\");\n        break;\n")
+         (if (null? missing) "" "        CODEGEN_ASSERT(!\"This instruction isn't lowered by the direct lowering macros yet\");\n        break;\n")
          (apply str (map (lambda (cmd) (str "    case IrCmd::" (%name-of cmd) ":\n")) pseudo))
          (if (null? pseudo) "" "        CODEGEN_ASSERT(!\"Pseudo instructions should not be lowered\");\n        break;\n")
          "    }\n}\n\n} // namespace " ns "\n} // namespace CodeGen\n} // namespace Luau\n")))

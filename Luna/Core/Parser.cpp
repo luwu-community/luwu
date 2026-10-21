@@ -190,13 +190,22 @@ void Parser::wrapDocs(SExpr& expr)
 SExpr Parser::parseExpr()
 {
     // 'x `x ,x ,@x read as (quote x) (quasiquote x) (unquote x) (unquote-splicing x)
+    // #'x #`x #,x #,@x read as (syntax x) (quasisyntax x) (unsyntax x) (unsyntax-splicing x)
     if (current.type == TokenType::Prefix)
     {
         Token prefix = advance();
         if (current.type == TokenType::Eof || current.type == TokenType::RParen || current.type == TokenType::RBracket)
             throw CompileError(SourceLocation{lexer.getFilename(), prefix.line, prefix.col}, "Expected an expression after " + prefix.text);
         SourceLocation loc{lexer.getFilename(), prefix.line, prefix.col};
-        const char* name = prefix.text == "'" ? "quote" : prefix.text == "`" ? "quasiquote" : prefix.text == "," ? "unquote" : "unquote-splicing";
+        const char* name = "quote";
+        if (prefix.text == "'") name = "quote";
+        else if (prefix.text == "`") name = "quasiquote";
+        else if (prefix.text == ",") name = "unquote";
+        else if (prefix.text == ",@") name = "unquote-splicing";
+        else if (prefix.text == "#'") name = "syntax";
+        else if (prefix.text == "#`") name = "quasisyntax";
+        else if (prefix.text == "#,") name = "unsyntax";
+        else if (prefix.text == "#,@") name = "unsyntax-splicing";
         SExpr head;
         head.kind = SExprKind::Symbol;
         head.text = name;
