@@ -154,6 +154,13 @@ static std::optional<TypePackId> variadicTailOf(const FunctionType* function)
     return std::nullopt;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get: its expected constructor,
+// its factory and its `__implemented` hook
+static bool belongsToTraitAlone(const std::string& name)
+{
+    return name == "__init" || name == "__create" || name == "__implemented";
+}
+
 // Luwu Traits (rfcs/classes/traits.md): whether a method leaves out a parameter or return annotation, which an overridden
 // function can fill in
 static bool hasUnannotatedSignature(AstExprFunction* fn)
@@ -1402,7 +1409,7 @@ void ConstraintGenerator::prototypeClass(
         ExternType::Props implementorProps;
         for (const auto& [name, prop] : staticProps)
         {
-            if (name != "__init" && name != "__create")
+            if (!belongsToTraitAlone(name))
                 implementorProps[name] = prop;
         }
 
@@ -1816,7 +1823,7 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
 
             for (const auto& [name, prop] : neededType->props())
             {
-                bool copyable = name != "__init" && name != "__create" && !traitType->props().count(name);
+                bool copyable = !belongsToTraitAlone(name) && !traitType->props().count(name);
                 if (copyable)
                 {
                     traitType->props()[name] = asSeenHere(prop);
@@ -2337,7 +2344,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         // A static (on the trait's value) is overridden by the class's own static, an instance member by its own member
         auto addProvider = [&](const Name& name, bool isStatic)
         {
-            bool provided = name != "__init" && name != "__create" && !info.expectations.count(name) && !info.fromNeeds.count(name);
+            bool provided = !belongsToTraitAlone(name) && !info.expectations.count(name) && !info.fromNeeds.count(name);
             bool classDefines = isStatic ? ownStatics.count(name) > 0 : own.count(name) > 0;
             if (!provided || classDefines)
                 return;
@@ -2433,8 +2440,8 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         // Whether the trait's member `name` is added to the class, reporting a clash when it can't be
         auto provide = [&](const Name& name, const Property& traitProp)
         {
-            // a factory's `__create` belongs to the trait alone, and a needed trait's members to that trait
-            if (name == "__init" || name == "__create" || info.expectations.count(name) || info.fromNeeds.count(name))
+            // a trait's constructor and hooks belong to the trait alone, and a needed trait's members to that trait
+            if (belongsToTraitAlone(name) || info.expectations.count(name) || info.fromNeeds.count(name))
                 return false;
 
             // The class's own member overrides the trait's, a field as well as a function, unless the trait's is final
@@ -2498,7 +2505,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         {
             for (const auto& [name, prop] : traitValueType->props())
             {
-                bool provided = name != "__init" && name != "__create" && info.expectations.count(name) == 0;
+                bool provided = !belongsToTraitAlone(name) && info.expectations.count(name) == 0;
                 if (provided && ownStatics.count(name))
                 {
                     auto own = classValueType->props().find(name);
@@ -4396,6 +4403,15 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                     bool unannotatedTraitCreate = statClass->isTrait && method.functionName == "__create" && !method.function->returnAnnotation;
                     if (unannotatedTraitCreate)
                         expectedType = arena->addType(FunctionType{arena->addTypePack({}), arena->addTypePack({classDeclRecord->ty})});
+
+                    // Luwu Traits (rfcs/classes/traits.md): `__implemented` is given each implementing class, a `class<Trait>`
+                    const ExternType* hookTrait = get<ExternType>(follow(classDeclRecord->ty));
+                    bool isImplementedHook = statClass->isTrait && method.functionName == "__implemented" && hookTrait && hookTrait->traitInfo &&
+                                             hookTrait->traitInfo->implementorClass;
+                    if (isImplementedHook)
+                        expectedType = arena->addType(
+                            FunctionType{arena->addTypePack({*hookTrait->traitInfo->implementorClass}), builtinTypes->emptyTypePack}
+                        );
 
                     // Luwu Traits (rfcs/classes/traits.md): an override takes what it leaves unannotated from the function it
                     // overrides, so it doesn't restate the signature

@@ -5450,6 +5450,10 @@ TEST_CASE_FIXTURE(Fixture, "trait_syntax_errors")
     matchParseError("trait T expect function __create() end", "'__create' can't be expected");
     matchParseError("trait T(x) function __create() end end", "Traits with parameters can't define '__create'");
     matchParseError("trait T function __create(self) end end", "'__create' can't take 'self'");
+    matchParseError("class C final function __implemented(cls) end end", "Only trait members can be 'final'");
+    matchParseError("trait T function __implemented(cls) end end", "'__implemented' must be final: write 'final function __implemented'");
+    matchParseError("trait T expect function __implemented(cls) end", "'__implemented' can't be expected");
+    matchParseError("trait T final function __implemented(self) end end", "'__implemented' can't take 'self'; it's given the implementing class");
     matchParseError(
         "trait T final function __init(self) end end", "Traits can't define '__init'; give fields default values or trait parameters instead"
     );
