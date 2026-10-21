@@ -1128,16 +1128,9 @@ static Closure* luaR_copytraitfunction(lua_State* L, const Closure* cl)
         setobj(L, &copy->l.uprefs[i], &cl->l.uprefs[i]);
     copy->preload = cl->preload;
 
-    // the copy runs natively when the function it copies does: native code compiles the copy now
-    if (L->global->ecb.functioncopied && cl->l.p->execdata)
-    {
-        luaC_threadbarrier(L);
-        luaD_checkstack(L, 1);
-        setclvalue(L, L->top, copy);
-        L->top++;
-        L->global->ecb.functioncopied(L);
-        L->top--;
-    }
+    // the copy runs natively wherever the function it copies does
+    if (L->global->ecb.functioncopied)
+        L->global->ecb.functioncopied(L, cl->l.p, p);
 
     return copy;
 }
