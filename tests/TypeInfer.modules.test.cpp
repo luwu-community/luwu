@@ -1309,6 +1309,41 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_alias_a_modules_exported_
     CHECK_EQ(b->exportedTypeBindings["Box"].typeParams.size(), 1);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "types_through_a_destructured_require_are_not_named_after_its_hidden_local")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["game/A"] = R"(
+        export type Point = { x: number }
+        return { make = function(): Point return { x = 1 } end }
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local .{ make } = require(game.A)
+        local p = make()
+        return {}
+    )";
+
+    fileResolver.source["game/C"] = R"(
+        --!strict
+        local A = require(game.A)
+        local p = A.make()
+        return {}
+    )";
+
+    LUAU_REQUIRE_NO_ERRORS(getFrontend().check("game/B"));
+    LUAU_REQUIRE_NO_ERRORS(getFrontend().check("game/C"));
+
+    // the hidden local binding the module is no prefix anyone can write: `Point` isn't in scope by any other name
+    ToStringOptions opts;
+    opts.scope = getFrontend().moduleResolver.getModule("game/B")->getModuleScope();
+    CHECK_EQ("Point", toString(requireType("game/B", "p"), opts));
+
+    opts.scope = getFrontend().moduleResolver.getModule("game/C")->getModuleScope();
+    CHECK_EQ("A.Point", toString(requireType("game/C", "p"), opts));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "locals_bound_to_an_imported_class_bring_its_type")
 {
     ScopedFastFlag sff[] = {

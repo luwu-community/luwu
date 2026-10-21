@@ -144,7 +144,10 @@ static std::pair<bool, std::optional<Luau::Name>> canUseTypeNameInScope(ScopePtr
     {
         for (const auto& [importName, nameTable] : curr->importedTypeBindings)
         {
-            if (nameTable.count(name))
+            // Luwu Destructuring (rfcs/destructuring.md): `const .{ ... } = require(p)` imports the module's types under
+            // the hidden local it binds the module to, which no code can spell, so it can't qualify a name
+            bool isHiddenLocalPath = importName.rfind(kDestructuredLocalName, 0) == 0;
+            if (!isHiddenLocalPath && nameTable.count(name))
                 return {true, importName};
         }
 
