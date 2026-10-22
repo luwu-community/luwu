@@ -3,6 +3,7 @@
 #include "Luau/BuiltinDefinitions.h"
 
 #include "Fixture.h"
+#include "Typewriter.h"
 #include "ScopedFlags.h"
 
 #include "doctest.h"
@@ -20,6 +21,7 @@ LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
 LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 
@@ -4492,6 +4494,175 @@ return 1
     CHECK_EQ(result.warnings[0].text, "lint directive needs the lint to turn on, like '--!lint ConstLocal'");
     CHECK_EQ(result.warnings[1].text, "'All' can only turn lints off; name the lint to turn on, like '--!lint ConstLocal'");
     CHECK_EQ(result.warnings[2].text, "lint directive refers to unknown lint rule 'ConstLocl'; did you mean 'ConstLocal'?");
+}
+
+// The ManualStringHelper warnings in `source`, in order
+static std::vector<std::string> manualStringHelpers(const LintResult& result)
+{
+    std::vector<std::string> texts;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == LintWarning::Code_ManualStringHelper)
+            texts.push_back(warning.text);
+    }
+    return texts;
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperSubComparisons")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = manualStringHelpers(lint(R"(
+local function f(path: string, p: string)
+    local a = string.sub(path, 1, 2) == "./"
+    local b = path:sub(-5) == ".luwu"
+    local c = string.sub(path, 1, #p) == p
+    local d = path:sub(-#p) ~= p
+    local e = string.sub(path, 1, 3) == "./"
+    return a, b, c, d, e
+end
+
+return f
+)"));
+
+    // `e` compares three characters with a two-character string, which isn't a prefix check
+    REQUIRE_EQ(warnings.size(), 4);
+    CHECK_EQ(warnings[0], "Use 'string.startswith(path, \"./\")' instead of comparing a 'sub' result");
+    CHECK_EQ(warnings[1], "Use 'path:endswith(\".luwu\")' instead of comparing a 'sub' result");
+    CHECK_EQ(warnings[2], "Use 'string.startswith(path, p)' instead of comparing a 'sub' result");
+    CHECK_EQ(warnings[3], "Use 'not path:endswith(p)' instead of comparing a 'sub' result");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperSearches")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = manualStringHelpers(lint(R"(
+local function f(path: string)
+    if string.match(path, "%.luwu$") then
+        print(path)
+    end
+    if not path:find("^@") then
+        print(path)
+    end
+    while string.find(path, "/", 1, true) do
+        break
+    end
+    if path:find("\n", 1, true) then
+        print(path)
+    end
+    local x = if path:match("^%./") ~= nil then 1 else 2
+    local y = string.match(path, "%.luwu$")
+    if string.match(path, "^a.b") then
+        print(path)
+    end
+    return x, y
+end
+
+return f
+)"));
+
+    // `y` uses the match as a value, and "^a.b" has a special character
+    REQUIRE_EQ(warnings.size(), 5);
+    CHECK_EQ(warnings[0], "Use 'string.endswith(path, \".luwu\")' instead of an anchored pattern");
+    CHECK_EQ(warnings[1], "Use 'not path:startswith(\"@\")' instead of an anchored pattern");
+    CHECK_EQ(warnings[2], "Use 'string.contains(path, \"/\")' instead of a plain 'find'");
+    CHECK_EQ(warnings[3], "Use 'path:contains(\"\\n\")' instead of a plain 'find'");
+    CHECK_EQ(warnings[4], "Use 'path:startswith(\"./\")' instead of an anchored pattern");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperTrimAndReplace")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = manualStringHelpers(lint(R"(
+local function f(s: string)
+    local a = s:match("^%s*(.-)%s*$")
+    local b = (string.gsub(s, "^%s+", ""))
+    local c = s:gsub("%s+$", "")
+    local d = string.gsub(s, "%.", "/")
+    local e, n = s:gsub("a", "b")
+    local g = s:gsub("a", "%0%0")
+    return a, b, c, d, e, n, g
+end
+
+return f
+)"));
+
+    // `e` reads the count, and `g`'s replacement has a capture
+    REQUIRE_EQ(warnings.size(), 4);
+    CHECK_EQ(warnings[0], "Use 's:trim()' instead of a whitespace pattern; it also trims Unicode whitespace");
+    CHECK_EQ(warnings[1], "Use 'string.trimstart(s)' instead of a whitespace pattern; it also trims Unicode whitespace");
+    CHECK_EQ(warnings[2], "Use 's:trimend()' instead of a whitespace pattern; it also trims Unicode whitespace");
+    CHECK_EQ(warnings[3], "Use 'string.replace(s, \".\", \"/\")' instead of 'gsub'; the pattern has no special characters");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperHelpers")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = manualStringHelpers(lint(R"(
+local function startswith(s: string, prefix: string): boolean
+    return s:find(prefix, 1, true) == 1
+end
+
+local function trim(xs: { string }): { string }
+    return xs
+end
+
+local lib = {
+    endswith = function(s: string, suffix: string): boolean
+        return true
+    end,
+    trim = function(s: string, ...: string): string
+        return s
+    end,
+}
+
+local path = "a.luwu"
+local a = lib.endswith(path, ".luwu")
+local b = lib.trim(path, "-")
+return startswith, trim, a, b
+)"));
+
+    // `trim` does no string work, and `lib.trim` takes extra strings, which another library's trim may treat as patterns
+    REQUIRE_EQ(warnings.size(), 2);
+    CHECK_EQ(warnings[0], "Use 'string.startswith' instead of defining 'startswith'");
+    CHECK_EQ(warnings[1], "Use 'string.endswith(path, \".luwu\")' instead of 'lib.endswith'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperOnlyInLuwuModules")
+{
+    const std::string source = R"(
+local function f(path: string)
+    return string.sub(path, 1, 2) == "./"
+end
+
+return f
+)";
+
+    {
+        ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, false};
+        CHECK(manualStringHelpers(lint(source)).empty());
+    }
+
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+    CHECK_EQ(manualStringHelpers(lint(source)).size(), 1);
+
+    configResolver.defaultConfig.language = Language::Luau;
+    CHECK(manualStringHelpers(lint(source)).empty());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperTypewriting")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    checkTypewriting(
+        *this,
+        "local path = \"a.luwu\"\n",
+        "if string.sub(path, -5) == \".luwu\" then\nprint(path)\n",
+        "\nlocal unrelated = 1\nprint(unrelated + 1)\n"
+    );
 }
 
 TEST_SUITE_END();

@@ -22,6 +22,7 @@ LUAU_FASTINTVARIABLE(LuauSuggestionDistance, 4)
 LUAU_FASTFLAGVARIABLE(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAGVARIABLE(LuwuTableRemoveFootgunLint)
+LUAU_FASTFLAG(LuwuStringExtensions)
 // Defined by the VM, which introduces `none`; without it there is nothing to mix up with `nil`.
 LUAU_FASTFLAG(LuwuNonePrimitive)
 
@@ -7157,6 +7158,558 @@ private:
 };
 
 // Luwu: `--!nolint` with no lint names, the way LintWarning::parseMask recognizes it
+// Luwu String Extensions (rfcs/string-extensions.md): in a Luwu file, code that does by hand what string.startswith,
+// endswith, contains, trim, trimstart, trimend or replace does. That's a 'sub' result compared with a string, an anchored
+// pattern or a plain find used as a condition, a whitespace pattern, a gsub with nothing special in its pattern, a helper
+// function with one of their names, or a call to another library's version. The suggestion keeps the form of the code it
+// replaces: a method call for a method call, `string.name(s, ...)` otherwise.
+class LintManualStringHelper : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintManualStringHelper pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // Calls whose extra results something reads (`return s:gsub(a, b)`): a builtin returning one value can't replace these
+    DenseHashSet<AstExprCall*> multretCalls{nullptr};
+
+    // A suggestion quotes expressions up to this long and writes `...` for longer ones
+    static constexpr size_t kMaxQuotedLength = 40;
+    static constexpr const char* kWhitespacePatternMessage = "Use '%s' instead of a whitespace pattern; it also trims Unicode whitespace";
+
+    // A call to a string library function: `string.name(s, ...)`, or `s:name(...)` on a string
+    struct StringCall
+    {
+        AstExprCall* call;
+        AstName name;
+        AstExpr* subject;
+        bool method;
+
+        // The arguments after the subject
+        AstExpr* arg(size_t i) const
+        {
+            size_t index = method ? i : i + 1;
+            return index < call->args.size ? call->args.data[index] : nullptr;
+        }
+
+        size_t argCount() const
+        {
+            return method ? call->args.size : call->args.size - 1;
+        }
+    };
+
+    bool mayBeString(AstExpr* expr)
+    {
+        std::optional<TypeId> type = context->getType(expr);
+        return !type || isString(follow(*type));
+    }
+
+    std::optional<StringCall> matchStringCall(AstExpr* expr)
+    {
+        AstExprCall* call = unwrapGroup(expr)->as<AstExprCall>();
+        AstExprIndexName* function = call ? call->func->as<AstExprIndexName>() : nullptr;
+        if (!function)
+            return std::nullopt;
+
+        if (call->self)
+        {
+            if (!mayBeString(function->expr))
+                return std::nullopt;
+
+            return StringCall{call, function->index, function->expr, /* method= */ true};
+        }
+
+        AstExprGlobal* library = function->expr->as<AstExprGlobal>();
+        if (!library || library->name != "string" || call->args.size == 0)
+            return std::nullopt;
+
+        return StringCall{call, function->index, call->args.data[0], /* method= */ false};
+    }
+
+    // `"lit"` for a suggestion, escaping what a Luau string needs
+    static std::string stringLiteral(std::string_view text)
+    {
+        std::string result = "\"";
+        for (char c : text)
+        {
+            if (c == '"' || c == '\\')
+                result += std::string("\\") + c;
+            else if (c == '\n')
+                result += "\\n";
+            else if (c == '\r')
+                result += "\\r";
+            else if (c == '\t')
+                result += "\\t";
+            else if ((unsigned char)c < 0x20)
+                result += format("\\x%02X", (unsigned char)c);
+            else
+                result += c;
+        }
+        return result + "\"";
+    }
+
+    static std::string quote(AstExpr* expr)
+    {
+        std::string text;
+        if (AstExprConstantString* string = unwrapGroup(expr)->as<AstExprConstantString>())
+            text = stringLiteral(std::string_view(string->value.data, string->value.size));
+        else
+            text = toString(expr);
+
+        return text.size() <= kMaxQuotedLength ? text : "...";
+    }
+
+    // `s:builtin(args)` for a method call, `string.builtin(s, args)` otherwise
+    static std::string suggestion(const StringCall& manual, const char* builtin, const std::vector<std::string>& args)
+    {
+        std::string result;
+        if (manual.method)
+            result = quote(manual.subject) + ":" + builtin + "(";
+        else
+            result = std::string("string.") + builtin + "(" + quote(manual.subject);
+
+        for (size_t i = 0; i < args.size(); ++i)
+        {
+            if (i > 0 || !manual.method)
+                result += ", ";
+            result += args[i];
+        }
+
+        return result + ")";
+    }
+
+    static bool isNumber(AstExpr* expr, double value)
+    {
+        AstExprConstantNumber* number = expr ? unwrapGroup(expr)->as<AstExprConstantNumber>() : nullptr;
+        return number && number->value == value;
+    }
+
+    // `-n` as a constant
+    static bool isNegativeNumber(AstExpr* expr, double value)
+    {
+        AstExprUnary* minus = expr ? unwrapGroup(expr)->as<AstExprUnary>() : nullptr;
+        if (minus && minus->op == AstExprUnary::Op::Minus)
+            return isNumber(minus->expr, value);
+
+        return isNumber(expr, -value);
+    }
+
+    // `#x`, the operand, or nullptr
+    static AstExpr* lengthOf(AstExpr* expr)
+    {
+        AstExprUnary* length = expr ? unwrapGroup(expr)->as<AstExprUnary>() : nullptr;
+        return length && length->op == AstExprUnary::Op::Len ? length->expr : nullptr;
+    }
+
+    // `-#x`, the operand, or nullptr
+    static AstExpr* negatedLengthOf(AstExpr* expr)
+    {
+        AstExprUnary* minus = expr ? unwrapGroup(expr)->as<AstExprUnary>() : nullptr;
+        return minus && minus->op == AstExprUnary::Op::Minus ? lengthOf(minus->expr) : nullptr;
+    }
+
+    static std::optional<std::string_view> constantString(AstExpr* expr)
+    {
+        AstExprConstantString* string = expr ? unwrapGroup(expr)->as<AstExprConstantString>() : nullptr;
+        if (!string)
+            return std::nullopt;
+
+        return std::string_view(string->value.data, string->value.size);
+    }
+
+    // A pattern with no special characters, unescaped: `%.luwu` is `.luwu`. Nothing for any other pattern.
+    static std::optional<std::string> literalPattern(std::string_view pattern)
+    {
+        std::string literal;
+
+        for (size_t i = 0; i < pattern.size(); ++i)
+        {
+            char c = pattern[i];
+
+            if (c == '%')
+            {
+                bool escapesPunctuation = i + 1 < pattern.size() && !isalnum((unsigned char)pattern[i + 1]);
+                if (!escapesPunctuation)
+                    return std::nullopt;
+
+                literal += pattern[++i];
+            }
+            else if (strchr("^$*+?.([])-", c))
+                return std::nullopt;
+            else
+                literal += c;
+        }
+
+        return literal;
+    }
+
+    void report(AstNode* node, const char* message, const std::string& replacement)
+    {
+        emitWarning(*context, LintWarning::Code_ManualStringHelper, node->location, message, replacement.c_str());
+    }
+
+    // `sub(s, 1, n) == lit`, `sub(s, 1, #p) == p`, `sub(s, -n) == lit` and `sub(s, -#p) == p`
+    void checkSubComparison(AstExprBinary* comparison, AstExpr* side, AstExpr* needle)
+    {
+        std::optional<StringCall> sub = matchStringCall(side);
+        if (!sub || sub->name != "sub")
+            return;
+
+        std::optional<std::string_view> literal = constantString(needle);
+        AstExpr* first = sub->arg(0);
+        AstExpr* last = sub->arg(1);
+
+        bool literalPrefix = literal && isNumber(first, 1) && isNumber(last, double(literal->size()));
+        bool expressionPrefix = isNumber(first, 1) && lengthOf(last) && similar(lengthOf(last), needle);
+        bool literalSuffix = literal && sub->argCount() == 1 && isNegativeNumber(first, double(literal->size()));
+        bool expressionSuffix = sub->argCount() == 1 && negatedLengthOf(first) && similar(negatedLengthOf(first), needle);
+
+        const char* builtin = nullptr;
+        if (literalPrefix || expressionPrefix)
+            builtin = "startswith";
+        else if (literalSuffix || expressionSuffix)
+            builtin = "endswith";
+        else
+            return;
+
+        std::string replacement = suggestion(*sub, builtin, {quote(needle)});
+        if (comparison->op == AstExprBinary::CompareNe)
+            replacement = "not " + replacement;
+
+        report(comparison, "Use '%s' instead of comparing a 'sub' result", replacement);
+    }
+
+    // An anchored pattern (`"^lit"`, `"lit$"`) or a plain find, used as a condition
+    void checkSearch(AstExpr* expr, bool negated)
+    {
+        std::optional<StringCall> search = matchStringCall(expr);
+        if (!search || (search->name != "match" && search->name != "find"))
+            return;
+
+        AstExprConstantBool* plain = search->arg(2) ? unwrapGroup(search->arg(2))->as<AstExprConstantBool>() : nullptr;
+        bool plainFind = search->name == "find" && search->argCount() == 3 && isNumber(search->arg(1), 1) && plain && plain->value;
+
+        std::string replacement;
+        const char* message = nullptr;
+
+        if (plainFind)
+        {
+            replacement = suggestion(*search, "contains", {quote(search->arg(0))});
+            message = "Use '%s' instead of a plain 'find'";
+        }
+        else if (std::optional<std::string_view> pattern = constantString(search->arg(0)); pattern && search->argCount() == 1 && pattern->size() > 1)
+        {
+            bool anchoredStart = pattern->front() == '^';
+            bool anchoredEnd = pattern->back() == '$' && (*pattern)[pattern->size() - 2] != '%';
+            if (anchoredStart == anchoredEnd)
+                return;
+
+            std::string_view body = anchoredStart ? pattern->substr(1) : pattern->substr(0, pattern->size() - 1);
+            std::optional<std::string> literal = literalPattern(body);
+            if (!literal || literal->empty())
+                return;
+
+            replacement = suggestion(*search, anchoredStart ? "startswith" : "endswith", {stringLiteral(*literal)});
+            message = "Use '%s' instead of an anchored pattern";
+        }
+        else
+            return;
+
+        if (negated)
+            replacement = "not " + replacement;
+
+        report(search->call, message, replacement);
+    }
+
+    // The parts of a condition whose truthiness is all that's read
+    void checkCondition(AstExpr* expr, bool negated = false)
+    {
+        expr = unwrapGroup(expr);
+
+        if (AstExprUnary* unary = expr->as<AstExprUnary>(); unary && unary->op == AstExprUnary::Op::Not)
+            return checkCondition(unary->expr, !negated);
+
+        if (AstExprBinary* binary = expr->as<AstExprBinary>())
+        {
+            if (binary->op == AstExprBinary::And || binary->op == AstExprBinary::Or)
+            {
+                checkCondition(binary->left, negated);
+                checkCondition(binary->right, negated);
+            }
+            else if (binary->op == AstExprBinary::CompareEq || binary->op == AstExprBinary::CompareNe)
+            {
+                // `x ~= nil` tests the same thing as `x`, and `x == nil` its opposite
+                bool equal = binary->op == AstExprBinary::CompareEq;
+                if (unwrapGroup(binary->right)->is<AstExprConstantNil>())
+                    checkSearch(binary->left, negated != equal);
+                else if (unwrapGroup(binary->left)->is<AstExprConstantNil>())
+                    checkSearch(binary->right, negated != equal);
+            }
+            return;
+        }
+
+        checkSearch(expr, negated);
+    }
+
+    // Whitespace patterns, and a gsub whose pattern has no special characters
+    void checkPatternCall(AstExprCall* node)
+    {
+        std::optional<StringCall> manual = matchStringCall(node);
+        if (!manual)
+            return;
+
+        std::optional<std::string_view> pattern = constantString(manual->arg(0));
+        if (!pattern)
+            return;
+
+        if (manual->name == "match" && manual->argCount() == 1 && *pattern == "^%s*(.-)%s*$")
+            return report(node, kWhitespacePatternMessage, suggestion(*manual, "trim", {}));
+
+        if (manual->name != "gsub" || multretCalls.contains(node))
+            return;
+
+        std::optional<std::string_view> replacement = constantString(manual->arg(1));
+        if (!replacement)
+            return;
+
+        bool trimsStart = *pattern == "^%s+" || *pattern == "^%s*";
+        bool trimsEnd = *pattern == "%s+$" || *pattern == "%s*$";
+        if ((trimsStart || trimsEnd) && replacement->empty() && manual->argCount() == 2)
+        {
+            const char* builtin = trimsStart ? "trimstart" : "trimend";
+            return report(node, kWhitespacePatternMessage, suggestion(*manual, builtin, {}));
+        }
+
+        std::optional<std::string> literal = literalPattern(*pattern);
+        bool literalReplacement = replacement->find('%') == std::string_view::npos;
+        if (!literal || literal->empty() || !literalReplacement || manual->argCount() > 3)
+            return;
+
+        std::vector<std::string> args = {stringLiteral(*literal), stringLiteral(*replacement)};
+        if (AstExpr* max = manual->arg(2))
+            args.push_back(quote(max));
+
+        report(node, "Use '%s' instead of 'gsub'; the pattern has no special characters", suggestion(*manual, "replace", args));
+    }
+
+    // The builtin a helper named `name` does the work of, or nullptr
+    static const char* builtinForHelper(std::string_view name)
+    {
+        static const std::pair<const char*, const char*> kHelpers[] = {
+            {"startswith", "startswith"},
+            {"starts_with", "startswith"},
+            {"startsWith", "startswith"},
+            {"starts", "startswith"},
+            {"endswith", "endswith"},
+            {"ends_with", "endswith"},
+            {"endsWith", "endswith"},
+            {"ends", "endswith"},
+            {"trim", "trim"},
+            {"strip", "trim"},
+            {"trimstart", "trimstart"},
+            {"trim_start", "trimstart"},
+            {"trimStart", "trimstart"},
+            {"trimfront", "trimstart"},
+            {"ltrim", "trimstart"},
+            {"lstrip", "trimstart"},
+            {"trimend", "trimend"},
+            {"trim_end", "trimend"},
+            {"trimEnd", "trimend"},
+            {"trimback", "trimend"},
+            {"rtrim", "trimend"},
+            {"rstrip", "trimend"},
+        };
+
+        for (const auto& [helper, builtin] : kHelpers)
+        {
+            if (name == helper)
+                return builtin;
+        }
+
+        return nullptr;
+    }
+
+    static bool isTrim(const char* builtin)
+    {
+        return strncmp(builtin, "trim", 4) == 0;
+    }
+
+    // Whether a function body uses the string library the way a hand-written helper does
+    struct StringWorkFinder : AstVisitor
+    {
+        bool found = false;
+
+        bool visit(AstExprCall* node) override
+        {
+            AstExprIndexName* function = node->func->as<AstExprIndexName>();
+            if (function)
+            {
+                const char* name = function->index.value;
+                bool stringWork = !strcmp(name, "sub") || !strcmp(name, "find") || !strcmp(name, "match") || !strcmp(name, "gsub");
+                found = found || stringWork;
+            }
+            return !found;
+        }
+    };
+
+    void checkHelperDefinition(AstName name, const Location& location, AstExprFunction* function)
+    {
+        const char* builtin = builtinForHelper(name.value);
+        if (!builtin || function->args.size == 0)
+            return;
+
+        StringWorkFinder finder;
+        function->body->visit(&finder);
+        if (!finder.found)
+            return;
+
+        emitWarning(
+            *context, LintWarning::Code_ManualStringHelper, location, "Use 'string.%s' instead of defining '%s'", builtin, name.value
+        );
+    }
+
+    // A call like `str.startswith(s, p)` to another library's version with string arguments. A trim given more than the
+    // string is left alone because seal's trims take patterns.
+    void checkHelperCall(AstExprCall* node)
+    {
+        AstExprIndexName* function = node->self ? nullptr : node->func->as<AstExprIndexName>();
+        AstExprGlobal* library = function ? function->expr->as<AstExprGlobal>() : nullptr;
+        if (!function || (library && library->name == "string") || node->args.size == 0)
+            return;
+
+        const char* builtin = builtinForHelper(function->index.value);
+        if (!builtin)
+            return;
+
+        bool argumentsFit = isTrim(builtin) ? node->args.size == 1 : node->args.size >= 2;
+        if (!argumentsFit)
+            return;
+
+        std::vector<std::string> args;
+        for (AstExpr* arg : node->args)
+        {
+            if (!mayBeString(arg) || !context->getType(arg))
+                return;
+            args.push_back(quote(arg));
+        }
+
+        std::string replacement = std::string("string.") + builtin + "(" + join(args, ", ") + ")";
+        emitWarning(
+            *context,
+            LintWarning::Code_ManualStringHelper,
+            node->location,
+            "Use '%s' instead of '%s'",
+            replacement.c_str(),
+            toString(node->func).c_str()
+        );
+    }
+
+    void markMultret(const AstArray<AstExpr*>& list)
+    {
+        if (list.size == 0)
+            return;
+
+        if (AstExprCall* call = list.data[list.size - 1]->as<AstExprCall>())
+            multretCalls.insert(call);
+    }
+
+    bool visit(AstStatReturn* node) override
+    {
+        markMultret(node->list);
+        return true;
+    }
+
+    bool visit(AstStatLocal* node) override
+    {
+        if (node->vars.size > node->values.size)
+            markMultret(node->values);
+        return true;
+    }
+
+    bool visit(AstStatAssign* node) override
+    {
+        if (node->vars.size > node->values.size)
+            markMultret(node->values);
+        return true;
+    }
+
+    bool visit(AstExprTable* node) override
+    {
+        if (node->items.size > 0 && node->items.data[node->items.size - 1].kind == AstExprTable::Item::Kind::List)
+        {
+            if (AstExprCall* call = node->items.data[node->items.size - 1].value->as<AstExprCall>())
+                multretCalls.insert(call);
+        }
+        return true;
+    }
+
+    bool visit(AstExprCall* node) override
+    {
+        markMultret(node->args);
+        checkPatternCall(node);
+        checkHelperCall(node);
+        return true;
+    }
+
+    bool visit(AstExprBinary* node) override
+    {
+        if (node->op == AstExprBinary::CompareEq || node->op == AstExprBinary::CompareNe)
+        {
+            checkSubComparison(node, node->left, node->right);
+            checkSubComparison(node, node->right, node->left);
+        }
+        return true;
+    }
+
+    bool visit(AstStatIf* node) override
+    {
+        checkCondition(node->condition);
+        return true;
+    }
+
+    bool visit(AstStatWhile* node) override
+    {
+        checkCondition(node->condition);
+        return true;
+    }
+
+    bool visit(AstStatRepeat* node) override
+    {
+        checkCondition(node->condition);
+        return true;
+    }
+
+    bool visit(AstExprIfElse* node) override
+    {
+        checkCondition(node->condition);
+        return true;
+    }
+
+    bool visit(AstStatLocalFunction* node) override
+    {
+        checkHelperDefinition(node->name->name, node->name->location, node->func);
+        return true;
+    }
+
+    bool visit(AstStatFunction* node) override
+    {
+        if (AstExprIndexName* index = node->name->as<AstExprIndexName>())
+            checkHelperDefinition(index->index, index->indexLocation, node->func);
+        else if (AstExprGlobal* global = node->name->as<AstExprGlobal>())
+            checkHelperDefinition(global->name, global->location, node->func);
+        else if (AstExprLocal* local = node->name->as<AstExprLocal>())
+            checkHelperDefinition(local->local->name, local->location, node->func);
+        return true;
+    }
+};
+
 static bool isBareNolint(const HotComment& hc)
 {
     return hc.header && hc.content.compare(0, 6, "nolint") == 0 && hc.content.find_first_not_of(" \t", 6) == std::string::npos;
@@ -7536,6 +8089,10 @@ std::vector<LintWarning> lint(
 
     if (context.warningEnabled(LintWarning::Code_FloatIndex))
         LintFloatIndex::process(context);
+
+    bool luwuModule = !module || module->language == Language::Luwu;
+    if (FFlag::LuwuStringExtensions && luwuModule && context.warningEnabled(LintWarning::Code_ManualStringHelper))
+        LintManualStringHelper::process(context);
 
     // Luwu: turning LuaIterators off turns off its parts
     if (context.warningEnabled(LintWarning::Code_LuaIterators) &&
