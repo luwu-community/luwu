@@ -7,3 +7,8 @@
 // Luwu Classes (rfcs/classes): enables classes. While it is on, the compiler emits WIP bytecode (version 200),
 // whose format can still change.
 LUAU_FASTFLAGVARIABLE(LuwuClasses)
+
+// Luwu String Extensions (rfcs/string-extensions.md): trim, trimstart, trimend, startswith, endswith, contains, replace
+// and split's maxpieces argument. Off, the string library is exactly upstream's. The compiler reads it to emit the
+// startswith, endswith and contains fastcalls.
+LUAU_FASTFLAGVARIABLE(LuwuStringExtensions)
