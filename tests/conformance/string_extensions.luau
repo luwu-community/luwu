@@ -120,4 +120,62 @@ assert(eq(string.split("abc", "", 1), { "abc" }))
 assert(eq(string.split("key = a = b", " = ", 2), { "key", "a = b" }))
 assert(raises(string.split, "a,b", ",", 0))
 
+-- method calls on proven strings compile as function calls and behave the same
+local literal = "Hello"
+assert(literal:lower() == "hello")
+assert(("abc"):startswith("a"))
+local built = string.rep("ab", 2)
+assert(built:sub(2, 3) == "ba")
+assert(built:upper():lower() == "abab")
+assert(("a" .. 1):len() == 2)
+
+local function guarded(v: any): any
+    if type(v) == "string" then
+        return v:upper()
+    end
+    return v
+end
+assert(guarded("x") == "X")
+assert(guarded(1) == 1)
+
+local function asserted(v: any): number
+    assert(type(v) == "string")
+    return v:len()
+end
+assert(asserted("abc") == 3)
+assert(not pcall(asserted, 1))
+
+-- a method call that may not be on a string tries the builtin, and anything else runs its own method
+local custom = {
+    startswith = function(self, prefix)
+        return "custom " .. prefix
+    end,
+    sub = function(self, i, j)
+        return i + j
+    end,
+    len = function(self)
+        return -1
+    end,
+}
+
+local function callMethods(receiver: any, prefix: any): (any, any, any)
+    return receiver:startswith(prefix), receiver:sub(1, 2), receiver:len()
+end
+
+for _ = 1, 3 do
+    local a, b, c = callMethods("hello", "he")
+    assert(a == true and b == "he" and c == 5)
+    a, b, c = callMethods(custom, "x")
+    assert(a == "custom x" and b == 3 and c == -1)
+end
+
+-- a number prefix falls back to the library function, which coerces it
+assert(callMethods("12ab", 12) == true)
+
+-- a name the string library doesn't have still raises as a missing method
+local ok, message = pcall(function()
+    return ("abc"):fo()
+end)
+assert(not ok and string.find(message, "fo", 1, true))
+
 return "OK"
