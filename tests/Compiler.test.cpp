@@ -37,6 +37,7 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
+LUAU_FASTFLAG(LuwuStringExtensions)
 
 using namespace Luau;
 
@@ -10033,6 +10034,38 @@ CALL R2 1 0
 JUMPIFEQ R0 R1 L3
 JUMPBACK L0
 L3: RETURN R0 0
+)"
+    );
+}
+
+TEST_CASE("StringExtensionFastcalls")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction0(R"(
+local s = ...
+return string.startswith(s, "a"), string.endswith(s, "a", "b"), string.contains(s, "a")
+)"),
+        R"(
+GETVARARGS R0 1
+FASTCALL2K 135 R0 K0 L0 ['a']
+MOVE R2 R0
+LOADK R3 K0 ['a']
+GETIMPORT R1 3 [string.startswith]
+CALL R1 2 1
+L0: LOADK R4 K0 ['a']
+LOADK R5 K4 ['b']
+FASTCALL3 136 R0 R4 R5 L1
+MOVE R3 R0
+GETIMPORT R2 6 [string.endswith]
+CALL R2 3 1
+L1: FASTCALL2K 137 R0 K0 L2 ['a']
+MOVE R4 R0
+LOADK R5 K0 ['a']
+GETIMPORT R3 8 [string.contains]
+CALL R3 2 -1
+L2: RETURN R1 -1
 )"
     );
 }
