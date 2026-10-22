@@ -3,6 +3,7 @@
 
 #include "Luau/Ast.h"
 #include "Luau/Common.h"
+#include "Luau/StringUtils.h"
 #include "Luau/TimeTrace.h"
 
 #include <algorithm>
@@ -76,7 +77,8 @@ const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not 
 const char* const kDeclareClassNeedsTypeError =
     "A declared class is written 'declare class type Name'; to declare an extern type, write 'declare extern type Name'";
 const char* const kDeclareExportOrderError = "'export' goes before 'declare': write 'export declare'";
-const char* const kClassesDisabledError = "Classes are currently disabled; enable the 'LuwuClasses' fast flag to use 'class'";
+const LuwuFeature kClassesFeature{"classes", /* plural= */ true, "LuwuClasses"};
+const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ true, "LuwuDefaultArguments"};
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
 // class header or in front of a member. This keeps those positions unambiguous, and leaves room to give
@@ -717,7 +719,7 @@ AstStat* Parser::parseStat()
         // Without the feature, `class` is an ordinary identifier, so only diagnose the shape a class
         // declaration actually has (`class Name`); anything else is someone's variable named `class`.
         if (lexer.current().type == Lexeme::Name)
-            return reportStatError(expr->location, copy({expr}), {}, "%s", kClassesDisabledError);
+            return reportLuwuFeatureStat(expr->location, copy({expr}), kClassesFeature);
     }
 
     if (ident == "export")
@@ -760,7 +762,7 @@ AstStat* Parser::parseStat()
         else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class")
         {
             if (!FFlag::LuwuClasses)
-                return reportStatError(expr->location, copy({expr}), {}, "%s", kClassesDisabledError);
+                return reportLuwuFeatureStat(expr->location, copy({expr}), kClassesFeature);
 
             Location classKeywordLocation = lexer.current().location;
             nextLexeme();
@@ -2109,7 +2111,7 @@ LUAU_NOINLINE AstClassPrimaryConstructor* Parser::parseClassPrimaryConstructor(
             // a primary constructor's parameters are function parameters that happen to belong to a
             // class, so their defaults ride on the same flag function parameter defaults do
             Binding binding = declared ? parseDeclaredClassBinding(qualifiers.declaredDefaultLocation)
-                                       : parseBinding(/* isConst= */ false, /* allowDefault= */ FFlag::LuwuDefaultArguments, /* allowAttributes= */ true);
+                                       : parseBinding(/* isConst= */ false, /* allowDefault= */ true, /* allowAttributes= */ true);
 
             if (attributesBeforeQualifier.size > 0)
             {
@@ -2234,6 +2236,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 {
     LUAU_ASSERT(FFlag::LuwuClasses);
     size_t errorsBeforeClass = parseErrors.size();
+    checkLuwuFeature(classKeywordLocation, kClassesFeature, /* enabled= */ true);
     std::optional<Name> name = parseNameOpt("type name");
 
     // Use error name if the name is missing
@@ -3791,7 +3794,7 @@ AstStat* Parser::parseExportValue(
     else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class")
     {
         if (!FFlag::LuwuClasses)
-            return reportStatError(start, {}, {}, "%s", kClassesDisabledError);
+            return reportLuwuFeatureStat(start, {}, kClassesFeature);
 
         Location classKeywordLocation = lexer.current().location;
         nextLexeme();
@@ -3920,7 +3923,7 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
             std::tie(vararg, varargLocation, varargAnnotation) = parseBindingList(
                 args,
                 /* allowDot3= */ true,
-                /* allowDefault= */ FFlag::LuwuDefaultArguments,
+                /* allowDefault= */ true,
                 &cstNode->argsCommaPositions,
                 nullptr,
                 &cstNode->varargAnnotationColonPosition,
@@ -3931,7 +3934,7 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
             std::tie(vararg, varargLocation, varargAnnotation) = parseBindingList(
                 args,
                 /* allowDot3= */ true,
-                /* allowDefault= */ FFlag::LuwuDefaultArguments,
+                /* allowDefault= */ true,
                 nullptr,
                 nullptr,
                 nullptr,
@@ -4089,6 +4092,7 @@ Parser::Binding Parser::parseBinding(bool isConst, bool allowDefault, bool allow
     }
     else if (allowDefault && lexer.current().type == '=')
     {
+        checkLuwuFeature(lexer.current().location, kDefaultArgumentsFeature, FFlag::LuwuDefaultArguments);
         nextLexeme();
         // The depth of functionStack is used to determine the scoping for a local
         // The expressions for default arguments need scoped to the function body, not the parent
@@ -7096,6 +7100,76 @@ AstStatError* Parser::reportStatError(
     va_end(args);
 
     return allocator.alloc<AstStatError>(location, expressions, statements, unsigned(parseErrors.size() - 1));
+}
+
+// Luwu: "Classes", from a feature name that starts a sentence.
+static std::string capitalized(const char* name)
+{
+    std::string result = name;
+    if (!result.empty() && result[0] >= 'a' && result[0] <= 'z')
+        result[0] = char(result[0] - 'a' + 'A');
+    return result;
+}
+
+// Luwu: what to say about a Luwu-only feature in a Luau module. A runtime gets one line; static analysis gets the
+// ways out as a Help section.
+static std::string luwuOnlyFeatureMessage(const LuwuFeature& feature, bool analysis)
+{
+    if (!analysis)
+        return format("attempt to use a Luwu-only feature in a Luau module: %s", feature.name);
+
+    return format(
+        "%s %s a Luwu-only feature.\n"
+        "\n"
+        "Help (Luwu-only feature):\n"
+        "  • Consider migrating to a .luwu module if this environment supports Luwu\n"
+        "  • Alternatively, you may transpile Luwu code to Luau code via the 'ast' library; see Luwu documentation on "
+        "existing transpilers and usage",
+        capitalized(feature.name).c_str(),
+        feature.plural ? "are" : "is"
+    );
+}
+
+// Luwu: what to say about a Luwu feature whose FFlag is off.
+static std::string disabledFeatureMessage(const LuwuFeature& feature, bool analysis)
+{
+    if (!analysis)
+        return format("attempt to use disabled Luwu feature %s; enable via FFlag '%s'", feature.name, feature.flag);
+
+    return format(
+        "%s %s currently disabled.\n"
+        "\n"
+        "Help (Disabled Luwu feature):\n"
+        "  • If this environment supports %s at runtime, enable the '%s' FFlag in your editor's configuration options",
+        capitalized(feature.name).c_str(),
+        feature.plural ? "are" : "is",
+        feature.name,
+        feature.flag
+    );
+}
+
+bool Parser::checkLuwuFeature(const Location& location, const LuwuFeature& feature, bool enabled)
+{
+    // A Luau module can't use the feature at all, so turning the flag on wouldn't help
+    if (options.language != Language::Luwu)
+    {
+        report(location, "%s", luwuOnlyFeatureMessage(feature, options.analysisErrors).c_str());
+        return false;
+    }
+
+    if (!enabled)
+    {
+        report(location, "%s", disabledFeatureMessage(feature, options.analysisErrors).c_str());
+        return false;
+    }
+
+    return true;
+}
+
+AstStatError* Parser::reportLuwuFeatureStat(const Location& location, const AstArray<AstExpr*>& expressions, const LuwuFeature& feature)
+{
+    checkLuwuFeature(location, feature, /* enabled= */ false);
+    return allocator.alloc<AstStatError>(location, expressions, AstArray<AstStat*>{}, unsigned(parseErrors.size() - 1));
 }
 
 AstExprError* Parser::reportExprError(const Location& location, const AstArray<AstExpr*>& expressions, const char* format, ...)
