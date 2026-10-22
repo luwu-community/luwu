@@ -163,6 +163,13 @@ These functions could be proposed upstream as they are.
 - **`split`'s `maxpieces` counts pieces, not splits.** Python's `split(sep, maxsplit)` and seal's `str.splitfront` count
   splits, so someone coming from either would write `split(" = ", 1)` to split once and get the whole string back as
   one piece.
+- **Method calls stop honoring a replaced `string` function.** Code that assigns `string.sub = wrapper` at runtime
+  (tracing, polyfills) no longer reaches the wrapper from `s:sub()`: a proven call uses the function imported at load,
+  and an unproven builtin call tries the builtin first. `string.sub(s)` has always worked this way. A read-only string
+  table, as in a sandbox, can't be affected.
+- **Proofs trust other builtins.** `tostring(x)`, `type(x)` and `assert` are assumed to be the real ones. If an
+  embedder replaces them with versions that break their contract, a "proven" receiver that isn't a string gets the
+  `string` function's argument error instead of its own method.
 - **Byte-based.** Because `contains` and the others compare bytes, equal-looking text in different Unicode encodings
   doesn't match. That belongs with Luwu's Unicode text handling work, not here.
 
@@ -193,8 +200,6 @@ These functions could be proposed upstream as they are.
 
 - **Native lowering of the fastcalls.** Native code calls the same fastcall functions as the interpreter. A call with
   one constant needle could instead compile to a length check and a compare (or a `memchr`) with no call at all.
-- **Fastcalls for method calls.** `s:startswith("x")` goes through the string metatable and never reaches the
-  fastcall. Proving the receiver is a string would let it.
 - **Lints** suggesting these functions over the patterns they replace: `find(s, x, 1, true)` to `contains`,
   `gsub` with a literal pattern to `replace`, `match(s, "^%s*(.-)%s*$")` to `trim`.
 - **Removing exactly one prefix or suffix** (Python's `removeprefix`).
@@ -220,6 +225,18 @@ instead.
   `LBF_STRING_ENDSWITH`, `LBF_STRING_CONTAINS`) when called through the `string` library. A needle that isn't a string
   falls back to the library function, which coerces numbers. Older runtimes without these builtins fall back to an
   ordinary call too, so the new builtin ids need no bytecode version.
+- **Method calls are as fast as the function form.**
+  - When the receiver is proven to be a string, `s:name(...)` compiles exactly as `string.name(s, ...)`, for every
+    `string` function. Proven means a literal, an interpolated string, the result of a `string` function that returns
+    a string, `tostring`/`type`/`typeof`/`table.concat`, a concatenation of those and number constants, an unwritten
+    local holding one, or a local checked by `type(x) == "string"` in an `if` or `assert`. Under `--!trust`, a
+    `string` annotation counts too.
+  - Otherwise, a method call named after a builtin whose fast path takes only a string receiver (`byte`, `len`, `sub`,
+    `startswith`, `endswith`, `contains`) tries that builtin first. Its fallback is the method call, so a table or
+    userdata with its own method of that name still runs it.
+  - A name the `string` library doesn't have stays a method call, so a typo still raises "missing method".
+  - One visible difference for proven receivers: a bad-argument error counts the receiver as argument 1, as the
+    function form does, where a method call counted from the argument after it.
 - Functions that change nothing return `s` itself without allocating.
 - Whitespace is matched as exact UTF-8 byte sequences at either end. That needs no decoding and no lookbehind, because
   the lead bytes of the multi-byte whitespace characters (`C2`, `E1`, `E2`, `E3`, `EF`) are never continuation bytes.
