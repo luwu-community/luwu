@@ -25,6 +25,13 @@ take one or two objects of a class, but quickly becomes missable when users comp
 
 Right now every method call on a string is significantly slower than a call using the builtin `string` library method alternatives. Due to this, it's been a common piece of Luau advice to "never use the string metatable". Using the string library everywhere forces uglier, inside-out code that just wouldn't be needed at all if string methods were faster and users didn't avoid using them. The trust directive unlocks FASTCALL optimizations for functions that annotate parameters as strings.
 
+With String Extensions (`rfcs/string-extensions.md`), most string method calls no longer need trust. A method call
+named after a string builtin whose fast path takes only a string (`byte`, `len`, `sub`, `startswith`, `endswith`,
+`contains`) tries the builtin first on any receiver and costs the same as the function form. A method call on a
+*proven* string compiles exactly as the function form for every `string` function. Trust covers what's left: a
+receiver known to be a string only from its annotation, calling a function that isn't a builtin (`upper`, `format`,
+`trim`, ...).
+
 ## Design
 
 The compiler classifies bindings thought to be of an expected type as *proven* or *trusted*.
@@ -71,3 +78,16 @@ How has this feature been influenced by other programming languages, theory, and
 ## Implementation details (optional)
 
 Any relevant implementation details the team should know about the proposed implementation, including optimizations, edge cases, and drawbacks. If the implementation details are all very important and need to be mentioned, consider putting the RFC specification in its own directory in `rfcs/` with an `implementation.md`.
+
+### Strings (implemented, behind `LuwuStringExtensions`)
+
+- **Proven strings:** literals, interpolated strings, results of `string` functions that return a string (as functions
+  or methods), `tostring`, `type`, `typeof`, `table.concat`, a `..` of those and number constants, an unwritten local
+  holding one, and a local checked by `type(x) == "string"` or `typeof(x) == "string"` in an `if` (for its body) or an
+  `assert` (for the rest of the block), with no write to it in that region. `s:name(...)` on one compiles exactly as
+  `string.name(s, ...)`, skipping the NAMECALL lookup. These apply with or without `--!trust`.
+- **Trusted strings:** with `--!trust`, a local or parameter annotated `string`, and an expression asserted
+  `:: string`. They compile the same way as proven ones. A value that isn't a string then raises the `string`
+  function's argument error instead of running its own method of that name, so incorrect code errors and never runs
+  the wrong thing.
+- **Not yet trusted:** return types, `string?` after a truthy check, class fields typed `string`.
