@@ -2143,4 +2143,21 @@ TEST_CASE_FIXTURE(Fixture, "luwu_syntax_in_a_luau_module_is_a_syntax_error")
     LUAU_REQUIRE_NO_ERRORS(luwu);
 }
 
+TEST_CASE_FIXTURE(Fixture, "checked_modules_know_their_language")
+{
+    fileResolver.source["game/a"] = "local x = 1";
+    fileResolver.source["game/b"] = "local x = 1";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    getFrontend().check("game/a");
+    getFrontend().check("game/b");
+
+    ModulePtr luau = getFrontend().moduleResolver.getModule("game/a");
+    ModulePtr luwu = getFrontend().moduleResolver.getModule("game/b");
+    REQUIRE(luau);
+    REQUIRE(luwu);
+    CHECK(luau->language == Language::Luau);
+    CHECK(luwu->language == Language::Luwu);
+}
+
 TEST_SUITE_END();
