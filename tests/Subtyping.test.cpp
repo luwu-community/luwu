@@ -159,7 +159,7 @@ struct SubtypeFixture : Fixture
     TypeId cls(const std::string& name, ExternType::Props&& props)
     {
         TypeId ty = cls(name);
-        getMutable<ExternType>(ty)->props = std::move(props);
+        getMutable<ExternType>(ty)->props() = std::move(props);
         return ty;
     }
 

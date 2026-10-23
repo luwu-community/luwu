@@ -1,6 +1,8 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Substitution.h"
 
+#include "Luau/ApplyTypeFunction.h"
+
 #include "Luau/Ast.h"
 #include "Luau/Common.h"
 #include "Luau/TxnLog.h"
@@ -16,9 +18,9 @@ LUAU_FASTINTVARIABLE(LuauTarjanPreallocationSize, 256)
 namespace Luau
 {
 
-static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
+static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool templatesBecomeInstantiations)
 {
-    auto go = [ty, &dest](auto&& a)
+    auto go = [ty, &dest, templatesBecomeInstantiations](auto&& a)
     {
         using T = std::decay_t<decltype(a)>;
 
@@ -98,6 +100,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
             // Luwu: `@nodiscard`
             clone.isNodiscard = a.isNodiscard;
             clone.nodiscardReason = a.nodiscardReason;
+            // Luwu user-defined refinements
+            clone.truthyRefinement = a.truthyRefinement;
             clone.name = a.name;
             clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
@@ -139,7 +143,17 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
         }
         else if constexpr (std::is_same_v<T, ExternType>)
         {
-            ExternType clone{a.name, a.props, a.parent, a.metatable, a.tags, a.userData, a.definitionModuleName, a.definitionLocation, a.indexer};
+            // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation's members are rebuilt from the
+            // copy's template and arguments (Substitution::clone), so they aren't copied. Neither are a template's when
+            // the copy is to become an instantiation of it.
+            const bool becomesInstantiation = a.genericTemplate || (templatesBecomeInstantiations && a.isGenericTemplate());
+            ExternType::Props members;
+            if (!becomesInstantiation)
+                members = a.builtProps();
+            ExternType clone{
+                a.name, std::move(members), a.parent, a.metatable, a.tags, a.userData, a.definitionModuleName, a.definitionLocation, a.indexer
+            };
+            clone.genericTemplate = a.genericTemplate;
             // Preserve the hierarchy root explicitly; roots are persistent builtins that are never
             // cloned, so this stays valid even as `parent` is re-pointed to substituted children.
             clone.root = a.root;
@@ -148,6 +162,10 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log)
                 clone.relation = a.relation;
                 clone.initLocation = a.initLocation;
             }
+            // Luwu Traits (rfcs/classes/traits.md)
+            clone.implementedTraits = a.implementedTraits;
+            clone.traitInfo = a.traitInfo;
+            clone.traitIntersection = a.traitIntersection;
             if (FFlag::LuwuGenericNominals)
             {
                 clone.hasUnresolvedGenerics = a.hasUnresolvedGenerics;
@@ -264,16 +282,55 @@ void Tarjan::visitChildren(TypeId ty, int index)
     }
     else if (const ExternType* etv = get<ExternType>(ty))
     {
-        for (const auto& [name, prop] : etv->props)
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation's members are its template's with its type arguments in, so a
+        // substitution reaches them through the arguments (below). The template and class value are shared by every
+        // instantiation and only come along when the subclass asks for them. A template is its own instantiation with
+        // its own generics as arguments, so substituting those makes an instantiation of it (Substitution::clone).
+        const bool isInstantiation = etv->genericTemplate || (etv->isGenericTemplate() && !substitutesGenericTemplates());
+        if (!isInstantiation)
         {
-            if (prop.readTy)
-                visitChild(prop.readTy);
-            if (prop.writeTy)
-                visitChild(prop.writeTy);
+            for (const auto& [name, prop] : etv->builtProps())
+            {
+                if (prop.readTy)
+                    visitChild(prop.readTy);
+                if (prop.writeTy)
+                    visitChild(prop.writeTy);
+            }
         }
+        else if (substitutesGenericTemplates())
+            visitChild(*etv->genericTemplate);
 
         if (etv->parent)
             visitChild(*etv->parent);
+
+        for (TypeId trait : etv->implementedTraits)
+            visitChild(trait);
+
+        if (etv->traitInfo && etv->traitInfo->implementorClass)
+            visitChild(*etv->traitInfo->implementorClass);
+
+        if (etv->traitInfo)
+        {
+            for (const auto& [trait, arguments] : etv->traitInfo->neededTypeArguments)
+            {
+                visitChild(trait);
+                for (TypeId argument : arguments)
+                    visitChild(argument);
+            }
+
+            if (etv->traitInfo->selfMarker)
+                visitChild(*etv->traitInfo->selfMarker);
+            for (const auto& [_, field] : etv->traitInfo->selfFieldTemplates)
+                visitChild(field);
+            for (const auto& [_, function] : etv->traitInfo->selfFunctions)
+            {
+                visitChild(function.generic);
+                visitChild(function.selfType);
+            }
+        }
+
+        for (TypeId trait : etv->traitIntersection)
+            visitChild(trait);
 
         if (etv->metatable)
             visitChild(*etv->metatable);
@@ -284,7 +341,8 @@ void Tarjan::visitChildren(TypeId ty, int index)
             visitChild(etv->indexer->indexResultType);
         }
 
-        if (FFlag::LuwuClasses && etv->relation)
+        const bool visitsRelation = !isInstantiation || substitutesGenericTemplates();
+        if (FFlag::LuwuClasses && etv->relation && visitsRelation)
         {
             Luau::visit(
                 overloaded{
@@ -715,7 +773,20 @@ void Substitution::resetState(const TxnLog* log, TypeArena* arena)
 
 TypeId Substitution::clone(TypeId ty)
 {
-    return shallowClone(ty, *arena, log);
+    TypeId result = shallowClone(ty, *arena, log, /* templatesBecomeInstantiations */ !substitutesGenericTemplates());
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): the copy's members are built from its own (substituted) template and arguments. A
+    // template whose generics are being replaced becomes an instantiation of itself (see visitChildren).
+    if (ExternType* etv = getMutable<ExternType>(result))
+    {
+        if (etv->isGenericTemplate() && !substitutesGenericTemplates())
+            etv->genericTemplate = log->follow(ty);
+
+        if (etv->genericTemplate)
+            resetNominalMembers(result, arena, sharedNominalArena());
+    }
+
+    return result;
 }
 
 TypePackId Substitution::clone(TypePackId tp)
@@ -817,6 +888,10 @@ void Substitution::replaceChildren(TypeId ty)
 
         ftv->argTypes = replace(ftv->argTypes);
         ftv->retTypes = replace(ftv->retTypes);
+
+        // Luwu user-defined refinements: a generic target is instantiated with the call
+        if (ftv->truthyRefinement)
+            ftv->truthyRefinement->type = replace(ftv->truthyRefinement->type);
     }
     else if (TableType* ttv = getMutable<TableType>(ty))
     {
@@ -874,16 +949,52 @@ void Substitution::replaceChildren(TypeId ty)
     }
     else if (ExternType* etv = getMutable<ExternType>(ty))
     {
-        for (auto& [name, prop] : etv->props)
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): see visitChildren. An instantiation's copy builds its members on first read.
+        const bool isInstantiation = etv->genericTemplate.has_value();
+        if (!isInstantiation)
         {
-            if (prop.readTy)
-                prop.readTy = replace(prop.readTy);
-            if (prop.writeTy)
-                prop.writeTy = replace(prop.writeTy);
+            for (auto& [name, prop] : etv->props())
+            {
+                if (prop.readTy)
+                    prop.readTy = replace(prop.readTy);
+                if (prop.writeTy)
+                    prop.writeTy = replace(prop.writeTy);
+            }
         }
+        else if (substitutesGenericTemplates())
+            etv->genericTemplate = replace(*etv->genericTemplate);
 
         if (etv->parent)
             etv->parent = replace(*etv->parent);
+
+        for (TypeId& trait : etv->implementedTraits)
+            trait = replace(trait);
+
+        if (etv->traitInfo && etv->traitInfo->implementorClass)
+            etv->traitInfo->implementorClass = replace(*etv->traitInfo->implementorClass);
+
+        if (etv->traitInfo)
+        {
+            for (auto& [trait, arguments] : etv->traitInfo->neededTypeArguments)
+            {
+                trait = replace(trait);
+                for (TypeId& argument : arguments)
+                    argument = replace(argument);
+            }
+
+            if (etv->traitInfo->selfMarker)
+                etv->traitInfo->selfMarker = replace(*etv->traitInfo->selfMarker);
+            for (auto& [_, field] : etv->traitInfo->selfFieldTemplates)
+                field = replace(field);
+            for (auto& [_, function] : etv->traitInfo->selfFunctions)
+            {
+                function.generic = replace(function.generic);
+                function.selfType = replace(function.selfType);
+            }
+        }
+
+        for (TypeId& trait : etv->traitIntersection)
+            trait = replace(trait);
 
         if (etv->metatable)
             etv->metatable = replace(*etv->metatable);
@@ -897,7 +1008,8 @@ void Substitution::replaceChildren(TypeId ty)
         // `clone()` copies `relation` across verbatim and `isDirty` descends into it, so it has to
         // be re-pointed here like every other child: otherwise the substituted copy holds a pointer
         // into the arena the original came from, which is freed once that module is done.
-        if (FFlag::LuwuClasses && etv->relation)
+        const bool replacesRelation = !isInstantiation || substitutesGenericTemplates();
+        if (FFlag::LuwuClasses && etv->relation && replacesRelation)
         {
             Luau::visit(
                 overloaded{

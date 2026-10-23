@@ -170,6 +170,11 @@ struct lua_ExecutionCallbacks
         size_t* count
     ); // called to get the execution counter data and count {uint32_t, uint32_t, uint64_t}
     Proto* (*inlinefunction)(lua_State* L, Closure* caller, Closure* target, uint32_t pc); // called when inlining threshold is reached
+
+    // Luwu Traits (rfcs/classes/traits.md): called when the VM copies a function, so the copy can run the original's native
+    // code. A class gets its own copy of each function of a trait from another module (luaR_copytraitfunction), which
+    // nothing compiled ahead of time. `copy` is a deep copy of `original`: their nested protos match one to one.
+    void (*functioncopied)(lua_State* L, Proto* original, Proto* copy);
 };
 
 struct lua_UdataDirectAccessData
@@ -218,6 +223,10 @@ typedef struct global_State
     struct LuaTable* mt[LUA_T_COUNT]; // metatables for basic types
     TString* ttname[LUA_T_COUNT]; // names for basic types, as returned by tostring()/error messages (LUA_TSYMNONE reports as "none")
     TString* ttypename[LUA_T_COUNT]; // names for basic types, as returned by type() (matches luaT_typenames verbatim)
+    TString* traittypename;          // Luwu Traits (rfcs/classes/traits.md): "trait", which type() and typeof() give for a trait
+    // Luwu Traits (rfcs/classes/traits.md): the C function LOP_INITTRAITS calls to run an object's trait initializers. One per
+    // state, made with it and marked as a root, so construction never allocates it.
+    Closure* traitinitrunner;
     TString* tmname[TM_N]; // array with tag-method names
 
     TValue pseudotemp; // storage for temporary values used in pseudo2addr

@@ -581,6 +581,12 @@ struct BytecodeGraphSerializer
             bcb.emitAux(getImmInt(insn, 2));
             break;
 
+        case LOP_INITTRAITS:
+            // the runner's register is the one below the object's
+            recordJump(insn, 1);
+            bcb.emitAD(LOP_INITTRAITS, uint8_t(getRegInput(insn, 0) - 1), 0);
+            break;
+
         case LOP__COUNT:
             LUAU_UNREACHABLE();
         }

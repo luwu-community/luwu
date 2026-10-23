@@ -103,25 +103,20 @@ static const std::unordered_set<std::string> kUnreachableTypeFunctions{"refine",
 // hierarchy root rather than telling someone that `Dog` is an external type.
 static const char* externTypeNoun(TypeId t)
 {
-    const ExternType* etv = get<ExternType>(t);
-    if (!etv || !etv->root)
-        return "external type";
+    const char* kind = get<ExternType>(t) ? luwuNominalKind(t) : nullptr;
+    return kind ? kind : "external type";
+}
 
-    const ExternType* rootEtv = get<ExternType>(follow(*etv->root));
-    if (!rootEtv)
-        return "external type";
-
-    if (rootEtv->name == "class")
-        return "class";
-    if (rootEtv->name == "object")
-        return "object";
-
-    return "external type";
+// Luwu Classes (rfcs/classes): objects, classes and traits have fields. Tables and embedder types have keys.
+static const char* memberNoun(TypeId t)
+{
+    return luwuNominalKind(t) ? "Field" : "Key";
 }
 
 // A class declaration produces two extern types that both stringify as the bare class name, so a
 // mismatch between them otherwise reads "Expected this to be 'Item', but got 'Item'". `class<Item>`
 // is the language's own spelling for the class value, so say that instead of inventing a gloss.
+// A trait's value is `trait<Item>` the same way.
 static std::optional<std::string> nominalDisplayName(TypeId t)
 {
     const ExternType* etv = get<ExternType>(follow(t));
@@ -129,14 +124,52 @@ static std::optional<std::string> nominalDisplayName(TypeId t)
         return std::nullopt;
 
     const ExternType* rootEtv = get<ExternType>(follow(*etv->root));
-    if (!rootEtv || rootEtv->name != "class")
+    if (!rootEtv || (rootEtv->name != "class" && rootEtv->name != "trait"))
         return std::nullopt;
 
     // Only a class value carries an `Obj` relation; an object carries a `Klass` one.
     if (!etv->relation->get_if<Obj>())
         return std::nullopt;
 
-    return "class<" + etv->name + ">";
+    return rootEtv->name + "<" + etv->name + ">";
+}
+
+// Luwu Traits (rfcs/classes/traits.md): what to call the declaration `t` (a class or trait value, or an object) comes
+// from in a message about one of its members
+static const char* declarationKind(TypeId t)
+{
+    const ExternType* etv = get<ExternType>(follow(t));
+    if (!etv)
+        return "class";
+
+    const ExternType* rootEtv = etv->root ? get<ExternType>(follow(*etv->root)) : nullptr;
+    bool isTrait = etv->traitInfo || !etv->traitIntersection.empty() || (rootEtv && rootEtv->name == "trait");
+    return isTrait ? "trait" : "class";
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait's value where any class is expected (`class.isinstance(x, Trait)`), or a
+// class's value where any trait is: "Expected this to be a class, got trait 'Item'". Both are extern types, so the
+// ordinary message would print the bare declaration name against 'class'.
+static std::optional<std::string> classTraitValueMismatch(TypeId given, TypeId wanted)
+{
+    // the root itself, `class` or `trait`, which has no root or relation of its own
+    const ExternType* wantedEtv = get<ExternType>(follow(wanted));
+    bool wantsRoot = wantedEtv && !wantedEtv->root && !wantedEtv->relation && (wantedEtv->name == "class" || wantedEtv->name == "trait");
+    if (!wantsRoot)
+        return std::nullopt;
+
+    // a class or trait value: under one of those roots, with an `Obj` relation (an object has a `Klass` one)
+    const ExternType* givenEtv = get<ExternType>(follow(given));
+    const ExternType* givenRoot = givenEtv && givenEtv->root ? get<ExternType>(follow(*givenEtv->root)) : nullptr;
+    bool givenIsValue = givenRoot && givenEtv->relation && givenEtv->relation->get_if<Obj>();
+    if (!givenIsValue)
+        return std::nullopt;
+
+    bool otherRoot = (givenRoot->name == "class" || givenRoot->name == "trait") && givenRoot->name != wantedEtv->name;
+    if (!otherRoot)
+        return std::nullopt;
+
+    return format("Expected this to be a %s, got %s '%s'", wantedEtv->name.c_str(), givenRoot->name.c_str(), givenEtv->name.c_str());
 }
 
 static bool isClassValueAgainstItsObject(TypeId given, TypeId wanted)
@@ -147,6 +180,222 @@ static bool isClassValueAgainstItsObject(TypeId given, TypeId wanted)
         return false;
 
     return nominalDisplayName(given).has_value() != nominalDisplayName(wanted).has_value();
+}
+
+// "a table", "a string or a table", ...: what `wanted` accepts when it only accepts tables and strings. nullopt for
+// anything else.
+static std::optional<std::string> tableOrStringNoun(TypeId wanted)
+{
+    bool acceptsTable = false;
+    bool acceptsString = false;
+
+    auto classify = [&](TypeId option) -> bool
+    {
+        option = follow(option);
+        const PrimitiveType* primitive = get<PrimitiveType>(option);
+        if (get<TableType>(option) || get<MetatableType>(option) || (primitive && primitive->type == PrimitiveType::Table))
+            acceptsTable = true;
+        else if (primitive && primitive->type == PrimitiveType::String)
+            acceptsString = true;
+        else
+            return false;
+
+        return true;
+    };
+
+    wanted = follow(wanted);
+    if (const UnionType* utv = get<UnionType>(wanted))
+    {
+        for (TypeId option : utv)
+        {
+            if (!classify(option))
+                return std::nullopt;
+        }
+    }
+    else if (!classify(wanted))
+        return std::nullopt;
+
+    if (!acceptsTable)
+        return std::nullopt;
+
+    return acceptsString ? "a string or a table" : "a table";
+}
+
+// Luwu Classes (rfcs/classes): objects, classes and traits are not tables, but a function that takes a table prints its
+// parameter as a table shape (`next` wants `{+ [K]: V +}`). Say what the value is instead of comparing it to that shape.
+static std::optional<std::string> luwuNominalWhereTableExpected(TypeId given, TypeId wanted)
+{
+    const char* kind = luwuNominalKind(given);
+    if (!kind)
+        return std::nullopt;
+
+    std::optional<std::string> wantedNoun = tableOrStringNoun(wanted);
+    if (!wantedNoun)
+        return std::nullopt;
+
+    std::string_view plural = "objects";
+    if (std::string_view(kind) == "class")
+        plural = "classes";
+    else if (std::string_view(kind) == "trait")
+        plural = "traits";
+
+    return "Expected this to be " + *wantedNoun + ", but got " + describeLuwuNominalValue(given) + "; " + std::string(plural) + " are not tables";
+}
+
+// Luwu Classes (rfcs/classes): how the object side of `obj == Cat` relates to the class or trait value it's compared with
+enum class ObjectAgainstDeclaration
+{
+    Is,        // `obj: Cat` against `Cat`
+    CouldBe,   // `obj: Cat | Dog` (or `Cat?`) against `Cat`
+    AnyObject, // `obj: object`, or a value typed by a trait, which could be an object of any class
+    Unrelated, // `obj: Dog` against `Cat`
+};
+
+// nullopt when `objectSide` isn't made of objects (and `nil`)
+static std::optional<ObjectAgainstDeclaration> classifyObjectAgainstDeclaration(TypeId objectSide, TypeId declarationValue)
+{
+    std::vector<TypeId> options;
+    objectSide = follow(objectSide);
+    if (const UnionType* utv = get<UnionType>(objectSide))
+        options.assign(begin(utv), end(utv));
+    else
+        options.push_back(objectSide);
+
+    // the type of the declaration's objects: `Cat` for `class<Cat>`
+    const ExternType* declarationEtv = get<ExternType>(follow(declarationValue));
+    const Obj* obj = declarationEtv && declarationEtv->relation ? declarationEtv->relation->get_if<Obj>() : nullptr;
+    const ExternType* declarationObject = obj ? get<ExternType>(follow(obj->ty)) : nullptr;
+
+    bool matches = false;
+    bool anyObject = false;
+    bool sawNil = false;
+    size_t objectCount = 0;
+
+    for (TypeId option : options)
+    {
+        option = follow(option);
+        if (const PrimitiveType* primitive = get<PrimitiveType>(option); primitive && primitive->type == PrimitiveType::NilType)
+        {
+            sawNil = true;
+            continue;
+        }
+
+        const char* kind = luwuNominalKind(option);
+        const ExternType* etv = get<ExternType>(option);
+        if (!etv || !kind || std::string_view(kind) != "object")
+            return std::nullopt;
+
+        ++objectCount;
+
+        // the `object` root itself has no relation
+        const Klass* klass = etv->relation ? etv->relation->get_if<Klass>() : nullptr;
+        const char* declarationKind = klass ? luwuNominalKind(klass->ty) : nullptr;
+        bool typedByTrait = declarationKind && std::string_view(declarationKind) == "trait";
+
+        // isSubclass also answers whether the object's class implements a trait, through `needs` too
+        if (declarationObject && isSubclass(etv, declarationObject))
+            matches = true;
+        else if (!klass || typedByTrait)
+            anyObject = true;
+    }
+
+    if (objectCount == 0)
+        return std::nullopt;
+
+    if (matches)
+    {
+        bool exactly = objectCount == 1 && !sawNil;
+        return exactly ? ObjectAgainstDeclaration::Is : ObjectAgainstDeclaration::CouldBe;
+    }
+
+    if (anyObject)
+        return ObjectAgainstDeclaration::AnyObject;
+
+    return ObjectAgainstDeclaration::Unrelated;
+}
+
+// Luwu Classes (rfcs/classes): comparing an object with a class or trait value (`obj == Cat`) is almost always an
+// attempt to check what the object is. Explains that, and how to narrow instead.
+static std::optional<std::string> classComparisonHelp(const CannotCompareUnrelatedTypes& e)
+{
+    bool leftIsDeclaration = nominalDisplayName(e.left).has_value();
+    bool rightIsDeclaration = nominalDisplayName(e.right).has_value();
+    if (leftIsDeclaration == rightIsDeclaration)
+        return std::nullopt;
+
+    TypeId declarationValue = leftIsDeclaration ? e.left : e.right;
+    TypeId objectSide = leftIsDeclaration ? e.right : e.left;
+    const std::optional<std::string>& declarationSpelling = leftIsDeclaration ? e.leftName : e.rightName;
+    const std::optional<std::string>& objectName = leftIsDeclaration ? e.rightName : e.leftName;
+
+    const ExternType* declarationEtv = get<ExternType>(follow(declarationValue));
+    std::optional<ObjectAgainstDeclaration> relation = classifyObjectAgainstDeclaration(objectSide, declarationValue);
+    if (!declarationEtv || !relation)
+        return std::nullopt;
+
+    const char* kind = luwuNominalKind(declarationValue);
+    bool isTrait = kind && std::string_view(kind) == "trait";
+    const std::string& name = declarationEtv->name;
+    std::string display = nominalDisplayName(declarationValue).value_or(name);
+
+    std::string checkFunction = isTrait ? "class.implements" : "class.isinstance";
+    std::string check = checkFunction + "(" + objectName.value_or("value") + ", " + declarationSpelling.value_or(name) + ")";
+    std::string subject = objectName ? "'" + *objectName + "'" : "the value";
+    std::string narrowLine = "To narrow " + subject + " into a '" + name + "', use '" + check + "'";
+
+    std::vector<std::string> lines;
+    switch (*relation)
+    {
+    case ObjectAgainstDeclaration::Unrelated:
+    {
+        const ExternType* objectEtv = get<ExternType>(follow(objectSide));
+        const Klass* klass = objectEtv && objectEtv->relation ? objectEtv->relation->get_if<Klass>() : nullptr;
+        if (klass)
+        {
+            std::string objectClass = nominalDisplayName(klass->ty).value_or(objectEtv->name);
+            lines.push_back("the type annotation '" + toString(objectSide) + "' refers to an object of '" + objectClass + "'");
+        }
+        if (isTrait)
+        {
+            lines.push_back("'" + display + "' is a trait itself, not an object that implements it");
+            lines.push_back("A '" + toString(objectSide) + "' doesn't implement '" + name + "'");
+        }
+        else
+        {
+            lines.push_back("'" + display + "' is a class itself (what you call to make '" + name + "' objects)");
+            lines.push_back("A '" + toString(objectSide) + "' cannot be a '" + name + "'");
+        }
+        break;
+    }
+    case ObjectAgainstDeclaration::AnyObject:
+        lines.push_back(isTrait ? "An object cannot be a trait" : "An object cannot be a class");
+        lines.push_back(narrowLine);
+        break;
+    case ObjectAgainstDeclaration::CouldBe:
+    case ObjectAgainstDeclaration::Is:
+    {
+        bool is = *relation == ObjectAgainstDeclaration::Is;
+        std::string object = objectName ? "the object '" + *objectName + "'" : "the object";
+
+        std::string claim = is ? " is a '" : " could be a '";
+        std::string itself = "the class itself";
+        if (isTrait)
+        {
+            claim = is ? " implements '" : " could implement '";
+            itself = "the trait itself";
+        }
+
+        lines.push_back(object + claim + name + "', but you're comparing it with " + itself + " (did you mean to narrow it instead?)");
+        lines.push_back(narrowLine);
+        break;
+    }
+    }
+
+    std::string help = std::string("Help (") + (isTrait ? "comparing trait with object" : "comparing class with object of class") + "):";
+    for (const std::string& line : lines)
+        help += "\n  - " + line;
+
+    return help;
 }
 
 std::string mismatchNotationLegend(uint8_t notation, const Helpifier& helpifier)
@@ -326,6 +575,12 @@ struct ErrorConverter
     {
         if (tm.overrideMessage)
             return *tm.overrideMessage;
+
+        if (std::optional<std::string> message = classTraitValueMismatch(tm.givenType, tm.wantedType))
+            return *message;
+
+        if (std::optional<std::string> message = luwuNominalWhereTableExpected(tm.givenType, tm.wantedType))
+            return *message;
 
         ToStringOptions typeOptions;
         const bool explained = tm.explained.has_value();
@@ -528,7 +783,7 @@ struct ErrorConverter
         if (get<TableType>(t))
             return "Key '" + e.key + "' not found in table '" + Luau::toString(t) + "'";
         else if (get<ExternType>(t))
-            return "Key '" + e.key + "' not found in " + externTypeNoun(t) + " '" + Luau::toString(t) + "'";
+            return std::string(memberNoun(t)) + " '" + e.key + "' not found in " + externTypeNoun(t) + " '" + Luau::toString(t) + "'";
         else
             return "Type '" + Luau::toString(e.table) + "' does not have key '" + e.key + "'";
     }
@@ -556,7 +811,16 @@ struct ErrorConverter
 
     std::string operator()(const Luau::CannotCompareUnrelatedTypes& e) const
     {
-        return "Cannot compare unrelated types '" + toString(e.left) + "' and '" + toString(e.right) + "' with '" + toString(e.op) + "'";
+        // Luwu Classes (rfcs/classes): a class value and its objects both print as the class name, so `obj == Cat` would read
+        // "unrelated types 'Cat' and 'Cat'". Spell the class side `class<Cat>` and point at the check that was meant.
+        std::string left = nominalDisplayName(e.left).value_or(toString(e.left));
+        std::string right = nominalDisplayName(e.right).value_or(toString(e.right));
+        std::string message = "Cannot compare unrelated types '" + left + "' and '" + right + "' with '" + toString(e.op) + "'";
+
+        if (std::optional<std::string> help = classComparisonHelp(e))
+            message += "\n\n" + *help;
+
+        return message;
     }
 
     std::string operator()(const Luau::OnlyTablesCanHaveMethods& e) const
@@ -696,9 +960,9 @@ struct ErrorConverter
             candidatesSuggestion += "'" + name + "'";
         }
 
-        std::string s = "Key '" + e.key + "' not found in ";
-
         TypeId t = follow(e.table);
+        std::string s = std::string(memberNoun(t)) + " '" + e.key + "' not found in ";
+
         if (get<ExternType>(t))
             s += externTypeNoun(t);
         else
@@ -830,7 +1094,28 @@ struct ErrorConverter
 
     std::string operator()(const Luau::IllegalRequire& e) const
     {
-        return "Cannot require module " + e.moduleName + ": " + e.reason;
+        // Luwu: upstream reads "Cannot require module <path>: <reason>", which buries the reason behind a long absolute
+        // path. Luwu says why first and puts the path on a line of its own.
+        const std::string path = "\nModule at path: " + e.moduleName;
+
+        switch (e.returns)
+        {
+        case IllegalRequire::Returns::Nothing:
+            return "Cannot require this module because it doesn't evaluate to a value" + path +
+                   "\n\nHelp (requiring modules):"
+                   "\n  - You probably forgot to return a value"
+                   "\n  - A required module may return exactly one value or export one or more values"
+                   "\n  - If you don't need to return any values, return 'nil'";
+        case IllegalRequire::Returns::TooMany:
+            return format("This module returns too many values (%s%zu)", e.returnCountIsMinimum ? "at least " : "", e.returnCount) + path +
+                   "\n\nHelp (requiring modules):"
+                   "\n  - Luwu expects modules to return exactly one value"
+                   "\n  - Not all runtimes support returning multiple values";
+        case IllegalRequire::Returns::Other:
+            break;
+        }
+
+        return "Cannot require this module because " + e.reason + path;
     }
 
     std::string operator()(const Luau::MissingProperties& e) const
@@ -1178,7 +1463,7 @@ struct ErrorConverter
         if (kUnreachableTypeFunctions.count(tfit->function->name))
         {
             return "Type function instance " + Luau::toString(e.ty) + " is uninhabited\n" +
-                   "This is likely to be a bug, please report it at https://github.com/luau-lang/luau/issues";
+                   "This is likely to be a bug, please report it at https://github.com/luwu-community/luwu/issues";
         }
 
         // Everything should be specialized above to report a more descriptive error that hopefully does not mention "type functions" explicitly.
@@ -1256,7 +1541,7 @@ struct ErrorConverter
 
     std::string operator()(const PrivatePropertyAccess& e) const
     {
-        const std::string member = "'" + e.key + "' of class '" + e.className + "' is private; ";
+        const std::string member = "'" + e.key + "' of " + declarationKind(e.table) + " '" + e.className + "' is private; ";
         if (e.isFunction)
             return "Function " + member + "calling it here will raise a runtime error";
         return "Field " + member + "accessing it here will raise a runtime error";
@@ -1264,7 +1549,8 @@ struct ErrorConverter
 
     std::string operator()(const ConstPropertyAssignment& e) const
     {
-        return "Field '" + e.key + "' of class '" + e.className + "' is constant; assigning to it outside of '__init' will raise a runtime error";
+        return "Field '" + e.key + "' of " + declarationKind(e.table) + " '" + e.className +
+               "' is constant; assigning to it outside of '__init' will raise a runtime error";
     }
 
     std::string operator()(const UnusableClass& e) const
@@ -1457,24 +1743,52 @@ struct ErrorConverter
 
     std::string operator()(const GenericBoundsMismatch& e) const
     {
-        std::string lowerBounds;
-        for (size_t i = 0; i < e.lowerBounds.size(); ++i)
+        // Luwu: upstream reads "No valid instantiation could be inferred for generic type parameter T. It was expected
+        // to be at least: <lower> and at most: <upper>", the solver's vocabulary for the bounds. Luwu says what each
+        // bound means in the call, and an empty bound gets no line of its own instead of an empty one.
+        const std::string name = "'" + std::string{e.genericName} + "'";
+        const std::string given = joinBounds(e.lowerBounds, " | ");
+        const std::string usedAs = joinBounds(e.upperBounds, " & ");
+
+        std::string message = "This call has no valid type for " + name + " that fits every place " + name + " is used.";
+        if (!given.empty())
+            message += "\n  " + name + " is given:   " + given;
+        if (!usedAs.empty())
+            message += "\n  " + name + " is used as: " + usedAs;
+
+        // With nothing given, the uses conflict among themselves: no value is all of them at once
+        const bool usesConflict = given.empty() && e.upperBounds.size() > 1;
+
+        message += "\n\nHelp (impossible generic parameter instantiation):"
+                   "\n  - A call picks one type for " + name + " and uses it everywhere " + name + " appears in the function's signature";
+        if (usesConflict)
         {
-            if (i > 0)
-                lowerBounds += " | ";
-            lowerBounds += Luau::toString(e.lowerBounds[i]);
+            message += "\n  - The arguments provided force " + name + " to be '" + usedAs + "' to fit"
+                       "\n  - No value can be '" + usedAs + "', so this " + name + " is impossible"
+                       "\n  - To fix this, pass arguments that agree on one valid type for " + name +
+                       "\n  - Consider adding another type parameter to the function's signature if the types are meant to differ";
         }
-        std::string upperBounds;
-        for (size_t i = 0; i < e.upperBounds.size(); ++i)
+        else
         {
-            if (i > 0)
-                upperBounds += " & ";
-            upperBounds += Luau::toString(e.upperBounds[i]);
+            message += "\n  - What " + name + " is given has to fit everywhere " + name + " is used";
+            if (!given.empty() && !usedAs.empty())
+                message += "\n  - To fix this, pass a value that fits '" + usedAs + "', or make the code that uses " + name +
+                           " accept '" + given + "'";
         }
 
-        return "No valid instantiation could be inferred for generic type parameter " + std::string{e.genericName} +
-               ". It was expected to be at least:\n    " + lowerBounds + "\nand at most:\n    " + upperBounds +
-               "\nbut these types are not compatible with one another.";
+        return message;
+    }
+
+    static std::string joinBounds(const std::vector<TypeId>& bounds, const char* separator)
+    {
+        std::string joined;
+        for (TypeId bound : bounds)
+        {
+            if (!joined.empty())
+                joined += separator;
+            joined += Luau::toString(bound);
+        }
+        return joined;
     }
 
     std::string operator()(const InstantiateGenericsOnNonFunction& e) const
@@ -1949,7 +2263,8 @@ bool ModuleHasCyclicDependency::operator==(const ModuleHasCyclicDependency& rhs)
 
 bool IllegalRequire::operator==(const IllegalRequire& rhs) const
 {
-    return moduleName == rhs.moduleName && reason == rhs.reason;
+    return moduleName == rhs.moduleName && reason == rhs.reason && returns == rhs.returns && returnCount == rhs.returnCount &&
+           returnCountIsMinimum == rhs.returnCountIsMinimum;
 }
 
 bool MissingProperties::operator==(const MissingProperties& rhs) const

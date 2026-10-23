@@ -30,6 +30,8 @@ LUAU_FASTINTVARIABLE(LuauTableTypeMaximumStringifierLength, 0)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 
 namespace Luau
 {
@@ -872,6 +874,7 @@ BuiltinTypes::BuiltinTypes()
     , externType(arena->addType(Type{ExternType{"userdata", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , objectType(arena->addType(Type{ExternType{"object", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , classType(arena->addType(Type{ExternType{"class", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
+    , traitType(arena->addType(Type{ExternType{"trait", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , vectorType(arena->addType(Type{ExternType{"vector", {}, std::nullopt, std::nullopt, {}, {}, {}, {}}, /*persistent*/ true}))
     , tableType(arena->addType(Type{PrimitiveType{PrimitiveType::Table}, /*persistent*/ true}))
     , emptyTableType(arena->addType(Type{TableType{TableState::Sealed, TypeLevel{}, nullptr}, /*persistent*/ true}))
@@ -919,9 +922,11 @@ TypePackId BuiltinTypes::errorRecoveryTypePack(TypePackId guess) const
     return guess;
 }
 
-std::array<TypeId, 4> BuiltinTypes::nominalRoots() const
+BuiltinTypes::NominalRoots BuiltinTypes::nominalRoots() const
 {
-    return {externType, classType, objectType, vectorType};
+    // Luwu Traits (rfcs/classes/traits.md): no value is a trait without traits, so `trait` stays out of the top
+    size_t count = FFlag::LuwuClasses && FFlag::LuwuTraits ? 5 : 4;
+    return {{externType, classType, objectType, vectorType, traitType}, count};
 }
 
 // A nominal type's root is its parent's root (or the parent itself, if the
@@ -953,7 +958,7 @@ ExternType::ExternType(
     std::optional<Location> definitionLocation
 )
     : name(std::move(name))
-    , props(std::move(props))
+    , memberStorage(std::move(props))
     , parent(parent)
     , root(deriveNominalRoot(parent))
     , metatable(metatable)
@@ -976,7 +981,7 @@ ExternType::ExternType(
     std::optional<TableIndexer> indexer
 )
     : name(std::move(name))
-    , props(std::move(props))
+    , memberStorage(std::move(props))
     , parent(parent)
     , root(deriveNominalRoot(parent))
     , metatable(metatable)
@@ -986,6 +991,20 @@ ExternType::ExternType(
     , definitionLocation(definitionLocation)
     , indexer(indexer)
 {
+}
+
+ExternType::Props& ExternType::props()
+{
+    if (hasUnbuiltMembers())
+        buildNominalMembers(*this);
+    return memberStorage;
+}
+
+const ExternType::Props& ExternType::props() const
+{
+    if (hasUnbuiltMembers())
+        buildNominalMembers(*this);
+    return memberStorage;
 }
 
 void persist(TypeId ty)
@@ -1029,7 +1048,7 @@ void persist(TypeId ty)
         }
         else if (auto etv = get<ExternType>(t))
         {
-            for (const auto& [_name, prop] : etv->props)
+            for (const auto& [_name, prop] : etv->props())
             {
 
                 if (prop.readTy)
@@ -1139,8 +1158,8 @@ const Property* lookupExternTypeProp(const ExternType* cls, const Name& name)
 {
     while (cls)
     {
-        auto it = cls->props.find(name);
-        if (it != cls->props.end())
+        auto it = cls->props().find(name);
+        if (it != cls->props().end())
             return &it->second;
 
         if (cls->parent)
@@ -1238,7 +1257,8 @@ static bool isBareGenericNominalRoot(const ExternType* cls, const ExternType* pa
     return true;
 }
 
-bool isSubclass(const ExternType* cls, const ExternType* parent)
+// The extern type hierarchy walk: `cls` or one of its parents is `parent`, or the same generic nominal type
+static bool isNominalSubclass(const ExternType* cls, const ExternType* parent)
 {
     while (cls)
     {
@@ -1257,6 +1277,116 @@ bool isSubclass(const ExternType* cls, const ExternType* parent)
 
     return false;
 }
+
+// Luwu Traits (rfcs/classes/traits.md): whether `cls` implements (or, for a trait, needs) `trait`, directly or through
+// the traits those need. This is not inheritance -- nothing is inherited, and a class's parent is untouched -- but it
+// is the same question for subtyping: an object is a subtype of every trait its class implements, and a trait of every
+// trait it needs. `needs` forms a graph that may have diamonds (and, in erroneous code, cycles), so each trait is
+// visited once.
+static bool implementsTrait(const ExternType* cls, const ExternType* trait)
+{
+    // This runs on every failed nominal subtype test. Most traits need no others, so the ones `cls` implements directly
+    // are checked before setting up the walk.
+    bool anyNeeds = false;
+    for (TypeId implemented : cls->implementedTraits)
+    {
+        const ExternType* implementedCls = get<ExternType>(follow(implemented));
+        if (!implementedCls)
+            continue;
+
+        if (isNominalSubclass(implementedCls, trait))
+            return true;
+
+        anyNeeds |= !implementedCls->implementedTraits.empty();
+    }
+
+    if (!anyNeeds)
+        return false;
+
+    std::vector<const ExternType*> pending;
+    DenseHashSet<const ExternType*> visited{nullptr};
+
+    auto push = [&](const ExternType* from)
+    {
+        for (TypeId implemented : from->implementedTraits)
+        {
+            const ExternType* implementedCls = get<ExternType>(follow(implemented));
+            if (implementedCls && !visited.contains(implementedCls))
+            {
+                visited.insert(implementedCls);
+                pending.push_back(implementedCls);
+            }
+        }
+    };
+
+    push(cls);
+
+    while (!pending.empty())
+    {
+        const ExternType* current = pending.back();
+        pending.pop_back();
+
+        if (isNominalSubclass(current, trait))
+            return true;
+
+        push(current);
+    }
+
+    return false;
+}
+
+static bool isSubclassOrImplements(const ExternType* cls, const ExternType* parent)
+{
+    if (isNominalSubclass(cls, parent))
+        return true;
+
+    // only types that implement or need traits have anything more to search
+    return !cls->implementedTraits.empty() && implementsTrait(cls, parent);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): upstream's name. With traits this answers "is `cls` a nominal subtype of `parent`",
+// by extern type inheritance or by implementing a trait (see implementsTrait).
+bool isSubclass(const ExternType* cls, const ExternType* parent)
+{
+    // Luwu Traits (rfcs/classes/traits.md): a subtype of an intersection of traits is a subtype of every one of them.
+    // Its parts are traits, never intersections themselves (Normalizer::intersectTraits flattens them).
+    if (!parent->traitIntersection.empty() && cls != parent)
+    {
+        for (TypeId trait : parent->traitIntersection)
+        {
+            const ExternType* traitCls = get<ExternType>(follow(trait));
+            if (!traitCls || !isSubclassOrImplements(cls, traitCls))
+                return false;
+        }
+
+        return true;
+    }
+
+    return isSubclassOrImplements(cls, parent);
+}
+
+bool isTraitLike(const ExternType* ty)
+{
+    return ty->traitInfo.has_value() || !ty->traitIntersection.empty();
+}
+
+const Property* findNominalMember(const ExternType* type, const Name& name)
+{
+    // props() builds an instantiation's members on first read, so it's read once
+    const ExternType::Props& props = type->props();
+    if (auto it = props.find(name); it != props.end())
+        return &it->second;
+
+    const TableType* metatable = type->metatable ? get<TableType>(follow(*type->metatable)) : nullptr;
+    if (metatable)
+    {
+        if (auto it = metatable->props.find(name); it != metatable->props.end())
+            return &it->second;
+    }
+
+    return nullptr;
+}
+
 
 const std::vector<TypeId>& getTypes(const UnionType* utv)
 {

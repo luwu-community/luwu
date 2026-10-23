@@ -7,3 +7,6 @@
 // Luwu Classes (rfcs/classes): enables classes. While it is on, the compiler emits WIP bytecode (version 200),
 // whose format can still change.
 LUAU_FASTFLAGVARIABLE(LuwuClasses)
+
+// Luwu Traits (rfcs/classes/traits.md): enables `trait` declarations and `implements` (in progress). Needs LuwuClasses.
+LUAU_FASTFLAGVARIABLE(LuwuTraits)

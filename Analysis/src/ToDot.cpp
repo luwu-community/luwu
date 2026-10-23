@@ -317,7 +317,7 @@ void StateDot::visitChildren(TypeId ty, int index)
             finishNodeLabel(ty);
             finishNode();
 
-            for (const auto& [name, prop] : t.props)
+            for (const auto& [name, prop] : t.props())
             {
                 if (prop.isShared())
                     visitChild(*prop.readTy, index, name.c_str());

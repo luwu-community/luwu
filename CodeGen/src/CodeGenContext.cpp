@@ -427,6 +427,28 @@ static char* getCounterData(lua_State* L, Proto* proto, size_t* count)
     return reinterpret_cast<char*>(static_cast<uint32_t*>(proto->execdata) + proto->sizecode);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a copy the VM made of a function (see lua_ExecutionCallbacks::functioncopied)
+// runs the original's native code instead of compiling its own. Native code reaches its bytecode, constants and nested
+// protos through the running closure's proto, so one compilation serves every copy. Each copy holds its own reference
+// on the native module, the way each compiled proto does.
+static void onFunctionCopied(lua_State* L, Proto* original, Proto* copy)
+{
+    CODEGEN_ASSERT(original->sizep == copy->sizep);
+
+    // a breakpoint or disableNativeExecutionForFunction can leave a proto's native code unused
+    bool runsNatively = original->execdata && original->codeentry != original->code;
+    if (runsNatively)
+    {
+        getNativeProtoExecDataHeader(static_cast<const uint32_t*>(original->execdata)).nativeModule->addRef();
+        copy->execdata = original->execdata;
+        copy->exectarget = original->exectarget;
+        copy->codeentry = &kCodeEntryInsn;
+    }
+
+    for (int i = 0; i < original->sizep; i++)
+        onFunctionCopied(L, original->p[i], copy->p[i]);
+}
+
 static void initializeExecutionCallbacks(lua_State* L, BaseCodeGenContext* codeGenContext) noexcept
 {
     CODEGEN_ASSERT(codeGenContext != nullptr);
@@ -440,6 +462,7 @@ static void initializeExecutionCallbacks(lua_State* L, BaseCodeGenContext* codeG
     ecb->disable = onDisable;
     ecb->getmemorysize = getMemorySize;
     ecb->getcounterdata = getCounterData;
+    ecb->functioncopied = onFunctionCopied;
 }
 
 void create(lua_State* L)

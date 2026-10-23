@@ -213,6 +213,11 @@ struct CannotCompareUnrelatedTypes
     TypeId right;
     AstExprBinary::Op op;
 
+    // Luwu Classes (rfcs/classes): how the source spells each operand (`o`, `a.pet`) when it is a name, for the help on
+    // comparing a class with an object
+    std::optional<std::string> leftName = std::nullopt;
+    std::optional<std::string> rightName = std::nullopt;
+
     bool operator==(const CannotCompareUnrelatedTypes& rhs) const;
 };
 
@@ -372,6 +377,18 @@ struct IllegalRequire
 {
     std::string moduleName;
     std::string reason;
+
+    // Luwu: a module whose returns can't be required gets its own message and help, which `reason` isn't used for
+    enum class Returns
+    {
+        Other,
+        Nothing,
+        TooMany,
+    };
+    Returns returns = Returns::Other;
+    // with TooMany: how many values the module returns, a minimum when the last one is a call or `...`
+    size_t returnCount = 0;
+    bool returnCountIsMinimum = false;
 
     bool operator==(const IllegalRequire& rhs) const;
 };
