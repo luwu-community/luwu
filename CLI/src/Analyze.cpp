@@ -21,6 +21,7 @@
 
 #include <condition_variable>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -298,13 +299,22 @@ struct CliConfigResolver : Luau::ConfigResolver
         defaultConfig.mode = mode;
     }
 
+    // Luwu: one copy of a directory's config per language, since a `.luau` and a `.luwu` file there share everything else.
+    mutable std::map<std::pair<std::string, Luau::Language>, Luau::Config> languageConfigCache;
+
     const Luau::Config& getConfig(const Luau::ModuleName& name, const Luau::TypeCheckLimits& limits) const override
     {
         std::optional<std::string> path = getParentPath(name);
-        if (!path)
-            return defaultConfig;
+        const Luau::Config& directoryConfig = path ? readConfigRec(*path, limits) : defaultConfig;
 
-        return readConfigRec(*path, limits);
+        Luau::Language language = languageOfPath(name);
+        if (directoryConfig.language == language)
+            return directoryConfig;
+
+        auto [it, inserted] = languageConfigCache.try_emplace({path.value_or(""), language}, directoryConfig);
+        if (inserted)
+            it->second.language = language;
+        return it->second;
     }
 
     const Luau::Config& readConfigRec(const std::string& path, const Luau::TypeCheckLimits& limits) const
