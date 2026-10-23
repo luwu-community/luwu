@@ -242,6 +242,10 @@ static void errorToString(std::ostream& stream, const T& err)
         stream << "ConstructorReadByName { table = " << toString(err.table) << ", className = " << err.className << " }";
     else if constexpr (std::is_same_v<T, Typo>)
         stream << "Typo { written = " << err.written << ", meant = " << err.meant << " }";
+    else if constexpr (std::is_same_v<T, UnreachableCodeUse>)
+        stream << "UnreachableCodeUse { use = " << int(err.use) << ", name = '" << err.name << "', reason = " << int(err.reason) << " }";
+    else if constexpr (std::is_same_v<T, NoTypeUse>)
+        stream << "NoTypeUse { use = " << int(err.use) << ", name = '" << err.name << "' }";
     else if constexpr (std::is_same_v<T, UninstantiableClass>)
         stream << "UninstantiableClass { classTy = " << toString(err.classTy) << " }";
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)

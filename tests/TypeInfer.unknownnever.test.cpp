@@ -172,7 +172,18 @@ TEST_CASE_FIXTURE(Fixture, "index_on_never")
         local z = x.y
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
+    // Luwu: using `never` is unreachable code (UnreachableCodeUse); upstream reports nothing
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        const UnreachableCodeUse* use = get<UnreachableCodeUse>(result.errors[0]);
+        REQUIRE(use);
+        CHECK_EQ(UnreachableCodeUse::Reason::DeclaredNever, use->reason);
+    }
+    else
+    {
+        LUAU_REQUIRE_NO_ERRORS(result);
+    }
 
     CHECK_EQ("never", toString(requireType("z")));
 }
@@ -184,7 +195,16 @@ TEST_CASE_FIXTURE(Fixture, "call_never")
         local x, y, z = f()
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
+    // Luwu: calling `never` is unreachable code (UnreachableCodeUse); upstream reports nothing
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        CHECK(get<UnreachableCodeUse>(result.errors[0]));
+    }
+    else
+    {
+        LUAU_REQUIRE_NO_ERRORS(result);
+    }
 
     CHECK_EQ("never", toString(requireType("x")));
     CHECK_EQ("never", toString(requireType("y")));
@@ -228,7 +248,16 @@ TEST_CASE_FIXTURE(Fixture, "assign_to_prop_which_is_never")
         end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
+    // Luwu: writing into `never` is unreachable code (UnreachableCodeUse); upstream reports nothing
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        CHECK(get<UnreachableCodeUse>(result.errors[0]));
+    }
+    else
+    {
+        LUAU_REQUIRE_NO_ERRORS(result);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "assign_to_subscript_which_is_never")
@@ -239,7 +268,16 @@ TEST_CASE_FIXTURE(Fixture, "assign_to_subscript_which_is_never")
         end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
+    // Luwu: writing into `never` is unreachable code (UnreachableCodeUse); upstream reports nothing
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        CHECK(get<UnreachableCodeUse>(result.errors[0]));
+    }
+    else
+    {
+        LUAU_REQUIRE_NO_ERRORS(result);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "for_loop_over_never")
@@ -431,6 +469,150 @@ TEST_CASE_FIXTURE(Fixture, "cast_from_never_does_not_error")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu: calling or indexing `never` is unreachable code, reported once per local with why it can't run
+TEST_CASE_FIXTURE(BuiltinsFixture, "using_never_is_unreachable_code")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local function f(x: string | number)
+            if typeof(x) == "string" then
+                return
+            elseif typeof(x) == "number" then
+                return
+            end
+            x.foo()
+            local y = x.bar
+            x()
+        end
+
+        local z = error("boom")
+        z.thing()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(Location{{7, 12}, {7, 13}}, result.errors[0].location);
+    CHECK_EQ(
+        "Attempt to use unreachable code: 'x' is 'never' here\n\n"
+        "Help (unreachable code):\n"
+        "  • The checks before this line rule out every type 'x' could have, so this line never runs",
+        toString(result.errors[0])
+    );
+    CHECK_EQ(
+        "Attempt to use unreachable code: 'z' is 'never' here\n\n"
+        "Help (unreachable code):\n"
+        "  • 'z' holds the result of a call that never returns, so this line never runs",
+        toString(result.errors[1])
+    );
+}
+
+// Luwu: a `never` the normalizer has to work out is unreachable code too; upstream reported it can't be called
+TEST_CASE_FIXTURE(BuiltinsFixture, "calling_an_unsimplified_never_is_unreachable_code")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local function f(x: string | number)
+            if typeof(x) == "string" then
+                return
+            elseif typeof(x) == "number" then
+                return
+            end
+            x()
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const UnreachableCodeUse* use = get<UnreachableCodeUse>(result.errors[0]);
+    REQUIRE(use);
+    CHECK_EQ(ImproperUse::Call, use->use);
+    CHECK_EQ("x", use->name);
+}
+
+// Luwu: code that can't run once the declared types are taken at their word is unreachable code, tables included: a
+// property typed `nil` checked for a value, tags of a union all ruled out, or two checks that contradict each other
+TEST_CASE_FIXTURE(BuiltinsFixture, "never_proven_from_the_declared_types_is_unreachable_code")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Box = { field: nil, n: number }
+        local function fromNil(b: Box): number
+            if b.field then
+                return b.n
+            end
+            return 0
+        end
+
+        type Shape = { kind: "circle", r: number } | { kind: "square", side: number }
+        local function fromTags(s: Shape): number
+            if s.kind == "circle" then
+                return s.r
+            elseif s.kind == "square" then
+                return s.side
+            end
+            return s.r
+        end
+
+        type Holder = { enc: { go: (any) -> () }? }
+        local function fromContradiction(h: Holder)
+            if not h.enc then
+                if h.enc then
+                    h.enc:go()
+                end
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    for (const TypeError& error : result.errors)
+    {
+        const UnreachableCodeUse* use = get<UnreachableCodeUse>(error);
+        REQUIRE(use);
+        CHECK_EQ(UnreachableCodeUse::Reason::NarrowedAway, use->reason);
+    }
+}
+
+// Luwu: a `never` the declared types can't explain may be a type checker bug, which leaves the value unchecked. Here
+// the solver keeps `not h.enc` after `h.enc` is assigned, so `h` is `never` in a branch that runs.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_never_that_may_be_a_type_bug_says_so")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Enc = { go: (Enc) -> () }
+        type Holder = { enc: Enc? }
+        local function f(h: Holder, make: () -> Enc)
+            if not h.enc then
+                h.enc = make()
+                if h.enc then
+                    h.enc:go()
+                end
+            end
+        end
+    )");
+
+    std::vector<std::string> names;
+    for (const TypeError& error : result.errors)
+    {
+        if (const UnreachableCodeUse* use = get<UnreachableCodeUse>(error))
+        {
+            CHECK_EQ(UnreachableCodeUse::Reason::PossibleTypeBug, use->reason);
+            names.push_back(use->name);
+        }
+    }
+    CHECK_EQ(std::vector<std::string>{"h"}, names);
+
+    UnreachableCodeUse bug{ImproperUse::Index, "self.dave", UnreachableCodeUse::Reason::PossibleTypeBug, true};
+    CHECK_EQ(
+        "'self.dave' is 'never' here but we're not sure it's truly unreachable. If this looks like a bug, report it to "
+        "https://github.com/luwu-community/luwu/issues\n\n"
+        "Help (possible type bug):\n"
+        "  • Until it's fixed, nothing 'self.dave' is used for here is checked",
+        toString(TypeError{Location{}, bug})
+    );
 }
 
 TEST_SUITE_END();

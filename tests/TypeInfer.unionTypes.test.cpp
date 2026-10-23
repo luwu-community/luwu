@@ -230,7 +230,13 @@ TEST_CASE_FIXTURE(Fixture, "index_on_a_union_type_with_missing_property")
 
     MissingUnionProperty* mup = get<MissingUnionProperty>(result.errors[0]);
     REQUIRE(mup);
-    CHECK_EQ("Key 'x' is missing from 'B' in the type 'A | B'", toString(result.errors[0]));
+    CHECK_EQ(
+        "Key 'x' is missing from 'B' in the type 'A | B'\n\n"
+        "Help (telling members apart):\n"
+        "  • Add 'x: nil' to 'B' so that checking 'x' tells the members apart\n"
+        "  • Or write the type as 'oneof<A, B>', which adds each member's missing fields as 'nil'",
+        toString(result.errors[0])
+    );
 
     if (!FFlag::DebugLuauForceOldSolver)
         CHECK_EQ("(A | B) -> number", toString(requireType("f")));
@@ -535,11 +541,16 @@ TEST_CASE_FIXTURE(Fixture, "optional_missing_key_error_details")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(4, result);
-    CHECK_EQ("Key 'y' is missing from 'C', 'D' in the type 'A | B | C | D'", toString(result.errors[0]));
+    const std::string missingY =
+        "Key 'y' is missing from 'C', 'D' in the type 'A | B | C | D'\n\n"
+        "Help (telling members apart):\n"
+        "  • Add 'y: nil' to 'C', 'D' so that checking 'y' tells the members apart\n"
+        "  • Or write the type as 'oneof<A, B, C, D>', which adds each member's missing fields as 'nil'";
+    CHECK_EQ(missingY, toString(result.errors[0]));
     CHECK_EQ("Type 'A | B | C | D' does not have key 'z'", toString(result.errors[1]));
 
     CHECK_EQ("Value of type '(A | B | C | D)?' could be nil", toString(result.errors[2]));
-    CHECK_EQ("Key 'y' is missing from 'C', 'D' in the type 'A | B | C | D'", toString(result.errors[3]));
+    CHECK_EQ(missingY, toString(result.errors[3]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "optional_iteration")

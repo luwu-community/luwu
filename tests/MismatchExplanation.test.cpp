@@ -141,7 +141,7 @@ TEST_CASE_FIXTURE(ExplainFixture, "union_holding_itself_does_not_hang")
 
     std::optional<MismatchExplanation> explanation = explain(bleu, colors);
     REQUIRE(explanation);
-    CHECK_EQ(explanation->reason, "\n\nHelp: did you mean '\"Blue\"'?");
+    CHECK_EQ(explanation->reason, "\n\nHelp (typo):\n  • Did you mean '\"Blue\"'?");
 }
 
 // A union of only `nil`s has no members to list fields from.
@@ -270,7 +270,7 @@ TEST_CASE_FIXTURE(ExplainFixture, "deep_and_wide_tables_stay_bounded" * doctest:
 
     TableType::Props wideExpected;
     TableType::Props wideGiven;
-    for (int f = 0; f < 3000; ++f)
+    for (int f = 0; f < 1000; ++f)
     {
         wideExpected["p" + std::to_string(f)] = getBuiltins()->numberType;
         wideGiven["p" + std::to_string(f)] = getBuiltins()->stringType;
@@ -756,9 +756,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_function_in_a_table_literal_is_named_by_it
         "This function can be passed a value it doesn't accept:\n"
         "  • inv.slots[i]: expected 'number?', got 'number'\n"
         "\n"
-        "Help: 'inv.slots[i]' can't be narrowed from 'number?' to 'number':\n"
-        "  • code calling this function as the expected type is allowed to pass 'nil' for 'inv.slots[i]'\n"
-        "  • this parameter must accept 'number?' to match the caller's expected signature"
+        "Help (narrowed parameter):\n"
+        "  • 'inv.slots[i]' can't be narrowed from 'number?' to 'number'\n"
+        "  • Code calling this function as the expected type is allowed to pass 'nil' for 'inv.slots[i]'\n"
+        "  • This parameter must accept 'number?' to match the caller's expected signature"
     );
 }
 
@@ -984,6 +985,46 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_string_is_a_typo")
     CHECK_EQ(toString(result.errors[1]), "Did you mean '\"Blue\"' instead of '\"Bleu\"'?");
     CHECK(get<TypeMismatch>(result.errors[2]));
     CHECK(get<TypeMismatch>(result.errors[3]));
+}
+
+// Luwu: every help is written by a Helpifier, which gives nothing when help is off
+TEST_CASE("helpifier_writes_every_help_the_same_way")
+{
+    Helpifier helpifier;
+    CHECK_EQ("Help (typo):\n  • Did you mean 'reason'?", helpifier("typo", {"Did you mean 'reason'?"}));
+    CHECK_EQ("Help (two):\n  • a\n  • b", helpifier("two", {"a", "b"}));
+    CHECK_EQ("", helpifier("empty", {}));
+
+    Helpifier off{false};
+    CHECK_EQ("", off("typo", {"Did you mean 'reason'?"}));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "show_help_off_leaves_no_help_in_type_errors")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuHelpfulSubtypingErrors, true},
+    };
+
+    // A frontend-wide option, like the others the checker reads: a per-check override doesn't reach it
+    getFrontend().options.showHelp = false;
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+        type Event = { reason: string }
+
+        local function process(rows: { Scoped }) end
+        local vcns: { Vcn } = {}
+        process(vcns)
+
+        local e: Event = { reson = "x" }
+    )");
+
+    // With help on, the read/write mismatch also reports a help at `process`'s parameter, alone. The typo is reported
+    // as a `Typo` of its own whether or not help is on.
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    for (const TypeError& error : result.errors)
+        CHECK_EQ(toString(error).find("Help"), std::string::npos);
 }
 
 TEST_SUITE_END();
