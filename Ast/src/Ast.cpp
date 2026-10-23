@@ -711,6 +711,19 @@ void AstExprTableComprehension::visit(AstVisitor* visitor)
         loop->visit(visitor);
 }
 
+AstExprPop::AstExprPop(const Location& location, AstExpr* expr)
+    : AstExpr(ClassIndex(), location)
+    , expr(expr)
+{
+    luwuOnly = true;
+}
+
+void AstExprPop::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        expr->visit(visitor);
+}
+
 AstExprError::AstExprError(const Location& location, const AstArray<AstExpr*>& expressions, unsigned messageIndex)
     : AstExpr(ClassIndex(), location)
     , expressions(expressions)
@@ -1103,6 +1116,26 @@ void AstStatCompoundAssign::visit(AstVisitor* visitor)
     {
         var->visit(visitor);
         value->visit(visitor);
+    }
+}
+
+AstStatPush::AstStatPush(const Location& location, AstExpr* target, const Location& opLocation, const AstArray<AstExpr*>& values)
+    : AstStat(ClassIndex(), location)
+    , target(target)
+    , opLocation(opLocation)
+    , values(values)
+{
+    luwuOnly = true;
+}
+
+void AstStatPush::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+    {
+        target->visit(visitor);
+
+        for (AstExpr* value : values)
+            value->visit(visitor);
     }
 }
 

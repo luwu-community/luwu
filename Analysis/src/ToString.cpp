@@ -3135,6 +3135,8 @@ std::string toString(const Constraint& constraint, ToStringOptions& opts)
             return tos(c.propType) + " ~ assignProp " + tos(c.lhsType) + " " + c.propName + " " + tos(c.rhsType);
         else if constexpr (std::is_same_v<T, AssignIndexConstraint>)
             return "assignIndex " + tos(c.lhsType) + " " + tos(c.indexType) + " " + tos(c.rhsType);
+        else if constexpr (std::is_same_v<T, PushConstraint>)
+            return "push " + tos(c.containerType) + " " + tos(c.valuesPack);
         else if constexpr (std::is_same_v<T, UnpackConstraint>)
             return toStringVector(c.resultPack, opts) + " ~ ...unpack " + tos(c.sourcePack);
         else if constexpr (std::is_same_v<T, ReduceConstraint>)

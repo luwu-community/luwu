@@ -362,6 +362,11 @@ AstExpr* unwrapGroup(AstExpr* expr);
 // Returns true if ty is optional, ie if it is a supertype of nil
 bool isOptionalType(TypeId ty, NotNull<BuiltinTypes> builtinTypes);
 
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): the element type `<+` stores into and `<-` removes from a
+// table raw: an array's element type, or `never` for a table with nothing in it (no indexer or properties). nullopt
+// for any other table.
+std::optional<TypeId> rawArrayElement(const TableType& table, NotNull<BuiltinTypes> builtinTypes);
+
 // These are magic types used in `TypeChecker2` and `NonStrictTypeChecker`
 //
 // `_luau_print` causes it's argument to be printed out, as in:

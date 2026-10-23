@@ -259,6 +259,8 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
     CASE(AstExprDo) return false;
     // Luwu Table Comprehensions (rfcs/table-comprehensions.md): each evaluation builds a new table
     CASE(AstExprTableComprehension) return false;
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): each pop takes a different element
+    CASE(AstExprPop) return false;
     else
     {
         LUAU_ASSERT(!"Unknown expression type");

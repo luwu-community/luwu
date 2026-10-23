@@ -479,6 +479,10 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_INITTRAITS";
     case IrCmd::FALLBACK_PRESIZETABLE:
         return "FALLBACK_PRESIZETABLE";
+    case IrCmd::FALLBACK_PUSH:
+        return "FALLBACK_PUSH";
+    case IrCmd::FALLBACK_POP:
+        return "FALLBACK_POP";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:

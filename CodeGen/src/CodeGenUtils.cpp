@@ -1165,6 +1165,36 @@ const Instruction* executePRESIZETABLE(lua_State* L, const Instruction* pc, StkI
     return pc;
 }
 
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_PUSH for native code (see FALLBACK_PUSH)
+const Instruction* executePUSH(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = &base[LUAU_INSN_B(insn)]; // note: this can point to L->top if c == LUA_MULTRET making VM_REG unsafe to use
+    int c = LUAU_INSN_C(insn) - 1;
+
+    // a multret value list ends at L->top, which luaV_push leaves in place so a __push call goes above it
+    if (c == LUA_MULTRET)
+        c = int(L->top - rb);
+
+    VM_PROTECT(luaV_push(L, ra, rb, c));
+    L->top = L->ci->top;
+    return pc;
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_POP for native code (see FALLBACK_POP)
+const Instruction* executePOP(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+    VM_PROTECT(luaV_pop(L, ra, rb));
+    return pc;
+}
+
 void executeGETVARARGSMultRet(lua_State* L, const Instruction* pc, StkId base, int rai)
 {
     [[maybe_unused]] Closure* cl = clvalue(L->ci->func);

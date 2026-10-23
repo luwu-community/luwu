@@ -35,6 +35,10 @@ LUAI_FUNC void luaV_callTM(lua_State* L, int nparams, int res);
 LUAI_FUNC void luaV_tryfuncTM(lua_State* L, StkId func);
 // Luwu Table Comprehensions (rfcs/table-comprehensions.md): LOP_PRESIZETABLE's work, for the interpreter and native code
 LUAI_FUNC void luaV_presizetable(lua_State* L, LuaTable* t, const TValue* rb, int form);
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_PUSH's and LOP_POP's work, for the interpreter and native
+// code. luaV_push reads `count` values from `values`, all at or below L->top.
+LUAI_FUNC void luaV_push(lua_State* L, StkId container, StkId values, int count);
+LUAI_FUNC void luaV_pop(lua_State* L, StkId ra, StkId container);
 
 LUAI_FUNC void luau_execute(lua_State* L);
 LUAI_FUNC void luau_finishop(lua_State* L);
