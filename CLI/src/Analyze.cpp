@@ -529,23 +529,24 @@ int main(int argc, char** argv)
         Luau::LoadDefinitionFileResult result = frontend.loadDefinitionFile(
             frontend.globals, frontend.globals.globalScope, *source, "@" + path, /* captureComments */ false
         );
+        for (const Luau::ParseError& error : result.parseResult.errors)
+            report(format, path.c_str(), error.getLocation(), "SyntaxError", error.getMessage().c_str());
+
+        // A definition file with type errors still loads. They're reported but don't fail the run.
+        if (result.module)
+        {
+            for (const Luau::TypeError& error : result.module->errors)
+                report(
+                    format,
+                    path.c_str(),
+                    error.location,
+                    "TypeError",
+                    Luau::toString(error, Luau::TypeErrorToStringOptions{frontend.fileResolver}).c_str()
+                );
+        }
+
         if (!result.success)
         {
-            for (const Luau::ParseError& error : result.parseResult.errors)
-                report(format, path.c_str(), error.getLocation(), "SyntaxError", error.getMessage().c_str());
-
-            if (result.module)
-            {
-                for (const Luau::TypeError& error : result.module->errors)
-                    report(
-                        format,
-                        path.c_str(),
-                        error.location,
-                        "TypeError",
-                        Luau::toString(error, Luau::TypeErrorToStringOptions{frontend.fileResolver}).c_str()
-                    );
-            }
-
             fprintf(stderr, "Failed to load definition file %s\n", path.c_str());
             return 1;
         }
