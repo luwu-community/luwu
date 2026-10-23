@@ -2108,16 +2108,34 @@ void TypeChecker2::visit(AstExprGlobal* expr)
     NotNull<Scope> scope = stack.back();
     if (!scope->lookup(expr->name))
     {
-        reportError(UnknownSymbol{expr->name.value, UnknownSymbol::Binding}, expr->location);
+        reportUnknownVariable(expr, scope);
     }
     else
     {
         if (scope->shouldWarnGlobal(expr->name.value) && !warnedGlobals.contains(expr->name.value))
         {
-            reportError(UnknownSymbol{expr->name.value, UnknownSymbol::Binding}, expr->location);
+            reportUnknownVariable(expr, scope);
             warnedGlobals.insert(expr->name.value);
         }
+        else if (scope->shouldWarnGlobal(expr->name.value))
+        {
+            // Luwu: a global only assigned in this module is reported once, but a misspelled local is a typo at every use
+            if (std::optional<UnknownSymbol> typo = misspelledLocalError(unknownVariableExplainer(), expr))
+                reportError(std::move(*typo), expr->location);
+        }
     }
+}
+
+UnknownVariableExplainer& TypeChecker2::unknownVariableExplainer()
+{
+    if (!unknownVariables)
+        unknownVariables = std::make_unique<UnknownVariableExplainer>(sourceModule->root);
+    return *unknownVariables;
+}
+
+void TypeChecker2::reportUnknownVariable(const AstExprGlobal* expr, NotNull<Scope> scope)
+{
+    reportError(unknownVariableError(unknownVariableExplainer(), expr, *scope, module->notes), expr->location);
 }
 
 void TypeChecker2::visit(AstExprVarargs* expr)
@@ -2126,15 +2144,47 @@ void TypeChecker2::visit(AstExprVarargs* expr)
 }
 
 // Luwu (helpful subtyping errors): each overload as the message lists it, with its parameter names.
-static std::vector<std::string> overloadSignatures(const std::vector<TypeId>& overloads)
+static ToStringOptions overloadPrintOptions()
 {
     ToStringOptions options;
     options.functionTypeArguments = true;
     options.sortUnionMembers = false;
+    return options;
+}
+
+static std::vector<std::string> overloadSignatures(const std::vector<TypeId>& overloads)
+{
     std::vector<std::string> signatures;
     for (TypeId overload : overloads)
-        signatures.push_back(toString(overload, options));
+        signatures.push_back(toString(overload, overloadPrintOptions()));
     return signatures;
+}
+
+// Luwu (helpful subtyping errors): a call's arguments as a parameter list, printed like the overloads they're compared
+// with. A string or boolean literal is printed as written, since its type has been widened by now.
+static std::string argumentList(const AstExprCall* call, TypePackId arguments)
+{
+    const auto [head, tail] = flatten(arguments);
+    // A method call's arguments start with the receiver, which the call's AST arguments don't include
+    const size_t receivers = call->self ? 1 : 0;
+
+    std::string printed;
+    for (size_t i = 0; i < head.size(); ++i)
+    {
+        if (i > 0)
+            printed += ", ";
+
+        const AstExpr* written = i >= receivers && i - receivers < call->args.size ? call->args.data[i - receivers] : nullptr;
+        if (const AstExprConstantString* string = written ? written->as<AstExprConstantString>() : nullptr)
+            printed += "\"" + escape(std::string_view(string->value.data, string->value.size)) + "\"";
+        else if (const AstExprConstantBool* boolean = written ? written->as<AstExprConstantBool>() : nullptr)
+            printed += boolean->value ? "true" : "false";
+        else
+            printed += toString(head[i], overloadPrintOptions());
+    }
+    if (tail)
+        printed += std::string(head.empty() ? "" : ", ") + toString(*tail, overloadPrintOptions());
+    return "(" + printed + ")";
 }
 
 static void reportAvailableOverloads(ErrorVec& errors, Location location, const ModuleName& moduleName, const std::vector<TypeId>& overloads)
@@ -2535,6 +2585,7 @@ void TypeChecker2::visitCall(AstExprCall* call)
             MultipleNonviableOverloads error{argHead.size()};
             error.callee = calleeDisplayName(call->func);
             error.overloads = overloadSignatures(overloadsToReport);
+            error.arguments = argumentList(call, argsPack);
             reportError(std::move(error), call->location);
         }
         else if (!overloadsToReport.empty())
@@ -2895,13 +2946,23 @@ void TypeChecker2::checkPrivateConstructorAccess(TypeId classTy, const Location&
         reportError(PrivateConstructorAccess{classTy}, location);
 }
 
-void TypeChecker2::visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy)
+void TypeChecker2::visitExprName(
+    AstExpr* expr,
+    Location location,
+    const std::string& propName,
+    ValueContext context,
+    TypeId astIndexExprTy,
+    char separator
+)
 {
     visit(expr, ValueContext::RValue);
     TypeId leftType = stripFromNilAndReport(lookupType(expr), location);
     if (reportImproperUse(expr, leftType, ImproperUse::Index))
         return;
-    if (checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy))
+    std::string receiver;
+    if (std::optional<std::string> name = separator ? bindingName(expr) : std::nullopt)
+        receiver = *name + separator;
+    if (checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy, receiver))
     {
         reportUnreachableUse(expr, ImproperUse::Index);
         return;
@@ -2915,7 +2976,7 @@ void TypeChecker2::visitExprName(AstExpr* expr, Location location, const std::st
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
 {
     // If we're indexing like _.foo - foo could either be a prop or a string.
-    visitExprName(indexName->expr, indexName->location, indexName->index.value, context, builtinTypes->stringType);
+    visitExprName(indexName->expr, indexName->location, indexName->index.value, context, builtinTypes->stringType, indexName->op);
 }
 
 void TypeChecker2::indexExprMetatableHelper(AstExprIndexExpr* indexExpr, const MetatableType* metaTable, TypeId exprType, TypeId indexType)
@@ -2943,7 +3004,7 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
     {
         TypeId astIndexExprType = lookupType(indexExpr->index);
         const std::string stringValue(str->value.data, str->value.size);
-        visitExprName(indexExpr->expr, indexExpr->location, stringValue, context, astIndexExprType);
+        visitExprName(indexExpr->expr, indexExpr->location, stringValue, context, astIndexExprType, 0);
         return;
     }
 
@@ -3210,86 +3271,15 @@ void TypeChecker2::visit(AstExprTable* expr)
     }
 
     if (FFlag::LuwuHelpfulSubtypingErrors)
-        reportPropertyTypos(expr);
-}
-
-// Luwu (helpful subtyping errors): the name of a literal's property, when it's written as one (`name = v` or `["name"] = v`).
-static std::optional<std::string> literalPropertyName(const AstExprTable::Item& item)
-{
-    if (item.kind == AstExprTable::Item::Kind::List || !item.key)
-        return std::nullopt;
-    if (AstExprConstantString* key = item.key->as<AstExprConstantString>())
-        return std::string(key->value.data, key->value.size);
-    return std::nullopt;
-}
-
-// Luwu (helpful subtyping errors): a property of a table literal that its expected table doesn't have, named like a
-// property the literal leaves out, is that property misspelled. For an optional property upstream reports nothing:
-// table types aren't exact, so the literal fits, and the value is never read. For a required one, the error for
-// leaving it out doesn't say why it's missing.
-void TypeChecker2::reportPropertyTypos(AstExprTable* expr)
-{
-    const TypeId* expectedType = module->astExpectedTypes.find(expr);
-    if (!expectedType)
-        return;
-
-    // `Config?` is checked as its `Config`.
-    TypeId expected = follow(*expectedType);
-    if (const UnionType* optional = get<UnionType>(expected))
     {
-        std::vector<TypeId> nonNil;
-        for (TypeId option : optional->options)
+        if (const TypeId* expected = module->astExpectedTypes.find(expr))
         {
-            if (!isNil(follow(option)))
-                nonNil.push_back(option);
-        }
-        if (nonNil.size() != 1)
-            return;
-        expected = follow(nonNil.front());
-    }
-
-    const TableType* table = get<TableType>(expected);
-    if (!table || table->indexer)
-        return;
-
-    // This runs for every table literal with an expected table type. Most write only properties the type has.
-    bool writesUnknownProperty = false;
-    for (const AstExprTable::Item& item : expr->items)
-    {
-        std::optional<std::string> name = literalPropertyName(item);
-        if (name && !table->props.count(*name))
-        {
-            writesUnknownProperty = true;
-            break;
-        }
-    }
-
-    if (!writesUnknownProperty)
-        return;
-
-    std::unordered_set<std::string> written;
-    for (const AstExprTable::Item& item : expr->items)
-    {
-        if (std::optional<std::string> name = literalPropertyName(item))
-            written.insert(*name);
-    }
-
-    for (const AstExprTable::Item& item : expr->items)
-    {
-        std::optional<std::string> name = literalPropertyName(item);
-        if (!name || table->props.count(*name))
-            continue;
-
-        for (const auto& [meant, property] : table->props)
-        {
-            if (!written.count(meant) && looksLikeTypo(*name, meant))
-            {
-                reportError(Typo{*name, meant}, item.key->location);
-                break;
-            }
+            for (auto& [location, typo] : literalPropertyTypos(expr, *expected))
+                reportError(std::move(typo), location);
         }
     }
 }
+
 
 void TypeChecker2::visit(AstExprUnary* expr)
 {
@@ -5284,6 +5274,8 @@ void TypeChecker2::explainError(
     // which then fall through to the reasonings below.
     std::optional<MismatchExplanation> explanation;
     std::optional<std::string> variable;
+    // The mismatched expression, when it spans exactly the error.
+    const AstExpr* mismatched = nullptr;
     if (FFlag::LuwuHelpfulSubtypingErrors)
     {
         std::optional<std::string> callee;
@@ -5300,19 +5292,28 @@ void TypeChecker2::explainError(
             if (AstExpr* expr = node->asExpr(); expr && expr->location == location)
             {
                 variable = bindingName(expr);
+                mismatched = expr;
                 break;
             }
         }
         if (!variable)
             variable = destinationName(*sourceModule, location);
 
-        explanation = explainMismatch(subTy, superTy, subtyping, scope, builtinTypes, callee, arrival, variable, helpifier);
+        TypeId given = mismatched ? withWrittenStrings(subTy, mismatched, superTy, *module->internalTypes) : subTy;
+        explanation = explainMismatch(given, superTy, subtyping, scope, builtinTypes, callee, arrival, variable, helpifier);
     }
 
     if (explanation && explanation->typo)
     {
-        reportError(Typo{explanation->typo->first, explanation->typo->second}, location);
-        return;
+        // A misspelled value inside a table is reported at the string, when the table is written here.
+        std::optional<Location> typoLocation = location;
+        if (!explanation->typoProperties.empty())
+            typoLocation = mismatched ? literalValueLocation(mismatched, explanation->typoProperties) : std::nullopt;
+        if (typoLocation)
+        {
+            reportError(Typo{explanation->typo->first, explanation->typo->second}, *typoLocation);
+            return;
+        }
     }
 
     if (explanation)
@@ -5332,6 +5333,13 @@ void TypeChecker2::explainError(
         };
         tm.contextVerb = contextVerb;
         reportError(std::move(tm), location);
+
+        // Where the mismatched properties are declared in this module, unless that's inside the error's own span
+        for (MismatchNote& note : explanation->notes)
+        {
+            if (note.module == module->name && !location.encloses(note.location))
+                module->notes.push_back({note.location, std::move(note.message), location});
+        }
         return;
     }
 
@@ -5482,6 +5490,20 @@ static std::optional<std::string> unionDisplayName(const UnionType* utv)
     return std::nullopt;
 }
 
+const std::vector<std::string>& TypeChecker2::requiredProperties(const TableType* table)
+{
+    if (const std::vector<std::string>* cached = requiredPropertiesCache.find(table))
+        return *cached;
+
+    std::vector<std::string> required;
+    for (const auto& [name, prop] : table->props)
+    {
+        if (prop.readTy && !isOptional(*prop.readTy))
+            required.push_back(name);
+    }
+    return requiredPropertiesCache[table] = std::move(required);
+}
+
 bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedType)
 {
     auto exprType = follow(lookupType(expr));
@@ -5552,14 +5574,8 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
     }
 
     Set<std::optional<std::string>> missingKeys{{}};
-    for (const auto& [name, prop] : expectedTableType->props)
-    {
-        if (prop.readTy)
-        {
-            if (!isOptional(*prop.readTy))
-                missingKeys.insert(name);
-        }
-    }
+    for (const std::string& name : requiredProperties(expectedTableType))
+        missingKeys.insert(name);
 
     bool isArrayLike = false;
     if (expectedTableType->indexer)
@@ -6020,7 +6036,8 @@ bool TypeChecker2::checkIndexTypeFromType(
     const std::string& prop,
     ValueContext context,
     const Location& location,
-    TypeId astIndexExprType
+    TypeId astIndexExprType,
+    const std::string& receiver
 )
 {
     std::shared_ptr<const NormalizedType> norm = normalizer.normalize(tableTy);
@@ -6060,12 +6077,12 @@ bool TypeChecker2::checkIndexTypeFromType(
             else if (auto et = get<ExternType>(tableTy))
             {
                 if (et->indexer)
-                    reportError(UnknownProperty{tableTy, prop}, location);
+                    reportMissingProperty(UnknownProperty{tableTy, prop}, tableTy, prop, receiver, location);
                 else
-                    reportError(PropertyAccessViolation{tableTy, prop, PropertyAccessViolation::CannotWrite}, location);
+                    reportMissingProperty(PropertyAccessViolation{tableTy, prop, PropertyAccessViolation::CannotWrite}, tableTy, prop, receiver, location);
             }
             else
-                reportError(CannotExtendTable{tableTy, CannotExtendTable::Property, prop}, location);
+                reportMissingProperty(CannotExtendTable{tableTy, CannotExtendTable::Property, prop}, tableTy, prop, receiver, location);
         }
         else if (context == ValueContext::RValue)
         {
@@ -6073,10 +6090,10 @@ bool TypeChecker2::checkIndexTypeFromType(
             if (rvPropTypes.foundOneProp() && rvPropTypes.noneMissingProp())
                 reportError(PropertyAccessViolation{tableTy, prop, PropertyAccessViolation::CannotRead}, location);
             else
-                reportError(UnknownProperty{tableTy, prop}, location);
+                reportMissingProperty(UnknownProperty{tableTy, prop}, tableTy, prop, receiver, location);
         }
         else
-            reportError(UnknownProperty{tableTy, prop}, location);
+            reportMissingProperty(UnknownProperty{tableTy, prop}, tableTy, prop, receiver, location);
     }
 
     return false;
@@ -6318,6 +6335,82 @@ void TypeChecker2::checkTypeInstantiation(
     }
 }
 
+
+// Luwu (helpful subtyping errors): a chain of `__index` tables (or of parent classes) longer than this isn't searched
+// for a name a property was misspelled from. Metatables can point at themselves.
+constexpr int kMaxIndexChain = 8;
+
+// Luwu (helpful subtyping errors): the names a value of type `ty` can be indexed with: a table's properties and its
+// metatable's `__index`, a string's methods, an object's fields and methods.
+static void collectIndexableNames(TypeId ty, std::vector<std::string>& names, int depth)
+{
+    if (depth > kMaxIndexChain)
+        return;
+    ty = follow(ty);
+
+    auto indexOf = [&](TypeId metatable)
+    {
+        const TableType* table = get<TableType>(follow(metatable));
+        if (!table)
+            return;
+        auto index = table->props.find("__index");
+        if (index != table->props.end() && index->second.readTy)
+            collectIndexableNames(*index->second.readTy, names, depth + 1);
+    };
+
+    if (const TableType* table = get<TableType>(ty))
+    {
+        for (const auto& [name, _] : table->props)
+            names.push_back(name);
+    }
+    else if (const MetatableType* metatable = get<MetatableType>(ty))
+    {
+        collectIndexableNames(metatable->table, names, depth + 1);
+        indexOf(metatable->metatable);
+    }
+    else if (const PrimitiveType* primitive = get<PrimitiveType>(ty); primitive && primitive->metatable)
+        indexOf(*primitive->metatable);
+    else if (const ExternType* extern_ = get<ExternType>(ty))
+    {
+        for (const auto& [name, _] : extern_->props)
+            names.push_back(name);
+        if (extern_->parent)
+            collectIndexableNames(*extern_->parent, names, depth + 1);
+    }
+}
+
+void TypeChecker2::reportMissingProperty(TypeErrorData error, TypeId tableTy, const std::string& prop, const std::string& receiver, const Location& location)
+{
+    std::optional<std::string> meant;
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+    {
+        std::vector<std::string> names;
+        collectIndexableNames(tableTy, names, 0);
+        // Upstream suggests a property that differs only in case (UnknownPropButFoundLikeProp), which says more
+        bool differsInCase = std::any_of(
+            names.begin(),
+            names.end(),
+            [&](const std::string& name)
+            {
+                return name != prop && equalsLower(name, prop);
+            }
+        );
+        if (!differsInCase)
+            meant = closestSpelling(prop, names);
+    }
+    if (!meant)
+    {
+        reportError(std::move(error), location);
+        return;
+    }
+
+    Typo typo{receiver + prop, receiver + *meant};
+    // A compound assignment checks its target twice, as a write and then as a read
+    const TypeError* last = module->errors.empty() ? nullptr : &module->errors.back();
+    const Typo* lastTypo = last && last->location == location ? get<Typo>(*last) : nullptr;
+    if (!lastTypo || !(*lastTypo == typo))
+        reportError(std::move(typo), location);
+}
 
 void TypeChecker2::diagnoseMissingTableKey(UnknownProperty* utk, TypeErrorData& data) const
 {

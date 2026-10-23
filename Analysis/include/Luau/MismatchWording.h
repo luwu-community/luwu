@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/Helpifier.h"
+#include "Luau/Location.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -94,6 +95,13 @@ struct Anchor
     size_t at = 0;
 };
 
+// Where a table declares a property, in the source of `module`.
+struct PropertySite
+{
+    Location location;
+    std::string module;
+};
+
 struct Difference
 {
     enum class Kind
@@ -144,6 +152,12 @@ struct Difference
     std::optional<std::string> subInFull;
     // For `ElementOfExpected`, the element type of the array expected.
     std::optional<std::string> element;
+    // At one of two parameters or return values written in the wrong order, which a help already says.
+    bool explainedBySwap = false;
+    // For a difference at a property, where the given and the expected table declare it. For `Missing`, the given
+    // site is the table the property is missing from.
+    std::optional<PropertySite> givenSite;
+    std::optional<PropertySite> expectedSite;
 };
 
 // The names paths hang off, and what the text rendered so far needs a legend for. Every piece of text
@@ -265,6 +279,14 @@ std::string misspelledFieldHelp(const Difference& d, Rendering& rendering);
 // A string one typo from an expected one, inside a table.
 std::string misspelledValueHelp(const Difference& d, Rendering& rendering);
 
+// Notes at the two declarations of a mismatched property: `Expected 'count: number' because of this` at the expected
+// one, `'count' is 'string' here, but should be 'number'` at the given one.
+std::string expectedPropertyNote(const std::string& name, const std::string& expected);
+std::string givenPropertyNote(const std::string& name, const std::string& given, const std::string& expected);
+// At the table a required property is missing from: `'colors.background' is missing 'b: number'`. Inside a function
+// the table is named from its parameter, as the bullet does (`'self' is missing ...`).
+std::string missingPropertyNote(const Difference& d, Rendering& rendering);
+
 // Headers: the line introducing the bullets.
 std::string similarHeader(std::string_view arrival, size_t paths);
 std::string pathsHeader(std::string_view arrival, size_t paths);
@@ -276,13 +298,14 @@ std::string unionMembersHeader(bool noneFit, const std::string& unionName, const
 // Scalars that aren't the scalar expected: `'string' isn't a 'number'.`, `Neither ... nor ...`,
 // `None of ...`. `article` says whether the expected type takes an `a`.
 std::string scalarsHeader(const std::vector<std::string>& names, const std::string& expected, bool article);
-std::string closestMatchHeader(const std::string& label, const std::string& memberType);
+// The member chosen for a given value. `memberType` is nullopt when the union printed above already shows it.
+std::string closestMatchHeader(const std::string& label, const std::optional<std::string>& memberType);
 // `'leaving.kind' is '"leave"', so 'leaving' was compared with Event#2 = ...:`.
 std::string taggedMatchHeader(
     const std::string& field,
     const std::string& value,
     const std::string& label,
-    const std::string& memberType,
+    const std::optional<std::string>& memberType,
     Rendering& rendering
 );
 // `'Json' is unrelated to 'ServerConfig'.`, naming each type by its alias, or by its printed form

@@ -5,6 +5,7 @@
 #include "Luau/Error.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace Luau
 {
@@ -744,6 +745,39 @@ std::string misspelledValueHelp(const Difference& d, Rendering& rendering)
     return rendering.helpifier("typo", {"Did you mean " + quoted(*d.similarName) + " instead of " + quoted(d.sub) + " for " + quoted(path) + "?"});
 }
 
+std::string expectedPropertyNote(const std::string& name, const std::string& expected)
+{
+    return "Expected " + quoted(name + ": " + expected) + " because of this";
+}
+
+std::string givenPropertyNote(const std::string& name, const std::string& given, const std::string& expected)
+{
+    return quoted(name) + " is " + quoted(given) + " here, but should be " + quoted(expected);
+}
+
+std::string missingPropertyNote(const Difference& d, Rendering& rendering)
+{
+    LUAU_ASSERT(d.kind == Difference::Kind::Missing && !d.path.empty());
+
+    // The note's path isn't in the message, so it adds nothing to the message's legend
+    uint8_t notation = rendering.notation;
+    std::string table;
+    bool inFunction = d.anchor && d.anchor->at + 1 < d.path.size();
+    if (inFunction)
+    {
+        const Segment& slot = d.path[d.anchor->at];
+        bool named = slot.kind == Segment::Kind::Parameter && !slot.name.empty();
+        table = slotInProse(slotNoun(d.path, d.anchor->at, d.path.size() - 1, nullptr), named);
+        // `its 2nd argument` starts the sentence
+        table[0] = char(std::toupper(static_cast<unsigned char>(table[0])));
+    }
+    else
+        table = quoted(rendering.givenPath(onGivenSide(DiffPath{d.path.begin(), d.path.end() - 1})));
+    rendering.notation = notation;
+
+    return table + " is missing " + quoted(d.path.back().name + ": " + d.super);
+}
+
 std::string similarHeader(std::string_view arrival, size_t paths)
 {
     return "The " + std::string(arrival) + " type is similar, but has " + countedPaths(paths) + ":";
@@ -802,21 +836,23 @@ static std::string labelled(const std::string& label, const std::string& type, c
     return label + " =\n    " + type + "\n" + rest;
 }
 
-std::string closestMatchHeader(const std::string& label, const std::string& memberType)
+std::string closestMatchHeader(const std::string& label, const std::optional<std::string>& memberType)
 {
-    return labelled("The closest match is " + label, memberType, ", but:");
+    std::string subject = "The closest match is " + label;
+    return memberType ? labelled(subject, *memberType, ", but:") : subject + ", but:";
 }
 
 std::string taggedMatchHeader(
     const std::string& field,
     const std::string& value,
     const std::string& label,
-    const std::string& memberType,
+    const std::optional<std::string>& memberType,
     Rendering& rendering
 )
 {
     std::string root = rendering.givenName();
-    return labelled(quoted(root + "." + field) + " is " + quoted(value) + ", so " + quoted(root) + " was compared with " + label, memberType, ":");
+    std::string subject = quoted(root + "." + field) + " is " + quoted(value) + ", so " + quoted(root) + " was compared with " + label;
+    return memberType ? labelled(subject, *memberType, ":") : subject + ":";
 }
 
 std::string unrelatedSentence(const std::optional<std::string>& givenAlias, const std::string& printedGiven, const std::string& printedExpected)

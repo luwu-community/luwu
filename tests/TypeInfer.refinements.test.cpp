@@ -2865,9 +2865,10 @@ TEST_CASE_FIXTURE(RefinementExternTypeFixture, "cannot_call_a_function_union")
     // FIXME CLI-157125: It's a bit clowny that we return a union of
     // functions containing `function` here, but it looks like a side
     // effect of how we execute `hasProp`.
+    // Luwu: `Disconnectable` prints as its name. Upstream names the cycle through it instead:
+    // `t2 where t1 = ExternScriptConnection | { Disconnect: t2 } | { disconnect: (t1) -> (...any) } ; t2 = (t1) -> (...any)`.
     std::string expectedError = "Cannot call a value of type function in union:\n"
-                                "  ((ExternScriptConnection) -> ()) | function | t2 where t1 = ExternScriptConnection | { Disconnect: t2 } | { "
-                                "disconnect: (t1) -> (...any) } ; t2 = (t1) -> (...any)";
+                                "  ((Disconnectable) -> (...any)) | ((ExternScriptConnection) -> ()) | function";
 
     CHECK_EQ(toString(result.errors[1]), expectedError);
 }

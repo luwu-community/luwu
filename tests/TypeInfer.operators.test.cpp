@@ -956,7 +956,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "UnknownGlobalCompoundAssign")
             )");
 
             LUAU_REQUIRE_ERROR_COUNT(1, result);
-            CHECK_EQ(toString(result.errors[0]), "Unknown global 'a'; consider assigning to it first");
+            CHECK_EQ(toString(result.errors[0]), "Unknown variable 'a', define it with 'local a = value'");
         }
     }
 
@@ -969,7 +969,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "UnknownGlobalCompoundAssign")
         )");
 
         LUAU_REQUIRE_ERRORS(result);
-        CHECK_EQ(toString(result.errors[0]), "Unknown global 'a'; consider assigning to it first");
+        CHECK_EQ(toString(result.errors[0]), "Unknown variable 'a', define it with 'local a = value'");
     }
 
     // In non-strict mode, compound assignment is not a definition, it's a modification
@@ -983,7 +983,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "UnknownGlobalCompoundAssign")
             )");
 
             LUAU_REQUIRE_ERROR_COUNT(2, result);
-            CHECK_EQ(toString(result.errors[0]), "Unknown global 'a'; consider assigning to it first");
+            CHECK_EQ(toString(result.errors[0]), "Unknown variable 'a', define it with 'local a = value'");
         }
     }
 }

@@ -1154,4 +1154,37 @@ TEST_CASE_FIXTURE(Fixture, "expanded_root_alias_prints_recursive_references_by_n
     CHECK_NE(std::string::npos, list.find("next: List<T>?"));
 }
 
+TEST_CASE_FIXTURE(Fixture, "recursive_union_alias_prints_by_name")
+{
+    CheckResult result = check(R"(
+        type Content = string | { read Content | nil }
+        local optional: Content | nil = "a"
+    )");
+
+    TypeId content = requireTypeAlias("Content");
+
+    // the table's element type reaches `Content` itself, not a copy of it
+    const UnionType* contentUnion = get<UnionType>(follow(content));
+    REQUIRE(contentUnion);
+    REQUIRE(contentUnion->options.size() == 2);
+    const TableType* array = get<TableType>(follow(contentUnion->options[1]));
+    REQUIRE(array);
+    REQUIRE(array->indexer);
+    const UnionType* element = get<UnionType>(follow(array->indexer->indexResultType));
+    REQUIRE(element);
+    REQUIRE(element->options.size() == 2);
+    CHECK_EQ(follow(element->options[0]), follow(content));
+
+    CHECK_EQ("Content?", toString(requireType("optional")));
+    CHECK_EQ("Content?", toString(array->indexer->indexResultType));
+
+    // expanded as the root, the way a hover shows an alias
+    ToStringOptions opts;
+    opts.alwaysExpandRootAlias = true;
+    opts.includeWhereClauses = true;
+    ToStringResult expanded = toStringDetailed(content, opts);
+    CHECK_EQ("string | {read Content?}", expanded.name);
+    CHECK_EQ("", expanded.whereClauses);
+}
+
 TEST_SUITE_END();

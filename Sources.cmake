@@ -297,6 +297,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/Unifiable.h
     Analysis/include/Luau/Unifier.h
     Analysis/include/Luau/Unifier2.h
+    Analysis/include/Luau/UnknownVariable.h
     Analysis/include/Luau/UnreachableProof.h
     Analysis/include/Luau/UnifierSharedState.h
     Analysis/include/Luau/UserDefinedTypeFunction.h
@@ -385,6 +386,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/Unifiable.cpp
     Analysis/src/Unifier.cpp
     Analysis/src/Unifier2.cpp
+    Analysis/src/UnknownVariable.cpp
     Analysis/src/UnreachableProof.cpp
     Analysis/src/UserDefinedTypeFunction.cpp
 )

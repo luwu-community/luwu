@@ -10,6 +10,7 @@
 #include "Luau/Type.h"
 #include "Luau/TypeFwd.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/UnknownVariable.h"
 
 #include <memory>
 
@@ -114,6 +115,8 @@ struct TypeChecker2
     mutable DenseHashMap<const AstExprFunction*, DenseHashSet<const AstLocal*>> initSelfAliases{nullptr};
 
     DenseHashSet<TypeId> seenTypeFunctionInstances{nullptr};
+    // Luwu: see requiredProperties
+    DenseHashMap<const TableType*, std::vector<std::string>> requiredPropertiesCache{nullptr};
 
     Normalizer normalizer;
     Subtyping _subtyping;
@@ -267,7 +270,8 @@ private:
     void visit(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);
-    void visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy);
+    // `separator` is the `.` or `:` of `expr.propName`, and 0 for `expr["propName"]`.
+    void visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy, char separator);
     void visit(AstExprIndexName* indexName, ValueContext context);
     void indexExprMetatableHelper(AstExprIndexExpr* indexExpr, const MetatableType* metaTable, TypeId exprType, TypeId indexType);
     void visit(AstExprIndexExpr* indexExpr, ValueContext context);
@@ -307,11 +311,13 @@ private:
         std::optional<std::string> contextVerb = std::nullopt
     );
     void explainError(TypePackId subTy, TypePackId superTy, Location location, const SubtypingResult& result);
-    void reportPropertyTypos(AstExprTable* expr);
 
     bool testLiteralOrAstTypeIsSubtype(AstExpr* expr, TypeId expectedType);
 
     bool testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedType);
+    // Luwu: the properties a table literal checked against `table` has to write: readable and not optional. Cached, so
+    // literals checked against one wide record (150 optional fields) don't each test every field.
+    const std::vector<std::string>& requiredProperties(const TableType* table);
 
     void maybeReportSubtypingError(TypeId subTy, TypeId superTy, const Location& location);
     // Tests whether subTy is a subtype of superTy in the context of a function iterator for a for-in statement.
@@ -330,7 +336,18 @@ private:
     );
     // If the provided type does not have the named property, report an error.
     // Returns whether `tableTy` can't exist (a `never` the normalizer had to work out), for the caller to report.
-    bool checkIndexTypeFromType(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location, TypeId astIndexExprType);
+    // `receiver` is how the indexed value is written before the property (`player.`), for a typo's message.
+    bool checkIndexTypeFromType(
+        TypeId tableTy,
+        const std::string& prop,
+        ValueContext context,
+        const Location& location,
+        TypeId astIndexExprType,
+        const std::string& receiver = ""
+    );
+    // Luwu (helpful subtyping errors): reports `error` for a property `tableTy` doesn't have, or a typo when it has one
+    // spelled almost the same.
+    void reportMissingProperty(TypeErrorData error, TypeId tableTy, const std::string& prop, const std::string& receiver, const Location& location);
     // If the named property is `private` on some user-defined class in tableTy's hierarchy, and
     // `location` falls outside of that class's own definition block, report an error.
     void checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location);
@@ -363,6 +380,11 @@ private:
 
     // Avoid duplicate warnings being emitted for the same global variable.
     DenseHashSet<std::string> warnedGlobals{""};
+
+    // Luwu: says why a name isn't a variable here. Created at the first unknown name.
+    std::unique_ptr<UnknownVariableExplainer> unknownVariables;
+    UnknownVariableExplainer& unknownVariableExplainer();
+    void reportUnknownVariable(const AstExprGlobal* expr, NotNull<Scope> scope);
 
     void suggestAnnotations(AstExprFunction* expr, TypeId ty);
 

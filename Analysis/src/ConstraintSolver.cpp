@@ -1945,9 +1945,27 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
 
     TypeId overloadToUse = fn;
 
+    // Luwu: a callee with one `__call` signature (a class, or a table with a single `__call`) has no overload to choose
+    // either. Upstream resolves it like an overload set, which subtype-tests every argument against the parameters on
+    // every call: a call passing a table literal to a wide record pays for all of its properties. Argument errors are
+    // TypeChecker2's to report, as they are for a function type.
+    std::optional<TypeId> onlyCallSignature;
+    if (!is<FunctionType>(fn))
+    {
+        ErrorVec ignored;
+        std::optional<TypeId> callMetamethod = findMetatableEntry(builtinTypes, ignored, fn, "__call", constraint->location);
+        if (callMetamethod && is<FunctionType>(follow(*callMetamethod)))
+            onlyCallSignature = follow(*callMetamethod);
+    }
+
+    if (onlyCallSignature)
+    {
+        overloadToUse = *onlyCallSignature;
+        argsPack = arena->addTypePack(TypePack{{fn}, argsPack});
+    }
     // If the function we have is already a function type, then there's no
     // point in trying to do overload selection: we're just wasting CPU.
-    if (!is<FunctionType>(fn))
+    else if (!is<FunctionType>(fn))
     {
         auto res = resolver.resolveOverload(
             fn,
