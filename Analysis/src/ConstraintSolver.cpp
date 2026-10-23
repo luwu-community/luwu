@@ -41,6 +41,7 @@ LUAU_FASTINTVARIABLE(LuauSolverRecursionLimit, 500)
 
 LUAU_FASTFLAGVARIABLE(DebugLuauAssertOnForcedConstraint)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
+LUAU_FASTFLAGVARIABLE(LuauRelaxConstraintOrderingForFunctionCheck)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogSolver)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogBindings)
 LUAU_FASTFLAGVARIABLE(LuauFixPropReadsOnMetatableTypes)
@@ -2333,18 +2334,21 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
     if (isBlocked(argsPack))
         return true;
 
-    // This is expensive as we need to traverse a (potentially large)
-    // literal up front in order to determine if there are any blocked
-    // types, otherwise we may run `matchTypeLiteral` multiple times,
-    // which right now may fail due to being non-idempotent (it
-    // destructively updates the underlying literal type).
-    auto blockedTypes = findBlockedArgTypesIn(c.callSite, c.astTypes);
-    for (TypeId ty : blockedTypes)
+    if (!FFlag::LuauRelaxConstraintOrderingForFunctionCheck)
     {
-        block(ty, constraint);
+        // This is expensive as we need to traverse a (potentially large)
+        // literal up front in order to determine if there are any blocked
+        // types, otherwise we may run `matchTypeLiteral` multiple times,
+        // which right now may fail due to being non-idempotent (it
+        // destructively updates the underlying literal type).
+        auto blockedTypes = findBlockedArgTypesIn_DEPRECATED(c.callSite, c.astTypes);
+        for (TypeId ty : blockedTypes)
+        {
+            block(ty, constraint);
+        }
+        if (!blockedTypes.empty())
+            return false;
     }
-    if (!blockedTypes.empty())
-        return false;
 
     // We know the type of the function and the arguments it expects to receive.
     // We also know the TypeIds of the actual arguments that will be passed.

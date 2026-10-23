@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/DenseHash.h"
+#include "Luau/DenseHash2.h"
 #include <ostream>
 #include <optional>
 
@@ -42,6 +43,24 @@ auto operator<<(std::ostream& lhs, const std::vector<T>& t) -> decltype(lhs << t
 
 template<typename K, typename H, typename E>
 auto operator<<(std::ostream& lhs, const Luau::DenseHashSet<K, H, E>& set) -> decltype(lhs << *set.begin())
+{
+    lhs << "{ ";
+    bool first = true;
+    for (const K& element : set)
+    {
+        if (first)
+            first = false;
+        else
+            lhs << ", ";
+
+        lhs << element;
+    }
+
+    return lhs << " }";
+}
+
+template<typename K, typename H, typename E>
+auto operator<<(std::ostream& lhs, const Luau::DenseHashSet2<K, H, E>& set) -> decltype(lhs << *set.begin())
 {
     lhs << "{ ";
     bool first = true;
