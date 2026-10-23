@@ -579,6 +579,72 @@ private:
     void checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn);
     std::optional<FunctionType::TruthyRefinement> resolveTruthyRefinement(const ScopePtr& signatureScope, AstExprFunction* fn);
 
+    // Luwu literal types: a parameter's, local's or table field's annotation, resolved. For `literal<B>`, `V<literal<B>>`,
+    // an alias of either, or one of those followed by `?`, `type` is `B` (or `B?`) and `check` is what a value given for
+    // it must be. Any other annotation resolves as usual, with no check.
+    struct ResolvedAnnotation
+    {
+        TypeId type;
+        std::optional<LiteralCheck> check;
+    };
+    ResolvedAnnotation resolveLiteralCheckAnnotation(const ScopePtr& scope, AstType* annotation, bool inTypeArguments, bool replaceErrorWithFresh);
+    // Luwu literal types: an alias of a union with a literal member (`type Length = CssLength | Token | number`), as
+    // resolveLiteralCheckAnnotation resolves the union written out
+    std::optional<ResolvedAnnotation> literalUnionOfType(TypeId ty);
+    // Luwu literal types: an alias body that is a literal annotation or a union with one among its members. A literal
+    // member resolves to its validator (or its placeholder), which use sites recognize (literalOfType).
+    static bool hasLiteralMember(const Scope& scope, AstType* annotation);
+    TypeId resolveLiteralAliasBody(const ScopePtr& scope, AstType* annotation);
+
+    // Luwu literal types: resolves a parameter's annotation (resolveLiteralCheckAnnotation), recording its check in
+    // `literalParameters`
+    TypeId resolveParameterAnnotation(
+        const ScopePtr& scope,
+        AstType* annotation,
+        size_t argIndex,
+        bool variadic,
+        std::vector<FunctionType::LiteralParameter>& literalParameters,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh
+    );
+    // Luwu literal types: resolveParameterAnnotation for each parameter of a function type `(a: A, ...: B) -> R`
+    TypePackId resolveParameterAnnotations(
+        const ScopePtr& scope,
+        const AstTypeList& params,
+        std::vector<FunctionType::LiteralParameter>& literalParameters,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh
+    );
+    // Luwu literal types: an annotation that is `literal<B>` or has it as a type argument (`V<literal<B>>`), resolved. The
+    // placeholder is the generic `literal<B>` stands for, marked with `B`; `validator` is the annotation around it (null for
+    // a bare `literal<B>`).
+    struct ResolvedLiteral
+    {
+        TypeId base;
+        TypeId placeholder;
+        TypeId validator;
+    };
+    // Luwu literal types: what a type an annotation resolved to says about it being a literal parameter: the placeholder of
+    // an alias of `literal<B>`, or a validator applied to one (an alias of `V<literal<B>>`)
+    static std::optional<ResolvedLiteral> literalOfType(TypeId ty);
+    ResolvedLiteral resolveLiteralAnnotation(
+        const ScopePtr& scope,
+        AstType* annotation,
+        AstTypeReference* literalRef,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh
+    );
+
+    // Luwu literal types: `B` of `literal<B>`, reporting a `literal` without exactly one type argument
+    TypeId resolveLiteralBase(const ScopePtr& scope, AstTypeReference* literalRef, bool inTypeArguments, bool replaceErrorWithFresh);
+    // Luwu literal types: the `literal<B>` that resolves to the placeholder while a validator is being resolved
+    struct PendingLiteral
+    {
+        AstTypeReference* ref;
+        TypeId placeholder;
+    };
+    std::optional<PendingLiteral> pendingLiteral;
+
     // Specializations of 'resolveType' below
     TypeId resolveReferenceType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref, bool inTypeArguments, bool replaceErrorWithFresh);
     TypeId resolveTableType(const ScopePtr& scope, AstType* ty, AstTypeTable* tab, bool inTypeArguments, bool replaceErrorWithFresh);

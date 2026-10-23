@@ -71,6 +71,184 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 namespace Luau
 {
 
+// Luwu literal types: `validator` with the argument's literal type in place of `literal<B>`, unreduced
+static std::optional<TypeId> applyLiteralValidator(
+    TypeArena& arena,
+    const LiteralCheck& literal,
+    TypeId validator,
+    TypeId literalTy
+)
+{
+    DenseHashMap<TypeId, TypeId> replacements{nullptr};
+    DenseHashMap<TypePackId, TypePackId> packReplacements{nullptr};
+    replacements[literal.placeholder] = literalTy;
+    Replacer replacer{NotNull{&arena}, NotNull{&replacements}, NotNull{&packReplacements}};
+    return replacer.substitute(validator);
+}
+
+// Luwu literal types: whether `literal<B>` can be given a literal of type `B`. Luau has literal types for strings and
+// booleans only.
+static bool hasLiterals(TypeId base)
+{
+    base = follow(base);
+    if (const PrimitiveType* primitive = get<PrimitiveType>(base))
+        return primitive->type == PrimitiveType::String || primitive->type == PrimitiveType::Boolean;
+
+    if (const UnionType* options = get<UnionType>(base))
+    {
+        for (TypeId option : options)
+        {
+            if (!hasLiterals(option))
+                return false;
+        }
+        return true;
+    }
+
+    // A generic (`literal<S>`) becomes the argument's literal; an error was reported already
+    return get<SingletonType>(base) || get<GenericType>(base) || get<ErrorType>(base) || get<AnyType>(base);
+}
+
+static std::string noLiteralsMessage(TypeId base)
+{
+    return format("there are no literals of type %s", toString(base).c_str());
+}
+
+// Luwu literal types: whether a value of type `ty` is a literal, i.e. its type is a singleton or a union of them
+static bool isLiteralValue(TypeId ty)
+{
+    ty = follow(ty);
+    if (const UnionType* options = get<UnionType>(ty))
+    {
+        for (TypeId option : options)
+        {
+            if (!get<SingletonType>(follow(option)))
+                return false;
+        }
+        return true;
+    }
+
+    // An error was reported already, and `never` is never there to be passed
+    return get<SingletonType>(ty) || get<ErrorType>(ty) || get<AnyType>(ty) || get<NeverType>(ty);
+}
+
+// Luwu literal types: whether a value given for `literal<base>` is wrong for not being a literal. A base without literals
+// was reported where it is written.
+static bool isMissingLiteral(TypeId base, TypeId given)
+{
+    return hasLiterals(base) && !isLiteralValue(given);
+}
+
+// Luwu literal types: the type function a validator applies (`NoDashes` of `NoDashes<literal<string>>`), if any
+static std::optional<std::string> validatorName(TypeId validator)
+{
+    if (!validator)
+        return std::nullopt;
+
+    validator = follow(validator);
+    if (const TypeFunctionInstanceType* instance = get<TypeFunctionInstanceType>(validator))
+    {
+        if (instance->userFuncName)
+            return std::string(instance->userFuncName->value);
+        return instance->function->name;
+    }
+    if (const PendingExpansionType* pending = get<PendingExpansionType>(validator))
+        return std::string(pending->name.value);
+    return std::nullopt;
+}
+
+static std::string forwardedLiteralMessage(const std::string& name, TypeId checkedBy, TypeId wanted)
+{
+    std::string wants = validatorName(wanted).value_or("this parameter's validator");
+    std::string fix = format("annotate '%s' with '%s' (or an alias of it), or pass a literal here", name.c_str(), wants.c_str());
+
+    if (std::optional<std::string> checked = validatorName(checkedBy))
+        return format("'%s' was checked by '%s', not '%s'; %s", name.c_str(), checked->c_str(), wants.c_str(), fix.c_str());
+    return format("'%s' isn't checked by '%s'; %s", name.c_str(), wants.c_str(), fix.c_str());
+}
+
+// Luwu literal types: a table given for a type with literal fields that wasn't checked against them
+static std::string uncheckedTableMessage(AstExpr* value, const std::string& field)
+{
+    AstExprLocal* local = value->as<AstExprLocal>();
+    if (!local)
+        return format("this table wasn't checked against '%s'; pass a table literal here", field.c_str());
+
+    const char* name = local->local->name.value;
+    return format(
+        "'%s' wasn't checked against '%s'; pass a table literal here, or annotate '%s' with a type that has that field",
+        name,
+        field.c_str(),
+        name
+    );
+}
+
+static std::string notALiteralMessage(TypeId base, TypeId given)
+{
+    return format("expected a literal of type %s, but got %s", toString(base).c_str(), toString(given).c_str());
+}
+
+// Luwu literal types: the type of `value`, given for a `literal<B>`, as written: `"-f"` is the singleton `"-f"` even where
+// it was inferred as `string` (a callee the solver couldn't see, like an overload set)
+static TypeId writtenLiteralType(TypeArena& arena, NotNull<BuiltinTypes> builtinTypes, AstExpr* value, TypeId inferred)
+{
+    if (isLiteralValue(inferred))
+        return inferred;
+
+    AstExpr* written = unwrapGroup(value);
+
+    if (AstExprConstantString* str = written->as<AstExprConstantString>())
+        return arena.addType(SingletonType{StringSingleton{std::string(str->value.data, str->value.size)}});
+    if (AstExprConstantBool* boolean = written->as<AstExprConstantBool>())
+        return boolean->value ? builtinTypes->trueType : builtinTypes->falseType;
+    return inferred;
+}
+
+// Luwu literal types: the table type `ty` is, or the one table type among its union's members (`Style | StyleInput`, a
+// class and a record). A union of several table types gives none: which one a table literal is meant for isn't known.
+static const TableType* tableTypeOf(TypeId ty)
+{
+    ty = follow(ty);
+    const UnionType* options = get<UnionType>(ty);
+    if (!options)
+        return get<TableType>(ty);
+
+    const TableType* table = nullptr;
+    for (TypeId option : options)
+    {
+        const TableType* member = get<TableType>(follow(option));
+        if (!member)
+            continue;
+        if (table)
+            return nullptr;
+        table = member;
+    }
+    return table;
+}
+
+// Luwu literal types: the check on field `name` of `table`, if it has one
+static const LiteralCheck* findLiteralField(const TableType* table, const std::string& name)
+{
+    if (!table)
+        return nullptr;
+    for (const auto& [field, check] : table->literalFields)
+    {
+        if (field == name)
+            return &check;
+    }
+    return nullptr;
+}
+
+// Luwu literal types: what a field's annotation asked for, as written (`padding: Length<literal<string>>?`)
+static std::string literalFieldDisplay(const std::string& name, const LiteralCheck& check)
+{
+    std::string annotation = check.validator ? toString(check.validator) : "literal<" + toString(check.base) + ">";
+    if (!check.alternatives)
+        return name + ": " + annotation;
+    if (isNil(check.alternatives))
+        return name + ": " + annotation + "?";
+    return name + ": " + annotation + " | " + toString(check.alternatives);
+}
+
 struct TypeChecker2::DeclarationIndex
 {
     // Keyed by where a function starts; its `FunctionDefinition::definitionLocation` is checked in full on lookup.
@@ -1103,6 +1281,11 @@ void TypeChecker2::visit(AstStatReturn* ret)
     }
 
     auto [head, _] = extendTypePack(*module->internalTypes, builtinTypes, expectedRetType, ret->list.size);
+
+    // Luwu literal types: a returned table checked against the literal fields of the return type
+    for (size_t idx = 0; idx < ret->list.size && idx < head.size(); idx++)
+        checkLiteralFields(ret->list.data[idx], head[idx], NotNull{scope});
+
     bool isSubtype = true;
     std::vector<TypeId> actualHead;
     std::optional<TypePackId> actualTail;
@@ -1185,7 +1368,10 @@ void TypeChecker2::visit(AstStatLocal* local)
                 TypeId annotationType = lookupAnnotation(var->annotation);
                 TypeId valueType = value ? lookupType(value) : nullptr;
                 if (valueType)
+                {
                     testPotentialLiteralIsSubtype(value, annotationType);
+                    checkLiteralLocalValue(var, value, valueType, annotationType);
+                }
 
                 visit(var->annotation);
             }
@@ -1211,6 +1397,7 @@ void TypeChecker2::visit(AstStatLocal* local)
                 {
                     TypeId varType = lookupAnnotation(var->annotation);
                     testIsSubtype(valueTypes.head[j - i], varType, value->location);
+                    checkLiteralLocalValue(var, value, valueTypes.head[j - i], varType);
 
                     visit(var->annotation);
                 }
@@ -1637,6 +1824,19 @@ void TypeChecker2::visit(AstStatAssign* assign)
             if (std::optional<TypeId> bindingType = getBindingType(lhs))
                 testLiteralOrAstTypeIsSubtype(rhs, *bindingType);
         }
+
+        // Luwu literal types: `t.padding = v` for a literal field, or a table assigned to a literal local or field
+        NotNull<Scope> scope{findInnermostScope(assign->location)};
+        AstExprIndexName* field = lhs->as<AstExprIndexName>();
+        const LiteralCheck* check = field ? findLiteralField(tableTypeOf(lookupType(field->expr)), field->index.value) : nullptr;
+        AstExprLocal* local = lhs->as<AstExprLocal>();
+        if (!check && local)
+            check = module->literalLocals.find(local->local);
+
+        if (check)
+            checkLiteralValue(rhs, rhsType, *check, scope);
+        else
+            checkLiteralFields(rhs, getBindingType(lhs).value_or(lhsType), scope);
     }
 }
 
@@ -3419,6 +3619,194 @@ static bool hasErrorSuppressingMember(TypeId ty)
     return false;
 }
 
+std::optional<TypeChecker2::ForwardedLiteral> TypeChecker2::forwardedLiteral(AstExpr* written)
+{
+    if (AstExprLocal* local = written->as<AstExprLocal>())
+    {
+        if (const LiteralCheck* check = module->literalLocals.find(local->local))
+            return ForwardedLiteral{local->local->name.value, *check};
+        return std::nullopt;
+    }
+
+    if (AstExprIndexName* field = written->as<AstExprIndexName>())
+    {
+        const LiteralCheck* check = findLiteralField(tableTypeOf(lookupType(field->expr)), field->index.value);
+        if (!check)
+            return std::nullopt;
+
+        AstExprLocal* owner = field->expr->as<AstExprLocal>();
+        std::string name = owner ? std::string(owner->local->name.value) + "." + field->index.value : field->index.value;
+        return ForwardedLiteral{std::move(name), *check};
+    }
+
+    return std::nullopt;
+}
+
+void TypeChecker2::checkLiteralValue(AstExpr* value, TypeId inferred, const LiteralCheck& check, NotNull<Scope> scope)
+{
+    AstExpr* written = unwrapGroup(value);
+    // A cast to a literal type (`s :: literal<string>`) passes as one, checked by nothing, like a cast to `any`
+    if (module->literalAssertions.contains(written))
+        return;
+
+    // A value checked where it was given (a literal parameter or local, a literal field) and passed on unchanged. Only the
+    // same validator can stand in for this one's, which can't see what that literal was.
+    if (std::optional<ForwardedLiteral> forwarded = forwardedLiteral(written))
+    {
+        bool sameCheck = !check.validator || validatorName(check.validator) == validatorName(forwarded->check.validator);
+        if (!sameCheck)
+            reportError(GenericError{forwardedLiteralMessage(forwarded->name, forwarded->check.validator, check.validator)}, value->location);
+        return;
+    }
+
+    TypeArena& arena = *module->internalTypes;
+    TypeId literalTy = writtenLiteralType(arena, builtinTypes, value, inferred);
+
+    if (isErrorSuppressing(value->location, literalTy))
+        return;
+
+    // What the rest of the union allows (`nil` for `literal<B>?`) isn't checked
+    if (check.alternatives && subtyping->isSubtype(literalTy, check.alternatives, scope).isSubtype)
+        return;
+
+    if (isMissingLiteral(check.base, literalTy))
+    {
+        reportError(GenericError{notALiteralMessage(check.base, literalTy)}, value->location);
+        return;
+    }
+
+    if (!check.validator)
+        return;
+
+    // A validator given the same literal again says the same thing: only where it's said changes
+    std::optional<std::pair<TypeId, std::string>> key;
+    if (const SingletonType* singleton = get<SingletonType>(follow(literalTy)))
+    {
+        if (const StringSingleton* string = get<StringSingleton>(singleton))
+            key = {follow(check.validator), "s:" + string->value};
+        else if (const BooleanSingleton* boolean = get<BooleanSingleton>(singleton))
+            key = {follow(check.validator), boolean->value ? "b:true" : "b:false"};
+    }
+
+    auto report = [&](const ValidatedLiteral& validated)
+    {
+        auto relocated = [&](ErrorVec errors)
+        {
+            for (TypeError& error : errors)
+                error.location = value->location;
+            return errors;
+        };
+        reportErrors(relocated(validated.messages));
+        // The validator raised (`error(...)` in a user type function): that error says why
+        if (!validated.errors.empty())
+            reportErrors(relocated(validated.errors));
+        else if (validated.accepted)
+            testIsSubtype(literalTy, *validated.accepted, value->location);
+    };
+
+    if (key)
+    {
+        if (auto it = validatedLiterals.find(*key); it != validatedLiterals.end())
+        {
+            report(it->second);
+            return;
+        }
+    }
+
+    std::optional<TypeId> instance = applyLiteralValidator(arena, check, follow(check.validator), literalTy);
+    if (!instance)
+        return;
+
+    TypeFunctionContext context{NotNull{&arena}, builtinTypes, scope, NotNull{&normalizer}, typeFunctionRuntime, ice, limits, subtyping};
+    FunctionGraphReductionResult reduction = reduceTypeFunctions(*instance, value->location, NotNull{&context}, /* force */ true);
+
+    ValidatedLiteral validated;
+    validated.messages = std::move(reduction.messages);
+    validated.errors = std::move(reduction.errors);
+    // Still unreduced, e.g. the value's type is a generic: nothing is known about it yet
+    if (TypeId accepted = follow(*instance); !get<TypeFunctionInstanceType>(accepted))
+        validated.accepted = accepted;
+
+    report(validated);
+    if (key)
+        validatedLiterals.emplace(*key, std::move(validated));
+}
+
+void TypeChecker2::checkLiteralFields(AstExpr* value, TypeId expected, NotNull<Scope> scope)
+{
+    const TableType* expectedTable = tableTypeOf(expected);
+    if (!expectedTable)
+        return;
+
+    AstExpr* written = unwrapGroup(value);
+    if (AstExprTable* literal = written->as<AstExprTable>())
+    {
+        // Field by field, into the tables nested in it too
+        for (const AstExprTable::Item& item : literal->items)
+        {
+            AstExprConstantString* key = item.kind == AstExprTable::Item::Kind::Record ? item.key->as<AstExprConstantString>() : nullptr;
+            if (!key)
+                continue;
+
+            std::string name(key->value.data, key->value.size);
+            if (const LiteralCheck* check = findLiteralField(expectedTable, name))
+                checkLiteralValue(item.value, lookupType(item.value), *check, scope);
+            else if (auto prop = expectedTable->props.find(name); prop != expectedTable->props.end())
+            {
+                std::optional<TypeId> fieldTy = prop->second.writeTy ? prop->second.writeTy : prop->second.readTy;
+                if (fieldTy)
+                    checkLiteralFields(item.value, *fieldTy, scope);
+            }
+        }
+        return;
+    }
+
+    if (expectedTable->literalFields.empty() || module->literalAssertions.contains(written))
+        return;
+
+    // Any other table must have been checked against the same fields already: a value annotated with them
+    TypeId valueTy = lookupType(value);
+    const TableType* valueTable = tableTypeOf(valueTy);
+    if (!valueTable || isErrorSuppressing(value->location, valueTy))
+        return;
+
+    for (const auto& [name, check] : expectedTable->literalFields)
+    {
+        const LiteralCheck* given = findLiteralField(valueTable, name);
+        bool sameCheck = given && (!check.validator || validatorName(check.validator) == validatorName(given->validator));
+        if (!sameCheck)
+        {
+            reportError(GenericError{uncheckedTableMessage(written, literalFieldDisplay(name, check))}, value->location);
+            return;
+        }
+    }
+}
+
+void TypeChecker2::checkLiteralLocalValue(AstLocal* var, AstExpr* value, TypeId valueType, TypeId annotationType)
+{
+    NotNull<Scope> scope{findInnermostScope(value->location)};
+    if (const LiteralCheck* check = module->literalLocals.find(var))
+        checkLiteralValue(value, valueType, *check, scope);
+    else
+        checkLiteralFields(value, annotationType, scope);
+}
+
+void TypeChecker2::checkLiteralArguments(AstExprCall* call, const FunctionType* fty, size_t selfOffset, NotNull<Scope> scope)
+{
+    std::vector<TypeId> params = extendTypePack(*module->internalTypes, builtinTypes, fty->argTypes, call->args.size + selfOffset).head;
+
+    for (size_t idx = 0; idx < call->args.size; ++idx)
+    {
+        // A multret argument (a call last in the list) is checked by its first value only
+        AstExpr* arg = call->args.data[idx];
+
+        if (const FunctionType::LiteralParameter* literal = findLiteralParameter(*fty, idx + selfOffset))
+            checkLiteralValue(arg, lookupType(arg), *literal, scope);
+        else if (idx + selfOffset < params.size())
+            checkLiteralFields(arg, params[idx + selfOffset], scope);
+    }
+}
+
 void TypeChecker2::visitCall(AstExprCall* call)
 {
     TypePack args;
@@ -3522,6 +3910,9 @@ void TypeChecker2::visitCall(AstExprCall* call)
             }
         }
     }
+
+    if (fty)
+        checkLiteralArguments(call, fty, selfOffset, scope);
 
     // FIXME: Similar to bidirectional inference prior, this does not support
     // overloaded functions nor generic typeArguments (yet).
@@ -5427,14 +5818,14 @@ void TypeChecker2::visit(AstTypeReference* ty)
     if (FFlag::DebugLuauMagicTypes && (ty->name == kLuauPrint || ty->name == kLuauForceConstraintSolvingIncomplete || ty->name == kLuauBlockedType))
         return;
 
+    Scope* scope = findInnermostScope(ty->location);
+    LUAU_ASSERT(scope);
+
     // `class<T>` is routed to a type function by ConstraintGenerator rather than resolved through
     // the `class` alias, which is the zero-parameter top type; checking its arity against that
     // alias would always report a spurious mismatch.
     if (FFlag::LuwuClasses && !ty->prefix.has_value() && ty->name == "class" && ty->hasParameterList)
     {
-        Scope* scope = findInnermostScope(ty->location);
-        LUAU_ASSERT(scope);
-
         for (const AstTypeOrPack& param : ty->parameters)
         {
             // `class<List>` names a generic class without its type arguments on purpose: it is the generic class
@@ -5452,8 +5843,18 @@ void TypeChecker2::visit(AstTypeReference* ty)
 
     // Luwu Traits (rfcs/classes/traits.md): `trait<T>` is resolved by ConstraintGenerator (resolveReferenceType), which
     // reports a misuse; there is no `trait` alias to check it against
-    if (FFlag::LuwuTraits && !ty->prefix.has_value() && ty->name == "trait" && ty->hasParameterList)
+    // Luwu literal types: `literal<B>` is resolved by ConstraintGenerator (resolveReferenceType), which also reports a
+    // misuse; there is no `literal` alias to check it against
+    bool isLiteralParameter = scope && isLiteralTypeReference(*scope, ty);
+    bool isTraitValue = FFlag::LuwuTraits && !ty->prefix.has_value() && ty->name == "trait" && ty->hasParameterList;
+    if (isLiteralParameter || isTraitValue)
     {
+        // Unresolved when `literal<B>` is misused outside a parameter, which ConstraintGenerator reported
+        AstType* base = isLiteralParameter && ty->parameters.size == 1 ? ty->parameters.data[0].type : nullptr;
+        TypeId* baseTy = base ? module->astResolvedTypes.find(base) : nullptr;
+        if (baseTy && !hasLiterals(*baseTy))
+            reportError(GenericError{noLiteralsMessage(follow(*baseTy))}, base->location);
+
         for (const AstTypeOrPack& param : ty->parameters)
         {
             if (param.type)
@@ -5471,9 +5872,6 @@ void TypeChecker2::visit(AstTypeReference* ty)
         else
             visit(param.typePack);
     }
-
-    Scope* scope = findInnermostScope(ty->location);
-    LUAU_ASSERT(scope);
 
     std::optional<TypeFun> alias = (ty->prefix) ? scope->lookupImportedType(ty->prefix->value, ty->name.value) : scope->lookupType(ty->name.value);
 
