@@ -32,6 +32,7 @@
  */
 
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 
 namespace Luau
@@ -1311,6 +1312,16 @@ TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     };
     stringDotUnpack.isCheckedFunction = true;
 
+    const TypeId splitResult = arena->addType(TableType{{}, TableIndexer{numberType, stringType}, TypeLevel{}, TableState::Sealed});
+    TypeId splitFunc;
+    // Luwu String Extensions (rfcs/string-extensions.md): split takes an optional maximum number of pieces.
+    if (FFlag::LuwuStringExtensions)
+        splitFunc = makeFunction(
+            *arena, stringType, {}, {}, {optionalString, optionalNumber}, {"sep", "maxpieces"}, {splitResult}, /* checked */ true
+        );
+    else
+        splitFunc = makeFunction(*arena, stringType, {}, {}, {optionalString}, {}, {splitResult}, /* checked */ true);
+
     TableType::Props stringLib = {
         {"byte", {arena->addType(std::move(stringDotByte))}},
         {"char", {arena->addType(std::move(stringDotChar))}},
@@ -1325,17 +1336,7 @@ TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
         {"reverse", {stringToStringType}},
         {"sub", {makeFunction(*arena, stringType, {}, {}, {numberType, optionalNumber}, {}, {stringType}, /* checked */ true)}},
         {"upper", {stringToStringType}},
-        {"split",
-         {makeFunction(
-             *arena,
-             stringType,
-             {},
-             {},
-             {optionalString},
-             {},
-             {arena->addType(TableType{{}, TableIndexer{numberType, stringType}, TypeLevel{}, TableState::Sealed})},
-             /* checked */ true
-         )}},
+        {"split", {splitFunc}},
         {"pack",
          {arena->addType(
              FunctionType{
@@ -1346,6 +1347,40 @@ TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
         {"packsize", {makeFunction(*arena, stringType, {}, {}, {}, {}, {numberType}, /* checked */ true)}},
         {"unpack", {arena->addType(std::move(stringDotUnpack))}},
     };
+
+    if (FFlag::LuwuStringExtensions)
+    {
+        // Luwu String Extensions (rfcs/string-extensions.md): the trims take any number of strings to remove.
+        // startswith, endswith and contains need one needle and take any number of alternatives, so `s:startswith()` is an
+        // error.
+        FunctionType trimFtv{{}, {}, arena->addTypePack(TypePack{{stringType}, stringVariadicList}), oneStringPack, {}, /* hasSelf */ true};
+        trimFtv.argNames = {FunctionArgument{"self", {}}};
+        trimFtv.isCheckedFunction = true;
+        const TypeId trimFunc = arena->addType(std::move(trimFtv));
+
+        const TypePackId needleTestParams = arena->addTypePack(TypePack{{stringType, stringType}, stringVariadicList});
+        FunctionType needleTestFtv{{}, {}, needleTestParams, arena->addTypePack({booleanType}), {}, /* hasSelf */ true};
+        needleTestFtv.argNames = {FunctionArgument{"self", {}}};
+        needleTestFtv.isCheckedFunction = true;
+        const TypeId needleTestFunc = arena->addType(std::move(needleTestFtv));
+
+        stringLib["trim"] = {trimFunc};
+        stringLib["trimstart"] = {trimFunc};
+        stringLib["trimend"] = {trimFunc};
+        stringLib["startswith"] = {needleTestFunc};
+        stringLib["endswith"] = {needleTestFunc};
+        stringLib["contains"] = {needleTestFunc};
+        stringLib["replace"] = {makeFunction(
+            *arena,
+            stringType,
+            {},
+            {},
+            {stringType, stringType, optionalNumber},
+            {"old", "new", "max"},
+            {stringType},
+            /* checked */ true
+        )};
+    }
 
     assignPropDocumentationSymbols(stringLib, "@luau/global/string");
 

@@ -43,6 +43,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuStringExtensions)
 
 using namespace Luau;
 
@@ -10556,6 +10557,144 @@ JUMPBACK L0
 L3: RETURN R0 0
 )"
     );
+}
+
+TEST_CASE("StringExtensionFastcalls")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction0(R"(
+local s = ...
+return string.startswith(s, "a"), string.endswith(s, "a", "b"), string.contains(s, "a")
+)"),
+        R"(
+GETVARARGS R0 1
+FASTCALL2K 135 R0 K0 L0 ['a']
+MOVE R2 R0
+LOADK R3 K0 ['a']
+GETIMPORT R1 3 [string.startswith]
+CALL R1 2 1
+L0: LOADK R4 K0 ['a']
+LOADK R5 K4 ['b']
+FASTCALL3 136 R0 R4 R5 L1
+MOVE R3 R0
+GETIMPORT R2 6 [string.endswith]
+CALL R2 3 1
+L1: FASTCALL2K 137 R0 K0 L2 ['a']
+MOVE R4 R0
+LOADK R5 K0 ['a']
+GETIMPORT R3 8 [string.contains]
+CALL R3 2 -1
+L2: RETURN R1 -1
+)"
+    );
+}
+
+TEST_CASE("StringMethodsOnProvenStringsCompileAsFunctions")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    // each pair compiles to exactly the same bytecode: an import and a fastcall (or a call), no NAMECALL
+    const std::pair<const char*, const char*> kSameAsFunctionForm[] = {
+        // a literal
+        {R"(return ("abc"):startswith("a"))", R"(return string.startswith("abc", "a"))"},
+        // an unwritten local initialized with one
+        {R"(local s = "abc" return s:upper())", R"(local s = "abc" return string.upper(s))"},
+        // the result of a string function, and a chain of them
+        {R"(local s = string.rep("a", 3) return s:sub(1, 2))", R"(local s = string.rep("a", 3) return string.sub(s, 1, 2))"},
+        {R"(local s = tostring(...) return s:lower():upper())", R"(local s = tostring(...) return string.upper(string.lower(s)))"},
+        // a concatenation of proven strings and numbers
+        {R"(local s = "a" .. 1 return s:len())", R"(local s = "a" .. 1 return string.len(s))"},
+        // a `type(x) == "string"` branch and assert
+        {R"(local s = ... if type(s) == "string" then return s:len() end return 0)",
+         R"(local s = ... if type(s) == "string" then return string.len(s) end return 0)"},
+        {R"(local s = ... assert(type(s) == "string") return s:find("x"))", R"(local s = ... assert(type(s) == "string") return string.find(s, "x"))"},
+        // a function that isn't a builtin is still called directly
+        {R"(local s = "a" return s:format())", R"(local s = "a" return string.format(s))"},
+    };
+
+    for (const auto& [method, function] : kSameAsFunctionForm)
+        CHECK_MESSAGE(compileFunction0(method) == compileFunction0(function), method);
+
+    // these stay method calls: an unproven receiver, a written local, a branch that writes the local, a name the string
+    // library doesn't have, and a `string` global the module assigns
+    const char* const kStillMethodCalls[] = {
+        R"(local s = ... return s:upper())",
+        R"(local s = "a" s = ... return s:upper())",
+        R"(local s = ... if type(s) == "string" then s = {} return s:upper() end return 0)",
+        R"(return ("abc"):fo())",
+        R"(string = nil return ("abc"):upper())",
+    };
+
+    for (const char* source : kStillMethodCalls)
+        CHECK_MESSAGE(compileFunction0(source).find("NAMECALL") != std::string::npos, source);
+}
+
+TEST_CASE("StringMethodsOnTrustedStringAnnotations")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    const char* source = R"(
+local function f(s: string)
+    return s:startswith("a")
+end
+return f
+)";
+
+    // without trust, a `string` annotation proves nothing
+    CHECK(compileFunction(source, 0).find("NAMECALL") != std::string::npos);
+
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+    CHECK(compileFunction(source, 0).find("NAMECALL") != std::string::npos);
+    CHECK(compileFunction(("--!trust" + std::string(source)).c_str(), 0).find("NAMECALL") == std::string::npos);
+}
+
+TEST_CASE("StringMethodsOnUnprovenReceiversTryTheBuiltin")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    // each builtin is tried with the receiver's register, and falls back to the method call for anything that isn't a
+    // string; `upper` isn't a builtin, so it stays a plain method call
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(s, p)
+    return s:startswith("a"), s:sub(1, 2), s:endswith(p), s:len(), s:upper()
+end
+return f
+)",
+                   0
+               ),
+        R"(
+FASTCALL2K 135 R0 K0 L0 ['a']
+LOADK R4 K0 ['a']
+NAMECALL R2 R0 K1 ['startswith']
+CALL R2 2 1
+L0: LOADN R5 1
+LOADN R6 2
+FASTCALL3 45 R0 R5 R6 L1
+NAMECALL R3 R0 K2 ['sub']
+CALL R3 3 1
+L1: FASTCALL2 136 R0 R1 L2
+MOVE R6 R1
+NAMECALL R4 R0 K3 ['endswith']
+CALL R4 2 1
+L2: FASTCALL1 43 R0 L3
+NAMECALL R5 R0 K4 ['len']
+CALL R5 1 1
+L3: NAMECALL R6 R0 K5 ['upper']
+CALL R6 1 -1
+RETURN R2 -1
+)"
+    );
+}
+
+TEST_CASE("StringMethodsStayMethodCallsWithTheFlagOff")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, false};
+
+    CHECK(compileFunction0(R"(return ("abc"):upper())").find("NAMECALL") != std::string::npos);
 }
 
 TEST_CASE("BuiltinArity")

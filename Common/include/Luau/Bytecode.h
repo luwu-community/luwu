@@ -74,6 +74,7 @@
 //   Luwu Traits (rfcs/classes/traits.md): the shape flags varint in LBC_CONSTANT_CLASS_SHAPE (LBC_CLASSSHAPE_TRAIT,
 //   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, and NEWCLASSMEMBER's IMPLEMENTS form.
 
+
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
 // Version 2: (from bytecode version 4) Type information for arguments, upvalues, locals and some temporaries. Currently supported.
@@ -1023,6 +1024,11 @@ enum LuauBuiltinFunction
 
     // Luwu Classes (rfcs/classes): class.isinstance(value, class) -> boolean
     LBF_CLASS_ISINSTANCE,
+
+    // Luwu String Extensions (rfcs/string-extensions.md): string.startswith/endswith/contains(s, needle, ...) -> boolean
+    LBF_STRING_STARTSWITH,
+    LBF_STRING_ENDSWITH,
+    LBF_STRING_CONTAINS,
 };
 
 // Capture type, used in LOP_CAPTURE

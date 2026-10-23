@@ -28,6 +28,7 @@
 
 LUAU_FASTFLAGVARIABLE(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuauCIProto)
+LUAU_FASTFLAG(LuwuStringExtensions)
 
 // luauF functions implement FASTCALL instruction that performs a direct execution of some builtin functions from the VM
 // The rule of thumb is that FASTCALL functions can not call user code, yield, fail, or reallocate stack.
@@ -2538,6 +2539,58 @@ static int luauF_bufferisfrozen(lua_State* L, StkId res, TValue* arg0, int nresu
     return -1;
 }
 
+// Luwu String Extensions (rfcs/string-extensions.md): string.startswith, string.endswith and string.contains. A needle
+// that isn't a string (the library coerces numbers) falls back to the library function. So does the flag being off,
+// which leaves those functions nil.
+static int stringNeedleTest(
+    lua_State* L,
+    StkId res,
+    TValue* arg0,
+    int nresults,
+    StkId args,
+    int nparams,
+    bool (*test)(const char*, size_t, const char*, size_t)
+)
+{
+    if (!FFlag::LuwuStringExtensions || nparams < 2 || nresults > 1 || !ttisstring(arg0))
+        return -1;
+
+    for (int i = 0; i < nparams - 1; i++)
+    {
+        if (!ttisstring(args + i))
+            return -1;
+    }
+
+    const TString* s = tsvalue(arg0);
+    for (int i = 0; i < nparams - 1; i++)
+    {
+        const TString* needle = tsvalue(args + i);
+        if (test(getstr(s), s->len, getstr(needle), needle->len))
+        {
+            setbvalue(res, true);
+            return 1;
+        }
+    }
+
+    setbvalue(res, false);
+    return 1;
+}
+
+static int luauF_startswith(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    return stringNeedleTest(L, res, arg0, nresults, args, nparams, luaS_startswith);
+}
+
+static int luauF_endswith(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    return stringNeedleTest(L, res, arg0, nresults, args, nparams, luaS_endswith);
+}
+
+static int luauF_contains(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    return stringNeedleTest(L, res, arg0, nresults, args, nparams, luaS_contains);
+}
+
 static int luauF_missing(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
     return -1;
@@ -2806,6 +2859,10 @@ const luau_FastFunction luauF_table[256] = {
     luauF_bufferisfrozen,
 
     luauF_class_isinstance,
+
+    luauF_startswith,
+    luauF_endswith,
+    luauF_contains,
 
 // When adding builtins, add them above this line; what follows is 64 "dummy" entries with luauF_missing fallback.
 // This is important so that older versions of the runtime that don't support newer builtins automatically fall back via luauF_missing.
