@@ -23,6 +23,9 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
+LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTruthyFalsy)
 
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
@@ -492,6 +495,32 @@ TEST_CASE_FIXTURE(Fixture, "table_param_width_subtyping_1")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "table_function_fields_type_like_assigned_functions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableFunctionFields, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+    };
+
+    CheckResult result = check(R"(
+        local t = {
+            count = 0,
+            function add(self, n: number): number
+                return n + 1
+            end,
+            function name(): string return "t" end,
+        }
+        local a = t:add(1)
+        local b = t.name()
+        local c: number = t.name()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK_EQ("number", toString(requireType("a")));
+    CHECK_EQ("string", toString(requireType("b")));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_param_width_subtyping_2")
@@ -7919,6 +7948,135 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_dot_table_constructors")
 
     checkTypewriting(*this, before, "local t = .{x, y = y + 1}", after);
     checkTypewriting(*this, before, "local n = make.{x}", after);
+}
+
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "table_without_indexer_as_array_names_what_it_is")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    // `table.freeze({})` is typed `{}`: an empty table, not one "with named fields".
+    CheckResult result = check(R"(
+        local EMPTY = table.freeze({})
+        local arr: { any } = EMPTY
+        local map: { [string]: any } = EMPTY
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(
+        "Expected 'EMPTY' to be\n"
+        "    '{any}'\n"
+        "but was given\n"
+        "    '{  }'\n"
+        "\n"
+        "'EMPTY' is an empty table where array '{any}' is expected.\n"
+        "\n"
+        "Help (empty table type):\n"
+        "  - Nothing tells the type checker what 'EMPTY' will hold, so its type is '{}'\n"
+        "  - To fix this, annotate 'EMPTY' as '{any}' where it's declared",
+        toString(result.errors[0])
+    );
+    CHECK_EQ(
+        "Expected 'EMPTY' to be\n"
+        "    '{ [string]: any }'\n"
+        "but was given\n"
+        "    '{  }'\n"
+        "\n"
+        "'EMPTY' is an empty table where map '{ [string]: any }' is expected.\n"
+        "\n"
+        "Help (empty table type):\n"
+        "  - Nothing tells the type checker what 'EMPTY' will hold, so its type is '{}'\n"
+        "  - To fix this, annotate 'EMPTY' as '{ [string]: any }' where it's declared",
+        toString(result.errors[1])
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "array_of_unknown_is_not_similar_to_an_array")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    // The element type is the only part compared, and it differs: nothing about the two is similar.
+    CheckResult result = check(R"(
+        local grown = table.create(4)
+        local nums: { number } = grown
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Expected 'grown' to be\n"
+        "    '{number}'\n"
+        "but was given\n"
+        "    '{unknown}'\n"
+        "\n"
+        "Some properties are incompatible:\n"
+        "  • grown[i]: expected 'number', got 'unknown'\n"
+        "\n"
+        "Help (unknown element type):\n"
+        "  - Nothing tells the type checker what 'grown' holds, so its elements are 'unknown' ('table.create(n)' without a value does this)\n"
+        "  - To fix this, annotate 'grown' as '{number}' where it's declared",
+        toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "names_only_some_environments_have_say_so")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // Calling the result of `x or fallback`, where `x` is an error or `any`, reports nothing more: the union it
+    // gives has a `~(false?)` member that isn't callable.
+    CheckResult result = check(R"(
+        local begin = debug.profilebegin or function(_label: string) end
+        begin("frame")
+        local fromAny = (nil :: any) or function(_label: string) end
+        fromAny("frame")
+        local s = string.nosuch
+        local g = utf8.graphemes
+        warn("careful")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ(
+        "This environment doesn't support 'debug.profilebegin'.\n\n"
+        "Help (environment-specific API):\n"
+        "  - Some environments add 'profilebegin' to the 'debug' library; this one doesn't\n"
+        "  - To use it where it exists, read it through 'any': '(debug :: any).profilebegin'",
+        toString(result.errors[0])
+    );
+    CHECK_EQ("The 'string' library has no member 'nosuch'", toString(result.errors[1]));
+    CHECK_EQ(
+        "This environment doesn't support 'utf8.graphemes'.\n\n"
+        "Help (environment-specific API):\n"
+        "  - Some environments add 'graphemes' to the 'utf8' library; this one doesn't\n"
+        "  - To use it where it exists, read it through 'any': '(utf8 :: any).graphemes'",
+        toString(result.errors[2])
+    );
+    // `warn` is a global (Roblox, Lune and seal all have it), so it can be declared where it exists; that bullet needs
+    // `declare` statements.
+    CHECK(toString(result.errors[3]).find("This environment doesn't support the global 'warn'.") == 0);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "luau_only_class_classof_depends_on_the_file")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true},
+    };
+
+    fileResolver.source["game/a"] = "local cls = class.classof\n";
+    fileResolver.source["game/b"] = "local cls = class.classof\n";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+    configResolver.configFiles["game/b"].language = Language::Luwu;
+
+    CheckResult inLuau = getFrontend().check("game/a");
+    LUAU_REQUIRE_ERROR_COUNT(1, inLuau);
+    CHECK_EQ("'class.classof' is a Luau-only API and doesn't exist in Luwu; diagnostics for it may be limited.", toString(inLuau.errors[0]));
+
+    CheckResult inLuwu = getFrontend().check("game/b");
+    LUAU_REQUIRE_ERROR_COUNT(1, inLuwu);
+    CHECK_EQ("'class.classof' is a Luau-only API and doesn't exist in Luwu. Did you mean 'class.of'?", toString(inLuwu.errors[0]));
 }
 
 TEST_SUITE_END();

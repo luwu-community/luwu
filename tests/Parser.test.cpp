@@ -8968,6 +8968,31 @@ static AstExprLocal* calledWithLocal(AstStat* stat)
     return local;
 }
 
+// `and` before a binding was meant as `when`: one error on the `and`, and the binding is a `when` clause
+TEST_CASE_FIXTURE(Fixture, "and_before_a_condition_binding_is_read_as_when")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    ParseResult result = tryParse("if a == 1 and const alias = f() then\n    print(alias)\nend\n");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Use 'when' instead of 'and' to bind 'alias' in a condition");
+    CHECK_EQ(result.errors[0].getLocation(), Location(Position(0, 10), Position(0, 13)));
+
+    REQUIRE_EQ(result.root->body.size, 1);
+    AstStatIf* stat = result.root->body.data[0]->as<AstStatIf>();
+    REQUIRE(stat);
+    REQUIRE_EQ(stat->clauses.size, 2);
+    CHECK(stat->clauses.data[0].expr->is<AstExprBinary>());
+    REQUIRE(stat->clauses.data[1].declaration);
+    CHECK_EQ(stat->clauses.data[1].whenLocation, Location(Position(0, 10), Position(0, 13)));
+
+    // `local` and `while` too, and an `and` without a binding after it is still `and`
+    result = tryParse("while a and local n = f() do\n    print(n)\nend\n");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Use 'when' instead of 'and' to bind 'n' in a condition");
+    CHECK_EQ(tryParse("if a and const then end\nlocal x = a and const\n").errors.size(), 0);
+}
+
 TEST_CASE_FIXTURE(Fixture, "if_local_parses_a_when_chain")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};

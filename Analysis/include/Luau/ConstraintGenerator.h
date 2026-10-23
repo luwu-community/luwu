@@ -101,6 +101,33 @@ struct ConstraintGenerator
     // define the scope hierarchy.
     std::vector<std::pair<Location, ScopePtr>> scopes;
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): the `do` expressions being checked, innermost last. `outer` is the
+    // scope the expression is checked in; `gives` collects the type of each `give` in its block.
+    struct GiveContext
+    {
+        Scope* outer;
+        std::optional<TypeId> expectedType;
+        std::vector<TypeId> gives;
+    };
+    std::vector<GiveContext> giveContexts;
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): for `x or return`, keyed by its right operand, what holds when the
+    // expression completes: `x`'s truthiness refinement. A statement whose whole value (or a declaration's or
+    // assignment's value) is such an expression applies it to the code after it (applyOrLeaveRefinements).
+    DenseHashMap<const AstExpr*, RefinementId> orLeaveRefinements{nullptr};
+    void applyOrLeaveRefinements(const ScopePtr& scope, const AstArray<AstExpr*>& values);
+
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the comprehensions being checked, innermost last. The
+    // expected key and value types come from an annotation; the item's types are collected when there is none.
+    struct ComprehensionContext
+    {
+        std::optional<TypeId> expectedKey;
+        std::optional<TypeId> expectedValue;
+        std::optional<TypeId> keyType;
+        std::optional<TypeId> valueType;
+    };
+    std::vector<ComprehensionContext> comprehensionContexts;
+
     ModulePtr module;
     NotNull<BuiltinTypes> builtinTypes;
     const NotNull<TypeArena> arena;
@@ -422,9 +449,13 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatLocalFunction* function);
     ControlFlow visit(const ScopePtr& scope, AstStatFunction* function);
     ControlFlow visit(const ScopePtr& scope, AstStatReturn* ret);
+    ControlFlow visit(const ScopePtr& scope, AstStatGive* give);
+    ControlFlow visit(const ScopePtr& scope, AstStatComprehensionItem* item);
     ControlFlow visit(const ScopePtr& scope, AstStatAssign* assign);
     ControlFlow visit(const ScopePtr& scope, AstStatCompoundAssign* assign);
     ControlFlow visit(const ScopePtr& scope, AstStatIf* ifStatement);
+    ScopePtr ifClausesScope(const AstArray<AstIfClause>& clauses, AstNode* branch, const ScopePtr& parent);
+    RefinementId checkIfClauses(const ScopePtr& chainScope, const AstArray<AstIfClause>& clauses);
     ControlFlow visit(const ScopePtr& scope, AstStatTypeAlias* alias);
     ControlFlow visit(const ScopePtr& scope, AstStatTypeFunction* function);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareGlobal* declareGlobal);
@@ -493,6 +524,8 @@ private:
         std::optional<TypeId> expectedType
     );
     Inference check(const ScopePtr& scope, AstExprIfElse* ifElse, std::optional<TypeId> expectedType);
+    Inference check(const ScopePtr& scope, AstExprDo* doExpr, std::optional<TypeId> expectedType);
+    Inference check(const ScopePtr& scope, AstExprTableComprehension* comprehension, std::optional<TypeId> expectedType);
     Inference check(const ScopePtr& scope, AstExprTypeAssertion* typeAssert);
     Inference check(const ScopePtr& scope, AstExprInterpString* interpString);
     Inference check(const ScopePtr& scope, AstExprInstantiate* explicitTypeInstantiation);

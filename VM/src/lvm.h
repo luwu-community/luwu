@@ -33,6 +33,8 @@ LUAI_FUNC void luaV_getimport(lua_State* L, LuaTable* env, TValue* k, StkId res,
 LUAI_FUNC void luaV_prepareFORN(lua_State* L, StkId plimit, StkId pstep, StkId pinit);
 LUAI_FUNC void luaV_callTM(lua_State* L, int nparams, int res);
 LUAI_FUNC void luaV_tryfuncTM(lua_State* L, StkId func);
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): LOP_PRESIZETABLE's work, for the interpreter and native code
+LUAI_FUNC void luaV_presizetable(lua_State* L, LuaTable* t, const TValue* rb, int form);
 
 LUAI_FUNC void luau_execute(lua_State* L);
 LUAI_FUNC void luau_finishop(lua_State* L);

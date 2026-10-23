@@ -1045,6 +1045,23 @@ struct BytecodeGraphParser
                 addImmInput(node, static_cast<int32_t>(aux));
                 break;
 
+            case LOP_APPENDTABLE:
+                // Luwu Table Comprehensions (rfcs/table-comprehensions.md): reads the table and the value, and
+                // updates the count in C
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addVmRegInput(node, LUAU_INSN_C(insn));
+                addProducer(LUAU_INSN_C(insn), nodeOp);
+                break;
+
+            case LOP_PRESIZETABLE:
+                // Luwu Table Comprehensions (rfcs/table-comprehensions.md): writes no register. The registers above B that
+                // the iterator and range forms also read belong to the loop that follows, which reads them too.
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(LUAU_INSN_C(insn)));
+                break;
+
             case LOP_NEWOBJECT:
             {
                 // Luwu Classes (rfcs/classes): A is only written. What else is read and written depends on the

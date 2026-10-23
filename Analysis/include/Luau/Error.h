@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/Ast.h"
+#include "Luau/Config.h"
 #include "Luau/Helpifier.h"
 #include "Luau/Location.h"
 #include "Luau/NotNull.h"
@@ -181,6 +182,9 @@ struct UnknownProperty
 {
     TypeId table;
     Name key;
+    // Luwu: the language of the module the key is read in, for keys that exist in only one of the languages
+    // (`class.classof` is upstream's). Set when the error is reported, from the module's config.
+    Language language = Language::Luwu;
 
     bool operator==(const UnknownProperty& rhs) const;
 };

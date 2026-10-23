@@ -1,0 +1,41 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing named functions in table literals")
+
+local counter = {
+    count = 0,
+    function increment(self, by: number?)
+        self.count += by or 1
+        return self.count
+    end,
+    function name()
+        return debug.info(1, "n")
+    end;
+    function() return "listed" end,
+}
+
+assert(counter:increment() == 1)
+assert(counter:increment(2) == 3)
+assert(counter.count == 3)
+
+-- named after its key, like `name = function() end`
+assert(counter.name() == "name")
+assert(debug.info(counter.increment, "n") == "increment")
+
+-- an anonymous function is still a list item
+assert(counter[1]() == "listed")
+
+-- upvalues and recursion through the table
+local base = 10
+local m
+m = {
+    function add(x)
+        return x + base
+    end,
+    function fact(n)
+        return if n <= 1 then 1 else n * m.fact(n - 1)
+    end,
+}
+assert(m.add(5) == 15)
+assert(m.fact(5) == 120)
+
+return "OK"

@@ -414,6 +414,52 @@ struct GlobalNameCollector : public AstVisitor
     }
 };
 
+// Luwu: backported from upstream 0.734 (`LuauUdtfPopulateEnv`), unflagged here because it is a bug fix. A type function
+// refers to the other type functions in its block (itself included) as globals. This gives each such use the
+// function's type, so a call to one is typed rather than `*error-type*`, which would hide mistakes in what is done
+// with its result.
+struct TypeFunctionEnvGlobalBinder : AstVisitor
+{
+    NotNull<Scope> environmentScope;
+    NotNull<const DataFlowGraph> dfg;
+    // The type function whose body is being visited, and whether the visit is inside one of its `for ... in` headers.
+    AstName current;
+    bool inLoopHeader = false;
+
+    TypeFunctionEnvGlobalBinder(NotNull<Scope> environmentScope, NotNull<const DataFlowGraph> dfg)
+        : environmentScope(environmentScope)
+        , dfg(dfg)
+    {
+    }
+
+    bool visit(AstExprGlobal* global) override
+    {
+        // A type function used as its own loop's iterator (`for _, x in f(t) do`) keeps `*error-type*`. The loop waits on
+        // the call, the call on the function's type, and that type on the whole body, loop included, so binding it here
+        // leaves the solver stuck ("outstanding free or blocked type"). Upstream binds it and doesn't get stuck, but its
+        // loop variable ends up untyped all the same.
+        if (inLoopHeader && global->name == current)
+            return true;
+
+        if (auto ty = environmentScope->lookup(global->name))
+            environmentScope->lvalueTypes[dfg->getDef(global)] = *ty;
+
+        return true;
+    }
+
+    bool visit(AstStatForIn* forIn) override
+    {
+        bool wasInLoopHeader = inLoopHeader;
+        inLoopHeader = true;
+        for (AstExpr* value : forIn->values)
+            value->visit(this);
+        inLoopHeader = wasInLoopHeader;
+
+        forIn->body->visit(this);
+        return false;
+    }
+};
+
 } // namespace
 
 ConstraintGenerator::ConstraintGenerator(
@@ -2912,6 +2958,20 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
         }
     }
 
+    if (typeFunctionEnvScope)
+    {
+        TypeFunctionEnvGlobalBinder binder{NotNull{typeFunctionEnvScope.get()}, dfg};
+
+        for (AstStat* stat : block->body)
+        {
+            if (auto function = stat->as<AstStatTypeFunction>())
+            {
+                binder.current = function->name;
+                function->body->visit(&binder);
+            }
+        }
+    }
+
     // Finally, we need to include aliases from functions we might call
     for (TypeFunctionInstanceType* type : createdTypeFunctions)
     {
@@ -2985,9 +3045,14 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
         return ControlFlow::Continues;
     else if (auto r = stat->as<AstStatReturn>())
         return visit(scope, r);
+    else if (auto g = stat->as<AstStatGive>())
+        return visit(scope, g);
+    else if (auto item = stat->as<AstStatComprehensionItem>())
+        return visit(scope, item);
     else if (auto e = stat->as<AstStatExpr>())
     {
         checkPack(scope, e->expr);
+        applyOrLeaveRefinements(scope, AstArray<AstExpr*>{&e->expr, 1});
 
         if (auto call = e->expr->as<AstExprCall>(); call && doesCallError(call))
             return ControlFlow::Throws;
@@ -3100,6 +3165,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
     Checkpoint start = checkpoint(this);
     TypePackId rvaluePack = checkPack(scope, statLocal->values, expectedTypes).tp;
     Checkpoint end = checkpoint(this);
+    applyOrLeaveRefinements(scope, statLocal->values);
 
     std::vector<TypeId> deferredTypes;
     auto [head, tail] = flatten(rvaluePack);
@@ -3541,6 +3607,21 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatForIn* forI
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatWhile* while_)
 {
+    // Luwu If Local (rfcs/if-local.md): `while local x = f() when c do`, checked like an `if`'s chain
+    if (while_->clauses.size != 0)
+    {
+        ScopePtr chainScope = ifClausesScope(while_->clauses, while_->body, scope);
+        checkIfClauses(chainScope, while_->clauses);
+
+        ScopePtr whileScope = childScope(while_, chainScope);
+        visit(whileScope, while_->body);
+
+        chainScope->inheritAssignments(whileScope);
+        scope->inheritAssignments(chainScope);
+
+        return ControlFlow::None;
+    }
+
     if (FFlag::DebugLuauCFG)
     {
         check(scope, while_->condition);
@@ -3808,9 +3889,25 @@ static void bindFreeType(TypeId a, TypeId b)
         emplaceType<BoundType>(asMutable(b), a);
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): every value of a statement runs, so after a value that is `x or return`
+// (asOrLeave), `x` is truthy.
+void ConstraintGenerator::applyOrLeaveRefinements(const ScopePtr& scope, const AstArray<AstExpr*>& values)
+{
+    for (AstExpr* value : values)
+    {
+        AstExprBinary* orLeave = asOrLeave(value);
+        if (!orLeave)
+            continue;
+
+        if (RefinementId* refinement = orLeaveRefinements.find(orLeave->right); refinement && *refinement)
+            applyRefinements(scope, value->location, *refinement);
+    }
+}
+
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatAssign* assign)
 {
     TypePackId resultPack = checkPack(scope, assign->values).tp;
+    applyOrLeaveRefinements(scope, assign->values);
 
     std::vector<TypeId> valueTypes;
     valueTypes.reserve(assign->vars.size);
@@ -3855,12 +3952,71 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatCompoundAss
     return ControlFlow::None;
 }
 
+// Luwu If Local (rfcs/if-local.md): the scope a `when` chain's bindings and refinements live in. It spans the chain
+// and the branch it guards, so code in a later clause sees the bindings before it. The branch's own scope is a child.
+ScopePtr ConstraintGenerator::ifClausesScope(const AstArray<AstIfClause>& clauses, AstNode* branch, const ScopePtr& parent)
+{
+    LUAU_ASSERT(clauses.size != 0);
+    const AstIfClause& first = clauses.data[0];
+    AstNode* firstNode = first.declaration ? static_cast<AstNode*>(first.declaration) : first.expr;
+
+    ScopePtr scope = childScope(firstNode, parent);
+    Location location{firstNode->location, branch->location};
+    scope->location = location;
+    scopes.back().first = location;
+
+    return scope;
+}
+
+// Luwu If Local (rfcs/if-local.md): checks a `when` chain in `chainScope` (see ifClausesScope). A
+// binding is declared like a `local` and narrowed to truthy (an untested one only declared); a plain condition's
+// refinement applies to the clauses after it and to the branch. Returns what the else branch may assume the negation
+// of: for a chain of plain conditions and untested bindings, the conditions' conjunction (the same as `a and b`); for a
+// chain with a tested binding, nothing, since any of its clauses may be the one that failed.
+RefinementId ConstraintGenerator::checkIfClauses(const ScopePtr& chainScope, const AstArray<AstIfClause>& clauses)
+{
+    RefinementId conditions = nullptr;
+    bool binds = false;
+
+    for (const AstIfClause& clause : clauses)
+    {
+        if (clause.declaration)
+        {
+            visit(chainScope, clause.declaration);
+            if (!clause.tested)
+                continue;
+
+            binds = true;
+            if (const RefinementKey* key = dfg->getRefinementKey(clause.local))
+                applyRefinements(chainScope, clause.local->location, refinementArena.proposition(key, builtinTypes->truthyType));
+        }
+        else
+        {
+            InConditionalContext flipper{&typeContext};
+            RefinementId refinement = check(chainScope, clause.expr).refinement;
+            applyRefinements(chainScope, clause.expr->location, refinement);
+            conditions = conditions ? refinementArena.conjunction(conditions, refinement) : refinement;
+        }
+    }
+
+    return binds ? nullptr : conditions;
+}
+
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatIf* ifStatement)
 {
     if (FFlag::DebugLuauCFG)
     {
-        check(scope, ifStatement->condition, std::nullopt);
-        ScopePtr thenScope = childScope(ifStatement->thenbody, scope);
+        ScopePtr thenParent = scope;
+        if (ifStatement->clauses.size != 0)
+        {
+            thenParent = ifClausesScope(ifStatement->clauses, ifStatement->thenbody, scope);
+            checkIfClauses(thenParent, ifStatement->clauses);
+        }
+        else
+        {
+            check(scope, ifStatement->condition, std::nullopt);
+        }
+        ScopePtr thenScope = childScope(ifStatement->thenbody, thenParent);
         visit(thenScope, ifStatement->thenbody);
         if (ifStatement->elsebody)
         {
@@ -3871,14 +4027,27 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatIf* ifState
     }
     else
     {
-        RefinementId refinement = [&]()
-        {
-            InConditionalContext flipper{&typeContext};
-            return check(scope, ifStatement->condition, std::nullopt).refinement;
-        }();
+        ScopePtr thenScope;
+        ScopePtr chainScope;
+        RefinementId refinement = nullptr;
 
-        ScopePtr thenScope = childScope(ifStatement->thenbody, scope);
-        applyRefinements(thenScope, ifStatement->condition->location, refinement);
+        if (ifStatement->clauses.size != 0)
+        {
+            chainScope = ifClausesScope(ifStatement->clauses, ifStatement->thenbody, scope);
+            refinement = checkIfClauses(chainScope, ifStatement->clauses);
+            thenScope = childScope(ifStatement->thenbody, chainScope);
+        }
+        else
+        {
+            refinement = [&]()
+            {
+                InConditionalContext flipper{&typeContext};
+                return check(scope, ifStatement->condition, std::nullopt).refinement;
+            }();
+
+            thenScope = childScope(ifStatement->thenbody, scope);
+            applyRefinements(thenScope, ifStatement->condition->location, refinement);
+        }
 
         ScopePtr elseScope = childScope(ifStatement->elsebody ? ifStatement->elsebody : ifStatement, scope);
         applyRefinements(elseScope, ifStatement->elseLocation.value_or(ifStatement->condition->location), refinementArena.negation(refinement));
@@ -3891,7 +4060,13 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatIf* ifState
         if (thencf != ControlFlow::None && elsecf == ControlFlow::None)
             scope->inheritRefinements(elseScope);
         else if (thencf == ControlFlow::None && elsecf != ControlFlow::None)
+        {
+            // Luwu If Local (rfcs/if-local.md): every clause passed, so what the chain refined holds after the `if`
+            if (chainScope)
+                scope->inheritRefinements(chainScope);
+
             scope->inheritRefinements(thenScope);
+        }
 
         if (thencf == ControlFlow::None)
             scope->inheritAssignments(thenScope);
@@ -5556,6 +5731,10 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
         result = check(scope, binary, expectedType);
     else if (auto ifElse = expr->as<AstExprIfElse>())
         result = check(scope, ifElse, expectedType);
+    else if (auto doExpr = expr->as<AstExprDo>())
+        result = check(scope, doExpr, expectedType);
+    else if (auto comprehension = expr->as<AstExprTableComprehension>())
+        result = check(scope, comprehension, expectedType);
     else if (auto typeAssert = expr->as<AstExprTypeAssertion>())
         result = check(scope, typeAssert);
     else if (auto interpString = expr->as<AstExprInterpString>())
@@ -5991,22 +6170,206 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprIfElse* ifEls
 {
     InConditionalContext inContext(&typeContext, TypeContext::Default);
 
-    RefinementId refinement = [&]()
-    {
-        InConditionalContext flipper{&typeContext};
-        ScopePtr condScope = childScope(ifElse->condition, scope);
-        return check(condScope, ifElse->condition).refinement;
-    }();
+    ScopePtr thenScope;
+    RefinementId refinement = nullptr;
 
-    ScopePtr thenScope = childScope(ifElse->trueExpr, scope);
-    applyRefinements(thenScope, ifElse->trueExpr->location, refinement);
+    if (ifElse->clauses.size != 0)
+    {
+        ScopePtr chainScope = ifClausesScope(ifElse->clauses, ifElse->trueExpr, scope);
+        refinement = checkIfClauses(chainScope, ifElse->clauses);
+        thenScope = childScope(ifElse->trueExpr, chainScope);
+    }
+    else
+    {
+        refinement = [&]()
+        {
+            InConditionalContext flipper{&typeContext};
+            ScopePtr condScope = childScope(ifElse->condition, scope);
+            return check(condScope, ifElse->condition).refinement;
+        }();
+
+        thenScope = childScope(ifElse->trueExpr, scope);
+        applyRefinements(thenScope, ifElse->trueExpr->location, refinement);
+    }
+
     TypeId thenType = check(thenScope, ifElse->trueExpr, expectedType).ty;
 
     ScopePtr elseScope = childScope(ifElse->falseExpr, scope);
     applyRefinements(elseScope, ifElse->falseExpr->location, refinementArena.negation(refinement));
     TypeId elseType = check(elseScope, ifElse->falseExpr, expectedType).ty;
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): a `do` in a branch can assign, and the code after the expression reads
+    // the join of both branches (see DataFlowGraphBuilder::visitExpr(AstExprIfElse*))
+    scope->inheritAssignments(thenScope);
+    scope->inheritAssignments(elseScope);
+
     return Inference{makeUnion(scope, ifElse->location, thenType, elseType)};
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): a `do` expression's type is the union of what its `give`s give. One
+// that never gives (every path returns, breaks or continues) is `never`, so `x or do return nil` is `x` made truthy.
+Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprDo* doExpr, std::optional<TypeId> expectedType)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+
+    ScopePtr bodyScope = childScope(doExpr->body, scope);
+
+    giveContexts.push_back({scope.get(), expectedType, {}});
+    visitBlockWithoutChildScope(bodyScope, doExpr->body);
+
+    std::vector<TypeId> gives = std::move(giveContexts.back().gives);
+    giveContexts.pop_back();
+
+    TypeId result = builtinTypes->neverType;
+    for (TypeId give : gives)
+        result = makeUnion(scope, doExpr->location, result, give);
+
+    return Inference{result};
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `give` leaves its block like `return` does, so the statements after it
+// in the block don't see what it skipped. Code after the whole `do` expression does run after a `give`, though: the
+// assignments made on its way there are copied to the scope the expression is checked in, where the data flow graph
+// joins them (DataFlowGraphBuilder::visit(AstStatGive*)).
+ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatGive* give)
+{
+    if (giveContexts.empty())
+    {
+        // The parser only accepts `give` inside a `do` expression
+        check(scope, give->value);
+        return ControlFlow::None;
+    }
+
+    // Checking the value can push and pop nested contexts, so nothing holds a reference into giveContexts across it
+    std::optional<TypeId> expectedType = giveContexts.back().expectedType;
+    TypeId ty = check(scope, give->value, expectedType).ty;
+    giveContexts.back().gives.push_back(ty);
+
+    Scope* outer = giveContexts.back().outer;
+    for (Scope* path = scope.get(); path && path != outer; path = path->parent.get())
+    {
+        for (const auto& [def, assigned] : path->lvalueTypes)
+            outer->lvalueTypes[def] = assigned;
+    }
+
+    return ControlFlow::Returns;
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the table's indexer. An annotation decides it when there is
+// one (`local xs: {string} = { for ... }`), so the item is checked against it the way a table literal's items are;
+// otherwise it is inferred from the item. Either way a nil value adds nothing, so the value type excludes nil:
+// `{ for ... do maybe(x) }` is `{X}`.
+Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTableComprehension* comprehension, std::optional<TypeId> expectedType)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+
+    bool isMap = comprehension->item->key != nullptr;
+
+    // The expected indexer, from an expected table type or a table member of an expected union (`{T}?`)
+    std::optional<TableIndexer> expectedIndexer;
+    if (expectedType)
+    {
+        auto tableIndexer = [](TypeId ty) -> std::optional<TableIndexer>
+        {
+            if (const TableType* ttv = get<TableType>(follow(ty)); ttv && ttv->indexer)
+                return ttv->indexer;
+            return std::nullopt;
+        };
+
+        expectedIndexer = tableIndexer(*expectedType);
+
+        if (const UnionType* ut = get<UnionType>(follow(*expectedType)); ut && !expectedIndexer)
+        {
+            for (TypeId option : ut)
+            {
+                expectedIndexer = tableIndexer(option);
+                if (expectedIndexer)
+                    break;
+            }
+        }
+    }
+
+    ComprehensionContext context;
+    if (expectedIndexer)
+    {
+        context.expectedKey = expectedIndexer->indexType;
+        context.expectedValue = expectedIndexer->indexResultType;
+    }
+
+    comprehensionContexts.push_back(context);
+
+    ScopePtr loopScope = childScope(comprehension, scope);
+    visit(loopScope, comprehension->loop);
+
+    ComprehensionContext checked = comprehensionContexts.back();
+    comprehensionContexts.pop_back();
+
+    TypeId keyType = builtinTypes->numberType;
+    TypeId valueType = builtinTypes->neverType;
+
+    if (expectedIndexer)
+    {
+        keyType = expectedIndexer->indexType;
+        valueType = expectedIndexer->indexResultType;
+    }
+    else
+    {
+        auto withoutNil = [&](TypeId ty, const Location& location)
+        {
+            TypeId refined = createTypeFunctionInstance(builtinTypes->typeFunctions->refineFunc, {ty, builtinTypes->notNilType}, {}, scope, location);
+            addConstraint(scope, location, ReduceConstraint{refined});
+            return refined;
+        };
+
+        if (isMap && checked.keyType)
+            keyType = withoutNil(*checked.keyType, comprehension->item->key->location);
+
+        if (checked.valueType)
+            valueType = withoutNil(*checked.valueType, comprehension->item->value->location);
+
+        // `[k] ..= v` stores the first value as is and strings after that
+        if (comprehension->item->accumulate == AstExprBinary::Concat)
+            valueType = makeUnion(scope, comprehension->item->value->location, valueType, builtinTypes->stringType);
+    }
+
+    TypeId ty = arena->addType(TableType{TableState::Sealed, TypeLevel{}, scope.get()});
+    TableType* ttv = getMutable<TableType>(ty);
+    LUAU_ASSERT(ttv);
+
+    ttv->definitionModuleName = module->name;
+    ttv->definitionLocation = comprehension->location;
+    ttv->indexer = TableIndexer{keyType, valueType};
+
+    return Inference{ty};
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): checks the item against the expected element types, and
+// records its types for the table's indexer
+ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatComprehensionItem* item)
+{
+    if (comprehensionContexts.empty())
+    {
+        // The parser only makes items inside a comprehension
+        if (item->key)
+            check(scope, item->key);
+        check(scope, item->value);
+        return ControlFlow::None;
+    }
+
+    // Checking can push and pop nested contexts, so nothing holds a reference into comprehensionContexts across it
+    std::optional<TypeId> expectedKey = comprehensionContexts.back().expectedKey;
+    std::optional<TypeId> expectedValue = comprehensionContexts.back().expectedValue;
+
+    std::optional<TypeId> keyType;
+    if (item->key)
+        keyType = check(scope, item->key, expectedKey).ty;
+
+    TypeId valueType = check(scope, item->value, expectedValue).ty;
+
+    comprehensionContexts.back().keyType = keyType;
+    comprehensionContexts.back().valueType = valueType;
+
+    return ControlFlow::None;
 }
 
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTypeAssertion* typeAssert)
@@ -6115,6 +6478,17 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         ScopePtr rightScope = childScope(right, scope);
         applyRefinements(rightScope, right->location, refinementArena.negation(leftRefinement));
         auto [rightType, rightRefinement] = check(rightScope, right, expectedType);
+
+        // Luwu Do Expressions (rfcs/do-expressions.md): `x or return` only has a value when `x` is truthy
+        AstExpr* leaveOperand = right;
+        while (AstExprGroup* group = leaveOperand->as<AstExprGroup>())
+            leaveOperand = group->expr;
+
+        if (AstExprDo* leave = leaveOperand->as<AstExprDo>(); leave && leave->alwaysLeaves())
+        {
+            orLeaveRefinements[right] = leftRefinement;
+            return {leftType, rightType, leftRefinement};
+        }
 
         return {leftType, rightType, refinementArena.disjunction(leftRefinement, rightRefinement)};
     }

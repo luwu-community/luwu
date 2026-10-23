@@ -120,8 +120,8 @@ struct Difference
         NothingReturned,
         // An argument passed to a function that has no parameter to take it.
         ExtraPassed,
-        // A record (named properties, no indexer) where a map is expected: Luau doesn't treat one
-        // as the other even when every property would fit.
+        // A record (named properties, no indexer) or an empty table, where an array or a map is expected: Luau doesn't
+        // treat one as the other even when every property would fit.
         NotAMap,
         // `sub` is an array of values that fit `super` (`{T}` where `T` is expected).
         ArrayOfExpected,
@@ -158,6 +158,10 @@ struct Difference
     // site is the table the property is missing from.
     std::optional<PropertySite> givenSite;
     std::optional<PropertySite> expectedSite;
+    // For `NotAMap`: the expected table is an array (`{ T }`) rather than a map, and the given table has no properties
+    // at all (`table.freeze({})` is typed `{}`, an empty table that can never hold anything).
+    bool expectsArray = false;
+    bool givenEmpty = false;
 };
 
 // The names paths hang off, and what the text rendered so far needs a legend for. Every piece of text
@@ -294,6 +298,12 @@ std::string becauseHeader();
 // Two tables whose properties don't fit.
 std::string propertiesHeader();
 std::string couldBeNilHeader(const std::string& subject);
+// The whole given value is a table with no indexer where an array or a map is expected (`NotAMap` at the root).
+std::string noIndexerSentence(const std::string& subject, const Difference& d);
+// For a table whose type says nothing about what it holds, `{}` or `{unknown}` (from `table.create(n)`): the type has
+// to be written down. `Help (...)` blocks, which go under the explanation.
+std::string emptyTableHelp(const std::string& variable, const std::string& type);
+std::string unknownElementsHelp(const std::string& variable, const std::string& type);
 std::string unionMembersHeader(bool noneFit, const std::string& unionName, const std::string& target);
 // Scalars that aren't the scalar expected: `'string' isn't a 'number'.`, `Neither ... nor ...`,
 // `None of ...`. `article` says whether the expected type takes an `a`.

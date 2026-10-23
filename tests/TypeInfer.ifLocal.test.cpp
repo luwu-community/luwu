@@ -1,0 +1,321 @@
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+#include "Fixture.h"
+#include "Typewriter.h"
+
+#include "doctest.h"
+
+#include "ScopedFlags.h"
+
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuauForceOldSolver)
+
+using namespace Luau;
+
+// Luwu If Local (rfcs/if-local.md)
+TEST_SUITE_BEGIN("TypeInferIfLocal");
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_binding_is_narrowed_to_truthy")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function maybe(): number?
+            return nil
+        end
+
+        if local n = maybe() then
+            local x: number = n
+        end
+
+        if local n: number? = maybe() when n > 3 then
+            local y: number = n + 1
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// `and` written for `when` is one parse error, and the binding works as it would after `when`
+TEST_CASE_FIXTURE(BuiltinsFixture, "and_before_a_condition_binding_has_no_cascade")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"luau(
+        --!strict
+        local function prefix_of(s: string): string?
+            if string.sub(s, 1, 1) == "@" and const alias = string.match(s, "(@[%w%-%._]+/)") then
+                return alias
+            end
+            return nil
+        end
+        print(prefix_of("@a/"))
+    )luau");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<SyntaxError>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_binding_type_comes_from_its_value")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function maybe(): number?
+            return nil
+        end
+
+        if local n = maybe() then
+            local wrong: string = n
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_annotation_is_checked_against_the_value")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function maybe(): number?
+            return nil
+        end
+
+        if local s: string? = maybe() then
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_plain_clauses_refine_the_clauses_after_them_and_the_branch")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function maybe(): number?
+            return nil
+        end
+
+        local function f(s: string?)
+            if local n = maybe() when s then
+                local a: string = s
+                local b: number = n
+            end
+
+            if s when #s > 0 when local n = maybe() then
+                local c: string = s
+                local d: number = n
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_binding_is_not_visible_in_the_else_branch")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        local function maybe(): number?
+            return nil
+        end
+
+        if local n = maybe() then
+        else
+            print(n)
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    UnknownSymbol* unknown = get<UnknownSymbol>(result.errors[0]);
+    REQUIRE(unknown);
+    CHECK_EQ(unknown->name, "n");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_expression_type")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function maybe(): number?
+            return nil
+        end
+
+        local r = if const n = maybe() then n * 2 else 0
+        local s = if const n = maybe() when n > 1 then tostring(n) else "none"
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("r")), "number");
+    CHECK_EQ(toString(requireType("s")), "string");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_chain_refinements_hold_after_the_if_when_the_else_branch_leaves")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function f(x: string?)
+            if x when #x > 0 then
+            else
+                return
+            end
+
+            local y: string = x
+        end
+
+        local function maybe(): number?
+            return nil
+        end
+
+        local function g(x: string?)
+            if local n = maybe() when x then
+                print(n)
+            else
+                return
+            end
+
+            local y: string = x
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_in_the_old_solver")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::DebugLuauForceOldSolver, true},
+    };
+
+    CheckResult result = check(R"(
+        local function maybe(): number?
+            return nil
+        end
+
+        if local n = maybe() when n then
+            print(n)
+        end
+
+        local r = if const n = maybe() then n else 0
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "loop_when_chains_narrow_their_bindings_and_conditions")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function maybe(): string?
+            return nil
+        end
+        local xs: { number? } = {}
+
+        while local line = maybe() when #line > 0 do
+            local s: string = line
+        end
+
+        for _, v in xs when v do
+            local n: number = v
+        end
+
+        for i = 1, 10 when local s = maybe() when #s > i do
+            local t: string = s
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "while_local_binding_is_not_visible_after_the_loop")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function maybe(): string?
+            return nil
+        end
+
+        while local line = maybe() do
+        end
+        local s: string = line
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "loop_when_chains_in_the_old_solver")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::DebugLuauForceOldSolver, true},
+    };
+
+    CheckResult result = check(R"(
+        local function maybe(): number?
+            return nil
+        end
+
+        while local n = maybe() when n do
+            print(n)
+        end
+
+        for _, x in {1} when x do
+            print(x)
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Code after the typed text. It uses nothing the typed text declares, so it stays clean whatever is typed above it.
+const char* const kTypewriterAfter = R"(
+local unrelated = 1
+print(unrelated + 1)
+)";
+
+const char* const kTypewriterBefore = R"(local function maybe(): number?
+    return nil
+end
+local nums = {1, 2, 3}
+)";
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_if_local")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    checkTypewriting(*this, kTypewriterBefore, "if local n = maybe() then\n    print(n + 1)\nend", kTypewriterAfter);
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "if local n = maybe() when n > 3 then\n    print(n)\nelseif const m = maybe() then\n    print(m)\nend",
+        kTypewriterAfter
+    );
+    checkTypewriting(*this, kTypewriterBefore, "if #nums > 1 when const n = maybe() then\n    print(n)\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "local s = if local n = maybe() then n else 0", kTypewriterAfter);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_loop_when_chains")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    checkTypewriting(*this, kTypewriterBefore, "for i = 1, 10 when i % 2 == 0 do\n    print(i)\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "for _, v in nums when v > 1 when local n = maybe() do\n    print(v + n)\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "while local n = maybe() when n > 1 do\n    print(n)\nend", kTypewriterAfter);
+}
+
+TEST_SUITE_END();
