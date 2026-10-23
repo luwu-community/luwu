@@ -655,6 +655,7 @@ TypeId TypeChecker2::checkForTypeFunctionInhabitance(TypeId instance, Location l
     TypeFunctionContext context{
         NotNull{module->internalTypes.get()}, builtinTypes, stack.back(), NotNull{&normalizer}, typeFunctionRuntime, ice, limits, subtyping
     };
+    context.reportedApplications = &reportedTypeFunctionApplications;
 
     ErrorVec errors = reduceTypeFunctions(instance, location, NotNull{&context}, true).errors;
     if (!isErrorSuppressing(location, instance))
@@ -763,24 +764,7 @@ TypePackId TypeChecker2::reconstructPack(AstArray<AstExpr*> exprs, TypeArena& ar
 
 Scope* TypeChecker2::findInnermostScope(Location location) const
 {
-    Scope* bestScope = module->getModuleScope().get();
-
-    bool didNarrow;
-    do
-    {
-        didNarrow = false;
-        for (auto scope : bestScope->children)
-        {
-            if (scope->location.encloses(location))
-            {
-                bestScope = scope.get();
-                didNarrow = true;
-                break;
-            }
-        }
-    } while (didNarrow && bestScope->children.size() > 0);
-
-    return bestScope;
+    return module->getModuleScope()->findNarrowestScopeContaining(location).get();
 }
 
 void TypeChecker2::visit(AstStat* stat)
@@ -3537,6 +3521,7 @@ void TypeChecker2::visitCall(AstExprCall* call)
         limits,
         call->location,
     };
+    resolver.reportedTypeFunctionApplications = &reportedTypeFunctionApplications;
     DenseHashSet<TypeId> uniqueTypes{nullptr};
     findUniqueTypes(NotNull{&uniqueTypes}, argExprs, NotNull{&module->astTypes});
 

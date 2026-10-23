@@ -628,10 +628,35 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
         globals.globalTypeFunctionScope->bindings[astName] = globals.globalScope->bindings[astName];
     }
 
-    LoadDefinitionFileResult typeFunctionLoadResult = frontend.loadDefinitionFile(
-        globals, globals.globalTypeFunctionScope, getTypeFunctionDefinitionSource(), "@luau", /* captureComments */ false, false
-    );
-    LUAU_ASSERT(typeFunctionLoadResult.success);
+    // Luwu: only the new solver runs type functions, and their typedefs use what only it understands (`read`)
+    if (frontend.getLuauSolverMode() == SolverMode::New)
+    {
+        LoadDefinitionFileResult typeFunctionLoadResult = frontend.loadDefinitionFile(
+            globals, globals.globalTypeFunctionScope, getTypeFunctionDefinitionSource(), "@luau", /* captureComments */ false, false
+        );
+        LUAU_ASSERT(typeFunctionLoadResult.success);
+
+        // Luwu: `t:is("table")` narrows `t` to the table kind of `type`. Every kind shares the one `is`, so it is still the
+        // magic function when `t` hasn't been narrowed yet.
+        std::optional<TypeFun> typeKinds = globals.globalTypeFunctionScope->lookupType("type");
+        const UnionType* kinds = typeKinds ? get<UnionType>(follow(typeKinds->type)) : nullptr;
+        std::optional<TypeId> sharedIs;
+        for (TypeId kind : kinds ? kinds->options : std::vector<TypeId>{})
+        {
+            TableType* kindTable = getMutable<TableType>(follow(kind));
+            auto is = kindTable ? kindTable->props.find("is") : TableType::Props::iterator{};
+            if (!kindTable || is == kindTable->props.end() || !is->second.readTy)
+                continue;
+
+            if (!sharedIs)
+            {
+                sharedIs = *is->second.readTy;
+                attachMagicFunction(*sharedIs, std::make_shared<MagicTypeFunctionIs>());
+            }
+
+            is->second = Property::readonly(*sharedIs);
+        }
+    }
 
     finalizeGlobalBindings(globals.globalTypeFunctionScope);
 }
@@ -2184,6 +2209,49 @@ void MagicClassInstanceCheck::refine(const MagicRefinementContext& context)
     TypeId discriminant = follow(*context.discriminantTypes[0]);
     LUAU_ASSERT(get<BlockedType>(discriminant));
     emplaceType<BoundType>(asMutable(discriminant), passed);
+}
+
+std::optional<WithPredicate<TypePackId>> MagicTypeFunctionIs::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicTypeFunctionIs::infer(const MagicFunctionCallContext&)
+{
+    // the declared signature types the call; this function only refines
+    return false;
+}
+
+void MagicTypeFunctionIs::refine(const MagicRefinementContext& context)
+{
+    // `t:is(tag)` refines its receiver; the tag has to be written out to say which kind it is
+    if (!context.callSite->self || context.discriminantTypes.empty() || !context.discriminantTypes[0] || context.callSite->args.size != 1)
+        return;
+
+    NotNull<BuiltinTypes> builtinTypes = context.solver->builtinTypes;
+    TypeId discriminant = follow(*context.discriminantTypes[0]);
+    LUAU_ASSERT(get<BlockedType>(discriminant));
+
+    const AstExprConstantString* tag = context.callSite->args.data[0]->as<AstExprConstantString>();
+    if (!tag)
+    {
+        emplaceType<BoundType>(asMutable(discriminant), builtinTypes->unknownType);
+        return;
+    }
+
+    // `{ read tag: "table" }`, what `t.tag == "table"` refines `t` by: it picks the kinds with that tag, and its negation in
+    // the else branch only rules out that tag, not a kind whose tag can be several (`Primitive`)
+    NotNull<TypeArena> arena = context.solver->arena;
+    TypeId tagTy = arena->addType(SingletonType{StringSingleton{std::string(tag->value.data, tag->value.size)}});
+
+    TableType tagged{TableState::Sealed, TypeLevel{}, context.scope.get()};
+    tagged.props["tag"] = Property::readonly(tagTy);
+    emplaceType<BoundType>(asMutable(discriminant), arena->addType(std::move(tagged)));
 }
 
 static bool checkRequirePath(TypeChecker& typechecker, AstExpr* expr)

@@ -117,6 +117,8 @@ struct TypeChecker2
     DenseHashSet<TypeId> seenTypeFunctionInstances{nullptr};
     // Luwu: see requiredProperties
     DenseHashMap<const TableType*, std::vector<std::string>> requiredPropertiesCache{nullptr};
+    // Luwu: see TypeFunctionContext::reportedApplications
+    std::set<std::string> reportedTypeFunctionApplications;
 
     Normalizer normalizer;
     Subtyping _subtyping;

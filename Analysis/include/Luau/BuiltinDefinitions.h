@@ -87,6 +87,19 @@ struct MagicClassInstanceCheck final : MagicFunction
     void refine(const MagicRefinementContext& context) override;
 };
 
+// Luwu: `t:is("table")` in a type function narrows `t` like `t.tag == "table"` (getTypeFunctionDefinitionSource)
+struct MagicTypeFunctionIs final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+    void refine(const MagicRefinementContext& context) override;
+};
+
 void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete = false);
 TypeId makeUnion(TypeArena& arena, std::vector<TypeId>&& types);
 TypeId makeIntersection(TypeArena& arena, std::vector<TypeId>&& types);

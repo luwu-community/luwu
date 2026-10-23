@@ -613,6 +613,20 @@ struct Obj
     TypeId ty;
 };
 
+// Luwu: the identity of a class or trait made by `types.newclass` or `types.newtrait`. `key` spells out its kind, name,
+// members, and the traits it implements or needs. Two generated types with equal keys are the same type. A generated
+// type used in another's members adds only its hash to that key, which keeps keys small.
+struct GeneratedNominalKey
+{
+    std::string key;
+    size_t hash = 0;
+
+    bool operator==(const GeneratedNominalKey& rhs) const
+    {
+        return hash == rhs.hash && key == rhs.key;
+    }
+};
+
 struct Klass
 {
     TypeId ty;
@@ -740,6 +754,10 @@ struct ExternType
     // `needs`), or of the traits a trait's `needs` list names. An object whose class implements a trait is a subtype
     // of it (isSubclass follows these), which is what lets a trait's function take `self` of every implementing class.
     std::vector<TypeId> implementedTraits;
+
+    // Luwu: set on classes and traits made by `types.newclass` or `types.newtrait` (see GeneratedNominalKey).
+    // isNominalSubclass compares it, because the type function making them runs again in every module that uses it.
+    std::shared_ptr<const GeneratedNominalKey> generatedKey;
 
     // Luwu Traits (rfcs/classes/traits.md): set on the object type of a trait. A trait is modeled as a class whose object
     // type implementing classes are subtypes of.

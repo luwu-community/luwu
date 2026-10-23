@@ -4,6 +4,7 @@
 #include "Luau/Common.h"
 #include "Luau/Constraint.h"
 #include "Luau/DenseHash.h"
+#include "Luau/DocRefs.h"
 #include "Luau/Location.h"
 #include "Luau/Scope.h"
 #include "Luau/Set.h"
@@ -236,7 +237,8 @@ struct StringifierState
         , result(result)
         , exhaustive(opts.exhaustive)
     {
-        ignoreSyntheticName = opts.ignoreSyntheticName;
+        // Luwu: expanding every alias means printing none of their names
+        ignoreSyntheticName = opts.ignoreSyntheticName || opts.expandAliases;
         lineBreaks = opts.useLineBreaks;
 
         for (const auto& [_, v] : opts.nameMap.types)
@@ -399,12 +401,12 @@ struct StringifierState
 
     void indent()
     {
-        indentation += 4;
+        indentation += opts.indentSize;
     }
 
     void dedent()
     {
-        indentation -= 4;
+        indentation -= opts.indentSize;
     }
 
     void newline()
@@ -425,6 +427,29 @@ private:
         emit(std::string(indentation, ' '));
     }
 };
+
+// Luwu: `line` cut to at most `width` characters (UTF-8 code points), ending in `…` when it was longer
+static std::string truncateDocLine(const std::string& line, size_t width)
+{
+    size_t chars = 0;
+    for (size_t i = 0; i < line.size(); ++i)
+    {
+        if ((static_cast<unsigned char>(line[i]) & 0xC0) == 0x80)
+            continue;
+        if (chars == width - 1)
+        {
+            // is there more than this last character?
+            size_t next = i + 1;
+            while (next < line.size() && (static_cast<unsigned char>(line[next]) & 0xC0) == 0x80)
+                ++next;
+            if (next >= line.size())
+                return line;
+            return line.substr(0, i) + "…";
+        }
+        ++chars;
+    }
+    return line;
+}
 
 // Structurally matches exactly `false | nil | none` (the canonical falsy union), independent of
 // member order, so it can be displayed as the single word "falsy" (and its negation as "truthy")
@@ -538,7 +563,7 @@ static bool willPrintAsBareName(TypeId ty, const StringifierState& state)
     if (state.suppressNameFor == followed)
         return false;
 
-    bool showName = !state.exhaustive || state.opts.hideTableAliasExpansions;
+    bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && !state.opts.expandAliases;
 
     auto hasBareName = [&](const auto* variant) -> bool
     {
@@ -927,7 +952,7 @@ struct TypeStringifier
 
     void operator()(TypeId ty, const FunctionType& ftv)
     {
-        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && state.suppressNameFor != ty;
+        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && !state.opts.expandAliases && state.suppressNameFor != ty;
 
         if (showName && ftv.name)
         {
@@ -1043,7 +1068,7 @@ struct TypeStringifier
             return stringify(*ttv.boundTo);
 
         // if hide table alias expansions are enabled and there is a name found for the table, use it
-        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && state.suppressNameFor != ty;
+        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && !state.opts.expandAliases && state.suppressNameFor != ty;
 
         if (showName)
         {
@@ -1175,6 +1200,26 @@ struct TypeStringifier
                 emitMoreProperties(ttv.props.size() - index, comma);
                 truncated = true;
                 return false;
+            }
+
+            // Luwu: the first line of the property's doc comment above it, the way the source reads. A property set from a
+            // declaration (`function str.trim()`) has no comments of its own; its value carries them.
+            bool showsComments = state.lineBreaks && state.opts.propertyCommentWidth > 0;
+            const TypeMetadataTable* comments = showsComments ? prop.metadata.get() : nullptr;
+            if (showsComments && !comments && prop.readTy)
+                comments = docMetadataOf(*prop.readTy);
+            if (comments)
+            {
+                for (const std::string& line : metadataDocLines(*comments))
+                {
+                    size_t first = line.find_first_not_of(" \t");
+                    if (first == std::string::npos)
+                        continue;
+                    state.emit("--- ");
+                    state.emit(truncateDocLine(line.substr(first), state.opts.propertyCommentWidth));
+                    state.newline();
+                    break;
+                }
             }
 
             stringify(name, prop);
@@ -1399,7 +1444,7 @@ struct TypeStringifier
     void operator()(TypeId ty, const MetatableType& mtv)
     {
         state.result.invalid = true;
-        if (!state.exhaustive && mtv.syntheticName && state.suppressNameFor != ty)
+        if (!state.exhaustive && !state.ignoreSyntheticName && mtv.syntheticName && state.suppressNameFor != ty)
         {
             state.recordAliasReference(*mtv.syntheticName, ty);
             state.emitAndRecordSpan(*mtv.syntheticName, ty);
@@ -1466,7 +1511,7 @@ struct TypeStringifier
 
     void operator()(TypeId ty, const UnionType& uv)
     {
-        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && state.suppressNameFor != ty;
+        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && !state.opts.expandAliases && state.suppressNameFor != ty;
 
         if (showName && uv.name)
         {
@@ -1686,7 +1731,7 @@ struct TypeStringifier
             }
         }
 
-        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && state.suppressNameFor != ty;
+        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && !state.opts.expandAliases && state.suppressNameFor != ty;
 
         if (showName && uv.name)
         {
@@ -2475,7 +2520,7 @@ ToStringResult toStringDetailed(TypeId ty, ToStringOptions& opts)
 
     TypeStringifier tvs{state};
 
-    if (!opts.exhaustive && !opts.alwaysExpandRootAlias)
+    if (!opts.exhaustive && !opts.alwaysExpandRootAlias && !opts.expandAliases)
     {
         if (state.ignoreSyntheticName)
         {
