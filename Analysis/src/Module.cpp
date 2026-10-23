@@ -507,6 +507,13 @@ void synthesizeExportReturn(NotNull<BuiltinTypes> builtinTypes, NotNull<Module> 
         if (TypeId* ty = module->astTypes.find(expr))
             return follow(*ty);
 
+        // Luwu: a call's type is its pack's first value (`export t = require(...)`). Upstream exports an error type.
+        if (TypePackId* pack = module->astTypePacks.find(expr))
+        {
+            if (std::optional<TypeId> first = Luau::first(*pack))
+                return follow(*first);
+        }
+
         return builtinTypes->errorType;
     };
 
@@ -522,6 +529,10 @@ void synthesizeExportReturn(NotNull<BuiltinTypes> builtinTypes, NotNull<Module> 
             for (size_t i = 0; i < localStat->vars.size; ++i)
             {
                 AstLocal* local = localStat->vars.data[i];
+                // Luwu Destructuring (rfcs/destructuring.md): an exported destructuring's hidden local isn't exported
+                if (!local->isExported)
+                    continue;
+
                 exportedLocals.insert(local);
 
                 if (localStat->vars.size != localStat->values.size || i >= localStat->values.size)

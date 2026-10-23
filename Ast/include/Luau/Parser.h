@@ -113,7 +113,7 @@ private:
     // block ::= chunk
     AstStatBlock* parseBlock();
 
-    AstStatBlock* parseBlockNoScope();
+    AstStatBlock* parseBlockNoScope(bool doExprBody = false);
 
     // stat ::=
     // varlist `=' explist |
@@ -132,6 +132,14 @@ private:
 
     // if exp then block {elseif exp then block} [else block] end
     AstStat* parseIf();
+
+    // Luwu If Local (rfcs/if-local.md)
+    AstExpr* parseIfCondition(AstArray<AstIfClause>& clauses, const char* head = "if");
+    AstArray<AstIfClause> parseLoopWhenChain(Location& whenLocation, bool inComprehension = false);
+    AstStatBlock* wrapInWhenGuard(const AstArray<AstIfClause>& when, const Location& whenLocation, AstStatBlock* body, AstStatIf*& guard);
+    void parseIfBindingClause(std::vector<AstIfClause>& chain, const std::optional<Location>& whenLocation);
+    bool ifBindingFollows();
+    bool whenFollows();
 
     // while exp do block end
     AstStat* parseWhile();
@@ -223,8 +231,55 @@ private:
         TempVector<CstAttrList*>* cstAttrLists = nullptr
     );
 
+    // Luwu Destructuring (rfcs/destructuring.md):
+    // destructuring ::= (`local' | `const') [Name] `.' `{' fieldlist `}' [`:' Type] `=' exp
+    // fieldlist ::= field {`,' field} [`,']
+    // field ::= Name [`.' `{' fieldlist `}'] [`:' Type] | Name `as' target
+    // target ::= Name [`.' `{' fieldlist `}'] [`:' Type] | `.' `{' fieldlist `}' [`:' Type]
+    // An annotation follows the binding it types; after a pattern, it types the value the pattern destructures.
+    struct DestructureTarget;
+
+    bool destructuringFollows();
+    bool destructurePatternFollows();
+    bool destructuringAssignmentFollows();
+    bool dotTableMissingBraceFollows();
+    bool destructuringAvailable();
+    AstStat* parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name = {});
+    void parseDestructurePattern(DestructureTarget& target);
+    struct DestructureField;
+    DestructureField parseDestructureField();
+    void reportDestructureKeyError();
+    void skipDestructureField();
+    AstDestructurePattern desugarDestructuring(
+        const DestructureTarget& target,
+        AstExpr* value,
+        const Location& location,
+        const Location& equalsLocation,
+        bool isConst,
+        std::vector<AstStat*>& out
+    );
+    AstDestructurePattern desugarDestructureFields(const DestructureTarget& target, AstLocal* local, bool isConst, std::vector<AstStat*>& out);
+
+    // Luwu Destructuring (rfcs/destructuring.md): patterns in a `for ... in` loop's bindings
+    bool loopPatternFollows();
+    AstStatBlock* prependLoopFields(const std::vector<AstStat*>& fields, AstStatBlock* body);
+    Binding parseLoopPattern(std::vector<std::optional<DestructureTarget>>& patterns);
+    void parseLoopBindings(
+        TempVector<Binding>& names,
+        std::vector<std::optional<DestructureTarget>>& patterns,
+        AstArray<Position>* commaPositions,
+        Position* initialCommaPosition
+    );
+    AstArray<AstLocal*> pushLoopLocals(
+        const TempVector<Binding>& names,
+        const std::vector<std::optional<DestructureTarget>>& patterns,
+        std::vector<AstStat*>& fields,
+        AstArray<AstDestructurePattern*>& destructure
+    );
+
     // return [explist]
     AstStat* parseReturn();
+    AstStatReturn* finishReturn(const Location& start, TempVector<AstExpr*>& list, TempVector<Position>& commaPositions);
 
     // type Name `=' Type
     AstStat* parseTypeAlias(
@@ -234,6 +289,8 @@ private:
         const Location& typeKeywordLocation,
         const AstArray<AstAttr*>& attributes = {nullptr, 0}
     );
+    std::optional<Name> parseModulePath();
+    AstStat* parseTypeDestructuring(const Location& start, bool exported, const Location& typeKeywordLocation);
 
     // `declared` parses the shape of a `declare class` (see AstStatDeclareClass) and returns the AstStatClass for it.
     // Luwu Traits (rfcs/classes/traits.md): `isTrait` parses `trait Name ... end`, which is a class with trait members.
@@ -302,6 +359,18 @@ private:
 
     // var [`+=' | `-=' | `*=' | `/=' | `%=' | `^=' | `..='] exp
     AstStat* parseCompoundAssignment(AstExpr* initial, AstExprBinary::Op op);
+
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    // var `<+' explist
+    AstStat* parsePush(AstExpr* target);
+    // `<-` syntax: whether the current `<` and the `-` right after it start a pop.
+    bool popFollows();
+    // `<-' exp, the operand parsed like a unary operator's
+    AstExpr* parsePop(unsigned int unaryPriority);
+    // Whether `<<` (or `< <`) opening explicit type arguments follows.
+    bool typeArgumentsFollow();
+    // `<-` syntax: `x <- y` as a statement, which reads like a push with an arrow
+    AstStat* parseMistakenPushArrow(AstExpr* target);
 
     std::tuple<AstLocal*, AstArray<AstLocal*>, AstArray<AstExpr*>> prepareFunctionArguments(const Location& start, bool hasself, const TempVector<Binding>& args);
 
@@ -412,10 +481,15 @@ private:
     static std::optional<AstExprBinary::Op> parseBinaryOp(const Lexeme& l);
     static std::optional<AstExprBinary::Op> parseCompoundOp(const Lexeme& l);
 
+public:
     struct BinaryOpPriority
     {
         unsigned char left, right;
     };
+
+private:
+    AstExpr* parseBinaryTail(AstExpr* expr, const Location& start, unsigned int limit);
+    AstStat* parseOrLeaveStatement(AstExpr* first, const Location& start);
 
     std::optional<AstExprUnary::Op> checkUnaryConfusables();
     std::optional<AstExprBinary::Op> checkBinaryConfusables(const BinaryOpPriority binaryPriority[], unsigned int limit);
@@ -455,8 +529,34 @@ private:
     // fieldsep ::= `,' | `;'
     AstExpr* parseTableConstructor();
 
+    // Luwu Destructuring (rfcs/destructuring.md):
+    // dottable ::= `.' `{' [dotfield {fieldsep dotfield} [fieldsep]] `}'
+    // dotfield ::= Name | Name `=' exp
+    AstExpr* parseDotTableConstructor();
+
     // TODO: Add grammar rules here?
     AstExpr* parseIfElseExpr();
+    // Luwu: a missing `then`/`else` in an if-else expression is reported on its keyword (see parseIfElseExpr)
+    enum class IfElseKeyword
+    {
+        Found,
+        Recovered,
+        Missing,
+    };
+    IfElseKeyword expectIfElseKeyword(Lexeme::Type type, const Location& keyword);
+    void noteStrayEnd(const char* construct, bool reported);
+    void reportLeftoverAtEndOfChunk();
+    AstExpr* missingIfElseArm();
+    // Luwu Do Expressions (rfcs/do-expressions.md)
+    AstExpr* parseDoExpr();
+    AstStat* parseGive();
+    bool orLeaveFollows();
+    bool orContinueFollows();
+    void resolveOrContinues();
+    AstExpr* parseOrLeave(const char* introducer = "or");
+    bool doExprBodyFollow(const Lexeme& l);
+    bool valueEnds(const Lexeme& l);
+    void checkDoExprKeywordAsName(const Name& name);
 
     // stringinterp ::= <INTERP_BEGIN> exp {<INTERP_MID> exp} <INTERP_END>
     AstExpr* parseInterpString();
@@ -509,6 +609,7 @@ private:
     bool startsConstDeclaration();
     bool startsTypeAliasDeclaration();
     bool nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName));
+    bool nextLineStartsUnpatternedStatement();
     bool statementReportedError();
     AstExpr* unfinishedIfElseExpr(
         const Location& start,
@@ -521,6 +622,7 @@ private:
     );
     bool expectAndConsumeFailWithLookahead(Lexeme::Type type, const char* context);
     void expectAndConsumeFail(Lexeme::Type type, const char* context);
+    void reportExpected(const Location& location, Lexeme::Type type, const char* context);
 
     struct MatchLexeme
     {
@@ -533,6 +635,8 @@ private:
         Lexeme::Type type;
         Position position;
     };
+
+    AstExpr* parseTableComprehension(const Location& start, const MatchLexeme& matchBrace);
 
     bool expectMatchAndConsume(char value, const MatchLexeme& begin, bool searchForMissing = false);
     void expectMatchAndConsumeFail(Lexeme::Type type, const MatchLexeme& begin, const char* extra = nullptr);
@@ -573,6 +677,8 @@ private:
     // Luwu: reports `feature` where it can't be used, in a Luau module or with its FFlag off (`enabled`). Returns
     // whether it can be used. The syntax is parsed either way, so the rest of the module still checks.
     bool checkLuwuFeature(const Location& location, const LuwuFeature& feature, bool enabled);
+    // Luwu: whether this is a Luau module whose classes follow upstream Luau's syntax (luauClassCompat)
+    bool luauClassModule() const;
     // Luwu: the statement for a Luwu-only one that can't be used, after reporting why (see checkLuwuFeature).
     AstStatError* reportLuwuFeatureStat(const Location& location, const AstArray<AstExpr*>& expressions, const LuwuFeature& feature);
     AstStatClass* getMatchingClass(AstExpr* expr);
@@ -599,6 +705,13 @@ private:
     {
         bool vararg;
         unsigned int loopDepth;
+        // Luwu Do Expressions (rfcs/do-expressions.md): how many `do` expressions enclose the current position in
+        // this function. Inside one, `give` and `continue` are hard keywords.
+        unsigned int doExprDepth = 0;
+        // Luwu Do Expressions (rfcs/do-expressions.md): this frame stands for a default value (a default argument,
+        // a field default, a primary constructor parameter's default or a trait argument), which runs inside a
+        // synthesized function or the callee's prologue. A `do` expression there can't `return`.
+        bool defaultValue = false;
 
         Function()
             : vararg(false)
@@ -658,6 +771,25 @@ private:
         }
     };
 
+    // Luwu Destructuring (rfcs/destructuring.md): a parsed `.{ ... }` pattern, see parseDestructuring.
+    struct DestructureTarget
+    {
+        // The local the value is bound to. Unnamed, the value goes to a hidden local.
+        std::optional<Name> name;
+        // Where the `.{ ... }` is, when the value is destructured further.
+        std::optional<Location> patternLocation;
+        // `: Type` after the binding, typing the local it binds.
+        AstType* annotation = nullptr;
+        bool closed = true;
+        std::vector<DestructureField> fields;
+    };
+    struct DestructureField
+    {
+        Name key;
+        std::optional<Location> asLocation;
+        DestructureTarget target;
+    };
+
     ParseOptions options;
 
     Lexer lexer;
@@ -673,11 +805,37 @@ private:
 
     unsigned int recursionCounter;
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): where the expression directly inside the innermost `(` being parsed
+    // starts, so a `do` expression can tell it is parenthesized.
+    std::optional<Position> parenthesizedExprStart;
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): the statement being parsed is directly in a `do` expression's block, not
+    // in a block nested in it. A `give` there ends the expression, so a `,` after its value belongs to the list around it.
+    bool doExprTopLevel = false;
+
+    // Luwu: `end`s found right after an if-else or `do` expression (see noteStrayEnd)
+    struct StrayEnd
+    {
+        Location location;
+        const char* construct;
+        bool reported;
+    };
+    std::vector<StrayEnd> strayEnds;
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): `x or continue` is the continue shorthand only in a module that never
+    // uses `continue` as a name. Name uses are counted as the module is parsed, and each shorthand keeps the slot it was
+    // stored in, so resolveOrContinues can turn it back into a variable read if the count isn't zero at the end.
+    size_t continueNameUses = 0;
+    std::vector<AstExpr**> orContinues;
+
     AstName nameSelf;
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;
+    // Luwu Destructuring (rfcs/destructuring.md): the hidden local an unnamed pattern binds its value to.
+    AstName nameDestructured;
     AstName nameNil;
+    AstName nameContinue;
 
     MatchLexeme endMismatchSuspect;
 
@@ -725,6 +883,8 @@ private:
     std::vector<Position> scratchPosition;
     std::vector<Position> scratchPosition2;
     std::vector<CstAttrList*> scratchCstAttrList;
+    std::vector<AstDestructureField> scratchDestructureField;
+    std::vector<AstTypeDestructureField> scratchTypeDestructureField;
     std::string scratchData;
 
     CstNodeMap cstNodeMap;
@@ -760,6 +920,10 @@ private:
         TempVector<CstAttrList*>* cstAttrLists;
     };
     std::optional<PendingFunctionAttributes> pendingFunctionAttributes;
+
+    // Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several
+    // statements. parseStat returns the first, and parseBlockNoScope appends these right after it.
+    std::vector<AstStat*> pendingStatements;
 };
 
 } // namespace Luau

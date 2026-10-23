@@ -19,7 +19,13 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuLiteralTypes)
+LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
@@ -712,7 +718,9 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     )");
 
     auto ac6 = autocomplete('1');
-    CHECK_EQ(ac6.entryMap.size(), 1);
+    // Luwu If Local (rfcs/if-local.md): a loop's header can also be followed by a `when` chain
+    CHECK_EQ(ac6.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
+    CHECK_EQ(ac6.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac6.entryMap.count("do"), 1);
     CHECK_EQ(ac6.context, AutocompleteContext::Keyword);
 
@@ -784,7 +792,9 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_in_middle_keywords")
     )");
 
     auto ac4 = autocomplete('1');
-    CHECK_EQ(ac4.entryMap.size(), 1);
+    // Luwu If Local (rfcs/if-local.md): a loop's header can also be followed by a `when` chain
+    CHECK_EQ(ac4.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
+    CHECK_EQ(ac4.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac4.entryMap.count("do"), 1);
     CHECK_EQ(ac4.context, AutocompleteContext::Keyword);
 
@@ -793,7 +803,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_in_middle_keywords")
     )");
 
     auto ac5 = autocomplete('1');
-    CHECK_EQ(ac5.entryMap.size(), 1);
+    CHECK_EQ(ac5.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
+    CHECK_EQ(ac5.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac5.entryMap.count("do"), 1);
     CHECK_EQ(ac5.context, AutocompleteContext::Keyword);
 
@@ -836,7 +847,9 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac2 = autocomplete('1');
-    CHECK_EQ(3, ac2.entryMap.size());
+    // Luwu If Local (rfcs/if-local.md): a loop's header can also be followed by a `when` chain
+    CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac2.entryMap.size());
+    CHECK_EQ(ac2.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac2.entryMap.count("do"), 1);
     CHECK_EQ(ac2.entryMap.count("and"), 1);
     CHECK_EQ(ac2.entryMap.count("or"), 1);
@@ -855,7 +868,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac4 = autocomplete('1');
-    CHECK_EQ(3, ac4.entryMap.size());
+    CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac4.entryMap.size());
+    CHECK_EQ(ac4.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac4.entryMap.count("do"), 1);
     CHECK_EQ(ac4.entryMap.count("and"), 1);
     CHECK_EQ(ac4.entryMap.count("or"), 1);
@@ -869,6 +883,130 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     CHECK_EQ(ac5.entryMap.count("do"), 0);
     CHECK_EQ(ac5.entryMap.count("true"), 1);
     CHECK_EQ(ac5.entryMap.count("false"), 1);
+}
+
+// Luwu If Local (rfcs/if-local.md)
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_local_keywords")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    check(R"(
+        if   @1
+    )");
+
+    auto ac1 = autocomplete('1');
+    CHECK_EQ(ac1.entryMap.count("local"), 1);
+    CHECK_EQ(ac1.entryMap.count("const"), 1);
+
+    check(R"(
+        if x t@1
+    )");
+
+    auto ac2 = autocomplete('1');
+    CHECK_EQ(ac2.entryMap.count("then"), 1);
+    CHECK_EQ(ac2.entryMap.count("when"), 1);
+
+    // the cursor after a later clause is past the condition too, not inside it
+    check(R"(
+        if local a = f() when a > 1 t@1
+    )");
+
+    auto ac3 = autocomplete('1');
+    CHECK_EQ(ac3.entryMap.count("then"), 1);
+    CHECK_EQ(ac3.entryMap.count("when"), 1);
+    CHECK_EQ(ac3.context, AutocompleteContext::Keyword);
+
+    // a binding is visible to the clauses after it
+    check(R"(
+        local function f() return 1 end
+        if local abc = f() when ab@1
+    )");
+
+    auto ac4 = autocomplete('1');
+    CHECK_EQ(ac4.entryMap.count("abc"), 1);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_loop_when_keywords")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuTableComprehensions, true},
+    };
+
+    struct Case
+    {
+        const char* source;
+        std::vector<const char*> expected;
+    };
+
+    const Case cases[] = {
+        {"for i = 1, 10 @1", {"do", "when"}},
+        {"for _, v in xs @1", {"do", "when"}},
+        {"for _, v in xs when v > 1 @1", {"do", "when"}},
+        {"for i = 1, 10 when local j = i @1", {"do", "when"}},
+        {"while   @1", {"local", "const"}},
+        {"while x @1", {"do", "when"}},
+        {"while local x = f() @1", {"do", "when"}},
+        {"while local x = f() when x > 1 @1", {"do", "when"}},
+        {"local t = { for _, v in xs @1 }", {"give", "when", "for"}},
+        {"local t = { for _, v in xs when v > 1 @1 }", {"give", "when", "for"}},
+    };
+
+    for (const Case& c : cases)
+    {
+        check(c.source);
+        AutocompleteResult ac = autocomplete('1');
+        INFO(std::string(c.source));
+
+        for (const char* keyword : c.expected)
+        {
+            INFO(std::string(keyword));
+            CHECK_EQ(ac.entryMap.count(keyword), 1);
+        }
+    }
+
+    // a binding in a loop's chain is visible to the clauses after it and to the body
+    check(R"(
+        local function f() return 1 end
+        while local abc = f() when ab@1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("abc"), 1);
+
+    check(R"(
+        local function f() return 1 end
+        for i = 1, 2 when local abc = f() do
+            print(ab@1)
+        end
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("abc"), 1);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md)
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_give_inside_do_expressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    check(R"(
+        local x = do
+            local a = 1
+            @1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("give"), 1);
+
+    check(R"(
+        local x = do
+            local f = function()
+                @1
+            end
+            give 1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("give"), 0);
+
+    check(R"(
+        local a = 1
+        @1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("give"), 0);
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_middle_keywords")
@@ -906,10 +1044,12 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_middle_keywords")
     )");
 
     auto ac3 = autocomplete('1');
-    CHECK_EQ(3, ac3.entryMap.size());
+    // Luwu If Local (rfcs/if-local.md): `when` can also follow a condition
+    CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac3.entryMap.size());
     CHECK_EQ(ac3.entryMap.count("then"), 1);
     CHECK_EQ(ac3.entryMap.count("and"), 1);
     CHECK_EQ(ac3.entryMap.count("or"), 1);
+    CHECK_EQ(ac3.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac3.context, AutocompleteContext::Keyword);
 
     check(R"(
@@ -3169,6 +3309,22 @@ type A<T = @1> = () -> T
     auto ac = autocomplete('1');
 
     CHECK(ac.entryMap.count("number"));
+    CHECK(ac.entryMap.count("string"));
+    CHECK_EQ(ac.context, AutocompleteContext::Type);
+}
+
+// Luwu literal types: `literal` is resolved by name rather than bound in a scope, so it is offered on its own
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_literal_in_types")
+{
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+
+    check(R"(
+local function f(name: @1) end
+    )");
+
+    auto ac = autocomplete('1');
+
+    CHECK(ac.entryMap.count("literal"));
     CHECK(ac.entryMap.count("string"));
     CHECK_EQ(ac.context, AutocompleteContext::Type);
 }
@@ -5998,5 +6154,155 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
     CHECK(ac.entryMap.count("Animator"));
 }
 
-// The value is a call, so its type is a pack (astTypePacks), not a single type
+TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_complete_the_properties_of_the_value")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local value = { alpha = 1, beta = "b", inner = { deep = true } }
+        local .{@1} = value
+        local .{alpha, @2} = value
+        local .{inner as .{@3}} = value
+        local .{@4}: { annotated: number } = value
+        local .{alpha as @5} = value
+        local .{@6}
+    )");
+
+    // An empty slot: the value's properties, and nothing else
+    AutocompleteResult ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("alpha"));
+    CHECK(ac.entryMap.count("beta"));
+    CHECK(ac.entryMap.count("inner"));
+    CHECK(!ac.entryMap.count("value"));
+    CHECK(!ac.entryMap.count("local"));
+
+    // Keys already written aren't offered again
+    ac = autocomplete('2');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(!ac.entryMap.count("alpha"));
+    CHECK(ac.entryMap.count("beta"));
+
+    // A nested pattern completes the field it destructures
+    ac = autocomplete('3');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("deep"));
+    CHECK(!ac.entryMap.count("alpha"));
+
+    // An annotated value completes from the annotation
+    ac = autocomplete('4');
+    CHECK(ac.entryMap.count("annotated"));
+
+    // The name after `as` declares a local
+    ac = autocomplete('5');
+    CHECK(ac.entryMap.empty());
+    CHECK_EQ(ac.context, AutocompleteContext::Unknown);
+
+    // With no value yet there is nothing to offer, and still no locals or keywords
+    ac = autocomplete('6');
+    CHECK(ac.entryMap.empty());
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_in_loop_bindings_complete_the_elements_properties")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local people = { { name = "a", age = 1, pos = { x = 1 } } }
+        for _, .{@1} in people do end
+        for _, p.{name, @2} in people do end
+        for _, .{pos as .{@3}} in people do end
+    )");
+
+    AutocompleteResult ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("name"));
+    CHECK(ac.entryMap.count("age"));
+    CHECK(!ac.entryMap.count("people"));
+
+    ac = autocomplete('2');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(!ac.entryMap.count("name"));
+    CHECK(ac.entryMap.count("age"));
+
+    ac = autocomplete('3');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(!ac.entryMap.count("name"));
+}
+
+TEST_CASE_FIXTURE(ACFixture, "type_destructuring_keys_complete_the_modules_exported_types")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["Module/A"] = R"(
+export type Point = { x: number }
+export type Size = number
+return {}
+    )";
+    getFrontend().check("Module/A");
+
+    fileResolver.source["Module/B"] = R"(
+local A = require(script.Parent.A)
+type .{} = A
+type .{Point, } = A
+type .{Point as } = A
+    )";
+
+    AutocompleteResult ac = autocomplete("Module/B", Position{2, 7});
+    CHECK_EQ(ac.context, AutocompleteContext::Type);
+    CHECK(ac.entryMap.count("Point"));
+    CHECK(ac.entryMap.count("Size"));
+    CHECK(!ac.entryMap.count("A"));
+
+    ac = autocomplete("Module/B", Position{3, 14});
+    CHECK(!ac.entryMap.count("Point"));
+    CHECK(ac.entryMap.count("Size"));
+
+    // a name after `as` declares a type
+    ac = autocomplete("Module/B", Position{4, 16});
+    CHECK_EQ(ac.context, AutocompleteContext::Unknown);
+    CHECK(ac.entryMap.empty());
+}
+
+TEST_CASE_FIXTURE(ACFixture, "destructuring_hidden_local_is_not_suggested")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local .{alpha} = { alpha = 1 }
+        local _ = @1
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("alpha"));
+    CHECK(!ac.entryMap.count(kDestructuredLocalName));
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a `.` alone where an expression goes starts a `.{...}` table, so nothing
+// is offered after it, not every global
+TEST_CASE_FIXTURE(ACFixture, "a_bare_dot_in_an_expression_completes_nothing")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local alpha = 1
+        local cat = .@1
+        local unrelated = 2
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.empty());
+
+    // inside the braces, names are offered again
+    check(R"(
+        local alpha = 1
+        local cat = .{@1}
+    )");
+
+    ac = autocomplete('1');
+    CHECK(ac.entryMap.count("alpha"));
+}
+
 TEST_SUITE_END();

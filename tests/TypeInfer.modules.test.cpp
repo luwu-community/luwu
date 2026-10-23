@@ -19,6 +19,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTINT(LuauSolverConstraintLimit)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
+LUAU_FASTFLAG(LuwuDestructuring)
 
 using namespace Luau;
 
@@ -1310,13 +1311,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "non_exported_class")
             end
         end
 
-        return {Point=Point}
+        -- A class returned in the table would export its type (every_common_way_to_export_a_class_brings_its_type)
+        return {make = function() return Point { x = 0, y = 0 } end}
     )";
 
     fileResolver.source["game/B"] = R"(
         local A = require(game.A)
 
-        local a: A.Point = A.Point { x=2, y=3 }
+        local a: A.Point = A.make()
     )";
 
     CheckResult result = getFrontend().check("game/B");
@@ -1357,6 +1359,299 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_module_types_say_whether_the_module_
     CHECK_EQ(toString(result.errors[2]), "Unknown type 'notAModule.Size': 'notAModule' isn't a required module");
     CHECK_EQ(toString(result.errors[3]), "Unknown type 'missing.Size'");
     CHECK_EQ(toString(result.errors[4]), "Unknown type 'Nowhere'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_alias_a_modules_exported_types")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["game/A"] = R"(
+        export type Point = { x: number }
+        export type Box<T> = { value: T }
+        export type Pair<K, V = string> = { key: K, value: V }
+        return {}
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local A = require(game.A)
+        type .{Point, Box as Crate, Pair} = A
+        local p: Point = { x = 1 }
+        local b: Crate<number> = { value = 1 }
+        local s: Crate<string> = { value = 1 }
+        local pair: Pair<number> = { key = 1, value = "v" }
+        export type .{Point as Exported, Box} = A
+        return {}
+    )";
+
+    CheckResult aResult = getFrontend().check("game/A");
+    LUAU_REQUIRE_NO_ERRORS(aResult);
+
+    // A generic type keeps its generics, its defaults included; the one error is `Crate<string>` holding a number
+    CheckResult bResult = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, bResult);
+    CHECK_EQ(bResult.errors[0].location.begin.line, 6);
+
+    ModulePtr b = getFrontend().moduleResolver.getModule("game/B");
+    REQUIRE(b);
+    CHECK(b->exportedTypeBindings.count("Exported"));
+    REQUIRE(b->exportedTypeBindings.count("Box"));
+    CHECK_EQ(b->exportedTypeBindings["Box"].typeParams.size(), 1);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "types_through_a_destructured_require_are_not_named_after_its_hidden_local")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["game/A"] = R"(
+        export type Point = { x: number }
+        return { make = function(): Point return { x = 1 } end }
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local .{ make } = require(game.A)
+        local p = make()
+        return {}
+    )";
+
+    fileResolver.source["game/C"] = R"(
+        --!strict
+        local A = require(game.A)
+        local p = A.make()
+        return {}
+    )";
+
+    LUAU_REQUIRE_NO_ERRORS(getFrontend().check("game/B"));
+    LUAU_REQUIRE_NO_ERRORS(getFrontend().check("game/C"));
+
+    // the hidden local binding the module is no prefix anyone can write: `Point` isn't in scope by any other name
+    ToStringOptions opts;
+    opts.scope = getFrontend().moduleResolver.getModule("game/B")->getModuleScope();
+    CHECK_EQ("Point", toString(requireType("game/B", "p"), opts));
+
+    opts.scope = getFrontend().moduleResolver.getModule("game/C")->getModuleScope();
+    CHECK_EQ("A.Point", toString(requireType("game/C", "p"), opts));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "locals_bound_to_an_imported_class_bring_its_type")
+{
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    fileResolver.source["game/A"] = R"(
+        export class Point
+            x: number
+            y: number
+        end
+
+        export class Size
+            w: number
+        end
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local A = require(game.A)
+        local Point = A.Point
+        const .{Size as Dims} = require(game.A)
+        const mod.{Size} = require(game.A)
+        local p: Point = Point { x = 1, y = 2 }
+        local d: Dims = Dims { w = 1 }
+        local s: Size = mod.Size { w = 2 }
+        local wrong: Point = Dims { w = 3 }
+    )";
+
+    // `wrong` is the one error: the bound types are the classes', not `any`
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 9);
+
+    // A type the scope already declares under the name wins
+    fileResolver.source["game/C"] = R"(
+        --!strict
+        local A = require(game.A)
+        type Point = number
+        local Point = A.Point
+        local n: Point = 1
+    )";
+
+    result = getFrontend().check("game/C");
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// A class's type comes with its value however the module exports it and however it's imported
+TEST_CASE_FIXTURE(BuiltinsFixture, "every_common_way_to_export_a_class_brings_its_type")
+{
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    fileResolver.source["game/Keyword"] = R"(
+        export class Cat
+            name: string
+        end
+    )";
+    fileResolver.source["game/Table"] = R"(
+        class Cat
+            name: string
+        end
+        return { Cat = Cat, Kitty = Cat }
+    )";
+    fileResolver.source["game/DotTable"] = R"(
+        class Cat
+            name: string
+        end
+        return .{Cat}
+    )";
+    fileResolver.source["game/Hub"] = R"(
+        const animals = require(game.Keyword)
+        export const Cat = animals.Cat
+    )";
+    fileResolver.source["game/DestructuringHub"] = R"(
+        export const .{Cat} = require(game.Table)
+    )";
+    fileResolver.source["game/ImpliedConstHub"] = R"(
+        export .{Cat} = require(game.DotTable)
+    )";
+
+    for (const char* exporter : {"Keyword", "Table", "DotTable", "Hub", "DestructuringHub", "ImpliedConstHub"})
+    {
+        INFO(std::string(exporter));
+        fileResolver.source["game/Importer"] = format(
+            R"(
+            --!strict
+            const .{Cat} = require(game.%s)
+            const animals = require(game.%s)
+            const Inline = require(game.%s).Cat
+            local a: Cat = Cat { name = "a" }
+            local b: animals.Cat = animals.Cat { name = "b" }
+            local c: Inline = Inline { name = "c" }
+            local wrong: Cat = 5
+            )",
+            exporter,
+            exporter,
+            exporter
+        );
+        getFrontend().markDirty("game/Importer");
+
+        // `wrong` is the one error: the bound types are the class's, not `any`
+        CheckResult result = getFrontend().check("game/Importer");
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        CHECK_EQ(result.errors[0].location.begin.line, 8);
+    }
+
+    // A returned table's key names the type
+    fileResolver.source["game/Importer"] = R"(
+        --!strict
+        const animals = require(game.Table)
+        local k: animals.Kitty = animals.Kitty { name = "k" }
+    )";
+    getFrontend().markDirty("game/Importer");
+    CheckResult kitty = getFrontend().check("game/Importer");
+    LUAU_REQUIRE_NO_ERRORS(kitty);
+}
+
+// A module exported as a field (`hub.t`) keeps its types, however the hub exports it
+TEST_CASE_FIXTURE(BuiltinsFixture, "modules_exported_as_fields_keep_their_types")
+{
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    fileResolver.source["game/T"] = R"(
+        export type Age = number
+        export class Cat(age: Age) end
+    )";
+    fileResolver.source["game/Hub"] = R"(
+        export const t = require(game.T)
+    )";
+    fileResolver.source["game/AliasHub"] = R"(
+        const t_module = require(game.T)
+        export const t = t_module
+    )";
+    fileResolver.source["game/TableHub"] = R"(
+        const t = require(game.T)
+        return { t = t }
+    )";
+    // Two levels: `outer.inner.t`
+    fileResolver.source["game/Outer"] = R"(
+        export const inner = require(game.Hub)
+    )";
+
+    const std::vector<std::pair<std::string, std::string>> hubs = {
+        {"Hub", "hub.t"}, {"AliasHub", "hub.t"}, {"TableHub", "hub.t"}, {"Outer", "hub.inner.t"},
+    };
+    for (const auto& hubAndPath : hubs)
+    {
+        const std::string& path = hubAndPath.second;
+        INFO(hubAndPath.first);
+        fileResolver.source["game/Importer"] = format(
+            R"(
+            --!strict
+            const hub = require(game.%s)
+            const .{ Cat } = %s
+            const m = %s
+            type .{ Age } = %s
+            local c: Cat = Cat(3)
+            local d: Cat = %s.Cat(4)
+            local a: Age = 1
+            local e: m.Age = 2
+            local wrong: Age = "x"
+            )",
+            hubAndPath.first.c_str(),
+            path.c_str(),
+            path.c_str(),
+            path.c_str(),
+            path.c_str()
+        );
+        getFrontend().markDirty("game/Importer");
+
+        // `wrong` is the one error: the types are the module's, not `any`
+        CheckResult result = getFrontend().check("game/Importer");
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        CHECK_EQ(result.errors[0].location.begin.line, 10);
+    }
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_report_what_the_module_does_not_export")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["game/A"] = R"(
+        export type Box<T> = { value: T }
+        return {}
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local A = require(game.A)
+        type .{Missing, Box} = A
+        local b: Box = { value = 1 }
+    )";
+
+    getFrontend().check("game/A");
+    CheckResult result = getFrontend().check("game/B");
+
+    // `Missing` isn't exported, and `Box` still takes its type argument where it's used
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    UnknownSymbol* unknown = get<UnknownSymbol>(result.errors[0]);
+    REQUIRE(unknown);
+    CHECK_EQ(unknown->name, "A.Missing");
+    CHECK(get<IncorrectGenericParameterCount>(result.errors[1]));
 }
 
 TEST_SUITE_END();

@@ -38,6 +38,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
+LUAU_FASTFLAG(LuwuDestructuring)
 
 using namespace Luau;
 
@@ -12107,6 +12108,28 @@ end
     CHECK(outsideGuard.find("INIT") != std::string::npos);
 }
 
+TEST_CASE("ClassPodConstructionFromDotTable")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+
+    // rfcs/destructuring.md: `Color.{r, g, b}` is the call `Color{r = r, g = g, b = b}`, so a POD class constructs
+    // at the call site like the table form does
+    const char* source = R"(
+class Color
+    r: number
+    g: number
+    b: number
+end
+
+function make(r, g, b)
+    local c = Color .{r, g, b}
+    return c
+end
+)";
+
+    CHECK(compileFunction(source, 0, 1).find("FIELDS") != std::string::npos);
+}
+
 TEST_CASE("ClassPrimaryConstructorFieldsFormInsideAnotherClass")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
@@ -13936,6 +13959,28 @@ GETIMPORT R2 3 [table.freeze]
 MOVE R3 R1
 CALL R2 1 1
 RETURN R2 1
+)"
+    );
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): the names a pattern binds go into the export table, its hidden local doesn't
+TEST_CASE("ExportDestructuringStoresTheNamesItBinds")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuwuDestructuring, true}};
+
+    CHECK_EQ(
+        "\n" + compileFunction0("export const .{x, y} = ..."),
+        R"(
+GETVARARGS R0 1
+GETTABLEKS R1 R0 K0 ['x']
+NEWTABLE R2 0 0
+SETTABLEKS R1 R2 K0 ['x']
+GETTABLEKS R3 R0 K1 ['y']
+SETTABLEKS R3 R2 K1 ['y']
+GETIMPORT R4 4 [table.freeze]
+MOVE R5 R2
+CALL R4 1 1
+RETURN R4 1
 )"
     );
 }
