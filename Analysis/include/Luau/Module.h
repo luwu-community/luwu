@@ -9,6 +9,7 @@
 #include "Luau/Scope.h"
 #include "Luau/TypeArena.h"
 #include "Luau/DataFlowGraph.h"
+#include "Luau/DocRefs.h"
 
 #include <memory>
 #include <vector>
@@ -33,6 +34,21 @@ class AstType;
 class AstTypePack;
 
 /// Root of the AST of a parsed source file
+// Luwu: a comment as a type function sees it in a type's `comments` metadata (ConstraintGenerator::attachDeclarationComments
+// adds whether it's above the declaration or to its side).
+// `prefix` is what opens it (`--`, `---`, `--[[`, `--[==[`) and `message` the rest, trimmed, so a type function can
+// tell docs from other comments by its own conventions.
+struct SourceComment
+{
+    Location location;
+    std::string prefix;
+    std::string message;
+    // nothing but whitespace before it on its line
+    bool startsLine = false;
+};
+
+std::vector<SourceComment> readSourceComments(std::string_view source, const std::vector<Comment>& comments);
+
 struct SourceModule
 {
     ModuleName name; // Module identifier or a filename
@@ -51,6 +67,13 @@ struct SourceModule
 
     std::vector<HotComment> hotcomments;
     std::vector<Comment> commentLocations;
+    // Luwu: see SourceComment. Hot comments (`--!strict`) and broken ones are left out.
+    std::vector<SourceComment> comments;
+
+    // Luwu doc references: references and bindings in doc comments, and their syntax errors, which
+    // never stop the module from compiling
+    std::vector<DocComment> docComments;
+    std::vector<ParseError> docParseErrors;
 
     SourceModule()
         : allocator(new Allocator)
@@ -100,6 +123,9 @@ struct Module
     AstStatBlock* root = nullptr;
 
     std::vector<std::pair<Location, ScopePtr>> scopes; // never empty
+
+    // Luwu doc references: where each name in the doc comments' references is declared
+    std::vector<DocRefTarget> docRefTargets;
 
     DenseHashMap<const AstExpr*, TypeId> astTypes{nullptr};
     DenseHashMap<const AstExpr*, TypePackId> astTypePacks{nullptr};

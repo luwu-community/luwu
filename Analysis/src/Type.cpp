@@ -1507,6 +1507,19 @@ bool hasTag(const Property& prop, const std::string& tagName)
     return hasTag(prop.tags, tagName);
 }
 
+bool metadataHasTypes(const TypeMetadataTable& metadata)
+{
+    bool hasTypes = false;
+    forEachMetadataType(
+        metadata,
+        [&](TypeId)
+        {
+            hasTypes = true;
+        }
+    );
+    return hasTypes;
+}
+
 bool TypeFun::operator==(const TypeFun& rhs) const
 {
     return type == rhs.type && typeParams == rhs.typeParams && typePackParams == rhs.typePackParams;

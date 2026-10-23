@@ -180,6 +180,9 @@ std::optional<SourceCode> TestFileResolver::readSource(const ModuleName& name)
 
 std::optional<ModuleInfo> TestFileResolver::resolveModule(const ModuleInfo* context, AstExpr* expr, const TypeCheckLimits& limits)
 {
+    if (AstExprConstantString* path = expr->as<AstExprConstantString>(); path && resolveStringRequires)
+        return ModuleInfo{std::string(path->value.data, path->value.size)};
+
     if (AstExprGlobal* g = expr->as<AstExprGlobal>())
     {
         if (g->name == "game")
