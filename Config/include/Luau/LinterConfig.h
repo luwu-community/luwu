@@ -103,6 +103,8 @@ struct LintWarning
         Code_OrReturnComma = 70,           // Luwu: `f(x or return a, b)`, where `b` is the next argument, not a second return value
         Code_MisleadingIndentation = 71,   // Luwu: a `do` expression's block reaching lines indented like the code after it
 
+        Code_ManualStringHelper = 72,      // Luwu: `s:sub(1, #p) == p` and the like, which `string.startswith` and friends do
+
         Code__Count
     };
 
@@ -217,6 +219,7 @@ inline constexpr const char* kWarningNames[] = {
     "LuaGuard",
     "OrReturnComma",
     "MisleadingIndentation",
+    "ManualStringHelper",
 };
 // clang-format on
 
