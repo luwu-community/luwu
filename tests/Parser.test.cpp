@@ -29,10 +29,10 @@ LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
-LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -9118,6 +9118,41 @@ TEST_CASE_FIXTURE(Fixture, "if_const_still_reads_a_variable_named_const")
     }
 }
 
+TEST_CASE_FIXTURE(Fixture, "if_local_destructures_into_one_clause_per_name")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    AstStatBlock* block = parse(R"(
+        if const .{x, y} = p when x > y then
+        end
+    )");
+
+    AstStatIf* stat = block->body.data[0]->as<AstStatIf>();
+    REQUIRE(stat);
+    REQUIRE_EQ(stat->clauses.size, 4);
+
+    AstStatLocal* source = stat->clauses.data[0].declaration;
+    REQUIRE(source);
+    CHECK(source->destructure);
+    CHECK(source->keywordLocation);
+    CHECK_EQ(std::string(source->vars.data[0]->name.value), kDestructuredLocalName);
+
+    for (size_t i = 1; i < 3; ++i)
+    {
+        AstStatLocal* field = stat->clauses.data[i].declaration;
+        REQUIRE(field);
+        CHECK_EQ(field->destructuredFrom, source);
+        CHECK(field->vars.data[0]->isConst);
+        CHECK(!stat->clauses.data[i].whenLocation);
+    }
+
+    CHECK(!stat->clauses.data[3].declaration);
+    CHECK(stat->clauses.data[3].whenLocation);
+}
+
 TEST_CASE_FIXTURE(Fixture, "if_local_mistakes_get_one_error")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
@@ -9224,6 +9259,77 @@ TEST_CASE_FIXTURE(Fixture, "while_local_parses_a_when_chain")
     CHECK(!plain->luwuOnly);
 }
 
+TEST_CASE_FIXTURE(Fixture, "for_in_bindings_can_be_destructured")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    AstStatBlock* block = parse(R"(
+        for _, .{name, age as years} in people when years > 1 do
+            print(name)
+        end
+        for i, entry.{kind} in entries do
+            print(entry)
+        end
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatForIn* unnamed = block->body.data[0]->as<AstStatForIn>();
+    REQUIRE(unnamed);
+    CHECK(unnamed->luwuOnly);
+    REQUIRE_EQ(unnamed->destructure.size, 2);
+    CHECK(!unnamed->destructure.data[0]);
+    REQUIRE(unnamed->destructure.data[1]);
+    AstLocal* hidden = unnamed->vars.data[1];
+    CHECK_EQ(std::string(hidden->name.value), kDestructuredLocalName);
+    CHECK_EQ(unnamed->destructure.data[1]->local, hidden);
+
+    // the body starts with the fields, read from the loop variable, then the guard
+    REQUIRE_EQ(unnamed->body->body.size, 3);
+    AstStatLocal* name = unnamed->body->body.data[0]->as<AstStatLocal>();
+    AstStatLocal* years = unnamed->body->body.data[1]->as<AstStatLocal>();
+    REQUIRE(name);
+    REQUIRE(years);
+    CHECK(name->destructuredFromLoop);
+    CHECK(name->isDesugaredField());
+    CHECK_EQ(std::string(years->vars.data[0]->name.value), "years");
+    CHECK_EQ(name->values.data[0]->as<AstExprIndexName>()->expr->as<AstExprLocal>()->local, hidden);
+    REQUIRE(unnamed->whenGuard);
+    CHECK_EQ(unnamed->body->body.data[2], unnamed->whenGuard);
+    CHECK_EQ(unnamed->whenGuard->condition->as<AstExprBinary>()->left->as<AstExprLocal>()->local, years->vars.data[0]);
+    CHECK_EQ(calledWithLocal(unnamed->whenGuard->thenbody->body.data[0])->local, name->vars.data[0]);
+
+    AstStatForIn* named = block->body.data[1]->as<AstStatForIn>();
+    REQUIRE(named);
+    REQUIRE_EQ(named->vars.size, 2);
+    CHECK_EQ(std::string(named->vars.data[1]->name.value), "entry");
+    REQUIRE_EQ(named->body->body.size, 2);
+    CHECK_EQ(calledWithLocal(named->body->body.data[1])->local, named->vars.data[1]);
+}
+
+TEST_CASE_FIXTURE(Fixture, "loop_when_and_destructuring_mistakes_get_one_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuTableComprehensions, true},
+    };
+
+    matchOnlyIfLocalError(
+        *this,
+        "for .{x} = 1, 2 do end",
+        "A numeric 'for' loop's variable is a number; only 'for ... in' bindings can be destructured"
+    );
+    matchOnlyIfLocalError(
+        *this,
+        "local t = { for .{x} = 1, 2 give x }",
+        "A numeric 'for' clause's variable is a number; only 'for ... in' bindings can be destructured"
+    );
+}
+
 TEST_CASE_FIXTURE(Fixture, "loop_when_without_the_flag_says_how_to_enable_it")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, false};
@@ -9310,6 +9416,110 @@ TEST_CASE_FIXTURE(Fixture, "table_comprehension_needs_its_flag")
     matchParseError(
         "local a = { for _, v in xs give v }", "attempt to use disabled Luwu feature table comprehensions; enable via FFlag 'LuwuTableComprehensions'"
     );
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_and_pop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    AstStatBlock* block = parse(R"(
+        const t = {}
+        t <+ 1, f()
+        local x = <-t.items
+        local y = a<-b
+    )");
+
+    REQUIRE_EQ(block->body.size, 4);
+
+    // a const variable can be pushed to: the push changes the table, not the variable
+    AstStatPush* push = block->body.data[1]->as<AstStatPush>();
+    REQUIRE(push);
+    CHECK(push->luwuOnly);
+    CHECK(push->target->is<AstExprLocal>());
+    CHECK_EQ(push->opLocation, Location{{2, 10}, {2, 12}});
+    REQUIRE_EQ(push->values.size, 2);
+    CHECK(push->values.data[1]->is<AstExprCall>());
+
+    // pop binds like `#`: the whole field is the operand
+    AstStatLocal* popped = block->body.data[2]->as<AstStatLocal>();
+    REQUIRE(popped);
+    AstExprPop* pop = popped->values.data[0]->as<AstExprPop>();
+    REQUIRE(pop);
+    CHECK(pop->luwuOnly);
+    CHECK(pop->expr->is<AstExprIndexName>());
+
+    // between two operands, `<-` is still a comparison with a negation
+    AstStatLocal* compared = block->body.data[3]->as<AstStatLocal>();
+    REQUIRE(compared);
+    AstExprBinary* comparison = compared->values.data[0]->as<AstExprBinary>();
+    REQUIRE(comparison);
+    CHECK_EQ(comparison->op, AstExprBinary::CompareLt);
+    CHECK(comparison->right->is<AstExprUnary>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_pop_after_less_than_is_not_explicit_type_arguments")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = x < <-t
+        local b = f< <number>>()
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatLocal* compared = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(compared);
+    AstExprBinary* comparison = compared->values.data[0]->as<AstExprBinary>();
+    REQUIRE(comparison);
+    CHECK_EQ(comparison->op, AstExprBinary::CompareLt);
+    CHECK(comparison->right->is<AstExprPop>());
+
+    // `< <` with no `-` after it still opens type arguments
+    AstStatLocal* instantiated = block->body.data[1]->as<AstStatLocal>();
+    REQUIRE(instantiated);
+    AstExprCall* call = instantiated->values.data[0]->as<AstExprCall>();
+    REQUIRE(call);
+    CHECK(call->func->is<AstExprInstantiate>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "an_arrow_statement_suggests_push_or_pop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    matchParseError("x <- y", "Did you mean 'x <+ y' to push, or 'x = <-y' to pop? A pop's '<-' goes before its container", Location{{0, 0}, {0, 6}});
+    matchParseError("t.items <- y", "Did you mean '<+' to push, or '= <-' to pop? A pop's '<-' goes before its container");
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_target_must_be_a_variable_or_a_field")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    matchParseError("(t) <+ 1", "'<+' can only push to a variable or a field");
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_and_pop_need_their_flag")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, false};
+
+    matchParseError("t <+ 1", "attempt to use disabled Luwu feature push operator '<+'; enable via FFlag 'DebugLuwuPoperators'", Location{{0, 2}, {0, 4}});
+    matchParseError("local x = <-t", "attempt to use disabled Luwu feature pop operator '<-'; enable via FFlag 'DebugLuwuPoperators'", Location{{0, 10}, {0, 12}});
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_and_pop_are_errors_in_a_luau_module")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    ParseResult push = tryParse("t <+ 1", luau);
+    REQUIRE(!push.errors.empty());
+    CHECK_EQ(push.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: push operator '<+'");
+
+    ParseResult pop = tryParse("local x = <-t", luau);
+    REQUIRE(!pop.errors.empty());
+    CHECK_EQ(pop.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: pop operator '<-'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "table_function_fields")
@@ -10457,110 +10667,6 @@ local function c() end
 
     REQUIRE(1 == result.errors.size());
     CHECK_EQ("@nodiscard takes at most one string, the reason: '@[nodiscard(\"use the returned copy\")]'", result.errors[0].getMessage());
-}
-
-TEST_CASE_FIXTURE(Fixture, "push_and_pop")
-{
-    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
-
-    AstStatBlock* block = parse(R"(
-        const t = {}
-        t <+ 1, f()
-        local x = <-t.items
-        local y = a<-b
-    )");
-
-    REQUIRE_EQ(block->body.size, 4);
-
-    // a const variable can be pushed to: the push changes the table, not the variable
-    AstStatPush* push = block->body.data[1]->as<AstStatPush>();
-    REQUIRE(push);
-    CHECK(push->luwuOnly);
-    CHECK(push->target->is<AstExprLocal>());
-    CHECK_EQ(push->opLocation, Location{{2, 10}, {2, 12}});
-    REQUIRE_EQ(push->values.size, 2);
-    CHECK(push->values.data[1]->is<AstExprCall>());
-
-    // pop binds like `#`: the whole field is the operand
-    AstStatLocal* popped = block->body.data[2]->as<AstStatLocal>();
-    REQUIRE(popped);
-    AstExprPop* pop = popped->values.data[0]->as<AstExprPop>();
-    REQUIRE(pop);
-    CHECK(pop->luwuOnly);
-    CHECK(pop->expr->is<AstExprIndexName>());
-
-    // between two operands, `<-` is still a comparison with a negation
-    AstStatLocal* compared = block->body.data[3]->as<AstStatLocal>();
-    REQUIRE(compared);
-    AstExprBinary* comparison = compared->values.data[0]->as<AstExprBinary>();
-    REQUIRE(comparison);
-    CHECK_EQ(comparison->op, AstExprBinary::CompareLt);
-    CHECK(comparison->right->is<AstExprUnary>());
-}
-
-TEST_CASE_FIXTURE(Fixture, "a_pop_after_less_than_is_not_explicit_type_arguments")
-{
-    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
-
-    AstStatBlock* block = parse(R"(
-        local a = x < <-t
-        local b = f< <number>>()
-    )");
-
-    REQUIRE_EQ(block->body.size, 2);
-
-    AstStatLocal* compared = block->body.data[0]->as<AstStatLocal>();
-    REQUIRE(compared);
-    AstExprBinary* comparison = compared->values.data[0]->as<AstExprBinary>();
-    REQUIRE(comparison);
-    CHECK_EQ(comparison->op, AstExprBinary::CompareLt);
-    CHECK(comparison->right->is<AstExprPop>());
-
-    // `< <` with no `-` after it still opens type arguments
-    AstStatLocal* instantiated = block->body.data[1]->as<AstStatLocal>();
-    REQUIRE(instantiated);
-    AstExprCall* call = instantiated->values.data[0]->as<AstExprCall>();
-    REQUIRE(call);
-    CHECK(call->func->is<AstExprInstantiate>());
-}
-
-TEST_CASE_FIXTURE(Fixture, "an_arrow_statement_suggests_push_or_pop")
-{
-    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
-
-    matchParseError("x <- y", "Did you mean 'x <+ y' to push, or 'x = <-y' to pop? A pop's '<-' goes before its container", Location{{0, 0}, {0, 6}});
-    matchParseError("t.items <- y", "Did you mean '<+' to push, or '= <-' to pop? A pop's '<-' goes before its container");
-}
-
-TEST_CASE_FIXTURE(Fixture, "push_target_must_be_a_variable_or_a_field")
-{
-    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
-
-    matchParseError("(t) <+ 1", "'<+' can only push to a variable or a field");
-}
-
-TEST_CASE_FIXTURE(Fixture, "push_and_pop_need_their_flag")
-{
-    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, false};
-
-    matchParseError("t <+ 1", "attempt to use disabled Luwu feature push operator '<+'; enable via FFlag 'DebugLuwuPoperators'", Location{{0, 2}, {0, 4}});
-    matchParseError("local x = <-t", "attempt to use disabled Luwu feature pop operator '<-'; enable via FFlag 'DebugLuwuPoperators'", Location{{0, 10}, {0, 12}});
-}
-
-TEST_CASE_FIXTURE(Fixture, "push_and_pop_are_errors_in_a_luau_module")
-{
-    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
-
-    ParseOptions luau;
-    luau.language = Language::Luau;
-
-    ParseResult push = tryParse("t <+ 1", luau);
-    REQUIRE(!push.errors.empty());
-    CHECK_EQ(push.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: push operator '<+'");
-
-    ParseResult pop = tryParse("local x = <-t", luau);
-    REQUIRE(!pop.errors.empty());
-    CHECK_EQ(pop.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: pop operator '<-'");
 }
 
 // TODO unit tests for various parse errors.

@@ -10631,6 +10631,25 @@ TEST_CASE("StringMethodsOnProvenStringsCompileAsFunctions")
         CHECK_MESSAGE(compileFunction0(source).find("NAMECALL") != std::string::npos, source);
 }
 
+TEST_CASE("StringMethodsProvenByOrLeave")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+    ScopedFastFlag doExpressions{FFlag::LuwuDoExpr, true};
+
+    // `type(s) == "string" or return` proves `s` for the rest of the block, as a statement, a declaration's value or an
+    // assignment's value
+    const std::pair<const char*, const char*> kSameAsFunctionForm[] = {
+        {R"(local s = ... typeof(s) == "string" or return 0 return s:len())", R"(local s = ... typeof(s) == "string" or return 0 return string.len(s))"},
+        {R"(local s = ... local ok = type(s) == "string" or return 0 return s:upper())",
+         R"(local s = ... local ok = type(s) == "string" or return 0 return string.upper(s))"},
+        {R"(local s, ok = ... ok = type(s) == "string" or return 0 return s:upper())",
+         R"(local s, ok = ... ok = type(s) == "string" or return 0 return string.upper(s))"},
+    };
+
+    for (const auto& [method, function] : kSameAsFunctionForm)
+        CHECK_MESSAGE(compileFunction0(method) == compileFunction0(function), method);
+}
+
 TEST_CASE("StringMethodsOnTrustedStringAnnotations")
 {
     ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};

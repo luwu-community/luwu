@@ -4536,13 +4536,14 @@ void TypeChecker2::visitExprName(
 }
 
 // Luwu: with class compat, the `class` library's definitions have both languages' names (EmbeddedBuiltinDefinitions), and
-// each module sees only its own: upstream's `classof` in a Luau module, Luwu's `of`, `name` and `fields` in a Luwu module.
+// each module sees only its own: upstream's `classof` in a Luau module, Luwu's `of`, `name`, `fields` and `implements` in a
+// Luwu module.
 static bool isOtherLanguagesClassMember(Language language, std::string_view member)
 {
     if (language == Language::Luwu)
         return member == "classof";
 
-    return member == "of" || member == "name" || member == "fields";
+    return member == "of" || member == "name" || member == "fields" || member == "implements";
 }
 
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
@@ -8340,7 +8341,7 @@ static void collectIndexableNames(TypeId ty, std::vector<std::string>& names, in
         indexOf(*primitive->metatable);
     else if (const ExternType* extern_ = get<ExternType>(ty))
     {
-        for (const auto& [name, _] : extern_->props)
+        for (const auto& [name, _] : extern_->props())
             names.push_back(name);
         if (extern_->parent)
             collectIndexableNames(*extern_->parent, names, depth + 1);

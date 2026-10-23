@@ -4705,7 +4705,9 @@ private:
     {
         for (const AstIfClause& clause : clauses)
         {
-            if (clause.declaration)
+            // a destructuring clause's value is the destructured source, never a condition
+            bool plainBinding = clause.declaration && !clause.declaration->destructure && !clause.declaration->isDesugaredField();
+            if (plainBinding)
                 checkBinding(clause.local, clause.expr);
         }
     }
@@ -8091,7 +8093,7 @@ private:
         };
         static const std::unordered_set<std::string> kString = {
             "byte", "char", "find", "format", "gmatch", "gsub", "len", "lower", "match", "rep", "reverse", "sub", "upper", "split",
-            "pack", "packsize", "unpack",
+            "pack", "packsize", "unpack", "trim", "trimstart", "trimend", "startswith", "endswith", "contains", "replace",
         };
         static const std::unordered_set<std::string> kTable = {
             "clone", "concat", "create", "find", "pack", "unpack", "maxn", "getn", "isfrozen",
@@ -8263,8 +8265,8 @@ private:
 
     bool visit(AstStatLocal* node) override
     {
-        // A local without a value can't be `const`
-        bool candidate = !node->isConst && node->values.size > 0;
+        // A destructuring declaration desugars to several locals, and one without a value can't be `const`
+        bool candidate = !node->isConst && node->values.size > 0 && !node->destructure && !node->isDesugaredField();
         if (!candidate)
             return true;
 

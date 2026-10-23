@@ -248,6 +248,7 @@ private:
     bool dotTableMissingBraceFollows();
     bool destructuringAvailable();
     AstStat* parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name = {});
+    AstExpr* parseDestructuringDeclaration(const Location& start, DestructureTarget& target, Location& equalsLocation);
     void parseDestructurePattern(DestructureTarget& target);
     struct DestructureField;
     DestructureField parseDestructureField();
@@ -546,6 +547,16 @@ private:
     bool typeTestFollows();
     AstExpr* parseTypeTest(AstExpr* value, const Location& start);
     std::optional<AstExpr*> parseNothingValue();
+    AstExpr* parseTypeTestBindings(AstExpr* value, AstExpr* type, bool negated, const Location& start);
+    struct TypeTestBindings;
+    struct TypeTestBindingsFrame;
+    TypeTestBindingsFrame allowTypeTestBindings();
+    void appendConditionClauses(
+        std::vector<AstIfClause>& chain,
+        AstExpr* condition,
+        const std::optional<Location>& whenLocation,
+        TypeTestBindingsFrame outer
+    );
     bool matchExpressionFollows();
     AstExpr* parseMatchExpr(bool inStatement = false);
     AstExpr* parseMatchPattern(AstLocal* subject);
@@ -850,6 +861,26 @@ private:
     AstName nameImplements;
     AstName nameMatched;
     AstName nameNone;
+
+    // Luwu match expressions: the clauses a `.{}` after a type test (`x is Point.{x, y}`) adds to the condition it's
+    // in: a hidden local holding the tested value when it isn't a local already, the test, then one untested binding
+    // per name. `test` is the expression the condition must be for the bindings to apply.
+    struct TypeTestBindings
+    {
+        AstExpr* test = nullptr;
+        Location location;
+        std::vector<AstIfClause> clauses;
+    };
+    // Whether a type test here may bind (the condition being parsed is a whole `if`, `when` or `case` condition), and
+    // the bindings it made. Saved and restored around each condition, so a nested one has its own.
+    struct TypeTestBindingsFrame
+    {
+        bool allowed = false;
+        std::optional<TypeTestBindings> bindings;
+    };
+    TypeTestBindingsFrame typeTestBindings;
+    // Set while parsing the class after `is`, so `Point.{x, y}` stops before the `.{` instead of calling `Point`
+    bool typeTestOperand = false;
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;
@@ -910,6 +941,10 @@ private:
 
     CstNodeMap cstNodeMap;
 
+    // Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several
+    // statements. parseStat returns the first, and parseBlockNoScope appends these right after it.
+    std::vector<AstStat*> pendingStatements;
+
     // Luwu Declare Statements (rfcs/declare-statements.md): whether the block being parsed may contain `declare`
     // (the top level, or a `do` block there), and what the next block parseBlockNoScope starts should allow.
     // fileDeclarations holds each global this file declares, so a second declaration of it is an error.
@@ -941,10 +976,6 @@ private:
         TempVector<CstAttrList*>* cstAttrLists;
     };
     std::optional<PendingFunctionAttributes> pendingFunctionAttributes;
-
-    // Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several
-    // statements. parseStat returns the first, and parseBlockNoScope appends these right after it.
-    std::vector<AstStat*> pendingStatements;
 };
 
 } // namespace Luau

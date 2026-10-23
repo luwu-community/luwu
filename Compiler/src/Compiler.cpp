@@ -5483,10 +5483,45 @@ struct Compiler
         return le->local;
     }
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): the check in `type(x) == "string" or return` (or `break`, `continue`)
+    // written as a statement, a declaration's value or an assignment's value, which only completes when the check passes
+    static AstExpr* orLeaveCheck(AstStat* stat)
+    {
+        if (AstStatExpr* statExpr = stat->as<AstStatExpr>())
+        {
+            AstExprBinary* orLeave = asOrLeave(statExpr->expr);
+            return orLeave ? orLeave->left : nullptr;
+        }
+
+        const AstArray<AstExpr*>* values = nullptr;
+        if (AstStatLocal* local = stat->as<AstStatLocal>())
+            values = &local->values;
+        else if (AstStatAssign* assign = stat->as<AstStatAssign>())
+            values = &assign->values;
+
+        for (size_t i = 0; values && i < values->size; ++i)
+        {
+            if (AstExprBinary* orLeave = asOrLeave(values->data[i]))
+                return orLeave->left;
+        }
+
+        return nullptr;
+    }
+
     // `assert(type(x) == "string")` as a statement, for the rest of the block. `assert` is the builtin, which raises when
-    // the check fails, under the same assumption every builtin fastcall makes.
+    // the check fails, under the same assumption every builtin fastcall makes. `type(x) == "string" or return` proves the
+    // same (see orLeaveCheck).
     AstLocal* matchAssertStringProof(AstStat* stat, const AstArray<AstStat*>& body, size_t index)
     {
+        if (AstExpr* check = orLeaveCheck(stat))
+        {
+            AstLocal* local = matchTypeStringCheck(check);
+            if (!local || bodyWritesLocal(body, index + 1, local))
+                return nullptr;
+
+            return local;
+        }
+
         AstStatExpr* statExpr = stat->as<AstStatExpr>();
         AstExprCall* call = statExpr ? statExpr->expr->as<AstExprCall>() : nullptr;
         const int* bfid = call ? builtins.find(call) : nullptr;

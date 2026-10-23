@@ -1618,13 +1618,6 @@ static void reportMetamethodsOnIndex(const MagicFunctionTypeCheckContext& contex
     }
 }
 
-bool MagicSetMetatable::typeCheck(const MagicFunctionTypeCheckContext& context)
-{
-    reportMetamethodsOnIndex(context);
-    // the call is still checked as usual
-    return false;
-}
-
 bool MagicSetMetatable::infer(const MagicFunctionCallContext&)
 {
     return false;
@@ -1653,6 +1646,8 @@ static bool reportLuwuNominalFirstArgument(const MagicFunctionTypeCheckContext& 
 
 bool MagicSetMetatable::typeCheck(const MagicFunctionTypeCheckContext& ctx)
 {
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): metamethods in `__index`, then the classes check
+    reportMetamethodsOnIndex(ctx);
     return reportLuwuNominalFirstArgument(ctx);
 }
 

@@ -211,6 +211,48 @@ do
     assert(fns[2]() == 3)
 end
 
+-- destructuring: every name must be truthy
+do
+    const p = { x = 1, y = 2, f = false }
+
+    local got
+    if const .{x, y} = p then
+        got = x + y
+    end
+    assert(got == 3)
+
+    got = "unset"
+    if const .{x, z} = p then
+        got = "then"
+    else
+        got = "else"
+    end
+    assert(got == "else")
+
+    got = "unset"
+    if const .{x, f} = p then
+        got = "then"
+    else
+        got = "else"
+    end
+    assert(got == "else")
+
+    if const q.{x} = p then
+        got = q.y + x
+    end
+    assert(got == 3)
+
+    -- a nil source fails the chain instead of raising
+    local missing = nil
+    got = "unset"
+    if const .{x} = missing then
+        got = "then"
+    else
+        got = "else"
+    end
+    assert(got == "else")
+end
+
 -- an annotated binding
 do
     local got
@@ -322,6 +364,14 @@ do
 
     branch = "unset"
     if local v = 1 when none then
+        branch = "then"
+    else
+        branch = "else"
+    end
+    assert(branch == "else")
+
+    branch = "unset"
+    if const .{k} = t then
         branch = "then"
     else
         branch = "else"
@@ -551,7 +601,7 @@ do
             assert(weak.t == t and weak.u == u)
         end
 
-        if const inner = { "inner" } then
+        if const .{inner} = { inner = { "destructured" } } then
             weak.inner = inner
         end
 
