@@ -19,6 +19,7 @@ LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_DYNAMIC_FASTFLAG(DebugLuauReportReturnTypeVariadicWithTypeSuffix)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
+LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDeclareStatements)
@@ -7793,10 +7794,8 @@ TEST_CASE_FIXTURE(Fixture, "export_value_parse_failures")
         return result;
     };
 
+    // Luwu: `export foo = 5` is `export const foo = 5`, so only the forms without a value fail
     for (const std::string source : {
-             R"(
-export foo = 5
-    )",
              R"(
 export foo
     )",
@@ -7918,6 +7917,36 @@ export function foo()
 end
     )");
 
+    // Luwu: `export const function` is `export function`, and `export name = value` is `export const name = value`
+    AstStatBlock* luwuForms = parse(R"(
+export const function bar()
+end
+export answer = 42
+export a, b: number = 1, 2
+    )");
+    REQUIRE(luwuForms != nullptr);
+    REQUIRE_EQ(3, luwuForms->body.size);
+
+    AstStatLocalFunction* bar = luwuForms->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(bar != nullptr);
+    CHECK(bar->name->isExported);
+    CHECK(bar->name->isConst);
+
+    for (size_t i = 1; i < 3; ++i)
+    {
+        AstStatLocal* implied = luwuForms->body.data[i]->as<AstStatLocal>();
+        REQUIRE(implied != nullptr);
+        CHECK(implied->isExported);
+        CHECK(implied->isConst);
+        CHECK(!implied->keywordLocation);
+        for (AstLocal* local : implied->vars)
+        {
+            CHECK(local->isExported);
+            CHECK(local->isConst);
+        }
+    }
+
+    matchParseError("export answer", "Missing initializer in const declaration");
     matchParseError("export 42", "Incomplete statement: expected assignment or a function call");
     matchParseError("export if true then end", "Incomplete statement: expected assignment or a function call");
     matchParseError("export", "Incomplete statement: expected assignment or a function call");
@@ -8401,6 +8430,66 @@ TEST_CASE_FIXTURE(Fixture, "declarations_have_no_value")
         REQUIRE_EQ(result.root->body.size, 2);
         CHECK(result.root->body.data[0]->is<AstStatDeclareGlobal>());
     }
+}
+
+TEST_CASE_FIXTURE(Fixture, "lint_attributes_take_bare_lint_names")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    AstStatBlock* stat = parse(R"(
+@[nolint(LocalUnused, "LoopConcat")]
+local function f() end
+@[nolint]
+local function g() end
+@[lint(LocalUnused)]
+local function h() end
+)");
+    REQUIRE(stat != nullptr);
+    REQUIRE(3 == stat->body.size);
+
+    AstStatLocalFunction* f = stat->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(f);
+    REQUIRE(1 == f->func->attributes.size);
+    CHECK(f->func->attributes.data[0]->type == AstAttr::Type::Nolint);
+    CHECK(2 == f->func->attributes.data[0]->args.size);
+
+    AstStatLocalFunction* h = stat->body.data[2]->as<AstStatLocalFunction>();
+    REQUIRE(h);
+    REQUIRE(1 == h->func->attributes.size);
+    CHECK(h->func->attributes.data[0]->type == AstAttr::Type::Lint);
+}
+
+TEST_CASE_FIXTURE(Fixture, "lint_attributes_reject_other_arguments")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    ParseResult result = tryParse(R"(
+@[nolint(1)]
+local function f() end
+@[lint]
+local function g() end
+)");
+
+    REQUIRE(2 == result.errors.size());
+    CHECK_EQ("Lint attributes take lint names, like '@[nolint(LocalUnused)]'", result.errors[0].getMessage());
+    CHECK_EQ("@lint needs the lints to turn on, like '@[lint(LocalUnused)]'", result.errors[1].getMessage());
+}
+
+TEST_CASE_FIXTURE(Fixture, "nodiscard_takes_an_optional_reason")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    ParseResult result = tryParse(R"(
+@nodiscard
+local function a() end
+@[nodiscard("use the copy")]
+local function b() end
+@[nodiscard(1)]
+local function c() end
+)");
+
+    REQUIRE(1 == result.errors.size());
+    CHECK_EQ("@nodiscard takes at most one string, the reason: '@[nodiscard(\"use the returned copy\")]'", result.errors[0].getMessage());
 }
 
 // TODO unit tests for various parse errors.

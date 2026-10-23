@@ -235,6 +235,12 @@ public:
         // Luwu @noinline (rfcs/noinline-attribute.md): upstream's `DebugNoinline` (`@debugnoinline`), shipped as
         // `@noinline`.
         Noinline,
+        // Luwu: `@[nolint(Name, ...)]` turns lints off inside the function, class or field it is written on, and
+        // `@[lint(Name, ...)]` turns them back on. Without names, all of them.
+        Nolint,
+        Lint,
+        // Luwu: `@nodiscard` or `@[nodiscard("reason")]` on a function: calling it without using its result is a mistake
+        Nodiscard,
         Unknown
     };
 
@@ -1001,6 +1007,7 @@ public:
     bool isExported = false;
 
     // Location of the leading `const` or `local` keyword token only.
+    // Luwu: none on an exported local without one, `export value = y`, which is const.
     std::optional<Location> keywordLocation;
     std::optional<Location> equalsSignLocation;
 

@@ -2635,6 +2635,14 @@ export const TAU = math.pi * 2
 export local settings: Settings = getSettings()
 export local a, b, c = 1, 2, 3
 export local d
+export implied = 1
+export   implied2, implied3: number = 2, 3
+    )");
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    code = (R"(
+export const   function constFunction()
+end
     )");
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 
