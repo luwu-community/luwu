@@ -14,6 +14,8 @@ void LintOptions::setDefaults()
     // Luwu: except the ones a module or codebase has to ask for (`--!lint Name`, or the config), because they're about
     // style and would flag most existing code
     warningMask.reset(LintWarning::Code_ConstLocal);
+    // Luwu: the group's own check, for every `any` its parts don't report; the parts are on
+    warningMask.reset(LintWarning::Code_Any);
 }
 
 const char* LintWarning::getName(Code code)
@@ -37,6 +39,14 @@ bool LintWarning::isAllName(const char* name)
     return strcmp(name, "All") == 0;
 }
 
+LintMask LintWarning::withGroupParts(LintMask mask)
+{
+    if (mask.test(Code_Any))
+        mask.set(Code_AnyCast).set(Code_AnyAnnotation);
+
+    return mask;
+}
+
 LintMask LintWarning::parseEnableMask(const std::vector<HotComment>& hotcomments)
 {
     LintMask result;
@@ -56,7 +66,7 @@ LintMask LintWarning::parseEnableMask(const std::vector<HotComment>& hotcomments
             result.set(code);
     }
 
-    return result;
+    return withGroupParts(result);
 }
 
 LintMask LintWarning::parseMask(const std::vector<HotComment>& hotcomments)
@@ -104,7 +114,7 @@ LintMask LintWarning::parseMask(const std::vector<HotComment>& hotcomments)
     if (disablesEverything)
         result |= LintMask().set().reset(LintWarning::Code_BareNolint);
 
-    return result;
+    return withGroupParts(result);
 }
 
 } // namespace Luau
