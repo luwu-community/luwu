@@ -235,7 +235,7 @@ struct MemberProof
             table = get<TableType>(follow(mt->table));
         const TableType::Props* props = table ? &table->props : nullptr;
         if (const ExternType* externType = get<ExternType>(member))
-            props = &externType->props;
+            props = &externType->props();
         if (!props)
             return std::nullopt;
 
