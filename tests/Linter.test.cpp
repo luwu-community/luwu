@@ -3809,6 +3809,30 @@ return f
     CHECK(warningsOf(result, LintWarning::Code_AnyCast).empty());
 }
 
+// AnyCast and AnyAnnotation are on by default only in Luwu modules
+TEST_CASE_FIXTURE(BuiltinsFixture, "AnyLintsAreOptInForLuauModules")
+{
+    const char* source = "--!strict\nlocal t = {}\nlocal a = t :: any\nreturn a\n";
+    configResolver.defaultConfig.language = Language::Luau;
+    CHECK(warningsOf(lint(source), LintWarning::Code_AnyCast).empty());
+    CHECK_EQ(warningsOf(lint(std::string("--!lint AnyCast\n") + source), LintWarning::Code_AnyCast).size(), 1);
+
+    LintResult scoped = lint(R"(
+--!strict
+local t = {}
+@[lint(AnyCast)]
+local function f()
+    return t :: any
+end
+local b = t :: any
+return f, b
+)");
+    // only the cast inside `f`
+    std::vector<LintWarning> casts = warningsOf(scoped, LintWarning::Code_AnyCast);
+    REQUIRE_EQ(casts.size(), 1);
+    CHECK_EQ(casts[0].location.begin.line, 5);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "AnyLintsAreOffInNonstrictAndWithTheGroupOff")
 {
     const char* cast = "local t = {}\nlocal a = t :: any\nlocal function f(x: any) return x end\nreturn a, f\n";
