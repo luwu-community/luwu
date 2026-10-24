@@ -280,6 +280,13 @@ private:
                 functions.emplace(function->location.begin.line, function);
                 return true;
             }
+
+            // A type function's doc resolves in the module, like any declaration's: its body's scope is the type
+            // function runtime's
+            bool visit(AstStatTypeFunction* typeFunction) override
+            {
+                return false;
+            }
         };
 
         Collector collector;
@@ -316,8 +323,10 @@ private:
     {
         Allocator& allocator = *sourceModule.allocator;
 
-        char* chars = static_cast<char*>(allocator.allocate(path.size()));
+        // NUL-terminated like the strings the parser makes, which embedders' resolvers may rely on
+        char* chars = static_cast<char*>(allocator.allocate(path.size() + 1));
         std::copy(path.begin(), path.end(), chars);
+        chars[path.size()] = '\0';
         AstExpr* argument = allocator.alloc<AstExprConstantString>(
             location, AstArray<char>{chars, path.size()}, AstExprConstantString::QuoteStyle::QuotedSimple
         );
@@ -1102,6 +1111,10 @@ std::vector<DocTextLink> resolveDocText(
     std::vector<TypeError>* errors
 )
 {
+    // A module checked without retainFullTypeGraphs has no scopes left to resolve names in
+    if (!module.hasModuleScope())
+        return {};
+
     SourceModule parsed;
     parsed.name = sourceModule.name;
     DocParser parser{parsed, text};
