@@ -10079,9 +10079,9 @@ TEST_CASE("StringMethodsOnProvenStringsCompileAsFunctions")
         {R"(return ("abc"):startswith("a"))", R"(return string.startswith("abc", "a"))"},
         // an unwritten local initialized with one
         {R"(local s = "abc" return s:upper())", R"(local s = "abc" return string.upper(s))"},
-        // the result of a string function, and a chain of them
+        // the result of a string function, and a chain of them, where a call receiver passes only its first value
         {R"(local s = string.rep("a", 3) return s:sub(1, 2))", R"(local s = string.rep("a", 3) return string.sub(s, 1, 2))"},
-        {R"(local s = tostring(...) return s:lower():upper())", R"(local s = tostring(...) return string.upper(string.lower(s)))"},
+        {R"(local s = tostring(...) return s:lower():upper())", R"(local s = tostring(...) return string.upper((string.lower(s))))"},
         // a concatenation of proven strings and numbers
         {R"(local s = "a" .. 1 return s:len())", R"(local s = "a" .. 1 return string.len(s))"},
         // a `type(x) == "string"` branch and assert
