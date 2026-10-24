@@ -148,6 +148,17 @@ struct ConstraintGenerator
     // global: see the comment there.
     DenseHashSet<AstName> classGlobalNames{AstName{}};
 
+    // Luwu: what the `return` statements of a function whose return type is inferred from them give
+    struct ReturnShape
+    {
+        // Positions where a `return` gives `x :: any` and another gives a value of its own. There the cast is left out
+        // of the join. Where only casts give a value, the value is `any`.
+        std::vector<bool> ignoredAnyCasts;
+    };
+
+    // Luwu: by return pack, the shape of each function whose return type is inferred from its `return` statements
+    DenseHashMap<TypePackId, ReturnShape> inferredReturnShapes{nullptr};
+
     // Luwu Declare Statements (rfcs/declare-statements.md): the placeholder type of each global a non-definition
     // module declares. The whole file sees a declaration, so hoistDeclarations binds these before any code is
     // visited, and the declaration's visit binds its placeholder to the declared type.

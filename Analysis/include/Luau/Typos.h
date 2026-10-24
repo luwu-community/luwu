@@ -46,4 +46,10 @@ TypeId withWrittenStrings(TypeId given, const AstExpr* literal, TypeId expected,
 // Where the value at `properties` is written inside the table literal `literal`, if it is
 std::optional<Location> literalValueLocation(const AstExpr* literal, const std::vector<std::string>& properties);
 
+// The name of a literal's property, when it's written as one (`name = v` or `["name"] = v`)
+std::optional<std::string> literalPropertyName(const AstExprTable::Item& item);
+
+// Whether `a` and `b` are at most one edit apart (an insertion, deletion, substitution or swap of two neighbors)
+bool withinOneEdit(const std::string& a, const std::string& b);
+
 } // namespace Luau

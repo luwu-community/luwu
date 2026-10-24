@@ -20,6 +20,7 @@
 #include "Luau/TypeFunction.h"
 #include "Luau/TypeFwd.h"
 
+#include <cstdint>
 #include <utility>
 #include <vector>
 
@@ -145,6 +146,18 @@ struct ConstraintSolver
 
     DenseHashMap<TypeId, const Constraint*> typeFunctionsToFinalize{nullptr};
 
+    // Luwu: a return pack dispatchInferredReturn made, by the pack.
+    struct InferredReturn
+    {
+        Scope* scope = nullptr;
+        // The fewest values a `return` dispatched so far gave. Past it, that `return` gave `nil`.
+        size_t fewestValues = SIZE_MAX;
+    };
+    DenseHashMap<TypePackId, InferredReturn> inferredReturns{nullptr};
+
+    // Luwu: the free types in those packs, one per value, and the one a variadic tail holds.
+    DenseHashSet<TypeId> inferredReturnSlots{nullptr};
+
     explicit ConstraintSolver(
         NotNull<Normalizer> normalizer,
         NotNull<TypeFunctionRuntime> typeFunctionRuntime,
@@ -200,6 +213,14 @@ private:
 
     void generalizeOneType(TypeId ty);
 
+    // Luwu: when nothing else can make progress, lets a type function over a function's inferred return value (a
+    // recursive call's result) reduce with what the function's other returns give. Returns true if it unblocked one.
+    bool reduceRecursiveReturnsWithLowerBounds();
+
+    // Luwu: the last step for an inferred return pack before its function is generalized.
+    void finishInferredReturn(NotNull<const Constraint> constraint, TypeId functionTy);
+    TypeId freshReturnSlot(Scope* scope);
+
     // Clip with LuauRemoveConstraintSolverEmplace
     template<typename T, typename... Args>
     void DEPRECATED_emplace(NotNull<const Constraint> constraint, TypeId ty, Args&&... args);
@@ -217,6 +238,7 @@ public:
 
     bool tryDispatch(const SubtypeConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const PackSubtypeConstraint& c, NotNull<const Constraint> constraint);
+    bool dispatchInferredReturn(const PackSubtypeConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const GeneralizationConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const IterableConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const NameConstraint& c, NotNull<const Constraint> constraint);

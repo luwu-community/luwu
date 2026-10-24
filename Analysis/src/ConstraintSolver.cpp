@@ -711,6 +711,8 @@ void ConstraintSolver::run()
     {
         progress = runSolverPass(false);
         if (!progress)
+            progress = reduceRecursiveReturnsWithLowerBounds();
+        if (!progress)
             progress |= runSolverPass(true);
     } while (progress);
 
@@ -730,6 +732,42 @@ void ConstraintSolver::run()
     {
         logger->captureFinalSolverState(rootScope, unsolvedConstraints);
     }
+}
+
+// Luwu: a recursive call gives the function's inferred return values. `return fact(n - 1) * n` makes the return value
+// `'r` hold `mul<'r, number>`, and the reduction and `'r` wait for each other. Once nothing else can make progress,
+// `'r`'s lower bound holds what the function's other returns give (the `1` of `if n <= 1 then return 1 end`). The type
+// function reduces with that. A function whose every return recurses has `never` there and returns `never`.
+// Upstream never meets this because its first `return` binds the return pack to a concrete type. When the recursive
+// `return` comes first, upstream's function returns `never`.
+bool ConstraintSolver::reduceRecursiveReturnsWithLowerBounds()
+{
+    bool unblocked = false;
+
+    for (NotNull<const Constraint> c : unsolvedConstraints)
+    {
+        const ReduceConstraint* reduce = get<ReduceConstraint>(*c);
+        if (!reduce)
+            continue;
+
+        TypeFunctionInstanceType* instance = getMutable<TypeFunctionInstanceType>(follow(reduce->ty));
+        if (!instance)
+            continue;
+
+        for (TypeId& argument : instance->typeArguments)
+        {
+            TypeId slot = follow(argument);
+            const FreeType* free = get<FreeType>(slot);
+            if (!free || !inferredReturnSlots.contains(slot))
+                continue;
+
+            argument = free->lowerBound;
+            cgraph->removeDependencyOf(slot, c.get());
+            unblocked = true;
+        }
+    }
+
+    return unblocked;
 }
 
 void ConstraintSolver::finalizeTypeFunctions()
@@ -1058,9 +1096,121 @@ bool ConstraintSolver::tryDispatch(const PackSubtypeConstraint& c, NotNull<const
     else if (isBlocked(c.superPack))
         return block(c.superPack, constraint);
 
+    if (c.inferredReturn)
+        return dispatchInferredReturn(c, constraint);
+
     unify(constraint, c.subPack, c.superPack);
 
     return true;
+}
+
+// Luwu: a function with no return annotation returns what its `return` statements give, joined value by value:
+// `return i` and `return nil` make `number?`. Upstream binds the free return pack to the first `return` that dispatches
+// and dispatches the returns in source order. The first `return` decides the type there, and every other one has to
+// match it. Here the pack holds one free type per value. The first `return` to dispatch makes the pack, a `return` with
+// more values adds to it, and every `return` widens the free types like any lower bound. An expected type (a lambda
+// passed to a call, a method of an annotated table) binds the pack before any `return` dispatches and decides the type
+// as it does upstream.
+bool ConstraintSolver::dispatchInferredReturn(const PackSubtypeConstraint& c, NotNull<const Constraint> constraint)
+{
+    TypePackId returnPack = follow(c.superPack);
+
+    // The pack starts with no values. Each `return` adds the slots it needs.
+    if (const FreeTypePack* free = get<FreeTypePack>(returnPack))
+    {
+        TypePackId slotPack = arena->addTypePack(TypePack{});
+        bind(constraint, returnPack, slotPack);
+        module->inferredReturnPacks.insert(slotPack);
+        inferredReturns[slotPack] = InferredReturn{free->scope};
+        returnPack = slotPack;
+    }
+
+    InferredReturn* inferred = inferredReturns.find(returnPack);
+    TypePack* slots = getMutable<TypePack>(returnPack);
+    if (!inferred || !slots)
+    {
+        unify(constraint, c.subPack, c.superPack);
+        return true;
+    }
+
+    auto [values, valuesTail] = flatten(c.subPack);
+    const VariadicTypePack* variadic = valuesTail ? get<VariadicTypePack>(follow(*valuesTail)) : nullptr;
+
+    // A generic or free pack at the end gives a number of values known only later. It goes to a tail bound once, as
+    // upstream binds the whole return pack.
+    if (valuesTail && !variadic)
+    {
+        if (!slots->tail)
+            slots->tail = arena->freshTypePack(inferred->scope, Polarity::Positive);
+        unify(constraint, c.subPack, returnPack);
+        inferred->fewestValues = std::min(inferred->fewestValues, values.size());
+        return true;
+    }
+
+    // A `return` with more values than there are slots adds slots. A `return` that gave fewer values before gave `nil`
+    // there, and one that ended in a variadic tail may have given one of its values.
+    const VariadicTypePack* slotsTail = slots->tail ? get<VariadicTypePack>(follow(*slots->tail)) : nullptr;
+    while (slots->head.size() < values.size())
+    {
+        TypeId slot = freshReturnSlot(inferred->scope);
+        if (inferred->fewestValues <= slots->head.size())
+            unify(constraint, builtinTypes->nilType, slot);
+        if (slotsTail)
+            unify(constraint, slotsTail->ty, slot);
+        slots->head.push_back(slot);
+    }
+
+    // Past its values, a `return` gives `nil`, or the values of its variadic tail.
+    for (size_t i = 0; i < slots->head.size(); ++i)
+    {
+        if (i < values.size())
+        {
+            unify(constraint, values[i], slots->head[i]);
+            continue;
+        }
+
+        unify(constraint, builtinTypes->nilType, slots->head[i]);
+        if (variadic)
+            unify(constraint, variadic->ty, slots->head[i]);
+    }
+
+    if (variadic)
+    {
+        if (!slots->tail)
+            slots->tail = arena->addTypePack(VariadicTypePack{freshReturnSlot(inferred->scope)});
+
+        if (const VariadicTypePack* tail = get<VariadicTypePack>(follow(*slots->tail)))
+            unify(constraint, variadic->ty, tail->ty);
+        else
+            unify(constraint, *valuesTail, *slots->tail);
+    }
+
+    inferred->fewestValues = std::min(inferred->fewestValues, values.size());
+    return true;
+}
+
+TypeId ConstraintSolver::freshReturnSlot(Scope* scope)
+{
+    TypeId slot = freshType(arena, builtinTypes, scope, Polarity::Positive);
+    inferredReturnSlots.insert(slot);
+    return slot;
+}
+
+// Luwu: a free tail no `return` filled is empty. Generalized as it is, it would be `...unknown`.
+void ConstraintSolver::finishInferredReturn(NotNull<const Constraint> constraint, TypeId functionTy)
+{
+    const FunctionType* fn = get<FunctionType>(follow(functionTy));
+    if (!fn)
+        return;
+
+    TypePackId returnPack = follow(fn->retTypes);
+    const TypePack* slots = get<TypePack>(returnPack);
+    if (!slots || !slots->tail || !inferredReturns.find(returnPack))
+        return;
+
+    TypePackId tail = follow(*slots->tail);
+    if (get<FreeTypePack>(tail))
+        bind(constraint, tail, builtinTypes->emptyTypePack);
 }
 
 // Luwu Classes (rfcs/classes): a generic class's method as read through the class value, where
@@ -1087,6 +1237,8 @@ bool ConstraintSolver::tryDispatch(const GeneralizationConstraint& c, NotNull<co
         return block(c.sourceType, constraint);
     else if (get<PendingExpansionType>(generalizedType))
         return block(generalizedType, constraint);
+
+    finishInferredReturn(constraint, c.sourceType);
 
     std::optional<TypeId> generalizedTy = generalize(NotNull{arena}, builtinTypes, constraint->scope, generalizedTypes, c.sourceType);
     if (!generalizedTy)

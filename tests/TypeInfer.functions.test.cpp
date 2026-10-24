@@ -2460,7 +2460,6 @@ TEST_CASE_FIXTURE(Fixture, "generic_packs_are_not_variadic")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "num_is_solved_before_num_or_str")
 {
-    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function num()
             return 5
@@ -2475,15 +2474,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "num_is_solved_before_num_or_str")
         end
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
-
-    CHECK_EQ("Expected this to be 'number', but got 'string'", toString(result.errors[0]));
-    CHECK_EQ("() -> number", toString(requireType("num_or_str")));
+    // Luwu: a function's returns are joined (ConstraintSolver::dispatchInferredReturn). Upstream takes the first
+    // `return` as the function's type and reports "Expected this to be 'number', but got 'string'" on the second.
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("() -> number | string", toString(requireType("num_or_str")));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "num_is_solved_after_num_or_str")
 {
-    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local function num_or_str()
             if math.random() > 0.5 then
@@ -2498,10 +2496,378 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "num_is_solved_after_num_or_str")
         end
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    // Luwu: a function's returns are joined (ConstraintSolver::dispatchInferredReturn). Upstream takes the first
+    // `return` as the function's type and reports "Expected this to be 'number', but got 'string'" on the second.
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("() -> number | string", toString(requireType("num_or_str")));
+}
 
-    CHECK_EQ("Expected this to be 'number', but got 'string'", toString(result.errors[0]));
-    CHECK_EQ("() -> number", toString(requireType("num_or_str")));
+// Luwu: a function's returns are joined value by value (ConstraintSolver::dispatchInferredReturn). Upstream takes the
+// first `return` as the function's type and reports every other `return` that doesn't match it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "returns_are_joined_into_the_function_type")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        local function find(t: { string }, s: string)
+            for i, v in t do
+                if v == s then
+                    return i
+                end
+            end
+            return nil
+        end
+
+        local function second(t: { string })
+            if #t < 2 then
+                return nil
+            end
+            return t[2]
+        end
+
+        local function pair(ok: boolean)
+            if ok then
+                return 1, "a"
+            end
+            return nil
+        end
+
+        local function three(): (number, string, boolean)
+            return 1, "a", true
+        end
+
+        local function two(): (number, boolean)
+            return 2, false
+        end
+
+        local function either(first: boolean)
+            if first then
+                return three()
+            end
+            return two()
+        end
+
+        local function either_or_one(first: boolean)
+            if first then
+                return two()
+            end
+            return 3
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("({string}, string) -> number?", toString(requireType("find")));
+    CHECK_EQ("({string}) -> string?", toString(requireType("second")));
+    CHECK_EQ("(boolean) -> (number?, string?)", toString(requireType("pair")));
+    CHECK_EQ("(boolean) -> (number, boolean | string, boolean?)", toString(requireType("either")));
+    CHECK_EQ("(boolean) -> (number, boolean?)", toString(requireType("either_or_one")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_function_that_returns_a_value_must_return_nil_on_its_other_paths")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // A bare `return`, or a call that gives nothing, beside a `return` that gives a value. A function that returns
+    // nothing anywhere may end in such a call.
+    CheckResult result = check(R"(
+        local function bare(ok: boolean)
+            if ok then
+                return 1
+            end
+            return
+        end
+
+        local function void_call(ok: boolean)
+            if ok then
+                return 1
+            end
+            return print("x")
+        end
+
+        local function void_only(ok: boolean)
+            if ok then
+                return print("a")
+            end
+            return
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(5, result.errors[0].location.begin.line);
+    CHECK_EQ(12, result.errors[1].location.begin.line);
+    CHECK_EQ("(boolean) -> ()", toString(requireType("void_only")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "the_one_return_that_differs_from_the_rest_is_reported")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        local function odd(n: number)
+            if n == 1 then
+                return 1
+            elseif n == 2 then
+                return 2
+            elseif n == 3 then
+                return 3
+            end
+            return "four"
+        end
+
+        local function forgot(n: number)
+            if n == 1 then
+                return 1, "a"
+            elseif n == 2 then
+                return 2, "b"
+            elseif n == 3 then
+                return 3, "c"
+            end
+            return 4
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+
+    const InconsistentReturn* odd = get<InconsistentReturn>(result.errors[0]);
+    REQUIRE(odd);
+    CHECK_EQ(9, result.errors[0].location.begin.line);
+    CHECK_EQ(
+        "This function's other 3 codepaths return 'number', are you sure you meant to return 'string' here? Explicitly "
+        "annotate this function's return type to silence",
+        toString(result.errors[0])
+    );
+
+    const InconsistentReturn* forgot = get<InconsistentReturn>(result.errors[1]);
+    REQUIRE(forgot);
+    CHECK_EQ(20, result.errors[1].location.begin.line);
+    CHECK_EQ("number, string", toString(forgot->othersReturn));
+    CHECK_EQ("number", toString(forgot->returned));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "returns_that_differ_without_surprise_join")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // An optional value among values of its type, a `false` among `true`s, `nil` and `x :: any` returns, and functions
+    // with too few agreeing returns to call one the odd one out.
+    CheckResult result = check(R"(
+        local function maybe(n: number, t: { number })
+            if n == 1 then
+                return 1
+            elseif n == 2 then
+                return 2
+            elseif n == 3 then
+                return 3
+            end
+            return t[1] :: number?
+        end
+
+        local function flags(n: number)
+            if n == 1 then
+                return true
+            elseif n == 2 then
+                return true
+            elseif n == 3 then
+                return true
+            end
+            return false
+        end
+
+        local function absent(n: number, x)
+            if n == 1 then
+                return 1
+            elseif n == 2 then
+                return 2
+            elseif n == 3 then
+                return x :: any
+            elseif n == 4 then
+                return 3
+            end
+            return nil
+        end
+
+        local function two_against_one(n: number)
+            if n == 1 then
+                return 1
+            elseif n == 2 then
+                return 2
+            end
+            return "three"
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("(number, {number}) -> number?", toString(requireType("maybe")));
+    CHECK_EQ("(number) -> boolean", toString(requireType("flags")));
+    CHECK_EQ("(number, unknown) -> number?", toString(requireType("absent")));
+    CHECK_EQ("(number) -> number | string", toString(requireType("two_against_one")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_cast_to_any_is_left_out_of_the_returned_type")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // `false` is a value like any other, not a failure value.
+    CheckResult result = check(R"(
+        local function some(ok: boolean, x)
+            if ok then
+                return x :: any
+            end
+            return 1
+        end
+
+        local function only(ok: boolean, x, y)
+            if ok then
+                return x :: any
+            end
+            return y :: any
+        end
+
+        local function falsy(o: { x: number })
+            if o.x > 1 then
+                return o
+            end
+            return false
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("(boolean, unknown) -> number", toString(requireType("some")));
+    CHECK_EQ("(boolean, unknown, unknown) -> any", toString(requireType("only")));
+    CHECK_EQ("({ x: number }) -> boolean | { x: number }", toString(requireType("falsy")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "misspelled_keys_and_strings_in_returns_are_typos")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // A key only one table has is an optional field, and short strings one edit apart are different words.
+    CheckResult result = check(R"(
+        local function keys(n: number)
+            if n == 1 then
+                return { type = "a", value = 1 }
+            end
+            return { tpye = "b", value = 2 }
+        end
+
+        local function strings(n: number)
+            if n == 1 then
+                return "success"
+            elseif n == 2 then
+                return "success"
+            end
+            return "sucess"
+        end
+
+        local function optional_field(n: number)
+            if n == 1 then
+                return { type = "a" }
+            end
+            return { type = "b", extra = true }
+        end
+
+        local function short_words(n: number)
+            if n == 1 then
+                return "add"
+            end
+            return "and"
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+
+    const Typo* key = get<Typo>(result.errors[0]);
+    REQUIRE(key);
+    CHECK_EQ("tpye", key->written);
+    CHECK_EQ("type", key->meant);
+
+    const Typo* string = get<Typo>(result.errors[1]);
+    REQUIRE(string);
+    CHECK_EQ("sucess", string->written);
+    CHECK_EQ("success", string->meant);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_return_ending_in_a_call_keeps_the_extra_values")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        local function first(s: string, p: string)
+            if s == "" then
+                return nil
+            end
+            return string.find(s, p)
+        end
+
+        local function length(s: string)
+            if s == "" then
+                return nil
+            end
+            return string.len(s)
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("(string, string) -> (number?, number?, ...string)", toString(requireType("first")));
+    CHECK_EQ("(string) -> number?", toString(requireType("length")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "recursive_returns_join_whichever_return_comes_first")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::DebugLuauAssertOnForcedConstraint, true},
+    };
+
+    // Upstream infers `never` for `recursive_first`: its first `return` holds the call to itself.
+    CheckResult result = check(R"(
+        local function base_first(n: number)
+            if n <= 1 then
+                return 1
+            end
+            return base_first(n - 1) * n
+        end
+
+        local function recursive_first(n: number)
+            if n > 1 then
+                return recursive_first(n - 1) * n
+            end
+            return 1
+        end
+
+        local math2 = {}
+        function math2.factorial(n: number)
+            if n > 1 then
+                return math2.factorial(n - 1) * n
+            end
+            return 1
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("(number) -> number", toString(requireType("base_first")));
+    CHECK_EQ("(number) -> number", toString(requireType("recursive_first")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "joined_returns_still_report_falling_off_the_end")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        local function f(ok: boolean, n: number)
+            if ok then
+                return 1
+            elseif n > 2 then
+                return "x"
+            end
+        end
+    )");
+
+    CHECK_EQ("(boolean, number) -> number | string", toString(requireType("f")));
+    bool reported = false;
+    for (const TypeError& error : result.errors)
+        reported |= get<FunctionExitsWithoutReturning>(error) != nullptr;
+    CHECK(reported);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "apply_of_lambda_with_inferred_and_explicit_types")
@@ -2977,15 +3343,13 @@ TEST_CASE_FIXTURE(Fixture, "unifier_should_not_bind_free_types")
     }
     else
     {
-        LUAU_REQUIRE_ERROR_COUNT(2, result);
-        auto tm1 = get<TypeMismatch>(result.errors[0]);
-        REQUIRE(tm1);
-        CHECK(toString(tm1->wantedType) == "string");
-        CHECK(toString(tm1->givenType) == "boolean");
-        auto tm2 = get<TypeMismatch>(result.errors[1]);
-        REQUIRE(tm2);
-        CHECK(toString(tm2->wantedType) == "string");
-        CHECK(toString(tm2->givenType) == "truthy & unknown");
+        // Luwu: the three returns are joined (ConstraintSolver::dispatchInferredReturn). Upstream takes the first as the
+        // function's type and reports the `false` and `result` returns for not being strings.
+        LUAU_REQUIRE_NO_ERRORS(result);
+        CHECK_EQ(
+            "<a>(t1) -> (a & truthy) | boolean | string where t1 = { read thing: (t1) -> (unknown, a, ...unknown) }",
+            toString(requireType("foo"))
+        );
     }
 }
 
