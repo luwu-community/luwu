@@ -2557,8 +2557,7 @@ std::optional<std::string> closestSpelling(const std::string& written, const std
     return best;
 }
 
-// The name of a literal's property, when it's written as one (`name = v` or `["name"] = v`).
-static std::optional<std::string> literalPropertyName(const AstExprTable::Item& item)
+std::optional<std::string> literalPropertyName(const AstExprTable::Item& item)
 {
     if (item.kind == AstExprTable::Item::Kind::List || !item.key)
         return std::nullopt;

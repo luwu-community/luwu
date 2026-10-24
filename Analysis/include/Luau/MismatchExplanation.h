@@ -89,6 +89,9 @@ bool looksLikeTypo(const std::string& written, const std::string& meant);
 // those on a tie. Nullopt when none is that close. `written` itself is never one.
 std::optional<std::string> closestSpelling(const std::string& written, const std::vector<std::string>& candidates);
 
+// The name of a literal's property, when it's written as one (`name = v` or `["name"] = v`).
+std::optional<std::string> literalPropertyName(const AstExprTable::Item& item);
+
 // Luwu (helpful subtyping errors): the misspelled properties of a table literal whose expected type is `expectedType`.
 // Each is a property the type lacks, named like one the literal leaves out. For an optional property upstream reports
 // nothing: table types aren't exact, so the literal fits and the value is never read.
