@@ -5600,6 +5600,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_function_overrides_fit_the_trait")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
     ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+    // `Self` in a trait's signatures
+    ScopedFastFlag luwuGenericNominals{FFlag::LuwuGenericNominals, true};
     CheckResult result = check(R"(
 trait Layout
     function column(self): Self
