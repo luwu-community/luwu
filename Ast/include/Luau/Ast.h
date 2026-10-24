@@ -1050,6 +1050,8 @@ public:
     // `[key] += value` (or -=, *=, ..=): combines with what `key` already holds. An absent key takes the value as is
     // (negated for -=), which is what starting from 0, 1 or "" gives without assuming the value is a number.
     std::optional<AstExprBinary::Op> accumulate;
+    // False when the item is a `do` block written in place of `give do`; `value` is then that AstExprDo.
+    bool hasGive = true;
 };
 
 class AstStatContinue : public AstStat

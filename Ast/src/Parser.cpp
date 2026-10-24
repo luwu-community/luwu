@@ -747,7 +747,12 @@ AstStatBlock* Parser::parseBlockNoScope(bool doExprBody)
 
     const Position prevPosition = lexer.previousLocation().end;
 
-    while (!blockFollow(lexer.current()) && !(doExprBody && doExprBodyFollow(lexer.current())))
+    // Luwu Do Expressions (rfcs/do-expressions.md): no statement starts with a closing bracket, `,` or `then`, so inside
+    // a `do` expression one belongs to the code around the expression. A nested block still missing its `end` stops
+    // there too.
+    bool inDoExpr = doExprBody || functionStack.back().doExprDepth > 0;
+
+    while (!blockFollow(lexer.current()) && !(inDoExpr && doExprBodyFollow(lexer.current())))
     {
         unsigned int oldRecursionCount = recursionCounter;
 
@@ -7263,10 +7268,11 @@ AstExpr* Parser::parseTableConstructor()
 }
 
 // Luwu Table Comprehensions (rfcs/table-comprehensions.md):
-// comprehension ::= `{' clause {clause} `give' item `}'
+// comprehension ::= `{' clause {clause} (`give' item | doexp) `}'
 // clause ::= `for' binding `=' exp `,' exp [`,' exp] {`when' condition}
 //          | `for' bindinglist `in' explist {`when' condition}
 // item ::= exp | `[' exp `]' `=' exp | `[' exp `]' compoundop exp
+// A `do` block after the clauses is short for `give do`, so statements don't need `give do ... give`.
 // Starts at `for`; `start` and `matchBrace` are the `{`. Builds the loop the comprehension runs (see
 // AstExprTableComprehension) and consumes the closing `}`.
 const LuwuFeature kTableComprehensionsFeature{"table comprehensions", /* plural= */ true, "LuwuTableComprehensions"};
@@ -7388,32 +7394,27 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
     // `give` is contextual here: after an expression list or a `when` condition, a bare name can't continue it
     Location doLocation = lexer.current().location;
     bool giveFollows = lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "give";
+    bool doFollows = lexer.current().type == Lexeme::ReservedDo;
     bool headerEndsAfterError = endsAfterError();
 
     if (giveFollows)
-    {
         nextLexeme();
-    }
-    else if (lexer.current().type == Lexeme::ReservedDo)
-    {
-        // `do` would read as a loop body; a comprehension gives one item
-        report(lexer.current().location, "Table comprehensions don't use 'do'; did you mean 'give'?");
-        nextLexeme();
-    }
-    else if (!headerEndsAfterError)
-    {
-        report(lexer.current().location, "Expected 'give' when parsing table comprehension, got %s", lexer.current().toString().c_str());
-    }
+    else if (!doFollows && !headerEndsAfterError)
+        report(lexer.current().location, "Expected 'give' or 'do' when parsing table comprehension, got %s", lexer.current().toString().c_str());
 
     AstExpr* key = nullptr;
     AstExpr* value = nullptr;
     std::optional<AstExprBinary::Op> accumulate;
-    // The item starts at its `give`, as a statement starts at its keyword
-    Location itemStart = giveFollows ? doLocation : lexer.current().location;
+    // The item starts at its `give` or `do`, as a statement starts at its keyword
+    Location itemStart = giveFollows || doFollows ? doLocation : lexer.current().location;
 
     CstExprTable::Item cstItem{Position::missing(), Position::missing(), Position::missing(), CstExprTable::Separator::Missing, Position::missing()};
 
-    if (lexer.current().type == '[')
+    if (doFollows)
+    {
+        value = parseDoExpr();
+    }
+    else if (lexer.current().type == '[')
     {
         cstItem.indexerOpenPosition = lexer.current().location.begin;
         MatchLexeme matchBracket = lexer.current();
@@ -7473,6 +7474,7 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
     Location itemLocation(itemStart, value->location);
     AstStatComprehensionItem* item = allocator.alloc<AstStatComprehensionItem>(itemLocation, key, value);
     item->accumulate = accumulate;
+    item->hasGive = !doFollows;
     item->luwuOnly = true;
 
     // Build the loops from the innermost clause out.

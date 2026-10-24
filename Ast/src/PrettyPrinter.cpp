@@ -935,8 +935,10 @@ struct Printer
                 stat = body->body.data[body->body.size - 1];
             }
 
+            // a `do` item without `give` prints its own `do`
             advance(doLocation.begin);
-            writer.keyword("give");
+            if (a->item->hasGive)
+                writer.keyword("give");
 
             const auto cstNode = lookupCstNode<CstExprTable>(a);
             const CstExprTable::Item* cstItem = cstNode && cstNode->items.size == 1 ? cstNode->items.begin() : nullptr;

@@ -835,6 +835,8 @@ struct AstJsonEncoder : public AstVisitor
                 PROP(value);
                 if (node->accumulate)
                     write("accumulate", *node->accumulate);
+                if (!node->hasGive)
+                    PROP(hasGive);
             }
         );
     }

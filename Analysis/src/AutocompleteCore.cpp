@@ -2201,8 +2201,8 @@ static AutocompleteResult autocompleteWhileLoopKeywords(std::vector<AstNode*> an
 }
 
 // Luwu If Local (rfcs/if-local.md): the keywords after a loop's header, when the cursor is past its last part (the
-// bounds, the values, the condition or the last clause of its `when` chain) and before its `do`: `do` and `when`, or for
-// a table comprehension's clause `give`, `when` and `for`. Nothing when the cursor isn't there, or the part before it
+// bounds, the values, the condition or the last clause of its `when` chain) and before its `do`: `do` and `when`, plus
+// `give` and `for` for a table comprehension's clause. Nothing when the cursor isn't there, or the part before it
 // is unfinished.
 static std::optional<AutocompleteResult> autocompleteLoopHeaderKeywords(const std::vector<AstNode*>& ancestry, Position position)
 {
@@ -2264,15 +2264,12 @@ static std::optional<AutocompleteResult> autocompleteLoopHeaderKeywords(const st
 
         AutocompleteEntryMap ret;
         ret["when"] = {AutocompleteEntryKind::Keyword};
+        ret["do"] = {AutocompleteEntryKind::Keyword};
 
         if (inComprehension && !node->is<AstStatWhile>())
         {
             ret["give"] = {AutocompleteEntryKind::Keyword};
             ret["for"] = {AutocompleteEntryKind::Keyword};
-        }
-        else
-        {
-            ret["do"] = {AutocompleteEntryKind::Keyword};
         }
 
         return AutocompleteResult{std::move(ret), ancestry, AutocompleteContext::Keyword};

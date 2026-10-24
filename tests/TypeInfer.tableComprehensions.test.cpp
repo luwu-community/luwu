@@ -8,6 +8,7 @@
 
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 using namespace Luau;
@@ -128,6 +129,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_table_comprehensions")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuTableComprehensions, true},
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
     };
 
     checkTypewriting(*this, kTypewriterBefore, "local doubled = { for _, v in nums give v * 2 }", kTypewriterAfter);
@@ -138,6 +140,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_table_comprehensions")
         *this,
         kTypewriterBefore,
         "local sums = {\n    for _, a in nums\n        when a > 1\n    for _, b in nums\n    give a + b\n}",
+        kTypewriterAfter
+    );
+    checkTypewriting(*this, kTypewriterBefore, "local seen = { for _, v in nums do print(v); give v }", kTypewriterAfter);
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "local kept = {\n    for _, v in nums do\n        local n = maybe()\n        n or continue\n"
+        "        if v > n then\n            give v\n        end\n        give n\n}",
         kTypewriterAfter
     );
 }

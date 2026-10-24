@@ -412,4 +412,57 @@ do
     assert(same(r, { 56, 57, 58 }))
 end
 
+-- a `do` block in place of `give do`
+do
+    local seen = 0
+    local r = { for i = 1, 5 do
+        seen += i
+        give seen }
+    assert(seen == 15 and same(r, { 1, 3, 6, 10, 15 }))
+    assert(same({ for i = 1, 3 do give i * 2 }, { for i = 1, 3 give do give i * 2 }))
+
+    -- `give` anywhere in the block ends this element's block, and `continue` skips the element
+    local xs = { 1, 2, 3, 4, 5, 6 }
+    local picked = {
+        for _, v in xs do
+            local half = v // 2
+            v % 2 == 0 or continue
+            if v > 3 then
+                give -v
+            end
+            give half
+    }
+    assert(same(picked, { 1, -4, -6 }))
+
+    -- `break` ends the comprehension, and the block runs once per element
+    local calls = 0
+    local firsts = { for _, v in xs do
+        calls += 1
+        v < 4 or break
+        give v }
+    assert(calls == 4 and same(firsts, { 1, 2, 3 }))
+
+    -- counting runs the block for each element too
+    calls = 0
+    assert(#{ for _, v in xs do
+        calls += 1
+        give if v > 4 then v else nil } == 2)
+    assert(calls == 6)
+
+    -- after `when` clauses and nested `for` clauses
+    local pairs_ = { for _, a in { 1, 2 } when a > 1 for _, b in { 10, 20 } do
+        local s = a + b
+        give s }
+    assert(same(pairs_, { 12, 22 }))
+
+    -- `return` leaves the enclosing function
+    local function first_big(list)
+        local _ = { for _, v in list do
+            v > 2 or continue
+            return v }
+        return nil
+    end
+    assert(first_big(xs) == 3 and first_big({ 1 }) == nil)
+end
+
 return "OK"

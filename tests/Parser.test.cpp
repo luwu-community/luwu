@@ -8616,22 +8616,68 @@ TEST_CASE_FIXTURE(Fixture, "table_comprehension_is_stored_as_its_loop")
     CHECK_EQ(expr->item->value->as<AstExprLocal>()->local, guard->clauses.data[1].local);
 }
 
+TEST_CASE_FIXTURE(Fixture, "table_comprehension_do_item_is_a_do_expression")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    AstStatBlock* block = parse(R"(
+        local a = { for _, v in xs do print(v); give v }
+        local b = { for _, v in xs give do print(v); give v }
+        local c = { for _, v in xs do v > 1 or continue; give v }
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+
+    auto itemOf = [](AstStat* stat)
+    {
+        AstStatLocal* local = stat->as<AstStatLocal>();
+        REQUIRE(local);
+        AstExprTableComprehension* expr = local->values.data[0]->as<AstExprTableComprehension>();
+        REQUIRE(expr);
+        return expr->item;
+    };
+
+    // `do` is short for `give do`: the same item, with `hasGive` telling them apart
+    AstStatComprehensionItem* a = itemOf(block->body.data[0]);
+    AstExprDo* aBody = a->value->as<AstExprDo>();
+    REQUIRE(aBody);
+    CHECK(!a->hasGive);
+    CHECK_EQ(aBody->body->body.size, 2);
+    // the item starts at the `do`, as it starts at `give`
+    CHECK_EQ(a->location.begin, aBody->location.begin);
+
+    AstStatComprehensionItem* b = itemOf(block->body.data[1]);
+    CHECK(b->hasGive);
+    CHECK(b->value->is<AstExprDo>());
+
+    // `continue` in the block skips the element
+    AstStatComprehensionItem* c = itemOf(block->body.data[2]);
+    AstExprDo* cBody = c->value->as<AstExprDo>();
+    REQUIRE(cBody);
+    REQUIRE_EQ(cBody->body->body.size, 2);
+    CHECK(!cBody->body->body.data[0]->is<AstStatError>());
+}
+
 TEST_CASE_FIXTURE(Fixture, "table_comprehension_parse_errors")
 {
-    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
 
     matchParseError("local a = { for _, v in xs give v, 1 }", "A table comprehension must be the only item in its table");
     matchParseError("local a = { 1, for _, v in xs do v }", "A table comprehension must be the only item in its table");
     matchParseError(
         "local a = { for _, v in xs give x = v }", "A table comprehension's item is a value or '[key] = value'; 'name = value' writes one key"
     );
-    matchParseError("local a = { for _, v in xs v }", "Expected 'give' when parsing table comprehension, got 'v'");
-    // pointed at the `do`, in a single-line and a multi-line comprehension
-    matchParseError("local a = { for _, v in xs do v }", "Table comprehensions don't use 'do'; did you mean 'give'?", Location{{0, 27}, {0, 29}});
+    matchParseError("local a = { for _, v in xs v }", "Expected 'give' or 'do' when parsing table comprehension, got 'v'");
+    // a `do` item follows the rules of a `do` expression
+    matchParseError("local a = { for _, v in xs do v }", "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'");
     matchParseError(
-        "local a = {\n    for _, v in xs\n        when v > 1\n    do v\n}",
-        "Table comprehensions don't use 'do'; did you mean 'give'?",
-        Location{{3, 4}, {3, 6}}
+        "local a = { for _, v in xs do print(v) }", "A 'do' expression must end with 'give <value>', 'return', 'break' or 'continue'"
     );
     matchParseError(
         "local a = { for _, v in xs give [v] /= 2 }", "A table comprehension can accumulate with '+=', '-=', '*=' or '..=', not '/='"
