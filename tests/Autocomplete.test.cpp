@@ -946,8 +946,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_loop_when_keywords")
         {"while x @1", {"do", "when"}},
         {"while local x = f() @1", {"do", "when"}},
         {"while local x = f() when x > 1 @1", {"do", "when"}},
-        {"local t = { for _, v in xs @1 }", {"give", "when", "for"}},
-        {"local t = { for _, v in xs when v > 1 @1 }", {"give", "when", "for"}},
+        {"local t = { for _, v in xs @1 }", {"give", "do", "when", "for"}},
+        {"local t = { for _, v in xs when v > 1 @1 }", {"give", "do", "when", "for"}},
     };
 
     for (const Case& c : cases)

@@ -2409,6 +2409,7 @@ TEST_CASE("prettyPrint_table_comprehensions")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuTableComprehensions, true},
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
     };
 
     std::string code = R"(
@@ -2420,6 +2421,16 @@ local c = {
         when #row > 0
     for _ , x in row
     give x
+}
+local d = { for _, v in xs   do print(v); give v }
+local e = { for _, v in xs give do print(v) give v }
+local f = {
+    for _, v in xs when v > 1 do
+        local w = v * 2
+        if w > 10 then
+            give w
+        end
+        give -w
 }
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
