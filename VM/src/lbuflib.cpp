@@ -10,6 +10,7 @@
 
 LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAGVARIABLE(LuwuBufferIsFrozen)
+LUAU_FASTFLAGVARIABLE(LuwuBufferMemcmp)
 
 #include <string.h>
 
@@ -279,6 +280,37 @@ static int buffer_copy(lua_State* L)
     return 0;
 }
 
+// Luwu buffer.memcmp (rfcs/buffer-memcmp.md):
+static int buffer_memcmp(lua_State* L)
+{
+    size_t b1len = 0;
+    void* b1buf = luaL_checkbuffer(L, 1, &b1len);
+
+    size_t b2len = 0;
+    void* b2buf = luaL_checkbuffer(L, 2, &b2len);
+
+    int b1offset = luaL_optinteger(L, 3, 0);
+    int b2offset = luaL_optinteger(L, 4, 0);
+
+    int mincount = (int(b1len) - b1offset) < (int(b2len) - b2offset) 
+        ? (int(b1len) - b1offset) : (int(b2len) - b2offset);
+
+    int count = luaL_optinteger(L, 5, mincount);
+
+    if (count < 0)
+        luaL_error(L, "buffer access out of bounds");
+
+    if (isoutofbounds(b1offset, b1len, unsigned(count)))
+        luaL_error(L, "buffer access out of bounds");
+
+    if (isoutofbounds(b2offset, b2len, unsigned(count)))
+        luaL_error(L, "buffer access out of bounds");
+
+    int res = memcmp((char*)b1buf + b1offset, (char*)b2buf + b2offset, count);
+    lua_pushnumber(L, double(res < 0 ? -1 : res > 0 ? 1 : 0));
+    return 1;
+}
+
 static int buffer_fill(lua_State* L)
 {
     size_t len = 0;
@@ -451,6 +483,12 @@ int luaopen_buffer(lua_State* L)
     {
         lua_pushcfunction(L, buffer_isfrozen, "isfrozen");
         lua_setfield(L, -2, "isfrozen");
+    }
+
+    if (FFlag::LuwuBufferMemcmp)
+    {
+        lua_pushcfunction(L, buffer_memcmp, "memcmp");
+        lua_setfield(L, -2, "memcmp");
     }
 
     return 1;
