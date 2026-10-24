@@ -242,6 +242,9 @@ static void errorToString(std::ostream& stream, const T& err)
         stream << "ConstructorReadByName { table = " << toString(err.table) << ", className = " << err.className << " }";
     else if constexpr (std::is_same_v<T, Typo>)
         stream << "Typo { written = " << err.written << ", meant = " << err.meant << " }";
+    else if constexpr (std::is_same_v<T, InconsistentReturn>)
+        stream << "InconsistentReturn { otherReturns = " << err.otherReturns << ", othersReturn = " << toString(err.othersReturn)
+               << ", returned = " << toString(err.returned) << " }";
     else if constexpr (std::is_same_v<T, DocSyntaxError>)
         stream << "DocSyntaxError { " << err.message << " }";
     else if constexpr (std::is_same_v<T, UninstantiableClass>)

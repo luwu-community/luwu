@@ -986,6 +986,22 @@ void TypeChecker2::visit(AstStatReturn* ret)
     Scope* scope = findInnermostScope(ret->location);
     TypePackId expectedRetType = scope->returnType;
 
+    // Luwu: in a function whose return type was inferred value by value (ConstraintSolver::dispatchInferredReturn), a
+    // `return` that gives some values gives `nil` for the rest. Because the inferred type already holds that `nil`, the
+    // `return` is checked only against the values it gives. One that gives nothing is checked against all of them: a
+    // function that returns a value must `return nil` on its other paths.
+    if (module->inferredReturnPacks.contains(follow(expectedRetType)))
+    {
+        auto [given, givenTail] = flatten(returnedPack(ret));
+        auto [head, tail] = flatten(expectedRetType);
+        bool givesSomeValues = !givenTail && !given.empty();
+        if (givesSomeValues && (given.size() < head.size() || tail))
+        {
+            head.resize(std::min(head.size(), given.size()));
+            expectedRetType = module->internalTypes->addTypePack(std::move(head));
+        }
+    }
+
     // Narrowly scoped to the pack tests themselves: the checks in between report on expressions,
     // and a pack mismatch from one of those is not about what this function returns.
     auto testReturnPack = [this](TypePackId actual, TypePackId expected, Location location)
@@ -4012,6 +4028,8 @@ void TypeChecker2::visit(AstExprFunction* fn)
     if (normalizedFnTy)
         suggestAnnotations(fn, normalizedFnTy->functions.parts.front());
 
+    checkInferredReturns(fn);
+
     functionDeclStack.pop_back();
 }
 
@@ -4087,6 +4105,314 @@ void TypeChecker2::reportPropertyTypos(AstExprTable* expr)
             if (!written.count(meant) && looksLikeTypo(*name, meant))
             {
                 reportError(Typo{*name, meant}, item.key->location);
+                break;
+            }
+        }
+    }
+}
+
+TypePackId TypeChecker2::returnedPack(AstStatReturn* ret)
+{
+    std::vector<TypeId> head;
+    std::optional<TypePackId> tail;
+    for (size_t i = 0; i < ret->list.size; ++i)
+    {
+        AstExpr* value = ret->list.data[i];
+        bool last = i + 1 == ret->list.size;
+        if (last && (value->is<AstExprCall>() || value->is<AstExprVarargs>()))
+            tail = lookupPack(value);
+        else
+            head.push_back(lookupType(value));
+    }
+    return module->internalTypes->addTypePack(TypePack{std::move(head), tail});
+}
+
+namespace
+{
+
+// Luwu: how many returns must agree before the one that differs is reported (InconsistentReturn)
+constexpr size_t kMinAgreeingReturns = 3;
+
+// Luwu: the most returned table or string literals compared for typos in one function. Each is compared with each.
+constexpr size_t kMaxComparedLiterals = 32;
+
+// Luwu: what a value returns as, for comparing it with other returns: a string or boolean literal as its type.
+TypeId widenLiteral(NotNull<BuiltinTypes> builtinTypes, TypeId ty)
+{
+    ty = follow(ty);
+    if (const SingletonType* singleton = get<SingletonType>(ty))
+    {
+        if (get<StringSingleton>(singleton))
+            return builtinTypes->stringType;
+        if (get<BooleanSingleton>(singleton))
+            return builtinTypes->booleanType;
+    }
+    return ty;
+}
+
+// Luwu: `nil`, `none` and `never` (a `return error(...)`) say nothing about what a function returns.
+bool isAbsence(TypeId ty)
+{
+    ty = follow(ty);
+    return isNil(ty) || isNone(ty) || get<NeverType>(ty);
+}
+
+AstExpr* stripGroups(AstExpr* expr)
+{
+    while (AstExprGroup* group = expr->as<AstExprGroup>())
+        expr = group->expr;
+    return expr;
+}
+
+// Luwu: a key or string literal a function returns, and where.
+struct Spelling
+{
+    std::string name;
+    // Its place among every spelling collected from the function's returns, in source order.
+    size_t order;
+    Location location;
+};
+
+// Luwu: of two spellings, the one to report as the typo: the one fewer returns use, or the later one if they tie.
+bool isTheTypo(const Spelling& written, const Spelling& other, const std::unordered_map<std::string, size_t>& uses)
+{
+    size_t writtenUses = uses.at(written.name);
+    size_t otherUses = uses.at(other.name);
+    if (writtenUses != otherUses)
+        return writtenUses < otherUses;
+    return written.order > other.order;
+}
+
+} // namespace
+
+// Luwu: the rules a function whose return type is inferred from its returns keeps (ConstraintSolver::
+// dispatchInferredReturn). Its returns join into one type, but some differences between them are almost always mistakes.
+void TypeChecker2::checkInferredReturns(const AstExprFunction* fn)
+{
+    std::vector<AstStatReturn*> returns = findOwnReturns(fn);
+    if (returns.size() < 2)
+        return;
+
+    Scope* scope = findInnermostScope(returns.front()->location);
+    if (!scope || !module->inferredReturnPacks.contains(follow(scope->returnType)))
+        return;
+
+    reportInconsistentReturn(returns);
+    reportReturnedKeyTypos(returns);
+    reportReturnedStringTypos(returns);
+}
+
+// Luwu: the one return whose values differ from what every other return agrees on, when at least
+// kMinAgreeingReturns agree. `nil`, `none` and `x :: any` returns don't count. Neither does a return ending in a variadic
+// or generic tail: its values can't be lined up with the others.
+void TypeChecker2::reportInconsistentReturn(const std::vector<AstStatReturn*>& returns)
+{
+    NotNull<Scope> scope = stack.back();
+
+    struct Returned
+    {
+        AstStatReturn* ret;
+        std::vector<TypeId> values;
+    };
+    std::vector<Returned> candidates;
+    for (AstStatReturn* ret : returns)
+    {
+        if (std::any_of(ret->list.begin(), ret->list.end(), isAnyCast))
+            continue;
+
+        auto [values, tail] = flatten(returnedPack(ret));
+        if (tail || std::all_of(values.begin(), values.end(), isAbsence))
+            continue;
+
+        for (TypeId& value : values)
+            value = widenLiteral(builtinTypes, value);
+        candidates.push_back(Returned{ret, std::move(values)});
+    }
+
+    if (candidates.size() < kMinAgreeingReturns + 1)
+        return;
+
+    auto isSubtype = [&](TypeId sub, TypeId super)
+    {
+        return subtyping->isSubtype(sub, super, scope).isSubtype;
+    };
+    auto agree = [&](const std::vector<TypeId>& a, const std::vector<TypeId>& b)
+    {
+        if (a.size() != b.size())
+            return false;
+        for (size_t i = 0; i < a.size(); ++i)
+        {
+            if (!isSubtype(a[i], b[i]) || !isSubtype(b[i], a[i]))
+                return false;
+        }
+        return true;
+    };
+
+    // With at most one return differing, two of the first three agree with each other and with the rest.
+    const Returned* reference = nullptr;
+    if (agree(candidates[0].values, candidates[1].values) || agree(candidates[0].values, candidates[2].values))
+        reference = &candidates[0];
+    else if (agree(candidates[1].values, candidates[2].values))
+        reference = &candidates[1];
+    else
+        return;
+
+    const Returned* odd = nullptr;
+    for (const Returned& candidate : candidates)
+    {
+        if (agree(candidate.values, reference->values))
+            continue;
+        if (odd)
+            return;
+        odd = &candidate;
+    }
+    if (!odd)
+        return;
+
+    // A missing or extra value is a surprise. A value made optional (`return find(x)` giving `T?` among `T`s), a subtype
+    // of theirs or a supertype isn't.
+    bool surprising = odd->values.size() != reference->values.size();
+    for (size_t i = 0; !surprising && i < odd->values.size(); ++i)
+    {
+        TypeId value = stripNil(builtinTypes, *module->internalTypes, odd->values[i]);
+        TypeId theirs = reference->values[i];
+        surprising = !isAbsence(value) && !isSubtype(value, theirs) && !isSubtype(theirs, odd->values[i]);
+    }
+
+    if (surprising)
+    {
+        TypePackId othersReturn = module->internalTypes->addTypePack(reference->values);
+        TypePackId returned = module->internalTypes->addTypePack(odd->values);
+        reportError(InconsistentReturn{candidates.size() - 1, othersReturn, returned}, odd->ret->location);
+    }
+}
+
+// Luwu: returned table literals whose keys are the same but for one pair spelled almost alike (`type` and `tpye`). The
+// spelling fewer returns use is the typo. A key only one table has is an optional field, not a typo.
+void TypeChecker2::reportReturnedKeyTypos(const std::vector<AstStatReturn*>& returns)
+{
+    // The keys of the tables returned at each position, and how many of those tables use each key.
+    std::vector<std::vector<std::vector<Spelling>>> tables;
+    std::vector<std::unordered_map<std::string, size_t>> uses;
+    size_t order = 0;
+    for (AstStatReturn* ret : returns)
+    {
+        for (size_t i = 0; i < ret->list.size; ++i)
+        {
+            AstExprTable* literal = stripGroups(ret->list.data[i])->as<AstExprTable>();
+            if (!literal)
+                continue;
+            if (tables.size() <= i)
+            {
+                tables.resize(i + 1);
+                uses.resize(i + 1);
+            }
+            if (tables[i].size() >= kMaxComparedLiterals)
+                continue;
+
+            std::vector<Spelling> keys;
+            for (const AstExprTable::Item& item : literal->items)
+            {
+                if (std::optional<std::string> name = literalPropertyName(item))
+                {
+                    keys.push_back(Spelling{*name, order++, item.key->location});
+                    ++uses[i][*name];
+                }
+            }
+            tables[i].push_back(std::move(keys));
+        }
+    }
+
+    // The keys of `keys` that `from` doesn't have.
+    auto missingFrom = [](const std::vector<Spelling>& keys, const std::vector<Spelling>& from)
+    {
+        std::vector<const Spelling*> missing;
+        for (const Spelling& key : keys)
+        {
+            bool found = std::any_of(
+                from.begin(),
+                from.end(),
+                [&](const Spelling& other)
+                {
+                    return other.name == key.name;
+                }
+            );
+            if (!found)
+                missing.push_back(&key);
+        }
+        return missing;
+    };
+
+    std::unordered_set<size_t> reported;
+    for (size_t i = 0; i < tables.size(); ++i)
+    {
+        for (size_t a = 0; a < tables[i].size(); ++a)
+        {
+            for (size_t b = a + 1; b < tables[i].size(); ++b)
+            {
+                const std::vector<Spelling>& left = tables[i][a];
+                const std::vector<Spelling>& right = tables[i][b];
+                if (left.size() != right.size())
+                    continue;
+
+                std::vector<const Spelling*> onlyLeft = missingFrom(left, right);
+                std::vector<const Spelling*> onlyRight = missingFrom(right, left);
+                if (onlyLeft.size() != 1 || onlyRight.size() != 1)
+                    continue;
+
+                const Spelling* written = onlyLeft.front();
+                const Spelling* meant = onlyRight.front();
+                if (!isTheTypo(*written, *meant, uses[i]))
+                    std::swap(written, meant);
+
+                if (looksLikeTypo(written->name, meant->name) && reported.insert(written->order).second)
+                    reportError(Typo{written->name, meant->name}, written->location);
+            }
+        }
+    }
+}
+
+// Luwu: returned string literals one edit apart (`"sucess"` and `"success"`), each at least kMinTypoStringLength long. The
+// spelling fewer returns use is the typo.
+void TypeChecker2::reportReturnedStringTypos(const std::vector<AstStatReturn*>& returns)
+{
+    // Shorter strings one edit apart are as often different words (`"add"`, `"and"`).
+    constexpr size_t kMinTypoStringLength = 4;
+
+    std::vector<std::vector<Spelling>> literals;
+    std::vector<std::unordered_map<std::string, size_t>> uses;
+    size_t order = 0;
+    for (AstStatReturn* ret : returns)
+    {
+        for (size_t i = 0; i < ret->list.size; ++i)
+        {
+            AstExprConstantString* literal = stripGroups(ret->list.data[i])->as<AstExprConstantString>();
+            if (!literal || literal->value.size < kMinTypoStringLength)
+                continue;
+            if (literals.size() <= i)
+            {
+                literals.resize(i + 1);
+                uses.resize(i + 1);
+            }
+            if (literals[i].size() >= kMaxComparedLiterals)
+                continue;
+
+            std::string value(literal->value.data, literal->value.size);
+            literals[i].push_back(Spelling{value, order++, literal->location});
+            ++uses[i][value];
+        }
+    }
+
+    for (size_t i = 0; i < literals.size(); ++i)
+    {
+        for (const Spelling& written : literals[i])
+        {
+            for (const Spelling& meant : literals[i])
+            {
+                if (written.name == meant.name || !withinOneEdit(written.name, meant.name) || !isTheTypo(written, meant, uses[i]))
+                    continue;
+
+                reportError(Typo{written.name, meant.name}, written.location);
                 break;
             }
         }

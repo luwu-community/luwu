@@ -1509,6 +1509,13 @@ struct ErrorConverter
         return "Did you mean '" + e.meant + "' instead of '" + e.written + "'?";
     }
 
+    std::string operator()(const InconsistentReturn& e) const
+    {
+        return "This function's other " + std::to_string(e.otherReturns) + " codepaths return '" + toString(e.othersReturn) +
+               "', are you sure you meant to return '" + toString(e.returned) +
+               "' here? Explicitly annotate this function's return type to silence";
+    }
+
     std::string operator()(const DocSyntaxError& e) const
     {
         return e.message;
@@ -1926,6 +1933,11 @@ bool UninstantiableClass::operator==(const UninstantiableClass& rhs) const
 bool Typo::operator==(const Typo& rhs) const
 {
     return written == rhs.written && meant == rhs.meant;
+}
+
+bool InconsistentReturn::operator==(const InconsistentReturn& rhs) const
+{
+    return otherReturns == rhs.otherReturns && othersReturn == rhs.othersReturn && returned == rhs.returned;
 }
 
 bool DocSyntaxError::operator==(const DocSyntaxError& rhs) const
@@ -2513,6 +2525,11 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
         e.table = clone(e.table);
     else if constexpr (std::is_same_v<T, Typo>)
     {
+    }
+    else if constexpr (std::is_same_v<T, InconsistentReturn>)
+    {
+        e.othersReturn = clone(e.othersReturn);
+        e.returned = clone(e.returned);
     }
     else if constexpr (std::is_same_v<T, DocSyntaxError>)
     {

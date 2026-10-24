@@ -2389,6 +2389,11 @@ bool looksLikeTypo(const std::string& written, const std::string& meant)
     return written.size() > kMaxTypoEdits && editDistanceWithin(written, meant, typoEditLimit(written)).has_value();
 }
 
+bool withinOneEdit(const std::string& a, const std::string& b)
+{
+    return editDistanceWithin(a, b, 1).has_value();
+}
+
 std::optional<MismatchExplanation> explainMismatch(
     TypeId given,
     TypeId expected,

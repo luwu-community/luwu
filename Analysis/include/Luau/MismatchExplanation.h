@@ -71,6 +71,9 @@ struct MismatchExplanation
 // few edits don't make it a different word.
 bool looksLikeTypo(const std::string& written, const std::string& meant);
 
+// Whether `a` and `b` are at most one edit apart (an insertion, deletion, substitution or swap of two neighbors).
+bool withinOneEdit(const std::string& a, const std::string& b);
+
 // Returns nullopt when the types are of a kind the differ doesn't take apart (generics, type
 // functions, classes), when no failing place can be found in two structured types, and when
 // everything found involves an error type, so the caller can fall back to the subtyping test's own

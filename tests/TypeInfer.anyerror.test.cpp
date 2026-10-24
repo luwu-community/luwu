@@ -15,6 +15,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauIndexingIntoErrorGivesError)
+LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 
 TEST_SUITE_BEGIN("TypeInferAnyError");
 
@@ -433,7 +434,13 @@ end
         // We refine `any` to `*error-type* | ~(false?)`, and then index
         // into it, versus the old solver path where we just claim refining
         // `any` means `any`.
-        CHECK("(any, *error-type*) -> *error-type*" == toString(requireType("foo")));
+
+        // Luwu: the two returns are joined (ConstraintSolver::dispatchInferredReturn). Without
+        // LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier the join loses the error type.
+        if (FFlag::LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
+            CHECK("(any, *error-type*) -> *error-type*" == toString(requireType("foo")));
+        else
+            CHECK("<a>(any, a) -> a" == toString(requireType("foo")));
     }
     else
     {

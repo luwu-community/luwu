@@ -133,7 +133,23 @@ AstLocal* methodSelf(AstExprFunction* fn)
 namespace
 {
 
-struct SelfReturns : AstVisitor
+struct OwnReturns : AstVisitor
+{
+    std::vector<AstStatReturn*> returns;
+
+    bool visit(AstExprFunction*) override
+    {
+        return false;
+    }
+
+    bool visit(AstStatReturn* ret) override
+    {
+        returns.push_back(ret);
+        return true;
+    }
+};
+
+struct SelfReturns
 {
     AstLocal* self = nullptr;
     size_t returns = 0;
@@ -152,19 +168,6 @@ struct SelfReturns : AstVisitor
         return construct && newOfClassOf(construct) == self;
     }
 
-    bool visit(AstExprFunction* fn) override
-    {
-        return false;
-    }
-
-    bool visit(AstStatReturn* ret) override
-    {
-        ++returns;
-        if (ret->list.size == 1 && isSelfValue(ret->list.data[0]))
-            ++selfReturns;
-        return true;
-    }
-
     bool isSelfValue(AstExpr* value) const
     {
         while (AstExprGroup* group = value->as<AstExprGroup>())
@@ -177,8 +180,15 @@ SelfReturns countSelfReturns(AstExprFunction* fn, AstLocal* self)
 {
     SelfReturns returns;
     returns.self = self;
-    if (self && fn->body)
-        fn->body->visit(&returns);
+    if (!self)
+        return returns;
+
+    for (AstStatReturn* ret : findOwnReturns(fn))
+    {
+        ++returns.returns;
+        if (ret->list.size == 1 && returns.isSelfValue(ret->list.data[0]))
+            ++returns.selfReturns;
+    }
     return returns;
 }
 
@@ -196,6 +206,24 @@ AstLocal* newOfClassOf(AstExprCall* call)
 
     AstExprLocal* local = classOf->args.data[0]->as<AstExprLocal>();
     return local ? local->local : nullptr;
+}
+
+std::vector<AstStatReturn*> findOwnReturns(const AstExprFunction* fn)
+{
+    OwnReturns visitor;
+    if (fn->body)
+        fn->body->visit(&visitor);
+    return std::move(visitor.returns);
+}
+
+bool isAnyCast(AstExpr* expr)
+{
+    while (AstExprGroup* group = expr->as<AstExprGroup>())
+        expr = group->expr;
+
+    AstExprTypeAssertion* cast = expr->as<AstExprTypeAssertion>();
+    AstTypeReference* annotation = cast ? cast->annotation->as<AstTypeReference>() : nullptr;
+    return annotation && !annotation->prefix && !annotation->hasParameterList && annotation->name == "any";
 }
 
 bool returnsSelf(AstExprFunction* fn, AstLocal* self)
