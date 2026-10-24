@@ -1,0 +1,124 @@
+;; ============================================================================
+;; C++ bindings shared by the targets: the instruction being lowered, its IR operands and conditions
+;; ============================================================================
+;;
+;; Each binding is a Luna value or procedure that builds a typed C++ term; templates use these instead of writing C++
+;; names themselves. Types (gen:typed) let templates tell registers, IR operands and constants apart (reg? ir? lit?)
+;; and let gen:build check instructions' arguments.
+
+;; The lowering context variables available in each command case of lowerInstGenerated.
+(define cpp:lowering (gen:name :lowering))
+(define cpp:regs (gen:name :regs))
+(define cpp:build (gen:name :build))
+(define cpp:inst (gen:name :inst))
+(define cpp:index (gen:typed :uint32_t (gen:name :index)))
+(define cpp:next (gen:name :next))
+
+~ Returns the C++ expression for the IR operand at slot (:OP_A ... :OP_G) of the instruction being lowered.
+(define (ir-operand slot) (gen:typed :IrOp (gen:call slot cpp:inst)))
+
+;; C++ sizeof expressions with compile-time sizes against which Luna validates index scales.
+(define sizeof-TValue (gen:sizeof :TValue 16))
+(define sizeof-Instruction (gen:sizeof :Instruction 4))
+(define sizeof-LuaNode (gen:sizeof :LuaNode 32))
+
+;; Bit shift amount that shifts an instruction's C field down to the lowest byte.
+(define instruction-c-shift (gen:typed :int (gen:* (gen:name :kOffsetOfInstructionC) 8)))
+
+~ Emits a lowering-time comparison testing whether IR operand op has the specified kind.
+(define (op-kind? op kind)
+  (let ([domain (and (cpp? op) (assoc 'kinds (cpp-facts op)))])
+    (cond [(and domain (not (member? (keyword->string kind) (second domain)))) #f]
+          [(and domain (= (length (second domain)) 1)) #t]
+          [else (gen:== (gen:field op :kind) (gen:enum :IrOpKind kind))])))
+~ Emits a lowering-time test checking whether IR operand op is a constant.
+(define (constant? op) (op-kind? op :Constant))
+~ Emits a lowering-time test checking whether IR operand op is an instruction.
+(define (inst? op) (op-kind? op :Inst))
+
+~ Tests whether an IR result may have nonzero high bits beyond its declared width.
+(define (dirty-high-bits? op)
+  (gen:&& (inst? op)
+          (gen:call :producesDirtyHighRegisterBits
+                    (gen:field (gen:method (gen:field cpp:lowering :function) :instOp op) :cmd))))
+
+~ Retrieves the 32-bit signed integer value of constant IR operand op.
+(define (int-val op) (gen:typed :int (gen:method cpp:lowering :intOp op)))
+~ Retrieves the 32-bit unsigned integer value of constant IR operand op.
+(define (uint-val op) (gen:typed :unsigned (gen:method cpp:lowering :uintOp op)))
+~ Retrieves the 64-bit integer value of constant IR operand op.
+(define (int64-val op) (gen:typed :int64_t (gen:method cpp:lowering :int64Op op)))
+~ Retrieves the double-precision float value of constant IR operand op.
+(define (double-val op) (gen:typed :double (gen:method cpp:lowering :doubleOp op)))
+~ Retrieves the tag byte value of constant IR operand op.
+(define (tag-val op) (gen:typed :uint8_t (gen:method cpp:lowering :tagOp op)))
+~ Retrieves the import index of constant IR operand op.
+(define (import-val op) (gen:typed :unsigned (gen:method cpp:lowering :importOp op)))
+~ Retrieves the VM register index of IR operand op.
+(define (vm-reg op) (gen:typed :int (gen:call :vmRegOp op)))
+~ Retrieves the VM constant table index of IR operand op.
+(define (vm-const op) (gen:typed :int (gen:call :vmConstOp op)))
+
+~ Emits a lowering-time test checking whether operand op represents an integer value.
+(define (int-operand? op)
+  (let ([fn (gen:field cpp:lowering :function)])
+    (gen:? (constant? op)
+           (gen:== (gen:field (gen:method fn :constOp op) :kind) (gen:enum :IrConstKind :Int))
+           (gen:== (gen:call :getCmdValueKind (gen:field (gen:method fn :instOp op) :cmd)) (gen:enum :IrValueKind :Int)))))
+~ Tests whether the currently lowered function is variadic.
+(define (variadic?) (gen:typed :bool (gen:field (gen:field cpp:lowering :function) :variadic)))
+~ Retrieves the native context offset for the specified runtime helper function.
+(define (libm-offset func) (gen:typed :uint32_t (gen:call :getNativeContextOffset func)))
+
+~ Retrieves the target IrBlock referenced by IR operand op.
+(define (block-of op) (gen:method cpp:lowering :blockOp op))
+~ Retrieves the assembly Label corresponding to IR operand op.
+(define (label-of op) (gen:typed :Label (gen:method cpp:lowering :labelOp op)))
+
+;; Condition keywords, as IrCondition enumerators
+(define %cond-names
+  '((:eq Equal) (:ne NotEqual) (:slt Less) (:sle LessEqual) (:sgt Greater) (:sge GreaterEqual) (:ult UnsignedLess)
+    (:ule UnsignedLessEqual) (:ugt UnsignedGreater) (:uge UnsignedGreaterEqual) (:lt Less) (:le LessEqual) (:gt Greater)
+    (:ge GreaterEqual) (:nlt NotLess) (:nle NotLessEqual) (:ngt NotGreater) (:nge NotGreaterEqual)))
+
+~ Returns the IrCondition corresponding to condition keyword c or :cond operand c.
+(define (cond-ir c)
+  (if (keyword? c)
+      (gen:typed :IrCondition (gen:enum :IrCondition (symbol->string (nth (assoc c %cond-names) 1))))
+      (gen:typed :IrCondition (gen:call :conditionOp c))))
+
+~ Returns a C++ reference to fast flag name (FFlag::name).
+(define (fflag name) (gen:typed :bool (gen:name (str "FFlag::" name))))
+
+~ Emits a lowering-time test checking whether condition operand c matches IrCondition name.
+(define (cond-is? c name) (gen:== (gen:call :conditionOp c) (gen:enum :IrCondition name)))
+
+(define %cond-negations
+  '((:eq :ne) (:ne :eq) (:slt :sge) (:sge :slt) (:sle :sgt) (:sgt :sle) (:ult :uge) (:uge :ult) (:ule :ugt) (:ugt :ule)
+    (:lt :nlt) (:nlt :lt) (:le :nle) (:nle :le) (:gt :ngt) (:ngt :gt) (:ge :nge) (:nge :ge)))
+
+~ Returns the negated IrCondition of condition c.
+(define (cond-negated-ir c)
+  (if (keyword? c)
+      (cond-ir (nth (assoc c %cond-negations) 1))
+      (gen:typed :IrCondition (gen:call :getNegatedCondition (cond-ir c)))))
+
+~ Returns an expression adding offset to base, returning base unmodified when offset is zero.
+(define (cpp-plus base offset) (if (equal? offset 0) base (gen:+ base offset)))
+
+;; 32-bit signed integer bounds and INT64_MIN constant.
+(define int32-min -2147483648)
+(define int32-max 2147483647)
+(define int64-min (gen:typed :int64_t (gen:name :INT64_MIN)))
+~ Returns true if number n falls within the 32-bit signed integer range.
+(define (int32? n) (and (int? n) (>= n int32-min) (<= n int32-max)))
+
+~ Returns the bit width of integer value type t.
+(define (type-bits t) (case t [(:I32 :U8 :S8 :U16 :S16) 32] [(:I64 :Ptr) 64] [else (error "type-bits takes an integer type, got" t)]))
+
+~ Converts numeric value v to a C++ double literal node, or returns v unchanged if already a C++ term.
+(define (cpp-double v) (if (number? v) (gen:double v) v))
+
+;; Bitmasks for garbage collection mark bits in GCheader.
+(define black-mask (gen:typed :int (gen:call :bitmask :BLACKBIT)))
+(define white-mask (gen:typed :int (gen:call :bit2mask :WHITE0BIT :WHITE1BIT)))

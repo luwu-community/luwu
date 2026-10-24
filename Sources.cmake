@@ -143,6 +143,9 @@ target_sources(Luwu.CodeGen PRIVATE
     CodeGen/include/Luau/UnwindBuilderWin.h
     CodeGen/include/Luau/BytecodeAnalysis.h
     CodeGen/include/Luau/BytecodeSummary.h
+    CodeGen/include/Luau/generated/IrCmd.h
+    CodeGen/include/Luau/generated/IrCmdEffects.h
+    CodeGen/include/Luau/generated/IrCmdInfo.h
     CodeGen/include/luacodegen.h
 
     CodeGen/src/AssemblyBuilderA64.cpp
@@ -169,6 +172,7 @@ target_sources(Luwu.CodeGen PRIVATE
     CodeGen/src/IrTranslateBuiltins.cpp
     CodeGen/src/IrTranslation.cpp
     CodeGen/src/IrUtils.cpp
+    CodeGen/src/IrValidation.cpp
     CodeGen/src/IrValueLocationTracking.cpp
     CodeGen/src/lcodegen.cpp
     CodeGen/src/NativeProtoExecData.cpp
@@ -199,8 +203,12 @@ target_sources(Luwu.CodeGen PRIVATE
     CodeGen/src/IrRegAllocA64.h
     CodeGen/src/IrTranslateBuiltins.h
     CodeGen/src/IrTranslation.h
+    CodeGen/src/IrValidation.h
     CodeGen/src/IrValueLocationTracking.h
     CodeGen/src/NativeState.h
+
+    CodeGen/src/generated/LoweringRulesA64.h
+    CodeGen/src/generated/LoweringRulesX64.h
 )
 
 # Luwu.Analysis Sources

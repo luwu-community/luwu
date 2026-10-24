@@ -1,0 +1,219 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-div-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+            (gen:build :sdiv (result-reg) temp1 temp2))))]
+    [:x64
+      (gen:seq
+        (gen:let ([div-rax (gen:call "ScopedRegX64" cpp:regs)]
+                  [div-rdx (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:method div-rax :take (x64:reg :rax))
+          (gen:method div-rdx :take (x64:reg :rdx))
+          (gen:build :mov (x64:reg :rax) (gen:method cpp:lowering :memRegInt64Op a))
+          (gen:build :cqo)
+          (gen:build :idiv (gen:method cpp:lowering :memRegInt64Op b))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a b)))
+          (gen:build :mov (result-reg) (x64:reg :rax))))]))
+
+(define (lower-idiv-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+            (gen:let ([temp-rem (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                      [temp-adj (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+              (gen:build :sdiv (result-reg) temp1 temp2)
+              (gen:build :msub temp-rem (result-reg) temp2 temp1)
+              (gen:build :sub temp-adj (result-reg) (gen:cast "uint16_t" 1))
+              (gen:build :cmp temp-rem (gen:cast "uint16_t" 0))
+              (gen:build :csel temp-adj temp-adj (result-reg) (gen:enum :ConditionA64 :NotEqual))
+              ;; The quotient can truncate to zero even when floor must subtract one.
+              (gen:build :eor temp-rem temp-rem temp2)
+              (gen:build :cmp temp-rem (gen:cast "uint16_t" 0))
+              (gen:build :csel (result-reg) temp-adj (result-reg) (gen:enum :ConditionA64 :Less))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([div-rax (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:method div-rax :take (x64:reg :rax))
+          (gen:let ([div-rdx (gen:call "ScopedRegX64" cpp:regs)])
+            (gen:method div-rdx :take (x64:reg :rdx))
+            (gen:let ([temp-b (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+              (gen:build :mov (x64:scoped-reg temp-b) (gen:method cpp:lowering :memRegInt64Op b))
+              (gen:build :mov (x64:reg :rax) (gen:method cpp:lowering :memRegInt64Op a))
+              (gen:build :cqo)
+              (gen:build :idiv (x64:scoped-reg temp-b))
+              (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a b)))
+              (gen:let ([done (:type "Label")])
+                (gen:build :mov (result-reg) (x64:reg :rax))
+                (gen:build :test (x64:reg :rdx) (x64:reg :rdx))
+                (gen:build :jcc (gen:enum :ConditionX64 :Equal) done)
+                (gen:build :xor_ (x64:reg :rdx) (x64:scoped-reg temp-b))
+                (gen:build :jcc (gen:enum :ConditionX64 :GreaterEqual) done)
+                (gen:build :sub (result-reg) 1)
+                (gen:build :setLabel done))))))]))
+
+(define (lower-udiv-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+            (gen:build :udiv (result-reg) temp1 temp2))))]
+    [:x64
+      (gen:seq
+        (gen:let ([div-rax (gen:call "ScopedRegX64" cpp:regs)]
+                  [div-rdx (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:method div-rax :take (x64:reg :rax))
+          (gen:method div-rdx :take (x64:reg :rdx))
+          (gen:build :mov (x64:reg :rax) (gen:method cpp:lowering :memRegInt64Op a))
+          (gen:build :xor_ (x64:reg :rdx) (x64:reg :rdx))
+          (gen:build :div (gen:method cpp:lowering :memRegInt64Op b))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a b)))
+          (gen:build :mov (result-reg) (x64:reg :rax))))]))
+
+(define (lower-rem-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+            (gen:build :sdiv (result-reg) temp1 temp2)
+            (gen:build :rem (result-reg) temp1 temp2))))]
+    [:x64
+      (gen:seq
+        (gen:let ([div-rax (gen:call "ScopedRegX64" cpp:regs)]
+                  [div-rdx (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:method div-rax :take (x64:reg :rax))
+          (gen:method div-rdx :take (x64:reg :rdx))
+          (gen:let ([temp-b (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                    [temp-a (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+            (gen:build :mov (x64:scoped-reg temp-a) (gen:method cpp:lowering :memRegInt64Op a))
+            (gen:build :mov (x64:scoped-reg temp-b) (gen:method cpp:lowering :memRegInt64Op b))
+            (gen:let ([skip (:type "Label")]
+                      [done (:type "Label")]
+                      [tmp-min (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+              (gen:build :cmp (x64:scoped-reg temp-b) (gen:- 1))
+              (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) skip)
+              (gen:build :mov (x64:reg :rdx) 0)
+              (gen:build :mov64 (x64:scoped-reg tmp-min) (gen:name :INT64_MIN))
+              (gen:build :cmp (x64:scoped-reg temp-a) (x64:scoped-reg tmp-min))
+              (gen:build :jcc (gen:enum :ConditionX64 :Equal) done)
+              (gen:build :setLabel skip)
+              (gen:build :mov (x64:reg :rax) (x64:scoped-reg temp-a))
+              (gen:build :cqo)
+              (gen:build :idiv (x64:scoped-reg temp-b))
+              (gen:build :setLabel done)
+              (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a b)))
+              (gen:build :mov (result-reg) (x64:reg :rdx))))))]))
+
+(define (lower-urem-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+            (gen:build :udiv (result-reg) temp1 temp2)
+            (gen:build :rem (result-reg) temp1 temp2))))]
+    [:x64
+      (gen:seq
+        (gen:let ([div-rax (gen:call "ScopedRegX64" cpp:regs)]
+                  [div-rdx (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:method div-rax :take (x64:reg :rax))
+          (gen:method div-rdx :take (x64:reg :rdx))
+          (gen:build :mov (x64:reg :rax) (gen:method cpp:lowering :memRegInt64Op a))
+          (gen:build :xor_ (x64:reg :rdx) (x64:reg :rdx))
+          (gen:build :div (gen:method cpp:lowering :memRegInt64Op b))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a b)))
+          (gen:build :mov (result-reg) (x64:reg :rdx))))]))
+
+(define (lower-mod-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+            (gen:let ([temp-rem (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                      [temp-adj (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+              (gen:build :sdiv (result-reg) temp1 temp2)
+              (gen:build :mov temp-rem (result-reg))
+              (gen:build :rem temp-rem temp1 temp2)
+              (gen:build :add temp-adj temp-rem temp2)
+              (gen:build :eor (result-reg) temp-rem temp2)
+              (gen:build :cmp (result-reg) (gen:cast "uint16_t" 0))
+              (gen:build :csel temp-adj temp-adj temp-rem (gen:enum :ConditionA64 :Less))
+              (gen:build :cmp temp-rem (gen:cast "uint16_t" 0))
+              (gen:build :csel (result-reg) temp-adj temp-rem (gen:enum :ConditionA64 :NotEqual))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([div-rax (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:method div-rax :take (x64:reg :rax))
+          (gen:let ([div-rdx (gen:call "ScopedRegX64" cpp:regs)])
+            (gen:method div-rdx :take (x64:reg :rdx))
+            (gen:let ([temp-b (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                      [temp-a (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+              (gen:build :mov (x64:scoped-reg temp-a) (gen:method cpp:lowering :memRegInt64Op a))
+              (gen:build :mov (x64:scoped-reg temp-b) (gen:method cpp:lowering :memRegInt64Op b))
+              (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a b)))
+              (gen:let ([skip (:type "Label")]
+                        [done (:type "Label")]
+                        [tmp-min (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+                (gen:build :cmp (x64:scoped-reg temp-b) (gen:- 1))
+                (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) skip)
+                (gen:build :mov (result-reg) 0)
+                (gen:build :mov64 (x64:scoped-reg tmp-min) (gen:name :INT64_MIN))
+                (gen:build :cmp (x64:scoped-reg temp-a) (x64:scoped-reg tmp-min))
+                (gen:build :jcc (gen:enum :ConditionX64 :Equal) done)
+                (gen:build :setLabel skip)
+                (gen:build :mov (x64:reg :rax) (x64:scoped-reg temp-a))
+                (gen:build :cqo)
+                (gen:build :idiv (x64:scoped-reg temp-b))
+                (gen:build :mov (result-reg) (x64:reg :rdx))
+                (gen:build :test (x64:reg :rdx) (x64:reg :rdx))
+                (gen:build :jcc (gen:enum :ConditionX64 :Equal) done)
+                (gen:build :xor_ (x64:reg :rdx) (x64:scoped-reg temp-b))
+                (gen:build :jcc (gen:enum :ConditionX64 :GreaterEqual) done)
+                (gen:build :add (result-reg) (x64:scoped-reg temp-b))
+                (gen:build :setLabel done))))))]))
+
+(define (lower-check-div-int64 a b fail)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([fresh-label (:type "Label")]
+                  [fail-label (:ref) (gen:method cpp:lowering :getTargetLabel fail cpp:index fresh-label)]
+                  [reg-b (gen:method cpp:lowering :tempInt64 b)])
+          (gen:build :cbz reg-b fail-label)
+          (gen:let ([reg-a (gen:method cpp:lowering :tempInt64 a)])
+            (gen:let ([temp-rotate (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+              (gen:build :ror temp-rotate reg-a (gen:cast "uint8_t" 63))
+              (gen:build :cmp temp-rotate (gen:cast "uint16_t" 1))
+              (gen:build :ccmn reg-b 1 (gen:call :getConditionInt64 (gen:enum :IrCondition :Equal)) 1)
+              (gen:build :b (gen:call :getConditionInt64 (gen:enum :IrCondition :Equal)) fail-label)
+              (gen:method cpp:lowering :finalizeTargetLabel fail cpp:index fresh-label)))))]
+    [:x64
+      (gen:seq
+        (gen:let ([tmp-a (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                  [tmp-b (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+          (gen:build :mov (x64:scoped-reg tmp-a) (gen:method cpp:lowering :memRegInt64Op a))
+          (gen:build :mov (x64:scoped-reg tmp-b) (gen:method cpp:lowering :memRegInt64Op b))
+          (gen:build :test (x64:scoped-reg tmp-b) (x64:scoped-reg tmp-b))
+          (gen:method cpp:lowering :jumpOrAbortOnUndef (gen:enum :ConditionX64 :Equal) fail cpp:index cpp:next)
+          (gen:let ([skip (:type "Label")]
+                    [tmp-min (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+            (gen:build :cmp (x64:scoped-reg tmp-b) (gen:- 1))
+            (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) skip)
+            (gen:build :mov64 (x64:scoped-reg tmp-min) (gen:name :INT64_MIN))
+            (gen:build :cmp (x64:scoped-reg tmp-a) (x64:scoped-reg tmp-min))
+            (gen:method cpp:lowering :jumpOrAbortOnUndef (gen:enum :ConditionX64 :Equal) fail cpp:index cpp:next)
+            (gen:build :setLabel skip))))]))
