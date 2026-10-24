@@ -99,7 +99,7 @@ struct LintWarning
         Code_DuplicateProperty = 64,       // Luwu: a property declared twice in a table type (part of TableLiteral)
         Code_DuplicateReadWrite = 65,      // Luwu: a table type property given its read or write type twice (part of TableLiteral)
 
-        Code_ManualStringHelper = 66,      // Luwu: `s:sub(1, #p) == p` and the like, which `string.startswith` and friends do
+        Code_LuaStringHelper = 66,         // Luwu: `s:sub(1, #p) == p` and the like, which `s:startswith(p)` and friends do
 
         Code__Count
     };
@@ -215,7 +215,7 @@ inline constexpr const char* kWarningNames[] = {
     "DuplicateKey",
     "DuplicateProperty",
     "DuplicateReadWrite",
-    "ManualStringHelper",
+    "LuaStringHelper",
 };
 // clang-format on
 
