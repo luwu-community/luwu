@@ -3693,6 +3693,46 @@ return a, b, c, d
     CHECK_EQ(found[2].location.begin.line, 6);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "DiscardedValuesReportsIfElseBranchesGivingMoreThanOneValue")
+{
+    LintResult result = lint(R"(
+local function f(a: number, b: number): number
+    return a + b
+end
+local function three(): (number, string, boolean)
+    return 1, "a", true
+end
+local function one(): number
+    return 1
+end
+local function rest(): (number, string, ...string)
+    return 1, "a"
+end
+local smth = math.random() > 0.5
+local succ, result = if smth then pcall(f, 1, 2) else nil, nil
+local x = if smth then one() elseif succ then three() else (three())
+local y = if smth then rest() else nil
+return succ, result, x, y
+)");
+
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : result.warnings)
+        if (warning.code == LintWarning::Code_DiscardedValues)
+            found.push_back(warning);
+
+    // `one()` gives one value, and the parentheses around the last `three()` silence it
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(
+        found[0].text,
+        "An if-else expression truncates this call to its first return, discarding 1 value. Wrap in parentheses to silence"
+    );
+    // the warning points at the call, not the whole if-else expression
+    CHECK_EQ(found[0].location, Location({14, 34}, {14, 48}));
+    CHECK_EQ(found[1].location.begin.line, 15);
+    CHECK(found[1].text.find("discarding 2 values") != std::string::npos);
+    CHECK(found[2].text.find("discarding 1 or more values") != std::string::npos);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsReportsPairsAndIpairsSeparately")
 {
     const std::string source = R"(
