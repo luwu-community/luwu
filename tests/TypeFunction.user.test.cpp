@@ -27,6 +27,7 @@ LUAU_FASTINT(LuwuTypeFunctionMemoryLimitMb)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuLiteralTypes)
+LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(LuwuClasses)
 
 TEST_SUITE_BEGIN("UserDefinedTypeFunctionTests");
@@ -4761,6 +4762,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_can_be_optional")
 {
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
     ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+    // A literal argument for a generic keeps its singleton type (`B` is `"b"`)
+    ScopedFastFlag removePrimitiveTypeConstraint{FFlag::LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier, true};
 
     CheckResult result = check(R"(
 type function Short(s: type): type
@@ -4855,6 +4858,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "literal_fields_are_checked_where_values_flow
 {
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
     ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
+    // `rule(raw)`'s read/write mismatch for `padding`
+    ScopedFastFlag missingPropertiesAsNil{FFlag::LuauSubtypingMissingPropertiesAsNil, true};
 
     CheckResult result = check(std::string(kLengthValidator) + R"(
 type CssLength = Length<literal<string>>
