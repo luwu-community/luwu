@@ -8,6 +8,7 @@
 #include "Luau/PrettyPrinter.h"
 #include "Luau/Scope.h"
 #include "Luau/TypeInfer.h"
+#include "Luau/TypePack.h"
 #include "Luau/TypeUtils.h"
 #include "Luau/StringUtils.h"
 #include "Luau/ToString.h"
@@ -6829,6 +6830,59 @@ private:
     }
 };
 
+// Luwu: a call giving more than one value where only one value is kept: a branch of an if-else expression. An if-else
+// expression gives exactly one value, so the rest are dropped: `local ok, err = if c then pcall(f) else nil, nil` sets `err` to the
+// second `nil`, never to what `pcall` gives. Parentheses around the branch say the truncation is meant.
+class LintDiscardedValues : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintDiscardedValues pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    void check(AstExpr* branch)
+    {
+        AstExprCall* call = branch->as<AstExprCall>();
+        const TypePackId* pack = call && context->module ? context->module->astTypePacks.find(call) : nullptr;
+        if (!pack)
+            return;
+
+        // A call whose values past the first are all a variadic or generic tail may well give exactly one.
+        auto [values, tail] = flatten(*pack);
+        if (values.size() < 2)
+            return;
+
+        size_t count = values.size() - 1;
+        std::string discarded = std::to_string(count);
+        if (tail)
+            discarded += " or more values";
+        else
+            discarded += count == 1 ? " value" : " values";
+
+        emitWarning(
+            *context,
+            LintWarning::Code_DiscardedValues,
+            call->location,
+            "An if-else expression truncates this call to its first return, discarding %s. Wrap in parentheses to silence",
+            discarded.c_str()
+        );
+    }
+
+    bool visit(AstExprIfElse* node) override
+    {
+        check(node->trueExpr);
+        check(node->falseExpr);
+        return true;
+    }
+};
+
 // Luwu: `pairs` and `ipairs`, which generalized iteration (`for k, v in t`) replaces. Each is its own lint so a module
 // can keep using one without turning off DeprecatedApi or the other.
 class LintLuaIterators : AstVisitor
@@ -7536,6 +7590,9 @@ std::vector<LintWarning> lint(
 
     if (context.warningEnabled(LintWarning::Code_FloatIndex))
         LintFloatIndex::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_DiscardedValues))
+        LintDiscardedValues::process(context);
 
     // Luwu: turning LuaIterators off turns off its parts
     if (context.warningEnabled(LintWarning::Code_LuaIterators) &&

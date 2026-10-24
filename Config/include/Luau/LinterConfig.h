@@ -87,6 +87,7 @@ struct LintWarning
         Code_MethodsNotInlined = 55,       // code that keeps the compiler from proving a class, so its methods aren't inlined
         Code_FloorDivision = 56,           // `math.floor(a / b)`, which is `a // b`
         Code_FenvDeoptimization = 57,      // `getfenv`/`setfenv`, which deoptimize the whole module
+        Code_DiscardedValues = 58,         // Luwu: a call giving several values where only its first is kept (an if-else branch)
 
         Code__Count
     };
@@ -188,6 +189,7 @@ inline constexpr const char* kWarningNames[] = {
     "MethodsNotInlined",
     "FloorDivision",
     "FenvDeoptimization",
+    "DiscardedValues",
 };
 // clang-format on
 
