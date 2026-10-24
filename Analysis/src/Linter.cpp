@@ -325,9 +325,9 @@ private:
         {
             const Global& g = global.second;
 
-            // A declared global exists at runtime whoever writes it, so writing it isn't a sign it should be a local.
-            if (g.declared)
-                continue;
+            // Luwu Declare Statements (rfcs/declare-statements.md): a declared global this file writes is checked like any
+            // other, and the suggestion says to remove the declaration too. One it only reads comes from the environment.
+            const char* declaration = g.declared ? " and removing its 'declare'" : "";
 
             if (g.functionRef.size() && g.assigned && g.firstRef->name != context->placeholder)
             {
@@ -338,18 +338,20 @@ private:
                         *context,
                         LintWarning::Code_GlobalUsedAsLocal,
                         g.firstRef->location,
-                        "Global '%s' is only used in the enclosing function '%s'; consider changing it to local",
+                        "Global '%s' is only used in the enclosing function '%s'; consider changing it to local%s",
                         g.firstRef->name.value,
-                        top->debugname.value
+                        top->debugname.value,
+                        declaration
                     );
                 else
                     emitWarning(
                         *context,
                         LintWarning::Code_GlobalUsedAsLocal,
                         g.firstRef->location,
-                        "Global '%s' is only used in the enclosing function defined at line %d; consider changing it to local",
+                        "Global '%s' is only used in the enclosing function defined at line %d; consider changing it to local%s",
                         g.firstRef->name.value,
-                        top->location.begin.line + 1
+                        top->location.begin.line + 1,
+                        declaration
                     );
             }
             else if (g.assigned && !g.readBeforeWritten && !g.definedInModuleScope && g.firstRef->name != context->placeholder)
@@ -358,8 +360,9 @@ private:
                     *context,
                     LintWarning::Code_GlobalUsedAsLocal,
                     g.firstRef->location,
-                    "Global '%s' is never read before being written. Consider changing it to local",
-                    g.firstRef->name.value
+                    "Global '%s' is never read before being written. Consider changing it to local%s",
+                    g.firstRef->name.value,
+                    declaration
                 );
             }
         }
