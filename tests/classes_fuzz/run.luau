@@ -128,7 +128,7 @@ local function seedDir(seed: number): string
 end
 
 local function mainFile(config: Config): string
-    return `main_{config.tag}.luau`
+    return `main_{config.tag}.luwu`
 end
 
 local function luauArgs(config: Config): { string }
@@ -166,7 +166,7 @@ for seed = firstSeed, firstSeed + seedCount - 1 do
     for _, config in configs do
         local modName = `mod_{config.tag}`
         local opt = tostring(config.opt)
-        fs.writefile(fs.path.join(dir, modName .. ".luau"), str.replace(mod, "OPTLEVEL", opt))
+        fs.writefile(fs.path.join(dir, modName .. ".luwu"), str.replace(mod, "OPTLEVEL", opt))
         fs.writefile(fs.path.join(dir, mainFile(config)), str.replace(str.replace(main, "OPTLEVEL", opt), "MODNAME", modName))
         table.insert(pending, { seed = seed, config = config })
     end
