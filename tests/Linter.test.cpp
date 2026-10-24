@@ -3249,12 +3249,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "declared_globals_are_known")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
 
-    // UnknownGlobal only runs in nocheck files; the writes would otherwise suggest a local
+    // UnknownGlobal only runs in nocheck files
     LintResult result = lint(R"(
 --!nocheck
 print(early)
 local function f()
-    counter = counter + 1
+    print(counter)
 end
 f()
 declare early: number
@@ -3262,6 +3262,48 @@ declare counter: number
 )");
 
     REQUIRE(0 == result.warnings.size());
+}
+
+// A declared global the file writes is checked like an undeclared one. A global the file only reads comes from the
+// environment, even when one function is all that reads it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "declared_globals_written_in_one_function_can_be_locals")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    LintResult result = lint(R"(
+declare counter: number
+declare total: number
+declare version: string
+
+function bump()
+    counter = 1
+    return counter
+end
+
+local function reset()
+    total = 0
+end
+
+local function show()
+    print(version)
+end
+
+return bump, reset, show
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 2);
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_GlobalUsedAsLocal);
+    CHECK_EQ(result.warnings[1].code, LintWarning::Code_GlobalUsedAsLocal);
+    std::vector<std::string> texts = {result.warnings[0].text, result.warnings[1].text};
+    std::sort(texts.begin(), texts.end());
+    CHECK_EQ(
+        texts[0],
+        "Global 'counter' is only used in the enclosing function 'bump'; consider changing it to local and removing its 'declare'"
+    );
+    CHECK_EQ(
+        texts[1],
+        "Global 'total' is only used in the enclosing function 'reset'; consider changing it to local and removing its 'declare'"
+    );
 }
 
 TEST_CASE_FIXTURE(Fixture, "DeclareMismatch")
