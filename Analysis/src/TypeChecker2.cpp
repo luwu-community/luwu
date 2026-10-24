@@ -8314,7 +8314,7 @@ static void collectIndexableNames(TypeId ty, std::vector<std::string>& names, in
         indexOf(*primitive->metatable);
     else if (const ExternType* extern_ = get<ExternType>(ty))
     {
-        for (const auto& [name, _] : extern_->props)
+        for (const auto& [name, _] : extern_->props())
             names.push_back(name);
         if (extern_->parent)
             collectIndexableNames(*extern_->parent, names, depth + 1);
