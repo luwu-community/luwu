@@ -1097,7 +1097,12 @@ bool ConstraintSolver::tryDispatch(const PackSubtypeConstraint& c, NotNull<const
         return block(c.superPack, constraint);
 
     if (c.inferredReturn)
-        return dispatchInferredReturn(c, constraint);
+    {
+        size_t firstPushed = unsolvedConstraints.size();
+        bool dispatched = dispatchInferredReturn(c, constraint);
+        blockReturnSlotsOnPushedConstraints(c.superPack, firstPushed);
+        return dispatched;
+    }
 
     unify(constraint, c.subPack, c.superPack);
 
@@ -1194,6 +1199,27 @@ TypeId ConstraintSolver::freshReturnSlot(Scope* scope)
     TypeId slot = freshType(arena, builtinTypes, scope, Polarity::Positive);
     inferredReturnSlots.insert(slot);
     return slot;
+}
+
+// Luwu: the constraints a `return` pushed (`C <: 'r`, for a value still being solved) give its return slots their
+// bounds, but the constraint graph doesn't know that: the slots are made while solving. Without the dependency, a slot is
+// generalized when another `return` finishes, with none of the bounds those constraints were about to give it, and the
+// function returns `unknown` (a static method whose recursive `return C.f()` dispatches first).
+void ConstraintSolver::blockReturnSlotsOnPushedConstraints(TypePackId returnPack, size_t firstPushed)
+{
+    const TypePack* slots = get<TypePack>(follow(returnPack));
+    if (!slots)
+        return;
+
+    for (size_t i = firstPushed; i < unsolvedConstraints.size(); ++i)
+    {
+        for (TypeId slot : slots->head)
+        {
+            slot = follow(slot);
+            if (get<FreeType>(slot) && inferredReturnSlots.contains(slot))
+                cgraph->addDependencyOf(unsolvedConstraints[i].get(), slot);
+        }
+    }
 }
 
 // Luwu: a free tail no `return` filled is empty. Generalized as it is, it would be `...unknown`.

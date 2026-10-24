@@ -28,6 +28,7 @@ LUAU_FASTFLAG(LuauHigherOrderGenericInference)
 LUAU_FASTFLAG(LuauCollapseDirectBoundCycles)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
+LUAU_FASTFLAG(LuwuClasses)
 
 TEST_SUITE_BEGIN("TypeInferFunctions");
 
@@ -2847,6 +2848,39 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "recursive_returns_join_whichever_return_come
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ("(number) -> number", toString(requireType("base_first")));
     CHECK_EQ("(number) -> number", toString(requireType("recursive_first")));
+}
+
+// A static method that calls itself through its class joins its returns like any function. The recursive `return` can
+// dispatch before the others (here, while `C.make`'s result is still waiting on the class), and the return slot must not
+// be generalized until every `return` is in.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_static_method_returning_its_own_call_joins_its_returns")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuClasses, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        class C(inner: string)
+            function make(n: number): C
+                return C(tostring(n))
+            end
+            function next_from(n: number)
+                const made = C.make(n)
+                if n > 3 then
+                    return made
+                else
+                    return C.next_from(n + 1)
+                end
+            end
+        end
+
+        local f = C.next_from
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("f")), "(number) -> C");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "joined_returns_still_report_falling_off_the_end")

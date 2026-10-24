@@ -239,6 +239,7 @@ public:
     bool tryDispatch(const SubtypeConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const PackSubtypeConstraint& c, NotNull<const Constraint> constraint);
     bool dispatchInferredReturn(const PackSubtypeConstraint& c, NotNull<const Constraint> constraint);
+    void blockReturnSlotsOnPushedConstraints(TypePackId returnPack, size_t firstPushed);
     bool tryDispatch(const GeneralizationConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const IterableConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const NameConstraint& c, NotNull<const Constraint> constraint);
