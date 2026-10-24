@@ -1441,7 +1441,7 @@ TEST_CASE_FIXTURE(Fixture, "typeof_unresolved_function")
         local function f(a: typeof(f)) end
         )");
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Unknown global 'f'; consider assigning to it first", toString(result.errors[0]));
+    CHECK_EQ("Unknown variable 'f', define it with 'local f = value'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "no_persistent_typelevel_change")

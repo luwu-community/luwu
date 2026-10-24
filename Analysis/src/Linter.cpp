@@ -11,6 +11,7 @@
 #include "Luau/TypeInfer.h"
 #include "Luau/TypePack.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/UnknownVariable.h"
 #include "Luau/StringUtils.h"
 #include "Luau/ToString.h"
 #include "Luau/Common.h"
@@ -287,15 +288,32 @@ private:
 
     void report()
     {
+        // Luwu: an unknown global gets the type checkers' message
+        std::unique_ptr<UnknownVariableExplainer> unknownVariables;
+        std::vector<std::string> knownGlobals;
+        std::vector<DiagnosticNote> unusedNotes;
+
         for (size_t i = 0; i < globalRefs.size(); ++i)
         {
             AstExprGlobal* gv = globalRefs[i];
             Global* g = globals.find(gv->name);
 
             if (!g || (!g->assigned && !g->builtin && !g->declared))
-                emitWarning(
-                    *context, LintWarning::Code_UnknownGlobal, gv->location, "Unknown global '%s'; consider assigning to it first", gv->name.value
-                );
+            {
+                if (!context->warningEnabled(LintWarning::Code_UnknownGlobal))
+                    continue;
+                if (!unknownVariables)
+                {
+                    unknownVariables = std::make_unique<UnknownVariableExplainer>(context->root->as<AstStatBlock>());
+                    for (const auto& [name, global] : globals)
+                    {
+                        if (global.assigned || global.builtin)
+                            knownGlobals.emplace_back(name.value);
+                    }
+                }
+                UnknownSymbol error = unknownVariableError(*unknownVariables, gv, knownGlobals, unusedNotes);
+                emitWarning(*context, LintWarning::Code_UnknownGlobal, gv->location, "%s", unknownVariableMessage(error).c_str());
+            }
             else if (g->deprecated)
             {
                 if (const char* replacement = *g->deprecated; replacement && strlen(replacement))
@@ -3113,11 +3131,7 @@ private:
 
     void report(const Location& location, const char* functionName, const AstAttr::DeprecatedInfo& info)
     {
-        std::string usePart = info.use ? format(", use '%s' instead", info.use->c_str()) : "";
-        std::string reasonPart = info.reason ? format(". %s", info.reason->c_str()) : "";
-        emitWarning(
-            *context, LintWarning::Code_DeprecatedApi, location, "Function '%s' is deprecated%s%s", functionName, usePart.c_str(), reasonPart.c_str()
-        );
+        reportAttributeDeprecation(location, "Function", functionName, info);
     }
 
     std::vector<const FunctionType*> functionTypeScopeStack;

@@ -58,10 +58,15 @@ TEST_CASE_FIXTURE(Fixture, "errors_that_render_differently_are_not_equal")
     named.givenName = "value";
     CHECK_FALSE((plain == named));
 
-    // `luwuExplanation` only selects the rendering style, so it doesn't make these two different errors.
+    // Whether a mismatch was explained only selects the rendering style, so it doesn't make these two different errors.
     TypeMismatch explained{number, string};
-    explained.luwuExplanation = true;
+    explained.explained = TypeMismatch::Explained{};
     CHECK((plain == explained));
+
+    // What an explanation prints does.
+    TypeMismatch expanded{number, string};
+    expanded.explained = TypeMismatch::Explained{std::nullopt, "A | B", 0};
+    CHECK_FALSE((explained == expanded));
 
     TypePackMismatch plainPack{empty, empty};
     TypePackMismatch overriddenPack{empty, empty};
@@ -78,9 +83,9 @@ TEST_CASE_FIXTURE(Fixture, "errors_that_render_differently_are_not_equal")
     namedMissing.givenName = "config";
     CHECK_FALSE((plainMissing == namedMissing));
 
-    MissingProperties explainedMissing{number, string, {"a"}};
-    explainedMissing.luwuExplanation = true;
-    CHECK((plainMissing == explainedMissing));
+    MissingProperties literalMissing{number, string, {"a"}};
+    literalMissing.fromTableLiteral = true;
+    CHECK((plainMissing == literalMissing));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_names_show_instead_of_tables")

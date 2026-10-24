@@ -61,6 +61,8 @@ namespace
 // class declaration parses as a nonsense expression statement and reports something about assignments
 // (upstream: "Incomplete statement: expected assignment or a function call").
 // Users have read that as "my Luwu build is broken", so say what is actually wrong.
+const LuwuFeature kClassesFeature{"classes", /* plural= */ true, "LuwuClasses"};
+const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ true, "LuwuDefaultArguments"};
 // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, `declare` is only allowed where it
 // visibly applies to the whole file.
 const char* const kDeclarationPlacementError =
@@ -77,8 +79,6 @@ const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not 
 const char* const kDeclareClassNeedsTypeError =
     "A declared class is written 'declare class type Name'; to declare an extern type, write 'declare extern type Name'";
 const char* const kDeclareExportOrderError = "'export' goes before 'declare': write 'export declare'";
-const LuwuFeature kClassesFeature{"classes", /* plural= */ true, "LuwuClasses"};
-const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ true, "LuwuDefaultArguments"};
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
 // class header or in front of a member. This keeps those positions unambiguous, and leaves room to give

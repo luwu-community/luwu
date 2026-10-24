@@ -26,6 +26,7 @@ LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuauHigherOrderGenericInference)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuauAllowIntersectionOfOneTableWithExtern)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 TEST_SUITE_BEGIN("TypeInferExternTypes");
 
@@ -372,7 +373,7 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_properties_are_invariant")
     CHECK_EQ(6, result.errors.at(0).location.begin.line);
     const GenericError* help = get<GenericError>(result.errors[1]);
     REQUIRE(help);
-    CHECK_EQ("Help[read/write mismatch]: consider marking 'foo' as 'read' if the function 'f' only reads from it.", help->message);
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking 'foo' as 'read' if the function 'f' only reads from it", help->message);
     CHECK_EQ(Location{{1, 23}, {1, 26}}, result.errors[1].location);
     CHECK_EQ(13, result.errors[2].location.begin.line);
 }
@@ -401,7 +402,7 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_indexers_are_invariant")
     CHECK_EQ(6, result.errors.at(0).location.begin.line);
     const GenericError* help = get<GenericError>(result.errors[1]);
     REQUIRE(help);
-    CHECK_EQ("Help[read/write mismatch]: consider marking this as 'read' if the function 'f' only reads from the array.", help->message);
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'f' only reads from the array", help->message);
     CHECK_EQ(Location{{1, 23}, {1, 42}}, result.errors[1].location);
     CHECK_EQ(13, result.errors[2].location.begin.line);
 }
@@ -579,9 +580,9 @@ local b: B = a
             "Expected property 'x' to allow reading and writing as 'BaseClass', but in 'A' it is a 'ChildClass', which can only "
             "be read as 'BaseClass'. Because 'x' can be read and written, it could silently be replaced with a value of a "
             "smaller type, causing data loss.\n\n"
-            "Help[read/write mismatch]:\n"
-            "- if nothing writes to 'x', mark it as 'read x: BaseClass' in 'B'\n"
-            "- if it reads and writes, make a 'BaseClass' version of your data or mark the additional properties as optional",
+            "Help (read/write mismatch):\n"
+            "  • If nothing writes to 'x', mark it as 'read x: BaseClass' in 'B'\n"
+            "  • If it reads and writes, make a 'BaseClass' version of your data or mark the additional properties as optional",
             toString(result.errors.at(0))
         );
     }
@@ -990,8 +991,20 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_check_missing_key")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, results);
-    auto err = get<UnknownProperty>(results.errors[0]);
-    CHECK_EQ("IsEnabled", err->key);
+    // Luwu (helpful subtyping errors): `IsEnabled` is one typo from `Enabled`
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+    {
+        const Typo* typo = get<Typo>(results.errors[0]);
+        REQUIRE(typo);
+        CHECK_EQ("foo.IsEnabled", typo->written);
+        CHECK_EQ("foo.Enabled", typo->meant);
+    }
+    else
+    {
+        auto err = get<UnknownProperty>(results.errors[0]);
+        REQUIRE(err);
+        CHECK_EQ("IsEnabled", err->key);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_check_present_key_in_superclass")
@@ -1090,7 +1103,11 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "extern_type_check_key_superset")
         end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(results);
+    // Luwu: `IsEnabled` is a string, so the second check can't run (UnreachableCodeUse). Upstream reports nothing.
+    LUAU_REQUIRE_ERROR_COUNT(1, results);
+    const UnreachableCodeUse* unreachable = get<UnreachableCodeUse>(results.errors[0]);
+    REQUIRE(unreachable);
+    CHECK_EQ(UnreachableCodeUse::Reason::NarrowedAway, unreachable->reason);
     CHECK_EQ("(Foobar) -> Foobar", toString(requireType("update")));
 }
 

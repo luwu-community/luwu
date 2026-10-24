@@ -81,7 +81,16 @@ TEST_CASE_FIXTURE(Fixture, "UnknownGlobal")
     LintResult result = lint("--!nocheck\nreturn foo");
 
     REQUIRE(1 == result.warnings.size());
-    CHECK_EQ(result.warnings[0].text, "Unknown global 'foo'; consider assigning to it first");
+    CHECK_EQ(result.warnings[0].text, "Unknown variable 'foo', define it with 'local foo = value'");
+}
+
+// Luwu: the lint explains an unknown name the way the type checkers do
+TEST_CASE_FIXTURE(Fixture, "UnknownGlobalTypo")
+{
+    LintResult result = lint("--!nocheck\nlocal othername = 1\nreturn othername, othrname");
+
+    REQUIRE(1 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "Typo 'othrname': Did you mean 'othername'?");
 }
 
 TEST_CASE_FIXTURE(Fixture, "DeprecatedGlobal")
