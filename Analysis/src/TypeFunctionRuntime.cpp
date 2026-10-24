@@ -1718,15 +1718,16 @@ static int setMetadata(lua_State* L)
 
     TypeFunctionTypeId self = getTypeUserData(L, 1);
 
-    if (FFlag::LuauTypeFunctionSupportsFrozen && self->frozen)
-        luaL_error(L, "type.setmetadata: cannot be called to mutate a frozen type, use `types.copy` to make a copy");
-
     // Only a type the type function makes when it returns can have metadata of its own; these stay the one type every
-    // use of them shares (TypeFunctionDeserializer::ownsDeserializedType)
+    // use of them shares (TypeFunctionDeserializer::ownsDeserializedType). Checked before frozen, which a shared type
+    // can also be (LuauUdtfReuseTypeUserdatas pins `types.number`), since this says why.
     bool shared = get<TypeFunctionPrimitiveType>(self) || get<TypeFunctionAnyType>(self) || get<TypeFunctionUnknownType>(self) ||
                   get<TypeFunctionNeverType>(self) || get<TypeFunctionGenericType>(self) || get<TypeFunctionErrorType>(self);
     if (shared)
         luaL_error(L, "type.setmetadata: a %s type is shared by every use of it, so it can't have metadata of its own", getTag(L, self).c_str());
+
+    if (FFlag::LuauTypeFunctionSupportsFrozen && self->frozen)
+        luaL_error(L, "type.setmetadata: cannot be called to mutate a frozen type, use `types.copy` to make a copy");
 
     // Luwu doc references: a class, object or trait is shared too, but documenting one is common enough to allow: the
     // metadata goes on what the type function call stands for (`Cat` in `type Cat = Explain<CatBase>`), so it has to be
