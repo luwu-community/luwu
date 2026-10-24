@@ -40,6 +40,7 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
+LUAU_FASTFLAG(LuwuStringExtensions)
 
 // May a file use the `--!trust` directive, which lets the compiler act on type annotations it cannot
 // verify (Compiler::trustsTypeAnnotations)? The flag only permits the directive; it never enables trust
@@ -874,6 +875,31 @@ struct Compiler
         }
     }
 
+    // The FASTCALL form for a call with `argCount` arguments (1 to 3). `secondIsConstant` picks FASTCALL2K, whose aux is a
+    // constant: the second argument, or a builtin's own constant (bit32.extract's packed field and width).
+    static LuauOpcode fastcallOpcode(size_t argCount, bool secondIsConstant)
+    {
+        if (argCount == 1)
+            return LOP_FASTCALL1;
+        if (secondIsConstant)
+            return LOP_FASTCALL2K;
+        if (argCount == 2)
+            return LOP_FASTCALL2;
+        return LOP_FASTCALL3;
+    }
+
+    // Emits `opc` for `bfid` with operands `args`: registers, or for FASTCALL2K a register and a constant index. `aux2K`,
+    // when set, replaces FASTCALL2K's constant.
+    void emitFastcallN(LuauOpcode opc, int bfid, const uint32_t args[3], int aux2K = -1)
+    {
+        bytecode.emitABC(opc, uint8_t(bfid), uint8_t(args[0]), 0);
+
+        if (opc == LOP_FASTCALL3)
+            bytecode.emitAux(args[1] | (args[2] << 8));
+        else if (opc != LOP_FASTCALL1)
+            bytecode.emitAux(aux2K >= 0 ? uint32_t(aux2K) : args[1]);
+    }
+
     void compileExprFastcallN(
         AstExprCall* expr,
         uint8_t target,
@@ -891,16 +917,8 @@ struct Compiler
         LUAU_ASSERT(bfid == LBF_BIT32_EXTRACTK ? bfK >= 0 : bfK < 0);
         LUAU_ASSERT(targetCount < 255);
 
-        LuauOpcode opc = LOP_NOP;
-
-        if (expr->args.size == 1)
-            opc = LOP_FASTCALL1;
-        else if (bfK >= 0 || (expr->args.size == 2 && isConstant(expr->args.data[1])))
-            opc = LOP_FASTCALL2K;
-        else if (expr->args.size == 2)
-            opc = LOP_FASTCALL2;
-        else
-            opc = LOP_FASTCALL3;
+        bool secondIsConstant = bfK >= 0 || (expr->args.size == 2 && isConstant(expr->args.data[1]));
+        LuauOpcode opc = fastcallOpcode(expr->args.size, secondIsConstant);
 
         uint32_t args[3] = {};
 
@@ -927,17 +945,8 @@ struct Compiler
 
         size_t fastcallLabel = bytecode.emitLabel();
 
-        bytecode.emitABC(opc, uint8_t(bfid), uint8_t(args[0]), 0);
-
-        if (opc == LOP_FASTCALL3)
-        {
-            LUAU_ASSERT(bfK < 0);
-            bytecode.emitAux(args[1] | (args[2] << 8));
-        }
-        else if (opc != LOP_FASTCALL1)
-        {
-            bytecode.emitAux(bfK >= 0 ? bfK : args[1]);
-        }
+        LUAU_ASSERT(opc != LOP_FASTCALL3 || bfK < 0);
+        emitFastcallN(opc, bfid, args, bfK);
 
         // Set up a traditional Lua stack for the subsequent LOP_CALL.
         // Note, as with other instructions that immediately follow FASTCALL, these are normally not executed and are used as a fallback for
@@ -3274,12 +3283,276 @@ struct Compiler
         return true;
     }
 
+    // Luwu String Extensions (rfcs/string-extensions.md): how far isProvenString follows locals to the values that
+    // initialized them
+    static constexpr int kMaxStringProofDepth = 16;
+
+    // Luwu String Extensions: the functions of the `string` library, which a method call on a string reaches
+    static bool isStringLibraryFunction(AstName name)
+    {
+        static const char* const kFunctions[] = {
+            "byte", "char", "find", "format", "gmatch", "gsub", "len", "lower", "match", "rep", "reverse", "sub", "upper", "split", "pack",
+            "packsize", "unpack", "trim", "trimstart", "trimend", "startswith", "endswith", "contains", "replace",
+        };
+
+        for (const char* function : kFunctions)
+        {
+            if (name == function)
+                return true;
+        }
+
+        return false;
+    }
+
+    // Luwu String Extensions: the `string` functions whose first result is always a string
+    static bool returnsString(AstName name)
+    {
+        static const char* const kFunctions[] = {
+            "char", "format", "gsub", "lower", "rep", "reverse", "sub", "upper", "trim", "trimstart", "trimend", "replace",
+        };
+
+        for (const char* function : kFunctions)
+        {
+            if (name == function)
+                return true;
+        }
+
+        return false;
+    }
+
+    static bool isStringAnnotation(AstType* annotation)
+    {
+        AstTypeReference* ref = annotation ? annotation->as<AstTypeReference>() : nullptr;
+        return ref && !ref->prefix && !ref->hasParameterList && ref->name == "string";
+    }
+
+    bool isNumberConstant(AstExpr* expr)
+    {
+        return isConstant(expr) && getConstant(expr).type == Constant::Type_Number;
+    }
+
+    bool isStringProvenLocal(AstLocal* local)
+    {
+        const bool* proven = stringProvenLocals.find(local);
+        return proven && *proven;
+    }
+
+    // Luwu String Extensions (rfcs/string-extensions.md): does `expr` always evaluate to a string? Literals, the results of
+    // `string` functions that return one (as functions or methods), `tostring`, `type`, `typeof` and `table.concat`, a
+    // concatenation of proven strings and number constants, and a local holding one of those: initialized with one and never
+    // written, or checked by `type(x) == "string"` around the code being compiled. Under `--!trust`, a `string` annotation
+    // counts too.
+    bool isProvenString(AstExpr* expr, int depth = 0)
+    {
+        if (depth > kMaxStringProofDepth)
+            return false;
+
+        while (AstExprGroup* group = expr->as<AstExprGroup>())
+            expr = group->expr;
+
+        if (expr->is<AstExprConstantString>() || expr->is<AstExprInterpString>())
+            return true;
+
+        if (AstExprTypeAssertion* assertion = expr->as<AstExprTypeAssertion>())
+            return (trustsTypeAnnotations() && isStringAnnotation(assertion->annotation)) || isProvenString(assertion->expr, depth + 1);
+
+        if (AstExprBinary* binary = expr->as<AstExprBinary>(); binary && binary->op == AstExprBinary::Concat)
+        {
+            bool leftIsString = isProvenString(binary->left, depth + 1) || isNumberConstant(binary->left);
+            bool rightIsString = isProvenString(binary->right, depth + 1) || isNumberConstant(binary->right);
+            return leftIsString && rightIsString;
+        }
+
+        if (AstExprCall* call = expr->as<AstExprCall>())
+        {
+            if (call->self)
+            {
+                AstExprIndexName* method = call->func->as<AstExprIndexName>();
+                return method && returnsString(method->index) && isProvenString(method->expr, depth + 1);
+            }
+
+            Builtin builtin = getBuiltin(call->func, globals, variables);
+            bool stringFunction = builtin.object == "string" && returnsString(builtin.method);
+            return stringFunction || builtin.isGlobal("tostring") || builtin.isGlobal("type") || builtin.isGlobal("typeof") ||
+                   builtin.isMethod("table", "concat");
+        }
+
+        if (AstExprLocal* le = expr->as<AstExprLocal>())
+        {
+            if (isFrameLocal(le) && isStringProvenLocal(le->local))
+                return true;
+
+            if (trustsTypeAnnotations() && isStringAnnotation(le->local->annotation))
+                return true;
+
+            const Variable* v = variables.find(le->local);
+            return v && !v->written && v->init && isProvenString(v->init, depth + 1);
+        }
+
+        return false;
+    }
+
+    // Luwu String Extensions (rfcs/string-extensions.md): `s:name(...)` as the call `string.name(s, ...)`, built once per
+    // method call, with its builtin recorded in `builtins`. Null when `name` isn't a `string` function (so a typo still
+    // raises "missing method") or `string` can't be imported.
+    AstExprCall* stringFunctionForm(AstExprCall* expr)
+    {
+        AstExprIndexName* method = expr->func->as<AstExprIndexName>();
+        AstName stringName = names.getOrAdd("string");
+
+        bool importable = stringName.value && getGlobalState(globals, stringName) == Global::Default;
+        if (!method || !importable || !isStringLibraryFunction(method->index))
+            return nullptr;
+
+        if (AstExprCall** cached = stringMethodCalls.find(expr))
+            return *cached;
+
+        AstExpr** args = static_cast<AstExpr**>(synthesizedNodes.allocate(sizeof(AstExpr*) * (expr->args.size + 1)));
+        args[0] = method->expr;
+        for (size_t i = 0; i < expr->args.size; ++i)
+            args[i + 1] = expr->args.data[i];
+
+        AstExprGlobal* library = synthesizedNodes.alloc<AstExprGlobal>(method->location, stringName);
+        AstExprIndexName* function =
+            synthesizedNodes.alloc<AstExprIndexName>(method->location, library, method->index, method->indexLocation, method->opPosition, '.');
+        AstArray<AstExpr*> callArgs{args, expr->args.size + 1};
+        AstArray<AstTypeOrPack> noTypeArguments{};
+        AstExprCall* call =
+            synthesizedNodes.alloc<AstExprCall>(expr->location, function, callArgs, /* self= */ false, noTypeArguments, expr->argLocation);
+
+        analyzeBuiltins(builtins, globals, variables, options, call, names);
+        stringMethodCalls[expr] = call;
+        return call;
+    }
+
+    // `s:name(...)` on a proven string as its function form, which compiles to an import and, where `name` is a builtin, a
+    // fastcall, with no NAMECALL lookup. Null when it has to stay a method call.
+    AstExprCall* stringMethodAsFunctionCall(AstExprCall* expr)
+    {
+        AstExprIndexName* method = expr->func->as<AstExprIndexName>();
+        if (!method || !isProvenString(method->expr))
+            return nullptr;
+
+        return stringFunctionForm(expr);
+    }
+
+    // Luwu String Extensions: the builtin to try first for a method call on a receiver that may not be a string, or -1.
+    // Only builtins whose fast path takes nothing but a string as its first argument qualify, so any other receiver falls
+    // back to the method call. `string.char`'s takes a number, which a number with an embedder-set metatable could be.
+    int stringMethodBuiltin(AstExprCall* expr)
+    {
+        AstExprCall* functionForm = stringFunctionForm(expr);
+        const int* bfid = functionForm ? builtins.find(functionForm) : nullptr;
+        if (!bfid)
+            return -1;
+
+        switch (*bfid)
+        {
+        case LBF_STRING_BYTE:
+        case LBF_STRING_LEN:
+        case LBF_STRING_SUB:
+        case LBF_STRING_STARTSWITH:
+        case LBF_STRING_ENDSWITH:
+        case LBF_STRING_CONTAINS:
+            return *bfid;
+        default:
+            return -1;
+        }
+    }
+
+    // Luwu String Extensions (rfcs/string-extensions.md): `s:name(...)` where `name` is a string builtin, as that builtin's
+    // fastcall with the method call as its fallback. The builtin takes only a string receiver, so a table or userdata with
+    // its own `name` reaches the NAMECALL and runs that. The fastcall reads its operands from the registers it names, since
+    // the receiver isn't in the call's first argument register until NAMECALL has run.
+    void compileStringMethodFastcall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop, bool multRet, uint8_t regs, int bfid)
+    {
+        AstExprIndexName* method = expr->func->as<AstExprIndexName>();
+        LUAU_ASSERT(method && expr->args.size <= 2);
+
+        size_t operandCount = expr->args.size + 1;
+        bool secondIsConstant = operandCount == 2 && isConstant(expr->args.data[0]);
+        LuauOpcode opc = fastcallOpcode(operandCount, secondIsConstant);
+
+        uint8_t selfreg = regs;
+        if (int reg = getExprLocalReg(method->expr); reg >= 0)
+            selfreg = uint8_t(reg);
+        else
+            compileExprTempTop(method->expr, regs);
+
+        uint32_t operands[3] = {selfreg, 0, 0};
+        for (size_t i = 0; i < expr->args.size; ++i)
+        {
+            AstExpr* arg = expr->args.data[i];
+
+            if (opc == LOP_FASTCALL2K)
+            {
+                int32_t cid = getConstantIndex(arg);
+                if (cid < 0)
+                    CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+                operands[i + 1] = cid;
+            }
+            else if (int reg = getExprLocalReg(arg); reg >= 0)
+            {
+                operands[i + 1] = uint8_t(reg);
+            }
+            else
+            {
+                operands[i + 1] = uint8_t(regs + 2 + i);
+                compileExprTempTop(arg, uint8_t(operands[i + 1]));
+            }
+        }
+
+        size_t fastcallLabel = bytecode.emitLabel();
+        emitFastcallN(opc, bfid, operands);
+
+        // the fallback: the arguments where CALL expects them after the receiver, then the method lookup
+        for (size_t i = 0; i < expr->args.size; ++i)
+        {
+            uint8_t argReg = uint8_t(regs + 2 + i);
+
+            if (opc == LOP_FASTCALL2K)
+                emitLoadK(argReg, operands[i + 1]);
+            else if (operands[i + 1] != argReg)
+                bytecode.emitABC(LOP_MOVE, argReg, uint8_t(operands[i + 1]), 0);
+        }
+
+        setDebugLine(method->indexLocation);
+
+        BytecodeBuilder::StringRef iname = sref(method->index);
+        int32_t cid = bytecode.addConstantString(iname);
+        if (cid < 0)
+            CompileError::raise(method->location, "Exceeded constant limit; simplify the code to compile");
+
+        bytecode.emitABC(LOP_NAMECALL, regs, selfreg, uint8_t(BytecodeBuilder::getStringHash(iname)));
+        bytecode.emitAux(cid);
+
+        size_t callLabel = bytecode.emitLabel();
+        if (!bytecode.patchSkipC(fastcallLabel, callLabel))
+            CompileError::raise(expr->func->location, "Exceeded jump distance limit; simplify the code to compile");
+
+        bytecode.emitABC(LOP_CALL, regs, uint8_t(operandCount + 1), multRet ? 0 : uint8_t(targetCount + 1));
+
+        if (!targetTop)
+        {
+            for (size_t i = 0; i < targetCount; ++i)
+                bytecode.emitABC(LOP_MOVE, uint8_t(target + i), uint8_t(regs + i), 0);
+        }
+    }
+
     void compileExprCall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop = false, bool multRet = false)
     {
         LUAU_ASSERT(targetCount < 255);
         LUAU_ASSERT(!targetTop || unsigned(target + targetCount) == regTop);
 
         setDebugLine(expr); // normally compileExpr sets up line info, but compileExprCall can be called directly
+
+        // Luwu String Extensions (rfcs/string-extensions.md): a method call on a proven string compiles exactly as its
+        // function form
+        if (FFlag::LuwuStringExtensions && expr->self && options.optimizationLevel >= 1)
+        {
+            if (AstExprCall* functionForm = stringMethodAsFunctionCall(expr))
+                return compileExprCall(functionForm, target, targetCount, targetTop, multRet);
+        }
 
         // try inlining the function
         if (options.optimizationLevel >= 2 && !expr->self)
@@ -3359,6 +3632,16 @@ struct Compiler
         {
             if (const int* id = builtins.find(expr); id && *id != LBF_NONE)
                 bfid = *id;
+        }
+
+        // Luwu String Extensions (rfcs/string-extensions.md): a method call that may be on a string tries the string
+        // builtin first (see compileStringMethodFastcall)
+        if (FFlag::LuwuStringExtensions && options.optimizationLevel >= 1 && expr->self)
+        {
+            bool argsFit = expr->args.size <= 2 && (expr->args.size == 0 || !isExprMultRet(expr->args.data[expr->args.size - 1]));
+
+            if (int methodBfid = stringMethodBuiltin(expr); methodBfid >= 0 && argsFit)
+                return compileStringMethodFastcall(expr, target, targetCount, targetTop, multRet, regs, methodBfid);
         }
 
         if (bfid >= 0 && bytecode.needsDebugRemarks())
@@ -4201,6 +4484,10 @@ struct Compiler
     {
         AstLocal* local = nullptr;
         AstStatClass* previous = nullptr;
+        // Luwu String Extensions (rfcs/string-extensions.md): an `assert(type(x) == "string")` proof instead of a class
+        // one, and whether the local was proven a string before it
+        bool stringProof = false;
+        bool previousString = false;
     };
 
     void noteAssertProof(AstStat* stat, const AstArray<AstStat*>& body, size_t index, std::vector<AssertProof>& proofs)
@@ -4213,15 +4500,83 @@ struct Compiler
             proofs.push_back({local, existing ? *existing : nullptr});
             isinstanceProvenLocals[local] = decl;
         }
+        else if (AstLocal* stringLocal = matchAssertStringProof(stat, body, index))
+        {
+            proofs.push_back({stringLocal, nullptr, /* stringProof= */ true, isStringProvenLocal(stringLocal)});
+            stringProvenLocals[stringLocal] = true;
+        }
     }
 
     void restoreAssertProofs(std::vector<AssertProof>& proofs)
     {
         // DenseHashMap has no erase; a null entry means "not proven"
         for (size_t i = proofs.size(); i > 0; --i)
-            isinstanceProvenLocals[proofs[i - 1].local] = proofs[i - 1].previous;
+        {
+            const AssertProof& proof = proofs[i - 1];
+
+            if (proof.stringProof)
+                stringProvenLocals[proof.local] = proof.previousString;
+            else
+                isinstanceProvenLocals[proof.local] = proof.previous;
+        }
 
         proofs.clear();
+    }
+
+    // Luwu String Extensions (rfcs/string-extensions.md): the local `expr` checks, when it is `type(x) == "string"` or
+    // `typeof(x) == "string"` (either way round) for a local of this frame that no nested function writes. A proof from it
+    // also needs a region no write in this frame can cross, like a `class.isinstance` proof (matchIsinstanceCall).
+    AstLocal* matchTypeStringCheck(AstExpr* expr)
+    {
+        if (!FFlag::LuwuStringExtensions || !currentFunction)
+            return nullptr;
+
+        while (AstExprGroup* group = expr->as<AstExprGroup>())
+            expr = group->expr;
+
+        AstExprBinary* comparison = expr->as<AstExprBinary>();
+        if (!comparison || comparison->op != AstExprBinary::CompareEq)
+            return nullptr;
+
+        AstExpr* typeCall = comparison->left;
+        AstExpr* typeName = comparison->right;
+        if (typeCall->is<AstExprConstantString>())
+            std::swap(typeCall, typeName);
+
+        AstExprConstantString* name = typeName->as<AstExprConstantString>();
+        AstExprCall* call = typeCall->as<AstExprCall>();
+        const int* bfid = call ? builtins.find(call) : nullptr;
+
+        bool checksType = bfid && (*bfid == LBF_TYPE || *bfid == LBF_TYPEOF) && call->args.size == 1;
+        bool checksString = name && name->value.size == 6 && memcmp(name->value.data, "string", 6) == 0;
+        if (!checksType || !checksString)
+            return nullptr;
+
+        AstExprLocal* le = call->args.data[0]->as<AstExprLocal>();
+        if (!isFrameLocal(le))
+            return nullptr;
+
+        if (const Variable* v = variables.find(le->local); v && v->writtenByNestedFunction)
+            return nullptr;
+
+        return le->local;
+    }
+
+    // `assert(type(x) == "string")` as a statement, for the rest of the block. `assert` is the builtin, which raises when
+    // the check fails, under the same assumption every builtin fastcall makes.
+    AstLocal* matchAssertStringProof(AstStat* stat, const AstArray<AstStat*>& body, size_t index)
+    {
+        AstStatExpr* statExpr = stat->as<AstStatExpr>();
+        AstExprCall* call = statExpr ? statExpr->expr->as<AstExprCall>() : nullptr;
+        const int* bfid = call ? builtins.find(call) : nullptr;
+        if (!bfid || *bfid != LBF_ASSERT || call->args.size == 0)
+            return nullptr;
+
+        AstLocal* local = matchTypeStringCheck(call->args.data[0]);
+        if (!local || bodyWritesLocal(body, index + 1, local))
+            return nullptr;
+
+        return local;
     }
 
     // the same question for the tail of a statement list, which is the region an `assert` proves
@@ -6135,11 +6490,27 @@ struct Compiler
             isinstanceProvenLocals[provenLocal] = decl;
         }
 
+        // Luwu String Extensions (rfcs/string-extensions.md): the then-branch of `if type(x) == "string"` knows `x` is a
+        // string, so its method calls compile as function calls (see stringMethodAsFunctionCall)
+        AstLocal* stringLocal = matchTypeStringCheck(stat->condition);
+        if (stringLocal && regionWritesLocal(stat->thenbody, stringLocal))
+            stringLocal = nullptr;
+
+        bool previousString = false;
+        if (stringLocal)
+        {
+            previousString = isStringProvenLocal(stringLocal);
+            stringProvenLocals[stringLocal] = true;
+        }
+
         compileStat(stat->thenbody);
 
         // DenseHashMap has no erase; a null entry means "not proven"
         if (provenLocal)
             isinstanceProvenLocals[provenLocal] = previousProvenClass;
+
+        if (stringLocal)
+            stringProvenLocals[stringLocal] = previousString;
 
         if (stat->elsebody && elseJump.size() > 0)
         {
@@ -8332,6 +8703,13 @@ struct Compiler
     // Luwu Classes (rfcs/classes): locals proven to be exact instances of a class by the enclosing
     // `class.isinstance` branch being compiled (see compileStatIf / provenIsinstanceClass)
     DenseHashMap<AstLocal*, AstStatClass*> isinstanceProvenLocals{nullptr};
+    // Luwu String Extensions (rfcs/string-extensions.md): locals proven to hold strings by the enclosing
+    // `type(x) == "string"` branch or a preceding assert of it (see compileStatIf / noteAssertProof)
+    DenseHashMap<AstLocal*, bool> stringProvenLocals{nullptr};
+    // Luwu String Extensions: the function-form call compiled in place of each method call on a proven string
+    // (see stringMethodAsFunctionCall), and the arena those calls are built in
+    DenseHashMap<AstExprCall*, AstExprCall*> stringMethodCalls{nullptr};
+    Allocator synthesizedNodes;
     // Classes that declare at least one private member. Their methods inline into outside code only when
     // classInlinedBodyKeepsPrivateAccess holds (see tryResolveMethodCall).
     DenseHashSet<AstStatClass*> classesWithPrivateMembers{nullptr};

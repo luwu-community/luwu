@@ -486,7 +486,8 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_string_completions")
 
     auto ac = autocomplete('1');
 
-    CHECK_EQ(17, ac.entryMap.size());
+    // Luwu: LuwuStringExtensions adds 7 methods (trim, trimstart, trimend, startswith, endswith, contains, replace)
+    CHECK_EQ(FFlag::LuwuStringExtensions ? 24 : 17, ac.entryMap.size());
     LUAU_CHECK_HAS_NO_KEY(ac.entryMap, "drop");
     CHECK_EQ(ac.context, AutocompleteContext::Property);
 }
