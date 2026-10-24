@@ -8328,67 +8328,6 @@ private:
     }
 };
 
-// Luwu: a Luwu-only library function read in a Luau or Lua module (its config's `language`, from a `.luau` or `.lua`
-// file). Luwu code goes in `.luwu` files.
-class LintLuwuOnlyApi : AstVisitor
-{
-public:
-    LUAU_NOINLINE static void process(LintContext& context)
-    {
-        if (!context.module || context.module->language == Language::Luwu)
-            return;
-
-        LintLuwuOnlyApi pass;
-        pass.context = &context;
-
-        context.root->visit(&pass);
-    }
-
-private:
-    LintContext* context;
-
-    // Members Luwu adds to libraries upstream Luau also has. Upstream's `class` library has `isinstance` too, and
-    // `classof` where Luwu has `of`.
-    static bool isLuwuOnlyMember(std::string_view library, std::string_view member)
-    {
-        if (library == "class")
-        {
-            static const char* const kLuwuClassMembers[] = {"of", "name", "implements", "fields"};
-            for (const char* luwuMember : kLuwuClassMembers)
-            {
-                if (member == luwuMember)
-                    return true;
-            }
-            return false;
-        }
-        if (library == "table")
-            return member == "drop";
-        if (library == "buffer")
-            return member == "isfrozen";
-        return false;
-    }
-
-    bool visit(AstExprIndexName* node) override
-    {
-        // A local named `table` is the reader's own, so only the global library counts.
-        AstExprGlobal* global = node->expr->as<AstExprGlobal>();
-        if (!global || !isLuwuOnlyMember(global->name.value, node->index.value))
-            return true;
-
-        std::string qualified = std::string(global->name.value) + "." + node->index.value;
-        const char* language = context->module->language == Language::Lua ? "Lua" : "Luau";
-        emitWarning(
-            *context,
-            LintWarning::Code_LuwuOnlyApi,
-            node->location,
-            "'%s' only exists in Luwu, but this is a %s file; rename it to '.luwu' if it's Luwu code",
-            qualified.c_str(),
-            language
-        );
-        return true;
-    }
-};
-
 // Luwu: `pairs` and `ipairs`, which generalized iteration (`for k, v in t`) replaces. Each is its own lint so a module
 // can keep using one without turning off DeprecatedApi or the other.
 class LintLuaIterators : AstVisitor
@@ -9246,8 +9185,6 @@ std::vector<LintWarning> lint(
     if (context.warningEnabled(LintWarning::Code_FloatIndex))
         LintFloatIndex::process(context);
 
-    if (context.warningEnabled(LintWarning::Code_LuwuOnlyApi))
-        LintLuwuOnlyApi::process(context);
 
     // Luwu: turning LuaIterators off turns off its parts
     if (context.warningEnabled(LintWarning::Code_LuaIterators) &&

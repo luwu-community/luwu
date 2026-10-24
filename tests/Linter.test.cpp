@@ -4472,46 +4472,6 @@ return a, b, c, d
     CHECK_EQ(found[2].location.begin.line, 6);
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")
-{
-    const std::string source = R"(
-local t = { 1, 2, 2 }
-local removed = table.drop(t, 2)
-local frozen = buffer.isfrozen(buffer.create(1))
-local owner = class.of
-local check = class.isinstance
-local function shadowed(table: { drop: () -> () })
-    table.drop()
-end
-return removed, frozen, shadowed, owner, check
-)";
-
-    // The module's language comes from its config, which the CLI and the language server set from the file extension
-    auto luwuOnly = [&](const ModuleName& name, Language language)
-    {
-        fileResolver.source[name] = source;
-        configResolver.configFiles[name].language = language;
-        std::vector<LintWarning> found;
-        for (const LintWarning& warning : lintModule(name).warnings)
-            if (warning.code == LintWarning::Code_LuwuOnlyApi)
-                found.push_back(warning);
-        return found;
-    };
-
-    // A local named `table` isn't the library, and upstream's `class` library has `isinstance` too
-    std::vector<LintWarning> inLuau = luwuOnly("game/a", Language::Luau);
-    REQUIRE_EQ(inLuau.size(), 3);
-    CHECK_EQ(inLuau[0].text, "'table.drop' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
-    CHECK_EQ(inLuau[1].location, Location({3, 15}, {3, 30}));
-    CHECK_EQ(inLuau[2].text, "'class.of' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
-
-    CHECK(luwuOnly("game/b", Language::Luwu).empty());
-
-    std::vector<LintWarning> inLua = luwuOnly("game/c", Language::Lua);
-    REQUIRE_EQ(inLua.size(), 3);
-    CHECK_EQ(inLua[0].text, "'table.drop' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
-}
-
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsReportsPairsAndIpairsSeparately")
 {
     const std::string source = R"(
