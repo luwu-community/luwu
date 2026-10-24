@@ -5817,6 +5817,31 @@ return a +
     }
 }
 
+// Luwu: a `type Name` with nothing after it doesn't take the next line's statement as its type
+TEST_CASE_FIXTURE(Fixture, "unfinished_type_alias_leaves_the_next_statement_alone")
+{
+    try
+    {
+        parse(R"(
+type Validator
+local function f(x: number): number
+    return x
+end
+type Same number
+return f
+)");
+        FAIL("Expected ParseErrors to be thrown");
+    }
+    catch (const Luau::ParseErrors& e)
+    {
+        // the unfinished alias, and `number` on the same line as `type Same`, which stays its type
+        REQUIRE_EQ(2, e.getErrors().size());
+        CHECK_EQ("Expected '=' when parsing type alias, got 'local'", e.getErrors()[0].getMessage());
+        CHECK_EQ(Location{{2, 0}, {2, 5}}, e.getErrors()[0].getLocation());
+        CHECK_EQ("Expected '=' when parsing type alias, got 'number'", e.getErrors()[1].getMessage());
+    }
+}
+
 // check that we are not skipping tokens that weren't processed at all
 TEST_CASE_FIXTURE(Fixture, "statement_error_recovery_expected")
 {
@@ -5998,7 +6023,7 @@ TEST_CASE_FIXTURE(Fixture, "an_unfinished_statement_stops_before_a_next_line_tha
     const std::string missingName = "Expected a variable name; the next line starts a new statement";
     const std::string missingValue = "Expected a value; the next line starts a new statement";
 
-    for (const auto& [source, message] : std::vector<std::pair<const char*, std::string>>{
+    for (const auto& testCase : std::vector<std::pair<const char*, std::string>>{
              {"local total = 0\nlocal\ntotal += 1\n", missingName},
              {"local total = 0\nconst\nprint(total)\n", missingName},
              {"local total = 0\nlocal\ntotal.x = 1\n", missingName},
@@ -6006,6 +6031,8 @@ TEST_CASE_FIXTURE(Fixture, "an_unfinished_statement_stops_before_a_next_line_tha
              {"local total = 0\ntotal =\ntotal = 2\n", missingValue},
          })
     {
+        const char* source = testCase.first;
+        const std::string& message = testCase.second;
         INFO(source);
         ParseResult result = tryParse(source);
         REQUIRE_EQ(result.errors.size(), 1);
@@ -6033,6 +6060,48 @@ TEST_CASE_FIXTURE(Fixture, "an_unindented_continuation_that_parses_is_left_alone
             CHECK_EQ(result.errors.size(), 0);
         for (const ParseError& error : result.errors)
             CHECK_NE(error.getMessage().find("the next line starts a new statement"), 0);
+    }
+}
+
+// The next line's type alias is a declaration of its own, not a global `type` then a statement. The one error is the
+// missing value or name, reported at the declaration as for `const`.
+TEST_CASE_FIXTURE(Fixture, "a_missing_value_above_a_type_alias_is_one_error")
+{
+    for (const char* source : {
+             "local x =\ntype Line = {\n    ln: number,\n}\nlocal l: Line = { ln = 1 }\n",
+             "local x =\n-- a comment\nexport type Line<T> = { ln: T }\nlocal l: Line<number> = { ln = 1 }\n",
+             "local t = {}\nlocal n = t.\ntype function f()\n    return types.number\nend\nlocal l = 1\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(1, result.errors.size());
+        AstStat* declaration = result.root->body.data[result.root->body.size - 2];
+        bool declaresType = declaration->is<AstStatTypeAlias>() || declaration->is<AstStatTypeFunction>();
+        CHECK(declaresType);
+    }
+}
+
+// A declaration on the line after an unclosed table's last element ends the table, and the one error is the missing `}`.
+// Read as the table's next element, it would be an error that consumes nothing, repeated until the parser runs out of
+// memory.
+TEST_CASE_FIXTURE(Fixture, "a_declaration_below_an_unclosed_table_ends_it")
+{
+    for (const char* source : {
+             "local t = {\n    1\nconst x = 1\n",
+             "local t = {\n    a = 1\nconst x = 1\n",
+             "local t = {\n    [1] = 1\ntype X = number\n",
+             "local t = f({\n    g(1)\nexport type X = number\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(1, result.errors.size());
+        CHECK(result.errors[0].getMessage().find("Expected '}'") == 0);
+        REQUIRE_EQ(2, result.root->body.size);
+        AstStat* declaration = result.root->body.data[1];
+        bool declares = declaration->is<AstStatLocal>() || declaration->is<AstStatTypeAlias>();
+        CHECK(declares);
     }
 }
 
