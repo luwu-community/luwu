@@ -6019,11 +6019,12 @@ AstExpr* Parser::parseSimpleExpr()
     {
         return parseIfElseExpr();
     }
-    else if (startsConstDeclaration())
+    else if (startsConstDeclaration() || startsTypeAliasDeclaration())
     {
-        // Luwu: the value is missing, and the next line declares a constant (`local x =` above `const y = 1`). Upstream
-        // reads `const` as a global and `y = 1` as a second statement, which cascades into type errors and lints on
-        // code the user hasn't touched. The statement loop parses the declaration.
+        // Luwu: the value is missing, and the next line declares a constant or a type (`local x =` above `const y = 1`
+        // or `type Line = {`). Upstream reads `const` or `type` as a global and the rest of the line as a second
+        // statement, which cascades into type errors and lints on code the user hasn't touched. The statement loop
+        // parses the declaration.
         reportNameError("expression");
         return allocator.alloc<AstExprError>(start, copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
     }
@@ -6281,12 +6282,18 @@ AstExpr* Parser::parseTableConstructor()
             }
         }
 
+        // Luwu: a new line declaring a constant or a type ends an unclosed table, so the statement loop parses the
+        // declaration. Read as the next element, it would loop forever: parseExpr reports it without consuming it.
+        // Upstream has no such recovery and reads `const` as a global.
+        bool declarationFollows = startsConstDeclaration() || startsTypeAliasDeclaration();
+        bool elementFollows = (lexer.current().type == '[' || lexer.current().type == Lexeme::Name) &&
+                              (FFlag::LuauTableEntriesDontNeedToMatchIndent ? true : lexer.current().location.begin.column == lastElementIndent_DEPRECATED);
+
         if (lexer.current().type == ',' || lexer.current().type == ';')
         {
             nextLexeme();
         }
-        else if ((lexer.current().type == '[' || lexer.current().type == Lexeme::Name) &&
-                 (FFlag::LuauTableEntriesDontNeedToMatchIndent ? true : lexer.current().location.begin.column == lastElementIndent_DEPRECATED))
+        else if (elementFollows && !declarationFollows)
         {
             report(lexer.current().location, "Expected ',' after table constructor element");
         }
@@ -6566,11 +6573,12 @@ Parser::Name Parser::parseName(const char* context)
     return Name(nameError, location);
 }
 
-// Luwu: parseNameOpt for a name that may not be typed yet. A new line starting with `const name` is the next declaration,
-// so the name is reported missing instead of read as `const` (`t.` or `local` above `const y = 1`).
+// Luwu: parseNameOpt for a name that may not be typed yet. A new line starting with `const name` or a type alias is the
+// next declaration, so the name is reported missing instead of read as `const` or `type` (`t.` or `local` above
+// `const y = 1`).
 std::optional<Parser::Name> Parser::parseNameBeforeDeclaration(const char* context)
 {
-    if (startsConstDeclaration())
+    if (startsConstDeclaration() || startsTypeAliasDeclaration())
     {
         reportNameError(context);
         return {};
@@ -7232,13 +7240,59 @@ bool Parser::continuesOnSameLine()
 // already warns it will.
 bool Parser::startsConstDeclaration()
 {
+    // called for every name the parser meets, so it only looks ahead past a `const`
     Lexeme current = lexer.current();
-    Lexeme next = lexer.lookahead();
-
     bool isConst = current.type == Lexeme::Name && AstName(current.name) == "const";
+    if (!isConst)
+        return false;
+
+    Lexeme next = lexer.lookahead();
     bool nameFollows = next.type == Lexeme::Name && next.location.begin.line == current.location.end.line;
 
-    return isConst && nameFollows && !continuesOnSameLine();
+    return nameFollows && !continuesOnSameLine();
+}
+
+// Luwu: whether a new line starts a type alias (`type Name =`, `type Name<`, `type function`, `export type`) where a
+// value or name was expected. Valid Luau <= 0.730 could read `type` there as the global function followed by a
+// statement on its line (`Name = {}`); Luwu reads it as the declaration it looks like, as for `const`.
+bool Parser::startsTypeAliasDeclaration()
+{
+    // called for every name the parser meets, so it only looks ahead past a `type` or `export`
+    const Lexeme& current = lexer.current();
+    if (current.type != Lexeme::Name)
+        return false;
+
+    AstName word(current.name);
+    if ((word != "type" && word != "export") || continuesOnSameLine())
+        return false;
+
+    Lexer probe = lexer;
+    auto advance = [&probe]() -> const Lexeme&
+    {
+        const Lexeme* next = &probe.next();
+        while (next->type == Lexeme::Comment || next->type == Lexeme::BlockComment)
+            next = &probe.next();
+        return *next;
+    };
+
+    unsigned int line = current.location.begin.line;
+    const Lexeme* next = &advance();
+    if (word == "export")
+    {
+        if (next->type != Lexeme::Name || AstName(next->name) != "type" || next->location.begin.line != line)
+            return false;
+        next = &advance();
+    }
+
+    if (next->location.begin.line != line)
+        return false;
+    if (next->type == Lexeme::ReservedFunction)
+        return true;
+    if (next->type != Lexeme::Name)
+        return false;
+
+    Lexeme::Type after = advance().type;
+    return after == '=' || after == '<';
 }
 
 // Luwu: the statement being parsed already reported an error (`local function` with no name yet), so what follows

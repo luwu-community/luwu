@@ -495,6 +495,7 @@ private:
     AstTypeError* missingTypeHere();
     bool continuesOnSameLine();
     bool startsConstDeclaration();
+    bool startsTypeAliasDeclaration();
     bool nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName));
     bool nextLineStartsUnpatternedStatement();
     bool statementReportedError();
