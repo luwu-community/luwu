@@ -14,6 +14,7 @@
 #include <vector>
 
 LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(LuwuStringExtensions)
 
 struct Completion
 {
@@ -257,9 +258,12 @@ TEST_CASE_FIXTURE(ReplFixture, "TableWithMetatableIndexTable")
         CompletionSet completions = getCompletionSet("t.tkey1.data2:re");
 
         std::string prefix = "t.tkey1.data2:";
-        CHECK(completions.size() == 2);
+        // Luwu: LuwuStringExtensions adds `string.replace`, which starts with `re` too
+        CHECK(completions.size() == (FFlag::LuwuStringExtensions ? 3 : 2));
         CHECK(checkCompletion(completions, prefix, "rep("));
         CHECK(checkCompletion(completions, prefix, "reverse("));
+        if (FFlag::LuwuStringExtensions)
+            CHECK(checkCompletion(completions, prefix, "replace("));
     }
     {
         CompletionSet completions = getCompletionSet("t.mtk");
