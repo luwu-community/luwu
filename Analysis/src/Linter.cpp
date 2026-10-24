@@ -6562,7 +6562,7 @@ private:
         };
         static const std::unordered_set<std::string> kString = {
             "byte", "char", "find", "format", "gmatch", "gsub", "len", "lower", "match", "rep", "reverse", "sub", "upper", "split",
-            "pack", "packsize", "unpack",
+            "pack", "packsize", "unpack", "trim", "trimstart", "trimend", "startswith", "endswith", "contains", "replace",
         };
         static const std::unordered_set<std::string> kTable = {
             "clone", "concat", "create", "find", "pack", "unpack", "maxn", "getn", "isfrozen",
