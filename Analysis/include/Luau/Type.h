@@ -648,6 +648,8 @@ struct LazyNominalMembers
     std::shared_ptr<SharedNominalArena> sharedArena;
     // The members built so far. One the solver hasn't finished in the template is built on a later read.
     std::set<Name> builtNames;
+    // Set after the first build, which puts every member in, pending ones as the template's
+    bool attempted = false;
     // Set once every member is built, after which they never change. Modules that import an instantiation read it from
     // different threads: the members are written under `mutex` and published by this.
     std::atomic<bool> built{false};
@@ -1407,6 +1409,10 @@ bool isSubclass(const ExternType* cls, const ExternType* parent);
 // Luwu Traits (rfcs/classes/traits.md): a trait, or an intersection of traits. Two of these may share instances even when neither is a subtype
 // of the other, unlike two classes, which are final.
 bool isTraitLike(const ExternType* ty);
+
+// Luwu Traits (rfcs/classes/traits.md): a member of a class or trait type: a field or function on the type itself, or a
+// function in its metatable
+const Property* findNominalMember(const ExternType* type, const Name& name);
 
 Type* asMutable(TypeId ty);
 

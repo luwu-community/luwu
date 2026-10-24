@@ -7,6 +7,9 @@
 
 #include "doctest.h"
 
+LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuauExportValueTypecheck)
+
 using namespace Luau;
 
 namespace
@@ -31,6 +34,13 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_tables_and_calls")
     checkTypewriting(*this, before, "local s = (\"abc\"):upper()", kAfter);
 }
 
+// Luwu: the DiscardedValues lint, on a call in an if-else branch
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_a_call_in_an_if_else_branch")
+{
+    const char* before = "local a = 1\nlocal function two(): (number, number) return a, a end\n";
+    checkTypewriting(*this, before, "local x = if a > 0 then two() else 0", kAfter);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_blocks")
 {
     const char* before = "local a = 1\n";
@@ -45,6 +55,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_blocks")
         "        return 3\n    end\n    return 4\nend",
         kAfter
     );
+}
+
+// Luwu: `export name = value`, which is `export const name = value`
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_exports")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}};
+
+    checkTypewriting(*this, "local a = 1\n", "export answer = a + 1", kAfter);
 }
 
 // Luwu Classes (rfcs/classes): declaring classes, and using them from the code below

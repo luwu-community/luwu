@@ -116,6 +116,19 @@ struct FindCyclicTypes final : TypeVisitor
         return true;
     }
 
+    // Luwu: a named union prints as its name, like a named table, so a cycle through it is never seen and needs no `t1`.
+    // Upstream walks into it and names the cycle: `Content | nil` prints as `t1 where t1 = (string | {read t1})?`.
+    bool visit(TypeId ty, const UnionType& utv) override
+    {
+        if (!visited.insert(ty))
+            return false;
+
+        if (utv.name || utv.syntheticName)
+            return exhaustive;
+
+        return true;
+    }
+
     bool visit(TypeId ty, const ExternType&) override
     {
         return false;
@@ -250,6 +263,12 @@ struct StringifierState
 
         if (seen.contains(ttv))
             seen.erase(ttv);
+    }
+
+    // Luwu: whether `tv` is being printed further up, without marking it the way hasSeen does.
+    bool isBeingPrinted(const void* tv) const
+    {
+        return seen.contains(const_cast<void*>(tv));
     }
 
     std::string getName(TypeId ty)
@@ -1160,14 +1179,11 @@ struct TypeStringifier
             comma = true;
         }
 
-        std::vector<std::pair<const std::string*, const Property*>> shown = propertiesToShow(ty, ttv);
-        // Luwu (helpful subtyping errors): properties `maxPropertiesShown` leaves out, counted at the end.
-        size_t leftOut = ttv.props.size() - shown.size();
-
         size_t index = 0;
         size_t oldLength = state.result.name.length();
         bool truncated = false;
-        for (const auto& [name, prop] : shown)
+        // false once the table is too long to print more
+        auto emitProperty = [&](const std::string& name, const Property& prop)
         {
             if (comma)
             {
@@ -1183,15 +1199,15 @@ struct TypeStringifier
             {
                 emitMoreProperties(ttv.props.size() - index, comma);
                 truncated = true;
-                break;
+                return false;
             }
 
             // Luwu: the first line of the property's doc comment above it, the way the source reads. A property set from a
             // declaration (`function str.trim()`) has no comments of its own; its value carries them.
             bool showsComments = state.lineBreaks && state.opts.propertyCommentWidth > 0;
-            const TypeMetadataTable* comments = showsComments ? prop->metadata.get() : nullptr;
-            if (showsComments && !comments && prop->readTy)
-                comments = docMetadataOf(*prop->readTy);
+            const TypeMetadataTable* comments = showsComments ? prop.metadata.get() : nullptr;
+            if (showsComments && !comments && prop.readTy)
+                comments = docMetadataOf(*prop.readTy);
             if (comments)
             {
                 for (const std::string& line : metadataDocLines(*comments))
@@ -1206,10 +1222,32 @@ struct TypeStringifier
                 }
             }
 
-            stringify(*name, *prop);
+            stringify(name, prop);
 
             comma = true;
             ++index;
+            return true;
+        };
+
+        // Luwu (helpful subtyping errors): properties `maxPropertiesShown` leaves out, counted at the end.
+        size_t leftOut = 0;
+        if (showsEveryProperty(ttv))
+        {
+            for (const auto& [name, prop] : ttv.props)
+            {
+                if (!emitProperty(name, prop))
+                    break;
+            }
+        }
+        else
+        {
+            std::vector<std::pair<const std::string*, const Property*>> shown = propertiesToShow(ty, ttv);
+            leftOut = ttv.props.size() - shown.size();
+            for (const auto& [name, prop] : shown)
+            {
+                if (!emitProperty(*name, *prop))
+                    break;
+            }
         }
 
         if (leftOut > 0 && !truncated)
@@ -1262,20 +1300,25 @@ struct TypeStringifier
         }
     }
 
+    // Luwu (helpful subtyping errors): whether the table prints all its properties, in order: without a limit or under
+    // it, and not only the focused ones
+    bool showsEveryProperty(const TableType& ttv) const
+    {
+        size_t limit = state.opts.maxPropertiesShown;
+        bool limited = limit != 0 && ttv.props.size() > limit;
+        return !state.opts.onlyFocusedProperties && !limited;
+    }
+
     // Luwu (helpful subtyping errors): the properties `maxPropertiesShown` lets a table print, in the order it
-    // prints them; all of them, in order, without a limit or under it.
+    // prints them, when it doesn't print them all (showsEveryProperty)
     std::vector<std::pair<const std::string*, const Property*>> propertiesToShow(TypeId ty, const TableType& ttv) const
     {
+        LUAU_ASSERT(!showsEveryProperty(ttv));
+
         std::vector<std::pair<const std::string*, const Property*>> shown;
         size_t limit = state.opts.maxPropertiesShown;
         bool onlyFocused = state.opts.onlyFocusedProperties;
         bool limited = limit != 0 && ttv.props.size() > limit;
-        if (!onlyFocused && !limited)
-        {
-            for (const auto& [name, prop] : ttv.props)
-                shown.emplace_back(&name, &prop);
-            return shown;
-        }
 
         auto isShown = [&](const std::string& name)
         {
@@ -1535,11 +1578,21 @@ struct TypeStringifier
         DenseHashSet<TypeId> flattenedUnions{nullptr};
         flattenedUnions.insert(follow(ty));
 
+        // A named union that is being expanded further up (the root of a hover, say) reaches itself again through
+        // a recursive reference. Kept whole, it prints its own name there (emitRecursiveAliasName): `{ read Content? }`
+        // instead of `Content`'s options spilled into the table, ending in `*CYCLE*`.
+        auto isRecursiveAliasReference = [&](const UnionType* nested)
+        {
+            bool hasName = nested->name || (nested->syntheticName && !state.ignoreSyntheticName);
+            return !state.exhaustive && hasName && state.isBeingPrinted(nested);
+        };
+
         auto collectOptions = [&](auto&& collectOptions, TypeId option) -> void
         {
             option = follow(option);
 
-            if (const UnionType* nested = get<UnionType>(option); nested && !willPrintAsBareName(option, state))
+            const UnionType* nested = get<UnionType>(option);
+            if (nested && !willPrintAsBareName(option, state) && !isRecursiveAliasReference(nested))
             {
                 if (flattenedUnions.contains(option))
                     return;
@@ -2222,21 +2275,11 @@ static void assignCycleNames(
 
             if (auto mtv = get<MetatableType>(cycleTyFollowed); mtv && mtv->syntheticName)
                 continue;
-            // UnionType and FunctionType are deliberately left out here. Each has its own reason,
-            // and those reasons limit how far this approach can go:
+            // A named union never gets here: FindCyclicTypes doesn't walk into it.
             //
-            //  - A named type can still be *expanded*: as the root, or as a `where` clause body. The
-            //    expansion then reaches the type's own recursive reference with `exhaustive` set.
-            //    `emitRecursiveAliasName` declines there, so the printer emits `*CYCLE*`, which says
-            //    less than a cycle name like `t1`. For types that are routinely expanded, skipping
-            //    the cycle name is a downgrade. `RefinementTest.cannot_call_a_function_union` pins
-            //    this for a named union.
-            //  - A self-recursive function alias is its own root. `suppressNameFor` then makes
-            //    `willPrintAsBareName` answer false. Because the type is not in `cycleNames`, the
-            //    union and intersection printers wrap it in parentheses: `(F)?` instead of `t1?`.
-            //
-            // The two types that are skipped (the metatable above, the intersection below) are the
-            // shapes class idioms produce. Those are read far more often than they are expanded.
+            // FunctionType is left out. A self-recursive function alias is its own root, where
+            // `suppressNameFor` makes `willPrintAsBareName` answer false. Without a cycle name, the union
+            // and intersection printers then wrap it in parentheses: `(F)?` instead of `t1?`.
             if (isNamed(get<IntersectionType>(cycleTyFollowed)))
                 continue;
         }

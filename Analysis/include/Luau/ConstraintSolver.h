@@ -347,6 +347,8 @@ public:
     /**
      * @returns true if the TypeId is in a blocked state.
      */
+    // Luwu Classes (rfcs/classes): see tryDispatch(HasPropConstraint)
+    std::optional<TypeId> methodSignatureInItsBody(TypeId member, NotNull<const Constraint> constraint) const;
     bool isBlocked(TypeId ty) const;
 
     /**

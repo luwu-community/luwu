@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include "Luau/Config.h"
 #include "Luau/Error.h"
 #include "Luau/Linter.h"
 #include "Luau/FileResolver.h"
@@ -55,6 +56,8 @@ struct SourceModule
     std::string humanReadableName;
 
     SourceCode::Type type = SourceCode::None;
+    // Luwu: from the module's config when it's parsed.
+    Language language = Language::Luwu;
     std::optional<std::string> environmentName;
     bool cyclic = false;
 
@@ -87,6 +90,8 @@ bool isWithinComment(const SourceModule& sourceModule, Position pos);
 bool isWithinComment(const ParseResult& result, Position pos);
 
 bool isWithinHotComment(const std::vector<HotComment>& hotComments, Position pos);
+// Luwu: the hot comment `pos` is in, or nullptr
+const HotComment* findHotComment(const std::vector<HotComment>& hotComments, Position pos);
 bool isWithinHotComment(const SourceModule& sourceModule, Position pos);
 bool isWithinHotComment(const ParseResult& result, Position pos);
 
@@ -111,6 +116,8 @@ struct Module
 
     ModuleName name;
     std::string humanReadableName;
+    // Luwu: the source module's language.
+    Language language = Language::Luwu;
 
     TypeArena interfaceTypes;
     // For modules in a require cycle, internalTypes is shared across all members
@@ -174,6 +181,8 @@ struct Module
 
     std::unordered_map<Name, TypeId> declaredGlobals;
     ErrorVec errors;
+    // Luwu: remarks that aren't errors, such as each use of a local left without a type by an error elsewhere
+    std::vector<DiagnosticNote> notes;
     LintResult lintResult;
     Mode mode;
     SourceCode::Type type;

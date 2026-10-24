@@ -21,6 +21,7 @@
 
 #include <condition_variable>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -73,8 +74,9 @@ static uint8_t mismatchNotationUsed = 0;
 
 static void reportError(const Luau::Frontend& frontend, ReportFormat format, const Luau::TypeError& error)
 {
-    if (const Luau::TypeMismatch* mismatch = Luau::get_if<Luau::TypeMismatch>(&error.data))
-        mismatchNotationUsed |= mismatch->notation;
+    const Luau::TypeMismatch* mismatch = Luau::get_if<Luau::TypeMismatch>(&error.data);
+    if (mismatch && mismatch->explained)
+        mismatchNotationUsed |= mismatch->explained->notation;
 
     std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(error.moduleName);
 
@@ -121,10 +123,31 @@ static bool reportModuleResult(Luau::Frontend& frontend, const Luau::ModuleName&
         return false;
     }
 
-    for (auto& error : cr->errors)
-        reportError(frontend, format, error);
-
     std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(name);
+
+    // Luwu: notes (Module::notes) follow the error they're about, and any about no error reported here come after
+    Luau::ModulePtr module = frontend.moduleResolver.getModule(name);
+    std::vector<bool> notePrinted(module ? module->notes.size() : 0);
+    auto reportNotes = [&](std::optional<Luau::Location> origin)
+    {
+        for (size_t i = 0; i < notePrinted.size(); ++i)
+        {
+            const Luau::DiagnosticNote& note = module->notes[i];
+            if (notePrinted[i] || (origin && note.origin != origin))
+                continue;
+            report(format, humanReadableName.c_str(), note.location, "Note", note.message.c_str());
+            notePrinted[i] = true;
+        }
+    };
+
+    for (auto& error : cr->errors)
+    {
+        reportError(frontend, format, error);
+        if (error.moduleName == name)
+            reportNotes(error.location);
+    }
+    reportNotes(std::nullopt);
+
     for (auto& error : cr->lintResult.errors)
         reportWarning(format, humanReadableName.c_str(), error);
     for (auto& warning : cr->lintResult.warnings)
@@ -276,13 +299,22 @@ struct CliConfigResolver : Luau::ConfigResolver
         defaultConfig.mode = mode;
     }
 
+    // Luwu: one copy of a directory's config per language, since a `.luau` and a `.luwu` file there share everything else.
+    mutable std::map<std::pair<std::string, Luau::Language>, Luau::Config> languageConfigCache;
+
     const Luau::Config& getConfig(const Luau::ModuleName& name, const Luau::TypeCheckLimits& limits) const override
     {
         std::optional<std::string> path = getParentPath(name);
-        if (!path)
-            return defaultConfig;
+        const Luau::Config& directoryConfig = path ? readConfigRec(*path, limits) : defaultConfig;
 
-        return readConfigRec(*path, limits);
+        Luau::Language language = languageOfPath(name);
+        if (directoryConfig.language == language)
+            return directoryConfig;
+
+        auto [it, inserted] = languageConfigCache.try_emplace({path.value_or(""), language}, directoryConfig);
+        if (inserted)
+            it->second.language = language;
+        return it->second;
     }
 
     const Luau::Config& readConfigRec(const std::string& path, const Luau::TypeCheckLimits& limits) const
@@ -609,7 +641,7 @@ int main(int argc, char** argv)
 
     if (format != ReportFormat::Luacheck)
     {
-        std::string legend = Luau::mismatchNotationLegend(mismatchNotationUsed);
+        std::string legend = Luau::mismatchNotationLegend(mismatchNotationUsed, Luau::Helpifier{});
         if (!legend.empty())
             fprintf(stderr, "\n%s\n", legend.c_str());
     }

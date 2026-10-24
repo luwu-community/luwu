@@ -910,6 +910,17 @@ std::optional<CheckResult> Frontend::getCheckResult(const ModuleName& name, bool
     return checkResult;
 }
 
+// How the Frontend parses a module: with comments, in the language its config says, and with errors worded for static
+// analysis.
+static ParseOptions analysisParseOptions(const Config& config)
+{
+    ParseOptions opts = config.parseOptions;
+    opts.captureComments = true;
+    opts.analysisErrors = true;
+    opts.language = config.language;
+    return opts;
+}
+
 std::vector<ModuleName> Frontend::getRequiredScripts(const ModuleName& name, const TypeCheckLimits& limits)
 {
     RequireTraceResult require = requireTrace[name];
@@ -921,10 +932,9 @@ std::vector<ModuleName> Frontend::getRequiredScripts(const ModuleName& name, con
             return {};
         }
         const Config& config = configResolver->getConfig(name, limits);
-        ParseOptions opts = config.parseOptions;
-        opts.captureComments = true;
-        SourceModule result = parse(name, source->source, opts);
+        SourceModule result = parse(name, source->source, analysisParseOptions(config));
         result.type = source->type;
+        result.language = config.language;
         require = traceRequires(fileResolver, result.root, name, limits);
     }
     std::vector<std::string> requiredModuleNames;
@@ -1226,7 +1236,9 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
         double timestamp = getTimestamp();
 
         std::vector<LintWarning> warnings =
-            Luau::lint(sourceModule.root, *sourceModule.names, environmentScope, module.get(), sourceModule.hotcomments, lintOptions);
+            Luau::lint(
+                sourceModule.root, *sourceModule.names, environmentScope, module.get(), sourceModule.hotcomments, lintOptions, &sourceModule.commentLocations
+            );
 
         moduleInfo.stats.timeLint += getTimestamp() - timestamp;
 
@@ -1616,6 +1628,7 @@ ModulePtr check(
     module->checkedInNewSolver = true;
     module->name = sourceModule.name;
     module->humanReadableName = sourceModule.humanReadableName;
+    module->language = sourceModule.language;
     module->mode = mode;
     module->internalTypes->owningModule = module.get();
     module->interfaceTypes.owningModule = module.get();
@@ -1772,7 +1785,14 @@ ModulePtr check(
                 // fallthrough intentional
             case Mode::Strict:
                 Luau::check(
-                    builtinTypes, NotNull{&typeFunctionRuntime}, NotNull{&unifierState}, NotNull{&limits}, logger.get(), sourceModule, module.get()
+                    builtinTypes,
+                    NotNull{&typeFunctionRuntime},
+                    NotNull{&unifierState},
+                    NotNull{&limits},
+                    logger.get(),
+                    sourceModule,
+                    module.get(),
+                    Helpifier{options.showHelp}
                 );
                 break;
             case Mode::NoCheck:
@@ -1936,7 +1956,9 @@ ModulePtr Frontend::check(
         typeChecker.unifierIterationLimit = typeCheckLimits.unifierIterationLimit;
         typeChecker.cancellationToken = typeCheckLimits.cancellationToken;
 
-        return typeChecker.check(sourceModule, mode, std::move(environmentScope));
+        ModulePtr module = typeChecker.check(sourceModule, mode, std::move(environmentScope));
+        module->language = sourceModule.language;
+        return module;
     }
 }
 
@@ -1996,10 +2018,9 @@ std::pair<SourceNode*, SourceModule*> Frontend::getSourceNode(const ModuleName& 
     }
 
     const Config& config = configResolver->getConfig(name, limits);
-    ParseOptions opts = config.parseOptions;
-    opts.captureComments = true;
-    SourceModule result = parse(name, source->source, opts);
+    SourceModule result = parse(name, source->source, analysisParseOptions(config));
     result.type = source->type;
+    result.language = config.language;
 
     RequireTraceResult& require = requireTrace[name];
     require = traceRequires(fileResolver, result.root, name, limits);

@@ -1194,7 +1194,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_3")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(3, result);
-    CHECK(toString(result.errors[0]) == R"(Unknown global 'fourth'; consider assigning to it first)");
+    CHECK(toString(result.errors[0]) == R"(Unknown variable 'fourth', define it with 'local fourth = value')");
     CHECK(toString(result.errors[1]) == R"('third' type function errored at runtime: [string "first"]:4: attempt to call a nil value)");
 }
 
@@ -1241,7 +1241,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_no_shared_state")
 
     // We are only checking first errors, others are mostly duplicates
     LUAU_REQUIRE_ERROR_COUNT(5, result);
-    CHECK(toString(result.errors[0]) == R"(Unknown global 'glob'; consider assigning to it first)");
+    CHECK(toString(result.errors[0]) == R"(Unknown variable 'glob', define it with 'local glob = value')");
     CHECK(toString(result.errors[1]) == R"('bar' type function errored at runtime: [string "foo"]:4: attempt to modify a readonly table)");
 }
 
@@ -1305,7 +1305,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_illegal_global")
 
     // We are only checking first errors, others are mostly duplicates
     LUAU_REQUIRE_ERROR_COUNT(3, result);
-    CHECK(toString(result.errors[0]) == R"(Unknown global 'gcinfo'; consider assigning to it first)");
+    CHECK(toString(result.errors[0]) == R"(Unknown variable 'gcinfo', define it with 'local gcinfo = value')");
     CHECK(
         toString(result.errors[1]) ==
         R"('illegal' type function errored at runtime: [string "illegal"]:3: this function is not supported in type functions)"
@@ -2583,7 +2583,7 @@ local function ok(idx: get<>): number return idx end
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(3, result);
-    CHECK(toString(result.errors[0]) == R"(Unknown global 'number'; consider assigning to it first)");
+    CHECK(toString(result.errors[0]) == R"(Unknown variable 'number', define it with 'local number = value')");
 }
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "type_alias_not_enough_arguments")

@@ -20,8 +20,6 @@ namespace
 
 // A type printed shorter than this reads fine where it is, however often it appears.
 constexpr size_t kMinNamedWidth = 40;
-// Names one message may introduce: past a few, the `where` block is itself something to read through.
-constexpr size_t kMaxNames = 5;
 // Types visited while looking for repeats, across everything one message prints. Types can be cyclic,
 // so the walk also stops at this depth.
 constexpr size_t kMaxWalkNodes = 512;
@@ -347,8 +345,6 @@ std::vector<size_t> chooseRepeated(const std::vector<Candidate>& candidates, con
             continue;
         chosen.push_back(i);
         counts[i] = count;
-        if (chosen.size() == kMaxNames)
-            break;
     }
     return chosen;
 }
@@ -619,7 +615,7 @@ void nameRepeatedTypesInError(TypeErrorData& data, const Scope* scope)
     if (TypeMismatch* tm = get_if<TypeMismatch>(&data))
     {
         // An explained mismatch printed its types already; the others print something other than the two types.
-        bool printsBothTypes = !tm->luwuExplanation && !tm->overrideMessage && !tm->contextWantedDisplay && !tm->contextGivenDisplay &&
+        bool printsBothTypes = !tm->explained && !tm->overrideMessage && !tm->contextWantedDisplay && !tm->contextGivenDisplay &&
                                !tm->wantedName && !tm->givenName && !tm->error;
         if (!printsBothTypes)
             return;

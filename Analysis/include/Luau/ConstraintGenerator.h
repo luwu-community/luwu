@@ -416,6 +416,7 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStat* stat);
     ControlFlow visit(const ScopePtr& scope, AstStatBlock* block);
     ControlFlow visit(const ScopePtr& scope, AstStatLocal* local);
+    void importRequiredTypes(const ScopePtr& scope, AstStatLocal* statLocal);
     ControlFlow visit(const ScopePtr& scope, AstStatFor* for_);
     ControlFlow visit(const ScopePtr& scope, AstStatForIn* forIn);
     ControlFlow visit(const ScopePtr& scope, AstStatWhile* while_);

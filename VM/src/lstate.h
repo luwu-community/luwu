@@ -171,10 +171,10 @@ struct lua_ExecutionCallbacks
     ); // called to get the execution counter data and count {uint32_t, uint32_t, uint64_t}
     Proto* (*inlinefunction)(lua_State* L, Closure* caller, Closure* target, uint32_t pc); // called when inlining threshold is reached
 
-    // Luwu Traits (rfcs/classes/traits.md): called when the VM copies a function whose proto has native code, so the copy
-    // can have native code too. A class gets its own copy of each function of a trait from another module
-    // (luaR_copytraitfunction), which nothing compiled ahead of time. The copy is on the top of the stack.
-    void (*functioncopied)(lua_State* L);
+    // Luwu Traits (rfcs/classes/traits.md): called when the VM copies a function, so the copy can run the original's native
+    // code. A class gets its own copy of each function of a trait from another module (luaR_copytraitfunction), which
+    // nothing compiled ahead of time. `copy` is a deep copy of `original`: their nested protos match one to one.
+    void (*functioncopied)(lua_State* L, Proto* original, Proto* copy);
 };
 
 struct lua_UdataDirectAccessData
