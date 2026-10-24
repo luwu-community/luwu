@@ -3886,6 +3886,44 @@ return removed, frozen, shadowed, owner, check
     CHECK_EQ(inLua[0].text, "'table.drop' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
 }
 
+// Luwu String Extensions (rfcs/string-extensions.md): the new string functions and methods are Luwu-only too
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsStringExtensions")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    const std::string source = R"(
+local s = "a.luau"
+local a = string.startswith(s, "a")
+local b = s:trim()
+local c = ("x"):contains("x")
+local str = { trim = function(x: string) return x end }
+local d = str.trim(s)
+local e = s:upper()
+return a, b, c, d, e
+)";
+
+    auto luwuOnly = [&](const ModuleName& name, Language language)
+    {
+        fileResolver.source[name] = source;
+        configResolver.configFiles[name].language = language;
+        std::vector<LintWarning> found;
+        for (const LintWarning& warning : lintModule(name).warnings)
+            if (warning.code == LintWarning::Code_LuwuOnlyApi)
+                found.push_back(warning);
+        return found;
+    };
+
+    // `str` is the module's own table, and `upper` is upstream's
+    std::vector<LintWarning> inLuau = luwuOnly("game/a", Language::Luau);
+    REQUIRE_EQ(inLuau.size(), 3);
+    CHECK_EQ(inLuau[0].text, "'string.startswith' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+    CHECK_EQ(inLuau[1].text, "'string.trim' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+    CHECK_EQ(inLuau[2].location.begin.line, 4);
+
+    CHECK_EQ(luwuOnly("game/b", Language::Lua).size(), 3);
+    CHECK(luwuOnly("game/c", Language::Luwu).empty());
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsReportsPairsAndIpairsSeparately")
 {
     const std::string source = R"(
