@@ -5812,6 +5812,29 @@ TEST_CASE_FIXTURE(Fixture, "a_missing_value_above_a_type_alias_is_one_error")
     }
 }
 
+// A declaration on the line after an unclosed table's last element ends the table, and the one error is the missing `}`.
+// Read as the table's next element, it would be an error that consumes nothing, repeated until the parser runs out of
+// memory.
+TEST_CASE_FIXTURE(Fixture, "a_declaration_below_an_unclosed_table_ends_it")
+{
+    for (const char* source : {
+             "local t = {\n    1\nconst x = 1\n",
+             "local t = {\n    a = 1\nconst x = 1\n",
+             "local t = {\n    [1] = 1\ntype X = number\n",
+             "local t = f({\n    g(1)\nexport type X = number\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(1, result.errors.size());
+        CHECK(result.errors[0].getMessage().find("Expected '}'") == 0);
+        REQUIRE_EQ(2, result.root->body.size);
+        AstStat* declaration = result.root->body.data[1];
+        bool declares = declaration->is<AstStatLocal>() || declaration->is<AstStatTypeAlias>();
+        CHECK(declares);
+    }
+}
+
 TEST_CASE_FIXTURE(Fixture, "a_global_named_const_is_still_a_value")
 {
     // Valid Luau <= 0.730: `const` read as a global wherever a name doesn't follow it on its own line

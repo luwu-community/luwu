@@ -5398,12 +5398,18 @@ AstExpr* Parser::parseTableConstructor()
             }
         }
 
+        // Luwu: a new line declaring a constant or a type ends an unclosed table, so the statement loop parses the
+        // declaration. Read as the next element, it would loop forever: parseExpr reports it without consuming it.
+        // Upstream has no such recovery and reads `const` as a global.
+        bool declarationFollows = startsConstDeclaration() || startsTypeAliasDeclaration();
+        bool elementFollows = (lexer.current().type == '[' || lexer.current().type == Lexeme::Name) &&
+                              (FFlag::LuauTableEntriesDontNeedToMatchIndent ? true : lexer.current().location.begin.column == lastElementIndent_DEPRECATED);
+
         if (lexer.current().type == ',' || lexer.current().type == ';')
         {
             nextLexeme();
         }
-        else if ((lexer.current().type == '[' || lexer.current().type == Lexeme::Name) &&
-                 (FFlag::LuauTableEntriesDontNeedToMatchIndent ? true : lexer.current().location.begin.column == lastElementIndent_DEPRECATED))
+        else if (elementFollows && !declarationFollows)
         {
             report(lexer.current().location, "Expected ',' after table constructor element");
         }
