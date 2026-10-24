@@ -1047,6 +1047,16 @@ TEST_SUITE_END();
 
 TEST_SUITE_BEGIN("ExportValueTests");
 
+// Luwu Export Values (rfcs/export-values.md): exports are always const and only Luwu modules can export values, so the
+// modules exporting values are `.luwu`, and upstream's tests of reassigning or forward-declaring exports are gone
+TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportInLuauModuleError")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
+    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/export_in_luau_module_error";
+    runProtectedRequire(path);
+    assertOutputContainsAll({"Luwu-only feature"});
+}
+
 TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportValue")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
@@ -1125,15 +1135,6 @@ TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportInFunctionError")
     std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/export_in_function_error";
     runProtectedRequire(path);
     assertOutputContainsAll({"'export' may only be applied to top-level statements"});
-}
-
-TEST_CASE_FIXTURE(ReplWithPathFixture, "ExportPostReturnMutationError")
-{
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
-    std::string path =
-        getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_post_return_mutation_error";
-    runProtectedRequire(path);
-    assertOutputContainsAll({"true"});
 }
 
 TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportInDoBlockError")
@@ -1240,62 +1241,6 @@ TEST_CASE_FIXTURE(ReplWithPathFixture, "ExportAsFunction")
     assertOutputContainsAll({"true"});
 }
 
-TEST_CASE_FIXTURE(ReplWithPathFixture, "ExportCounter")
-{
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
-    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_counter_module";
-    runProtectedRequire(path);
-    assertOutputContainsAll({"true"});
-}
-
-TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportFunctionRebind")
-{
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
-    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_function_rebind";
-    runProtectedRequire(path);
-    assertOutputContainsAll({"true"});
-}
-
-TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportEdgeCases")
-{
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
-    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_edge_cases";
-    runProtectedRequire(path);
-    assertOutputContainsAll({"true"});
-}
-
-TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportFrozenMutate")
-{
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
-    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_frozen_mutate";
-    runProtectedRequire(path);
-    assertOutputContainsAll({"true"});
-}
-
-TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportForwardRebind")
-{
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
-    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_forward_rebind";
-    runProtectedRequire(path);
-    assertOutputContainsAll({"true"});
-}
-
-TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportMultiSwap")
-{
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
-    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_multi_swap";
-    runProtectedRequire(path);
-    assertOutputContainsAll({"true"});
-}
-
-TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportCompound")
-{
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
-    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_compound";
-    runProtectedRequire(path);
-    assertOutputContainsAll({"true"});
-}
-
 TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportAlias")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
@@ -1308,22 +1253,6 @@ TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportAlias2")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
     std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_alias2";
-    runProtectedRequire(path);
-    assertOutputContainsAll({"true"});
-}
-
-TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportMultiAssign")
-{
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
-    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_multi_assign";
-    runProtectedRequire(path);
-    assertOutputContainsAll({"true"});
-}
-
-TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportTrap")
-{
-    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
-    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/export_keyword/require_export_trap";
     runProtectedRequire(path);
     assertOutputContainsAll({"true"});
 }

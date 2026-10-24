@@ -7725,22 +7725,23 @@ TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_errors")
     matchParseError("local a = x:a<<T>>", "Expected '(', '{' or <string> when parsing function call, got <eof>");
 }
 
+// Luwu: every export is const, so upstream's `export local` declarations are plain exports here, and its forward
+// declarations (`export local f, g`) are locals exported once they're assigned
 TEST_CASE_FIXTURE(Fixture, "export_value_rfc")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
 
     AstStatBlock* block = parse(R"(
-export local version = "1.0.0"
-export const TAU = math.pi * 2
-export local settings: Settings = getSettings()
-export local a, b, c = 1, 2, 3
-export local d
+export version = "1.0.0"
+export TAU = math.pi * 2
+export settings: Settings = getSettings()
+export a, b, c = 1, 2, 3
 
 export function add(a: number, b: number): number
     return a + b
 end
 
-export local f, g
+local f, g
 function f()
     return g()
 end
@@ -7748,88 +7749,53 @@ end
 function g()
     return 42
 end
+export f, g = f, g
 
 local function ret(): (string, number, boolean)
     return "heh", 42, false
 end
-export local x, y, z = ret()
+export x, y, z = ret()
     )");
 
     REQUIRE(block != nullptr);
     REQUIRE_EQ(11, block->body.size);
 
-    AstStatLocal* version = block->body.data[0]->as<AstStatLocal>();
-    REQUIRE(version != nullptr);
-    CHECK(version->isExported);
-    CHECK(!version->isConst);
-    REQUIRE_EQ(1, version->vars.size);
-    CHECK(version->vars.data[0]->isExported);
-    CHECK(!version->vars.data[0]->isConst);
-
-    AstStatLocal* tau = block->body.data[1]->as<AstStatLocal>();
-    REQUIRE(tau != nullptr);
-    CHECK(tau->isExported);
-    CHECK(tau->isConst);
-    REQUIRE_EQ(1, tau->vars.size);
-    CHECK(tau->vars.data[0]->isExported);
-    CHECK(tau->vars.data[0]->isConst);
+    // The exported declarations, which are all const
+    for (size_t index : {0, 1, 2, 3, 8, 10})
+    {
+        INFO(index);
+        AstStatLocal* exported = block->body.data[index]->as<AstStatLocal>();
+        REQUIRE(exported != nullptr);
+        CHECK(exported->isExported);
+        CHECK(exported->isConst);
+        for (AstLocal* local : exported->vars)
+        {
+            CHECK(local->isExported);
+            CHECK(local->isConst);
+        }
+    }
 
     AstStatLocal* settings = block->body.data[2]->as<AstStatLocal>();
-    REQUIRE(settings != nullptr);
-    CHECK(settings->isExported);
-    CHECK(!settings->isConst);
     REQUIRE_EQ(1, settings->vars.size);
     REQUIRE(settings->vars.data[0]->annotation != nullptr);
 
-    AstStatLocal* abc = block->body.data[3]->as<AstStatLocal>();
-    REQUIRE(abc != nullptr);
-    CHECK(abc->isExported);
-    CHECK(!abc->isConst);
-    REQUIRE_EQ(3, abc->vars.size);
-    for (AstLocal* local : abc->vars)
-    {
-        CHECK(local->isExported);
-        CHECK(!local->isConst);
-    }
+    REQUIRE_EQ(3, block->body.data[3]->as<AstStatLocal>()->vars.size);
 
-    AstStatLocal* d = block->body.data[4]->as<AstStatLocal>();
-    REQUIRE(d != nullptr);
-    CHECK(d->isExported);
-    CHECK(!d->isConst);
-    REQUIRE_EQ(1, d->vars.size);
-    CHECK_EQ(0, d->values.size);
-    CHECK(d->vars.data[0]->isExported);
-
-    AstStatLocalFunction* add = block->body.data[5]->as<AstStatLocalFunction>();
+    AstStatLocalFunction* add = block->body.data[4]->as<AstStatLocalFunction>();
     REQUIRE(add != nullptr);
     CHECK(add->name->isExported);
     CHECK(add->name->isConst);
 
-    AstStatLocal* forwardDecls = block->body.data[6]->as<AstStatLocal>();
+    AstStatLocal* forwardDecls = block->body.data[5]->as<AstStatLocal>();
     REQUIRE(forwardDecls != nullptr);
-    CHECK(forwardDecls->isExported);
-    CHECK(!forwardDecls->isConst);
+    CHECK(!forwardDecls->isExported);
     REQUIRE_EQ(2, forwardDecls->vars.size);
     CHECK_EQ(0, forwardDecls->values.size);
-    for (AstLocal* local : forwardDecls->vars)
-    {
-        CHECK(local->isExported);
-        CHECK(!local->isConst);
-    }
 
+    REQUIRE(block->body.data[6]->is<AstStatFunction>());
     REQUIRE(block->body.data[7]->is<AstStatFunction>());
-    REQUIRE(block->body.data[8]->is<AstStatFunction>());
 
-    AstStatLocal* xyz = block->body.data[3]->as<AstStatLocal>();
-    REQUIRE(xyz != nullptr);
-    CHECK(xyz->isExported);
-    CHECK(!xyz->isConst);
-    REQUIRE_EQ(3, xyz->vars.size);
-    for (AstLocal* local : xyz->vars)
-    {
-        CHECK(local->isExported);
-        CHECK(!local->isConst);
-    }
+    REQUIRE_EQ(3, block->body.data[10]->as<AstStatLocal>()->vars.size);
 
     parse(R"(
 export type Config = {
@@ -7876,14 +7842,14 @@ end
     }
 
     ParseResult duplicateExport = expectParseError(R"(
-export local foo = 1
-export local foo = 2
+export foo = 1
+export foo = 2
     )");
     CHECK_NE(duplicateExport.errors.front().getMessage().find("foo"), std::string::npos);
 
     matchParseError(
         R"(
-export local answer = 42
+export answer = 42
 return {answer = answer}
     )",
         "Exporting values is not compatible with top-level return (export/return conflict)"
@@ -7895,7 +7861,7 @@ if skip then
     return
 end
 
-export local answer = 42
+export answer = 42
     )",
         "Exporting values is not compatible with top-level return (export/return conflict)"
     );
@@ -7923,32 +7889,32 @@ return Player {health = 100}
     for (const std::string source : {
              R"(
 if true then
-    export local insideIf = 1
+    export insideIf = 1
 end
     )",
              R"(
 do
-    export const insideDo = 1
+    export insideDo = 1
 end
     )",
              R"(
 while true do
-    export local insideWhile = 1
+    export insideWhile = 1
 end
     )",
              R"(
 repeat
-    export local insideRepeat = 1
+    export insideRepeat = 1
 until true
     )",
              R"(
 for i = 1, 1 do
-    export local insideFor = i
+    export insideFor = i
 end
     )",
              R"(
 local function test()
-    export local insideFunction = 1
+    export insideFunction = 1
 end
     )",
          })
@@ -7972,16 +7938,15 @@ export()
     CHECK(contextualKeywordUses->body.data[1]->is<AstStatCompoundAssign>());
     CHECK(contextualKeywordUses->body.data[2]->is<AstStatExpr>());
 
-    parse("export local x = 5");
-    parse("export const x = 5");
+    parse("export x = 5");
     parse(R"(
 export function foo()
 end
     )");
 
-    // Luwu: `export const function` is `export function`, and `export name = value` is `export const name = value`
+    // Luwu Export Values (rfcs/export-values.md): `export name = value` declares a const export
     AstStatBlock* luwuForms = parse(R"(
-export const function bar()
+export function bar()
 end
 export answer = 42
 export a, b: number = 1, 2
@@ -8008,10 +7973,82 @@ export a, b: number = 1, 2
         }
     }
 
-    matchParseError("export answer", "Missing initializer in const declaration");
+    matchParseError("export answer", "Exported values are const and must be initialized");
     matchParseError("export 42", "Incomplete statement: expected assignment or a function call");
     matchParseError("export if true then end", "Incomplete statement: expected assignment or a function call");
     matchParseError("export", "Incomplete statement: expected assignment or a function call");
+}
+
+// Luwu Export Values (rfcs/export-values.md): exports are always const, so `local` or `const` after `export` is an error,
+// and only a Luwu module can export values
+TEST_CASE_FIXTURE(Fixture, "export_local_and_const_are_errors")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
+
+    matchParseError("export local x = 5", "Remove 'local' here; exports are always const");
+    matchParseError("export const x = 5", "Remove 'const' here; exports are always const");
+    matchParseError("export const function f() end", "Remove 'const' here; exports are always const");
+    const std::string hoistHint =
+        "Forward declare a local binding to export a hoisted function: local f; ... export function f() ... end";
+    matchParseError("export x", "Exported values are const and must be initialized");
+    matchParseError("export a, b = 1", "Exported values are const and must be initialized");
+    matchParseError("export local is_odd: (number) -> boolean", hoistHint);
+    // assigned later, so it was meant as a forward declaration (the assignment also reports reassigning a const)
+    ParseResult assignedLater = tryParse("export x\nx = 1");
+    bool hinted = std::any_of(
+        assignedLater.errors.begin(),
+        assignedLater.errors.end(),
+        [&](const ParseError& error)
+        {
+            return error.getMessage() == hoistHint;
+        }
+    );
+    CHECK(hinted);
+
+    // `export function f` assigns a local `f` that's already declared, like `function f()` does
+    AstStatBlock* filled = parse(R"(
+local is_odd
+export function is_even(n: number): boolean
+    return if n == 0 then true else is_odd(n - 1)
+end
+export function is_odd(n: number): boolean
+    return if n == 0 then false else is_even(n - 1)
+end
+    )");
+    REQUIRE(filled != nullptr);
+    REQUIRE_EQ(3, filled->body.size);
+    AstStatFunction* isOdd = filled->body.data[2]->as<AstStatFunction>();
+    REQUIRE(isOdd != nullptr);
+    AstExprLocal* isOddLocal = isOdd->name->as<AstExprLocal>();
+    REQUIRE(isOddLocal != nullptr);
+    CHECK_EQ(isOddLocal->local, filled->body.data[0]->as<AstStatLocal>()->vars.data[0]);
+    CHECK(isOddLocal->local->isExported);
+    CHECK(isOddLocal->local->isConst);
+
+    matchParseError("const c = 1\nexport function c() end", "Variable 'c' is constant and may not be reassigned");
+
+    // One error each, and the code after still parses
+    ParseResult result = tryParse(R"(
+export local x = 5
+export const y = 6
+export z = x + y
+    )");
+    REQUIRE_EQ(2, result.errors.size());
+    REQUIRE(result.root != nullptr);
+    CHECK_EQ(3, result.root->body.size);
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    for (const char* source : {"export x = 5", "export function f() end", "export local x = 5"})
+    {
+        INFO(source);
+        ParseResult inLuau = tryParse(source, luau);
+        REQUIRE_EQ(1, inLuau.errors.size());
+        CHECK(inLuau.errors.front().getMessage().find("Luwu-only feature") != std::string::npos);
+    }
+
+    ParseResult typeInLuau = tryParse("export type T = number", luau);
+    CHECK(typeInLuau.errors.empty());
 }
 
 TEST_CASE_FIXTURE(Fixture, "extern_read_write_attributes")

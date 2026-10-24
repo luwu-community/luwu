@@ -63,6 +63,10 @@ namespace
 // Users have read that as "my Luwu build is broken", so say what is actually wrong.
 const LuwuFeature kClassesFeature{"classes", /* plural= */ true, "LuwuClasses"};
 const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ true, "LuwuDefaultArguments"};
+// Luwu Export Values (rfcs/export-values.md): exporting values (`export x = v`, `export function`). Upstream only has
+// them behind LuauExportValueSyntax, which its library and Roblox leave off, so they're Luwu's. `export type` is ordinary
+// Luau.
+const LuwuFeature kExportsFeature{"exported values", /* plural= */ true, "LuauExportValueSyntax"};
 // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, `declare` is only allowed where it
 // visibly applies to the whole file.
 const char* const kDeclarationPlacementError =
@@ -578,6 +582,8 @@ AstStatBlock* Parser::parseChunk()
 
     if (lexer.current().type != Lexeme::Eof)
         expectAndConsumeFail(Lexeme::Eof, nullptr);
+
+    reportValuelessExports(result);
 
     return result;
 }
@@ -1890,7 +1896,10 @@ AstStat* Parser::parseLocal(
         // Both error as there's probably user error (`foo` and `baz` can
         // only ever be `nil`). We report an error but return the
         // declaration as-is, as it's still reasonable syntactically.
-        if (isConst && !isEnoughValues(values, vars.size()))
+        bool missingValue = isConst && !isEnoughValues(values, vars.size());
+        if (missingValue && parsingExport)
+            valuelessExports.push_back({node->location, node, /* writtenAsLocal= */ false});
+        else if (missingValue)
             report(node->location, "Missing initializer in const declaration");
 
         return node;
@@ -3686,6 +3695,64 @@ AstStat* Parser::parseAssignment(AstExpr* initial)
     return node;
 }
 
+// Luwu Export Values (rfcs/export-values.md): `local` or `const` after `export`, which every export already is. An
+// exported local without a value waits for reportValuelessExports, which knows whether the module assigns it later.
+void Parser::reportRedundantExportKeyword(const Location& keywordLocation, const char* keyword, AstStatLocal* stat)
+{
+    // Outside a Luwu module the export itself is the error
+    if (options.language != Language::Luwu)
+        return;
+
+    // A value-less `export const x` was already recorded by parseLocal
+    bool valueless = stat && stat->values.size == 0 && stat->vars.size > 0;
+    if (valueless && strcmp(keyword, "local") == 0)
+        valuelessExports.push_back({keywordLocation, stat, /* writtenAsLocal= */ true});
+    else if (!valueless)
+        report(keywordLocation, "Remove '%s' here; exports are always const", keyword);
+}
+
+// Luwu Export Values (rfcs/export-values.md): an export without a value usually lacks one by mistake. Written as
+// `export local x`, or assigned by a later top-level statement (`function x()`, `x = ...`), it was meant as a forward
+// declaration instead.
+void Parser::reportValuelessExports(AstStatBlock* root)
+{
+    for (const ValuelessExport& valueless : valuelessExports)
+    {
+        AstStatLocal* stat = valueless.stat;
+        auto declaredHere = [stat](AstExpr* expr)
+        {
+            // An assignment to a const export is wrapped in the error that reports it
+            if (AstExprError* error = expr->as<AstExprError>(); error && error->expressions.size > 0)
+                expr = error->expressions.data[0];
+
+            AstExprLocal* local = expr->as<AstExprLocal>();
+            return local && std::find(stat->vars.begin(), stat->vars.end(), local->local) != stat->vars.end();
+        };
+
+        bool assignedLater = false;
+        bool afterDeclaration = false;
+        for (AstStat* later : root->body)
+        {
+            if (later == stat)
+                afterDeclaration = true;
+            else if (!afterDeclaration)
+                continue;
+            else if (AstStatFunction* function = later->as<AstStatFunction>(); function && declaredHere(function->name))
+                assignedLater = true;
+            else if (AstStatAssign* assign = later->as<AstStatAssign>())
+                assignedLater = assignedLater || std::any_of(assign->vars.begin(), assign->vars.end(), declaredHere);
+        }
+
+        if (valueless.writtenAsLocal || assignedLater)
+            report(
+                valueless.location,
+                "Forward declare a local binding to export a hoisted function: local f; ... export function f() ... end"
+            );
+        else
+            report(valueless.location, "Exported values are const and must be initialized");
+    }
+}
+
 AstStat* Parser::parseExportValue(
     const Location& start,
     const Location& keywordLocation,
@@ -3698,6 +3765,12 @@ AstStat* Parser::parseExportValue(
 
     if (hasModuleReturn)
         report(start, "Exporting values is not compatible with top-level return (export/return conflict)");
+
+    // `export class` and `export declare` report their own feature
+    Lexeme next = lexer.current();
+    bool exportsOwnFeature = next.type == Lexeme::Name && (AstName(next.name) == "class" || AstName(next.name) == "declare");
+    if (!exportsOwnFeature)
+        checkLuwuFeature(start, kExportsFeature, /* enabled= */ true);
 
     auto checkDuplicateExport = [&](AstName name, const Location& location) -> bool
     {
@@ -3734,17 +3807,31 @@ AstStat* Parser::parseExportValue(
     };
 
     // `constKeywordLocation` is the `const` of `export const function`, if written
-    auto exportFunctionStat = [&](std::optional<Location> constKeywordLocation) -> AstStat*
+    auto exportFunctionStat = [&]() -> AstStat*
     {
+        // Luwu Export Values (rfcs/export-values.md): like `function f()`, `export function f()` assigns a local `f` that's
+        // already declared, so functions declared before it can call it. Upstream declares a new local, which leaves a
+        // forward declaration (`local f`) nil.
+        Lexeme name = lexer.lookahead();
+        AstLocal** declared = name.type == Lexeme::Name ? localMap.find(AstName(name.name)) : nullptr;
+        if (declared && *declared)
+        {
+            AstLocal* local = *declared;
+            AstStatFunction* filled = parseFunctionStat(attributes, cstAttrLists);
+            if (!checkDuplicateExport(local->name, local->location))
+                report(filled->name->location, "Duplicate exported identifier '%s'", local->name.value);
+
+            local->isExported = true;
+            local->isConst = true;
+            return filled;
+        }
+
         auto funcStat = parseLocal(start, keywordLocation, attributes, true, cstAttrLists);
         if (!funcStat->is<AstStatLocalFunction>())
             // parseLocal returned a parse error
             return funcStat;
 
         auto func = funcStat->as<AstStatLocalFunction>();
-
-        if (constKeywordLocation)
-            func->constKeywordBegin = constKeywordLocation->begin;
 
         if (!checkDuplicateExport(func->name->name, func->name->location))
             report(func->name->location, "Duplicate exported identifier '%s'", func->name->name.value);
@@ -3774,22 +3861,39 @@ AstStat* Parser::parseExportValue(
             return parseLocal(start, localKeywordLocation, {nullptr, 0}, true);
         }
 
-        return exportLocalStat(parseLocal(start, keywordLocation, {nullptr, 0}, false), localKeywordLocation);
+        // Luwu Export Values (rfcs/export-values.md): exports are always const, so `export local` is an error. Upstream
+        // exports a mutable local, which raises anyway once its module returns and freezes the export table.
+        AstStat* stat = exportLocalStat(parseLocal(start, keywordLocation, {nullptr, 0}, false), localKeywordLocation);
+        if (AstStatLocal* localStat = stat->as<AstStatLocal>())
+            reportRedundantExportKeyword(localKeywordLocation, "local", localStat);
+        return stat;
     }
     else if (lexer.current().type == Lexeme::ReservedFunction)
     {
-        return exportFunctionStat(std::nullopt);
+        return exportFunctionStat();
     }
     else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const")
     {
+        // Luwu Export Values (rfcs/export-values.md): exports are always const, so `const` after `export` is an error. The
+        // declaration is parsed without it.
         Location constKeywordLocation = lexer.current().location;
         nextLexeme();
 
-        // Luwu: `export const function f()` is `export function f()`, which is already const. Upstream rejects it.
         if (lexer.current().type == Lexeme::ReservedFunction)
-            return exportFunctionStat(constKeywordLocation);
+        {
+            reportRedundantExportKeyword(constKeywordLocation, "const", nullptr);
+            return exportFunctionStat();
+        }
 
-        return exportLocalStat(parseLocal(start, constKeywordLocation, {nullptr, 0}, true), constKeywordLocation);
+        parsingExport = true;
+        AstStat* stat = exportLocalStat(parseLocal(start, start, {nullptr, 0}, true), start);
+        parsingExport = false;
+        if (AstStatLocal* localStat = stat->as<AstStatLocal>())
+        {
+            localStat->keywordLocation = std::nullopt;
+            reportRedundantExportKeyword(constKeywordLocation, "const", localStat);
+        }
+        return stat;
     }
     else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class")
     {
@@ -3811,7 +3915,9 @@ AstStat* Parser::parseExportValue(
     else if (lexer.current().type == Lexeme::Name)
     {
         // Luwu: `export value = y` is `export const value = y`. It has no `const` keyword to point at.
+        parsingExport = true;
         AstStat* stat = exportLocalStat(parseLocal(start, start, {nullptr, 0}, true), start);
+        parsingExport = false;
         if (AstStatLocal* localStat = stat->as<AstStatLocal>())
             localStat->keywordLocation = std::nullopt;
         return stat;

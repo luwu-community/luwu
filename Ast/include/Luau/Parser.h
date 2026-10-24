@@ -281,6 +281,8 @@ private:
     // varlist `=' explist
     AstStat* parseAssignment(AstExpr* initial);
 
+    void reportRedundantExportKeyword(const Location& keywordLocation, const char* keyword, AstStatLocal* stat);
+    void reportValuelessExports(AstStatBlock* root);
     AstStat* parseExportValue(
         const Location& start,
         const Location& keywordLocation,
@@ -659,6 +661,17 @@ private:
     std::vector<unsigned int> matchRecoveryStopOnToken;
 
     DenseHashMap<AstName, Location> declaredExportBindings;
+    // Luwu Export Values (rfcs/export-values.md): exports declared without a value, reported once the module is parsed
+    struct ValuelessExport
+    {
+        Location location;
+        AstStatLocal* stat;
+        // Written `export local x`, which is how upstream forward declares an export
+        bool writtenAsLocal;
+    };
+    std::vector<ValuelessExport> valuelessExports;
+    // Set while parseLocal reads an export's declaration, which reports a missing value through valuelessExports
+    bool parsingExport = false;
     bool hasModuleReturn = false;
 
     std::vector<AstAttr*> scratchAttr;

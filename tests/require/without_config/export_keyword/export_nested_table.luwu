@@ -1,5 +1,5 @@
 -- nested table, where the binding is immutable but contents mutable
-export const triangle = {}
+export triangle = {}
 
 triangle.name = "triangle"
 triangle.sides = 3

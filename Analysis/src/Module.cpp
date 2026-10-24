@@ -454,8 +454,11 @@ void synthesizeExportReturn(NotNull<BuiltinTypes> builtinTypes, NotNull<Module> 
         }
         else if (AstStatFunction* funcStat = statement->as<AstStatFunction>())
         {
+            // Luwu Export Values (rfcs/export-values.md): `export function f` that fills a forward-declared `local f` is an
+            // AstStatFunction too, with the local marked exported
             AstExprLocal* exprLocal = funcStat->name->as<AstExprLocal>();
-            if (exprLocal && exportedLocals.contains(exprLocal->local))
+            bool exported = exprLocal && (exportedLocals.contains(exprLocal->local) || exprLocal->local->isExported);
+            if (exported)
             {
                 props[exprLocal->local->name.value] = Property::readonly(lookupExprType(funcStat->func));
                 props[exprLocal->local->name.value].location = exprLocal->local->location;
