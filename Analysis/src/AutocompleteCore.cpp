@@ -11,6 +11,7 @@
 #include "Luau/FileResolver.h"
 #include "Luau/Frontend.h"
 #include "Luau/LinterConfig.h"
+#include "Luau/LuwuOnlyApi.h"
 #include "Luau/TimeTrace.h"
 #include "Luau/ToString.h"
 #include "Luau/Subtyping.h"
@@ -2413,7 +2414,23 @@ AutocompleteResult autocomplete_(
         TypeId ty = follow(*it);
         PropIndexType indexType = indexName->op == ':' ? PropIndexType::Colon : PropIndexType::Point;
 
-        return {autocompleteProps(*module, typeArena, builtinTypes, ty, indexType, ancestry), ancestry, AutocompleteContext::Property};
+        AutocompleteEntryMap props = autocompleteProps(*module, typeArena, builtinTypes, ty, indexType, ancestry);
+
+        // Luwu: a Luau or Lua module can't use what Luwu adds to a library (LuwuOnlyApi), so it isn't offered there
+        if (module->language != Language::Luwu)
+        {
+            AstExprGlobal* global = indexName->expr->as<AstExprGlobal>();
+            std::string_view library = global ? std::string_view(global->name.value) : isString(ty) ? "string" : "";
+            for (auto prop = props.begin(); prop != props.end();)
+            {
+                if (isLuwuOnlyMember(library, prop->first))
+                    prop = props.erase(prop);
+                else
+                    ++prop;
+            }
+        }
+
+        return {std::move(props), ancestry, AutocompleteContext::Property};
     }
     else if (auto typeReference = node->as<AstTypeReference>())
     {
