@@ -1908,7 +1908,13 @@ const function generate(seed: number): (string, string)
         "    end",
         "end",
         "local function run(label, fn)",
+        -- A `~` op may raise partway through under a trusted lying annotation, after fewer `nextId()` calls than at O0,
+        -- so the counter is put back and the ops after it see the same ids in every config
+        "    local idsBefore = idCounter",
         "    local r = table.pack(pcall(fn))",
+        "    if string.sub(label, 1, 1) == '~' then",
+        "        idCounter = idsBefore",
+        "    end",
         "    if r[1] then",
         "        print(label, 'ok', norm(r[2]), norm(r[3]))",
         "    else",
