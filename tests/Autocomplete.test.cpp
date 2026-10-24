@@ -5173,6 +5173,22 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_comment_directives")
     CHECK(ac.entryMap.empty());
 }
 
+// Luwu: a Luau or Lua module isn't offered what Luwu adds to a library (the LuwuOnlyApi lint's members)
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_luwu_only_members_out_of_luau_modules")
+{
+    ScopedFastFlag tableDrop{FFlag::LuwuTableDrop, true};
+
+    check("local t = table.@1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("drop"), 1);
+
+    configResolver.defaultConfig.language = Language::Luau;
+    check("local t = table.@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("drop"), 0);
+    CHECK_EQ(ac.entryMap.count("insert"), 1);
+}
+
 // Luwu: inside `@[nolint(...)]` and `@[lint(...)]`, the lint names, without the ones the attribute already lists
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_lint_attributes")
 {
