@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/Ast.h"
+#include "Luau/Helpifier.h"
 #include "Luau/Location.h"
 #include "Luau/NotNull.h"
 #include "Luau/Type.h"
@@ -10,6 +11,8 @@
 #include "Luau/Variant.h"
 
 #include <set>
+#include <string>
+#include <vector>
 
 namespace Luau
 {
@@ -17,6 +20,41 @@ namespace Luau
 struct FileResolver;
 struct TypeArena;
 struct TypeError;
+
+// Luwu (helpful subtyping errors): path notation a mismatch explanation can use. Kept as bits on the error so
+// whatever shows several errors together (an editor hover, the CLI's output) can print one legend for
+// all of them.
+enum MismatchNotation : uint8_t
+{
+    MismatchNotationUnionMember = 1 << 0,  // `Drop#2`
+    MismatchNotationIndexer = 1 << 1,      // `[string]`, a value in a map
+    MismatchNotationExpectedRoot = 1 << 2, // a path starting at `expected`
+    MismatchNotationGotRoot = 1 << 3,      // a path starting at `given`
+    MismatchNotationOverload = 1 << 4,     // `Lookup#2`, one overload of a function
+    MismatchNotationArrayElement = 1 << 5, // `[i]`, an element of an array
+};
+
+// The legend for `notation`, a help; an empty string when it uses none of the notation or help is off.
+std::string mismatchNotationLegend(uint8_t notation, const Helpifier& helpifier);
+
+// Luwu (helpful subtyping errors): the `TypeMismatch::contextVerb` phrases for a mismatch in a function's
+// parameters and in its return values. The renderer words the rest of the message by which one it is.
+inline constexpr const char* mismatchContextFunctionTakes = "this function to take";
+inline constexpr const char* mismatchContextFunctionReturns = "this function to return";
+
+// Luwu (helpful subtyping errors): `type Animal = { ... }` under an expected/got message, for a type the
+// message would otherwise print several times. The name is made up for the message (or is an alias in
+// scope with the same structure), and the message prints it in every place the type appears.
+struct NamedTypeDeclaration
+{
+    std::string name;
+    std::string expansion;
+
+    bool operator==(const NamedTypeDeclaration& rhs) const
+    {
+        return name == rhs.name && expansion == rhs.expansion;
+    }
+};
 
 struct TypeMismatch
 {
@@ -48,6 +86,46 @@ struct TypeMismatch
     // text alone. Not part of any constructor; set directly on the constructed value.
     std::optional<std::string> contextVerb;
 
+    // Luwu (helpful subtyping errors): when `contextVerb` is set, the preamble names a specific part of
+    // the type, so printing the root `wantedType`/`givenType` after it would contradict what the preamble
+    // just promised ("Expected this function to return '() -> Widget'"). These hold the stringified types
+    // at the end of that shared context path, and are printed in their place when set.
+    std::optional<std::string> contextWantedDisplay;
+    std::optional<std::string> contextGivenDisplay;
+
+    // Luwu (helpful subtyping errors): a bespoke explanation, printed verbatim in place of the whole
+    // "Expected this to be 'X', but got 'Y'" rendering. Some mismatches are far better explained by a
+    // sentence written for that one case, but they are still type mismatches: keeping them as one preserves
+    // `wantedType` and `givenType` for everything downstream that reads them rather than the message.
+    std::optional<std::string> overrideMessage;
+
+    // Luwu (helpful subtyping errors): printed in place of a type that has a name the reader wrote.
+    std::optional<std::string> wantedName;
+    std::optional<std::string> givenName;
+    // The name the given value has in the code: the variable it was read from, or where a literal is being put. The
+    // message calls the value by it (`Expected 'settings' to be`), and the reason's paths start at it.
+    std::optional<std::string> givenVariable;
+    // Luwu (helpful subtyping errors): the `where` block under the two types. When it isn't empty,
+    // `wantedName` and `givenName` hold the two types printed with these names.
+    std::vector<NamedTypeDeclaration> whereDeclarations;
+
+    // Luwu (helpful subtyping errors): what `explainMismatch` adds when it explains the mismatch.
+    struct Explained
+    {
+        // An aliased union has no name of its own to print, so its `= ...` expansion goes on the line below the name.
+        std::optional<std::string> wantedExpansion;
+        std::optional<std::string> givenExpansion;
+        // `MismatchNotation` bits used by `reason`.
+        uint8_t notation = 0;
+
+        bool operator==(const Explained& rhs) const;
+    };
+
+    // Set when `explainMismatch` explained the mismatch. The message then prints union members in the order they were
+    // written, not sorted, because the reason numbers them (`Drop#2`) and the numbers have to match what is printed;
+    // and it says "but was given", matching the `given` its paths are rooted at.
+    std::optional<Explained> explained;
+
     bool operator==(const TypeMismatch& rhs) const;
 };
 
@@ -61,8 +139,43 @@ struct UnknownSymbol
     Name name;
     Context context;
 
+    // Luwu: for a module-qualified type `x.A`, what `x` turned out to be, so the message can say which half is wrong.
+    // Upstream reports every case as "Unknown type 'x.A'".
+    enum class Qualifier
+    {
+        // Not qualified, or a require that didn't resolve (which has its own error already)
+        Unknown,
+        // `x` isn't bound to a require
+        NotAModule,
+        // `x` is a required module that exports no type `A`
+        NotExported,
+    };
+    Qualifier qualifier = Qualifier::Unknown;
+    Name module;
+    Name member;
+
+    // Luwu: why a variable's name isn't bound where it's used. Upstream says "Unknown global 'x'; consider assigning
+    // to it first" every time.
+    enum class Unbound
+    {
+        // No local in the file has the name
+        NotDefined,
+        // `meant` is in scope and spelled almost the same
+        Typo,
+        // The local at `definition` is declared after this use
+        BeforeDefinition,
+        // The local at `definition` is in a block that doesn't contain this use
+        InnerScope,
+    };
+    Unbound unbound = Unbound::NotDefined;
+    Name meant;
+    std::optional<Location> definition;
+
     bool operator==(const UnknownSymbol& rhs) const;
 };
+
+// The error for a type reference that names no type in `scope`.
+UnknownSymbol unknownTypeReference(const Scope& scope, const AstTypeReference& reference);
 
 struct UnknownProperty
 {
@@ -245,6 +358,13 @@ struct ModuleHasCyclicDependency
 struct FunctionExitsWithoutReturning
 {
     TypePackId expectedReturnType;
+
+    // Luwu (helpful subtyping errors): see TypeMismatch::overrideMessage. A function with no return
+    // statement at all is not a case of "not all code paths", and when the declared type is `nil` the
+    // distinction it is failing on -- returning the value `nil` versus returning nothing -- is worth
+    // spelling out.
+    std::optional<std::string> overrideMessage;
+
     bool operator==(const FunctionExitsWithoutReturning& rhs) const;
 };
 
@@ -267,6 +387,14 @@ struct MissingProperties
     TypeId subType;
     std::vector<Name> properties;
     Context context = Missing;
+
+    // Luwu (helpful subtyping errors): the properties are missing from a table literal. The message names the literal
+    // by `givenName` (what it's being assigned to) when it has one, and lists each missing property with its type.
+    bool fromTableLiteral = false;
+    std::optional<std::string> givenName;
+    // The name of the type the table is for, which can be a union the literal was narrowed to one member
+    // of (`GameEvent`), so the message doesn't name a member the reader never wrote.
+    std::optional<std::string> wantedName;
 
     bool operator==(const MissingProperties& rhs) const;
 };
@@ -320,6 +448,8 @@ struct MissingUnionProperty
     TypeId type;
     std::vector<TypeId> missing;
     Name key;
+    // Luwu: whether the message carries help (see Helpifier)
+    bool showHelp = true;
 
     bool operator==(const MissingUnionProperty& rhs) const;
 };
@@ -345,6 +475,15 @@ struct TypePackMismatch
     TypePackId wantedTp;
     TypePackId givenTp;
     std::string reason;
+
+    // Luwu (helpful subtyping errors): see TypeMismatch::overrideMessage.
+    std::optional<std::string> overrideMessage;
+
+    // Luwu (helpful subtyping errors): see TypeMismatch::whereDeclarations. When it isn't empty, these hold
+    // the two packs printed with its names.
+    std::optional<std::string> wantedName;
+    std::optional<std::string> givenName;
+    std::vector<NamedTypeDeclaration> whereDeclarations;
 
     bool operator==(const TypePackMismatch& rhs) const;
 };
@@ -471,6 +610,84 @@ struct ConstructorReadByName
 
     bool operator==(const ConstructorReadByName& rhs) const;
 };
+
+// Luwu (helpful subtyping errors): something written where a similar thing was almost certainly meant, when that is the
+// whole problem: a property of a table literal named like one the expected table has and the literal leaves out (table
+// types aren't exact, so an optional one is otherwise never reported, and the value is never read), a string one typo
+// from an expected one (`"LeftCtrl"` for `"LeftControl"`), or a table whose one problem is a misspelled property.
+struct Typo
+{
+    Name written;
+    Name meant;
+
+    bool operator==(const Typo& rhs) const;
+};
+
+// Luwu: what a value was used for, where its type says it can't exist (`never`) or couldn't be worked out
+// (`*error-type*`).
+enum class ImproperUse
+{
+    Call,
+    Index,
+};
+
+// Luwu: calling or indexing a value whose type is `never`. Either the code can't run, or a type checker bug made the
+// value `never` and nothing it's used for is checked; the second has crashed real code. Upstream says nothing, and for a
+// `never` it didn't simplify (`number & ~number`) reports that it can't be called.
+struct UnreachableCodeUse
+{
+    enum class Reason
+    {
+        // The checks before the use rule out every member of the local's declared type on their own (provesUnreachable)
+        NarrowedAway,
+        // The local holds the result of a call that never returns (`error(...)`)
+        NeverReturningCall,
+        // The local is annotated `never`
+        DeclaredNever,
+        // The local is annotated with a type no value has (`{ x: number } & { x: string }`)
+        DeclaredUninhabited,
+        // The local holds a `never` cast to it (`x :: never`)
+        CastToNever,
+        // Nothing the reader wrote proves it: inference or the solver's refinements made the value `never`, which a
+        // refinement bug can do while the code runs
+        PossibleTypeBug,
+    };
+
+    ImproperUse use = ImproperUse::Call;
+    // The local, or the name the value is read through (`self.dave`); empty when it has none
+    std::string name;
+    Reason reason = Reason::NarrowedAway;
+    bool showHelp = true;
+
+    bool operator==(const UnreachableCodeUse& rhs) const;
+};
+
+// Luwu: the first call or index of a local whose type couldn't be worked out (`*error-type*`), usually because of an
+// error in its declaration. Every other use of the local gets a note (`Module::notes`) pointing at that error.
+// Upstream says nothing: an error type stands for an error already reported.
+struct NoTypeUse
+{
+    ImproperUse use = ImproperUse::Call;
+    std::string name;
+    // The error that left the local without a type, when one was reported
+    std::optional<Location> origin;
+    bool showHelp = true;
+
+    bool operator==(const NoTypeUse& rhs) const;
+};
+
+// Luwu: a remark on code that an error elsewhere explains. It isn't an error (it changes no error count), so it is kept
+// in `Module::notes`; editors show it less prominently.
+struct DiagnosticNote
+{
+    Location location;
+    std::string message;
+    // The error it's about
+    std::optional<Location> origin;
+};
+
+// The note on a use of the local `name`, which has no type because of the error at `origin`.
+std::string noTypeNote(const std::string& name, std::optional<Location> origin);
 
 struct PropertyAccessViolation
 {
@@ -600,8 +817,19 @@ struct MultipleNonviableOverloads
 {
     size_t attemptedArgCount;
 
+    // Luwu (helpful subtyping errors): the function called, as the code names it (empty when it has no name), and every
+    // overload's signature, listed by number in the one error. Upstream reports the list as a second error,
+    // "Available overloads: ...", all on one line.
+    std::string callee;
+    std::vector<std::string> overloads;
+    // The arguments as a parameter list, `("chat", (message: number) -> ())`. Empty when they weren't recorded.
+    std::string arguments;
+
     bool operator==(const MultipleNonviableOverloads& rhs) const;
 };
+
+// Luwu (helpful subtyping errors): overloads one per line, numbered as an explanation numbers them: `  • #2 '(sig)'`.
+std::string numberedOverloads(const std::vector<std::string>& signatures);
 
 // Error where a type alias violates the recursive restraint, ie when a type alias T<A> has T with different arguments on the RHS.
 struct RecursiveRestraintViolation
@@ -753,7 +981,10 @@ using TypeErrorData = Variant<
     TypeInstantiationCountMismatch,
     AmbiguousFunctionCall,
     UninstantiableClass,
-    ConstructorReadByName>;
+    ConstructorReadByName,
+    Typo,
+    UnreachableCodeUse,
+    NoTypeUse>;
 
 struct TypeErrorSummary
 {

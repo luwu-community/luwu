@@ -926,6 +926,7 @@ TEST_CASE_FIXTURE(FrontendFixture, "discard_type_graphs")
 
 TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_errors_when_full_type_graph_is_discarded")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     Frontend fe{!FFlag::DebugLuauForceOldSolver ? SolverMode::New : SolverMode::Old, &fileResolver, &configResolver, {false}};
@@ -943,10 +944,41 @@ TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_errors_when_f
     // It could segfault, or you could see weird type names like the empty string or <VALUELESS BY EXCEPTION>
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        CHECK_EQ("required field 'Count' not found in type\n  '{ count: string }'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+        CHECK_EQ(
+            "required property 'Count' not found in type\n  '{ count: string }'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0])
+        );
     }
     else
-        REQUIRE_EQ("required field 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+        REQUIRE_EQ("required property 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_explained_errors_when_full_type_graph_is_discarded")
+{
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+    ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
+
+    Frontend fe{!FFlag::DebugLuauForceOldSolver ? SolverMode::New : SolverMode::Old, &fileResolver, &configResolver, {false}};
+    fileResolver.source["Module/A"] = R"(
+        --!strict
+        local a: {Count: number} = {count='five'}
+    )";
+
+    CheckResult result = fe.check("Module/A");
+
+    // As above: stringifying reads the error's TypeIds, which must outlive the discarded type graph.
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        // The second error is the misspelling: `count` written where `Count` was meant.
+        REQUIRE_EQ(2, result.errors.size());
+        CHECK_EQ("'a' is missing a property:\n  • 'Count: number'", toString(result.errors[1]));
+        REQUIRE(get<Typo>(result.errors[0]));
+        CHECK_EQ("Did you mean 'Count' instead of 'count'?", toString(result.errors[0]));
+    }
+    else
+    {
+        REQUIRE_EQ(1, result.errors.size());
+        CHECK_EQ("required property 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+    }
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "trace_requires_in_nonstrict_mode")
@@ -1276,6 +1308,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "module_scope_check")
 
 TEST_CASE_FIXTURE(FrontendFixture, "parse_only")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/Gui/Modules/A"] = R"(
         local a: number = 'oh no a type error'
         return {a=a}
@@ -2083,8 +2116,18 @@ TEST_CASE_FIXTURE(FrontendFixture, "deleted_source_is_evicted_on_recheck")
     // Invalidate old contents of A
     getFrontend().markDirty("game/A");
 
-    // Should be able to check C and fail on missing B
-    LUAU_REQUIRE_ERROR_COUNT(1, getFrontend().check("game/C"));
+    // Should be able to check C and fail on missing B. Luwu: and on the first use of `B`, which has no type because
+    // of it (NoTypeUse).
+    CheckResult result = getFrontend().check("game/C");
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(2, result);
+        CHECK(get<NoTypeUse>(result.errors[1]));
+    }
+    else
+    {
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+    }
 
     CHECK(getFrontend().sourceNodes.count("game/B") == 0);
     CHECK(getFrontend().moduleResolver.getModule("game/B") == nullptr);

@@ -435,6 +435,7 @@ TEST_CASE_FIXTURE(Fixture, "compound_assign_mismatch_op")
 
 TEST_CASE_FIXTURE(Fixture, "compound_assign_mismatch_result")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         local s = 'hello'
         s += 10
@@ -532,6 +533,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "compound_assign_result_must_be_compatible_wi
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "compound_assign_mismatch_metatable")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         --!strict
         type V2B = { x: number, y: number }
@@ -954,7 +956,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "UnknownGlobalCompoundAssign")
             )");
 
             LUAU_REQUIRE_ERROR_COUNT(1, result);
-            CHECK_EQ(toString(result.errors[0]), "Unknown global 'a'; consider assigning to it first");
+            CHECK_EQ(toString(result.errors[0]), "Unknown variable 'a', define it with 'local a = value'");
         }
     }
 
@@ -967,7 +969,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "UnknownGlobalCompoundAssign")
         )");
 
         LUAU_REQUIRE_ERRORS(result);
-        CHECK_EQ(toString(result.errors[0]), "Unknown global 'a'; consider assigning to it first");
+        CHECK_EQ(toString(result.errors[0]), "Unknown variable 'a', define it with 'local a = value'");
     }
 
     // In non-strict mode, compound assignment is not a definition, it's a modification
@@ -981,7 +983,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "UnknownGlobalCompoundAssign")
             )");
 
             LUAU_REQUIRE_ERROR_COUNT(2, result);
-            CHECK_EQ(toString(result.errors[0]), "Unknown global 'a'; consider assigning to it first");
+            CHECK_EQ(toString(result.errors[0]), "Unknown variable 'a', define it with 'local a = value'");
         }
     }
 }
@@ -1779,6 +1781,24 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "overload_concat")
     )");
 
     LUAU_CHECK_NO_ERRORS(result);
+}
+
+// Luwu: what a `~=` refinement leaves of a string (`string & ~"p"`) is still a string, with string's metatable, so
+// comparing it with a string isn't a metatable mismatch
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_refined_string_compares_with_strings")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local function f(x: string): boolean
+            if x ~= "p" and x ~= "q" then
+                return x == "p" or x == "r"
+            end
+            return false
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 TEST_SUITE_END();

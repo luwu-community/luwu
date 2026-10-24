@@ -32,6 +32,9 @@ struct ToStringNameMap
     std::unordered_map<TypePackId, std::string> typePacks;
 };
 
+// Luwu (helpful subtyping errors): for a table, the properties an error message is about, which it prints first.
+using PropertyFocus = DenseHashMap<TypeId, std::vector<std::string>>;
+
 struct ToStringOptions
 {
     ToStringOptions(bool exhaustive = false)
@@ -61,6 +64,29 @@ struct ToStringOptions
     // as a hover over a variable. There, printing the alias's own name back (`const fs: fs.fs`) tells
     // the reader nothing.
     bool alwaysExpandRootAlias = false;
+    // Luwu (helpful subtyping errors): if false, union and intersection members print in the order the type
+    // holds them (the order they were written in, for an annotation) instead of sorted. Mismatch
+    // explanations number union members (`Drop#2`), and the number has to match what the reader sees.
+    bool sortUnionMembers = true;
+    // Luwu (helpful subtyping errors): types an error message names because it would otherwise print them
+    // several times (`where type Animal = ...`), printed by that name. The root of a call with
+    // `alwaysExpandRootAlias` is still expanded, which is how the name's own declaration is printed.
+    const DenseHashMap<TypeId, std::string>* repeatedTypeNames = nullptr;
+    // Luwu (helpful subtyping errors): with `useLineBreaks`, put a table's fields on lines of their own only
+    // when it has more than a few, or one of them is long. A small table reads better on one line, even
+    // inside a large one.
+    bool breakOnlyLargeTables = false;
+    // Luwu (helpful subtyping errors): past this many properties (0 for no limit), a table prints only this many:
+    // the ones in `propertyFocus` first, then up to two whose type is a literal (a discriminant, `kind: "leave"`),
+    // then with `identifyByConventionalNames` the ones conventionally naming what it is (`type`, `kind`, `name`,
+    // ...), then the rest in order, and counts the others. A record of twenty properties where three are wrong is
+    // mostly properties the reader doesn't need.
+    size_t maxPropertiesShown = 0;
+    const PropertyFocus* propertyFocus = nullptr;
+    bool identifyByConventionalNames = false;
+    // Luwu (helpful subtyping errors): print only the properties `maxPropertiesShown` puts ahead of the rest, and `…`
+    // for the others, however few there are: for a table the message only needs to point into.
+    bool onlyFocusedProperties = false;
     size_t maxTableLength = size_t(FInt::LuauTableTypeMaximumStringifierLength); // Only applied to TableTypes
     size_t maxTypeLength = size_t(FInt::LuauTypeMaximumStringifierLength);
     size_t compositeTypesSingleLineLimit = 5; // The number of type elements permitted on a single line when printing type unions/intersections
