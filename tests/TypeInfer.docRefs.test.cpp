@@ -273,6 +273,39 @@ TEST_CASE_FIXTURE(DocRefsFixture, "doc_bindings_require_modules")
     CHECK_EQ(prop->key, "readfile");
 }
 
+// A language server checks modules it only needs for their exports without retainFullTypeGraphs, which drops their
+// scopes. Doc text from such a module (a hover on a type it declared) resolves nothing instead of reading the scopes.
+TEST_CASE_FIXTURE(DocRefsFixture, "doc_text_in_a_module_checked_without_its_scopes_resolves_nothing")
+{
+    fileResolver.source["game/Lib"] = R"(
+        --!strict
+        local x = 1
+        return { x = x }
+    )";
+    FrontendOptions options;
+    options.retainFullTypeGraphs = false;
+    getFrontend().check("game/Lib", options);
+
+    ModulePtr module = getFrontend().moduleResolver.getModule("game/Lib");
+    SourceModule* sourceModule = getFrontend().getSourceModule("game/Lib");
+    REQUIRE(module);
+    REQUIRE(sourceModule);
+    REQUIRE(!module->hasModuleScope());
+
+    std::vector<DocTextLink> links = resolveDocText(
+        "See [x].",
+        *sourceModule,
+        *module,
+        Location{{2, 0}, {2, 0}},
+        getBuiltins(),
+        NotNull{&fileResolver},
+        NotNull<ModuleResolver>{&getFrontend().moduleResolver},
+        TypeCheckLimits{},
+        nullptr
+    );
+    CHECK(links.empty());
+}
+
 TEST_CASE_FIXTURE(DocRefsFixture, "code_that_does_not_belong_in_docs_is_a_doc_syntax_error")
 {
     CheckResult result = check(R"(

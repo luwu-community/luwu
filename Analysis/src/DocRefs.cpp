@@ -1111,6 +1111,10 @@ std::vector<DocTextLink> resolveDocText(
     std::vector<TypeError>* errors
 )
 {
+    // A module checked without retainFullTypeGraphs has no scopes left to resolve names in
+    if (!module.hasModuleScope())
+        return {};
+
     SourceModule parsed;
     parsed.name = sourceModule.name;
     DocParser parser{parsed, text};
