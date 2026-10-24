@@ -9009,18 +9009,32 @@ TEST_CASE_FIXTURE(Fixture, "an_end_after_an_expression_that_takes_none_gets_one_
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
-    const std::string ifElse = "An if-else expression doesn't end with 'end'; this 'end' closes the block around it instead";
-    const std::string doEnd = "A 'do' expression doesn't end with 'end'; this 'end' closes the block around it instead";
+    const std::string ifElse = "Remove this 'end'; an if-else expression ends at the value after its 'else'";
+    const std::string doEnd = "Remove this 'end'; a 'do' expression ends at its 'give', 'return', 'break' or 'continue'";
 
     matchOnlyDoExprError(*this, "local x = if a then 1 else 2 end", ifElse);
     matchOnlyDoExprError(*this, "local x = do give 1 end", doEnd);
     matchOnlyDoExprError(*this, "while true do\n    local x = do give 1 end\nend", doEnd);
 
-    // the stray `end` closes the function early, and the function's own `end` is left over: the stray one is blamed
-    ParseResult result = tryParse("local function f()\n    local x = do\n        give 1\n    end\n    return x\nend");
+    // the stray `end` closes the function early, and the function's own `end` is left over: the stray one is blamed, and
+    // skipped, so the rest of the function and the code after it parse where they belong
+    ParseResult result = tryParse("local function f()\n    local x = do\n        give 1\n    end\n    return x\nend\nprint(f())");
     REQUIRE_EQ(result.errors.size(), 1);
     CHECK_EQ(result.errors[0].getMessage(), doEnd);
     CHECK_EQ(result.errors[0].getLocation().begin, Position(3, 4));
+    REQUIRE_EQ(result.root->body.size, 2);
+    AstStatLocalFunction* f = result.root->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(f);
+    CHECK_EQ(f->func->body->body.size, 2);
+
+    result = tryParse("local function f()\n    local y = if a then 1 else 2 end\n    return y\nend\nprint(f())");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), ifElse);
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(1, 33));
+    REQUIRE_EQ(result.root->body.size, 2);
+    f = result.root->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(f);
+    CHECK_EQ(f->func->body->body.size, 2);
 
     matchOnlyDoExprError(
         *this, "local x = do foo() end", "A 'do' expression doesn't end with 'end'; end it with 'give <value>', 'return', 'break' or 'continue'"

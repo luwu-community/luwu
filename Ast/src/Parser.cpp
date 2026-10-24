@@ -140,6 +140,9 @@ const char* const kIncompleteStatement = "Incomplete statement: expected assignm
 const char* const kOrLeaveIncompleteStatement =
     "Incomplete statement: expected assignment, a function call, or an expression ending in 'or return', 'or break' or 'or continue'";
 const char* const kGiveIncompleteStatement = "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'";
+// Luwu: an `end` after an expression that takes none (see noteStrayEnd)
+const char* const kStrayEndAfterDoExpr = "Remove this 'end'; a 'do' expression ends at its 'give', 'return', 'break' or 'continue'";
+const char* const kStrayEndAfterIfElseExpr = "Remove this 'end'; an if-else expression ends at the value after its 'else'";
 // Luwu: upstream's legacy `declare class` declares an extern type; in Luwu it is a class or nothing.
 const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead";
 const char* const kDeclareClassNeedsTypeError =
@@ -510,9 +513,17 @@ ParseResult Parser::parse(const char* buffer, size_t bufferSize, AstNameTable& n
     try
     {
         AstStatBlock* root = p.parseChunk();
-        size_t lines = p.lexer.current().location.end.line + (bufferSize > 0 && buffer[bufferSize - 1] != '\n');
 
-        return ParseResult{root, lines, std::move(p.hotcomments), std::move(p.parseErrors), std::move(p.commentLocations), std::move(p.cstNodeMap)};
+        // Luwu: a stray `end` after an if-else or `do` expression closed a block early, so the rest of the file parsed
+        // in the wrong blocks or not at all. Parse it again with that `end` skipped, which reports it where it is.
+        if (p.blamedStrayEnd)
+        {
+            Parser retry(buffer, bufferSize, names, allocator, options);
+            retry.skippedStrayEnd = p.blamedStrayEnd;
+            return finishParse(retry, retry.parseChunk(), buffer, bufferSize);
+        }
+
+        return finishParse(p, root, buffer, bufferSize);
     }
     catch (ParseError& err)
     {
@@ -521,6 +532,13 @@ ParseResult Parser::parse(const char* buffer, size_t bufferSize, AstNameTable& n
 
         return ParseResult{nullptr, 0, {}, p.parseErrors, {}, std::move(p.cstNodeMap)};
     }
+}
+
+ParseResult Parser::finishParse(Parser& p, AstStatBlock* root, const char* buffer, size_t bufferSize)
+{
+    size_t lines = p.lexer.current().location.end.line + (bufferSize > 0 && buffer[bufferSize - 1] != '\n');
+
+    return ParseResult{root, lines, std::move(p.hotcomments), std::move(p.parseErrors), std::move(p.commentLocations), std::move(p.cstNodeMap)};
 }
 
 template<typename Node, typename F>
@@ -677,7 +695,8 @@ void Parser::reportLeftoverAtEndOfChunk()
         }
 
         const StrayEnd& stray = strayEnds.front();
-        report(stray.location, "%s doesn't end with 'end'; this 'end' closes the block around it instead", stray.construct);
+        report(stray.location, "%s", stray.message);
+        blamedStrayEnd = stray.location;
         return;
     }
 
@@ -8079,7 +8098,7 @@ AstExpr* Parser::parseIfElseExpr()
     Location end = falseExpr->location;
 
     if (!isElseIf)
-        noteStrayEnd("An if-else expression", /* reported= */ false);
+        noteStrayEnd(kStrayEndAfterIfElseExpr, /* reported= */ false);
 
     AstExprIfElse* node =
         allocator.alloc<AstExprIfElse>(Location(start, end), condition, hasThen, trueExpr, hasElse, falseExpr, start, thenLocation, elseLocation);
@@ -8116,7 +8135,7 @@ Parser::IfElseKeyword Parser::expectIfElseKeyword(Lexeme::Type type, const Locat
     {
         std::string typeString = Lexeme(Location(Position(0, 0), 0), type).toString();
         report(keyword, "Expected %s when parsing if then else expression, got 'end'; an if-else expression doesn't end with 'end'", typeString.c_str());
-        noteStrayEnd("An if-else expression", /* reported= */ true);
+        noteStrayEnd(kStrayEndAfterIfElseExpr, /* reported= */ true);
         return IfElseKeyword::Missing;
     }
 
@@ -8129,10 +8148,20 @@ Parser::IfElseKeyword Parser::expectIfElseKeyword(Lexeme::Type type, const Locat
 // Luwu: an `end` right after an if-else or `do` expression, which takes none. It may still close an enclosing block
 // legitimately (`return if a then 1 else 2` and then the function's `end`), so it is only noted here, and blamed when
 // the file turns out to have an `end` left over (see parseChunk). `reported` means an error already explains it.
-void Parser::noteStrayEnd(const char* construct, bool reported)
+// Parsing again after that, the blamed `end` is reported with `message` and skipped.
+void Parser::noteStrayEnd(const char* message, bool reported)
 {
-    if (lexer.current().type == Lexeme::ReservedEnd)
-        strayEnds.push_back({lexer.current().location, construct, reported});
+    if (lexer.current().type != Lexeme::ReservedEnd)
+        return;
+
+    if (skippedStrayEnd && lexer.current().location == *skippedStrayEnd)
+    {
+        report(lexer.current().location, "%s", message);
+        nextLexeme();
+        return;
+    }
+
+    strayEnds.push_back({lexer.current().location, message, reported});
 }
 
 // Luwu: the arm of an if-else expression whose `then` or `else` is missing: empty, at the current token
@@ -8215,7 +8244,7 @@ AstExpr* Parser::parseDoExpr()
         if (!bodyReportedErrors && lexer.current().type == Lexeme::ReservedEnd)
         {
             report(start, "A 'do' expression doesn't end with 'end'; end it with 'give <value>', 'return', 'break' or 'continue'");
-            noteStrayEnd("A 'do' expression", /* reported= */ true);
+            noteStrayEnd(kStrayEndAfterDoExpr, /* reported= */ true);
         }
         else if (!bodyReportedErrors)
         {
@@ -8248,7 +8277,7 @@ AstExpr* Parser::parseDoExpr()
     }
 
     if (terminated)
-        noteStrayEnd("A 'do' expression", /* reported= */ false);
+        noteStrayEnd(kStrayEndAfterDoExpr, /* reported= */ false);
 
     // On the `do` alone, like every error about the expression as a whole
     checkLuwuFeature(start, LuwuFeature{"'do' expressions", /* plural= */ true, "LuwuDoExpr"}, FFlag::LuwuDoExpr);

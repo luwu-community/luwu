@@ -105,6 +105,8 @@ private:
 
     Parser(const char* buffer, std::size_t bufferSize, AstNameTable& names, Allocator& allocator, const ParseOptions& options);
 
+    static ParseResult finishParse(Parser& p, AstStatBlock* root, const char* buffer, size_t bufferSize);
+
     bool blockFollow(const Lexeme& l);
 
     AstStatBlock* parseChunk();
@@ -494,7 +496,7 @@ private:
         Missing,
     };
     IfElseKeyword expectIfElseKeyword(Lexeme::Type type, const Location& keyword);
-    void noteStrayEnd(const char* construct, bool reported);
+    void noteStrayEnd(const char* message, bool reported);
     void reportLeftoverAtEndOfChunk();
     AstExpr* missingIfElseArm();
     AstExpr* missingValueAfter(const char* keyword);
@@ -744,10 +746,14 @@ private:
     struct StrayEnd
     {
         Location location;
-        const char* construct;
+        const char* message;
         bool reported;
     };
     std::vector<StrayEnd> strayEnds;
+    // The stray `end` reportLeftoverAtEndOfChunk blamed. Parser::parse parses the file again with it skipped (as
+    // skippedStrayEnd), so the code after it isn't cut off at the block it closed early.
+    std::optional<Location> blamedStrayEnd;
+    std::optional<Location> skippedStrayEnd;
 
     // Luwu Do Expressions (rfcs/do-expressions.md): `x or continue` is the continue shorthand only in a module that never
     // uses `continue` as a name. Name uses are counted as the module is parsed, and each shorthand keeps the slot it was
