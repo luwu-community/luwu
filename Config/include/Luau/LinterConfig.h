@@ -97,6 +97,7 @@ struct LintWarning
         Code_LuwuOnlyApi = 62,             // Luwu: a Luwu-only library function (`table.drop`) used in a `.luau` or `.lua` file
 
         Code_LuaStringHelper = 63,         // Luwu: `s:sub(1, #p) == p` and the like, which `s:startswith(p)` and friends do
+        Code_StringOperations = 64,        // Luwu: a string library call that `""` makes pointless or wrong (`s:startswith("")`)
 
         Code__Count
     };
@@ -207,6 +208,7 @@ inline constexpr const char* kWarningNames[] = {
     "AnyAnnotation",
     "LuwuOnlyApi",
     "LuaStringHelper",
+    "StringOperations",
 };
 // clang-format on
 

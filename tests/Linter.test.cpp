@@ -1382,8 +1382,10 @@ string.gsub(s, '[A-Z]+(%d)', "%0%1")
 string.gsub(s, 'foo', "%0")
 )");
 
-    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here, and neither does
+    // StringOperations reporting the empty pattern
     result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
+    result.warnings = withoutCode(result, LintWarning::Code_StringOperations);
 
     REQUIRE(4 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid match replacement: unfinished replacement");
@@ -4961,6 +4963,87 @@ return f
 
     configResolver.defaultConfig.language = Language::Luau;
     CHECK(luaStringHelpers(lint(source)).empty());
+}
+
+// An empty string makes no prefix, suffix or substring check worth suggesting: StringOperations reports those calls
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperLeavesEmptyStringsToStringOperations")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    LintResult result = lint(R"(
+local lib = {
+    startswith = function(s: string, prefix: string): boolean
+        return true
+    end,
+}
+
+local function f(path: string)
+    if path:find("", 1, true) then
+        print(path)
+    end
+    return lib.startswith(path, "")
+end
+
+return f
+)");
+
+    CHECK(luaStringHelpers(result).empty());
+}
+
+// The StringOperations warnings in `result`, in order
+static std::vector<std::string> stringOperations(const LintResult& result)
+{
+    std::vector<std::string> texts;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == LintWarning::Code_StringOperations)
+            texts.push_back(warning.text);
+    }
+    return texts;
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "StringOperationsReportsEmptyStringArguments")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = stringOperations(lint(R"(
+local function f(path: string, r: string)
+    local a = path:startswith("")
+    local b = string.endswith(path, "")
+    local c = path:contains("")
+    local d = path:find("")
+    local e = path:find("", 1, true)
+    local g = path:find("", 3)
+    local h = path:gsub("", "-")
+    local i = path:replace("", r)
+    local j = path:startswith("x")
+    return a, b, c, d, e, g, h, i, j
+end
+
+return f
+)"));
+
+    // `path:find("", 3)` gives 3, or nil past the end of `path`
+    REQUIRE_EQ(warnings.size(), 7);
+    CHECK_EQ(warnings[0], "'path:startswith(\"\")' is always true");
+    CHECK_EQ(warnings[1], "'string.endswith(path, \"\")' is always true");
+    CHECK_EQ(warnings[2], "'path:contains(\"\")' is always true");
+    CHECK_EQ(warnings[3], "'path:find(\"\")' always returns 1");
+    CHECK_EQ(warnings[4], "'path:find(\"\", 1, true)' always returns 1");
+    CHECK_EQ(warnings[5], "'path:gsub(\"\", \"-\")' puts the replacement before every character and at the end");
+    CHECK_EQ(warnings[6], "'path:replace(\"\", r)' always raises because the string to replace can't be empty");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "StringOperationsTypewriting")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    checkTypewriting(
+        *this,
+        "local path = \"a.luwu\"\n",
+        "local found = path:find(\"\")\nprint(found)\n",
+        "\nlocal unrelated = 1\nprint(unrelated + 1)\n"
+    );
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperTypewriting")

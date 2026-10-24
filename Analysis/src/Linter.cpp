@@ -7473,7 +7473,116 @@ private:
     }
 };
 
-// Luwu: `--!nolint` with no lint names, the way LintWarning::parseMask recognizes it
+// Luwu String Extensions (rfcs/string-extensions.md): what LuaStringHelper and StringOperations share
+
+// A suggestion quotes expressions up to this long and writes `...` for longer ones
+constexpr size_t kMaxQuotedLength = 40;
+
+// A call to a string library function: `string.name(s, ...)`, or `s:name(...)` on a string
+struct StringCall
+{
+    AstExprCall* call;
+    AstName name;
+    AstExpr* subject;
+    bool method;
+
+    // The arguments after the subject
+    AstExpr* arg(size_t i) const
+    {
+        size_t index = method ? i : i + 1;
+        return index < call->args.size ? call->args.data[index] : nullptr;
+    }
+
+    size_t argCount() const
+    {
+        return method ? call->args.size : call->args.size - 1;
+    }
+};
+
+static bool mayBeString(LintContext& context, AstExpr* expr)
+{
+    std::optional<TypeId> type = context.getType(expr);
+    return !type || isString(follow(*type));
+}
+
+static std::optional<StringCall> asStringCall(LintContext& context, AstExpr* expr)
+{
+    AstExprCall* call = unwrapGroup(expr)->as<AstExprCall>();
+    AstExprIndexName* function = call ? call->func->as<AstExprIndexName>() : nullptr;
+    if (!function)
+        return std::nullopt;
+
+    if (call->self)
+    {
+        if (!mayBeString(context, function->expr))
+            return std::nullopt;
+
+        return StringCall{call, function->index, function->expr, /* method= */ true};
+    }
+
+    AstExprGlobal* library = function->expr->as<AstExprGlobal>();
+    if (!library || library->name != "string" || call->args.size == 0)
+        return std::nullopt;
+
+    return StringCall{call, function->index, call->args.data[0], /* method= */ false};
+}
+
+// `"lit"` for a suggestion, escaping what a Luau string needs
+static std::string stringLiteral(std::string_view text)
+{
+    std::string result = "\"";
+    for (char c : text)
+    {
+        if (c == '"' || c == '\\')
+            result += std::string("\\") + c;
+        else if (c == '\n')
+            result += "\\n";
+        else if (c == '\r')
+            result += "\\r";
+        else if (c == '\t')
+            result += "\\t";
+        else if ((unsigned char)c < 0x20)
+            result += format("\\x%02X", (unsigned char)c);
+        else
+            result += c;
+    }
+    return result + "\"";
+}
+
+static std::string quote(AstExpr* expr)
+{
+    std::string text;
+    if (AstExprConstantString* string = unwrapGroup(expr)->as<AstExprConstantString>())
+        text = stringLiteral(std::string_view(string->value.data, string->value.size));
+    else
+        text = toString(expr);
+
+    return text.size() <= kMaxQuotedLength ? text : "...";
+}
+
+// The string library function a call names, the way the code wrote it: `path:find` or `string.find`
+static std::string calledAs(const StringCall& call)
+{
+    if (call.method)
+        return quote(call.subject) + ":" + call.name.value;
+    return std::string("string.") + call.name.value;
+}
+
+static bool isNumber(AstExpr* expr, double value)
+{
+    AstExprConstantNumber* number = expr ? unwrapGroup(expr)->as<AstExprConstantNumber>() : nullptr;
+    return number && number->value == value;
+}
+
+static std::optional<std::string_view> constantString(AstExpr* expr)
+{
+    AstExprConstantString* string = expr ? unwrapGroup(expr)->as<AstExprConstantString>() : nullptr;
+    if (!string)
+        return std::nullopt;
+
+    return std::string_view(string->value.data, string->value.size);
+}
+
 // Luwu String Extensions (rfcs/string-extensions.md): in a Luwu file, Lua-style code that does by hand what
 // startswith, endswith, contains, trim, trimstart, trimend or replace does. That's a 'sub' result compared with a string,
 // an anchored pattern or a plain find used as a condition, a whitespace pattern, a gsub with nothing special in its
@@ -7496,95 +7605,11 @@ private:
     // Calls whose extra results something reads (`return s:gsub(a, b)`): a builtin returning one value can't replace these
     DenseHashSet<AstExprCall*> multretCalls{nullptr};
 
-    // A suggestion quotes expressions up to this long and writes `...` for longer ones
-    static constexpr size_t kMaxQuotedLength = 40;
     static constexpr const char* kWhitespacePatternMessage = "Replace this with '%s' to correctly trim Unicode whitespace";
 
     static const char* prefixOrSuffixMessage(const char* builtin)
     {
         return strcmp(builtin, "startswith") == 0 ? "Consider '%s' instead of a manual prefix check" : "Consider '%s' instead of a manual suffix check";
-    }
-
-    // A call to a string library function: `string.name(s, ...)`, or `s:name(...)` on a string
-    struct StringCall
-    {
-        AstExprCall* call;
-        AstName name;
-        AstExpr* subject;
-        bool method;
-
-        // The arguments after the subject
-        AstExpr* arg(size_t i) const
-        {
-            size_t index = method ? i : i + 1;
-            return index < call->args.size ? call->args.data[index] : nullptr;
-        }
-
-        size_t argCount() const
-        {
-            return method ? call->args.size : call->args.size - 1;
-        }
-    };
-
-    bool mayBeString(AstExpr* expr)
-    {
-        std::optional<TypeId> type = context->getType(expr);
-        return !type || isString(follow(*type));
-    }
-
-    std::optional<StringCall> matchStringCall(AstExpr* expr)
-    {
-        AstExprCall* call = unwrapGroup(expr)->as<AstExprCall>();
-        AstExprIndexName* function = call ? call->func->as<AstExprIndexName>() : nullptr;
-        if (!function)
-            return std::nullopt;
-
-        if (call->self)
-        {
-            if (!mayBeString(function->expr))
-                return std::nullopt;
-
-            return StringCall{call, function->index, function->expr, /* method= */ true};
-        }
-
-        AstExprGlobal* library = function->expr->as<AstExprGlobal>();
-        if (!library || library->name != "string" || call->args.size == 0)
-            return std::nullopt;
-
-        return StringCall{call, function->index, call->args.data[0], /* method= */ false};
-    }
-
-    // `"lit"` for a suggestion, escaping what a Luau string needs
-    static std::string stringLiteral(std::string_view text)
-    {
-        std::string result = "\"";
-        for (char c : text)
-        {
-            if (c == '"' || c == '\\')
-                result += std::string("\\") + c;
-            else if (c == '\n')
-                result += "\\n";
-            else if (c == '\r')
-                result += "\\r";
-            else if (c == '\t')
-                result += "\\t";
-            else if ((unsigned char)c < 0x20)
-                result += format("\\x%02X", (unsigned char)c);
-            else
-                result += c;
-        }
-        return result + "\"";
-    }
-
-    static std::string quote(AstExpr* expr)
-    {
-        std::string text;
-        if (AstExprConstantString* string = unwrapGroup(expr)->as<AstExprConstantString>())
-            text = stringLiteral(std::string_view(string->value.data, string->value.size));
-        else
-            text = toString(expr);
-
-        return text.size() <= kMaxQuotedLength ? text : "...";
     }
 
     // `s:builtin(args)`, or `string.builtin(s, args)` when a method call can't follow the subject as written (`a .. b`):
@@ -7600,20 +7625,6 @@ private:
         std::vector<std::string> allArgs = {quote(manual.subject)};
         allArgs.insert(allArgs.end(), args.begin(), args.end());
         return std::string("string.") + builtin + "(" + join(allArgs, ", ") + ")";
-    }
-
-    // The string library function a call names, the way the code wrote it: `path:find` or `string.find`
-    static std::string calledAs(const StringCall& call)
-    {
-        if (call.method)
-            return quote(call.subject) + ":" + call.name.value;
-        return std::string("string.") + call.name.value;
-    }
-
-    static bool isNumber(AstExpr* expr, double value)
-    {
-        AstExprConstantNumber* number = expr ? unwrapGroup(expr)->as<AstExprConstantNumber>() : nullptr;
-        return number && number->value == value;
     }
 
     // `-n` as a constant
@@ -7638,15 +7649,6 @@ private:
     {
         AstExprUnary* minus = expr ? unwrapGroup(expr)->as<AstExprUnary>() : nullptr;
         return minus && minus->op == AstExprUnary::Op::Minus ? lengthOf(minus->expr) : nullptr;
-    }
-
-    static std::optional<std::string_view> constantString(AstExpr* expr)
-    {
-        AstExprConstantString* string = expr ? unwrapGroup(expr)->as<AstExprConstantString>() : nullptr;
-        if (!string)
-            return std::nullopt;
-
-        return std::string_view(string->value.data, string->value.size);
     }
 
     // A pattern with no special characters, unescaped: `%.luwu` is `.luwu`. Nothing for any other pattern.
@@ -7683,7 +7685,7 @@ private:
     // `sub(s, 1, n) == lit`, `sub(s, 1, #p) == p`, `sub(s, -n) == lit` and `sub(s, -#p) == p`
     void checkSubComparison(AstExprBinary* comparison, AstExpr* side, AstExpr* needle)
     {
-        std::optional<StringCall> sub = matchStringCall(side);
+        std::optional<StringCall> sub = asStringCall(*context, side);
         if (!sub || sub->name != "sub")
             return;
 
@@ -7714,12 +7716,17 @@ private:
     // An anchored pattern (`"^lit"`, `"lit$"`) or a plain find, used as a condition
     void checkSearch(AstExpr* expr, bool negated)
     {
-        std::optional<StringCall> search = matchStringCall(expr);
+        std::optional<StringCall> search = asStringCall(*context, expr);
         if (!search || (search->name != "match" && search->name != "find"))
             return;
 
         AstExprConstantBool* plain = search->arg(2) ? unwrapGroup(search->arg(2))->as<AstExprConstantBool>() : nullptr;
+        // `find("")` is StringOperations' to report
+        std::optional<std::string_view> needle = constantString(search->arg(0));
+        bool emptyNeedle = needle && needle->empty();
         bool plainFind = search->name == "find" && search->argCount() == 3 && isNumber(search->arg(1), 1) && plain && plain->value;
+        if (emptyNeedle)
+            return;
 
         std::string replacement;
         const char* message = nullptr;
@@ -7798,7 +7805,7 @@ private:
     // Whitespace patterns, and a gsub whose pattern has no special characters
     void checkPatternCall(AstExprCall* node)
     {
-        std::optional<StringCall> manual = matchStringCall(node);
+        std::optional<StringCall> manual = asStringCall(*context, node);
         if (!manual)
             return;
 
@@ -7976,13 +7983,14 @@ private:
         std::vector<std::string> args;
         for (AstExpr* arg : node->args)
         {
-            if (!mayBeString(arg) || !context->getType(arg))
+            if (!mayBeString(*context, arg) || !context->getType(arg))
                 return;
             if (arg == node->args.data[0])
                 continue;
 
+            // An empty string is StringOperations' to report
             std::optional<std::string_view> constant = constantString(arg);
-            if (constant && looksLikePattern(*constant))
+            if (constant && (constant->empty() || looksLikePattern(*constant)))
                 return;
             args.push_back(quote(arg));
         }
@@ -8099,6 +8107,73 @@ private:
     }
 };
 
+// Luwu String Extensions (rfcs/string-extensions.md): a string library call that `""` as its first argument after the
+// string makes pointless or wrong: `s:startswith("")` is always true, and `s:replace("", r)` always raises
+class LintStringOperations : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintStringOperations pass{&context};
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    explicit LintStringOperations(LintContext* context)
+        : context(context)
+    {
+    }
+
+    // What a call does with `""` as its first argument after the string, or nullptr when that's fine
+    static const char* emptyArgumentMessage(const StringCall& call)
+    {
+        std::string_view name = call.name.value;
+        bool alwaysTrue = name == "startswith" || name == "endswith" || name == "contains";
+        bool findsFromTheStart = name == "find" && (call.argCount() == 1 || isNumber(call.arg(1), 1));
+
+        if (alwaysTrue)
+            return "'%s' is always true";
+        if (findsFromTheStart)
+            return "'%s' always returns 1";
+        if (name == "replace")
+            return "'%s' always raises because the string to replace can't be empty";
+        if (name == "gsub")
+            return "'%s' puts the replacement before every character and at the end";
+        return nullptr;
+    }
+
+    bool visit(AstExprCall* node) override
+    {
+        std::optional<StringCall> call = asStringCall(*context, node);
+        std::optional<std::string_view> needle = call ? constantString(call->arg(0)) : std::nullopt;
+        if (!needle || !needle->empty())
+            return true;
+
+        if (const char* message = emptyArgumentMessage(*call))
+        {
+            std::string written = writtenAs(*call);
+            emitWarning(*context, LintWarning::Code_StringOperations, node->location, message, written.c_str());
+        }
+
+        return true;
+    }
+
+    // The call as the code wrote it (`path:startswith("")`), or just what it calls when that's too long to quote
+    static std::string writtenAs(const StringCall& call)
+    {
+        // A function call's arguments start with the string, which a method call has before the `:`
+        std::vector<std::string> args;
+        for (AstExpr* arg : call.call->args)
+            args.push_back(quote(arg));
+
+        std::string written = calledAs(call) + "(" + join(args, ", ") + ")";
+        return written.size() <= kMaxQuotedLength ? written : calledAs(call);
+    }
+};
+
+// Luwu: `--!nolint` with no lint names, the way LintWarning::parseMask recognizes it
 static bool isBareNolint(const HotComment& hc)
 {
     return hc.header && hc.content.compare(0, 6, "nolint") == 0 && hc.content.find_first_not_of(" \t", 6) == std::string::npos;
@@ -8507,6 +8582,9 @@ std::vector<LintWarning> lint(
     bool luwuModule = !module || module->language == Language::Luwu;
     if (FFlag::LuwuStringExtensions && luwuModule && context.warningEnabled(LintWarning::Code_LuaStringHelper))
         LintLuaStringHelper::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_StringOperations))
+        LintStringOperations::process(context);
 
     // Luwu: turning LuaIterators off turns off its parts
     if (context.warningEnabled(LintWarning::Code_LuaIterators) &&
