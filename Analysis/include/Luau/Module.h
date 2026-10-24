@@ -67,6 +67,8 @@ bool isWithinComment(const SourceModule& sourceModule, Position pos);
 bool isWithinComment(const ParseResult& result, Position pos);
 
 bool isWithinHotComment(const std::vector<HotComment>& hotComments, Position pos);
+// Luwu: the hot comment `pos` is in, or nullptr
+const HotComment* findHotComment(const std::vector<HotComment>& hotComments, Position pos);
 bool isWithinHotComment(const SourceModule& sourceModule, Position pos);
 bool isWithinHotComment(const ParseResult& result, Position pos);
 

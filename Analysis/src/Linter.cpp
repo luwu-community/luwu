@@ -3,11 +3,13 @@
 
 #include "Luau/AstQuery.h"
 #include "Luau/LinterConfig.h"
+#include "Luau/LuwuOnlyApi.h"
 #include "Luau/Module.h"
 #include "Luau/ParseResult.h"
 #include "Luau/PrettyPrinter.h"
 #include "Luau/Scope.h"
 #include "Luau/TypeInfer.h"
+#include "Luau/TypePack.h"
 #include "Luau/TypeUtils.h"
 #include "Luau/StringUtils.h"
 #include "Luau/ToString.h"
@@ -4293,18 +4295,7 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
             }
             else
             {
-                static const char* kHotComments[] = {
-                    "nolint",
-                    "lint",
-                    "nocheck",
-                    "nonstrict",
-                    "strict",
-                    "optimize",
-                    "native",
-                    "trust",
-                };
-
-                if (const char* suggestion = fuzzyMatch(first, kHotComments, std::size(kHotComments)))
+                if (const char* suggestion = fuzzyMatch(first, kCommentDirectives, std::size(kCommentDirectives)))
                     emitWarning(
                         context,
                         LintWarning::Code_CommentDirective,
@@ -6830,6 +6821,317 @@ private:
     }
 };
 
+// Luwu: a call giving more than one value where only one value is kept: a branch of an if-else expression. An if-else
+// expression gives exactly one value, so the rest are dropped: `local ok, err = if c then pcall(f) else nil, nil` sets `err` to the
+// second `nil`, never to what `pcall` gives. Parentheses around the branch say the truncation is meant.
+// Luwu: `any` in a type, which turns off type checking for everything it touches. AnyCast reports `x :: any` without a
+// comment saying why, on its line or the line above; a stub whose whole body is `return nil :: any` is left alone.
+// AnyAnnotation reports `any` as a parameter's, local's or property's whole annotation, except for `self` and `this`.
+// The Any group, when it's on, reports every other `any` in a type, and the ones whose part is off. Strict modules
+// only: nonstrict code is unchecked anyway.
+class LintAny : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context, const std::vector<Comment>* comments)
+    {
+        LintAny pass;
+        pass.context = &context;
+        pass.comments = comments;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    const std::vector<Comment>* comments;
+    // The `any`s a part that is on covers, so the group's own check leaves them to it, and the exempt ones
+    DenseHashSet<AstType*> covered{nullptr};
+
+    static bool isAny(AstType* type)
+    {
+        AstTypeReference* reference = type ? type->as<AstTypeReference>() : nullptr;
+        return reference && !reference->prefix && !reference->hasParameterList && reference->name == "any";
+    }
+
+    // Whether the part reports in this module; the group's check reports what a part that is off would have
+    bool partOn(LintWarning::Code part)
+    {
+        return context->warningEnabled(part);
+    }
+
+    bool hasReasonComment(const Location& cast)
+    {
+        if (!comments)
+            return false;
+
+        for (const Comment& comment : *comments)
+        {
+            bool sameLine = comment.location.begin.line >= cast.begin.line && comment.location.begin.line <= cast.end.line;
+            bool lineAbove = comment.location.end.line + 1 == cast.begin.line;
+            if (sameLine || lineAbove)
+                return true;
+        }
+
+        return false;
+    }
+
+    // `return nil :: any` as a function's whole body, a stub that only has to typecheck
+    static bool isStubReturn(AstExprFunction* function, AstExprTypeAssertion* cast)
+    {
+        if (!function || function->body->body.size != 1)
+            return false;
+
+        AstStatReturn* ret = function->body->body.data[0]->as<AstStatReturn>();
+        return ret && ret->list.size == 1 && ret->list.data[0] == cast && cast->expr->is<AstExprConstantNil>();
+    }
+
+    static std::string nameOf(AstExpr* expr)
+    {
+        if (AstExprLocal* local = expr->as<AstExprLocal>())
+            return local->local->name.value;
+        if (AstExprGlobal* global = expr->as<AstExprGlobal>())
+            return global->name.value;
+        return "";
+    }
+
+    // The innermost function the cast is in
+    std::vector<AstExprFunction*> functions;
+
+    bool visit(AstExprFunction* node) override
+    {
+        for (AstLocal* arg : node->args)
+            checkAnnotation(arg->name.value, arg->annotation);
+
+        functions.push_back(node);
+        node->body->visit(this);
+        functions.pop_back();
+
+        // the annotations were visited above; the rest of the signature is the group's
+        for (AstLocal* arg : node->args)
+        {
+            if (arg->annotation)
+                arg->annotation->visit(this);
+        }
+        if (node->varargAnnotation)
+            node->varargAnnotation->visit(this);
+        if (node->returnAnnotation)
+            node->returnAnnotation->visit(this);
+        return false;
+    }
+
+    bool visit(AstExprTypeAssertion* node) override
+    {
+        if (!isAny(node->annotation) || !partOn(LintWarning::Code_AnyCast))
+            return true;
+
+        covered.insert(node->annotation);
+
+        AstExprFunction* function = functions.empty() ? nullptr : functions.back();
+        if (isStubReturn(function, node) || hasReasonComment(node->location))
+            return true;
+
+        std::string name = nameOf(node->expr);
+        if (name.empty())
+            emitWarning(
+                *context,
+                LintWarning::Code_AnyCast,
+                node->location,
+                "This cast to 'any' bypasses type checking; add a comment explaining why, or cast to 'unknown'"
+            );
+        else
+            emitWarning(
+                *context,
+                LintWarning::Code_AnyCast,
+                node->location,
+                "'%s :: any' bypasses type checking; add a comment explaining why, or cast to 'unknown'",
+                name.c_str()
+            );
+        return true;
+    }
+
+    void checkAnnotation(const char* name, AstType* annotation)
+    {
+        if (!isAny(annotation))
+            return;
+
+        // `self` and `this` are exempt from the group too
+        bool selfOrThis = strcmp(name, "self") == 0 || strcmp(name, "this") == 0;
+        if (selfOrThis)
+            covered.insert(annotation);
+        if (selfOrThis || !partOn(LintWarning::Code_AnyAnnotation))
+            return;
+
+        covered.insert(annotation);
+
+        emitWarning(
+            *context,
+            LintWarning::Code_AnyAnnotation,
+            annotation->location,
+            "Annotate '%s' with 'unknown' instead of 'any', which turns off type checking for it",
+            name
+        );
+    }
+
+    bool visit(AstStatLocal* node) override
+    {
+        for (AstLocal* local : node->vars)
+            checkAnnotation(local->name.value, local->annotation);
+        return true;
+    }
+
+    bool visit(AstStatClass* node) override
+    {
+        if (node->primaryConstructor)
+        {
+            for (AstLocal* arg : node->primaryConstructor->args)
+                checkAnnotation(arg->name.value, arg->annotation);
+        }
+
+        for (const AstClassMember& member : node->members)
+        {
+            if (const AstClassProperty* property = member.get_if<AstClassProperty>())
+                checkAnnotation(property->name.value, property->ty);
+        }
+        return true;
+    }
+
+    bool visit(AstTypeTable* node) override
+    {
+        for (const AstTableProp& prop : node->props)
+            checkAnnotation(prop.name.value, prop.type);
+        return true;
+    }
+
+    bool visit(AstTypeReference* node) override
+    {
+        if (isAny(node) && !covered.contains(node) && context->warningEnabled(LintWarning::Code_Any))
+            emitWarning(
+                *context,
+                LintWarning::Code_Any,
+                node->location,
+                "'any' turns off type checking here; use 'unknown' or the type this should be"
+            );
+        return true;
+    }
+
+    bool visit(AstType* node) override
+    {
+        return true;
+    }
+
+    bool visit(AstTypePack* node) override
+    {
+        return true;
+    }
+};
+
+// Luwu: a Luwu-only library member read in a Luau or Lua module (its config's `language`, from a `.luau` or `.lua`
+// file), as `library.member` or as a method on a value of that library's type (`s:startswith`, a `string` method). Luwu
+// code goes in `.luwu` files. The members are isLuwuOnlyMember's.
+class LintLuwuOnlyApi : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        if (!context.module || context.module->language == Language::Luwu)
+            return;
+
+        LintLuwuOnlyApi pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // The library `node` reads a member of: a global library (`table.drop`), or `string` for a method on a string. A
+    // local named `table` is the reader's own, so it doesn't count.
+    std::optional<std::string> libraryOf(AstExprIndexName* node)
+    {
+        if (node->op == '.')
+        {
+            if (AstExprGlobal* global = node->expr->as<AstExprGlobal>())
+                return std::string(global->name.value);
+            return std::nullopt;
+        }
+
+        std::optional<TypeId> receiver = context->getType(node->expr);
+        if (receiver && isString(follow(*receiver)))
+            return std::string("string");
+        return std::nullopt;
+    }
+
+    bool visit(AstExprIndexName* node) override
+    {
+        std::optional<std::string> library = libraryOf(node);
+        if (!library || !isLuwuOnlyMember(*library, node->index.value))
+            return true;
+
+        std::string qualified = *library + "." + node->index.value;
+        const char* language = context->module->language == Language::Lua ? "Lua" : "Luau";
+        emitWarning(
+            *context,
+            LintWarning::Code_LuwuOnlyApi,
+            node->location,
+            "'%s' only exists in Luwu, but this is a %s file; rename it to '.luwu' if it's Luwu code",
+            qualified.c_str(),
+            language
+        );
+        return true;
+    }
+};
+
+class LintDiscardedValues : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintDiscardedValues pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    void check(AstExpr* branch)
+    {
+        AstExprCall* call = branch->as<AstExprCall>();
+        const TypePackId* pack = call && context->module ? context->module->astTypePacks.find(call) : nullptr;
+        if (!pack)
+            return;
+
+        // A call whose values past the first are all a variadic or generic tail may well give exactly one.
+        auto [values, tail] = flatten(*pack);
+        if (values.size() < 2)
+            return;
+
+        size_t count = values.size() - 1;
+        std::string discarded = std::to_string(count);
+        if (tail)
+            discarded += " or more values";
+        else
+            discarded += count == 1 ? " value" : " values";
+
+        emitWarning(
+            *context,
+            LintWarning::Code_DiscardedValues,
+            call->location,
+            "An if-else expression truncates this call to its first return, discarding %s. Wrap in parentheses to silence",
+            discarded.c_str()
+        );
+    }
+
+    bool visit(AstExprIfElse* node) override
+    {
+        check(node->trueExpr);
+        check(node->falseExpr);
+        return true;
+    }
+};
+
 // Luwu: `pairs` and `ipairs`, which generalized iteration (`for k, v in t`) replaces. Each is its own lint so a module
 // can keep using one without turning off DeprecatedApi or the other.
 class LintLuaIterators : AstVisitor
@@ -7924,7 +8226,7 @@ private:
                     name->c_str()
                 );
         }
-        return mask;
+        return LintWarning::withGroupParts(mask);
     }
 
     void addScopes(const AstArray<AstAttr*>& attributes, const Location& range, const AstArray<AstLocal*>* bindings = nullptr)
@@ -8031,7 +8333,8 @@ std::vector<LintWarning> lint(
     const ScopePtr& env,
     const Module* module,
     const std::vector<HotComment>& hotcomments,
-    const LintOptions& options
+    const LintOptions& options,
+    const std::vector<Comment>* comments
 )
 {
     LintContext context;
@@ -8060,6 +8363,19 @@ std::vector<LintWarning> lint(
                 );
         }
     }
+
+    // Luwu: AnyCast and AnyAnnotation are on by default in Luwu modules only. A Luau module has to ask for them, with
+    // `--!lint` or `@[lint]`.
+    if (module && module->language != Language::Luwu)
+    {
+        LintMask asked = LintWarning::parseEnableMask(hotcomments);
+        for (LintWarning::Code part : {LintWarning::Code_AnyCast, LintWarning::Code_AnyAnnotation})
+        {
+            if (!asked.test(part))
+                context.options.warningMask.reset(part);
+        }
+    }
+    const LintMask moduleMask = context.options.warningMask;
 
     // Luwu: a lint a scope turns on has to run even where the module turns it off; filterByLintScopes then drops what
     // isn't on where it was reported
@@ -8163,6 +8479,17 @@ std::vector<LintWarning> lint(
     if (context.warningEnabled(LintWarning::Code_FloatIndex))
         LintFloatIndex::process(context);
 
+    if (context.warningEnabled(LintWarning::Code_DiscardedValues))
+        LintDiscardedValues::process(context);
+
+    bool anyLints = context.warningEnabled(LintWarning::Code_Any) || context.warningEnabled(LintWarning::Code_AnyCast) ||
+                    context.warningEnabled(LintWarning::Code_AnyAnnotation);
+    if (anyLints && context.module && context.module->mode == Mode::Strict)
+        LintAny::process(context, comments);
+
+    if (context.warningEnabled(LintWarning::Code_LuwuOnlyApi))
+        LintLuwuOnlyApi::process(context);
+
     bool luwuModule = !module || module->language == Language::Luwu;
     if (FFlag::LuwuStringExtensions && luwuModule && context.warningEnabled(LintWarning::Code_LuaStringHelper))
         LintLuaStringHelper::process(context);
@@ -8215,7 +8542,7 @@ std::vector<LintWarning> lint(
     }
 
     if (!scopes.empty())
-        filterByLintScopes(context.result, std::move(scopes), options.warningMask);
+        filterByLintScopes(context.result, std::move(scopes), moduleMask);
 
     std::sort(context.result.begin(), context.result.end(), WarningComparator());
 

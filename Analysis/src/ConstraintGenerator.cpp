@@ -3318,7 +3318,12 @@ InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall*
 
     Checkpoint funcEndCheckpoint = checkpoint(this);
 
-    return checkExprCall(scope, call, fnType, funcBeginCheckpoint, funcEndCheckpoint, expectedType);
+    InferencePack result = checkExprCall(scope, call, fnType, funcBeginCheckpoint, funcEndCheckpoint, expectedType);
+
+    // Luwu: every call's values, not only those of a call in a place that takes them all, so the DiscardedValues lint
+    // can see what a call that keeps one value drops.
+    module->astTypePacks[call] = result.tp;
+    return result;
 }
 
 InferencePack ConstraintGenerator::checkExprCall(
