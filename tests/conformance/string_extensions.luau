@@ -129,6 +129,9 @@ assert(built:sub(2, 3) == "ba")
 assert(built:upper():lower() == "abab")
 assert(("a" .. 1):len() == 2)
 
+-- a call receiver passes only its first value, though the function form puts it last
+assert(string.gsub("ab\n", "z", ""):trimend() == "ab")
+
 local function guarded(v: any): any
     if type(v) == "string" then
         return v:upper()

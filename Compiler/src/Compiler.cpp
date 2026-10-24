@@ -3411,7 +3411,13 @@ struct Compiler
             return *cached;
 
         AstExpr** args = static_cast<AstExpr**>(synthesizedNodes.allocate(sizeof(AstExpr*) * (expr->args.size + 1)));
+
+        // A receiver is one value, but a call as the last argument passes all of its values: `f():trimend()` must not
+        // become `string.trimend(f())`
         args[0] = method->expr;
+        if (method->expr->is<AstExprCall>())
+            args[0] = synthesizedNodes.alloc<AstExprGroup>(method->expr->location, method->expr);
+
         for (size_t i = 0; i < expr->args.size; ++i)
             args[i + 1] = expr->args.data[i];
 
