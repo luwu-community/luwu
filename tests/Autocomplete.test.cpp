@@ -5138,6 +5138,68 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_suggest_hot_comments")
     CHECK(ac.entryMap.count("native"));
     CHECK(ac.entryMap.count("nolint"));
     CHECK(ac.entryMap.count("optimize"));
+    // Luwu: every directive the linter knows
+    CHECK(ac.entryMap.count("lint"));
+    CHECK(ac.entryMap.count("trust"));
+}
+
+// Luwu: after `--!nolint` or `--!lint`, the lint names, without the ones the directive already lists
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_comment_directives")
+{
+    check("--!nolint @1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 1);
+    CHECK_EQ(ac.entryMap.count("All"), 1);
+    CHECK_EQ(ac.entryMap.count("strict"), 0);
+    CHECK_EQ(ac.context, AutocompleteContext::HotComment);
+
+    check("--!nolint LocalUnused Loc@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 0);
+    CHECK_EQ(ac.entryMap.count("LocalShadow"), 1);
+
+    check("--!lint @1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 1);
+    CHECK_EQ(ac.entryMap.count("All"), 0);
+
+    check("--!optimize @1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.size(), 3);
+    CHECK_EQ(ac.entryMap.count("2"), 1);
+
+    check("--!strict @1");
+    ac = autocomplete('1');
+    CHECK(ac.entryMap.empty());
+}
+
+// Luwu: inside `@[nolint(...)]` and `@[lint(...)]`, the lint names, without the ones the attribute already lists
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_lint_attributes")
+{
+    check(R"(
+        \@[nolint(@1)]
+        local function f() end
+    )");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 1);
+    CHECK_EQ(ac.entryMap.count("local"), 0);
+    CHECK_EQ(ac.context, AutocompleteContext::Keyword);
+
+    check(R"(
+        \@[lint(LocalUnused, Loc@1)]
+        local function f() end
+    )");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 0);
+    CHECK_EQ(ac.entryMap.count("LocalShadow"), 1);
+
+    check(R"(
+        \@[nolint(LocalShadow, @1)]
+        function g() end
+    )");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalShadow"), 0);
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 1);
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_method_in_unfinished_repeat_body_eof")

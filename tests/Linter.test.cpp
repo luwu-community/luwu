@@ -3207,7 +3207,7 @@ local neither = 5
 if neither ~= nil then end -- ok: a different mistake, not this one
 
 local function _untyped(u) return u ~= nil end -- ok: unknown
-local a: any = nil
+local a = nil :: any -- an untyped value
 if a ~= none then end -- ok
 )");
 
@@ -3722,6 +3722,102 @@ return succ, result, x, y
     CHECK_EQ(found[1].location.begin.line, 15);
     CHECK(found[1].text.find("discarding 2 values") != std::string::npos);
     CHECK(found[2].text.find("discarding 1 or more values") != std::string::npos);
+}
+
+// The warnings of `code` in `result`, in order
+static std::vector<LintWarning> warningsOf(const LintResult& result, LintWarning::Code code)
+{
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == code)
+            found.push_back(warning);
+    }
+    return found;
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AnyCastNeedsACommentSayingWhy")
+{
+    LintResult result = lint(R"(
+--!strict
+local function stub(): number
+    return nil :: any
+end
+local t = {}
+local a = t :: any
+local b = t :: any -- the solver can't see through t's metatable
+-- legacy table from before the types existed
+local c = t :: any
+return stub, a, b, c
+)");
+
+    // `stub` is a stub, `b` has a comment on its line and `c` one above it
+    std::vector<LintWarning> casts = warningsOf(result, LintWarning::Code_AnyCast);
+    REQUIRE_EQ(casts.size(), 1);
+    CHECK_EQ(casts[0].location.begin.line, 6);
+    CHECK_EQ(casts[0].text, "'t :: any' bypasses type checking; add a comment explaining why, or cast to 'unknown'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AnyAnnotationSuggestsUnknown")
+{
+    LintResult result = lint(R"(
+--!strict
+local function f(self: any, x: any, y: number)
+    local z: any = x
+    return z, y
+end
+type T = { this: any, value: any, list: { any } }
+return f
+)");
+
+    // `self` and `this` are exempt, and `{ any }` is the Any group's, which is off
+    std::vector<LintWarning> annotations = warningsOf(result, LintWarning::Code_AnyAnnotation);
+    REQUIRE_EQ(annotations.size(), 3);
+    CHECK_EQ(annotations[0].text, "Annotate 'x' with 'unknown' instead of 'any', which turns off type checking for it");
+    CHECK_EQ(annotations[1].location.begin.line, 3);
+    CHECK_EQ(annotations[2].location.begin.line, 6);
+    CHECK(warningsOf(result, LintWarning::Code_Any).empty());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AnyGroupReportsWhatItsPartsDont")
+{
+    LintResult result = lint(R"(
+--!strict
+--!lint Any
+--!nolint AnyCast
+local function f(x: number): { any }
+    return { x :: any }
+end
+return f
+)");
+
+    // AnyCast is off, so the group reports the cast as well as the return type
+    std::vector<LintWarning> any = warningsOf(result, LintWarning::Code_Any);
+    REQUIRE_EQ(any.size(), 2);
+    CHECK_EQ(any[0].text, "'any' turns off type checking here; use 'unknown' or the type this should be");
+    CHECK_EQ(any[0].location.begin.line, 4);
+    CHECK_EQ(any[1].location.begin.line, 5);
+    CHECK(warningsOf(result, LintWarning::Code_AnyCast).empty());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AnyLintsAreOffInNonstrictAndWithTheGroupOff")
+{
+    const char* cast = "local t = {}\nlocal a = t :: any\nlocal function f(x: any) return x end\nreturn a, f\n";
+
+    CHECK(warningsOf(lint(std::string("--!nonstrict\n") + cast), LintWarning::Code_AnyCast).empty());
+    CHECK(warningsOf(lint(std::string("--!strict\n--!nolint Any\n") + cast), LintWarning::Code_AnyAnnotation).empty());
+
+    LintResult scoped = lint(R"(
+--!strict
+local t = {}
+@[nolint(Any)]
+local function f(x: any)
+    return x, t :: any
+end
+return f
+)");
+    CHECK(warningsOf(scoped, LintWarning::Code_AnyCast).empty());
+    CHECK(warningsOf(scoped, LintWarning::Code_AnyAnnotation).empty());
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsReportsPairsAndIpairsSeparately")
