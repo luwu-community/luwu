@@ -7158,17 +7158,17 @@ private:
 };
 
 // Luwu: `--!nolint` with no lint names, the way LintWarning::parseMask recognizes it
-// Luwu String Extensions (rfcs/string-extensions.md): in a Luwu file, code that does by hand what string.startswith,
-// endswith, contains, trim, trimstart, trimend or replace does. That's a 'sub' result compared with a string, an anchored
-// pattern or a plain find used as a condition, a whitespace pattern, a gsub with nothing special in its pattern, a helper
-// function with one of their names, or a call to another library's version. The suggestion keeps the form of the code it
-// replaces: a method call for a method call, `string.name(s, ...)` otherwise.
-class LintManualStringHelper : AstVisitor
+// Luwu String Extensions (rfcs/string-extensions.md): in a Luwu file, Lua-style code that does by hand what
+// startswith, endswith, contains, trim, trimstart, trimend or replace does. That's a 'sub' result compared with a string,
+// an anchored pattern or a plain find used as a condition, a whitespace pattern, a gsub with nothing special in its
+// pattern, a helper function with one of their names that does the string work itself, or a call to another library's
+// version. Suggestions are method calls.
+class LintLuaStringHelper : AstVisitor
 {
 public:
     LUAU_NOINLINE static void process(LintContext& context)
     {
-        LintManualStringHelper pass;
+        LintLuaStringHelper pass;
         pass.context = &context;
 
         context.root->visit(&pass);
@@ -7182,7 +7182,12 @@ private:
 
     // A suggestion quotes expressions up to this long and writes `...` for longer ones
     static constexpr size_t kMaxQuotedLength = 40;
-    static constexpr const char* kWhitespacePatternMessage = "Use '%s' instead of a whitespace pattern; it also trims Unicode whitespace";
+    static constexpr const char* kWhitespacePatternMessage = "Replace this with '%s' to correctly trim Unicode whitespace";
+
+    static const char* prefixOrSuffixMessage(const char* builtin)
+    {
+        return strcmp(builtin, "startswith") == 0 ? "Consider '%s' instead of a manual prefix check" : "Consider '%s' instead of a manual suffix check";
+    }
 
     // A call to a string library function: `string.name(s, ...)`, or `s:name(...)` on a string
     struct StringCall
@@ -7266,23 +7271,27 @@ private:
         return text.size() <= kMaxQuotedLength ? text : "...";
     }
 
-    // `s:builtin(args)` for a method call, `string.builtin(s, args)` otherwise
+    // `s:builtin(args)`, or `string.builtin(s, args)` when a method call can't follow the subject as written (`a .. b`):
+    // `string.startswith(a .. b, x)` reads better than `(a .. b):startswith(x)`
     static std::string suggestion(const StringCall& manual, const char* builtin, const std::vector<std::string>& args)
     {
-        std::string result;
-        if (manual.method)
-            result = quote(manual.subject) + ":" + builtin + "(";
-        else
-            result = std::string("string.") + builtin + "(" + quote(manual.subject);
+        AstExpr* subject = unwrapGroup(manual.subject);
+        bool takesMethodCall = subject->is<AstExprLocal>() || subject->is<AstExprGlobal>() || subject->is<AstExprIndexName>() ||
+                               subject->is<AstExprIndexExpr>() || subject->is<AstExprCall>();
+        if (takesMethodCall)
+            return quote(manual.subject) + ":" + builtin + "(" + join(args, ", ") + ")";
 
-        for (size_t i = 0; i < args.size(); ++i)
-        {
-            if (i > 0 || !manual.method)
-                result += ", ";
-            result += args[i];
-        }
+        std::vector<std::string> allArgs = {quote(manual.subject)};
+        allArgs.insert(allArgs.end(), args.begin(), args.end());
+        return std::string("string.") + builtin + "(" + join(allArgs, ", ") + ")";
+    }
 
-        return result + ")";
+    // The string library function a call names, the way the code wrote it: `path:find` or `string.find`
+    static std::string calledAs(const StringCall& call)
+    {
+        if (call.method)
+            return quote(call.subject) + ":" + call.name.value;
+        return std::string("string.") + call.name.value;
     }
 
     static bool isNumber(AstExpr* expr, double value)
@@ -7352,7 +7361,7 @@ private:
 
     void report(AstNode* node, const char* message, const std::string& replacement)
     {
-        emitWarning(*context, LintWarning::Code_ManualStringHelper, node->location, message, replacement.c_str());
+        emitWarning(*context, LintWarning::Code_LuaStringHelper, node->location, message, replacement.c_str());
     }
 
     // `sub(s, 1, n) == lit`, `sub(s, 1, #p) == p`, `sub(s, -n) == lit` and `sub(s, -#p) == p`
@@ -7383,7 +7392,7 @@ private:
         if (comparison->op == AstExprBinary::CompareNe)
             replacement = "not " + replacement;
 
-        report(comparison, "Use '%s' instead of comparing a 'sub' result", replacement);
+        report(comparison, prefixOrSuffixMessage(builtin), replacement);
     }
 
     // An anchored pattern (`"^lit"`, `"lit$"`) or a plain find, used as a condition
@@ -7402,7 +7411,18 @@ private:
         if (plainFind)
         {
             replacement = suggestion(*search, "contains", {quote(search->arg(0))});
-            message = "Use '%s' instead of a plain 'find'";
+            if (negated)
+                replacement = "not " + replacement;
+
+            emitWarning(
+                *context,
+                LintWarning::Code_LuaStringHelper,
+                search->call->location,
+                "Consider '%s' for a substring check instead of '%s' with plain matching",
+                replacement.c_str(),
+                calledAs(*search).c_str()
+            );
+            return;
         }
         else if (std::optional<std::string_view> pattern = constantString(search->arg(0)); pattern && search->argCount() == 1 && pattern->size() > 1)
         {
@@ -7416,8 +7436,9 @@ private:
             if (!literal || literal->empty())
                 return;
 
-            replacement = suggestion(*search, anchoredStart ? "startswith" : "endswith", {stringLiteral(*literal)});
-            message = "Use '%s' instead of an anchored pattern";
+            const char* builtin = anchoredStart ? "startswith" : "endswith";
+            replacement = suggestion(*search, builtin, {stringLiteral(*literal)});
+            message = prefixOrSuffixMessage(builtin);
         }
         else
             return;
@@ -7496,7 +7517,14 @@ private:
         if (AstExpr* max = manual->arg(2))
             args.push_back(quote(max));
 
-        report(node, "Use '%s' instead of 'gsub'; the pattern has no special characters", suggestion(*manual, "replace", args));
+        emitWarning(
+            *context,
+            LintWarning::Code_LuaStringHelper,
+            node->location,
+            "Consider '%s' instead of '%s' here because this pattern doesn't have magic characters",
+            suggestion(*manual, "replace", args).c_str(),
+            calledAs(*manual).c_str()
+        );
     }
 
     // The builtin a helper named `name` does the work of, or nullptr
@@ -7541,6 +7569,28 @@ private:
         return strncmp(builtin, "trim", 4) == 0;
     }
 
+    // A string written as a pattern: a magic character other than `.` and `-`, which plain strings use often (".luau",
+    // "my-file"), or an anchor at either end
+    static bool looksLikePattern(std::string_view text)
+    {
+        bool anchored = !text.empty() && (text.front() == '^' || text.back() == '$');
+        return anchored || text.find_first_of("%[]()*+?") != std::string_view::npos;
+    }
+
+    // What a builtin's call checks or does, for a message: "a suffix check"
+    static const char* purposeOf(const char* builtin)
+    {
+        if (strcmp(builtin, "startswith") == 0)
+            return "a prefix check";
+        if (strcmp(builtin, "endswith") == 0)
+            return "a suffix check";
+        if (strcmp(builtin, "trimstart") == 0)
+            return "trimming leading whitespace";
+        if (strcmp(builtin, "trimend") == 0)
+            return "trimming trailing whitespace";
+        return "trimming whitespace";
+    }
+
     // Whether a function body uses the string library the way a hand-written helper does
     struct StringWorkFinder : AstVisitor
     {
@@ -7570,13 +7620,28 @@ private:
         if (!finder.found)
             return;
 
+        if (isTrim(builtin))
+        {
+            emitWarning(
+                *context, LintWarning::Code_LuaStringHelper, location, "Consider 'string.%s' instead of defining '%s'", builtin, name.value
+            );
+            return;
+        }
+
         emitWarning(
-            *context, LintWarning::Code_ManualStringHelper, location, "Use 'string.%s' instead of defining '%s'", builtin, name.value
+            *context,
+            LintWarning::Code_LuaStringHelper,
+            location,
+            "Consider 'string.%s' for %s instead of defining '%s'",
+            builtin,
+            purposeOf(builtin),
+            name.value
         );
     }
 
     // A call like `str.startswith(s, p)` to another library's version with string arguments. A trim given more than the
-    // string is left alone because seal's trims take patterns.
+    // string is left alone, and so is a call given a string that looks like a pattern, because a library's version may
+    // take one (seal's trims do).
     void checkHelperCall(AstExprCall* node)
     {
         AstExprIndexName* function = node->self ? nullptr : node->func->as<AstExprIndexName>();
@@ -7597,16 +7662,24 @@ private:
         {
             if (!mayBeString(arg) || !context->getType(arg))
                 return;
+            if (arg == node->args.data[0])
+                continue;
+
+            std::optional<std::string_view> constant = constantString(arg);
+            if (constant && looksLikePattern(*constant))
+                return;
             args.push_back(quote(arg));
         }
 
-        std::string replacement = std::string("string.") + builtin + "(" + join(args, ", ") + ")";
+        StringCall helper{node, function->index, node->args.data[0], /* method= */ false};
+        std::string replacement = suggestion(helper, builtin, args);
         emitWarning(
             *context,
-            LintWarning::Code_ManualStringHelper,
+            LintWarning::Code_LuaStringHelper,
             node->location,
-            "Use '%s' instead of '%s'",
+            "Consider '%s' for %s instead of '%s' unless the library function provides additional functionality",
             replacement.c_str(),
+            purposeOf(builtin),
             toString(node->func).c_str()
         );
     }
@@ -8091,8 +8164,8 @@ std::vector<LintWarning> lint(
         LintFloatIndex::process(context);
 
     bool luwuModule = !module || module->language == Language::Luwu;
-    if (FFlag::LuwuStringExtensions && luwuModule && context.warningEnabled(LintWarning::Code_ManualStringHelper))
-        LintManualStringHelper::process(context);
+    if (FFlag::LuwuStringExtensions && luwuModule && context.warningEnabled(LintWarning::Code_LuaStringHelper))
+        LintLuaStringHelper::process(context);
 
     // Luwu: turning LuaIterators off turns off its parts
     if (context.warningEnabled(LintWarning::Code_LuaIterators) &&

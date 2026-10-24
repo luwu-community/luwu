@@ -88,7 +88,7 @@ struct LintWarning
         Code_FloorDivision = 56,           // `math.floor(a / b)`, which is `a // b`
         Code_FenvDeoptimization = 57,      // `getfenv`/`setfenv`, which deoptimize the whole module
 
-        Code_ManualStringHelper = 58,      // Luwu: `s:sub(1, #p) == p` and the like, which `string.startswith` and friends do
+        Code_LuaStringHelper = 58,         // Luwu: `s:sub(1, #p) == p` and the like, which `s:startswith(p)` and friends do
 
         Code__Count
     };
@@ -190,7 +190,7 @@ inline constexpr const char* kWarningNames[] = {
     "MethodsNotInlined",
     "FloorDivision",
     "FenvDeoptimization",
-    "ManualStringHelper",
+    "LuaStringHelper",
 };
 // clang-format on
 

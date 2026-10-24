@@ -4496,23 +4496,23 @@ return 1
     CHECK_EQ(result.warnings[2].text, "lint directive refers to unknown lint rule 'ConstLocl'; did you mean 'ConstLocal'?");
 }
 
-// The ManualStringHelper warnings in `source`, in order
-static std::vector<std::string> manualStringHelpers(const LintResult& result)
+// The LuaStringHelper warnings in `source`, in order
+static std::vector<std::string> luaStringHelpers(const LintResult& result)
 {
     std::vector<std::string> texts;
     for (const LintWarning& warning : result.warnings)
     {
-        if (warning.code == LintWarning::Code_ManualStringHelper)
+        if (warning.code == LintWarning::Code_LuaStringHelper)
             texts.push_back(warning.text);
     }
     return texts;
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperSubComparisons")
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperSubComparisons")
 {
     ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
 
-    std::vector<std::string> warnings = manualStringHelpers(lint(R"(
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
 local function f(path: string, p: string)
     local a = string.sub(path, 1, 2) == "./"
     local b = path:sub(-5) == ".luwu"
@@ -4527,17 +4527,34 @@ return f
 
     // `e` compares three characters with a two-character string, which isn't a prefix check
     REQUIRE_EQ(warnings.size(), 4);
-    CHECK_EQ(warnings[0], "Use 'string.startswith(path, \"./\")' instead of comparing a 'sub' result");
-    CHECK_EQ(warnings[1], "Use 'path:endswith(\".luwu\")' instead of comparing a 'sub' result");
-    CHECK_EQ(warnings[2], "Use 'string.startswith(path, p)' instead of comparing a 'sub' result");
-    CHECK_EQ(warnings[3], "Use 'not path:endswith(p)' instead of comparing a 'sub' result");
+    CHECK_EQ(warnings[0], "Consider 'path:startswith(\"./\")' instead of a manual prefix check");
+    CHECK_EQ(warnings[1], "Consider 'path:endswith(\".luwu\")' instead of a manual suffix check");
+    CHECK_EQ(warnings[2], "Consider 'path:startswith(p)' instead of a manual prefix check");
+    CHECK_EQ(warnings[3], "Consider 'not path:endswith(p)' instead of a manual suffix check");
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperSearches")
+// Suggestions are method calls, or the function form when the subject would need parentheses
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperSuggestsMethodCalls")
 {
     ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
 
-    std::vector<std::string> warnings = manualStringHelpers(lint(R"(
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
+local function f(a: string, b: string)
+    return string.sub(a .. b, 1, 1) == "x"
+end
+
+return f
+)"));
+
+    REQUIRE_EQ(warnings.size(), 1);
+    CHECK_EQ(warnings[0], "Consider 'string.startswith(a .. b, \"x\")' instead of a manual prefix check");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperSearches")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
 local function f(path: string)
     if string.match(path, "%.luwu$") then
         print(path)
@@ -4564,18 +4581,18 @@ return f
 
     // `y` uses the match as a value, and "^a.b" has a special character
     REQUIRE_EQ(warnings.size(), 5);
-    CHECK_EQ(warnings[0], "Use 'string.endswith(path, \".luwu\")' instead of an anchored pattern");
-    CHECK_EQ(warnings[1], "Use 'not path:startswith(\"@\")' instead of an anchored pattern");
-    CHECK_EQ(warnings[2], "Use 'string.contains(path, \"/\")' instead of a plain 'find'");
-    CHECK_EQ(warnings[3], "Use 'path:contains(\"\\n\")' instead of a plain 'find'");
-    CHECK_EQ(warnings[4], "Use 'path:startswith(\"./\")' instead of an anchored pattern");
+    CHECK_EQ(warnings[0], "Consider 'path:endswith(\".luwu\")' instead of a manual suffix check");
+    CHECK_EQ(warnings[1], "Consider 'not path:startswith(\"@\")' instead of a manual prefix check");
+    CHECK_EQ(warnings[2], "Consider 'path:contains(\"/\")' for a substring check instead of 'string.find' with plain matching");
+    CHECK_EQ(warnings[3], "Consider 'path:contains(\"\\n\")' for a substring check instead of 'path:find' with plain matching");
+    CHECK_EQ(warnings[4], "Consider 'path:startswith(\"./\")' instead of a manual prefix check");
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperTrimAndReplace")
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperTrimAndReplace")
 {
     ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
 
-    std::vector<std::string> warnings = manualStringHelpers(lint(R"(
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
 local function f(s: string)
     local a = s:match("^%s*(.-)%s*$")
     local b = (string.gsub(s, "^%s+", ""))
@@ -4591,17 +4608,17 @@ return f
 
     // `e` reads the count, and `g`'s replacement has a capture
     REQUIRE_EQ(warnings.size(), 4);
-    CHECK_EQ(warnings[0], "Use 's:trim()' instead of a whitespace pattern; it also trims Unicode whitespace");
-    CHECK_EQ(warnings[1], "Use 'string.trimstart(s)' instead of a whitespace pattern; it also trims Unicode whitespace");
-    CHECK_EQ(warnings[2], "Use 's:trimend()' instead of a whitespace pattern; it also trims Unicode whitespace");
-    CHECK_EQ(warnings[3], "Use 'string.replace(s, \".\", \"/\")' instead of 'gsub'; the pattern has no special characters");
+    CHECK_EQ(warnings[0], "Replace this with 's:trim()' to correctly trim Unicode whitespace");
+    CHECK_EQ(warnings[1], "Replace this with 's:trimstart()' to correctly trim Unicode whitespace");
+    CHECK_EQ(warnings[2], "Replace this with 's:trimend()' to correctly trim Unicode whitespace");
+    CHECK_EQ(warnings[3], "Consider 's:replace(\".\", \"/\")' instead of 'string.gsub' here because this pattern doesn't have magic characters");
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperHelpers")
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperHelpers")
 {
     ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
 
-    std::vector<std::string> warnings = manualStringHelpers(lint(R"(
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
 local function startswith(s: string, prefix: string): boolean
     return s:find(prefix, 1, true) == 1
 end
@@ -4627,11 +4644,57 @@ return startswith, trim, a, b
 
     // `trim` does no string work, and `lib.trim` takes extra strings, which another library's trim may treat as patterns
     REQUIRE_EQ(warnings.size(), 2);
-    CHECK_EQ(warnings[0], "Use 'string.startswith' instead of defining 'startswith'");
-    CHECK_EQ(warnings[1], "Use 'string.endswith(path, \".luwu\")' instead of 'lib.endswith'");
+    CHECK_EQ(warnings[0], "Consider 'string.startswith' for a prefix check instead of defining 'startswith'");
+    CHECK_EQ(
+        warnings[1],
+        "Consider 'path:endswith(\".luwu\")' for a suffix check instead of 'lib.endswith' unless the library function provides "
+        "additional functionality"
+    );
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperOnlyInLuwuModules")
+// Each library helper and each helper definition says what its builtin is for
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperSaysWhatTheBuiltinIsFor")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
+local function ends_with(s: string, suffix: string): boolean
+    return s:sub(-#suffix) == suffix
+end
+
+local lib = {
+    startswith = function(s: string, prefix: string): boolean
+        return true
+    end,
+    trim = function(s: string): string
+        return s
+    end,
+}
+
+local path = "a.luwu"
+local a = lib.startswith(path, "a")
+local b = lib.trim(path)
+local c = lib.startswith(path, "%a+")
+return ends_with, a, b, c
+)"));
+
+    // `ends_with`'s body is a manual suffix check too, and `c` passes a pattern, which another library may take
+    REQUIRE_EQ(warnings.size(), 4);
+    CHECK_EQ(warnings[0], "Consider 'string.endswith' for a suffix check instead of defining 'ends_with'");
+    CHECK_EQ(warnings[1], "Consider 's:endswith(suffix)' instead of a manual suffix check");
+    CHECK_EQ(
+        warnings[2],
+        "Consider 'path:startswith(\"a\")' for a prefix check instead of 'lib.startswith' unless the library function provides "
+        "additional functionality"
+    );
+    CHECK_EQ(
+        warnings[3],
+        "Consider 'path:trim()' for trimming whitespace instead of 'lib.trim' unless the library function provides additional "
+        "functionality"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperOnlyInLuwuModules")
 {
     const std::string source = R"(
 local function f(path: string)
@@ -4643,17 +4706,17 @@ return f
 
     {
         ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, false};
-        CHECK(manualStringHelpers(lint(source)).empty());
+        CHECK(luaStringHelpers(lint(source)).empty());
     }
 
     ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
-    CHECK_EQ(manualStringHelpers(lint(source)).size(), 1);
+    CHECK_EQ(luaStringHelpers(lint(source)).size(), 1);
 
     configResolver.defaultConfig.language = Language::Luau;
-    CHECK(manualStringHelpers(lint(source)).empty());
+    CHECK(luaStringHelpers(lint(source)).empty());
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "ManualStringHelperTypewriting")
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperTypewriting")
 {
     ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
 
