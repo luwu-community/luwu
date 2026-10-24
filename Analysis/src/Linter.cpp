@@ -7680,6 +7680,19 @@ std::vector<LintWarning> lint(
         }
     }
 
+    // Luwu: AnyCast and AnyAnnotation are on by default in Luwu modules only. A Luau module has to ask for them, with
+    // `--!lint` or `@[lint]`.
+    if (module && module->language != Language::Luwu)
+    {
+        LintMask asked = LintWarning::parseEnableMask(hotcomments);
+        for (LintWarning::Code part : {LintWarning::Code_AnyCast, LintWarning::Code_AnyAnnotation})
+        {
+            if (!asked.test(part))
+                context.options.warningMask.reset(part);
+        }
+    }
+    const LintMask moduleMask = context.options.warningMask;
+
     // Luwu: a lint a scope turns on has to run even where the module turns it off; filterByLintScopes then drops what
     // isn't on where it was reported
     std::vector<LintScope> scopes = LintScopeCollector::collect(context);
@@ -7838,7 +7851,7 @@ std::vector<LintWarning> lint(
     }
 
     if (!scopes.empty())
-        filterByLintScopes(context.result, std::move(scopes), options.warningMask);
+        filterByLintScopes(context.result, std::move(scopes), moduleMask);
 
     std::sort(context.result.begin(), context.result.end(), WarningComparator());
 
