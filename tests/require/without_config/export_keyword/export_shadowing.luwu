@@ -8,8 +8,8 @@ export function foo()
 end
 
 local fruit = "apple"
-export local fruit
+export fruit = nil
 
-export local animal = "dog"
+export animal = "dog"
 local animal = "cat"
 animal = "bird"

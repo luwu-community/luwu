@@ -519,12 +519,12 @@ TEST_CASE_FIXTURE(Fixture, "exported_locals_are_never_unused")
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}};
 
     LintResult result = lint(R"(
-export local version = "1.0"
-export const TAU = math.pi * 2
+export version = "1.0"
+export TAU = math.pi * 2
 export answer = 42
 export function greet()
 end
-export const function farewell()
+export function farewell()
 end
 local unused = 1
 )");
