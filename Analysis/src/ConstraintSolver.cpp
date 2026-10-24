@@ -2011,9 +2011,27 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
 
     TypeId overloadToUse = fn;
 
+    // Luwu: a callee with one `__call` signature (a class, or a table with a single `__call`) has no overload to choose
+    // either. Upstream resolves it like an overload set, which subtype-tests every argument against the parameters on
+    // every call: a call passing a table literal to a wide record pays for all of its properties. Argument errors are
+    // TypeChecker2's to report, as they are for a function type.
+    std::optional<TypeId> onlyCallSignature;
+    if (!is<FunctionType>(fn))
+    {
+        ErrorVec ignored;
+        std::optional<TypeId> callMetamethod = findMetatableEntry(builtinTypes, ignored, fn, "__call", constraint->location);
+        if (callMetamethod && is<FunctionType>(follow(*callMetamethod)))
+            onlyCallSignature = follow(*callMetamethod);
+    }
+
+    if (onlyCallSignature)
+    {
+        overloadToUse = *onlyCallSignature;
+        argsPack = arena->addTypePack(TypePack{{fn}, argsPack});
+    }
     // If the function we have is already a function type, then there's no
     // point in trying to do overload selection: we're just wasting CPU.
-    if (!is<FunctionType>(fn))
+    else if (!is<FunctionType>(fn))
     {
         auto res = resolver.resolveOverload(
             fn,
@@ -2500,8 +2518,31 @@ bool ConstraintSolver::tryDispatch(const HasPropConstraint& c, NotNull<const Con
         return false;
     }
 
-    bind(constraint, resultType, result.value_or(builtinTypes->anyType));
+    TypeId found = result.value_or(builtinTypes->anyType);
+    if (std::optional<TypeId> signature = methodSignatureInItsBody(found, constraint))
+        found = *signature;
+
+    bind(constraint, resultType, found);
     return true;
+}
+
+// Luwu Classes (rfcs/classes): a class method is the result of generalizing it, which waits for its body. Read in its own
+// body (`child:all()` in `all`), it would wait for itself, so it is the signature the body was checked with instead, as
+// a recursive local function is.
+std::optional<TypeId> ConstraintSolver::methodSignatureInItsBody(TypeId member, NotNull<const Constraint> constraint) const
+{
+    const BlockedType* pending = get<BlockedType>(follow(member));
+    const Constraint* owner = pending ? pending->getOwner() : nullptr;
+    const GeneralizationConstraint* generalization = owner ? get<GeneralizationConstraint>(*owner) : nullptr;
+    if (!generalization)
+        return std::nullopt;
+
+    for (const Scope* scope = constraint->scope.get(); scope; scope = scope->parent.get())
+    {
+        if (scope == owner->scope.get())
+            return generalization->sourceType;
+    }
+    return std::nullopt;
 }
 
 bool ConstraintSolver::tryDispatchHasIndexer(
@@ -3523,22 +3564,8 @@ bool ConstraintSolver::tryDispatch(const InstantiateNominalPropConstraint& c, No
 
     // Luwu Traits (rfcs/classes/traits.md): a trait function generic over `Self` has the implementing class substituted for
     // it, which leaves the class in the function's generics. The copy is fresh, so it can drop it.
-    FunctionType* substitutedFunction = *substituted != templateProp ? getMutable<FunctionType>(*substituted) : nullptr;
-    if (substitutedFunction)
-    {
-        std::vector<TypeId>& generics = substitutedFunction->generics;
-        generics.erase(
-            std::remove_if(
-                generics.begin(),
-                generics.end(),
-                [](TypeId generic)
-                {
-                    return !get<GenericType>(follow(generic));
-                }
-            ),
-            generics.end()
-        );
-    }
+    if (*substituted != templateProp)
+        dropSubstitutedGenerics(*substituted);
 
     bind(constraint, c.target, *substituted);
     return true;

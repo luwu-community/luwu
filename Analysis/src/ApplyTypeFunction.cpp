@@ -331,6 +331,26 @@ std::optional<TypeId> pendingNominalMember(const ExternType& instantiation, cons
     return findPendingMember(it->second);
 }
 
+void dropSubstitutedGenerics(TypeId fn)
+{
+    FunctionType* function = getMutable<FunctionType>(fn);
+    if (!function)
+        return;
+
+    std::vector<TypeId>& generics = function->generics;
+    generics.erase(
+        std::remove_if(
+            generics.begin(),
+            generics.end(),
+            [](TypeId generic)
+            {
+                return !get<GenericType>(follow(generic));
+            }
+        ),
+        generics.end()
+    );
+}
+
 void buildNominalMembers(const ExternType& etv)
 {
     const std::shared_ptr<LazyNominalMembers>& lazy = etv.lazyMembers;
@@ -348,6 +368,23 @@ void buildNominalMembers(const ExternType& etv)
 
     const ExternType* templateEtv = get<ExternType>(follow(*etv.genericTemplate));
     LUAU_ASSERT(templateEtv);
+
+    // Every read of a member rebuilds while one is pending, so when none of them can be built yet, nothing is set up
+    if (!templateIsFinal && lazy->attempted)
+    {
+        bool anyBuildable = false;
+        for (const auto& [name, prop] : templateEtv->builtProps())
+        {
+            if (!lazy->builtNames.count(name) && !findPendingMember(prop))
+            {
+                anyBuildable = true;
+                break;
+            }
+        }
+
+        if (!anyBuildable)
+            return;
+    }
 
     TypeArena* arena = lazy->arena;
     std::unique_lock<std::mutex> arenaGuard;
@@ -396,6 +433,7 @@ void buildNominalMembers(const ExternType& etv)
         lazy->builtNames.insert(name);
     }
 
+    lazy->attempted = true;
     if (!anyPending)
         lazy->built.store(true, std::memory_order_release);
 }

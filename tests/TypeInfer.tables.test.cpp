@@ -35,6 +35,7 @@ LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
 LUAU_FASTFLAG(LuauIndexerModifierMismatchErrors)
 LUAU_FASTFLAG(LuauAlwaysIntersectTablesWithTables)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 TEST_SUITE_BEGIN("TableTests");
 
@@ -2664,8 +2665,8 @@ local y: number = tmp.p.y
             "which can only be read as 'Super'. Because 'p' can be read and written, it could silently be replaced with a "
             "value of a smaller type, causing data loss.\n\n"
             "Help (read/write mismatch):\n"
-            "  - if nothing writes to 'p', mark it as 'read p: Super' in 'HasSuper'\n"
-            "  - if it reads and writes, make a 'Super' version of your data or mark the additional properties as optional",
+            "  • If nothing writes to 'p', mark it as 'read p: Super' in 'HasSuper'\n"
+            "  • If it reads and writes, make a 'Super' version of your data or mark the additional properties as optional",
             toString(result.errors[0])
         );
     }
@@ -5862,7 +5863,11 @@ TEST_CASE_FIXTURE(Fixture, "stop_refining_new_table_indices_for_non_primitive_ta
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    LUAU_CHECK_ERROR(result, UnknownProperty);
+    // Luwu (helpful subtyping errors): `vall` is one typo from `val`
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+        LUAU_CHECK_ERROR(result, Typo);
+    else
+        LUAU_CHECK_ERROR(result, UnknownProperty);
 }
 
 TEST_CASE_FIXTURE(Fixture, "fuzz_match_literal_type_crash_again")
@@ -7512,8 +7517,8 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_indexer")
         "allowed to read 'Scoped' through its 'Vcn' elements. Because the function 'process' can read and write to your array, "
         "it can silently replace its elements with those of a smaller type, causing data loss.\n\n"
         "Help (read/write mismatch):\n"
-        "  - if the function doesn't actually write to the array, annotate the parameter as '{ read Scoped }'\n"
-        "  - if it reads and writes, make 'Scoped' versions of your data to pass to the function or mark the additional "
+        "  • If the function doesn't actually write to the array, annotate the parameter as '{ read Scoped }'\n"
+        "  • If it reads and writes, make 'Scoped' versions of your data to pass to the function or mark the additional "
         "properties as optional",
         toString(result.errors[0])
     );
@@ -7522,7 +7527,7 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_indexer")
     // away or in another function entirely. It points at the element type inside the braces, where
     // `{ read Scoped }` is written -- `read` in front of the parameter's name is a syntax error.
     CHECK_EQ(
-        "Help (read/write mismatch): consider marking this as 'read' if the function 'process' only reads from the array.", toString(result.errors[1])
+        "Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'process' only reads from the array", toString(result.errors[1])
     );
     CHECK_EQ(Location{{4, 39}, {4, 45}}, result.errors[1].location);
 }
@@ -7550,12 +7555,12 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_map_uses_map_nouns_
         "map that is only allowed to read 'Scoped' through its 'Vcn' values. Because the function 'byKey' can read and write "
         "to your map, it can silently replace its values with those of a smaller type, causing data loss.\n\n"
         "Help (read/write mismatch):\n"
-        "  - if the function doesn't actually write to the map, annotate the parameter as '{ read [string]: Scoped }'\n"
-        "  - if it reads and writes, make 'Scoped' versions of your data to pass to the function or mark the additional "
+        "  • If the function doesn't actually write to the map, annotate the parameter as '{ read [string]: Scoped }'\n"
+        "  • If it reads and writes, make 'Scoped' versions of your data to pass to the function or mark the additional "
         "properties as optional",
         toString(result.errors[0])
     );
-    CHECK_EQ("Help (read/write mismatch): consider marking this as 'read' if the function 'byKey' only reads from the map.", toString(result.errors[1]));
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'byKey' only reads from the map", toString(result.errors[1]));
 
     // On the indexer, which is where `read` is written.
     CHECK_EQ(Location{{4, 39}, {4, 55}}, result.errors[1].location);
@@ -7581,14 +7586,14 @@ TEST_CASE_FIXTURE(Fixture, "variance_nil_widening_gets_its_own_message")
         "This array with non-optional elements cannot be passed where optional elements are allowed; doing so would allow "
         "'nil' to be written into it.\n\n"
         "Help (read/write mismatch):\n"
-        "  - annotate the expected indexer as 'read' if nothing writes to it\n"
-        "  - cast this array to '{string?}' if you know 'nil' will not be written to it",
+        "  • Annotate the expected indexer as 'read' if nothing writes to it\n"
+        "  • Cast this array to '{string?}' if you know 'nil' will not be written to it",
         toString(result.errors[0])
     );
 
     // The second error is the help on the parameter's indexer.
     CHECK_EQ(
-        "Help (read/write mismatch): consider marking this as 'read' if the function 'compact' only reads from the array.", toString(result.errors[1])
+        "Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'compact' only reads from the array", toString(result.errors[1])
     );
     CHECK_EQ(Location{{1, 40}, {1, 47}}, result.errors[1].location);
 }
@@ -7609,11 +7614,11 @@ TEST_CASE_FIXTURE(Fixture, "variance_nil_widening_uses_map_and_property_wording"
         "This map with non-optional values cannot be passed where optional values are allowed; doing so would allow 'nil' "
         "to be written into it.\n\n"
         "Help (read/write mismatch):\n"
-        "  - annotate the expected indexer as 'read' if nothing writes to it\n"
-        "  - cast this map to '{ [string]: string? }' if you know 'nil' will not be written to it",
+        "  • Annotate the expected indexer as 'read' if nothing writes to it\n"
+        "  • Cast this map to '{ [string]: string? }' if you know 'nil' will not be written to it",
         toString(map.errors[0])
     );
-    CHECK_EQ("Help (read/write mismatch): consider marking this as 'read' if the function 'byKey' only reads from the map.", toString(map.errors[1]));
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'byKey' only reads from the map", toString(map.errors[1]));
 
     CheckResult property = check(R"(
         local function cfg(c: { name: string? }) end
@@ -7626,11 +7631,11 @@ TEST_CASE_FIXTURE(Fixture, "variance_nil_widening_uses_map_and_property_wording"
         "Property 'name' is non-optional, so this cannot be passed where it is allowed to be optional; doing so would "
         "allow 'nil' to be written into it.\n\n"
         "Help (read/write mismatch):\n"
-        "  - annotate 'name' as 'read' if nothing writes to it\n"
-        "  - cast this to '{ name: string? }' if you know 'nil' will not be written to it",
+        "  • Annotate 'name' as 'read' if nothing writes to it\n"
+        "  • Cast this to '{ name: string? }' if you know 'nil' will not be written to it",
         toString(property.errors[0])
     );
-    CHECK_EQ("Help (read/write mismatch): consider marking 'name' as 'read' if the function 'cfg' only reads from it.", toString(property.errors[1]));
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking 'name' as 'read' if the function 'cfg' only reads from it", toString(property.errors[1]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "variance_nil_widening_says_used_when_nothing_is_called")
@@ -7648,8 +7653,8 @@ TEST_CASE_FIXTURE(Fixture, "variance_nil_widening_says_used_when_nothing_is_call
         "This map with non-optional values cannot be used where optional values are allowed; doing so would allow 'nil' "
         "to be written into it.\n\n"
         "Help (read/write mismatch):\n"
-        "  - annotate the expected indexer as 'read' if nothing writes to it\n"
-        "  - cast this map to '{ [string]: string? }' if you know 'nil' will not be written to it",
+        "  • Annotate the expected indexer as 'read' if nothing writes to it\n"
+        "  • Cast this map to '{ [string]: string? }' if you know 'nil' will not be written to it",
         toString(result.errors[0])
     );
 }
@@ -7671,11 +7676,11 @@ TEST_CASE_FIXTURE(Fixture, "variance_widening_to_a_union_member_is_a_one_liner")
     CHECK_EQ(
         "Expected this to be\n    '{number | string}'\nbut got\n    '{string}'\nThis incorrectly allows a 'number' to be written to your array.\n\n"
         "Help (read/write mismatch):\n"
-        "  - annotate the expected indexer as 'read' if nothing writes to it\n"
-        "  - cast this array to '{number | string}' if you know a 'number' will not be written to it",
+        "  • Annotate the expected indexer as 'read' if nothing writes to it\n"
+        "  • Cast this array to '{number | string}' if you know a 'number' will not be written to it",
         toString(result.errors[0])
     );
-    CHECK_EQ("Help (read/write mismatch): consider marking this as 'read' if the function 'widen' only reads from the array.", toString(result.errors[1]));
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'widen' only reads from the array", toString(result.errors[1]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "variance_read_only_annotation_actually_fixes_the_wider_element_case")
@@ -7713,8 +7718,8 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_without_a_call_names_no_function"
         "allowed to read 'Scoped' through its 'Vcn' elements. Because '{Scoped}' can be read and written, it can silently "
         "replace its elements with those of a smaller type, causing data loss.\n\n"
         "Help (read/write mismatch):\n"
-        "  - if nothing writes to the array, annotate it as '{ read Scoped }'\n"
-        "  - if it reads and writes, make 'Scoped' versions of your data or mark the additional properties as optional",
+        "  • If nothing writes to the array, annotate it as '{ read Scoped }'\n"
+        "  • If it reads and writes, make 'Scoped' versions of your data or mark the additional properties as optional",
         toString(result.errors[0])
     );
 }
@@ -7743,14 +7748,14 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_property_names_the_
         "be read as 'Scoped'. Because the function 'takesBox' can read and write to 'value', it could silently replace it "
         "with a value of a smaller type, causing data loss.\n\n"
         "Help (read/write mismatch):\n"
-        "  - if the function doesn't actually write to 'value', mark it as 'read value: Scoped' in 'Box<Scoped>'\n"
-        "  - if it reads and writes, make a 'Scoped' version of your data to pass to the function or mark the additional "
+        "  • If the function doesn't actually write to 'value', mark it as 'read value: Scoped' in 'Box<Scoped>'\n"
+        "  • If it reads and writes, make a 'Scoped' version of your data to pass to the function or mark the additional "
         "properties as optional",
         toString(result.errors[0])
     );
 
     CHECK_EQ(
-        "Help (read/write mismatch): consider marking 'value' as 'read' if the function 'takesBox' only reads from it.",
+        "Help (read/write mismatch):\n  • Consider marking 'value' as 'read' if the function 'takesBox' only reads from it",
         toString(result.errors[1])
     );
 
@@ -7957,6 +7962,32 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "luau_only_class_classof_depends_on_the_file"
     CheckResult inLuwu = getFrontend().check("game/b");
     LUAU_REQUIRE_ERROR_COUNT(1, inLuwu);
     CHECK_EQ("'class.classof' is a Luau-only API and doesn't exist in Luwu. Did you mean 'class.of'?", toString(inLuwu.errors[0]));
+}
+
+// Luwu: a union's members can't be told apart by a field some of them lack, since a table type is a shape a class
+// object or vector also fits; the help says how to declare it
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_union_members_lack_says_how_to_tell_them_apart")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Ok = { message: string }
+        type Err = { err: string }
+        local function get(): Ok | Err
+            return { message = "hi" }
+        end
+        local thing = get()
+        if thing.message then
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Key 'message' is missing from 'Err' in the type 'Err | Ok'\n\n"
+        "Help (telling members apart):\n"
+        "  • Add 'message: nil' to 'Err' so that checking 'message' tells the members apart",
+        toString(result.errors[0])
+    );
 }
 
 TEST_SUITE_END();

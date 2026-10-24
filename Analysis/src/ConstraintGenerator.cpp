@@ -104,22 +104,6 @@ static bool isOwnSelf(const Scope& scope, const ClassDeclRecord* record)
     return record && self && self->typeParams.empty() && follow(self->type) == follow(record->ty);
 }
 
-// Luwu Traits (rfcs/classes/traits.md): a class's or trait's member `name`, from its object type or its metatable
-static const Property* findNominalMember(const ExternType* type, const Name& name)
-{
-    if (auto it = type->props().find(name); it != type->props().end())
-        return &it->second;
-
-    const TableType* metatable = type->metatable ? get<TableType>(follow(*type->metatable)) : nullptr;
-    if (metatable)
-    {
-        if (auto it = metatable->props.find(name); it != metatable->props.end())
-            return &it->second;
-    }
-
-    return nullptr;
-}
-
 // Luwu Traits (rfcs/classes/traits.md): the function `name` that a method of `type` overrides: the one the traits it
 // implements (a class) or needs (a trait) provide. Of several, the one that needs the others, as the runtime picks it. A
 // trait from this module has its signature in `signatures`; one from another module is solved already.
@@ -168,6 +152,13 @@ static std::optional<TypePackId> variadicTailOf(const FunctionType* function)
     if (tail && get<VariadicTypePack>(follow(*tail)))
         return follow(*tail);
     return std::nullopt;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get: its expected constructor,
+// its factory and its `__implemented` hook
+static bool belongsToTraitAlone(const std::string& name)
+{
+    return name == "__init" || name == "__create" || name == "__implemented";
 }
 
 // Luwu Traits (rfcs/classes/traits.md): whether a method leaves out a parameter or return annotation, which an overridden
@@ -1464,7 +1455,7 @@ void ConstraintGenerator::prototypeClass(
         ExternType::Props implementorProps;
         for (const auto& [name, prop] : staticProps)
         {
-            if (name != "__init" && name != "__create")
+            if (!belongsToTraitAlone(name))
                 implementorProps[name] = prop;
         }
 
@@ -1878,7 +1869,7 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
 
             for (const auto& [name, prop] : neededType->props())
             {
-                bool copyable = name != "__init" && name != "__create" && !traitType->props().count(name);
+                bool copyable = !belongsToTraitAlone(name) && !traitType->props().count(name);
                 if (copyable)
                 {
                     traitType->props()[name] = asSeenHere(prop);
@@ -2399,7 +2390,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         // A static (on the trait's value) is overridden by the class's own static, an instance member by its own member
         auto addProvider = [&](const Name& name, bool isStatic)
         {
-            bool provided = name != "__init" && name != "__create" && !info.expectations.count(name) && !info.fromNeeds.count(name);
+            bool provided = !belongsToTraitAlone(name) && !info.expectations.count(name) && !info.fromNeeds.count(name);
             bool classDefines = isStatic ? ownStatics.count(name) > 0 : own.count(name) > 0;
             if (!provided || classDefines)
                 return;
@@ -2495,8 +2486,8 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         // Whether the trait's member `name` is added to the class, reporting a clash when it can't be
         auto provide = [&](const Name& name, const Property& traitProp)
         {
-            // a factory's `__create` belongs to the trait alone, and a needed trait's members to that trait
-            if (name == "__init" || name == "__create" || info.expectations.count(name) || info.fromNeeds.count(name))
+            // a trait's constructor and hooks belong to the trait alone, and a needed trait's members to that trait
+            if (belongsToTraitAlone(name) || info.expectations.count(name) || info.fromNeeds.count(name))
                 return false;
 
             // The class's own member overrides the trait's, a field as well as a function, unless the trait's is final
@@ -2560,7 +2551,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         {
             for (const auto& [name, prop] : traitValueType->props())
             {
-                bool provided = name != "__init" && name != "__create" && info.expectations.count(name) == 0;
+                bool provided = !belongsToTraitAlone(name) && info.expectations.count(name) == 0;
                 if (provided && ownStatics.count(name))
                 {
                     auto own = classValueType->props().find(name);
@@ -2835,7 +2826,18 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
     }
 
     if (FFlag::LuwuTraits)
+    {
+        // Luwu Traits (rfcs/classes/traits.md): a trait can need one another module exports (`needs core.Element`), so the
+        // block's requires are imported before its traits are linked. Visiting each `local` imports it again, to the same
+        // types.
+        for (AstStat* stat : statements)
+        {
+            if (AstStatLocal* statLocal = stat->as<AstStatLocal>())
+                importRequiredTypes(scope, statLocal);
+        }
+
         linkTraitNeeds(scope, statements);
+    }
 
     if (hasTypeFunction)
         typeFunctionEnvScope = std::make_shared<Scope>(typeFunctionRuntime->rootScope);
@@ -3219,47 +3221,49 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
         }
     }
 
-    if (statLocal->values.size > 0)
-    {
-        // To correctly handle 'require', we need to import the exported type bindings into the variable 'namespace'.
-        for (size_t i = 0; i < statLocal->values.size && i < statLocal->vars.size; ++i)
-        {
-            const AstExprCall* call = statLocal->values.data[i]->as<AstExprCall>();
-            if (!call)
-                continue;
-
-            auto maybeRequire = matchRequire(*call);
-            if (!maybeRequire)
-                continue;
-
-            AstExpr* require = *maybeRequire;
-
-            const Name name{statLocal->vars.data[i]->name.value};
-
-            auto moduleInfo = moduleResolver->resolveModuleInfo(module->name, *require);
-            ModulePtr module = moduleInfo ? moduleResolver->getModule(moduleInfo->name) : nullptr;
-            if (!module)
-            {
-                scope->unresolvedRequires.insert(name);
-                continue;
-            }
-
-            scope->importedTypeBindings[name] = module->exportedTypeBindings;
-            scope->importedModules[name] = moduleInfo->name;
-
-            // Imported typeArguments of requires that transitively refer to current module have to be replaced with 'any'
-            for (const auto& [location, path] : requireCycles)
-            {
-                if (path.empty() || path.front() != moduleInfo->name)
-                    continue;
-
-                for (auto& [name, tf] : scope->importedTypeBindings[name])
-                    tf = TypeFun{{}, {}, builtinTypes->anyType};
-            }
-        }
-    }
+    importRequiredTypes(scope, statLocal);
 
     return ControlFlow::None;
+}
+
+void ConstraintGenerator::importRequiredTypes(const ScopePtr& scope, AstStatLocal* statLocal)
+{
+    // To correctly handle 'require', we need to import the exported type bindings into the variable 'namespace'.
+    for (size_t i = 0; i < statLocal->values.size && i < statLocal->vars.size; ++i)
+    {
+        const AstExprCall* call = statLocal->values.data[i]->as<AstExprCall>();
+        if (!call)
+            continue;
+
+        auto maybeRequire = matchRequire(*call);
+        if (!maybeRequire)
+            continue;
+
+        AstExpr* require = *maybeRequire;
+
+        const Name name{statLocal->vars.data[i]->name.value};
+
+        auto moduleInfo = moduleResolver->resolveModuleInfo(module->name, *require);
+        ModulePtr module = moduleInfo ? moduleResolver->getModule(moduleInfo->name) : nullptr;
+        if (!module)
+        {
+            scope->unresolvedRequires.insert(name);
+            continue;
+        }
+
+        scope->importedTypeBindings[name] = module->exportedTypeBindings;
+        scope->importedModules[name] = moduleInfo->name;
+
+        // Imported typeArguments of requires that transitively refer to current module have to be replaced with 'any'
+        for (const auto& [location, path] : requireCycles)
+        {
+            if (path.empty() || path.front() != moduleInfo->name)
+                continue;
+
+            for (auto& [name, tf] : scope->importedTypeBindings[name])
+                tf = TypeFun{{}, {}, builtinTypes->anyType};
+        }
+    }
 }
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatFor* for_)
@@ -4575,6 +4579,15 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                     if (unannotatedTraitCreate)
                         expectedType = arena->addType(FunctionType{arena->addTypePack({}), arena->addTypePack({classDeclRecord->ty})});
 
+                    // Luwu Traits (rfcs/classes/traits.md): `__implemented` is given each implementing class, a `class<Trait>`
+                    const ExternType* hookTrait = get<ExternType>(follow(classDeclRecord->ty));
+                    bool isImplementedHook = statClass->isTrait && method.functionName == "__implemented" && hookTrait && hookTrait->traitInfo &&
+                                             hookTrait->traitInfo->implementorClass;
+                    if (isImplementedHook)
+                        expectedType = arena->addType(
+                            FunctionType{arena->addTypePack({*hookTrait->traitInfo->implementorClass}), builtinTypes->emptyTypePack}
+                        );
+
                     // Luwu Traits (rfcs/classes/traits.md): an override takes what it leaves unannotated from the function it
                     // overrides, so it doesn't restate the signature
                     const ExternType* overriding = get<ExternType>(follow(classDeclRecord->ty));
@@ -4949,9 +4962,12 @@ InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall*
     {
         std::optional<TypeId> selfType = scope->lookup(of);
         if (selfType && traitSelfTypes.contains(*selfType))
-            return InferencePack{arena->addTypePack({*selfType})};
+            result = InferencePack{arena->addTypePack({*selfType})};
     }
 
+    // Luwu: every call's values, not only those of a call in a place that takes them all, so the DiscardedValues lint
+    // can see what a call that keeps one value drops.
+    module->astTypePacks[call] = result.tp;
     return result;
 }
 

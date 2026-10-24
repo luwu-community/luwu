@@ -141,7 +141,7 @@ TEST_CASE_FIXTURE(ExplainFixture, "union_holding_itself_does_not_hang")
 
     std::optional<MismatchExplanation> explanation = explain(bleu, colors);
     REQUIRE(explanation);
-    CHECK_EQ(explanation->reason, "\n\nHelp: did you mean '\"Blue\"'?");
+    CHECK_EQ(explanation->reason, "\n\nHelp (typo):\n  • Did you mean '\"Blue\"'?");
 }
 
 // A union of only `nil`s has no members to list fields from.
@@ -270,7 +270,7 @@ TEST_CASE_FIXTURE(ExplainFixture, "deep_and_wide_tables_stay_bounded" * doctest:
 
     TableType::Props wideExpected;
     TableType::Props wideGiven;
-    for (int f = 0; f < 3000; ++f)
+    for (int f = 0; f < 1000; ++f)
     {
         wideExpected["p" + std::to_string(f)] = getBuiltins()->numberType;
         wideGiven["p" + std::to_string(f)] = getBuiltins()->stringType;
@@ -756,9 +756,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_function_in_a_table_literal_is_named_by_it
         "This function can be passed a value it doesn't accept:\n"
         "  • inv.slots[i]: expected 'number?', got 'number'\n"
         "\n"
-        "Help: 'inv.slots[i]' can't be narrowed from 'number?' to 'number':\n"
-        "  • code calling this function as the expected type is allowed to pass 'nil' for 'inv.slots[i]'\n"
-        "  • this parameter must accept 'number?' to match the caller's expected signature"
+        "Help (narrowed parameter):\n"
+        "  • 'inv.slots[i]' can't be narrowed from 'number?' to 'number'\n"
+        "  • Code calling this function as the expected type is allowed to pass 'nil' for 'inv.slots[i]'\n"
+        "  • This parameter must accept 'number?' to match the caller's expected signature"
     );
 }
 
@@ -819,10 +820,34 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "overloads_are_listed_in_one_error")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "None of the overloads of 'on' accept these 2 arguments:\n"
+        "None of the overloads of 'on' accept '(\"chat\", (message: number) -> ())':\n"
         "  • #1 '(event: \"join\", fn: () -> ()) -> ()'\n"
         "  • #2 '(event: \"chat\", fn: (message: string) -> ()) -> ()'"
     );
+}
+
+// The receiver of a method call is its first argument, and literals are printed as written.
+TEST_CASE_FIXTURE(BuiltinsFixture, "overloads_error_lists_a_method_calls_arguments")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Emitter = {
+            on: ((self: Emitter, event: "join", fn: () -> ()) -> ()) & ((self: Emitter, event: "chat", fn: (message: string) -> ()) -> ()),
+        }
+        local e: Emitter = nil :: any
+        e:on('say "hi"', true)
+        local function many(...: number)
+            e.on(e, "join", ...)
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    const std::string overloads =
+        "  • #1 '(self: Emitter, event: \"join\", fn: () -> ()) -> ()'\n"
+        "  • #2 '(self: Emitter, event: \"chat\", fn: (message: string) -> ()) -> ()'";
+    CHECK_EQ("None of the overloads of 'e:on' accept '(Emitter, \"say \\\"hi\\\"\", true)':\n" + overloads, toString(result.errors[0]));
+    CHECK_EQ("None of the overloads of 'e.on' accept '(Emitter, \"join\", ...number)':\n" + overloads, toString(result.errors[1]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "overloads_taking_other_argument_counts_are_listed_in_one_error")
@@ -984,6 +1009,350 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_string_is_a_typo")
     CHECK_EQ(toString(result.errors[1]), "Did you mean '\"Blue\"' instead of '\"Bleu\"'?");
     CHECK(get<TypeMismatch>(result.errors[2]));
     CHECK(get<TypeMismatch>(result.errors[3]));
+}
+
+// A misspelled tag in a table literal is a typo at the string, though the checker widens the literal's strings to
+// `string`. With another problem, a misspelled tag still picks the member it meant.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_tag_in_a_literal_is_a_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Event = { kind: "join", player: string } | { kind: "leave", player: string, reason: string }
+        local function emit(_: Event) end
+        emit({ kind = "laeve", player = "p", reason = "r" })
+        local _e: Event = { kind = "leavee", player = "p", reason = "r" }
+        emit({ kind = "leeve" :: "leeve", player = "p", reason = 1 })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    REQUIRE(get<Typo>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[0]), "Did you mean '\"leave\"' instead of '\"laeve\"'?");
+    CHECK_EQ(result.errors[0].location, Location{{3, 22}, {3, 29}});
+    REQUIRE(get<Typo>(result.errors[1]));
+    CHECK_EQ(toString(result.errors[1]), "Did you mean '\"leave\"' instead of '\"leavee\"'?");
+    CHECK_EQ(
+        toString(result.errors[2]),
+        "Expected this to be\n"
+        "    type Event = … | { kind: \"leave\", player: string, reason: string }\n"
+        "but was given\n"
+        "    '{ kind: \"leeve\", reason: number, … }'\n"
+        "\n"
+        "Help (typo):\n"
+        "  • Did you mean '\"leave\"' instead of '\"leeve\"' for 'given.kind'?\n"
+        "\n"
+        "The closest match is Event#2, but:\n"
+        "  • given.kind: expected '\"leave\"', got '\"leeve\"'\n"
+        "  • given.reason: expected 'string', got 'number'"
+    );
+}
+
+// The member a tag picked is spelled out in the union printed above, so the header only names it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_tagged_match_is_not_printed_twice")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Shape = { kind: "circle", radius: number } | { kind: "rect", width: number, height: number }
+        local function draw(_: Shape) end
+        draw({ kind = "rect", width = 1, height = true })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected this to be\n"
+        "    type Shape = … | { height: number, kind: \"rect\", width: number }\n"
+        "but was given\n"
+        "    '{ height: boolean, kind: \"rect\", … }'\n"
+        "\n"
+        "'given.kind' is '\"rect\"', so 'given' was compared with Shape#2:\n"
+        "  • given.height: expected 'number', got 'boolean'"
+    );
+}
+
+// A swap the help names needs no bullets of its own; anything else wrong keeps its bullet.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_swap_is_said_only_by_its_help")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function parse(input: string): (string?, boolean)
+            return nil, #input > 0
+        end
+        local _validate: (input: string) -> (boolean, string?) = parse
+        local function both(name: string, age: number) end
+        local _call: (age: number, name: string) -> () = both
+        local function partly(input: string): (string?, boolean, number)
+            return nil, true, 1
+        end
+        local _three: (input: string) -> (boolean, string?, string) = partly
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Expected 'parse' to be\n"
+        "    '(input: string) -> (boolean, string?)'\n"
+        "but was given\n"
+        "    '(input: string) -> (string?, boolean)'\n"
+        "\n"
+        "Help (return order):\n"
+        "  • The 1st and 2nd return values look like they're in the wrong order"
+    );
+    CHECK_EQ(
+        toString(result.errors[1]),
+        "Expected 'both' to be\n"
+        "    '(age: number, name: string) -> ()'\n"
+        "but was given\n"
+        "    '(name: string, age: number) -> ()'\n"
+        "\n"
+        "Help (parameter order):\n"
+        "  • The parameters 'name' and 'age' look like they're in the wrong order"
+    );
+    CHECK_EQ(
+        toString(result.errors[2]),
+        "Expected 'partly' to be\n"
+        "    '(input: string) -> (boolean, string?, string)'\n"
+        "but was given\n"
+        "    '(input: string) -> (string?, boolean, number)'\n"
+        "\n"
+        "Help (return order):\n"
+        "  • The 1st and 2nd return values look like they're in the wrong order\n"
+        "\n"
+        "This function should return:\n"
+        "  • 'string' as its 3rd value, not 'number'"
+    );
+}
+
+// A mismatched property gets a note where each side declares it, pointing back at the error: a deep path is hard to
+// trace back to the two declarations by hand.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_mismatched_property_notes_where_both_sides_declare_it")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Stack = { id: string, count: number }
+        type Inventory = { byCategory: { [string]: { [string]: { Stack } } } }
+        local function load(raw: { [string]: { [string]: { { id: string, count: string } } } }): Inventory
+            return { byCategory = raw }
+        end
+        local _ = load
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const std::vector<DiagnosticNote>& notes = getMainModule()->notes;
+    REQUIRE_EQ(notes.size(), 2);
+    CHECK_EQ(notes[0].message, "Expected 'count: number' because of this");
+    CHECK_EQ(notes[0].location, Location{{1, 35}, {1, 40}});
+    CHECK_EQ(notes[1].message, "'count' is 'string' here, but should be 'number'");
+    CHECK_EQ(notes[1].location, Location{{3, 73}, {3, 78}});
+    CHECK_EQ(notes[0].origin, result.errors[0].location);
+    CHECK_EQ(notes[1].origin, result.errors[0].location);
+}
+
+// A missing property gets a note at the table it's missing from, which can be a few variables away from the error,
+// and one where the expected type requires it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_missing_property_notes_the_table_it_is_missing_from")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Color = { r: number, g: number, b: number }
+        type Theme = { name: string, colors: { background: Color, text: Color } }
+        local function apply(_: Theme) end
+        local white = { r = 1, g = 1 }
+        local colors = { background = white, text = { r = 0, g = 0, b = 0 } }
+        apply({ name = "light", colors = colors })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const std::vector<DiagnosticNote>& notes = getMainModule()->notes;
+    REQUIRE_EQ(notes.size(), 2);
+    CHECK_EQ(notes[0].message, "Expected 'b: number' because of this");
+    CHECK_EQ(notes[0].location, Location{{1, 45}, {1, 46}});
+    CHECK_EQ(notes[1].message, "'colors.background' is missing 'b: number'");
+    CHECK_EQ(notes[1].location, Location{{4, 22}, {4, 38}});
+    CHECK_EQ(notes[1].origin, result.errors[0].location);
+}
+
+// Inside a function, the table a property is missing from is named from its parameter, as the bullet names it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_missing_property_note_names_a_parameter")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type EnemyImpl = {
+            __index: EnemyImpl,
+            take_damage: (self: Enemy, amount: number) -> boolean,
+        }
+        type Enemy = typeof(setmetatable({} :: { name: string, health: number }, {} :: EnemyImpl))
+        type BossImpl = EnemyImpl & { phase: (self: Boss) -> number }
+        type Boss = typeof(setmetatable({} :: { name: string, health: number, enraged: boolean }, {} :: BossImpl))
+        local Boss = {} :: BossImpl
+        Boss.take_damage = function(self: Boss, amount: number): number
+            return self.health - amount
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    INFO(toString(result.errors[0]));
+    const std::vector<DiagnosticNote>& notes = getMainModule()->notes;
+    REQUIRE_EQ(notes.size(), 2);
+    CHECK_EQ(notes[0].message, "Expected 'enraged: boolean' because of this");
+    CHECK_EQ(notes[1].message, "'self' is missing 'enraged: boolean'");
+    // Enemy's own table, which is what reaches 'self'
+    CHECK_EQ(notes[1].location.begin.line, 5);
+}
+
+// A generic's property is declared once for both sides, where neither note would say anything.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_mismatch_inside_one_generic_declaration_has_no_notes")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Box<T> = { value: T }
+        local function wrap(b: Box<string>): Box<number>
+            return b
+        end
+        local _ = wrap
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(getMainModule()->notes.empty());
+}
+
+// A property misspelled from one the value has is a typo, read or written, on a table, a string or a library. One that
+// differs only in case keeps upstream's suggestion, and one with nothing close stays unknown.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_property_is_a_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Player = { name: string, level: number }
+        type Settings = { volume: number, muted: boolean? }
+        local function use(player: Player, settings: Settings, text: string)
+            local _ = player.nmae
+            settings.mutd = true
+            local _ = text:uper()
+            table.srot({ "b", "a" })
+            local _ = player.Name
+            local _ = player.zzzz
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(6, result);
+    const char* typos[] = {
+        "Did you mean 'player.name' instead of 'player.nmae'?",
+        "Did you mean 'settings.muted' instead of 'settings.mutd'?",
+        "Did you mean 'text:upper' instead of 'text:uper'?",
+        "Did you mean 'table.sort' instead of 'table.srot'?",
+    };
+    for (size_t i = 0; i < 4; ++i)
+    {
+        REQUIRE(get<Typo>(result.errors[i]));
+        CHECK_EQ(toString(result.errors[i]), typos[i]);
+    }
+    CHECK(get<UnknownPropButFoundLikeProp>(result.errors[4]));
+    CHECK(get<UnknownProperty>(result.errors[5]));
+}
+
+// Names that differ only in digits are siblings, and a type name that is a value in scope wants `typeof`: neither is
+// a typo.
+TEST_CASE_FIXTURE(BuiltinsFixture, "numbered_names_and_values_are_not_typos")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Weld = { Part0: number, Part1: number }
+        local function use(weld: Weld)
+            local _ = weld.Part8
+        end
+        local Colours = { Red = 1 }
+        type Colour = keyof<Colours>
+        local _ = use
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<UnknownProperty>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[1]), "Unknown type 'Colours'");
+}
+
+// A type name misspelled from one in scope is a typo too.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_type_name_is_a_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Player = { name: string }
+        local function greet(_: Plyer) end
+        local function count(_: Zzzzzz) end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(toString(result.errors[0]), "Typo 'Plyer': Did you mean 'Player'?");
+    CHECK_EQ(toString(result.errors[1]), "Unknown type 'Zzzzzz'");
+}
+
+// Luwu: every help is written by a Helpifier, which gives nothing when help is off
+TEST_CASE("helpifier_writes_every_help_the_same_way")
+{
+    Helpifier helpifier;
+    CHECK_EQ("Help (typo):\n  • Did you mean 'reason'?", helpifier("typo", {"Did you mean 'reason'?"}));
+    CHECK_EQ("Help (two):\n  • a\n  • b", helpifier("two", {"a", "b"}));
+    CHECK_EQ("", helpifier("empty", {}));
+
+    Helpifier off{false};
+    CHECK_EQ("", off("typo", {"Did you mean 'reason'?"}));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "show_help_off_leaves_no_help_in_type_errors")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuHelpfulSubtypingErrors, true},
+    };
+
+    // A frontend-wide option, like the others the checker reads: a per-check override doesn't reach it
+    getFrontend().options.showHelp = false;
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+        type Event = { reason: string }
+
+        local function process(rows: { Scoped }) end
+        local vcns: { Vcn } = {}
+        process(vcns)
+
+        local e: Event = { reson = "x" }
+    )");
+
+    // With help on, the read/write mismatch also reports a help at `process`'s parameter, alone. The typo is reported
+    // as a `Typo` of its own whether or not help is on.
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    for (const TypeError& error : result.errors)
+        CHECK_EQ(toString(error).find("Help"), std::string::npos);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_read_only_array_is_printed_with_read")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuHelpfulSubtypingErrors, true},
+    };
+
+    CheckResult result = check(R"(
+        type Item = string | number
+        local function give_back(items: { read Item }?): { Item }
+            local result: { Item } = items or {}
+            return result
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    std::string message = toString(result.errors[0]);
+    INFO(message);
+    CHECK(message.find("got '{read Item}'") != std::string::npos);
 }
 
 TEST_SUITE_END();

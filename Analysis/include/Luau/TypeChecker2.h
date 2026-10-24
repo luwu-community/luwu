@@ -10,6 +10,7 @@
 #include "Luau/Type.h"
 #include "Luau/TypeFwd.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/UnknownVariable.h"
 
 #include <memory>
 
@@ -88,7 +89,8 @@ void check(
     NotNull<TypeCheckLimits> limits,
     DcrLogger* logger,
     const SourceModule& sourceModule,
-    Module* module
+    Module* module,
+    Helpifier helpifier = {}
 );
 
 struct TypeChecker2
@@ -97,6 +99,8 @@ struct TypeChecker2
     NotNull<TypeFunctionRuntime> typeFunctionRuntime;
     DcrLogger* logger;
     const NotNull<TypeCheckLimits> limits;
+    // Luwu: writes the help in the errors this reports; off when the frontend's `showHelp` is
+    Helpifier helpifier;
     const NotNull<InternalErrorReporter> ice;
     const SourceModule* sourceModule;
     Module* module;
@@ -111,6 +115,8 @@ struct TypeChecker2
     mutable DenseHashMap<const AstExprFunction*, DenseHashSet<const AstLocal*>> initSelfAliases{nullptr};
 
     DenseHashSet<TypeId> seenTypeFunctionInstances{nullptr};
+    // Luwu: see requiredProperties
+    DenseHashMap<const TableType*, std::vector<std::string>> requiredPropertiesCache{nullptr};
 
     Normalizer normalizer;
     Subtyping _subtyping;
@@ -166,10 +172,54 @@ struct TypeChecker2
     // `getDeclarationIndex` the first time an error needs it, never on the clean path.
     struct DeclarationIndex;
     std::shared_ptr<DeclarationIndex> declarationIndex;
+
+    // Luwu: a call or index of a value that is `never` or has an error type (see UnreachableCodeUse, NoTypeUse).
+    // Returns whether `subjectType` is one; only types that are so without normalizing are recognized.
+    bool reportImproperUse(AstExpr* subject, TypeId subjectType, ImproperUse use);
+    void reportUnreachableUse(AstExpr* subject, ImproperUse use);
+    // Why the local read at `use` is `never`, when something the reader wrote says so; nullopt when it may be a type
+    // checker bug
+    std::optional<UnreachableCodeUse::Reason> unreachableReason(const AstExprLocal* use);
+    // The first error reported in `local`'s declaration, which explains what is wrong with its type
+    std::optional<Location> declarationError(const AstLocal* local);
+    std::optional<Location> firstErrorIn(const Location& range);
+    // The first error in an annotation, or in the declaration of an alias it names (`type Result = Nope`)
+    std::optional<Location> annotationError(AstNode* annotation);
+    // Why a local has no type: the error in its declaration, or the one behind another local with no type that its
+    // declaration uses (`local alias = w`). `root` is the local the chain starts at; it gets one error, at the first
+    // improper use of any local in the chain.
+    struct NoTypeCause
+    {
+        std::optional<Location> origin;
+        const AstLocal* root = nullptr;
+    };
+    NoTypeCause noTypeCause(const AstLocal* local, size_t depth = 0);
+    DenseHashMap<const AstLocal*, NoTypeCause> noTypeCauses{nullptr};
+    DenseHashSet<const AstLocal*> noTypeRootsReported{nullptr};
+    // Whether a value of the normalized type `norm` can't exist
+    bool isUninhabited(const NormalizedType* norm);
+    // A note on every use of an error-typed local that didn't get the error (see NoTypeUse)
+    void reportNoTypeNotes();
+    // Locals with an improper use reported: each gets one error
+    DenseHashSet<const AstLocal*> improperlyUsedLocals{nullptr};
+    // Every use of an error-typed local, and those reported as an improper use
+    std::vector<const AstExprLocal*> noTypeUses;
+    DenseHashSet<const AstExprLocal*> noTypeUsesReported{nullptr};
+    // Uses cast to a type (`self :: Class`): the cast gives the value a type, so they get no note
+    DenseHashSet<const AstExprLocal*> noTypeUsesCast{nullptr};
+    DenseHashMap<const AstLocal*, std::optional<Location>> declarationErrors{nullptr};
     const DeclarationIndex& getDeclarationIndex();
 
     bool testIsSubtype(TypeId subTy, TypeId superTy, Location location);
     bool testIsSubtype(TypePackId subTy, TypePackId superTy, Location location);
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait's version of a function a class writes in place of it, with `Self` as
+    // the class
+    struct OverriddenTraitFunction
+    {
+        const ExternType* trait;
+        TypeId function;
+    };
 
 private:
     static bool allowsNoReturnValues(const TypePackId tp);
@@ -216,8 +266,20 @@ private:
     void visit(AstStatDeclareGlobal* stat);
     void visit(AstStatDeclareExternType* stat);
     void visit(AstStatClass* stat);
-    // Luwu Traits (rfcs/classes/traits.md): the class's fields against the types of the fields its traits expect
+    bool worksAsTraitFunction(TypeId function, TypeId as, NotNull<Scope> scope);
+    void checkTraitFunctionOverride(
+        const ExternType* classType,
+        const Name& name,
+        TypeId override,
+        const std::vector<OverriddenTraitFunction>& versions,
+        Location location
+    );
+    // Luwu Traits (rfcs/classes/traits.md): the first parameter an override requires that the overridden function lacks
+    std::optional<std::string> requiredExtraParameter(TypeId override, TypeId overridden);
+    // Luwu Traits (rfcs/classes/traits.md): a trait function as a class has it, with the class for `Self`
+    TypeId traitFunctionFor(const ExternType* traitType, TypeId classTy, const Name& name, TypeId function);
     std::optional<TypeId> selfFieldFor(const ExternType* traitType, TypeId classTy, const Name& name);
+    // Luwu Traits (rfcs/classes/traits.md): the class's fields against the types of the fields its traits expect
     void checkTraitFieldExpectations(AstStatClass* stat);
     // Luwu Traits (rfcs/classes/traits.md): the class's constructor against the trait's expected `__init`
     void checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType);
@@ -260,7 +322,8 @@ private:
     void visit(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);
-    void visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy);
+    // `separator` is the `.` or `:` of `expr.propName`, and 0 for `expr["propName"]`.
+    void visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy, char separator);
     void visit(AstExprIndexName* indexName, ValueContext context);
     void indexExprMetatableHelper(AstExprIndexExpr* indexExpr, const MetatableType* metaTable, TypeId exprType, TypeId indexType);
     void visit(AstExprIndexExpr* indexExpr, ValueContext context);
@@ -305,11 +368,13 @@ private:
         std::optional<std::string> contextVerb = std::nullopt
     );
     void explainError(TypePackId subTy, TypePackId superTy, Location location, const SubtypingResult& result);
-    void reportPropertyTypos(AstExprTable* expr);
 
     bool testLiteralOrAstTypeIsSubtype(AstExpr* expr, TypeId expectedType);
 
     bool testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedType);
+    // Luwu: the properties a table literal checked against `table` has to write: readable and not optional. Cached, so
+    // literals checked against one wide record (150 optional fields) don't each test every field.
+    const std::vector<std::string>& requiredProperties(const TableType* table);
 
     void maybeReportSubtypingError(TypeId subTy, TypeId superTy, const Location& location);
     // Tests whether subTy is a subtype of superTy in the context of a function iterator for a for-in statement.
@@ -327,7 +392,19 @@ private:
         std::vector<TypeError>& errors
     );
     // If the provided type does not have the named property, report an error.
-    void checkIndexTypeFromType(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location, TypeId astIndexExprType);
+    // Returns whether `tableTy` can't exist (a `never` the normalizer had to work out), for the caller to report.
+    // `receiver` is how the indexed value is written before the property (`player.`), for a typo's message.
+    bool checkIndexTypeFromType(
+        TypeId tableTy,
+        const std::string& prop,
+        ValueContext context,
+        const Location& location,
+        TypeId astIndexExprType,
+        const std::string& receiver = ""
+    );
+    // Luwu (helpful subtyping errors): reports `error` for a property `tableTy` doesn't have, or a typo when it has one
+    // spelled almost the same.
+    void reportMissingProperty(TypeErrorData error, TypeId tableTy, const std::string& prop, const std::string& receiver, const Location& location);
     // If the named property is `private` on some user-defined class in tableTy's hierarchy, and
     // `location` falls outside of that class's own definition block, report an error.
     void checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location);
@@ -361,6 +438,11 @@ private:
 
     // Avoid duplicate warnings being emitted for the same global variable.
     DenseHashSet<std::string> warnedGlobals{""};
+
+    // Luwu: says why a name isn't a variable here. Created at the first unknown name.
+    std::unique_ptr<UnknownVariableExplainer> unknownVariables;
+    UnknownVariableExplainer& unknownVariableExplainer();
+    void reportUnknownVariable(const AstExprGlobal* expr, NotNull<Scope> scope);
 
     void suggestAnnotations(AstExprFunction* expr, TypeId ty);
 

@@ -24,6 +24,8 @@ LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
 LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuauExportValueTypecheck)
 
 using namespace Luau;
 
@@ -81,7 +83,16 @@ TEST_CASE_FIXTURE(Fixture, "UnknownGlobal")
     LintResult result = lint("--!nocheck\nreturn foo");
 
     REQUIRE(1 == result.warnings.size());
-    CHECK_EQ(result.warnings[0].text, "Unknown global 'foo'; consider assigning to it first");
+    CHECK_EQ(result.warnings[0].text, "Unknown variable 'foo', define it with 'local foo = value'");
+}
+
+// Luwu: the lint explains an unknown name the way the type checkers do
+TEST_CASE_FIXTURE(Fixture, "UnknownGlobalTypo")
+{
+    LintResult result = lint("--!nocheck\nlocal othername = 1\nreturn othername, othrname");
+
+    REQUIRE(1 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "Typo 'othrname': Did you mean 'othername'?");
 }
 
 TEST_CASE_FIXTURE(Fixture, "DeprecatedGlobal")
@@ -554,6 +565,26 @@ local _Roact = require(game.Packages.Roact)
 
     REQUIRE(1 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Import 'Roact' is never used; prefix with '_' to silence");
+}
+
+// Luwu: modules that require this one use what it exports. Upstream reports them as unused.
+TEST_CASE_FIXTURE(Fixture, "exported_locals_are_never_unused")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}};
+
+    LintResult result = lint(R"(
+export local version = "1.0"
+export const TAU = math.pi * 2
+export answer = 42
+export function greet()
+end
+export const function farewell()
+end
+local unused = 1
+)");
+
+    REQUIRE(1 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
 }
 
 TEST_CASE_FIXTURE(Fixture, "FunctionUnused")
@@ -3995,7 +4026,7 @@ if neither ~= nil then end -- ok: a different mistake, not this one
 local function _untyped(u) -- ok: unknown
     return u ~= nil
 end
-local a: any = nil
+local a = nil :: any -- an untyped value
 if a ~= none then end -- ok
 )");
 
@@ -4470,6 +4501,206 @@ return a, b, c, d
     // the warning points at the division, not the whole index
     CHECK_EQ(found[1].location, Location({3, 13}, {3, 20}));
     CHECK_EQ(found[2].location.begin.line, 6);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "DiscardedValuesReportsIfElseBranchesGivingMoreThanOneValue")
+{
+    LintResult result = lint(R"(
+local function f(a: number, b: number): number
+    return a + b
+end
+local function three(): (number, string, boolean)
+    return 1, "a", true
+end
+local function one(): number
+    return 1
+end
+local function rest(): (number, string, ...string)
+    return 1, "a"
+end
+local smth = math.random() > 0.5
+local succ, result = if smth then pcall(f, 1, 2) else nil, nil
+local x = if smth then one() elseif succ then three() else (three())
+local y = if smth then rest() else nil
+return succ, result, x, y
+)");
+
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : result.warnings)
+        if (warning.code == LintWarning::Code_DiscardedValues)
+            found.push_back(warning);
+
+    // `one()` gives one value, and the parentheses around the last `three()` silence it
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(
+        found[0].text,
+        "An if-else expression truncates this call to its first return, discarding 1 value. Wrap in parentheses to silence"
+    );
+    // the warning points at the call, not the whole if-else expression
+    CHECK_EQ(found[0].location, Location({14, 34}, {14, 48}));
+    CHECK_EQ(found[1].location.begin.line, 15);
+    CHECK(found[1].text.find("discarding 2 values") != std::string::npos);
+    CHECK(found[2].text.find("discarding 1 or more values") != std::string::npos);
+}
+
+// The warnings of `code` in `result`, in order
+static std::vector<LintWarning> warningsOf(const LintResult& result, LintWarning::Code code)
+{
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == code)
+            found.push_back(warning);
+    }
+    return found;
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AnyCastNeedsACommentSayingWhy")
+{
+    LintResult result = lint(R"(
+--!strict
+local function stub(): number
+    return nil :: any
+end
+local t = {}
+local a = t :: any
+local b = t :: any -- the solver can't see through t's metatable
+-- legacy table from before the types existed
+local c = t :: any
+return stub, a, b, c
+)");
+
+    // `stub` is a stub, `b` has a comment on its line and `c` one above it
+    std::vector<LintWarning> casts = warningsOf(result, LintWarning::Code_AnyCast);
+    REQUIRE_EQ(casts.size(), 1);
+    CHECK_EQ(casts[0].location.begin.line, 6);
+    CHECK_EQ(casts[0].text, "'t :: any' bypasses type checking; add a comment explaining why, or cast to 'unknown'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AnyAnnotationSuggestsUnknown")
+{
+    LintResult result = lint(R"(
+--!strict
+local function f(self: any, x: any, y: number)
+    local z: any = x
+    return z, y
+end
+type T = { this: any, value: any, list: { any } }
+return f
+)");
+
+    // `self` and `this` are exempt, and `{ any }` is the Any group's, which is off
+    std::vector<LintWarning> annotations = warningsOf(result, LintWarning::Code_AnyAnnotation);
+    REQUIRE_EQ(annotations.size(), 3);
+    CHECK_EQ(annotations[0].text, "Annotate 'x' with 'unknown' instead of 'any', which turns off type checking for it");
+    CHECK_EQ(annotations[1].location.begin.line, 3);
+    CHECK_EQ(annotations[2].location.begin.line, 6);
+    CHECK(warningsOf(result, LintWarning::Code_Any).empty());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AnyGroupReportsWhatItsPartsDont")
+{
+    LintResult result = lint(R"(
+--!strict
+--!lint Any
+--!nolint AnyCast
+local function f(x: number): { any }
+    return { x :: any }
+end
+return f
+)");
+
+    // AnyCast is off, so the group reports the cast as well as the return type
+    std::vector<LintWarning> any = warningsOf(result, LintWarning::Code_Any);
+    REQUIRE_EQ(any.size(), 2);
+    CHECK_EQ(any[0].text, "'any' turns off type checking here; use 'unknown' or the type this should be");
+    CHECK_EQ(any[0].location.begin.line, 4);
+    CHECK_EQ(any[1].location.begin.line, 5);
+    CHECK(warningsOf(result, LintWarning::Code_AnyCast).empty());
+}
+
+// AnyCast and AnyAnnotation are on by default only in Luwu modules
+TEST_CASE_FIXTURE(BuiltinsFixture, "AnyLintsAreOptInForLuauModules")
+{
+    const char* source = "--!strict\nlocal t = {}\nlocal a = t :: any\nreturn a\n";
+    configResolver.defaultConfig.language = Language::Luau;
+    CHECK(warningsOf(lint(source), LintWarning::Code_AnyCast).empty());
+    CHECK_EQ(warningsOf(lint(std::string("--!lint AnyCast\n") + source), LintWarning::Code_AnyCast).size(), 1);
+
+    LintResult scoped = lint(R"(
+--!strict
+local t = {}
+@[lint(AnyCast)]
+local function f()
+    return t :: any
+end
+local b = t :: any
+return f, b
+)");
+    // only the cast inside `f`
+    std::vector<LintWarning> casts = warningsOf(scoped, LintWarning::Code_AnyCast);
+    REQUIRE_EQ(casts.size(), 1);
+    CHECK_EQ(casts[0].location.begin.line, 5);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AnyLintsAreOffInNonstrictAndWithTheGroupOff")
+{
+    const char* cast = "local t = {}\nlocal a = t :: any\nlocal function f(x: any) return x end\nreturn a, f\n";
+
+    CHECK(warningsOf(lint(std::string("--!nonstrict\n") + cast), LintWarning::Code_AnyCast).empty());
+    CHECK(warningsOf(lint(std::string("--!strict\n--!nolint Any\n") + cast), LintWarning::Code_AnyAnnotation).empty());
+
+    LintResult scoped = lint(R"(
+--!strict
+local t = {}
+@[nolint(Any)]
+local function f(x: any)
+    return x, t :: any
+end
+return f
+)");
+    CHECK(warningsOf(scoped, LintWarning::Code_AnyCast).empty());
+    CHECK(warningsOf(scoped, LintWarning::Code_AnyAnnotation).empty());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")
+{
+    const std::string source = R"(
+local t = { 1, 2, 2 }
+local removed = table.drop(t, 2)
+local frozen = buffer.isfrozen(buffer.create(1))
+local owner = class.of
+local check = class.isinstance
+local function shadowed(table: { drop: () -> () })
+    table.drop()
+end
+return removed, frozen, shadowed, owner, check
+)";
+
+    // The module's language comes from its config, which the CLI and the language server set from the file extension
+    auto luwuOnly = [&](const ModuleName& name, Language language)
+    {
+        fileResolver.source[name] = source;
+        configResolver.configFiles[name].language = language;
+        std::vector<LintWarning> found;
+        for (const LintWarning& warning : lintModule(name).warnings)
+            if (warning.code == LintWarning::Code_LuwuOnlyApi)
+                found.push_back(warning);
+        return found;
+    };
+
+    // A local named `table` isn't the library, and upstream's `class` library has `isinstance` too
+    std::vector<LintWarning> inLuau = luwuOnly("game/a", Language::Luau);
+    REQUIRE_EQ(inLuau.size(), 3);
+    CHECK_EQ(inLuau[0].text, "'table.drop' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+    CHECK_EQ(inLuau[1].location, Location({3, 15}, {3, 30}));
+    CHECK_EQ(inLuau[2].text, "'class.of' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+
+    CHECK(luwuOnly("game/b", Language::Luwu).empty());
+
+    std::vector<LintWarning> inLua = luwuOnly("game/c", Language::Lua);
+    REQUIRE_EQ(inLua.size(), 3);
+    CHECK_EQ(inLua[0].text, "'table.drop' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsReportsPairsAndIpairsSeparately")

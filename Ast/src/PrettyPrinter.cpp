@@ -1164,10 +1164,12 @@ struct Printer
             {
                 writer.keyword("export");
 
+                // Luwu: `export value = y` has no keyword after `export`
                 if (a->keywordLocation.has_value())
+                {
                     advance(a->keywordLocation->begin);
-
-                writer.keyword(a->isConst ? "const" : "local");
+                    writer.keyword(a->isConst ? "const" : "local");
+                }
             }
             else if (a->isConst)
             {
@@ -1408,6 +1410,14 @@ struct Printer
             if (FFlag::LuauExportValueSyntax && a->name->isExported)
             {
                 writer.keyword("export");
+
+                // Luwu: `export const function f()`, whose `const` isn't at the keyword position `export` is
+                bool constWritten = cstNode && a->constKeywordBegin != Position::missing() && a->constKeywordBegin != cstNode->localKeywordPosition;
+                if (constWritten)
+                {
+                    advance(a->constKeywordBegin);
+                    writer.keyword("const");
+                }
             }
             else if (a->name->isConst)
             {

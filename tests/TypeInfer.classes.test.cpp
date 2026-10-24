@@ -2,6 +2,7 @@
 
 #include "ClassesFixture.h"
 #include "Fixture.h"
+#include "Typewriter.h"
 
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Error.h"
@@ -20,6 +21,7 @@ LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTINT(LuauSolverConstraintLimit)
@@ -1832,6 +1834,24 @@ TEST_CASE_FIXTURE(ClassesFixture, "missing_key_error_names_the_class_or_object_n
     CHECK_EQ("Field 'age' not found in class 'Dog'", toString(result.errors[1]));
 }
 
+// A compound assignment checks its target as a write and as a read; the typo is reported once.
+TEST_CASE_FIXTURE(ClassesFixture, "misspelled_field_is_one_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        class Player(name: string, level: number)
+            function promote(self)
+                self.levle += 1
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<Typo>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[0]), "Did you mean 'self.level' instead of 'self.levle'?");
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_from_inside_its_own_body")
 {
     ScopedFastFlag sffs[] = {
@@ -3566,6 +3586,27 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_implements_refines")
     CHECK_EQ("Dog", toString(requireTypeAtPosition({24, 27})));
 }
 
+// Luwu Traits (rfcs/classes/traits.md): with no specific trait known, a value that passes `class.implements` is still
+// what it was (an object), not an error type that silences everything after
+TEST_CASE_FIXTURE(ClassesFixture, "class_implements_with_any_trait_keeps_the_value")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Expect
+            private function expect_some(self, expected: trait)
+                if class.implements(self, expected) then
+                    local probe: number = self
+                end
+            end
+        end
+    )");
+
+    // `self` is still `Expect` in the branch, so the probe is an error instead of silently passing
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "trait_functions_through_the_trait")
 {
     ScopedFastFlag traits{FFlag::LuwuTraits, true};
@@ -3892,6 +3933,55 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_from_another_module")
     CheckResult modB = getFrontend().check("game/B");
     LUAU_REQUIRE_NO_ERRORS(modB);
     CHECK_EQ("string", toString(requireType("game/B", "h")));
+}
+
+// A trait needing one from another module is linked to it, so what that trait provides reaches the classes implementing
+// it, and a trait implemented alongside that needs the same root sees it provided
+TEST_CASE_FIXTURE(ClassesFixture, "trait_needing_a_trait_from_another_module")
+{
+    ScopedFastFlag _[3]{{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}, {FFlag::LuwuTraits, true}};
+
+    fileResolver.source["game/Core"] = R"(
+        export trait Markup
+            expect function render(self): string
+            function child_count(self): number
+                return 0
+            end
+        end
+
+        export trait Child needs Markup end
+
+        export trait Element needs Markup
+            expect const tag: string
+            function render(self): string
+                return `<{self.tag}>`
+            end
+        end
+    )";
+
+    fileResolver.source["game/Lists"] = R"(
+        local core = require(game.Core)
+
+        trait List needs core.Element
+            items: { string } = { "a", "b" }
+            function child_count(self): number
+                return #self.items
+            end
+        end
+
+        class UnorderedList implements List, core.Child
+            const tag = "ul"
+        end
+
+        local rendered = UnorderedList():render()
+        local count = UnorderedList():child_count()
+        local element: core.Element = UnorderedList()
+    )";
+
+    CheckResult result = getFrontend().check("game/Lists");
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("string", toString(requireType("game/Lists", "rendered")));
+    CHECK_EQ("number", toString(requireType("game/Lists", "count")));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "trait_values_are_traits_not_classes")
@@ -5324,4 +5414,281 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_parameter_named_self_wins")
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ("Thing", toString(requireType("t")));
 }
+
+// Luwu Traits (rfcs/classes/traits.md): typing traits, classes that implement them, and their uses
+const char* const kTraitTypewriterAfter = R"(
+local unrelated = 1
+print(unrelated + 1)
+)";
+
+TEST_CASE_FIXTURE(ClassesFixture, "typing_trait_declarations")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuDefaultArguments, true}};
+    const char* before = "local a = 1\n";
+
+    const char* members = "trait Greeter\n"
+                          "    expect name: string\n"
+                          "    greeting = \"hello\"\n"
+                          "\n"
+                          "    function greet(self): string\n"
+                          "        return self.greeting .. \", \" .. self.name\n"
+                          "    end\n"
+                          "end";
+    checkTypewriting(*this, before, members, kTraitTypewriterAfter);
+
+    const char* parameters = "trait Item(category: string, count = 0)\n"
+                             "    expect name: string\n"
+                             "    final kind = \"item\"\n"
+                             "    expect function used?(self)\n"
+                             "end";
+    checkTypewriting(*this, before, parameters, kTraitTypewriterAfter);
+
+    const char* access = "trait Toggle\n"
+                         "    expect private model: string\n"
+                         "    private on = false\n"
+                         "    public function toggle(self): boolean\n"
+                         "        self.on = not self.on\n"
+                         "        return self.on\n"
+                         "    end\n"
+                         "end";
+    checkTypewriting(*this, before, access, kTraitTypewriterAfter);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): an unannotated `__implemented` is given a `class<Trait>`, the hook isn't a member of
+// the implementing class, and a needing trait's own hook doesn't override the needed trait's final one
+TEST_CASE_FIXTURE(ClassesFixture, "implemented_hook_is_given_the_class")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Component
+            expect function render(self): string
+            final function __implemented(cls)
+                local _n: number = cls
+            end
+        end
+
+        trait Card needs Component
+            final function __implemented(cls) end
+        end
+
+        class Button implements Component
+            function render(self): string
+                return "button"
+            end
+        end
+
+        local _ = Button.__implemented
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+    const TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(tm);
+    CHECK_EQ(toString(tm->givenType), "class<Component>");
+    CHECK_EQ(result.errors[1].location.begin.line, 18);
+    CHECK(get<UnknownProperty>(result.errors[1]));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): typing a trait's `__implemented` hook
+TEST_CASE_FIXTURE(ClassesFixture, "typing_an_implemented_hook")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+    const char* before = "local a = 1\n";
+    const char* hook = "trait Component\n"
+                       "    final function __implemented(cls)\n"
+                       "        local registered = cls\n"
+                       "        print(registered)\n"
+                       "    end\n"
+                       "end";
+    checkTypewriting(*this, before, hook, kTraitTypewriterAfter);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typing_traits_that_need_and_classes_that_implement")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuDefaultArguments, true}};
+    const char* before = R"(trait Named
+    expect name: string
+end
+
+trait Item(category: string, count = 0)
+    function is_weapon(self): boolean
+        return self.category == "Weapon"
+    end
+end
+)";
+
+    const char* needs = "trait Greeter needs Named\n"
+                        "    function greet(self): string\n"
+                        "        return \"hi \" .. self.name\n"
+                        "    end\n"
+                        "end";
+    checkTypewriting(*this, before, needs, kTraitTypewriterAfter);
+
+    const char* implements = "class Cat implements Named\n"
+                             "    name = \"whiskers\"\n"
+                             "end";
+    checkTypewriting(*this, before, implements, kTraitTypewriterAfter);
+
+    const char* withArguments = "class Rifle implements Named, Item(\"Weapon\", 1)\n"
+                                "    name = \"rifle\"\n"
+                                "end";
+    checkTypewriting(*this, before, withArguments, kTraitTypewriterAfter);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typing_trait_uses")
+{
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    const char* before = R"(trait Greeter
+    expect name: string
+    function greet(self): string
+        return "hi " .. self.name
+    end
+end
+
+class Cat implements Greeter
+    name = "whiskers"
+end
+
+local value: unknown = nil
+)";
+
+    checkTypewriting(*this, before, "local s = Cat():greet()", kTraitTypewriterAfter);
+    checkTypewriting(*this, before, "local function welcome(g: Greeter): string\n    return g:greet()\nend", kTraitTypewriterAfter);
+    checkTypewriting(*this, before, "if class.implements(value, Greeter) then\n    print(value:greet())\nend", kTraitTypewriterAfter);
+}
+
+// Luwu Classes (rfcs/classes): a method calling itself on another instance is checked like a recursive local function,
+// with the signature its body is checked with
+TEST_CASE_FIXTURE(ClassesFixture, "methods_call_themselves_on_other_instances")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    CheckResult result = check(R"(
+class Node
+    children: { Node } = {}
+
+    function all(self): { Node }
+        local nodes: { Node } = { self }
+        for _, child in self.children do
+            for _, node in child:all() do
+                nodes[#nodes + 1] = node
+            end
+        end
+        return nodes
+    end
+
+    function count(self)
+        local total = 1
+        for _, child in self.children do
+            total += Node.count(child)
+        end
+        return total
+    end
+end
+local all = Node():all()
+local count = Node():count()
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("all")), "{Node}");
+    CHECK_EQ(toString(requireType("count")), "number");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class's function in place of a trait's has to work as the trait's: code holding
+// the trait calls it the trait's way
+TEST_CASE_FIXTURE(ClassesFixture, "trait_function_overrides_fit_the_trait")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+    // `Self` in a trait's signatures
+    ScopedFastFlag luwuGenericNominals{FFlag::LuwuGenericNominals, true};
+    CheckResult result = check(R"(
+trait Layout
+    function column(self): Self
+        return self
+    end
+    function merge(self, other: Self): Self
+        return self
+    end
+    function label(self, text: string, size: number?): string
+        return text
+    end
+end
+
+class Fine implements Layout
+    function column(self, title: string?): Fine
+        return self
+    end
+    function merge(self, other: Fine): Fine
+        return self
+    end
+    function label(self, text: string, size: number?, bold: boolean?): string
+        return text
+    end
+end
+
+class Footer implements Layout
+    function column(self, title: string, links: { string }): Footer
+        return self
+    end
+    function label(self, text: number): string
+        return ""
+    end
+end
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 26);
+    CHECK_EQ(toString(result.errors[0]), "'column' requires 'title', which trait 'Layout' doesn't pass when it calls 'column'; make 'title' optional");
+    CHECK_EQ(result.errors[1].location.begin.line, 29);
+    CHECK(get<TypeMismatch>(result.errors[1]));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): traits whose versions of a function can't be called each other's way conflict,
+// which no function in the class can resolve
+TEST_CASE_FIXTURE(ClassesFixture, "conflicting_trait_function_versions")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+    CheckResult result = check(R"(
+trait Named
+    function label(self, text: string): string
+        return text
+    end
+end
+trait Numbered
+    function label(self, index: number): number
+        return index
+    end
+end
+trait Titled
+    function label(self, text: string): string
+        return text
+    end
+end
+class Item implements Named, Numbered
+    function label(self, value: string): string
+        return value
+    end
+end
+class Same implements Named, Titled
+    function label(self, value: number): string
+        return ""
+    end
+end
+    )");
+
+    // `Same`'s traits agree, so it gets one ordinary mismatch rather than the conflict
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 17);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Traits 'Named' and 'Numbered' conflict on function 'label'.\n- 'Named' has 'label: (string) -> string'\n- 'Numbered' has 'label: "
+        "(number) -> number'\n\nHelp (conflicting trait functions):\n  - 'label' in class 'Item' can't be called as each of these at once\n"
+        "  - Rename 'label' in one of the traits"
+    );
+    CHECK_EQ(result.errors[1].location.begin.line, 22);
+    CHECK(get<TypeMismatch>(result.errors[1]));
+}
+
 TEST_SUITE_END();

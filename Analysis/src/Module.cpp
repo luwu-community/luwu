@@ -94,13 +94,18 @@ bool isWithinComment(const ParseResult& result, Position pos)
 
 bool isWithinHotComment(const std::vector<HotComment>& hotComments, Position pos)
 {
+    return findHotComment(hotComments, pos) != nullptr;
+}
+
+const HotComment* findHotComment(const std::vector<HotComment>& hotComments, Position pos)
+{
     for (const HotComment& hotComment : hotComments)
     {
         if (hotComment.location.containsClosed(pos))
-            return true;
+            return &hotComment;
     }
 
-    return false;
+    return nullptr;
 }
 
 bool isWithinHotComment(const SourceModule& sourceModule, Position pos)

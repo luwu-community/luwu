@@ -4,12 +4,15 @@
 #include "Luau/AstQuery.h"
 #include "Luau/AstUtils.h"
 #include "Luau/LinterConfig.h"
+#include "Luau/LuwuOnlyApi.h"
 #include "Luau/Module.h"
 #include "Luau/ParseResult.h"
 #include "Luau/PrettyPrinter.h"
 #include "Luau/Scope.h"
 #include "Luau/TypeInfer.h"
+#include "Luau/TypePack.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/UnknownVariable.h"
 #include "Luau/StringUtils.h"
 #include "Luau/ToString.h"
 #include "Luau/Common.h"
@@ -332,15 +335,32 @@ private:
 
     void report()
     {
+        // Luwu: an unknown global gets the type checkers' message
+        std::unique_ptr<UnknownVariableExplainer> unknownVariables;
+        std::vector<std::string> knownGlobals;
+        std::vector<DiagnosticNote> unusedNotes;
+
         for (size_t i = 0; i < globalRefs.size(); ++i)
         {
             AstExprGlobal* gv = globalRefs[i];
             Global* g = globals.find(gv->name);
 
             if (!g || (!g->assigned && !g->builtin && !g->declared))
-                emitWarning(
-                    *context, LintWarning::Code_UnknownGlobal, gv->location, "Unknown global '%s'; consider assigning to it first", gv->name.value
-                );
+            {
+                if (!context->warningEnabled(LintWarning::Code_UnknownGlobal))
+                    continue;
+                if (!unknownVariables)
+                {
+                    unknownVariables = std::make_unique<UnknownVariableExplainer>(context->root->as<AstStatBlock>());
+                    for (const auto& [name, global] : globals)
+                    {
+                        if (global.assigned || global.builtin)
+                            knownGlobals.emplace_back(name.value);
+                    }
+                }
+                UnknownSymbol error = unknownVariableError(*unknownVariables, gv, knownGlobals, unusedNotes);
+                emitWarning(*context, LintWarning::Code_UnknownGlobal, gv->location, "%s", unknownVariableMessage(error).c_str());
+            }
             else if (g->deprecated)
             {
                 if (const char* replacement = *g->deprecated; replacement && strlen(replacement))
@@ -1275,6 +1295,10 @@ private:
     {
         // Luwu: a name in parentheses is one the parser made, like an unnamed `match` subject's, which code can't use
         if (local->name.value[0] == '_' || local->name.value[0] == '(')
+            return;
+
+        // Luwu: an exported local is used by the modules that require it. Upstream reports it as unused.
+        if (local->isExported)
             return;
 
         if (info.function)
@@ -3521,11 +3545,7 @@ private:
 
     void report(const Location& location, const char* functionName, const AstAttr::DeprecatedInfo& info)
     {
-        std::string usePart = info.use ? format(", use '%s' instead", info.use->c_str()) : "";
-        std::string reasonPart = info.reason ? format(". %s", info.reason->c_str()) : "";
-        emitWarning(
-            *context, LintWarning::Code_DeprecatedApi, location, "Function '%s' is deprecated%s%s", functionName, usePart.c_str(), reasonPart.c_str()
-        );
+        reportAttributeDeprecation(location, "Function", functionName, info);
     }
 
     std::vector<const FunctionType*> functionTypeScopeStack;
@@ -4181,8 +4201,6 @@ private:
     }
 };
 
-static AstExpr* unparenthesized(AstExpr* expr);
-
 class LintMisleadingAndOr : AstVisitor
 {
 public:
@@ -4201,7 +4219,7 @@ private:
 
     void markCondition(AstExpr* expr)
     {
-        expr = unparenthesized(expr);
+        expr = unwrapGroup(expr);
         conditions.insert(expr);
 
         if (AstExprBinary* binary = expr->as<AstExprBinary>(); binary && (binary->op == AstExprBinary::And || binary->op == AstExprBinary::Or))
@@ -4258,7 +4276,7 @@ private:
         if (conditions.contains(node))
             return true;
 
-        AstExpr* last = unparenthesized(node->right);
+        AstExpr* last = unwrapGroup(node->right);
         if (last->is<AstExprConstantBool>())
             return true;
         if (AstExprUnary* unary = last->as<AstExprUnary>())
@@ -5725,18 +5743,7 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
             }
             else
             {
-                static const char* kHotComments[] = {
-                    "nolint",
-                    "lint",
-                    "nocheck",
-                    "nonstrict",
-                    "strict",
-                    "optimize",
-                    "native",
-                    "trust",
-                };
-
-                if (const char* suggestion = fuzzyMatch(first, kHotComments, std::size(kHotComments)))
+                if (const char* suggestion = fuzzyMatch(first, kCommentDirectives, std::size(kCommentDirectives)))
                     emitWarning(
                         context,
                         LintWarning::Code_CommentDirective,
@@ -5781,12 +5788,24 @@ static bool hasNativeCommentDirective(const std::vector<HotComment>& hotcomments
     return hasHeaderCommentDirective(hotcomments, "native");
 }
 
-static AstExpr* unparenthesized(AstExpr* expr)
+// Luwu: a visitor told about every assignment target: `x` in `x = v` and in `x += v`
+struct AssignmentTargetVisitor : AstVisitor
 {
-    while (AstExprGroup* group = expr->as<AstExprGroup>())
-        expr = group->expr;
-    return expr;
-}
+    virtual void assigned(AstExpr* target) = 0;
+
+    bool visit(AstStatAssign* node) override
+    {
+        for (AstExpr* var : node->vars)
+            assigned(var);
+        return true;
+    }
+
+    bool visit(AstStatCompoundAssign* node) override
+    {
+        assigned(node->var);
+        return true;
+    }
+};
 
 // A short name for a value in a lint message (`x`, `t.value`, `obj:method`), or nullopt when it has none.
 static std::optional<std::string> shortExprName(AstExpr* expr)
@@ -6030,7 +6049,7 @@ private:
 
         bool visit(AstExprIndexName* node) override
         {
-            AstExprLocal* indexed = unparenthesized(node->expr)->as<AstExprLocal>();
+            AstExprLocal* indexed = unwrapGroup(node->expr)->as<AstExprLocal>();
             if (indexed && indexed->local == local)
                 found = true;
             return !found;
@@ -6044,8 +6063,10 @@ private:
 
     // `a.field:method(...)` calls in one function, by `a` and `field`, not counting nested functions. A field the
     // function also assigns can't be read into a local once, so those are marked.
-    struct FieldMethodCallCounter : AstVisitor
+    struct FieldMethodCallCounter : AssignmentTargetVisitor
     {
+        using AssignmentTargetVisitor::visit;
+
         struct Calls
         {
             AstExprIndexName* field = nullptr; // the first `a.field` called through
@@ -6058,8 +6079,8 @@ private:
         // `a.field` as a key, or nullopt when it isn't one
         static std::optional<std::pair<AstLocal*, AstName>> keyOf(AstExpr* expr)
         {
-            AstExprIndexName* field = unparenthesized(expr)->as<AstExprIndexName>();
-            AstExprLocal* base = field && field->op == '.' ? unparenthesized(field->expr)->as<AstExprLocal>() : nullptr;
+            AstExprIndexName* field = unwrapGroup(expr)->as<AstExprIndexName>();
+            AstExprLocal* base = field && field->op == '.' ? unwrapGroup(field->expr)->as<AstExprLocal>() : nullptr;
             if (!base)
                 return std::nullopt;
 
@@ -6083,7 +6104,7 @@ private:
             return calls.back().second;
         }
 
-        void markAssigned(AstExpr* target)
+        void assigned(AstExpr* target) override
         {
             if (std::optional<std::pair<AstLocal*, AstName>> key = keyOf(target))
                 entry(*key).assigned = true;
@@ -6098,21 +6119,8 @@ private:
 
             Calls& counted = entry(*key);
             if (!counted.field)
-                counted.field = unparenthesized(method->expr)->as<AstExprIndexName>();
+                counted.field = unwrapGroup(method->expr)->as<AstExprIndexName>();
             ++counted.count;
-            return true;
-        }
-
-        bool visit(AstStatAssign* node) override
-        {
-            for (AstExpr* var : node->vars)
-                markAssigned(var);
-            return true;
-        }
-
-        bool visit(AstStatCompoundAssign* node) override
-        {
-            markAssigned(node->var);
             return true;
         }
 
@@ -6142,7 +6150,7 @@ private:
     // The local `x`, `x ~= nil` or `x ~= none` narrows when it's true
     static AstExprLocal* narrowedLocal(AstExpr* condition)
     {
-        condition = unparenthesized(condition);
+        condition = unwrapGroup(condition);
         if (AstExprLocal* local = condition->as<AstExprLocal>())
             return local;
 
@@ -6150,8 +6158,8 @@ private:
         if (!binary || binary->op != AstExprBinary::CompareNe)
             return nullptr;
 
-        AstExpr* value = unparenthesized(binary->left);
-        AstExpr* sentinel = unparenthesized(binary->right);
+        AstExpr* value = unwrapGroup(binary->left);
+        AstExpr* sentinel = unwrapGroup(binary->right);
         if (isNilOrNone(value))
             std::swap(value, sentinel);
 
@@ -6303,7 +6311,7 @@ private:
         if (!library || library->name != "math" || function->index != "floor" || node->args.size != 1)
             return;
 
-        AstExprBinary* division = unparenthesized(node->args.data[0])->as<AstExprBinary>();
+        AstExprBinary* division = unwrapGroup(node->args.data[0])->as<AstExprBinary>();
         if (!division || division->op != AstExprBinary::Div)
             return;
 
@@ -6402,8 +6410,8 @@ private:
 // Luwu: whether `a` and `b` name the same variable or field chain (`x`, `t.items`)
 static bool sameTarget(AstExpr* a, AstExpr* b)
 {
-    a = unparenthesized(a);
-    b = unparenthesized(b);
+    a = unwrapGroup(a);
+    b = unwrapGroup(b);
 
     if (AstExprLocal* localA = a->as<AstExprLocal>())
     {
@@ -6425,7 +6433,7 @@ static bool sameTarget(AstExpr* a, AstExpr* b)
 // Luwu: `expr` quoted for a message, or `fallback` when it has no short name
 static std::string describe(AstExpr* expr, const char* fallback)
 {
-    std::optional<std::string> name = shortExprName(unparenthesized(expr));
+    std::optional<std::string> name = shortExprName(unwrapGroup(expr));
     return name ? "'" + *name + "'" : std::string(fallback);
 }
 
@@ -6537,13 +6545,13 @@ private:
     // The binding a target is reached through: `s` for `s` and `s.parts.text`
     static AstLocal* rootLocal(AstExpr* target)
     {
-        target = unparenthesized(target);
+        target = unwrapGroup(target);
         while (true)
         {
             if (AstExprIndexName* index = target->as<AstExprIndexName>())
-                target = unparenthesized(index->expr);
+                target = unwrapGroup(index->expr);
             else if (AstExprIndexExpr* index = target->as<AstExprIndexExpr>())
-                target = unparenthesized(index->expr);
+                target = unwrapGroup(index->expr);
             else
                 break;
         }
@@ -6576,7 +6584,7 @@ private:
     // local
     static bool outlives(AstExpr* target, AstStat* loop)
     {
-        AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
+        AstExprLocal* local = unwrapGroup(target)->as<AstExprLocal>();
         return !local || local->local->location.begin < loop->location.begin;
     }
 
@@ -6638,7 +6646,7 @@ private:
         if (node->vars.size != 1 || node->values.size != 1)
             return true;
 
-        AstExprBinary* value = unparenthesized(node->values.data[0])->as<AstExprBinary>();
+        AstExprBinary* value = unwrapGroup(node->values.data[0])->as<AstExprBinary>();
         if (value && value->op == AstExprBinary::Concat && sameTarget(value->left, node->vars.data[0]))
             reportConcat(node->vars.data[0], node->location);
 
@@ -6647,7 +6655,7 @@ private:
 
     static bool isConstantOne(AstExpr* expr)
     {
-        AstExprConstantNumber* number = unparenthesized(expr)->as<AstExprConstantNumber>();
+        AstExprConstantNumber* number = unwrapGroup(expr)->as<AstExprConstantNumber>();
         return number && number->value == 1.0;
     }
 
@@ -7042,8 +7050,10 @@ private:
     DenseHashSet<AstLocal*> captured{nullptr};
     DenseHashSet<AstLocal*> capturedWrites{nullptr};
 
-    struct CaptureCollector : AstVisitor
+    struct CaptureCollector : AssignmentTargetVisitor
     {
+        using AssignmentTargetVisitor::visit;
+
         DenseHashSet<AstLocal*>* captured;
         DenseHashSet<AstLocal*>* capturedWrites;
 
@@ -7053,9 +7063,9 @@ private:
         {
         }
 
-        void write(AstExpr* target)
+        void assigned(AstExpr* target) override
         {
-            AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
+            AstExprLocal* local = unwrapGroup(target)->as<AstExprLocal>();
             if (local && local->upvalue)
                 capturedWrites->insert(local->local);
         }
@@ -7066,25 +7076,12 @@ private:
                 captured->insert(node->local);
             return true;
         }
-
-        bool visit(AstStatAssign* node) override
-        {
-            for (AstExpr* var : node->vars)
-                write(var);
-            return true;
-        }
-
-        bool visit(AstStatCompoundAssign* node) override
-        {
-            write(node->var);
-            return true;
-        }
     };
 
     // `name(...)`, `lib.name(...)` or `obj:name(...)`: the last name in the callee
     static std::optional<std::string_view> calleeName(AstExprCall* call)
     {
-        AstExpr* func = unparenthesized(call->func);
+        AstExpr* func = unwrapGroup(call->func);
         if (AstExprGlobal* global = func->as<AstExprGlobal>())
             return std::string_view(global->name.value);
         if (AstExprLocal* local = func->as<AstExprLocal>())
@@ -7281,7 +7278,7 @@ private:
 
     static bool collectConditionReads(AstExpr* expr, ConditionReads& reads)
     {
-        expr = unparenthesized(expr);
+        expr = unwrapGroup(expr);
 
         if (AstExprLocal* local = expr->as<AstExprLocal>())
         {
@@ -7297,7 +7294,7 @@ private:
         {
             if (unary->op == AstExprUnary::Op::Len)
             {
-                AstExprLocal* table = unparenthesized(unary->expr)->as<AstExprLocal>();
+                AstExprLocal* table = unwrapGroup(unary->expr)->as<AstExprLocal>();
                 if (!table)
                     return false;
                 reads.lengths.push_back(table->local);
@@ -7325,7 +7322,7 @@ private:
 
         bool isConditionLocal(AstExpr* expr) const
         {
-            AstExprLocal* local = unparenthesized(expr)->as<AstExprLocal>();
+            AstExprLocal* local = unwrapGroup(expr)->as<AstExprLocal>();
             return local && std::find(reads->locals.begin(), reads->locals.end(), local->local) != reads->locals.end();
         }
 
@@ -7350,7 +7347,7 @@ private:
         // Reading an element of a table leaves its length alone; any other use of it might not
         bool visit(AstExprIndexExpr* node) override
         {
-            AstExprLocal* table = unparenthesized(node->expr)->as<AstExprLocal>();
+            AstExprLocal* table = unwrapGroup(node->expr)->as<AstExprLocal>();
             if (table && isLengthTable(table->local))
             {
                 node->index->visit(this);
@@ -7428,7 +7425,7 @@ private:
         if (loop->values.size == 0)
             return {};
 
-        AstExpr* first = unparenthesized(loop->values.data[0]);
+        AstExpr* first = unwrapGroup(loop->values.data[0]);
         if (AstExprCall* call = first->as<AstExprCall>())
         {
             AstExprGlobal* callee = call->func->as<AstExprGlobal>();
@@ -7469,7 +7466,7 @@ private:
             AstExprIndexName* function = node->func->as<AstExprIndexName>();
             AstExprGlobal* library = function ? function->expr->as<AstExprGlobal>() : nullptr;
             bool isRemove = library && library->name == "table" && function->index == "remove" && node->args.size == 2;
-            AstExprLocal* removed = isRemove ? unparenthesized(node->args.data[1])->as<AstExprLocal>() : nullptr;
+            AstExprLocal* removed = isRemove ? unwrapGroup(node->args.data[1])->as<AstExprLocal>() : nullptr;
             if (removed && removed->local == index && sameTarget(node->args.data[0], table))
                 found = node;
             return !found;
@@ -7560,7 +7557,7 @@ private:
 
         AstLocal* loopVariable(AstExpr* target)
         {
-            AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>();
+            AstExprLocal* local = unwrapGroup(target)->as<AstExprLocal>();
             if (!local || std::find(vars->begin(), vars->end(), local->local) == vars->end())
                 return nullptr;
             return local->local;
@@ -7573,7 +7570,7 @@ private:
                 if (AstLocal* local = loopVariable(var))
                 {
                     writes.emplace_back(node, local);
-                    writeTargets.insert(unparenthesized(var)->as<AstExprLocal>());
+                    writeTargets.insert(unwrapGroup(var)->as<AstExprLocal>());
                 }
             }
             return true;
@@ -7641,7 +7638,7 @@ private:
 
             std::string fix = "write through the table instead";
             Iterated iterated = iteratedTable(forIn);
-            std::optional<std::string> tableName = iterated.table ? shortExprName(unparenthesized(iterated.table)) : std::nullopt;
+            std::optional<std::string> tableName = iterated.table ? shortExprName(unwrapGroup(iterated.table)) : std::nullopt;
             bool namedKey = forIn->vars.size >= 2 && std::string_view(forIn->vars.data[0]->name.value) != "_";
             if (tableName && namedKey && local == forIn->vars.data[1])
                 fix = "write through the table instead ('" + *tableName + "[" + forIn->vars.data[0]->name.value + "] = ...')";
@@ -7672,10 +7669,10 @@ private:
 
         bool writesOtherKey(AstExpr* target) const
         {
-            target = unparenthesized(target);
+            target = unwrapGroup(target);
             if (AstExprIndexExpr* index = target->as<AstExprIndexExpr>())
             {
-                AstExprLocal* indexLocal = unparenthesized(index->index)->as<AstExprLocal>();
+                AstExprLocal* indexLocal = unwrapGroup(index->index)->as<AstExprLocal>();
                 bool ownKey = key && indexLocal && indexLocal->local == key;
                 return sameTarget(index->expr, table) && !ownKey;
             }
@@ -7753,8 +7750,8 @@ private:
         checkUselessLoop(node, node->body, /* takesFirstItem */ false);
 
         // `for i = 1, #t` (counting up) is a forward pass over `t`
-        AstExprUnary* length = unparenthesized(node->to)->as<AstExprUnary>();
-        AstExprConstantNumber* step = node->step ? unparenthesized(node->step)->as<AstExprConstantNumber>() : nullptr;
+        AstExprUnary* length = unwrapGroup(node->to)->as<AstExprUnary>();
+        AstExprConstantNumber* step = node->step ? unwrapGroup(node->step)->as<AstExprConstantNumber>() : nullptr;
         bool countsUp = !node->step || (step && step->value > 0);
         if (length && length->op == AstExprUnary::Op::Len && countsUp)
             checkRemoveWhileIterating(length->expr, node->var, node->body);
@@ -7813,7 +7810,7 @@ private:
                 start = node->args.data[0];
         }
 
-        AstExprConstantNumber* zero = start ? unparenthesized(start)->as<AstExprConstantNumber>() : nullptr;
+        AstExprConstantNumber* zero = start ? unwrapGroup(start)->as<AstExprConstantNumber>() : nullptr;
         if (!zero || zero->value != 0.0)
             return true;
 
@@ -7872,8 +7869,10 @@ private:
     DenseHashSet<AstLocal*> containerLocals{nullptr};
     DenseHashSet<AstLocal*> assignedLocals{nullptr};
 
-    struct ContainerLocalCollector : AstVisitor
+    struct ContainerLocalCollector : AssignmentTargetVisitor
     {
+        using AssignmentTargetVisitor::visit;
+
         DenseHashSet<AstLocal*>* containerLocals;
         DenseHashSet<AstLocal*>* assignedLocals;
 
@@ -7897,29 +7896,16 @@ private:
         {
             for (size_t i = 0; i < node->vars.size && i < node->values.size; ++i)
             {
-                if (unparenthesized(node->values.data[i])->is<AstExprTable>())
+                if (unwrapGroup(node->values.data[i])->is<AstExprTable>())
                     containerLocals->insert(node->vars.data[i]);
             }
             return true;
         }
 
-        void assigned(AstExpr* target)
+        void assigned(AstExpr* target) override
         {
-            if (AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>())
+            if (AstExprLocal* local = unwrapGroup(target)->as<AstExprLocal>())
                 assignedLocals->insert(local->local);
-        }
-
-        bool visit(AstStatAssign* node) override
-        {
-            for (AstExpr* var : node->vars)
-                assigned(var);
-            return true;
-        }
-
-        bool visit(AstStatCompoundAssign* node) override
-        {
-            assigned(node->var);
-            return true;
         }
     };
 
@@ -7929,8 +7915,8 @@ private:
         if (!enabled.newValueComparison || (node->op != AstExprBinary::CompareEq && node->op != AstExprBinary::CompareNe))
             return true;
 
-        AstExpr* left = unparenthesized(node->left);
-        AstExpr* right = unparenthesized(node->right);
+        AstExpr* left = unwrapGroup(node->left);
+        AstExpr* right = unwrapGroup(node->right);
         bool table = left->is<AstExprTable>() || right->is<AstExprTable>();
         bool function = left->is<AstExprFunction>() || right->is<AstExprFunction>();
         if (!table && !function)
@@ -7977,10 +7963,10 @@ private:
         if (!enabled.tableTruthiness)
             return;
 
-        condition = unparenthesized(condition);
+        condition = unwrapGroup(condition);
         AstExprUnary* negation = condition->as<AstExprUnary>();
         bool negated = negation && negation->op == AstExprUnary::Op::Not;
-        AstExpr* tested = negated ? unparenthesized(negation->expr) : condition;
+        AstExpr* tested = negated ? unwrapGroup(negation->expr) : condition;
         if (!isContainer(tested))
             return;
 
@@ -8109,6 +8095,12 @@ private:
         return library && isPureBuiltin(library->name.value, function->index.value);
     }
 
+    // `const _ = ...`, how to discard a result on purpose
+    static std::string discardOnPurpose(AstExprCall* call)
+    {
+        return "const _ = " + shortExprName(call->func).value_or("f") + "(...)";
+    }
+
     bool visit(AstStatExpr* node) override
     {
         if (!enabled.discardedResult)
@@ -8118,16 +8110,14 @@ private:
         if (!call)
             return true;
 
-        std::string callee = describe(call->func, "this function");
-
-        // `const _ = ...` is how to discard a result on purpose
-        std::string discard = "const _ = " + shortExprName(call->func).value_or("f") + "(...)";
-
         if (callsPureBuiltin(call))
         {
+            std::string callee = describe(call->func, "this function");
+            std::string discard = discardOnPurpose(call);
+
             // `s:upper()` on its own line: strings can't be changed in place
             AstExprIndexName* method = call->self ? call->func->as<AstExprIndexName>() : nullptr;
-            std::optional<std::string> receiver = method ? shortExprName(unparenthesized(method->expr)) : std::nullopt;
+            std::optional<std::string> receiver = method ? shortExprName(unwrapGroup(method->expr)) : std::nullopt;
             if (receiver)
                 emitWarning(
                     *context,
@@ -8160,6 +8150,8 @@ private:
         if (!function || !function->isNodiscard)
             return true;
 
+        std::string callee = describe(call->func, "this function");
+        std::string discard = discardOnPurpose(call);
         std::string reason = function->nodiscardReason.empty() ? std::string() : ": " + function->nodiscardReason;
         emitWarning(
             *context,
@@ -8196,32 +8188,19 @@ private:
     LintContext* context;
     DenseHashSet<AstLocal*> assigned{nullptr};
 
-    struct AssignmentCollector : AstVisitor
+    struct AssignmentCollector : AssignmentTargetVisitor
     {
-        DenseHashSet<AstLocal*>* assigned;
+        DenseHashSet<AstLocal*>* assignedLocals;
 
-        explicit AssignmentCollector(DenseHashSet<AstLocal*>* assigned)
-            : assigned(assigned)
+        explicit AssignmentCollector(DenseHashSet<AstLocal*>* assignedLocals)
+            : assignedLocals(assignedLocals)
         {
         }
 
-        void write(AstExpr* target)
+        void assigned(AstExpr* target) override
         {
-            if (AstExprLocal* local = unparenthesized(target)->as<AstExprLocal>())
-                assigned->insert(local->local);
-        }
-
-        bool visit(AstStatAssign* node) override
-        {
-            for (AstExpr* var : node->vars)
-                write(var);
-            return true;
-        }
-
-        bool visit(AstStatCompoundAssign* node) override
-        {
-            write(node->var);
-            return true;
+            if (AstExprLocal* local = unwrapGroup(target)->as<AstExprLocal>())
+                assignedLocals->insert(local->local);
         }
     };
 
@@ -8291,7 +8270,7 @@ private:
     // in between (`math.floor(n / 2)`) makes its own value, so it isn't looked into.
     static AstExprBinary* findDivision(AstExpr* expr)
     {
-        expr = unparenthesized(expr);
+        expr = unwrapGroup(expr);
 
         if (AstExprBinary* binary = expr->as<AstExprBinary>())
         {
@@ -8324,6 +8303,317 @@ private:
                 "integer"
             );
 
+        return true;
+    }
+};
+
+// Luwu: a call giving more than one value where only one value is kept: a branch of an if-else expression. An if-else
+// expression gives exactly one value, so the rest are dropped: `local ok, err = if c then pcall(f) else nil, nil` sets `err` to the
+// second `nil`, never to what `pcall` gives. Parentheses around the branch say the truncation is meant.
+// Luwu: `any` in a type, which turns off type checking for everything it touches. AnyCast reports `x :: any` without a
+// comment saying why, on its line or the line above; a stub whose whole body is `return nil :: any` is left alone.
+// AnyAnnotation reports `any` as a parameter's, local's or property's whole annotation, except for `self` and `this`.
+// The Any group, when it's on, reports every other `any` in a type, and the ones whose part is off. Strict modules
+// only: nonstrict code is unchecked anyway.
+class LintAny : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context, const std::vector<Comment>* comments)
+    {
+        LintAny pass;
+        pass.context = &context;
+        pass.comments = comments;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    const std::vector<Comment>* comments;
+    // The `any`s a part that is on covers, so the group's own check leaves them to it, and the exempt ones
+    DenseHashSet<AstType*> covered{nullptr};
+
+    static bool isAny(AstType* type)
+    {
+        AstTypeReference* reference = type ? type->as<AstTypeReference>() : nullptr;
+        return reference && !reference->prefix && !reference->hasParameterList && reference->name == "any";
+    }
+
+    // Whether the part reports in this module; the group's check reports what a part that is off would have
+    bool partOn(LintWarning::Code part)
+    {
+        return context->warningEnabled(part);
+    }
+
+    bool hasReasonComment(const Location& cast)
+    {
+        if (!comments)
+            return false;
+
+        for (const Comment& comment : *comments)
+        {
+            bool sameLine = comment.location.begin.line >= cast.begin.line && comment.location.begin.line <= cast.end.line;
+            bool lineAbove = comment.location.end.line + 1 == cast.begin.line;
+            if (sameLine || lineAbove)
+                return true;
+        }
+
+        return false;
+    }
+
+    // `return nil :: any` as a function's whole body, a stub that only has to typecheck
+    static bool isStubReturn(AstExprFunction* function, AstExprTypeAssertion* cast)
+    {
+        if (!function || function->body->body.size != 1)
+            return false;
+
+        AstStatReturn* ret = function->body->body.data[0]->as<AstStatReturn>();
+        return ret && ret->list.size == 1 && ret->list.data[0] == cast && cast->expr->is<AstExprConstantNil>();
+    }
+
+    static std::string nameOf(AstExpr* expr)
+    {
+        if (AstExprLocal* local = expr->as<AstExprLocal>())
+            return local->local->name.value;
+        if (AstExprGlobal* global = expr->as<AstExprGlobal>())
+            return global->name.value;
+        return "";
+    }
+
+    // The innermost function the cast is in
+    std::vector<AstExprFunction*> functions;
+
+    bool visit(AstExprFunction* node) override
+    {
+        for (AstLocal* arg : node->args)
+            checkAnnotation(arg->name.value, arg->annotation);
+
+        functions.push_back(node);
+        node->body->visit(this);
+        functions.pop_back();
+
+        // the annotations were visited above; the rest of the signature is the group's
+        for (AstLocal* arg : node->args)
+        {
+            if (arg->annotation)
+                arg->annotation->visit(this);
+        }
+        if (node->varargAnnotation)
+            node->varargAnnotation->visit(this);
+        if (node->returnAnnotation)
+            node->returnAnnotation->visit(this);
+        return false;
+    }
+
+    bool visit(AstExprTypeAssertion* node) override
+    {
+        if (!isAny(node->annotation) || !partOn(LintWarning::Code_AnyCast))
+            return true;
+
+        covered.insert(node->annotation);
+
+        AstExprFunction* function = functions.empty() ? nullptr : functions.back();
+        if (isStubReturn(function, node) || hasReasonComment(node->location))
+            return true;
+
+        std::string name = nameOf(node->expr);
+        if (name.empty())
+            emitWarning(
+                *context,
+                LintWarning::Code_AnyCast,
+                node->location,
+                "This cast to 'any' bypasses type checking; add a comment explaining why, or cast to 'unknown'"
+            );
+        else
+            emitWarning(
+                *context,
+                LintWarning::Code_AnyCast,
+                node->location,
+                "'%s :: any' bypasses type checking; add a comment explaining why, or cast to 'unknown'",
+                name.c_str()
+            );
+        return true;
+    }
+
+    void checkAnnotation(const char* name, AstType* annotation)
+    {
+        if (!isAny(annotation))
+            return;
+
+        // `self` and `this` are exempt from the group too
+        bool selfOrThis = strcmp(name, "self") == 0 || strcmp(name, "this") == 0;
+        if (selfOrThis)
+            covered.insert(annotation);
+        if (selfOrThis || !partOn(LintWarning::Code_AnyAnnotation))
+            return;
+
+        covered.insert(annotation);
+
+        emitWarning(
+            *context,
+            LintWarning::Code_AnyAnnotation,
+            annotation->location,
+            "Annotate '%s' with 'unknown' instead of 'any', which turns off type checking for it",
+            name
+        );
+    }
+
+    bool visit(AstStatLocal* node) override
+    {
+        for (AstLocal* local : node->vars)
+            checkAnnotation(local->name.value, local->annotation);
+        return true;
+    }
+
+    bool visit(AstStatClass* node) override
+    {
+        if (node->primaryConstructor)
+        {
+            for (AstLocal* arg : node->primaryConstructor->args)
+                checkAnnotation(arg->name.value, arg->annotation);
+        }
+
+        for (const AstClassMember& member : node->members)
+        {
+            if (const AstClassProperty* property = member.get_if<AstClassProperty>())
+                checkAnnotation(property->name.value, property->ty);
+        }
+        return true;
+    }
+
+    bool visit(AstTypeTable* node) override
+    {
+        for (const AstTableProp& prop : node->props)
+            checkAnnotation(prop.name.value, prop.type);
+        return true;
+    }
+
+    bool visit(AstTypeReference* node) override
+    {
+        if (isAny(node) && !covered.contains(node) && context->warningEnabled(LintWarning::Code_Any))
+            emitWarning(
+                *context,
+                LintWarning::Code_Any,
+                node->location,
+                "'any' turns off type checking here; use 'unknown' or the type this should be"
+            );
+        return true;
+    }
+
+    bool visit(AstType* node) override
+    {
+        return true;
+    }
+
+    bool visit(AstTypePack* node) override
+    {
+        return true;
+    }
+};
+
+// Luwu: a Luwu-only library member read in a Luau or Lua module (its config's `language`, from a `.luau` or `.lua`
+// file), as `library.member` or as a method on a value of that library's type (`s:startswith`, a `string` method). Luwu
+// code goes in `.luwu` files. The members are isLuwuOnlyMember's.
+class LintLuwuOnlyApi : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        if (!context.module || context.module->language == Language::Luwu)
+            return;
+
+        LintLuwuOnlyApi pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // The library `node` reads a member of: a global library (`table.drop`), or `string` for a method on a string. A
+    // local named `table` is the reader's own, so it doesn't count.
+    std::optional<std::string> libraryOf(AstExprIndexName* node)
+    {
+        if (node->op == '.')
+        {
+            if (AstExprGlobal* global = node->expr->as<AstExprGlobal>())
+                return std::string(global->name.value);
+            return std::nullopt;
+        }
+
+        std::optional<TypeId> receiver = context->getType(node->expr);
+        if (receiver && isString(follow(*receiver)))
+            return std::string("string");
+        return std::nullopt;
+    }
+
+    bool visit(AstExprIndexName* node) override
+    {
+        std::optional<std::string> library = libraryOf(node);
+        if (!library || !isLuwuOnlyMember(*library, node->index.value))
+            return true;
+
+        std::string qualified = *library + "." + node->index.value;
+        const char* language = context->module->language == Language::Lua ? "Lua" : "Luau";
+        emitWarning(
+            *context,
+            LintWarning::Code_LuwuOnlyApi,
+            node->location,
+            "'%s' only exists in Luwu, but this is a %s file; rename it to '.luwu' if it's Luwu code",
+            qualified.c_str(),
+            language
+        );
+        return true;
+    }
+};
+
+class LintDiscardedValues : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintDiscardedValues pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    void check(AstExpr* branch)
+    {
+        AstExprCall* call = branch->as<AstExprCall>();
+        const TypePackId* pack = call && context->module ? context->module->astTypePacks.find(call) : nullptr;
+        if (!pack)
+            return;
+
+        // A call whose values past the first are all a variadic or generic tail may well give exactly one.
+        auto [values, tail] = flatten(*pack);
+        if (values.size() < 2)
+            return;
+
+        size_t count = values.size() - 1;
+        std::string discarded = std::to_string(count);
+        if (tail)
+            discarded += " or more values";
+        else
+            discarded += count == 1 ? " value" : " values";
+
+        emitWarning(
+            *context,
+            LintWarning::Code_DiscardedValues,
+            call->location,
+            "An if-else expression truncates this call to its first return, discarding %s. Wrap in parentheses to silence",
+            discarded.c_str()
+        );
+    }
+
+    bool visit(AstExprIfElse* node) override
+    {
+        check(node->trueExpr);
+        check(node->falseExpr);
         return true;
     }
 };
@@ -8400,7 +8690,7 @@ private:
         for (size_t i = 0; i < pairs; ++i)
         {
             AstExpr* var = node->vars.data[i];
-            AstExpr* target = unparenthesized(var);
+            AstExpr* target = unwrapGroup(var);
             bool isName = target->is<AstExprLocal>() || target->is<AstExprGlobal>();
             if (!isName && !strict)
                 continue;
@@ -8612,7 +8902,7 @@ private:
         bool visit(AstStatAssign* node) override
         {
             for (AstExpr* var : node->vars)
-                if (!unparenthesized(var)->is<AstExprLocal>())
+                if (!unwrapGroup(var)->is<AstExprLocal>())
                     var->visit(this);
             for (AstExpr* value : node->values)
                 value->visit(this);
@@ -8695,13 +8985,21 @@ private:
 
     static bool isComputed(AstExpr* value)
     {
-        value = unparenthesized(value);
+        value = unwrapGroup(value);
         return value->is<AstExprCall>() || value->is<AstExprBinary>() || value->is<AstExprUnary>() || value->is<AstExprIfElse>() ||
                value->is<AstExprInterpString>();
     }
 
-    static void forgetRead(std::vector<Store>& pending, const Effects& effects)
+    // Forgets the stores `node` reads, or all of them when it can leave the block. Walking `node` is what this costs, and
+    // nested blocks are walked again on their own, so it's skipped when nothing is pending.
+    static void forgetRead(std::vector<Store>& pending, AstNode* node)
     {
+        if (pending.empty())
+            return;
+
+        Effects effects;
+        node->visit(&effects);
+
         if (effects.leaves)
         {
             pending.clear();
@@ -8733,13 +9031,10 @@ private:
 
         for (AstStat* stat : block->body)
         {
-            Effects effects;
-
             if (AstStatLocal* local = stat->as<AstStatLocal>())
             {
                 for (AstExpr* value : local->values)
-                    value->visit(&effects);
-                forgetRead(pending, effects);
+                    forgetRead(pending, value);
 
                 if (local->vars.size == 1 && local->values.size == 1)
                     remember(pending, local->vars.data[0], local->values.data[0], local->vars.data[0]->location);
@@ -8749,18 +9044,16 @@ private:
             AstStatAssign* assign = stat->as<AstStatAssign>();
             if (!assign)
             {
-                stat->visit(&effects);
-                forgetRead(pending, effects);
+                forgetRead(pending, stat);
                 continue;
             }
 
             // The values and any table being indexed are read before the locals are written
-            assign->visit(&effects);
-            forgetRead(pending, effects);
+            forgetRead(pending, assign);
 
             for (size_t i = 0; i < assign->vars.size; ++i)
             {
-                AstExprLocal* target = unparenthesized(assign->vars.data[i])->as<AstExprLocal>();
+                AstExprLocal* target = unwrapGroup(assign->vars.data[i])->as<AstExprLocal>();
                 if (!target)
                     continue;
 
@@ -8910,7 +9203,7 @@ private:
                     name->c_str()
                 );
         }
-        return mask;
+        return LintWarning::withGroupParts(mask);
     }
 
     void addScopes(const AstArray<AstAttr*>& attributes, const Location& range, const AstArray<AstLocal*>* bindings = nullptr)
@@ -9017,7 +9310,8 @@ std::vector<LintWarning> lint(
     const ScopePtr& env,
     const Module* module,
     const std::vector<HotComment>& hotcomments,
-    const LintOptions& options
+    const LintOptions& options,
+    const std::vector<Comment>* comments
 )
 {
     LintContext context;
@@ -9046,6 +9340,19 @@ std::vector<LintWarning> lint(
                 );
         }
     }
+
+    // Luwu: AnyCast and AnyAnnotation are on by default in Luwu modules only. A Luau module has to ask for them, with
+    // `--!lint` or `@[lint]`.
+    if (module && module->language != Language::Luwu)
+    {
+        LintMask asked = LintWarning::parseEnableMask(hotcomments);
+        for (LintWarning::Code part : {LintWarning::Code_AnyCast, LintWarning::Code_AnyAnnotation})
+        {
+            if (!asked.test(part))
+                context.options.warningMask.reset(part);
+        }
+    }
+    const LintMask moduleMask = context.options.warningMask;
 
     // Luwu: a lint a scope turns on has to run even where the module turns it off; filterByLintScopes then drops what
     // isn't on where it was reported
@@ -9185,6 +9492,16 @@ std::vector<LintWarning> lint(
     if (context.warningEnabled(LintWarning::Code_FloatIndex))
         LintFloatIndex::process(context);
 
+    if (context.warningEnabled(LintWarning::Code_DiscardedValues))
+        LintDiscardedValues::process(context);
+
+    bool anyLints = context.warningEnabled(LintWarning::Code_Any) || context.warningEnabled(LintWarning::Code_AnyCast) ||
+                    context.warningEnabled(LintWarning::Code_AnyAnnotation);
+    if (anyLints && context.module && context.module->mode == Mode::Strict)
+        LintAny::process(context, comments);
+
+    if (context.warningEnabled(LintWarning::Code_LuwuOnlyApi))
+        LintLuwuOnlyApi::process(context);
 
     // Luwu: turning LuaIterators off turns off its parts
     if (context.warningEnabled(LintWarning::Code_LuaIterators) &&
@@ -9237,7 +9554,7 @@ std::vector<LintWarning> lint(
     }
 
     if (!scopes.empty())
-        filterByLintScopes(context.result, std::move(scopes), options.warningMask);
+        filterByLintScopes(context.result, std::move(scopes), moduleMask);
 
     std::sort(context.result.begin(), context.result.end(), WarningComparator());
 

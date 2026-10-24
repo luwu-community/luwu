@@ -10,6 +10,8 @@
 #include "Luau/Common.h"
 #include "Luau/FileResolver.h"
 #include "Luau/Frontend.h"
+#include "Luau/LinterConfig.h"
+#include "Luau/LuwuOnlyApi.h"
 #include "Luau/TimeTrace.h"
 #include "Luau/ToString.h"
 #include "Luau/Subtyping.h"
@@ -48,8 +50,6 @@ static constexpr std::array<std::string_view, 13> kStatementStartingKeywords_CON
 
 static constexpr std::array<std::string_view, 14> kStatementStartingKeywords_EXPORT =
     {"while", "if", "local", "repeat", "function", "do", "for", "return", "break", "continue", "type", "export", "const", "export"};
-
-static constexpr std::array<std::string_view, 6> kHotComments = {"nolint", "nocheck", "nonstrict", "strict", "optimize", "native"};
 
 namespace Luau
 {
@@ -201,6 +201,108 @@ static const AstAttr* findAttributeWithArgumentsAt(const std::vector<AstNode*>& 
     );
 
     return result;
+}
+
+// Luwu: the lint names, without the ones `written` already lists. `All` too when `withAll` (`--!nolint All`).
+static AutocompleteEntryMap autocompleteLintNames(const std::unordered_set<std::string>& written, bool withAll, AutocompleteEntryKind kind)
+{
+    AutocompleteEntryMap result;
+    for (const char* name : kWarningNames)
+    {
+        if (!written.count(name))
+            result[name] = {kind};
+    }
+
+    if (withAll && !written.count("All"))
+        result["All"] = {kind};
+
+    return result;
+}
+
+// Luwu: inside `@[nolint(...)]` or `@[lint(...)]`, past the name: the attribute, and the lints its other arguments name
+static const AstAttr* findLintAttributeArgumentsAt(const std::vector<AstNode*>& ancestry, Position position, std::unordered_set<std::string>& written)
+{
+    const AstAttr* result = nullptr;
+    forEachAttributeList(
+        ancestry,
+        [&](const AstArray<AstAttr*>& attributes, AstAttr::Context)
+        {
+            for (AstAttr* attr : attributes)
+            {
+                bool lintAttribute = attr->type == AstAttr::Type::Nolint || attr->type == AstAttr::Type::Lint;
+                Position nameEnd{attr->location.begin.line, attr->location.begin.column + unsigned(strlen(attr->name.value))};
+                if (!lintAttribute || !(nameEnd < position) || !attr->location.containsClosed(position))
+                    continue;
+
+                for (AstExpr* arg : attr->args)
+                {
+                    if (arg->location.containsClosed(position))
+                        continue;
+                    if (AstExprGlobal* global = arg->as<AstExprGlobal>())
+                        written.insert(global->name.value);
+                    else if (AstExprConstantString* string = arg->as<AstExprConstantString>())
+                        written.insert(std::string(string->value.data, string->value.size));
+                }
+
+                result = attr;
+                return true;
+            }
+
+            return false;
+        }
+    );
+
+    return result;
+}
+
+// Luwu: in a comment directive, what can be written at `position`: a directive name after `--!`, a lint name after
+// `--!nolint` or `--!lint`, and an optimization level after `--!optimize`
+static AutocompleteEntryMap autocompleteHotComment(const HotComment& hotComment, Position position)
+{
+    // `content` starts after the `--!` and has no trailing whitespace, so a cursor past its end follows a space
+    const unsigned contentStart = hotComment.location.begin.column + 3;
+    const size_t offset = position.column > contentStart ? position.column - contentStart : 0;
+    std::string typed = hotComment.content.substr(0, std::min(offset, hotComment.content.size()));
+    if (offset > hotComment.content.size())
+        typed += ' ';
+
+    AutocompleteEntryMap result;
+    const size_t space = typed.find_first_of(" \t");
+    if (space == std::string::npos)
+    {
+        for (const char* directive : kCommentDirectives)
+            result[directive] = {AutocompleteEntryKind::HotComment};
+        return result;
+    }
+
+    const std::string_view directive = std::string_view(typed).substr(0, space);
+    if (directive == "optimize")
+    {
+        for (const char* level : {"0", "1", "2"})
+            result[level] = {AutocompleteEntryKind::HotComment};
+        return result;
+    }
+
+    if (directive != "nolint" && directive != "lint")
+        return result;
+
+    // the names written before the one being typed
+    std::unordered_set<std::string> written;
+    std::string_view rest = std::string_view(typed).substr(space);
+    const size_t lastSpace = rest.find_last_of(" \t");
+    std::string_view finished = rest.substr(0, lastSpace);
+    size_t start = 0;
+    while (start < finished.size())
+    {
+        size_t wordStart = finished.find_first_not_of(" \t", start);
+        if (wordStart == std::string_view::npos)
+            break;
+        size_t wordEnd = finished.find_first_of(" \t", wordStart);
+        written.insert(std::string(finished.substr(wordStart, wordEnd - wordStart)));
+        start = wordEnd;
+    }
+
+    return autocompleteLintNames(written, directive == "nolint", AutocompleteEntryKind::HotComment);
 }
 
 // The fields an attribute takes that are still left to write, when the cursor is inside the braces of its
@@ -2080,22 +2182,6 @@ static std::optional<AutocompleteEntryMap> autocompleteStringParams(
     return std::nullopt;
 }
 
-// Luwu Traits (rfcs/classes/traits.md): a member of a class or trait type, on the type itself or, for a method, in its metatable
-static const Property* findClassMember(const ExternType* type, const Name& name)
-{
-    if (auto it = type->props().find(name); it != type->props().end())
-        return &it->second;
-
-    const TableType* metatable = type->metatable ? get<TableType>(follow(*type->metatable)) : nullptr;
-    if (metatable)
-    {
-        if (auto it = metatable->props.find(name); it != metatable->props.end())
-            return &it->second;
-    }
-
-    return nullptr;
-}
-
 static std::string typeNameInScope(const ScopePtr& scope, TypeId ty)
 {
     if (std::optional<Name> name = tryGetTypeNameInScope(scope, ty, true))
@@ -2175,8 +2261,8 @@ static void autocompleteMissingTraitMembers(const ScopePtr& scope, AstStatClass*
 
         for (const auto& [name, optional] : traitType->traitInfo->expectations)
         {
-            const Property* expected = findClassMember(traitType, name);
-            if (name == "__init" || !expected || findClassMember(classType, name) || result.count(name))
+            const Property* expected = findNominalMember(traitType, name);
+            if (name == "__init" || !expected || findNominalMember(classType, name) || result.count(name))
                 continue;
 
             AutocompleteEntry entry{AutocompleteEntryKind::Property, expected->readTy};
@@ -2490,7 +2576,7 @@ AutocompleteResult autocomplete_(
     Position position,
     FileResolver* fileResolver,
     StringCompletionCallback callback,
-    bool isInHotComment
+    const HotComment* hotComment
 )
 {
     LUAU_TIMETRACE_SCOPE("Luau::autocomplete_", "AutocompleteCore");
@@ -2512,6 +2598,11 @@ AutocompleteResult autocomplete_(
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }
 
+    // Luwu: inside `@[nolint(|)]` or `@[lint(|)]`, the lint names. Its arguments aren't in the ancestry either.
+    std::unordered_set<std::string> writtenLints;
+    if (findLintAttributeArgumentsAt(ancestry, position, writtenLints))
+        return {autocompleteLintNames(writtenLints, /* withAll */ false, AutocompleteEntryKind::Keyword), ancestry, AutocompleteContext::Keyword};
+
     // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): inside `@[deprecated { | }]`,
     // the fields the attribute takes. Its arguments aren't in the ancestry either, so without this the
     // cursor would complete as if it were at the enclosing statement.
@@ -2521,14 +2612,8 @@ AutocompleteResult autocomplete_(
             return {std::move(*fields), ancestry, AutocompleteContext::Property};
     }
 
-    if (isInHotComment)
-    {
-        AutocompleteEntryMap result;
-
-        for (const std::string_view hc : kHotComments)
-            result.emplace(hc, AutocompleteEntry{AutocompleteEntryKind::HotComment});
-        return {std::move(result), ancestry, AutocompleteContext::HotComment};
-    }
+    if (hotComment)
+        return {autocompleteHotComment(*hotComment, position), ancestry, AutocompleteContext::HotComment};
 
     // Luwu If Local (rfcs/if-local.md): `for ... when ... do`, `while local ... when ... do` and comprehension clauses
     if (FFlag::LuwuIfLocal || FFlag::LuwuTableComprehensions)
@@ -2560,7 +2645,23 @@ AutocompleteResult autocomplete_(
         TypeId ty = follow(*it);
         PropIndexType indexType = indexName->op == ':' ? PropIndexType::Colon : PropIndexType::Point;
 
-        return {autocompleteProps(*module, typeArena, builtinTypes, ty, indexType, ancestry), ancestry, AutocompleteContext::Property};
+        AutocompleteEntryMap props = autocompleteProps(*module, typeArena, builtinTypes, ty, indexType, ancestry);
+
+        // Luwu: a Luau or Lua module can't use what Luwu adds to a library (LuwuOnlyApi), so it isn't offered there
+        if (module->language != Language::Luwu)
+        {
+            AstExprGlobal* global = indexName->expr->as<AstExprGlobal>();
+            std::string_view library = global ? std::string_view(global->name.value) : isString(ty) ? "string" : "";
+            for (auto prop = props.begin(); prop != props.end();)
+            {
+                if (isLuwuOnlyMember(library, prop->first))
+                    prop = props.erase(prop);
+                else
+                    ++prop;
+            }
+        }
+
+        return {std::move(props), ancestry, AutocompleteContext::Property};
     }
     else if (auto typeReference = node->as<AstTypeReference>())
     {

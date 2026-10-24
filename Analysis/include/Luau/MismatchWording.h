@@ -1,6 +1,9 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include "Luau/Helpifier.h"
+#include "Luau/Location.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -92,6 +95,13 @@ struct Anchor
     size_t at = 0;
 };
 
+// Where a table declares a property, in the source of `module`.
+struct PropertySite
+{
+    Location location;
+    std::string module;
+};
+
 struct Difference
 {
     enum class Kind
@@ -142,6 +152,12 @@ struct Difference
     std::optional<std::string> subInFull;
     // For `ElementOfExpected`, the element type of the array expected.
     std::optional<std::string> element;
+    // At one of two parameters or return values written in the wrong order, which a help already says.
+    bool explainedBySwap = false;
+    // For a difference at a property, where the given and the expected table declare it. For `Missing`, the given
+    // site is the table the property is missing from.
+    std::optional<PropertySite> givenSite;
+    std::optional<PropertySite> expectedSite;
     // For `NotAMap`: the expected table is an array (`{ T }`) rather than a map, and the given table has no properties
     // at all (`table.freeze({})` is typed `{}`, an empty table that can never hold anything).
     bool expectsArray = false;
@@ -176,6 +192,9 @@ struct Rendering
     // `Drop#2`: the 2nd member of the given or expected union.
     std::string givenMember(size_t number);
     std::string expectedMember(size_t number);
+    // Writes the explanation's helps.
+    Helpifier helpifier;
+
     // The expected root quoted, even when it's the placeholder.
     std::string expectedName();
     // The expected root quoted, or "the expected type" for the placeholder.
@@ -254,15 +273,23 @@ Line andMore(size_t hidden, bool bullet, std::string_view things = "");
 std::string narrowedParameterHelp(const std::vector<const Difference*>& narrowed, Rendering& rendering);
 
 // Helps: what to do, printed right after the two types.
-std::string swappedParametersHelp(const std::string& first, const std::string& second, size_t i, size_t j);
-std::string swappedReturnsHelp(size_t i, size_t j);
-std::string misspelledStringHelp(const std::string& suggestion);
+std::string swappedParametersHelp(const std::string& first, const std::string& second, size_t i, size_t j, const Helpifier& helpifier);
+std::string swappedReturnsHelp(size_t i, size_t j, const Helpifier& helpifier);
+std::string misspelledStringHelp(const std::string& suggestion, const Helpifier& helpifier);
 // A missing field with a similar name present, at the path of the table holding it: what was written and what was
 // meant (`leaving.reson`, `leaving.reason`), and the help saying so.
 std::pair<std::string, std::string> misspelledFieldNames(const Difference& d, Rendering& rendering);
 std::string misspelledFieldHelp(const Difference& d, Rendering& rendering);
 // A string one typo from an expected one, inside a table.
 std::string misspelledValueHelp(const Difference& d, Rendering& rendering);
+
+// Notes at the two declarations of a mismatched property: `Expected 'count: number' because of this` at the expected
+// one, `'count' is 'string' here, but should be 'number'` at the given one.
+std::string expectedPropertyNote(const std::string& name, const std::string& expected);
+std::string givenPropertyNote(const std::string& name, const std::string& given, const std::string& expected);
+// At the table a required property is missing from: `'colors.background' is missing 'b: number'`. Inside a function
+// the table is named from its parameter, as the bullet does (`'self' is missing ...`).
+std::string missingPropertyNote(const Difference& d, Rendering& rendering);
 
 // Headers: the line introducing the bullets.
 std::string similarHeader(std::string_view arrival, size_t paths);
@@ -281,13 +308,14 @@ std::string unionMembersHeader(bool noneFit, const std::string& unionName, const
 // Scalars that aren't the scalar expected: `'string' isn't a 'number'.`, `Neither ... nor ...`,
 // `None of ...`. `article` says whether the expected type takes an `a`.
 std::string scalarsHeader(const std::vector<std::string>& names, const std::string& expected, bool article);
-std::string closestMatchHeader(const std::string& label, const std::string& memberType);
+// The member chosen for a given value. `memberType` is nullopt when the union printed above already shows it.
+std::string closestMatchHeader(const std::string& label, const std::optional<std::string>& memberType);
 // `'leaving.kind' is '"leave"', so 'leaving' was compared with Event#2 = ...:`.
 std::string taggedMatchHeader(
     const std::string& field,
     const std::string& value,
     const std::string& label,
-    const std::string& memberType,
+    const std::optional<std::string>& memberType,
     Rendering& rendering
 );
 // `'Json' is unrelated to 'ServerConfig'.`, naming each type by its alias, or by its printed form
@@ -329,7 +357,7 @@ std::string hiddenMembers(size_t count);
 // then only those `listed`, by number, then how many others there are.
 std::string unionSummary(size_t members, bool optional, const std::vector<std::pair<size_t, std::string>>& listed);
 
-// A block of text separated from what comes before it by a blank line.
+// A block of text separated from what comes before it by a blank line; nothing for no text (a help that is off).
 std::string paragraph(const std::string& text);
 // The whole explanation: helps, the header and its lines, then a help explaining why. Held to
 // `kMaxReasonLines` and `kMaxReasonChars`: lines past them are counted instead, and taken out of

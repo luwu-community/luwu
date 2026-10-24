@@ -121,6 +121,8 @@ namespace
 // class declaration parses as a nonsense expression statement and reports something about assignments
 // (upstream: "Incomplete statement: expected assignment or a function call").
 // Users have read that as "my Luwu build is broken", so say what is actually wrong.
+const LuwuFeature kClassesFeature{"classes", /* plural= */ true, "LuwuClasses"};
+const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ true, "LuwuDefaultArguments"};
 // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, `declare` is only allowed where it
 // visibly applies to the whole file.
 const char* const kDeclarationPlacementError =
@@ -144,8 +146,6 @@ const char* const kDeclareClassNeedsTypeError =
     "A declared class is written 'declare class type Name'; to declare an extern type, write 'declare extern type Name'";
 const char* const kDeclareTraitNeedsTypeError = "A declared trait is written 'declare trait type Name'";
 const char* const kDeclareExportOrderError = "'export' goes before 'declare': write 'export declare'";
-const LuwuFeature kClassesFeature{"classes", /* plural= */ true, "LuwuClasses"};
-const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ true, "LuwuDefaultArguments"};
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
 // class header or in front of a member. This keeps those positions unambiguous, and leaves room to give
@@ -940,6 +940,11 @@ AstStat* Parser::parseStat()
                 Location typeKeywordLocation = current.location;
                 nextLexeme();
                 return parseTypeAlias(expr->location, /* exported= */ true, typeKeywordPosition, typeKeywordLocation);
+            }
+            // Luwu: `export value = y` is `export const value = y`
+            else if (current.type == Lexeme::Name)
+            {
+                return parseExportValue(expr->location, expr->location, AstArray<AstAttr*>({nullptr, 0}));
             }
         }
         // TODO: remove with LuauExportValueSyntax
@@ -2899,6 +2904,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     LUAU_ASSERT(FFlag::LuwuClasses);
     LUAU_ASSERT(!isTrait || FFlag::LuwuTraits);
     size_t errorsBeforeClass = parseErrors.size();
+    checkLuwuFeature(classKeywordLocation, kClassesFeature, /* enabled= */ true);
     // what the declaration is called in messages
     const char* kind = isTrait ? "trait" : "class";
 
@@ -3582,6 +3588,19 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                     else if (body->args.size > 0 && body->args.data[0]->name == "self")
                         report(name.location, "'__create' can't take 'self'");
                 }
+                else if (name.name == "__implemented")
+                {
+                    // Luwu Traits (rfcs/classes/traits.md): `__implemented` runs once for each class implementing the trait, given
+                    // the class. It's final so that no implementing class or needing trait can switch it off.
+                    if (!isTrait)
+                        report(name.location, "Only traits can define '__implemented'");
+                    else if (expectLocation)
+                        report(name.location, "'__implemented' can't be expected");
+                    else if (!finalLocation)
+                        report(name.location, "'__implemented' must be final: write 'final function __implemented'");
+                    else if (body->args.size > 0 && body->args.data[0]->name == "self")
+                        report(name.location, "'__implemented' can't take 'self'; it's given the implementing class");
+                }
                 else if (name.name == "__init" && isTrait && !expectLocation)
                 {
                     // Luwu Traits (rfcs/classes/traits.md): construction belongs to the class. A trait's state comes from its field defaults and
@@ -3610,7 +3629,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 }
                 else if (EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0)
                     report(name.location, "%s cannot define '%s' as a metamethod", isTrait ? "Traits" : "Classes", name.name.value);
-                else if (ALLOWED_METAMETHODS.count(name.name.value) == 0)
+                // Luwu: not while the parameter list is missing, which is how a special name being typed (`__ini`) reads
+                else if (ALLOWED_METAMETHODS.count(name.name.value) == 0 && body->argLocation)
                     report(name.location, "Cannot use '%s' as a method name: names starting with '__' are reserved", name.name.value);
             }
 
@@ -4692,6 +4712,27 @@ AstStat* Parser::parseExportValue(
         return stat;
     };
 
+    // `constKeywordLocation` is the `const` of `export const function`, if written
+    auto exportFunctionStat = [&](std::optional<Location> constKeywordLocation) -> AstStat*
+    {
+        auto funcStat = parseLocal(start, keywordLocation, attributes, true, cstAttrLists);
+        if (!funcStat->is<AstStatLocalFunction>())
+            // parseLocal returned a parse error
+            return funcStat;
+
+        auto func = funcStat->as<AstStatLocalFunction>();
+
+        if (constKeywordLocation)
+            func->constKeywordBegin = constKeywordLocation->begin;
+
+        if (!checkDuplicateExport(func->name->name, func->name->location))
+            report(func->name->location, "Duplicate exported identifier '%s'", func->name->name.value);
+
+        func->name->isExported = true;
+        func->name->isConst = true;
+        return func;
+    };
+
     if (attributes.size != 0 && lexer.current().type != Lexeme::ReservedFunction)
     {
         report(
@@ -4716,31 +4757,16 @@ AstStat* Parser::parseExportValue(
     }
     else if (lexer.current().type == Lexeme::ReservedFunction)
     {
-        auto funcStat = parseLocal(start, keywordLocation, attributes, true, cstAttrLists);
-        if (!funcStat->is<AstStatLocalFunction>())
-            // parseLocal returned a parse error
-            return funcStat;
-
-        auto func = funcStat->as<AstStatLocalFunction>();
-
-        if (!checkDuplicateExport(func->name->name, func->name->location))
-            report(func->name->location, "Duplicate exported identifier '%s'", func->name->name.value);
-
-        func->name->isExported = true;
-        func->name->isConst = true;
-        return func;
+        return exportFunctionStat(std::nullopt);
     }
     else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const")
     {
         Location constKeywordLocation = lexer.current().location;
         nextLexeme();
 
+        // Luwu: `export const function f()` is `export function f()`, which is already const. Upstream rejects it.
         if (lexer.current().type == Lexeme::ReservedFunction)
-        {
-            report(start, "'export' must be followed by an identifier or 'function'");
-            // still parse the function for error recovery
-            return parseLocal(start, constKeywordLocation, {nullptr, 0}, true);
-        }
+            return exportFunctionStat(constKeywordLocation);
 
         return exportLocalStat(parseLocal(start, constKeywordLocation, {nullptr, 0}, true), constKeywordLocation);
     }
@@ -4773,6 +4799,14 @@ AstStat* Parser::parseExportValue(
 
             traitStat->name->isExported = true;
         }
+        return stat;
+    }
+    else if (lexer.current().type == Lexeme::Name)
+    {
+        // Luwu: `export value = y` is `export const value = y`. It has no `const` keyword to point at.
+        AstStat* stat = exportLocalStat(parseLocal(start, start, {nullptr, 0}, true), start);
+        if (AstStatLocal* localStat = stat->as<AstStatLocal>())
+            localStat->keywordLocation = std::nullopt;
         return stat;
     }
 

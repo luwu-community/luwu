@@ -74,8 +74,9 @@ static uint8_t mismatchNotationUsed = 0;
 
 static void reportError(const Luau::Frontend& frontend, ReportFormat format, const Luau::TypeError& error)
 {
-    if (const Luau::TypeMismatch* mismatch = Luau::get_if<Luau::TypeMismatch>(&error.data))
-        mismatchNotationUsed |= mismatch->notation;
+    const Luau::TypeMismatch* mismatch = Luau::get_if<Luau::TypeMismatch>(&error.data);
+    if (mismatch && mismatch->explained)
+        mismatchNotationUsed |= mismatch->explained->notation;
 
     std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(error.moduleName);
 
@@ -115,10 +116,31 @@ static bool reportModuleResult(Luau::Frontend& frontend, const Luau::ModuleName&
         return false;
     }
 
-    for (auto& error : cr->errors)
-        reportError(frontend, format, error);
-
     std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(name);
+
+    // Luwu: notes (Module::notes) follow the error they're about, and any about no error reported here come after
+    Luau::ModulePtr module = frontend.moduleResolver.getModule(name);
+    std::vector<bool> notePrinted(module ? module->notes.size() : 0);
+    auto reportNotes = [&](std::optional<Luau::Location> origin)
+    {
+        for (size_t i = 0; i < notePrinted.size(); ++i)
+        {
+            const Luau::DiagnosticNote& note = module->notes[i];
+            if (notePrinted[i] || (origin && note.origin != origin))
+                continue;
+            report(format, humanReadableName.c_str(), note.location, "Note", note.message.c_str());
+            notePrinted[i] = true;
+        }
+    };
+
+    for (auto& error : cr->errors)
+    {
+        reportError(frontend, format, error);
+        if (error.moduleName == name)
+            reportNotes(error.location);
+    }
+    reportNotes(std::nullopt);
+
     for (auto& error : cr->lintResult.errors)
         reportWarning(format, humanReadableName.c_str(), error);
     for (auto& warning : cr->lintResult.warnings)
@@ -611,7 +633,7 @@ int main(int argc, char** argv)
 
     if (format != ReportFormat::Luacheck)
     {
-        std::string legend = Luau::mismatchNotationLegend(mismatchNotationUsed);
+        std::string legend = Luau::mismatchNotationLegend(mismatchNotationUsed, Luau::Helpifier{});
         if (!legend.empty())
             fprintf(stderr, "\n%s\n", legend.c_str());
     }

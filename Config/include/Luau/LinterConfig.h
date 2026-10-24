@@ -87,20 +87,28 @@ struct LintWarning
         Code_MethodsNotInlined = 55,       // code that keeps the compiler from proving a class, so its methods aren't inlined
         Code_FloorDivision = 56,           // `math.floor(a / b)`, which is `a // b`
         Code_FenvDeoptimization = 57,      // `getfenv`/`setfenv`, which deoptimize the whole module
-        Code_ReturnSelf = 58,              // Luwu Traits: a trait method returning `self` typed as the trait, not `Self`
-        Code_ReturnOnNextLine = 59,        // Luwu: a `return` in a `do` expression whose value starts on the next line
-        Code_OrContinue = 60,              // Luwu: `x or continue`, which reads a binding named `continue`
-        Code_KeywordShadow = 61,           // Luwu: a binding named after a contextual keyword (`class`, `continue`, ...)
-        Code_BuiltinShadow = 62,           // Luwu: a binding that hides a builtin global (`type`, `typeof`, `table`, ...)
-        Code_BindingSwallowsCondition = 63, // Luwu: `if local x = f() and x > 1`, where the `and` is part of the bound value
-        Code_Style = 64,                   // Luwu: the group of layout lints; turning it off turns off all of its parts
+        Code_DiscardedValues = 58,         // Luwu: a call giving several values where only its first is kept (an if-else branch)
+        // Luwu: `any` in a type, which turns off type checking. The group also reports every `any` its parts don't, and
+        // is off by default; its parts are on by default in strict Luwu modules. Turning the group on or off turns them
+        // on or off with it (LintWarning::withGroupParts).
+        Code_Any = 59,
+        Code_AnyCast = 60,                 // `x :: any` without a comment saying why
+        Code_AnyAnnotation = 61,           // `x: any` on a parameter, local or property, which `unknown` would type safely
+        Code_LuwuOnlyApi = 62,             // Luwu: a Luwu-only library function (`table.drop`) used in a `.luau` or `.lua` file
+        Code_ReturnSelf = 63,              // Luwu Traits: a trait method returning `self` typed as the trait, not `Self`
+        Code_ReturnOnNextLine = 64,        // Luwu: a `return` in a `do` expression whose value starts on the next line
+        Code_OrContinue = 65,              // Luwu: `x or continue`, which reads a binding named `continue`
+        Code_KeywordShadow = 66,           // Luwu: a binding named after a contextual keyword (`class`, `continue`, ...)
+        Code_BuiltinShadow = 67,           // Luwu: a binding that hides a builtin global (`type`, `typeof`, `table`, ...)
+        Code_BindingSwallowsCondition = 68, // Luwu: `if local x = f() and x > 1`, where the `and` is part of the bound value
+        Code_Style = 69,                   // Luwu: the group of layout lints; turning it off turns off all of its parts
         // Luwu: parts of Style that can be turned off on their own (ConstLocal, SameLineStatement and MultiLineStatement too)
-        Code_OneLineStatement = 65,        // `if x then y end`, `while c do f() end`, `function f() return 1 end` on one line
-        Code_OneLineGuard = 66,            // `if not x then return end` on one line, in a Luau file
-        Code_InlineOrLeave = 67,           // `x or return` ending a line much longer than the lines around it
-        Code_LuaGuard = 68,                // `if not x then return end` on one line, in a Luwu file, which can write `x or return`
-        Code_OrReturnComma = 69,           // Luwu: `f(x or return a, b)`, where `b` is the next argument, not a second return value
-        Code_MisleadingIndentation = 70,   // Luwu: a `do` expression's block reaching lines indented like the code after it
+        Code_OneLineStatement = 70,        // `if x then y end`, `while c do f() end`, `function f() return 1 end` on one line
+        Code_OneLineGuard = 71,            // `if not x then return end` on one line, in a Luau file
+        Code_InlineOrLeave = 72,           // `x or return` ending a line much longer than the lines around it
+        Code_LuaGuard = 73,                // `if not x then return end` on one line, in a Luwu file, which can write `x or return`
+        Code_OrReturnComma = 74,           // Luwu: `f(x or return a, b)`, where `b` is the next argument, not a second return value
+        Code_MisleadingIndentation = 75,   // Luwu: a `do` expression's block reaching lines indented like the code after it
 
         Code__Count
     };
@@ -116,6 +124,9 @@ struct LintWarning
     static LintMask parseMask(const std::vector<HotComment>& hotcomments);
     // Luwu: the lints `--!lint Name` directives turn on, for the ones that are off by default
     static LintMask parseEnableMask(const std::vector<HotComment>& hotcomments);
+    // Luwu: `mask` with the parts of the groups in it whose parts don't depend on the group being on (Any). Every place
+    // that turns lints on or off by name applies it, so naming the group turns its parts on or off too.
+    static LintMask withGroupParts(LintMask mask);
 };
 
 static_assert(LintWarning::Code__Count <= kLintMaskBits, "more lints than LintMask has bits; raise kLintMaskBits");
@@ -202,6 +213,11 @@ inline constexpr const char* kWarningNames[] = {
     "MethodsNotInlined",
     "FloorDivision",
     "FenvDeoptimization",
+    "DiscardedValues",
+    "Any",
+    "AnyCast",
+    "AnyAnnotation",
+    "LuwuOnlyApi",
     "ReturnSelf",
     "ReturnOnNextLine",
     "OrContinue",
@@ -217,6 +233,9 @@ inline constexpr const char* kWarningNames[] = {
     "MisleadingIndentation",
 };
 // clang-format on
+
+// Luwu: the comment directives (`--!strict`, `--!nolint Name`), which the linter checks and autocomplete offers
+inline constexpr const char* kCommentDirectives[] = {"nolint", "lint", "nocheck", "nonstrict", "strict", "optimize", "native", "trust"};
 
 static_assert(std::size(kWarningNames) == unsigned(LintWarning::Code__Count), "did you forget to add warning to the list?");
 

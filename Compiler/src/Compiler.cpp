@@ -185,6 +185,19 @@ static bool isTraitConstantField(const AstClassProperty& prop)
     return !prop.expectLocation && prop.defaultValue && isConstantClassDefault(prop.defaultValue);
 }
 
+// Luwu Classes (rfcs/classes): whether the class or trait body declares a field `name`, which restates the primary
+// constructor parameter of that name
+static bool classBodyDeclaresProperty(AstStatClass* decl, AstName name)
+{
+    for (const AstClassMember& member : decl->members)
+    {
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
+            return true;
+    }
+
+    return false;
+}
+
 struct Compiler
 {
     struct RegScope;
@@ -3909,6 +3922,7 @@ struct Compiler
 
     // Luwu Traits (rfcs/classes/traits.md): a trait's fields in the order its shape lists them (compileClassDeclaration):
     // the body's provided fields, then the parameters the body doesn't restate. A parameter's entry has no property.
+    // An `expect` field restates a parameter too, so the parameter provides no field, as in luaR_implementtraits.
     static std::vector<std::pair<AstName, const AstClassProperty*>> traitProvidedFields(AstStatClass* trait)
     {
         std::vector<std::pair<AstName, const AstClassProperty*>> fields;
@@ -3921,16 +3935,7 @@ struct Compiler
         {
             for (AstLocal* param : trait->primaryConstructor->args)
             {
-                bool restated = std::any_of(
-                    fields.begin(),
-                    fields.end(),
-                    [&](const std::pair<AstName, const AstClassProperty*>& field)
-                    {
-                        return field.first == param->name;
-                    }
-                );
-
-                if (!restated)
+                if (!classBodyDeclaresProperty(trait, param->name))
                     fields.emplace_back(param->name, nullptr);
             }
         }
@@ -4425,7 +4430,7 @@ struct Compiler
     //   name clashes behave exactly as they do for a trait from another module.
     // - Copies every function with a body, including defaults the class overrides: an override can still call the trait's
     //   version with `Trait.method(self)`, and that runs the trait's code through this copy. Skips `expect` functions
-    //   (no body) and a factory's `__create`, which belongs to the trait, not the class.
+    //   (no body), a factory's `__create` and the `__implemented` hook, which belong to the trait, not the class.
     // - Also copies each trait's `__traitinit`, which construction runs for every object (LOP_INITTRAITS), so the trait's
     //   fields are computed natively too.
     void buildTraitFunctionCopies(AstStatBlock* root, Allocator& allocator, std::vector<AstExprFunction*>& functionsToCompile)
@@ -4454,7 +4459,8 @@ struct Compiler
                 {
                     const AstClassMethod* method = member.get_if<AstClassMethod>();
 
-                    if (!method || method->expectLocation || method->functionName == "__create")
+                    bool traitOnly = method && (method->functionName == "__create" || method->functionName == "__implemented");
+                    if (!method || method->expectLocation || traitOnly)
                         continue;
 
                     AstExprFunction* copy = copyTraitFunction(decl, method->function, method->nameLocation, allocator, functionsToCompile);

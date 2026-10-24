@@ -5,6 +5,7 @@
 #include "Luau/Error.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace Luau
 {
@@ -695,9 +696,6 @@ std::string narrowedParameterHelp(const std::vector<const Difference*>& narrowed
     if (narrowed.empty())
         return "";
 
-    std::string title;
-    std::string passes;
-    std::string must;
     if (narrowed.size() == 1)
     {
         const Difference& d = *narrowed.front();
@@ -705,35 +703,37 @@ std::string narrowedParameterHelp(const std::vector<const Difference*>& narrowed
         std::string name = slotNoun(d.path, d.anchor->at, d.path.size(), &rendering.notation);
         // The optional type itself, not an alias of it: "narrowed from 'Slot'" hides what was dropped.
         std::string from = d.subMeaning ? *d.subMeaning : d.sub;
-        title = "Help: " + quoted(name) + " can't be narrowed from " + quoted(from) + " to " + quoted(d.super) + ":";
-        passes = "code calling this function as the expected type is allowed to pass 'nil' for " + quoted(name);
-        must = "this parameter must accept " + quoted(from) + " to match the caller's expected signature";
-    }
-    else
-    {
-        title = "Help: these parameters can't drop the 'nil' the expected type allows:";
-        passes = "code calling this function as the expected type is allowed to pass 'nil' for any of them";
-        must = "each must accept its optional type to match the caller's expected signature";
+        return rendering.helpifier(
+            "narrowed parameter",
+            {quoted(name) + " can't be narrowed from " + quoted(from) + " to " + quoted(d.super),
+             "Code calling this function as the expected type is allowed to pass 'nil' for " + quoted(name),
+             "This parameter must accept " + quoted(from) + " to match the caller's expected signature"}
+        );
     }
 
-    return title + "\n" + nestedItem(passes) + "\n" + nestedItem(must);
+    return rendering.helpifier(
+        "narrowed parameters",
+        {"These parameters can't drop the 'nil' the expected type allows",
+         "Code calling this function as the expected type is allowed to pass 'nil' for any of them",
+         "Each must accept its optional type to match the caller's expected signature"}
+    );
 }
 
-std::string swappedParametersHelp(const std::string& first, const std::string& second, size_t i, size_t j)
+std::string swappedParametersHelp(const std::string& first, const std::string& second, size_t i, size_t j, const Helpifier& helpifier)
 {
     if (!first.empty() && !second.empty())
-        return "Help: the parameters " + quoted(first) + " and " + quoted(second) + " look like they're in the wrong order.";
-    return "Help: the " + ordinal(i + 1) + " and " + ordinal(j + 1) + " parameters look like they're in the wrong order.";
+        return helpifier("parameter order", {"The parameters " + quoted(first) + " and " + quoted(second) + " look like they're in the wrong order"});
+    return helpifier("parameter order", {"The " + ordinal(i + 1) + " and " + ordinal(j + 1) + " parameters look like they're in the wrong order"});
 }
 
-std::string swappedReturnsHelp(size_t i, size_t j)
+std::string swappedReturnsHelp(size_t i, size_t j, const Helpifier& helpifier)
 {
-    return "Help: the " + ordinal(i + 1) + " and " + ordinal(j + 1) + " return values look like they're in the wrong order.";
+    return helpifier("return order", {"The " + ordinal(i + 1) + " and " + ordinal(j + 1) + " return values look like they're in the wrong order"});
 }
 
-std::string misspelledStringHelp(const std::string& suggestion)
+std::string misspelledStringHelp(const std::string& suggestion, const Helpifier& helpifier)
 {
-    return "Help: did you mean " + quoted(suggestion) + "?";
+    return helpifier("typo", {"Did you mean " + quoted(suggestion) + "?"});
 }
 
 std::pair<std::string, std::string> misspelledFieldNames(const Difference& d, Rendering& rendering)
@@ -748,14 +748,47 @@ std::pair<std::string, std::string> misspelledFieldNames(const Difference& d, Re
 std::string misspelledFieldHelp(const Difference& d, Rendering& rendering)
 {
     auto [written, meant] = misspelledFieldNames(d, rendering);
-    return "Help: did you mean " + quoted(meant) + " instead of " + quoted(written) + "?";
+    return rendering.helpifier("typo", {"Did you mean " + quoted(meant) + " instead of " + quoted(written) + "?"});
 }
 
 std::string misspelledValueHelp(const Difference& d, Rendering& rendering)
 {
     LUAU_ASSERT(d.kind == Difference::Kind::Mismatch && d.similarName);
-    return "Help: did you mean " + quoted(*d.similarName) + " instead of " + quoted(d.sub) + " for " + quoted(rendering.givenPath(onGivenSide(d.path))) +
-           "?";
+    std::string path = rendering.givenPath(onGivenSide(d.path));
+    return rendering.helpifier("typo", {"Did you mean " + quoted(*d.similarName) + " instead of " + quoted(d.sub) + " for " + quoted(path) + "?"});
+}
+
+std::string expectedPropertyNote(const std::string& name, const std::string& expected)
+{
+    return "Expected " + quoted(name + ": " + expected) + " because of this";
+}
+
+std::string givenPropertyNote(const std::string& name, const std::string& given, const std::string& expected)
+{
+    return quoted(name) + " is " + quoted(given) + " here, but should be " + quoted(expected);
+}
+
+std::string missingPropertyNote(const Difference& d, Rendering& rendering)
+{
+    LUAU_ASSERT(d.kind == Difference::Kind::Missing && !d.path.empty());
+
+    // The note's path isn't in the message, so it adds nothing to the message's legend
+    uint8_t notation = rendering.notation;
+    std::string table;
+    bool inFunction = d.anchor && d.anchor->at + 1 < d.path.size();
+    if (inFunction)
+    {
+        const Segment& slot = d.path[d.anchor->at];
+        bool named = slot.kind == Segment::Kind::Parameter && !slot.name.empty();
+        table = slotInProse(slotNoun(d.path, d.anchor->at, d.path.size() - 1, nullptr), named);
+        // `its 2nd argument` starts the sentence
+        table[0] = char(std::toupper(static_cast<unsigned char>(table[0])));
+    }
+    else
+        table = quoted(rendering.givenPath(onGivenSide(DiffPath{d.path.begin(), d.path.end() - 1})));
+    rendering.notation = notation;
+
+    return table + " is missing " + quoted(d.path.back().name + ": " + d.super);
 }
 
 std::string similarHeader(std::string_view arrival, size_t paths)
@@ -837,21 +870,23 @@ static std::string labelled(const std::string& label, const std::string& type, c
     return label + " =\n    " + type + "\n" + rest;
 }
 
-std::string closestMatchHeader(const std::string& label, const std::string& memberType)
+std::string closestMatchHeader(const std::string& label, const std::optional<std::string>& memberType)
 {
-    return labelled("The closest match is " + label, memberType, ", but:");
+    std::string subject = "The closest match is " + label;
+    return memberType ? labelled(subject, *memberType, ", but:") : subject + ", but:";
 }
 
 std::string taggedMatchHeader(
     const std::string& field,
     const std::string& value,
     const std::string& label,
-    const std::string& memberType,
+    const std::optional<std::string>& memberType,
     Rendering& rendering
 )
 {
     std::string root = rendering.givenName();
-    return labelled(quoted(root + "." + field) + " is " + quoted(value) + ", so " + quoted(root) + " was compared with " + label, memberType, ":");
+    std::string subject = quoted(root + "." + field) + " is " + quoted(value) + ", so " + quoted(root) + " was compared with " + label;
+    return memberType ? labelled(subject, *memberType, ":") : subject + ":";
 }
 
 std::string unrelatedSentence(const std::optional<std::string>& givenAlias, const std::string& printedGiven, const std::string& printedExpected)
@@ -957,7 +992,7 @@ std::string tagLabel(const std::string& field, const std::string& value)
 
 std::string paragraph(const std::string& text)
 {
-    return "\n\n" + text;
+    return text.empty() ? text : "\n\n" + text;
 }
 
 std::string hiddenMembers(size_t count)
@@ -985,16 +1020,16 @@ std::string composeReason(
 {
     std::string reason;
     // A help that says what to do comes before the detail that backs it up. Several members making the
-    // same mistake give the same help.
+    // same mistake give the same help. A help that is off is empty.
     std::vector<std::string> shownHelps;
     for (const std::string& help : helps)
     {
         bool repeated = std::find(shownHelps.begin(), shownHelps.end(), help) != shownHelps.end();
-        if (!repeated && shownHelps.size() < kMaxHelps)
+        if (!help.empty() && !repeated && shownHelps.size() < kMaxHelps)
             shownHelps.push_back(help);
     }
-    for (size_t i = 0; i < shownHelps.size(); ++i)
-        reason += (i == 0 ? "\n\n" : "\n") + shownHelps[i];
+    for (const std::string& help : shownHelps)
+        reason += paragraph(help);
 
     if (!header.empty())
         reason += paragraph(header);
