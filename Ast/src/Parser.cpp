@@ -2365,9 +2365,11 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     LUAU_ASSERT(FFlag::LuwuClasses);
     LUAU_ASSERT(!isTrait || FFlag::LuwuTraits);
     size_t errorsBeforeClass = parseErrors.size();
-    checkLuwuFeature(classKeywordLocation, kClassesFeature, /* enabled= */ true);
     // what the declaration is called in messages
     const char* kind = isTrait ? "trait" : "class";
+
+    if (!isTrait)
+        checkLuwuFeature(classKeywordLocation, kClassesFeature, /* enabled= */ true);
 
     std::optional<Name> name = parseNameOpt("type name");
 
