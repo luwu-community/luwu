@@ -993,6 +993,7 @@ int lua_getmetatable(lua_State* L, int objindex)
     case LUA_TUSERDATA:
         mt = uvalue(obj)->metatable;
         break;
+    case LUA_TBACKINGSTORE:
     case LUA_TOBJECT:
     case LUA_TCLASS:
         // Luwu Classes (rfcs/classes): class and object metatables are locked down and never
@@ -1134,12 +1135,15 @@ int lua_setmetatable(lua_State* L, int objindex)
             luaC_objbarrier(L, uvalue(obj), mt);
         break;
     }
+    case LUA_TBACKINGSTORE:
     case LUA_TOBJECT:
     case LUA_TCLASS:
     {
         // Luwu Classes (rfcs/classes): the default case would install a metatable for every value
         // of the type, which the language doesn't allow for classes and objects. Upstream takes the
         // default case for both.
+        //
+        // Similarly backing stores do not support metatables
         luaG_runerror(L, "cannot set the metatable of a %s", luaT_typenames[ttype(obj)]);
     }
     default:

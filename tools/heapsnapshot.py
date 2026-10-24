@@ -169,7 +169,14 @@ def convertToSnapshot(data):
             if "metatable" in obj:
                 edgeCount += 1
                 addEdge([edgeTypeToMetaIndex["internal"], getStringSnapshotIndex(f'metatable ({obj["metatable"]})'), getNodeSnapshotIndex(obj["metatable"])])
-            addNode([nodeTypeToMetaIndex["native"], getStringSnapshotIndex(f"Luau userdata ({address})"), getUniqueId(address), obj["size"], edgeCount, 0, 0])
+            if obj.get("backingstore"):
+                for field in ("root", "cstr"):
+                    target = obj.get(field)
+                    if target is not None:
+                        edgeCount += 1
+                        addEdge([edgeTypeToMetaIndex["internal"], getStringSnapshotIndex(field), getNodeSnapshotIndex(target)])
+            name = f"Luau backing store ({address})" if obj.get("backingstore") else f"Luau userdata ({address})"
+            addNode([nodeTypeToMetaIndex["native"], getStringSnapshotIndex(name), getUniqueId(address), obj["size"], edgeCount, 0, 0])
         elif obj["type"] == "proto":
             name = f'Luau proto: {obj["source"]}:{obj["line"]} ({address})' if "source" in obj else f"Luau proto ({address})"
             if "constants" in obj:

@@ -73,6 +73,7 @@ typedef struct lua_TValue
 #define ttisboolean(o) (ttype(o) == LUA_TBOOLEAN)
 #define ttisuserdata(o) (ttype(o) == LUA_TUSERDATA)
 #define ttisthread(o) (ttype(o) == LUA_TTHREAD)
+#define ttisbackingstore(o) (ttype(o) == LUA_TBACKINGSTORE)
 #define ttisbuffer(o) (ttype(o) == LUA_TBUFFER)
 #define ttislightuserdata(o) (ttype(o) == LUA_TLIGHTUSERDATA)
 #define ttisvector(o) (ttype(o) == LUA_TVECTOR)
@@ -93,6 +94,8 @@ typedef struct lua_TValue
 #define hvalue(o) check_exp(ttistable(o), &(o)->value.gc->h)
 #define bvalue(o) check_exp(ttisboolean(o), (o)->value.b)
 #define thvalue(o) check_exp(ttisthread(o), &(o)->value.gc->th)
+#define backingstorevalue(o) check_exp(ttisbackingstore(o), cast_to(BackingStore*, (o)->value.gc))
+#define gco2backingstore(o) check_exp((o)->gch.tt == LUA_TBACKINGSTORE, cast_to(BackingStore*, o))
 #define bufvalue(o) check_exp(ttisbuffer(o), &(o)->value.gc->buf)
 #define upvalue(o) check_exp(ttisupval(o), &(o)->value.gc->uv)
 #define classvalue(o) check_exp(ttisclass(o), &(o)->value.gc->lclass)
@@ -111,6 +114,14 @@ typedef struct lua_TValue
 #define checkconsistency(obj) LUAU_ASSERT(!iscollectable(obj) || (ttype(obj) == (obj)->value.gc->gch.tt))
 
 #define checkliveness(g, obj) LUAU_ASSERT(!iscollectable(obj) || ((ttype(obj) == (obj)->value.gc->gch.tt) && !isdead(g, (obj)->value.gc)))
+
+#define setbackingstorevalue(L, obj, x) \
+    { \
+        TValue* i_o = (obj); \
+        i_o->value.gc = cast_to(GCObject*, (x)); \
+        i_o->tt = LUA_TBACKINGSTORE; \
+        checkliveness((L)->global, i_o); \
+    }
 
 // Macros to set values
 #define setnilvalue(obj) ((obj)->tt = LUA_TNIL)
@@ -538,12 +549,16 @@ typedef struct Closure
 ** Tables
 */
 
+// Shared with native code that reads packed table-key tags.
+#define LUA_TKEY_TAG_BITS 5
+static_assert(LUA_TDEADKEY < (1 << LUA_TKEY_TAG_BITS), "Table key tags must fit");
+
 typedef struct TKey
 {
     ::Value value;
     int extra[LUA_EXTRA_SIZE];
-    unsigned tt : 4;
-    int next : 28; // for chaining
+    unsigned tt : LUA_TKEY_TAG_BITS;
+    int next : (32 - LUA_TKEY_TAG_BITS); // for chaining
 } TKey;
 
 typedef struct LuaNode

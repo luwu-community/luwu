@@ -2,6 +2,8 @@
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #pragma once
 
+#include "lbackingstore.h"
+
 #include "lobject.h"
 #include "ltm.h"
 #include "ludata.h"
@@ -267,6 +269,8 @@ typedef struct global_State
 #ifdef LUAI_GCMETRICS
     GCMetrics gcmetrics;
 #endif
+
+    BackingStoreState backingstores;
 } global_State;
 // clang-format on
 

@@ -130,6 +130,10 @@ while offset < len(queue):
     elif obj["type"] == "userdata":
         if "metatable" in obj:
             queue.append((obj["metatable"], node.child("__meta")))
+        if obj.get("backingstore"):
+            for field in ("root", "cstr"):
+                if obj.get(field) is not None:
+                    queue.append((obj[field], node.child("__" + field)))
     elif obj["type"] == "thread":
         queue.append((obj["env"], node.child("__env")))
         stack = obj.get("stack")

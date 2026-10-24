@@ -104,6 +104,8 @@ enum lua_Type
     LUA_TVECTOR,
 #endif
 
+    LUA_TBACKINGSTORE,
+
     // values below this line are used in GCObject tags but may never show up in TValue type tags
 
     // LUA_TDEADKEY is used in TKey to identify Luau table entries that have the value set to nil,
@@ -234,6 +236,69 @@ LUA_API void* lua_newbuffer(lua_State* L, size_t sz);
 
 typedef void (*lua_BufferFree)(lua_State* L, void* data, size_t sz, void* userdata);
 LUA_API void* lua_newexternalbuffer(lua_State* L, size_t sz, void* data, void* userdata, lua_BufferFree free_cb, int mode);
+
+/*
+** backing stores (of which strings/buffers are views over)
+*/
+typedef void (*lua_BackingStoreFree)(lua_State* L, void* data, size_t len, void* userdata);
+
+// Up to 14 registrations per VM with every call returning a opaque tag owned by the VM.
+// `freecb` must drop the `data` and `inline userdata` when called
+LUA_API uint32_t lua_registerbackingstoretype(lua_State* L, lua_BackingStoreFree freecb, size_t userdatasize);
+
+// Pushes a VM-owned store and returns its bytes. Bytes are zero-initialized and limited to 1 GB.
+//
+// If terminated is nonzero, reserves a trailing NUL outside len (and flags the backing store as being terminated
+// to avoid copying cstrs (strings etc.))
+LUA_API void* lua_newbackingstore(lua_State* L, size_t len, int mutable_, int terminated);
+
+// Pushes a store over external bytes (guaranteed to be zero-copy and is limited to 4 GB) and returns data.
+//
+// If terminated is nonzero, data must be non-null and data[len] must remain a readable NUL
+// for the store's lifetime.
+LUA_API void* lua_newexternalbackingstore(
+    lua_State* L, void* data, size_t len, uint32_t tag, int mutable_, int terminated, const void* userdata);
+
+// Pushes a zero-copy slice of the store at idx and returns its bytes. The slice inherits mutability
+// and keeps the root store alive.
+LUA_API void* lua_slicebackingstore(lua_State* L, int idx, size_t offset, size_t len);
+
+// Pushes a new VM-owned copy of the store at idx with the requested mutability and termination,
+// and returns its bytes. Always copies, including terminated sources.
+LUA_API void* lua_copybackingstore(lua_State* L, int idx, int mutable_, int terminated);
+
+// Pushes a NUL-terminated store with the same logical bytes as the store at idx and returns its bytes:
+//
+// 1. Terminated (mutable or immutable): pushes the store itself
+// 2. Unterminated immutable: copies the bytes with a NUL-terminator and caches the copy inside the
+// store, so later calls push the cached copy without copying again
+// 3. Unterminated mutable: pushes a fresh immutable snapshot with a NUL-terminator
+LUA_API const char* lua_backingstorecstr(lua_State* L, int idx, size_t* len);
+
+// Returns the bytes of the store at idx, or NULL if the value is not a backing store. len may be NULL.
+//
+// Pointers remain valid while the store is reachable. Mutating the bytes of an immutable store is UB.
+LUA_API void* lua_tobackingstore(lua_State* L, int idx, size_t* len);
+
+// Returns the inline userdata of an external store at idx, or NULL if not present.
+LUA_API void* lua_getbackingstoreuserdata(lua_State* L, int idx);
+
+// Returns the registered tag of the external store at idx, or 0 for any other value.
+LUA_API uint32_t lua_backingstoretag(lua_State* L, int idx);
+
+// These return 0 for values other than backing stores.
+LUA_API int lua_isbackingstoreexternal(lua_State* L, int idx);
+LUA_API int lua_isbackingstoremutable(lua_State* L, int idx);
+// Whether data[len] is a guaranteed NUL (hence making strcmp etc safe).
+LUA_API int lua_isbackingstoreterminated(lua_State* L, int idx);
+// is the backing store a slice of another store
+LUA_API int lua_isbackingstoreslice(lua_State* L, int idx);
+
+// Pushes the root of the store at idx (itself for non-slices).
+LUA_API void lua_getbackingstoreroot(lua_State* L, int idx);
+
+// Offset of the store at idx into its root, or 0 for non-slices and other values.
+LUA_API size_t lua_backingstoreoffset(lua_State* L, int idx);
 
 /*
 ** get functions (Lua -> stack)
@@ -529,6 +594,7 @@ LUA_API int lua_getrefpool(lua_State* L, int ref);
 #define lua_isvector(L, n) (lua_type(L, (n)) == LUA_TVECTOR)
 #define lua_isthread(L, n) (lua_type(L, (n)) == LUA_TTHREAD)
 #define lua_isbuffer(L, n) (lua_type(L, (n)) == LUA_TBUFFER)
+#define lua_isbackingstore(L, n) (lua_type(L, (n)) == LUA_TBACKINGSTORE)
 #define lua_isnone(L, n) (lua_type(L, (n)) == LUA_TNONE)
 #define lua_issymnone(L, n) (lua_type(L, (n)) == LUA_TSYMNONE)
 #define lua_isnoneornil(L, n) (lua_type(L, (n)) <= LUA_TNIL)

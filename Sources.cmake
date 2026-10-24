@@ -387,6 +387,8 @@ target_sources(Luwu.VM PRIVATE
     VM/src/lapi.cpp
     VM/src/lapix.cpp
     VM/src/laux.cpp
+    VM/src/lbackingstore.cpp
+    VM/src/lbackingstore.h
     VM/src/lbaselib.cpp
     VM/src/lbitlib.cpp
     VM/src/lbuffer.cpp
@@ -606,6 +608,7 @@ endif()
 if(TARGET Luwu.Conformance)
     # Luwu.Conformance Sources
     target_sources(Luwu.Conformance PRIVATE
+        tests/BackingStore.test.cpp
         tests/ExternalBuffer.test.cpp
         tests/ExternalString.test.cpp
         tests/FatCClosure.test.cpp

@@ -41,6 +41,7 @@ const char* const luaT_typenames[] = {
 #if LUA_VECTOR_DOUBLE == 1
     "vector",
 #endif
+    "userdata", // backing stores
 };
 
 const char* const luaT_eventname[] = {
@@ -120,6 +121,8 @@ const TValue* luaT_gettmbyobj(lua_State* L, const TValue* o, TMS event)
     LuaTable* mt;
     switch (ttype(o))
     {
+    case LUA_TBACKINGSTORE:
+        return luaO_nilobject;
     case LUA_TTABLE:
         mt = hvalue(o)->metatable;
         break;

@@ -10,6 +10,7 @@
 #include "ldo.h"
 #include "ldebug.h"
 #include "ludata.h"
+#include "lbackingstore.h"
 
 #include <string.h>
 
@@ -233,6 +234,7 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
     g->strt.size = 0;
     g->strt.nuse = 0;
     g->strt.hash = NULL;
+    luaB_initbackingstorestate(L);
     setnilvalue(&g->pseudotemp);
     setnilvalue(registry(L));
     setnilvalue(&g->weakregistry);

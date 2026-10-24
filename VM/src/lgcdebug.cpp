@@ -10,6 +10,7 @@
 #include "ltable.h"
 #include "ludata.h"
 #include "lbuffer.h"
+#include "lbackingstore.h"
 #include "lclass.h"
 
 #include <string.h>
@@ -207,6 +208,13 @@ static void validateobj(global_State* g, GCObject* o)
         break;
 
     case LUA_TVECTOR:
+        break;
+
+    case LUA_TBACKINGSTORE:
+        if (luaB_backingstoreisslice(gco2backingstore(o)))
+            validateobjref(g, o, obj2gco(luaB_backingstoreroot(gco2backingstore(o))));
+        if (BackingStore* copy = luaB_backingstorecachedcstr(gco2backingstore(o)))
+            validateobjref(g, o, obj2gco(copy));
         break;
 
     case LUA_TBUFFER:
@@ -668,7 +676,7 @@ static void dumpobject(FILE* f, LuauObject* inst)
     fprintf(f, "]}");
 }
 
-static void dumpobj(FILE* f, GCObject* o)
+static void dumpobj(lua_State* L, FILE* f, GCObject* o)
 {
     switch (o->gch.tt)
     {
@@ -690,6 +698,17 @@ static void dumpobj(FILE* f, GCObject* o)
     case LUA_TVECTOR:
         return; // vector data is outlined, but is a constant cost of a vector
 
+    case LUA_TBACKINGSTORE:
+    {
+        BackingStore* store = gco2backingstore(o);
+        fprintf(f, R"({"type":"userdata","cat":%d,"size":%zu,"backingstore":true,"root":)", o->gch.memcat,
+            luaB_backingstoresize(L, store) + (luaB_backingstoreisexternal(store) ? luaB_backingstorelen(store) : 0));
+        dumpoptref(f, luaB_backingstoreisslice(store) ? obj2gco(luaB_backingstoreroot(store)) : NULL);
+        fprintf(f, R"(,"cstr":)");
+        dumpoptref(f, reinterpret_cast<GCObject*>(luaB_backingstorecachedcstr(store)));
+        fprintf(f, "}");
+        return;
+    }
     case LUA_TBUFFER:
         return dumpbuffer(f, gco2buf(o));
 
@@ -710,13 +729,20 @@ static void dumpobj(FILE* f, GCObject* o)
     }
 }
 
+struct DumpContext
+{
+    lua_State* L;
+    FILE* file;
+};
+
 static bool dumpgco(void* context, lua_Page* page, GCObject* gco)
 {
-    FILE* f = (FILE*)context;
+    DumpContext* ctx = static_cast<DumpContext*>(context);
+    FILE* f = ctx->file;
 
     dumpref(f, gco);
     fputc(':', f);
-    dumpobj(f, gco);
+    dumpobj(ctx->L, f, gco);
     fputc(',', f);
     fputc('\n', f);
 
@@ -730,9 +756,10 @@ void luaC_dump(lua_State* L, void* file, const char* (*categoryName)(lua_State* 
 
     fprintf(f, "{\"objects\":{\n");
 
-    dumpgco(f, NULL, obj2gco(g->mainthread));
+    DumpContext ctx = {L, f};
+    dumpgco(&ctx, NULL, obj2gco(g->mainthread));
 
-    luaM_visitgco(L, f, dumpgco);
+    luaM_visitgco(L, &ctx, dumpgco);
 
     fprintf(f, "\"0\":{\"type\":\"userdata\",\"cat\":0,\"size\":0}\n"); // to avoid issues with trailing ,
     fprintf(f, "},\"roots\":{\n");
@@ -1105,6 +1132,16 @@ static void enumobj(EnumContext* ctx, GCObject* o)
     case LUA_TVECTOR:
         return enumnode(ctx, o, sizeof(LuauVector), NULL);
 
+    case LUA_TBACKINGSTORE:
+    {
+        BackingStore* store = gco2backingstore(o);
+        enumnode(ctx, o, luaB_backingstoresize(ctx->L, store) + (luaB_backingstoreisexternal(store) ? luaB_backingstorelen(store) : 0), "backingstore");
+        if (luaB_backingstoreisslice(store))
+            enumedge(ctx, o, obj2gco(luaB_backingstoreroot(store)), "root");
+        if (BackingStore* copy = luaB_backingstorecachedcstr(store))
+            enumedge(ctx, o, obj2gco(copy), "cstr");
+        return;
+    }
     case LUA_TBUFFER:
         return enumbuffer(ctx, gco2buf(o));
 

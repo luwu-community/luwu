@@ -1498,6 +1498,7 @@ reentry:
                     case LUA_TSTRING:
                     case LUA_TFUNCTION:
                     case LUA_TTHREAD:
+                    case LUA_TBACKINGSTORE:
                     case LUA_TBUFFER:
                         pc += gcvalue(ra) == gcvalue(rb) ? LUAU_INSN_D(insn) : 1;
                         VM_ASSERT_PC(pc);
@@ -1632,6 +1633,7 @@ reentry:
                     case LUA_TSTRING:
                     case LUA_TFUNCTION:
                     case LUA_TTHREAD:
+                    case LUA_TBACKINGSTORE:
                     case LUA_TBUFFER:
                         pc += gcvalue(ra) != gcvalue(rb) ? LUAU_INSN_D(insn) : 1;
                         VM_ASSERT_PC(pc);

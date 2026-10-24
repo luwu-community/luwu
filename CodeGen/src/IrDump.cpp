@@ -77,6 +77,8 @@ const char* getTagName(uint8_t tag)
         return "tuserdata";
     case LUA_TTHREAD:
         return "tthread";
+    case LUA_TBACKINGSTORE:
+        return "tbackingstore";
     case LUA_TBUFFER:
         return "tbuffer";
     case LUA_TPROTO:
@@ -657,6 +659,9 @@ uint8_t parseTagName(std::string_view name)
 
     if (name == "tthread")
         return LUA_TTHREAD;
+
+    if (name == "tbackingstore")
+        return LUA_TBACKINGSTORE;
 
     if (name == "tbuffer")
         return LUA_TBUFFER;

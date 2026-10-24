@@ -11,6 +11,7 @@
 #include "lmem.h"
 #include "ludata.h"
 #include "lbuffer.h"
+#include "lbackingstore.h"
 #include "lclass.h"
 #include "lvector.h"
 
@@ -270,6 +271,16 @@ static void reallymarkobject(global_State* g, GCObject* o)
                 markobject(g, mt);
             return;
         }
+    }
+    case LUA_TBACKINGSTORE:
+    {
+        BackingStore* store = gco2backingstore(o);
+        if (luaB_backingstoreisslice(store))
+            markobject(g, luaB_backingstoreroot(store));
+        if (BackingStore* copy = luaB_backingstorecachedcstr(store))
+            markobject(g, copy);
+        gray2black(o); // bounded owner, no gray list needed
+        return;
     }
     case LUA_TUPVAL:
     {
@@ -772,6 +783,9 @@ static void freeobj(lua_State* L, GCObject* o, lua_Page* page)
         break;
     case LUA_TVECTOR:
         luaVec_freevector(L, gco2vec(o), page);
+        break;
+    case LUA_TBACKINGSTORE:
+        luaB_freebackingstore(L, gco2backingstore(o), page);
         break;
     case LUA_TBUFFER:
         luaB_freebuffer(L, gco2buf(o), page);
