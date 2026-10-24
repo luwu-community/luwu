@@ -437,8 +437,8 @@ do
     local mustEnd = "A 'do' expression must end with 'give <value>', 'return', 'break' or 'continue'"
     compileError("local x = do local y = 1", mustEnd)
     compileError("local x = do local y = 1 end", "A 'do' expression doesn't end with 'end'")
-    compileError("local x = do give 1 end", "A 'do' expression doesn't end with 'end'")
-    compileError("local x = if a then 1 else 2 end", "An if-else expression doesn't end with 'end'")
+    compileError("local x = do give 1 end", "Remove this 'end'; a 'do' expression ends at")
+    compileError("local x = if a then 1 else 2 end", "Remove this 'end'; an if-else expression ends at")
     compileError("local x = f(do local y = 1)", mustEnd)
     compileError("local x = do if true then give 1 end", mustEnd)
     compileError("local x = do error('x')", "write 'give error(...)'")
