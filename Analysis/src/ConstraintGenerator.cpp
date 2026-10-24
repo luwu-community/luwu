@@ -1772,8 +1772,10 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
     return ControlFlow::None;
 }
 
-// Luwu Destructuring (rfcs/destructuring.md): how deep `hub.a.b` paths to modules a required module exports go
+// Luwu Destructuring (rfcs/destructuring.md): how deep `hub.a.b` paths to modules a required module exports go, and how
+// many of them one local imports. Modules that export the same modules under several names multiply the paths.
 constexpr size_t kMaxExportedModuleDepth = 8;
+constexpr size_t kMaxExportedModulePaths = 256;
 
 // Luwu Destructuring (rfcs/destructuring.md): a local holding a module, `const m = require(p)`, `const m = hub.t` or
 // `const m = other`, imports its types like a require does, along with the modules it exports (`m.t.Cat`). An exported
@@ -1802,30 +1804,61 @@ void ConstraintGenerator::bindModuleAliases(const ScopePtr& scope, AstStatLocal*
             scope->importedModules[name] = *moduleName;
         }
 
-        importExportedModules(scope, name, *imported, /* depth= */ 0);
+        importExportedModules(scope, name, imported, *moduleName);
 
         if (local->isExported && scope.get() == rootScope)
             module->exportedModules[name] = *moduleName;
     }
 }
 
-// Imports the modules `imported` exports under `alias.field`, and the ones they export under `alias.field.field`
-void ConstraintGenerator::importExportedModules(const ScopePtr& scope, const Name& alias, const Module& imported, size_t depth)
+// Imports the modules `imported` (named `importedName`) exports under `alias.field`, and the ones they export under
+// `alias.field.field`, shorter paths first
+void ConstraintGenerator::importExportedModules(
+    const ScopePtr& scope,
+    const Name& alias,
+    const ModulePtr& imported,
+    const ModuleName& importedName
+)
 {
-    if (depth >= kMaxExportedModuleDepth)
-        return;
-
-    for (const auto& [field, nestedName] : imported.exportedModules)
+    struct PendingPath
     {
-        // A module in a require cycle with this one isn't checked yet
-        ModulePtr nested = nestedName == module->name ? nullptr : moduleResolver->getModule(nestedName);
-        if (!nested)
+        Name path;
+        ModulePtr module;
+        // the modules the path went through, `module` last
+        std::vector<ModuleName> modules;
+    };
+
+    std::vector<PendingPath> queue{PendingPath{alias, imported, {importedName}}};
+    size_t importedPaths = 0;
+    for (size_t i = 0; i < queue.size(); ++i)
+    {
+        // a copy: pushing to the queue can move its entries
+        const PendingPath current = queue[i];
+        if (current.modules.size() > kMaxExportedModuleDepth)
             continue;
 
-        const Name path = alias + "." + field;
-        scope->importedTypeBindings[path] = nested->exportedTypeBindings;
-        scope->importedModules[path] = nestedName;
-        importExportedModules(scope, path, *nested, depth + 1);
+        for (const auto& [field, nestedName] : current.module->exportedModules)
+        {
+            // A module in a require cycle with this one isn't checked yet. One already on the path (two modules that
+            // export each other) is imported under the shorter path.
+            bool onPath = std::find(current.modules.begin(), current.modules.end(), nestedName) != current.modules.end();
+            bool revisits = nestedName == module->name || onPath;
+            ModulePtr nested = revisits ? nullptr : moduleResolver->getModule(nestedName);
+            if (!nested)
+                continue;
+
+            if (importedPaths == kMaxExportedModulePaths)
+                return;
+            ++importedPaths;
+
+            const Name path = current.path + "." + field;
+            scope->importedTypeBindings[path] = nested->exportedTypeBindings;
+            scope->importedModules[path] = nestedName;
+
+            std::vector<ModuleName> modules = current.modules;
+            modules.push_back(nestedName);
+            queue.push_back(PendingPath{path, nested, std::move(modules)});
+        }
     }
 }
 

@@ -1537,6 +1537,44 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "modules_exported_as_fields_keep_their_types"
     }
 }
 
+// Modules that each export the next one under four names give 4^7 paths to the last one (`hub.a.b.c...`). A required
+// module imports a bounded number of them, the short ones first.
+TEST_CASE_FIXTURE(BuiltinsFixture, "modules_exported_under_many_paths_import_a_bounded_number")
+{
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    const int levels = 8;
+    fileResolver.source[format("game/L%d", levels)] = "export type Age = number\nexport const value = 1\n";
+    for (int i = levels - 1; i >= 1; --i)
+    {
+        fileResolver.source[format("game/L%d", i)] = format(
+            "export type Age = number\nconst next = require(game.L%d)\n"
+            "export const a = next\nexport const b = next\nexport const c = next\nexport const d = next\n",
+            i + 1
+        );
+    }
+
+    fileResolver.source["game/Importer"] = R"(
+        --!strict
+        const hub = require(game.L1)
+        type .{ Age } = hub.d.c.b
+        local age: Age = 1
+    )";
+    CheckResult result = getFrontend().check("game/Importer");
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    // `hub` itself, and at most kMaxExportedModulePaths (256) paths through it
+    ModulePtr importer = getFrontend().moduleResolver.getModule("game/Importer");
+    REQUIRE(importer);
+    REQUIRE(importer->hasModuleScope());
+    CHECK_LE(importer->getModuleScope()->importedModules.size(), 257);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_report_what_the_module_does_not_export")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

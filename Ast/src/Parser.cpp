@@ -6348,6 +6348,7 @@ AstExpr* Parser::parseDotTableConstructor()
 
     while (lexer.current().type != '}')
     {
+        Position elementStart = lexer.current().location.begin;
         bool nameFollows = lexer.current().type == Lexeme::Name;
         bool explicitValue = nameFollows && lexer.lookahead().type == '=';
         bool renaming = nameFollows && lexer.lookahead().type == Lexeme::Name && AstName(lexer.lookahead().name) == "as";
@@ -6422,9 +6423,15 @@ AstExpr* Parser::parseDotTableConstructor()
             cstItems.push_back({Position::missing(), Position::missing(), equalsPosition, separator, separatorPosition});
         }
 
+        // A new line declaring a constant ends an unclosed table, so the statement loop parses it. So does any element
+        // that consumed nothing: parseExpr reports a declaration without consuming it, and reading it as the next element
+        // would loop forever.
+        bool consumedNothing = lexer.current().location.begin == elementStart;
+        bool tableEnds = consumedNothing || startsConstDeclaration();
+
         if (lexer.current().type == ',' || lexer.current().type == ';')
             nextLexeme();
-        else if (lexer.current().type == Lexeme::Name)
+        else if (lexer.current().type == Lexeme::Name && !tableEnds)
             report(lexer.current().location, "Expected ',' after table constructor element");
         else if (lexer.current().type != '}')
             break;

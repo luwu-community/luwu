@@ -7978,6 +7978,20 @@ local unrelated = 1
     REQUIRE_EQ(result.root->body.size, 2);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): a `const` on the line after an unclosed `.{` ends the table, and the one
+// error is the missing `}`. Read as the table's next field, it would be an error that consumes nothing, repeated until
+// the parser runs out of memory.
+TEST_CASE_FIXTURE(Fixture, "a_const_below_an_unclosed_dot_table_ends_it")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    ParseResult result = tryParse("const y = 2\nlocal t = .{\n    y\nconst x = 1\n");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK(result.errors[0].getMessage().find("Expected '}'") == 0);
+    REQUIRE_EQ(result.root->body.size, 3);
+    CHECK(result.root->body.data[2]->is<AstStatLocal>());
+}
+
 TEST_CASE_FIXTURE(Fixture, "dot_tables_need_luwu_destructuring")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, false};
