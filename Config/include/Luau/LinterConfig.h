@@ -88,6 +88,12 @@ struct LintWarning
         Code_FloorDivision = 56,           // `math.floor(a / b)`, which is `a // b`
         Code_FenvDeoptimization = 57,      // `getfenv`/`setfenv`, which deoptimize the whole module
         Code_DiscardedValues = 58,         // Luwu: a call giving several values where only its first is kept (an if-else branch)
+        // Luwu: `any` in a type, which turns off type checking. The group also reports every `any` its parts don't, and
+        // is off by default; its parts are on by default in strict Luwu modules. Turning the group on or off turns them
+        // on or off with it (LintWarning::withGroupParts).
+        Code_Any = 59,
+        Code_AnyCast = 60,                 // `x :: any` without a comment saying why
+        Code_AnyAnnotation = 61,           // `x: any` on a parameter, local or property, which `unknown` would type safely
 
         Code__Count
     };
@@ -103,6 +109,9 @@ struct LintWarning
     static LintMask parseMask(const std::vector<HotComment>& hotcomments);
     // Luwu: the lints `--!lint Name` directives turn on, for the ones that are off by default
     static LintMask parseEnableMask(const std::vector<HotComment>& hotcomments);
+    // Luwu: `mask` with the parts of the groups in it whose parts don't depend on the group being on (Any). Every place
+    // that turns lints on or off by name applies it, so naming the group turns its parts on or off too.
+    static LintMask withGroupParts(LintMask mask);
 };
 
 static_assert(LintWarning::Code__Count <= kLintMaskBits, "more lints than LintMask has bits; raise kLintMaskBits");
@@ -190,8 +199,14 @@ inline constexpr const char* kWarningNames[] = {
     "FloorDivision",
     "FenvDeoptimization",
     "DiscardedValues",
+    "Any",
+    "AnyCast",
+    "AnyAnnotation",
 };
 // clang-format on
+
+// Luwu: the comment directives (`--!strict`, `--!nolint Name`), which the linter checks and autocomplete offers
+inline constexpr const char* kCommentDirectives[] = {"nolint", "lint", "nocheck", "nonstrict", "strict", "optimize", "native", "trust"};
 
 static_assert(std::size(kWarningNames) == unsigned(LintWarning::Code__Count), "did you forget to add warning to the list?");
 
