@@ -1940,7 +1940,9 @@ ModulePtr Frontend::check(
         typeChecker.unifierIterationLimit = typeCheckLimits.unifierIterationLimit;
         typeChecker.cancellationToken = typeCheckLimits.cancellationToken;
 
-        return typeChecker.check(sourceModule, mode, std::move(environmentScope));
+        ModulePtr module = typeChecker.check(sourceModule, mode, std::move(environmentScope));
+        module->language = sourceModule.language;
+        return module;
     }
 }
 
