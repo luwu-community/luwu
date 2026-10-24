@@ -3,6 +3,7 @@
 
 #include "Luau/AstQuery.h"
 #include "Luau/LinterConfig.h"
+#include "Luau/LuwuOnlyApi.h"
 #include "Luau/Module.h"
 #include "Luau/ParseResult.h"
 #include "Luau/PrettyPrinter.h"
@@ -7023,6 +7024,63 @@ private:
     }
 };
 
+// Luwu: a Luwu-only library member read in a Luau or Lua module (its config's `language`, from a `.luau` or `.lua`
+// file), as `library.member` or as a method on a value of that library's type (`s:startswith`, a `string` method). Luwu
+// code goes in `.luwu` files. The members are isLuwuOnlyMember's.
+class LintLuwuOnlyApi : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        if (!context.module || context.module->language == Language::Luwu)
+            return;
+
+        LintLuwuOnlyApi pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // The library `node` reads a member of: a global library (`table.drop`), or `string` for a method on a string. A
+    // local named `table` is the reader's own, so it doesn't count.
+    std::optional<std::string> libraryOf(AstExprIndexName* node)
+    {
+        if (node->op == '.')
+        {
+            if (AstExprGlobal* global = node->expr->as<AstExprGlobal>())
+                return std::string(global->name.value);
+            return std::nullopt;
+        }
+
+        std::optional<TypeId> receiver = context->getType(node->expr);
+        if (receiver && isString(follow(*receiver)))
+            return std::string("string");
+        return std::nullopt;
+    }
+
+    bool visit(AstExprIndexName* node) override
+    {
+        std::optional<std::string> library = libraryOf(node);
+        if (!library || !isLuwuOnlyMember(*library, node->index.value))
+            return true;
+
+        std::string qualified = *library + "." + node->index.value;
+        const char* language = context->module->language == Language::Lua ? "Lua" : "Luau";
+        emitWarning(
+            *context,
+            LintWarning::Code_LuwuOnlyApi,
+            node->location,
+            "'%s' only exists in Luwu, but this is a %s file; rename it to '.luwu' if it's Luwu code",
+            qualified.c_str(),
+            language
+        );
+        return true;
+    }
+};
+
 class LintDiscardedValues : AstVisitor
 {
 public:
@@ -7802,6 +7860,9 @@ std::vector<LintWarning> lint(
                     context.warningEnabled(LintWarning::Code_AnyAnnotation);
     if (anyLints && context.module && context.module->mode == Mode::Strict)
         LintAny::process(context, comments);
+
+    if (context.warningEnabled(LintWarning::Code_LuwuOnlyApi))
+        LintLuwuOnlyApi::process(context);
 
     // Luwu: turning LuaIterators off turns off its parts
     if (context.warningEnabled(LintWarning::Code_LuaIterators) &&
