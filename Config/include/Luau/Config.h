@@ -31,6 +31,10 @@ struct Config
     // for upstream because their platform has tons of untyped code that they need to infer
     Mode mode = Mode::Strict;
 
+    // Luwu: not read from a config file. A config resolver sets it for the module it's resolving (the CLI and the
+    // language server go by file extension), so modules in one directory can differ.
+    Language language = Language::Luwu;
+
     ParseOptions parseOptions;
 
     LintOptions enabledLint;

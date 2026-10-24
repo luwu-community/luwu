@@ -20,6 +20,7 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver);
 LUAU_FASTFLAG(DebugLuauFreezeArena)
 LUAU_FASTFLAG(DebugLuauMagicTypes)
 LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauDontBindOptionalGenericToNil)
 LUAU_FASTFLAG(LuauSubtypingMissingPropertiesAsNil)
@@ -2115,14 +2116,58 @@ TEST_CASE_FIXTURE(FrontendFixture, "deleted_source_is_evicted_on_recheck")
     // Invalidate old contents of A
     getFrontend().markDirty("game/A");
 
-    // Should be able to check C and fail on missing B
-    LUAU_REQUIRE_ERROR_COUNT(1, getFrontend().check("game/C"));
+    // Should be able to check C and fail on missing B. Luwu: and on the first use of `B`, which has no type because
+    // of it (NoTypeUse).
+    CheckResult result = getFrontend().check("game/C");
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(2, result);
+        CHECK(get<NoTypeUse>(result.errors[1]));
+    }
+    else
+    {
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+    }
 
     CHECK(getFrontend().sourceNodes.count("game/B") == 0);
     CHECK(getFrontend().moduleResolver.getModule("game/B") == nullptr);
 
     CHECK(getFrontend().sourceNodes.count("game/A") == 1);
     CHECK(getFrontend().moduleResolver.getModule("game/A") != nullptr);
+}
+
+TEST_CASE_FIXTURE(Fixture, "luwu_syntax_in_a_luau_module_is_a_syntax_error")
+{
+    ScopedFastFlag luwuDefaultArguments{FFlag::LuwuDefaultArguments, true};
+
+    fileResolver.source["game/a"] = "local function f(x = 1) return x end";
+    fileResolver.source["game/b"] = "local function f(x = 1) return x end";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    CheckResult luau = getFrontend().check("game/a");
+    LUAU_REQUIRE_ERROR_COUNT(1, luau);
+    REQUIRE(get<SyntaxError>(luau.errors[0]));
+    CHECK(toString(luau.errors[0]).find("Default arguments are a Luwu-only feature.\n\nHelp (Luwu-only feature):") == 0);
+
+    CheckResult luwu = getFrontend().check("game/b");
+    LUAU_REQUIRE_NO_ERRORS(luwu);
+}
+
+TEST_CASE_FIXTURE(Fixture, "checked_modules_know_their_language")
+{
+    fileResolver.source["game/a"] = "local x = 1";
+    fileResolver.source["game/b"] = "local x = 1";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    getFrontend().check("game/a");
+    getFrontend().check("game/b");
+
+    ModulePtr luau = getFrontend().moduleResolver.getModule("game/a");
+    ModulePtr luwu = getFrontend().moduleResolver.getModule("game/b");
+    REQUIRE(luau);
+    REQUIRE(luwu);
+    CHECK(luau->language == Language::Luau);
+    CHECK(luwu->language == Language::Luwu);
 }
 
 TEST_SUITE_END();

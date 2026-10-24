@@ -213,12 +213,20 @@ TEST_CASE_FIXTURE(Fixture, "index_on_an_intersection_type_with_mixed_types")
         end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
-
+    // Luwu: no value has type `A & B`, so using `t` is unreachable code (UnreachableCodeUse); upstream reports nothing
     if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        const UnreachableCodeUse* use = get<UnreachableCodeUse>(result.errors[0]);
+        REQUIRE(use);
+        CHECK_EQ(UnreachableCodeUse::Reason::DeclaredUninhabited, use->reason);
         CHECK_EQ("(A & B) -> never", toString(requireType("f")));
+    }
     else
+    {
+        LUAU_REQUIRE_NO_ERRORS(result);
         CHECK_EQ("(A & B) -> number & string", toString(requireType("f")));
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "index_on_an_intersection_type_with_one_part_missing_the_property")
@@ -1372,7 +1380,17 @@ TEST_CASE_FIXTURE(Fixture, "less_greedy_unification_with_intersection_types_2")
         end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
+    // Luwu: no value has the declared type, so using `t` is unreachable code; upstream reports nothing
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const UnreachableCodeUse* use = get<UnreachableCodeUse>(result.errors[0]);
+    REQUIRE(use);
+    CHECK_EQ(UnreachableCodeUse::Reason::DeclaredUninhabited, use->reason);
+    CHECK_EQ(
+        "Attempt to use unreachable code: 't' is 'never' here\n\n"
+        "Help (unreachable code):\n"
+        "  • 't' is declared with a type no value has, so this line never runs",
+        toString(result.errors[0])
+    );
 
     CHECK_EQ("({ x: number } & { x: string }) -> never", toString(requireType("f")));
 }

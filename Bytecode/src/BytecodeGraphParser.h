@@ -1076,8 +1076,10 @@ struct BytecodeGraphParser
 
             case LOP_NEWCLASSMEMBER:
                 LUAU_ASSERT(FFlag::LuwuClasses);
-                // Luwu Traits (rfcs/classes/traits.md): the graph pipeline doesn't support the IMPLEMENTS form yet
-                LUAU_ASSERT(LUAU_INSN_B(insn) == 0);
+                // Luwu Traits (rfcs/classes/traits.md): the graph pipeline doesn't support the IMPLEMENTS and TRAITCOPY
+                // forms yet, so a function using them isn't rebuilt. They read other operands than a plain member add.
+                if (LUAU_INSN_B(insn) != 0)
+                    return false;
                 addVmRegInput(node, LUAU_INSN_A(insn));
                 addVmRegInput(node, LUAU_INSN_C(insn));
                 addVmConstInput(node, aux);

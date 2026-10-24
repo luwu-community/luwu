@@ -4,6 +4,7 @@
 #include "Luau/Clone.h"
 #include "Luau/Common.h"
 #include "Luau/FileResolver.h"
+#include "Luau/MismatchExplanation.h"
 #include "Luau/NotNull.h"
 #include "Luau/Scope.h"
 #include "Luau/StringUtils.h"
@@ -12,6 +13,7 @@
 #include "Luau/TypeChecker2.h"
 #include "Luau/TypeFunction.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/UnknownVariable.h"
 
 #include <optional>
 #include <string>
@@ -22,6 +24,7 @@ LUAU_FASTINTVARIABLE(LuauIndentTypeMismatchMaxTypeLength, 10)
 LUAU_FASTFLAGVARIABLE(LuauTweakAccessViolationReporting)
 LUAU_FASTFLAGVARIABLE(LuauBetterMissingPropertiesTypeError)
 LUAU_FASTFLAG(LuauBetterPackAndVariadicMismatchErrors)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 static std::string wrongNumberOfArgsString(
     size_t expectedCount,
@@ -395,34 +398,31 @@ static std::optional<std::string> classComparisonHelp(const CannotCompareUnrelat
     return help;
 }
 
-std::string mismatchNotationLegend(uint8_t notation)
+std::string mismatchNotationLegend(uint8_t notation, const Helpifier& helpifier)
 {
-    std::vector<std::string> parts;
+    // At most one part per kind of notation, and one for the roots
+    constexpr size_t kMaxLegendParts = 5;
+    std::string_view parts[kMaxLegendParts];
+    size_t count = 0;
     if (notation & MismatchNotationUnionMember)
-        parts.push_back("'#2' is the 2nd member of a union, counting in the order printed");
+        parts[count++] = "'#2' is the 2nd member of a union, counting in the order printed";
     if (notation & MismatchNotationOverload)
-        parts.push_back("'#2' is the 2nd overload of a function, counting in the order printed");
+        parts[count++] = "'#2' is the 2nd overload of a function, counting in the order printed";
     if (notation & MismatchNotationIndexer)
-        parts.push_back("'[string]' is any value in a map with string keys");
+        parts[count++] = "'[string]' is any value in a map with string keys";
     if (notation & MismatchNotationArrayElement)
-        parts.push_back("'[i]' is any element of an array");
+        parts[count++] = "'[i]' is any element of an array";
 
     bool expectedRoot = (notation & MismatchNotationExpectedRoot) != 0;
     bool gotRoot = (notation & MismatchNotationGotRoot) != 0;
     if (expectedRoot && gotRoot)
-        parts.push_back("'expected' is the type we expected, and 'given' is the type we were given");
+        parts[count++] = "'expected' is the type we expected, and 'given' is the type we were given";
     else if (expectedRoot)
-        parts.push_back("'expected' is the type we expected");
+        parts[count++] = "'expected' is the type we expected";
     else if (gotRoot)
-        parts.push_back("'given' is the type we were given");
+        parts[count++] = "'given' is the type we were given";
 
-    if (parts.empty())
-        return "";
-
-    std::string legend = "Help: in the paths above,";
-    for (const std::string& part : parts)
-        legend += "\n  • " + part;
-    return legend;
+    return helpifier("paths above", parts, count);
 }
 
 // A reason that starts on its own line joins the message as a line, not as a clause: `"; "` before a line
@@ -518,6 +518,50 @@ static void appendNamesAndReason(std::string& message, const std::vector<NamedTy
         appendReason(message, reason);
 }
 
+// Luwu: where to report a bug in Luwu
+static const char* const kIssuesUrl = "https://github.com/luwu-community/luwu/issues";
+
+// Luwu: how an improper use reads in "Attempt to ...". Indexing is any use that isn't a call.
+static std::string improperUseVerb(ImproperUse use)
+{
+    return use == ImproperUse::Call ? "call" : "use";
+}
+
+// Luwu: why a local has no type, as the end of a sentence about it
+static std::string noTypeClause(std::optional<Location> origin)
+{
+    if (origin)
+        return "has no type because of the error on line " + std::to_string(origin->begin.line + 1);
+    return "has no type";
+}
+
+std::string noTypeNote(const std::string& name, std::optional<Location> origin)
+{
+    return "'" + name + "' " + noTypeClause(origin);
+}
+
+// Luwu: how to tell the members of a union of table types apart by a field some of them lack; nullopt when a member
+// that lacks it isn't a table type, which no field can be added to
+static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionProperty& e)
+{
+    const UnionType* ut = get<UnionType>(follow(e.type));
+    if (!ut || !e.showHelp)
+        return std::nullopt;
+    for (TypeId missing : e.missing)
+    {
+        if (!get<TableType>(follow(missing)))
+            return std::nullopt;
+    }
+
+    std::string lacking;
+    for (TypeId missing : e.missing)
+        lacking += (lacking.empty() ? "'" : ", '") + toString(missing) + "'";
+
+    return Helpifier{e.showHelp}(
+        "telling members apart", {"Add '" + e.key + ": nil' to " + lacking + " so that checking '" + e.key + "' tells the members apart"}
+    );
+}
+
 struct ErrorConverter
 {
     FileResolver* fileResolver = nullptr;
@@ -534,10 +578,11 @@ struct ErrorConverter
             return *message;
 
         ToStringOptions typeOptions;
-        typeOptions.sortUnionMembers = !tm.luwuExplanation;
+        const bool explained = tm.explained.has_value();
+        typeOptions.sortUnionMembers = !explained;
         // Luwu (helpful subtyping errors): an explained mismatch prints parameter names, so the two function types can
         // be compared parameter by parameter and its bullets can refer to them by name.
-        typeOptions.functionTypeArguments = tm.luwuExplanation;
+        typeOptions.functionTypeArguments = explained;
 
         std::string givenTypeName = tm.givenName ? *tm.givenName : Luau::toString(tm.givenType, typeOptions);
         std::string wantedTypeName = tm.wantedName ? *tm.wantedName : Luau::toString(tm.wantedType, typeOptions);
@@ -564,10 +609,10 @@ struct ErrorConverter
         // being called with them: there it says what the function it got takes or returns.
         const bool aboutParameters = tm.contextVerb && *tm.contextVerb == mismatchContextFunctionTakes;
         const bool aboutReturns = tm.contextVerb && *tm.contextVerb == mismatchContextFunctionReturns;
-        std::string butGot = tm.luwuExplanation ? "but was given" : "but got";
-        if (tm.luwuExplanation && aboutParameters)
+        std::string butGot = explained ? "but was given" : "but got";
+        if (explained && aboutParameters)
             butGot = "but it takes";
-        else if (tm.luwuExplanation && aboutReturns)
+        else if (explained && aboutReturns)
             butGot = "but it returns";
 
         // A qualifier is rendered already formatted (" from 'a.luau'", " defined on line 3") because
@@ -602,19 +647,20 @@ struct ErrorConverter
             // a table in it: tables side by side on one line can't be compared.
             bool blockTypes = givenType.find('\n') != std::string::npos || wantedType.find('\n') != std::string::npos;
             bool hasTables = givenType.find('{') != std::string::npos || wantedType.find('{') != std::string::npos;
-            bool printedByLuwu = tm.wantedName || tm.givenName || tm.luwuExplanation;
+            bool printedByLuwu = tm.wantedName || tm.givenName || explained;
             bool stacked = blockTypes || (printedByLuwu && hasTables);
             bool givenIsShort = !stacked && givenType.length() <= luauIndentTypeMismatchMaxTypeLength;
             bool eitherIsShort = givenIsShort || (!stacked && wantedType.length() <= luauIndentTypeMismatchMaxTypeLength);
 
             // An aliased union is printed as its declaration, `type Drop = A | B`, so its members are
             // there to count; a long one goes on the line below its name.
-            if (tm.givenExpansion || tm.wantedExpansion)
+            const bool hasExpansion = explained && (tm.explained->givenExpansion || tm.explained->wantedExpansion);
+            if (hasExpansion)
             {
-                if (tm.wantedExpansion)
-                    wanted = typeDeclaration(wantedType, *tm.wantedExpansion);
-                if (tm.givenExpansion)
-                    given = typeDeclaration(givenType, *tm.givenExpansion);
+                if (tm.explained->wantedExpansion)
+                    wanted = typeDeclaration(wantedType, *tm.explained->wantedExpansion);
+                if (tm.explained->givenExpansion)
+                    given = typeDeclaration(givenType, *tm.explained->givenExpansion);
                 return preamble + "\n    " + wanted + "\n" + butGot + "\n    " + given;
             }
 
@@ -705,7 +751,7 @@ struct ErrorConverter
         switch (e.context)
         {
         case UnknownSymbol::Binding:
-            return "Unknown global '" + e.name + "'; consider assigning to it first";
+            return unknownVariableMessage(e);
         case UnknownSymbol::Type:
             switch (e.qualifier)
             {
@@ -716,6 +762,9 @@ struct ErrorConverter
             case UnknownSymbol::Qualifier::Unknown:
                 break;
             }
+            // Luwu: a type name misspelled from one in scope reads like a misspelled local
+            if (e.unbound == UnknownSymbol::Unbound::Typo)
+                return unknownVariableMessage(e);
             return "Unknown type '" + e.name + "'";
         }
 
@@ -1069,7 +1118,7 @@ struct ErrorConverter
         // Luwu (helpful subtyping errors): the squiggle is already on the table literal, and the missing properties
         // are all that's wrong with it, so neither type is printed: name the literal and what it's for, then
         // list each missing property with the type it should have.
-        if (e.luwuExplanation && e.context == MissingProperties::Missing)
+        if (e.fromTableLiteral && e.context == MissingProperties::Missing)
         {
             ToStringOptions typeOptions;
             typeOptions.sortUnionMembers = false;
@@ -1235,7 +1284,13 @@ struct ErrorConverter
             ss += "'" + toString(ty) + "'";
         }
 
-        return ss + " in the type '" + toString(e.type) + "'";
+        ss += " in the type '" + toString(e.type) + "'";
+
+        // Luwu: a table type is a shape, so reading a field a member doesn't declare can raise (a class object, a vector
+        // or an extern value fits it). Declaring the field as `nil` makes testing it tell the members apart.
+        if (std::optional<std::string> help = missingUnionPropertyHelp(e))
+            ss += "\n\n" + *help;
+        return ss;
     }
 
     std::string operator()(const TypesAreUnrelated& e) const
@@ -1509,6 +1564,74 @@ struct ErrorConverter
         return "Did you mean '" + e.meant + "' instead of '" + e.written + "'?";
     }
 
+    std::string operator()(const UnreachableCodeUse& e) const
+    {
+        if (e.reason == UnreachableCodeUse::Reason::PossibleTypeBug)
+        {
+            std::string subject = e.name.empty() ? "This value" : "'" + e.name + "'";
+            std::string message = subject + " is 'never' here but we're not sure it's truly unreachable. If this looks like a bug, report it to " +
+                                  kIssuesUrl;
+            std::string what = e.name.empty() ? "this value" : "'" + e.name + "'";
+            Helpifier{e.showHelp}.appendTo(message, "possible type bug", {"Until it's fixed, nothing " + what + " is used for here is checked"});
+            return message;
+        }
+
+        std::string message = "Attempt to " + improperUseVerb(e.use) + " unreachable code: '" + e.name + "' is 'never' here";
+
+        std::string reason;
+        switch (e.reason)
+        {
+        case UnreachableCodeUse::Reason::NarrowedAway:
+            reason = "The checks before this line rule out every type '" + e.name + "' could have, so this line never runs";
+            break;
+        case UnreachableCodeUse::Reason::NeverReturningCall:
+            reason = "'" + e.name + "' holds the result of a call that never returns, so this line never runs";
+            break;
+        case UnreachableCodeUse::Reason::DeclaredNever:
+            reason = "'" + e.name + "' is declared as 'never', so this line never runs";
+            break;
+        case UnreachableCodeUse::Reason::DeclaredUninhabited:
+            reason = "'" + e.name + "' is declared with a type no value has, so this line never runs";
+            break;
+        case UnreachableCodeUse::Reason::CastToNever:
+            reason = "'" + e.name + "' is cast to 'never', a type no value has, so this line never runs";
+            break;
+        case UnreachableCodeUse::Reason::PossibleTypeBug:
+            LUAU_ASSERT(!"worded above");
+            break;
+        }
+        Helpifier{e.showHelp}.appendTo(message, "unreachable code", {reason});
+        return message;
+    }
+
+    std::string operator()(const NoTypeUse& e) const
+    {
+        std::string message = "Attempt to " + improperUseVerb(e.use) + " '" + e.name + "', which " + noTypeClause(e.origin);
+
+        Helpifier helpifier{e.showHelp};
+        if (e.origin)
+        {
+            std::string line = std::to_string(e.origin->begin.line + 1);
+            helpifier.appendTo(message, "no type", {"Fix the error on line " + line + " first; until then, uses of '" + e.name + "' aren't checked"});
+        }
+        else
+        {
+            helpifier.appendTo(
+                message,
+                "no type",
+                {"Luwu couldn't work out a type for '" + e.name + "', so its uses aren't checked", "Annotating '" + e.name + "' gives it a type"}
+            );
+        }
+        return message;
+    }
+
+    std::string operator()(const InconsistentReturn& e) const
+    {
+        return "This function's other " + std::to_string(e.otherReturns) + " codepaths return '" + toString(e.othersReturn) +
+               "', are you sure you meant to return '" + toString(e.returned) +
+               "' here? Explicitly annotate this function's return type to silence";
+    }
+
     std::string operator()(const DocSyntaxError& e) const
     {
         return e.message;
@@ -1615,6 +1738,8 @@ struct ErrorConverter
 
         std::string function = e.callee.empty() ? "this function" : "'" + e.callee + "'";
         std::string arguments = e.attemptedArgCount == 1 ? "this argument" : "these " + std::to_string(e.attemptedArgCount) + " arguments";
+        if (!e.arguments.empty())
+            arguments = "'" + e.arguments + "'";
         return "None of the overloads of " + function + " accept " + arguments + ":\n" + numberedOverloads(e.overloads);
     }
 
@@ -1840,28 +1965,63 @@ bool TypeMismatch::operator==(const TypeMismatch& rhs) const
         return false;
 
     // Luwu (helpful subtyping errors): errors are deduplicated with ==, so everything that changes what the
-    // message says takes part. `luwuExplanation` doesn't, here or on MissingProperties: it only selects the
-    // rendering style ("but was given" for "but got", union members in written order, the missing-fields
-    // layout), so two errors that agree on everything else say the same thing and keeping one loses nothing.
+    // message says takes part. Whether the mismatch was explained doesn't, nor does `fromTableLiteral` on
+    // MissingProperties: they only select the rendering style ("but was given" for "but got", union members in
+    // written order, the missing-fields layout), so two errors that agree on everything else say the same thing
+    // and keeping one loses nothing. What an explanation adds (expansions, notation) does take part.
+    const Explained noExplanation;
+    const Explained& lhsExplained = explained ? *explained : noExplanation;
+    const Explained& rhsExplained = rhs.explained ? *rhs.explained : noExplanation;
     const bool sameContext =
         contextVerb == rhs.contextVerb && contextWantedDisplay == rhs.contextWantedDisplay && contextGivenDisplay == rhs.contextGivenDisplay;
-    const bool sameNames = wantedName == rhs.wantedName && givenName == rhs.givenName && wantedExpansion == rhs.wantedExpansion &&
-                           givenExpansion == rhs.givenExpansion && givenVariable == rhs.givenVariable && whereDeclarations == rhs.whereDeclarations;
-    const bool sameLuwuRendering = sameContext && sameNames && overrideMessage == rhs.overrideMessage && notation == rhs.notation;
+    const bool sameNames = wantedName == rhs.wantedName && givenName == rhs.givenName && givenVariable == rhs.givenVariable &&
+                           whereDeclarations == rhs.whereDeclarations;
+    const bool sameLuwuRendering = sameContext && sameNames && overrideMessage == rhs.overrideMessage && lhsExplained == rhsExplained;
 
     return *wantedType == *rhs.wantedType && *givenType == *rhs.givenType && reason == rhs.reason && context == rhs.context &&
            sameLuwuRendering;
 }
 
+bool TypeMismatch::Explained::operator==(const Explained& rhs) const
+{
+    return wantedExpansion == rhs.wantedExpansion && givenExpansion == rhs.givenExpansion && notation == rhs.notation;
+}
+
 bool UnknownSymbol::operator==(const UnknownSymbol& rhs) const
 {
-    return name == rhs.name && qualifier == rhs.qualifier;
+    return name == rhs.name && qualifier == rhs.qualifier && unbound == rhs.unbound && meant == rhs.meant && definition == rhs.definition;
+}
+
+// Luwu (helpful subtyping errors): the type names in scope at `scope`, nearest first.
+static std::vector<std::string> typeNamesInScope(const Scope& scope)
+{
+    std::vector<std::string> names;
+    for (const Scope* s = &scope; s; s = s->parent.get())
+    {
+        for (const auto& [name, _] : s->exportedTypeBindings)
+            names.push_back(name);
+        for (const auto& [name, _] : s->privateTypeBindings)
+            names.push_back(name);
+    }
+    return names;
 }
 
 UnknownSymbol unknownTypeReference(const Scope& scope, const AstTypeReference& reference)
 {
     if (!reference.prefix)
-        return UnknownSymbol{reference.name.value, UnknownSymbol::Context::Type};
+    {
+        UnknownSymbol error{reference.name.value, UnknownSymbol::Context::Type};
+        // A value with this name (`keyof<Colours>` for a local `Colours`) is what was meant, not a type spelled like it
+        bool namesAValue = scope.linearSearchForBinding(error.name).has_value();
+        if (!FFlag::LuwuHelpfulSubtypingErrors || namesAValue)
+            return error;
+        if (std::optional<std::string> meant = closestSpelling(error.name, typeNamesInScope(scope)))
+        {
+            error.unbound = UnknownSymbol::Unbound::Typo;
+            error.meant = *meant;
+        }
+        return error;
+    }
 
     std::string module = reference.prefix->value;
     std::string member = reference.name.value;
@@ -1926,6 +2086,21 @@ bool UninstantiableClass::operator==(const UninstantiableClass& rhs) const
 bool Typo::operator==(const Typo& rhs) const
 {
     return written == rhs.written && meant == rhs.meant;
+}
+
+bool UnreachableCodeUse::operator==(const UnreachableCodeUse& rhs) const
+{
+    return use == rhs.use && name == rhs.name && reason == rhs.reason && showHelp == rhs.showHelp;
+}
+
+bool NoTypeUse::operator==(const NoTypeUse& rhs) const
+{
+    return use == rhs.use && name == rhs.name && origin == rhs.origin && showHelp == rhs.showHelp;
+}
+
+bool InconsistentReturn::operator==(const InconsistentReturn& rhs) const
+{
+    return otherReturns == rhs.otherReturns && othersReturn == rhs.othersReturn && returned == rhs.returned;
 }
 
 bool DocSyntaxError::operator==(const DocSyntaxError& rhs) const
@@ -2259,7 +2434,7 @@ bool GenericTypePackCountMismatch::operator==(const GenericTypePackCountMismatch
 
 bool MultipleNonviableOverloads::operator==(const MultipleNonviableOverloads& rhs) const
 {
-    return attemptedArgCount == rhs.attemptedArgCount && callee == rhs.callee && overloads == rhs.overloads;
+    return attemptedArgCount == rhs.attemptedArgCount && callee == rhs.callee && overloads == rhs.overloads && arguments == rhs.arguments;
 }
 
 std::string numberedOverloads(const std::vector<std::string>& signatures)
@@ -2511,8 +2686,13 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
         e.classTy = clone(e.classTy);
     else if constexpr (std::is_same_v<T, ConstructorReadByName>)
         e.table = clone(e.table);
-    else if constexpr (std::is_same_v<T, Typo>)
+    else if constexpr (std::is_same_v<T, Typo> || std::is_same_v<T, UnreachableCodeUse> || std::is_same_v<T, NoTypeUse>)
     {
+    }
+    else if constexpr (std::is_same_v<T, InconsistentReturn>)
+    {
+        e.othersReturn = clone(e.othersReturn);
+        e.returned = clone(e.returned);
     }
     else if constexpr (std::is_same_v<T, DocSyntaxError>)
     {

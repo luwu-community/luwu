@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/AutocompleteTypes.h"
+#include "Luau/ParseResult.h"
 
 namespace Luau
 {
@@ -22,7 +23,7 @@ AutocompleteResult autocomplete_(
     Position position,
     FileResolver* fileResolver,
     StringCompletionCallback callback,
-    bool isInHotComment = false
+    const HotComment* hotComment = nullptr
 );
 
 } // namespace Luau

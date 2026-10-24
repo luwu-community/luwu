@@ -119,6 +119,9 @@ struct FrontendOptions
     std::function<void(const SourceModule& sourceModule, const Luau::Module& module)> customModuleCheck;
 
     bool collectTypeAllocationStats = false;
+    // Luwu: whether error messages carry help (see Helpifier). A reader who knows the language well may want only the
+    // errors.
+    bool showHelp = true;
 };
 
 struct CheckResult

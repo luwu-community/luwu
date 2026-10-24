@@ -111,7 +111,8 @@ struct DocTextLink
 
 // Resolves the references in doc text that isn't in a source file, as if it were a doc comment at `at` in `module`
 // (`sourceModule` is the same module's: its module-level doc's bindings apply). Errors go to `errors` when it isn't
-// null, all at `at`, since the text has no place in the source.
+// null, all at `at`, since the text has no place in the source. Nothing resolves when `module` was checked without
+// retainFullTypeGraphs.
 std::vector<DocTextLink> resolveDocText(
     std::string_view text,
     const SourceModule& sourceModule,

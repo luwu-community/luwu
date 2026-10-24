@@ -25,6 +25,19 @@ namespace Luau
 
 // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation's members are rebuilt from the clone's
 // template and arguments, which cloneChildren clones
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): a copy of `ty` in `arena`. An instantiation's members are
+// copied with it, and another thread may be building them (buildNominalMembers), so they're copied under its lock.
+static TypeId copyType(TypeArena* arena, TypeId ty)
+{
+    if (const ExternType* etv = get<ExternType>(ty); etv && etv->lazyMembers)
+    {
+        std::lock_guard<std::mutex> guard(etv->lazyMembers->mutex);
+        return arena->addType(ty->ty);
+    }
+
+    return arena->addType(ty->ty);
+}
+
 static void resetClonedInstantiation(TypeId clone, TypeArena* arena)
 {
     if (const ExternType* etv = get<ExternType>(clone); etv && etv->genericTemplate)
@@ -189,7 +202,7 @@ public:
         else if (ty->persistent && ty != forceTy)
             return ty;
 
-        TypeId target = arena->addType(ty->ty);
+        TypeId target = copyType(arena.get(), ty);
         asMutable(target)->documentationSymbol = ty->documentationSymbol;
         asMutable(target)->metadata = cloneMetadata(ty->metadata);
 
@@ -607,7 +620,7 @@ public:
         else if (ty->persistent && ty != forceTy)
             return ty;
 
-        TypeId target = arena->addType(ty->ty);
+        TypeId target = copyType(arena.get(), ty);
         asMutable(target)->documentationSymbol = ty->documentationSymbol;
         asMutable(target)->metadata = cloneMetadata(ty->metadata);
 

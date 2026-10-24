@@ -226,8 +226,18 @@ bool luaR_isvminternalfunction(lua_State* L, const Closure* cl)
 }
 
 // The members the compiler synthesizes for the VM to call. Users can't declare them: names starting with `__` are reserved.
+// Every name the VM reserves for class and trait internals starts with `__`. Checked per member, so ordinary names
+// skip looking the reserved ones up.
+static bool luaR_hasreservedprefix(TString* name)
+{
+    return name->len >= 2 && getstr(name)[0] == '_' && getstr(name)[1] == '_';
+}
+
 static bool luaR_isvminternalname(lua_State* L, TString* name)
 {
+    if (!luaR_hasreservedprefix(name))
+        return false;
+
     return name == luaS_newliteral(L, "__defaults") || name == luaS_newliteral(L, "__implements") ||
            name == luaS_newliteral(L, "__traitinit") || name == luaS_newliteral(L, "__needs");
 }
@@ -1118,16 +1128,9 @@ static Closure* luaR_copytraitfunction(lua_State* L, const Closure* cl)
         setobj(L, &copy->l.uprefs[i], &cl->l.uprefs[i]);
     copy->preload = cl->preload;
 
-    // the copy runs natively when the function it copies does: native code compiles the copy now
-    if (L->global->ecb.functioncopied && cl->l.p->execdata)
-    {
-        luaC_threadbarrier(L);
-        luaD_checkstack(L, 1);
-        setclvalue(L, L->top, copy);
-        L->top++;
-        L->global->ecb.functioncopied(L);
-        L->top--;
-    }
+    // the copy runs natively wherever the function it copies does
+    if (L->global->ecb.functioncopied)
+        L->global->ecb.functioncopied(L, cl->l.p, p);
 
     return copy;
 }
@@ -1166,6 +1169,9 @@ static Closure* luaR_classtraitfunction(lua_State* L, LuauClass* classdef, const
 // has no name at all, see luaR_sealclassshape).
 static bool luaR_istraitinternal(lua_State* L, TString* name)
 {
+    if (!luaR_hasreservedprefix(name))
+        return false;
+
     return name == luaS_newliteral(L, "__traitinit") || name == luaS_newliteral(L, "__needs");
 }
 
@@ -1536,12 +1542,24 @@ static LuauClass* luaR_overridingtrait(lua_State* L, LuaTable* edges, LuaTable* 
         return classvalue(luaH_getnum(providers, i));
     };
 
+    // one table of visited traits, emptied for each search
+    luaD_checkstack(L, 1);
+    LuaTable* visited = luaH_new(L, 0, 0);
+    sethvalue(L, L->top, visited);
+    L->top++;
+
+    auto needs = [&](LuauClass* from, LuauClass* to)
+    {
+        luaH_clear(visited);
+        return luaR_traitneeds(L, edges, visited, from, to);
+    };
+
     LuauClass* winner = NULL;
     for (int i = 1; i <= count && !winner; i++)
     {
         bool needsall = true;
         for (int j = 1; j <= count && needsall; j++)
-            needsall = i == j || luaR_traitneeds(L, edges, luaH_new(L, 0, 0), providerat(i), providerat(j));
+            needsall = i == j || needs(providerat(i), providerat(j));
 
         if (needsall)
             winner = providerat(i);
@@ -1554,8 +1572,7 @@ static LuauClass* luaR_overridingtrait(lua_State* L, LuaTable* edges, LuaTable* 
         {
             for (int j = i + 1; j <= count; j++)
             {
-                bool related = luaR_traitneeds(L, edges, luaH_new(L, 0, 0), providerat(i), providerat(j)) ||
-                               luaR_traitneeds(L, edges, luaH_new(L, 0, 0), providerat(j), providerat(i));
+                bool related = needs(providerat(i), providerat(j)) || needs(providerat(j), providerat(i));
                 if (related)
                     continue;
 
@@ -1629,6 +1646,7 @@ static LuauClass* luaR_overridingtrait(lua_State* L, LuaTable* edges, LuaTable* 
         LUAU_ASSERT(!isfield || (winnerflags & LBC_CLASSMEMBER_HASDEFAULT));
     }
 
+    L->top--;
     return winner;
 }
 
@@ -1857,8 +1875,10 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             uint8_t flags = trait->memberflags[off];
             bool isfield = off < trait->numberofinstancemembers;
 
-            // a factory's `__create` belongs to the trait alone
-            bool provided = name && !(flags & LBC_CLASSMEMBER_EXPECTED) && !luaR_istraitinternal(L, name) && name != luaS_newliteral(L, "__create");
+            // a factory's `__create` and the `__implemented` hook belong to the trait alone
+            bool traitonly = name && luaR_hasreservedprefix(name) &&
+                             (name == luaS_newliteral(L, "__create") || name == luaS_newliteral(L, "__implemented"));
+            bool provided = name && !(flags & LBC_CLASSMEMBER_EXPECTED) && !luaR_istraitinternal(L, name) && !traitonly;
             if (!provided)
                 continue;
 
@@ -1970,6 +1990,14 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
     uint32_t newninst = ownninst + newfields;
     uint32_t newnstatic = ownnstatic + newstatics;
     uint32_t newall = newninst + newnstatic;
+
+    // The member map and `__init`'s name are made before the arrays: until the arrays are installed, nothing frees them
+    // if an allocation raises
+    luaD_checkstack(L, 1);
+    LuaTable* newmap = luaH_new(L, 0, int(newall));
+    sethvalue(L, L->top, newmap);
+    L->top++;
+    TString* initname = luaS_newliteral(L, "__init");
 
     TString** newnames = luaM_newarray(L, newall, TString*, classdef->memcat);
     uint8_t* newflags = luaM_newarray(L, newall, uint8_t, classdef->memcat);
@@ -2099,8 +2127,6 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
                 overriddenconsts[next++] = off;
     }
 
-    LuaTable* newmap = luaH_new(L, 0, int(newall));
-    TString* initname = luaS_newliteral(L, "__init");
     uint32_t newinitoffset = classdef->initoffset + newfields;
 
     for (uint32_t off = 0; off < newall; off++)
@@ -2280,8 +2306,15 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
 
     if (numinits > 0)
     {
+        // each array is installed as soon as it exists, so luaR_freeclass frees it if the next allocation raises
         TValue* inits = luaM_newarray(L, numinits, TValue, classdef->memcat);
+        for (uint32_t i = 0; i < numinits; i++)
+            setnilvalue(&inits[i]);
+        classdef->traitinits = inits;
+        classdef->numtraitinits = numinits;
+
         uint32_t* initargs = luaM_newarray(L, 2 * numinits, uint32_t, classdef->memcat);
+        classdef->traitinitargs = initargs;
 
         uint32_t next = 0;
         for (int i = 0; i < numtraits; i++)
@@ -2294,10 +2327,6 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             argsof(trait, &initargs[2 * next], &initargs[2 * next + 1]);
             next++;
         }
-
-        classdef->traitinits = inits;
-        classdef->traitinitargs = initargs;
-        classdef->numtraitinits = numinits;
 
         for (uint32_t i = 0; i < numinits; i++)
             luaC_barrier(L, classdef, &inits[i]);
@@ -2313,6 +2342,22 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
     classdef->traitspending = false;
     // every compiled copy the class uses is a member, a trait default or a trait initializer by now
     classdef->compiledtraitcopies = NULL;
+
+    // Each trait's `__implemented` hook, given the finished class, in dependency order: a trait's needed traits' hooks run
+    // before its own. An error in one is raised from the class statement.
+    for (int i = 0; i < numtraits; i++)
+    {
+        LuauClass* trait = classvalue(L->base + orderbase + i);
+        const TValue* hook = luaR_findstaticmember(L, trait, "__implemented");
+        if (!hook)
+            continue;
+
+        luaD_checkstack(L, 2);
+        setobj2s(L, L->top, hook);
+        setclassvalue(L, L->top + 1, classdef);
+        L->top += 2;
+        luaD_call(L, L->top - 2, 0);
+    }
 
     L->top = restorestack(L, oldtop);
 }
