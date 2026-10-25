@@ -3104,7 +3104,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "OneLineGuardInALuauFileOnlySuggestsThreeLine
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
-    fileResolver.source["game/a"] = "local function f(x)\n    if not x then return end\n    return x\nend\nreturn f\n";
+    fileResolver.source["game/a"] = "--!lint OneLineGuard\nlocal function f(x)\n    if not x then return end\n    return x\nend\nreturn f\n";
     configResolver.configFiles["game/a"].language = Language::Luau;
 
     std::vector<LintWarning> warnings;
@@ -3117,6 +3117,24 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "OneLineGuardInALuauFileOnlySuggestsThreeLine
         warnings[0].text,
         "Put the 'return' on its own line, so it isn't hidden at the end of this one"
     );
+}
+
+// OneLineGuard is off until a module or config asks for it, and with it off nothing else reports a one-line guard
+TEST_CASE_FIXTURE(BuiltinsFixture, "OneLineGuardIsOffUntilAskedFor")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    const std::string source = "local function f(t)\n    for _, v in t do\n        if not v then continue end\n        if v.done then "
+                               "break end\n    end\n    if not t then return end\n    return t\nend\nreturn f\n";
+    fileResolver.source["game/off"] = source;
+    configResolver.configFiles["game/off"].language = Language::Luau;
+    fileResolver.source["game/on"] = "--!lint OneLineGuard\n" + source;
+    configResolver.configFiles["game/on"].language = Language::Luau;
+
+    LintResult off = lintModule("game/off");
+    CHECK(warningsWithCode(off, LintWarning::Code_OneLineGuard).empty());
+    CHECK(warningsWithCode(off, LintWarning::Code_OneLineStatement).empty());
+    CHECK_EQ(warningsWithCode(lintModule("game/on"), LintWarning::Code_OneLineGuard).size(), 3);
 }
 
 TEST_CASE_FIXTURE(Fixture, "InlineOrLeave")
@@ -3173,6 +3191,7 @@ return f
 
     // and a part can be turned off alone
     LintResult part = lint(R"(--!nolint OneLineStatement
+--!lint OneLineGuard
 local t = {}
 if t.a then print(1) end
 local function f(x)
