@@ -220,17 +220,20 @@ Workaround: annotate the table first (`local info: Info = { ... }`) and pass `in
 
 ### Naming classes
 
-- `class<T>` gets the class value of object type `T`; `objectof` goes the other way and is only created by
-  refinements. Both are in `BuiltinTypeFunctions.cpp` (`classFunc`, `objectofFunc`).
-- `class<...>` is routed to the type function in `resolveReferenceType` (`ConstraintGenerator.cpp`), so bare
-  `class` keeps its binding as the top type.
+- `class<T>` gets the class value of object type `T`, and `object<C>` the object type of a class or trait value. An
+  object type is its own `object<...>`, so `object<class<object<Dog>>>` is `Dog`. Both are in
+  `BuiltinTypeFunctions.cpp` (`classFunc`, `objectFunc`).
+- `class<...>` and `object<...>` are routed to their type functions in `resolveReferenceType`
+  (`ConstraintGenerator.cpp`), so bare `class` and `object` keep their bindings as top types.
 - `typeof(Cat)` is an error suggesting `class<Cat>`, since both print as `Cat` otherwise.
-- Same-name type mismatches say `class<Item>` vs `Item` instead of repeating the module
-  (`nominalDisplayName`, `Error.cpp`).
+- Type errors print class and trait values as `class<Item>` and `trait<Item>`
+  (`ToStringOptions::classAndTraitValuesInTypeForm`). A value against its own objects is said in words instead
+  (`valueOrObjectInWords`, `Error.cpp`).
 
 ### Refinement and the `class` library
 
-- `class.isinstance(x, C)` refines `x` to `objectof<C>`: `matchIsInstanceGuard` (`ConstraintGenerator.cpp`).
+- `class.isinstance(x, C)` refines `x` to the object type of `C`: `MagicClassInstanceCheck` (`BuiltinDefinitions.cpp`),
+  through `objectTypeOfClassValue`.
   It has to be recognized by the checker; the solver can't refine on `class.of(x) == C`.
 - `class.name` and `class.fields` have precise return types: `MagicClassName`, `MagicClassFields`
   (`BuiltinDefinitions.cpp`).

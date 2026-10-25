@@ -181,6 +181,10 @@ struct UnknownProperty
 {
     TypeId table;
     Name key;
+    // Luwu Classes (rfcs/classes): `table` is a class value and `key` is a field of its objects (`Paint.gloss`)
+    bool fieldOfItsObjects = false;
+    // Luwu: whether the message carries help (see Helpifier)
+    bool showHelp = true;
 
     bool operator==(const UnknownProperty& rhs) const;
 };
