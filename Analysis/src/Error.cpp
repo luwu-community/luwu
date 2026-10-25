@@ -1275,7 +1275,7 @@ struct ErrorConverter
 
     std::string operator()(const Typo& e) const
     {
-        return "Did you mean '" + e.meant + "' instead of '" + e.written + "'?";
+        return typoMessage(e.written, e.meant);
     }
 
     std::string operator()(const UnreachableCodeUse& e) const
@@ -2147,6 +2147,20 @@ bool AmbiguousFunctionCall::operator==(const AmbiguousFunctionCall& rhs) const
     return function == rhs.function && arguments == rhs.arguments;
 }
 
+
+bool isTypo(const TypeError& error)
+{
+    if (get_if<Typo>(&error.data))
+        return true;
+
+    const UnknownSymbol* unknown = get_if<UnknownSymbol>(&error.data);
+    return unknown && unknown->unbound == UnknownSymbol::Unbound::Typo;
+}
+
+std::string typoMessage(const std::string& written, const std::string& meant)
+{
+    return "Did you mean '" + meant + "' instead of '" + written + "'?";
+}
 
 std::string toString(const TypeError& error)
 {

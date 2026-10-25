@@ -1050,6 +1050,13 @@ struct TypeErrorToStringOptions
 std::string toString(const TypeError& error);
 std::string toString(const TypeError& error, TypeErrorToStringOptions options);
 
+// Luwu (helpful subtyping errors): whether `error` reports a misspelling, so tools can label it "Typo" rather than
+// "TypeError". A misspelled name is an `UnknownSymbol` (its quick fixes need that), and every other typo a `Typo`.
+bool isTypo(const TypeError& error);
+
+// Luwu (helpful subtyping errors): what every typo says, whichever error carries it
+std::string typoMessage(const std::string& written, const std::string& meant);
+
 bool containsParseErrorName(const TypeError& error);
 
 // Copy any types named in the error into destArena.

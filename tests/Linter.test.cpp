@@ -58,7 +58,7 @@ TEST_CASE_FIXTURE(Fixture, "UnknownGlobalTypo")
     LintResult result = lint("--!nocheck\nlocal othername = 1\nreturn othername, othrname");
 
     REQUIRE(1 == result.warnings.size());
-    CHECK_EQ(result.warnings[0].text, "Typo 'othrname': Did you mean 'othername'?");
+    CHECK_EQ(result.warnings[0].text, "Did you mean 'othername' instead of 'othrname'?");
 }
 
 TEST_CASE_FIXTURE(Fixture, "DeprecatedGlobal")

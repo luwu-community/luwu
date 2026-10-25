@@ -323,7 +323,7 @@ TEST_CASE_FIXTURE(Fixture, "unknown_type_reports_error")
 
     // Luwu (helpful subtyping errors): `CoinbasTicker` is one typo from `CoinbaseTicker`
     if (FFlag::LuwuHelpfulSubtypingErrors)
-        CHECK_EQ("Typo 'CoinbasTicker': Did you mean 'CoinbaseTicker'?", toString(result.errors[0]));
+        CHECK_EQ("Did you mean 'CoinbaseTicker' instead of 'CoinbasTicker'?", toString(result.errors[0]));
     else
         CHECK_EQ("Unknown type 'CoinbasTicker'", toString(result.errors[0]));
 }

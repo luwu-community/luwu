@@ -1341,7 +1341,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_type_name_is_a_typo")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK_EQ(toString(result.errors[0]), "Typo 'Plyer': Did you mean 'Player'?");
+    CHECK_EQ(toString(result.errors[0]), "Did you mean 'Player' instead of 'Plyer'?");
     CHECK_EQ(toString(result.errors[1]), "Unknown type 'Zzzzzz'");
 }
 

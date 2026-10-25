@@ -522,7 +522,7 @@ std::string unknownVariableMessage(const UnknownSymbol& error)
     switch (error.unbound)
     {
     case UnknownSymbol::Unbound::Typo:
-        return "Typo " + name + ": Did you mean '" + error.meant + "'?";
+        return typoMessage(error.name, error.meant);
     case UnknownSymbol::Unbound::BeforeDefinition:
         if (error.definition)
             return "Can't use " + name + " defined on line " + definedOn + " before it exists";

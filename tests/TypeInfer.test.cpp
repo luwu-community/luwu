@@ -3106,10 +3106,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_typo_of_a_local_global_or_l
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(4, result);
-    CHECK_EQ("Typo 'othrname': Did you mean 'othername'?", toString(result.errors[0]));
-    CHECK_EQ("Typo 'pirnt': Did you mean 'print'?", toString(result.errors[1]));
-    CHECK_EQ("Typo 'mth': Did you mean 'math'?", toString(result.errors[2]));
+    CHECK_EQ("Did you mean 'othername' instead of 'othrname'?", toString(result.errors[0]));
+    CHECK_EQ("Did you mean 'print' instead of 'pirnt'?", toString(result.errors[1]));
+    CHECK_EQ("Did you mean 'math' instead of 'mth'?", toString(result.errors[2]));
     CHECK_EQ("Unknown variable 'number', define it with 'local number = value'", toString(result.errors[3]));
+
+    // Tools label a misspelled name "Typo", like every other typo
+    CHECK(isTypo(result.errors[0]));
+    CHECK(!isTypo(result.errors[3]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_used_before_its_definition")
@@ -3206,7 +3210,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_typo_comes_before_inner_sco
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Typo 'result': Did you mean 'resutl'?", toString(result.errors[0]));
+    CHECK_EQ("Did you mean 'resutl' instead of 'result'?", toString(result.errors[0]));
     CHECK(getMainModule()->notes.empty());
 }
 
@@ -3237,10 +3241,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_typos_are_reported_in_nonst
     )");
 
     const std::vector<std::string> expected = {
+        "Did you mean 'othername' instead of 'othrname'?",
+        "Did you mean 'othername' instead of 'othrname'?",
+        "Did you mean 'print' instead of 'pirnt'?",
         "Did you mean 'verbose' instead of 'verbos'?",
-        "Typo 'othrname': Did you mean 'othername'?",
-        "Typo 'othrname': Did you mean 'othername'?",
-        "Typo 'pirnt': Did you mean 'print'?",
     };
     CHECK_EQ(expected, sortedMessages(result));
 }
@@ -3257,8 +3261,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_misspelled_local_is_a_typo_
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK_EQ("Typo 'othrname': Did you mean 'othername'?", toString(result.errors[0]));
-    CHECK_EQ("Typo 'othrname': Did you mean 'othername'?", toString(result.errors[1]));
+    CHECK_EQ("Did you mean 'othername' instead of 'othrname'?", toString(result.errors[0]));
+    CHECK_EQ("Did you mean 'othername' instead of 'othrname'?", toString(result.errors[1]));
 }
 
 // Luwu: names that differ only in digits are siblings (`player1`, `player2`), so a variable isn't a typo of one
@@ -3292,7 +3296,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_plural_global_beside_a_loca
     )");
 
     const std::vector<std::string> expected = {
-        "Typo 'itemz': Did you mean 'item'?",
+        "Did you mean 'item' instead of 'itemz'?",
         "Unknown variable 'items', define it with 'local items = value'",
     };
     CHECK_EQ(expected, sortedMessages(result));
