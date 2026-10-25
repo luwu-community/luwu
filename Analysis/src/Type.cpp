@@ -1007,6 +1007,20 @@ const ExternType::Props& ExternType::props() const
     return memberStorage;
 }
 
+const char* nominalValueKind(const ExternType& etv)
+{
+    // A class or trait value links to its object type with `Obj`; an object links back to its class with `Klass`
+    if (!etv.root || !etv.relation || !etv.relation->get_if<Obj>())
+        return nullptr;
+
+    const ExternType* rootEtv = get<ExternType>(follow(*etv.root));
+    if (rootEtv && rootEtv->name == "class")
+        return "class";
+    if (rootEtv && rootEtv->name == "trait")
+        return "trait";
+    return nullptr;
+}
+
 void persist(TypeId ty)
 {
     VecDeque<TypeId> queue{ty};

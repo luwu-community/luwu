@@ -2524,7 +2524,62 @@ TypeFunctionReductionResult<TypeId> getmetatableTypeFunction(
     return getmetatableHelper(targetTy, location, ctx);
 }
 
-TypeFunctionReductionResult<TypeId> objectofTypeFunction(
+// Luwu Classes (rfcs/classes): `object<C>`, the type of a class or trait value's objects. The inverse of `class<T>`:
+// an object type is its own `object<...>`, so `object<class<object<Dog>>>` is `Dog`. Distributes over unions.
+static TypeFunctionReductionResult<TypeId> objectTypeHelper(TypeId targetTy, NotNull<TypeFunctionContext> ctx)
+{
+    targetTy = follow(targetTy);
+
+    if (isPending(targetTy, ctx->solver))
+        return {std::nullopt, Reduction::MaybeOk, {targetTy}, {}};
+
+    // A value of no class has no objects either
+    if (is<NeverType>(targetTy))
+        return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
+
+    // `class` and `trait`, the tops of the value lattices, make objects of any class: `object`
+    if (targetTy == ctx->builtins->classType || targetTy == ctx->builtins->traitType || targetTy == ctx->builtins->objectType)
+        return {ctx->builtins->objectType, Reduction::MaybeOk, {}, {}};
+
+    if (std::optional<TypeId> objectType = objectTypeOfClassValue(ctx->builtins, targetTy))
+        return {*objectType, Reduction::MaybeOk, {}, {}};
+
+    // An object type (linked back to its class or trait with `Klass`) is already what `object<...>` gives
+    if (const ExternType* etv = get<ExternType>(targetTy); etv && etv->relation && etv->relation->get_if<Klass>())
+        return {targetTy, Reduction::MaybeOk, {}, {}};
+
+    if (auto ut = get<UnionType>(targetTy))
+    {
+        std::vector<TypeId> options{};
+        options.reserve(ut->options.size());
+
+        // UnionTypeIterator flattens nested unions, so the recursion below never reaches this branch again
+        for (TypeId option : ut)
+        {
+            TypeFunctionReductionResult<TypeId> result = objectTypeHelper(option, ctx);
+
+            // Propagates a blocked argument as well as a bad one
+            if (!result.result)
+                return result;
+
+            if (!is<NeverType>(follow(*result.result)))
+                options.push_back(*result.result);
+        }
+
+        if (options.empty())
+            return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
+
+        if (options.size() == 1)
+            return {options.front(), Reduction::MaybeOk, {}, {}};
+
+        return {ctx->arena->addType(UnionType{std::move(options)}), Reduction::MaybeOk, {}, {}};
+    }
+
+    // `object<T>` is written by hand, so anything else is a user error rather than a silently uninhabited type
+    return {std::nullopt, Reduction::Erroneous, {}, {}};
+}
+
+TypeFunctionReductionResult<TypeId> objectTypeFunction(
     TypeId instance,
     const std::vector<TypeId>& typeParams,
     const std::vector<TypePackId>& packParams,
@@ -2534,19 +2589,11 @@ TypeFunctionReductionResult<TypeId> objectofTypeFunction(
     LUAU_ASSERT(FFlag::LuwuClasses);
     if (typeParams.size() != 1 || !packParams.empty())
     {
-        ctx->ice->ice("objectof type function: encountered a type function instance without the required argument structure");
+        ctx->ice->ice("object type function: encountered a type function instance without the required argument structure");
         LUAU_ASSERT(false);
     }
 
-    TypeId targetTy = follow(typeParams.at(0));
-
-    if (isPending(targetTy, ctx->solver))
-        return {std::nullopt, Reduction::MaybeOk, {targetTy}, {}};
-
-    if (std::optional<TypeId> objectType = objectTypeOfClassValue(ctx->builtins, targetTy))
-        return {*objectType, Reduction::MaybeOk, {}, {}};
-
-    return {ctx->builtins->errorType, Reduction::MaybeOk, {}, {}};
+    return objectTypeHelper(typeParams.at(0), ctx);
 }
 
 std::optional<TypeId> objectTypeOfClassValue(NotNull<BuiltinTypes> builtinTypes, TypeId classValue)
@@ -2564,7 +2611,7 @@ std::optional<TypeId> objectTypeOfClassValue(NotNull<BuiltinTypes> builtinTypes,
     return std::nullopt;
 }
 
-// The mirror of objectof: maps an object type to the class value it was declared by. Only an object
+// The mirror of `object<C>`: maps an object type to the class value it was declared by. Only an object
 // type (a type rooted at `object`) has one; `relation` carries the link back.
 //
 // Distributes over unions. Intersections are deliberately left to error for now: with no inheritance
@@ -2625,8 +2672,7 @@ static TypeFunctionReductionResult<TypeId> classValueHelper(TypeId targetTy, Not
         return {ctx->arena->addType(UnionType{std::move(options)}), Reduction::MaybeOk, {}, {}};
     }
 
-    // Unlike objectof, which is only ever minted internally by isinstance refinements, `class<T>` is
-    // written by hand, so a bad argument is a user error rather than a silently uninhabited type.
+    // `class<T>` is written by hand, so a bad argument is a user error rather than a silently uninhabited type.
     return {std::nullopt, Reduction::Erroneous, {}, {}};
 }
 
@@ -2707,7 +2753,7 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , rawgetFunc{"rawget", rawgetTypeFunction}
     , setmetatableFunc{"setmetatable", setmetatableTypeFunction}
     , getmetatableFunc{"getmetatable", getmetatableTypeFunction}
-    , objectofFunc{"objectof", objectofTypeFunction}
+    , objectFunc{"object", objectTypeFunction}
     , classFunc{"class", classTypeFunction}
     , weakoptionalFunc{"weakoptional", weakoptionalTypeFunc}
 {

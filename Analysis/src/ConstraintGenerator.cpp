@@ -6650,6 +6650,21 @@ TypeId ConstraintGenerator::resolveReferenceType(
         module->astResolvedTypes[ty] = traitValueTy;
         return traitValueTy;
     }
+    // Luwu Classes (rfcs/classes): `object<C>` is the type of a class or trait value's objects, the inverse of
+    // `class<T>`. Like `class`, bare `object` stays the top type, of all objects.
+    if (FFlag::LuwuClasses && !ref->prefix.has_value() && ref->name == "object" && ref->hasParameterList)
+    {
+        if (ref->parameters.size != 1 || !ref->parameters.data[0].type)
+        {
+            reportError(ty->location, GenericError{"object<C> requires exactly one type argument, a class or trait value"});
+            module->astResolvedTypes[ty] = builtinTypes->errorType;
+            return builtinTypes->errorType;
+        }
+
+        // Outside a type-argument context for the same reason as `class<T>` above
+        TypeId valueTy = resolveType_(scope, ref->parameters.data[0].type, /*inTypeArguments*/ false);
+        return createTypeFunctionInstance(builtinTypes->typeFunctions->objectFunc, {valueTy}, {}, scope, ty->location);
+    }
 
     std::optional<TypeFun> alias;
 

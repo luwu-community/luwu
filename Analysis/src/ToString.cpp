@@ -1439,6 +1439,13 @@ struct TypeStringifier
 
     void operator()(TypeId ty, const ExternType& etv)
     {
+        const char* valueKind = state.opts.classAndTraitValuesInTypeForm ? nominalValueKind(etv) : nullptr;
+        if (valueKind)
+        {
+            state.emit(valueKind);
+            state.emit("<");
+        }
+
         state.emitAndRecordSpan(etv.name, ty);
         if (FFlag::LuwuGenericNominals)
         {
@@ -1446,12 +1453,16 @@ struct TypeStringifier
             {
                 state.result.cycle = true;
                 state.emit("<*CYCLE*>");
-                return;
             }
-
-            stringify(etv.instantiatedTypeParams, etv.instantiatedTypePackParams);
-            state.unsee(&etv);
+            else
+            {
+                stringify(etv.instantiatedTypeParams, etv.instantiatedTypePackParams);
+                state.unsee(&etv);
+            }
         }
+
+        if (valueKind)
+            state.emit(">");
     }
 
     void operator()(TypeId, const AnyType&)

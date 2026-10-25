@@ -3254,6 +3254,14 @@ static std::optional<std::string> bindingName(AstExpr* expr)
     return std::nullopt;
 }
 
+// Luwu (helpful subtyping errors): whether `name` is a class or trait read by its own name (`Ink`, of type `class<Ink>`).
+// Calling the value 'Ink' only repeats the type printed next to it.
+static bool namesItsOwnDeclaration(const std::string& name, TypeId ty)
+{
+    const ExternType* etv = get<ExternType>(follow(ty));
+    return etv && nominalValueKind(*etv) && etv->name == name;
+}
+
 // Luwu (helpful subtyping errors): how to refer to the function being called in a diagnostic: a name as
 // `bindingName` gives it, with a method's `:` kept (`damaged:Connect`). Anything else (an immediately-invoked
 // function, a call through an expression) has no name the reader would recognize, so it's empty and the
@@ -5068,10 +5076,12 @@ void TypeChecker2::visit(AstTypeReference* ty)
     if (FFlag::DebugLuauMagicTypes && (ty->name == kLuauPrint || ty->name == kLuauForceConstraintSolvingIncomplete || ty->name == kLuauBlockedType))
         return;
 
-    // `class<T>` is routed to a type function by ConstraintGenerator rather than resolved through
-    // the `class` alias, which is the zero-parameter top type; checking its arity against that
-    // alias would always report a spurious mismatch.
-    if (FFlag::LuwuClasses && !ty->prefix.has_value() && ty->name == "class" && ty->hasParameterList)
+    // `class<T>` and `object<C>` are routed to type functions by ConstraintGenerator rather than resolved through
+    // the `class` and `object` aliases, which are zero-parameter top types; checking their arity against those
+    // aliases would always report a spurious mismatch.
+    const bool namesClass = ty->name == "class";
+    const bool routedToTypeFunction = !ty->prefix.has_value() && ty->hasParameterList && (namesClass || ty->name == "object");
+    if (FFlag::LuwuClasses && routedToTypeFunction)
     {
         Scope* scope = findInnermostScope(ty->location);
         LUAU_ASSERT(scope);
@@ -5079,7 +5089,7 @@ void TypeChecker2::visit(AstTypeReference* ty)
         for (const AstTypeOrPack& param : ty->parameters)
         {
             // `class<List>` names a generic class without its type arguments on purpose: it is the generic class
-            bool namesGenericClass = scope && param.type && genericClassValueType(*scope, param.type);
+            bool namesGenericClass = namesClass && scope && param.type && genericClassValueType(*scope, param.type);
             if (namesGenericClass)
                 continue;
 
@@ -6476,6 +6486,8 @@ void TypeChecker2::explainError(
             if (AstExpr* expr = node->asExpr(); expr && expr->location == location)
             {
                 variable = bindingName(expr);
+                if (variable && namesItsOwnDeclaration(*variable, subTy))
+                    variable = std::nullopt;
                 mismatched = expr;
                 break;
             }
@@ -7567,8 +7579,30 @@ static void collectIndexableNames(TypeId ty, std::vector<std::string>& names, in
     }
 }
 
+// Luwu Classes (rfcs/classes): whether `tableTy` is a class value whose objects have a field named `prop` (`Paint.gloss`)
+static bool isFieldOfItsObjects(TypeId tableTy, const std::string& prop)
+{
+    const ExternType* classValue = get<ExternType>(follow(tableTy));
+    const char* kind = classValue ? nominalValueKind(*classValue) : nullptr;
+    if (!kind || std::string_view(kind) != "class")
+        return false;
+
+    const Obj* obj = classValue->relation->get_if<Obj>();
+    const ExternType* object = obj ? get<ExternType>(follow(obj->ty)) : nullptr;
+    return object && object->props().count(prop) > 0;
+}
+
 void TypeChecker2::reportMissingProperty(TypeErrorData error, TypeId tableTy, const std::string& prop, const std::string& receiver, const Location& location)
 {
+    // A field read off its class is spelled right, so it's never a typo
+    if (UnknownProperty* unknown = get_if<UnknownProperty>(&error); unknown && isFieldOfItsObjects(tableTy, prop))
+    {
+        unknown->fieldOfItsObjects = true;
+        unknown->showHelp = helpifier.enabled;
+        reportError(std::move(error), location);
+        return;
+    }
+
     std::optional<std::string> meant;
     if (FFlag::LuwuHelpfulSubtypingErrors)
     {

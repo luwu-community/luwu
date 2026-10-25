@@ -2170,9 +2170,9 @@ void MagicClassInstanceCheck::refine(const MagicRefinementContext& context)
     if (argTypes.size() < 2)
         return;
 
-    // The objects that pass the check, as `objectof` names them. The solver has the arguments' types by now (it
+    // The objects that pass the check, as `object<C>` names them. The solver has the arguments' types by now (it
     // blocks the call on them), so this reads the class value directly. A value that isn't a class or trait gives
-    // the error type, as `objectof` does.
+    // the error type.
     NotNull<BuiltinTypes> builtinTypes = context.solver->builtinTypes;
     TypeId passed = objectTypeOfClassValue(builtinTypes, argTypes[1]).value_or(builtinTypes->errorType);
 

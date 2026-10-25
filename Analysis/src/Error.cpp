@@ -107,10 +107,11 @@ static const char* externTypeNoun(TypeId t)
     return kind ? kind : "external type";
 }
 
-// Luwu Classes (rfcs/classes): objects, classes and traits have fields. Tables and embedder types have keys.
+// Luwu Classes (rfcs/classes): objects, classes and traits have members (fields and functions). Tables and embedder
+// types have keys.
 static const char* memberNoun(TypeId t)
 {
-    return luwuNominalKind(t) ? "Field" : "Key";
+    return luwuNominalKind(t) ? "Member" : "Key";
 }
 
 // A class declaration produces two extern types that both stringify as the bare class name, so a
@@ -120,18 +121,11 @@ static const char* memberNoun(TypeId t)
 static std::optional<std::string> nominalDisplayName(TypeId t)
 {
     const ExternType* etv = get<ExternType>(follow(t));
-    if (!etv || !etv->root || !etv->relation)
+    const char* kind = etv ? nominalValueKind(*etv) : nullptr;
+    if (!kind)
         return std::nullopt;
 
-    const ExternType* rootEtv = get<ExternType>(follow(*etv->root));
-    if (!rootEtv || (rootEtv->name != "class" && rootEtv->name != "trait"))
-        return std::nullopt;
-
-    // Only a class value carries an `Obj` relation; an object carries a `Klass` one.
-    if (!etv->relation->get_if<Obj>())
-        return std::nullopt;
-
-    return rootEtv->name + "<" + etv->name + ">";
+    return std::string(kind) + "<" + etv->name + ">";
 }
 
 // Luwu Traits (rfcs/classes/traits.md): what to call the declaration `t` (a class or trait value, or an object) comes
@@ -180,6 +174,27 @@ static bool isClassValueAgainstItsObject(TypeId given, TypeId wanted)
         return false;
 
     return nominalDisplayName(given).has_value() != nominalDisplayName(wanted).has_value();
+}
+
+// Luwu Classes (rfcs/classes): a class or trait value, or one of its objects, in words for a message about mixing the two
+// up. `kind` is the value's: "class" or "trait". The given side ends the message, so it closes with "itself" or "instead".
+static std::string valueOrObjectInWords(TypeId t, const char* kind, bool endsMessage)
+{
+    const ExternType* etv = get<ExternType>(follow(t));
+    const bool isValue = etv && nominalValueKind(*etv);
+    const std::string name = "'" + toString(t) + "'";
+
+    std::string words;
+    if (isValue)
+        words = std::string("the ") + kind + " " + name;
+    else if (std::string(kind) == "trait")
+        words = "an object that implements " + name;
+    else
+        words = "an object of class " + name;
+
+    if (endsMessage)
+        words += isValue ? " itself" : " instead";
+    return words;
 }
 
 // "a table", "a string or a table", ...: what `wanted` accepts when it only accepts tables and strings. nullopt for
@@ -583,6 +598,7 @@ struct ErrorConverter
         // Luwu (helpful subtyping errors): an explained mismatch prints parameter names, so the two function types can
         // be compared parameter by parameter and its bullets can refer to them by name.
         typeOptions.functionTypeArguments = explained;
+        typeOptions.classAndTraitValuesInTypeForm = true;
 
         std::string givenTypeName = tm.givenName ? *tm.givenName : Luau::toString(tm.givenType, typeOptions);
         std::string wantedTypeName = tm.wantedName ? *tm.wantedName : Luau::toString(tm.wantedType, typeOptions);
@@ -617,21 +633,25 @@ struct ErrorConverter
 
         // A qualifier is rendered already formatted (" from 'a.luau'", " defined on line 3") because
         // the two kinds of qualifier don't read the same way after the type name.
-        auto constructErrorMessage = [&](std::string givenType,
-                                         std::string wantedType,
-                                         std::optional<std::string> givenQualifier,
-                                         std::optional<std::string> wantedQualifier) -> std::string
+        // Luwu (helpful subtyping errors): a value with a name is called by it, `Expected 'totals' to be`, so the two
+        // types under it are only types and can be compared. Not when the name is one of the two types (`Expected 'Item'
+        // to be 'Item'`), including one spelled out in place as `'Config: { port: number }'`.
+        auto subjectFor = [&](const std::string& givenType, const std::string& wantedType) -> std::string
         {
-            // Luwu (helpful subtyping errors): a value with a name is called by it, `Expected 'totals' to be`, so the
-            // two types under it are only types and can be compared. Not when the name is one of the two types
-            // (`Expected 'Item' to be 'Item'` about a class and its object), including one spelled out in place as
-            // `'Config: { port: number }'`.
             auto printsAs = [&](const std::string& type)
             {
                 return type == *tm.givenVariable || type.rfind(*tm.givenVariable + ": ", 0) == 0;
             };
             bool nameIsAType = tm.givenVariable && (printsAs(givenType) || printsAs(wantedType));
-            std::string subject = tm.givenVariable && !nameIsAType ? quote(*tm.givenVariable) : "this";
+            return tm.givenVariable && !nameIsAType ? quote(*tm.givenVariable) : "this";
+        };
+
+        auto constructErrorMessage = [&](std::string givenType,
+                                         std::string wantedType,
+                                         std::optional<std::string> givenQualifier,
+                                         std::optional<std::string> wantedQualifier) -> std::string
+        {
+            std::string subject = subjectFor(givenType, wantedType);
             // Normally this preamble just reads "Expected this to be"; when the mismatch reasoning
             // was entirely about one specific, recognizable aspect of the type (e.g. a function's
             // return type, or its arguments), a more specific phrase reads a lot more naturally,
@@ -692,15 +712,19 @@ struct ErrorConverter
         //
         // Nothing is appended when the message prints a part of the type (hasContextDisplay).
         //
-        // First case: a class value against one of its own objects. Spell the class side as
-        // `class<X>`. This applies even when the two strings differ, because an object of a generic
-        // class prints its type arguments (`Box<number>`) and the class value doesn't.
+        // Luwu Classes (rfcs/classes): an object passed as its own class or trait, or the reverse, is said in words.
+        // Printed as types, `class<Item>` against `Item` leaves the reader to work out which side is which.
         if (!hasContextDisplay && isClassValueAgainstItsObject(tm.givenType, tm.wantedType))
         {
-            std::optional<std::string> givenDisplay = nominalDisplayName(tm.givenType);
-            std::optional<std::string> wantedDisplay = nominalDisplayName(tm.wantedType);
-            result =
-                constructErrorMessage(givenDisplay.value_or(givenTypeName), wantedDisplay.value_or(wantedTypeName), std::nullopt, std::nullopt);
+            const ExternType* givenEtv = get<ExternType>(follow(tm.givenType));
+            const ExternType* wantedEtv = get<ExternType>(follow(tm.wantedType));
+            const char* kind = nominalValueKind(*givenEtv);
+            if (!kind)
+                kind = nominalValueKind(*wantedEtv);
+
+            result = "Expected " + subjectFor(givenTypeName, wantedTypeName) + " to be " +
+                     valueOrObjectInWords(tm.wantedType, kind, /* endsMessage */ false) + ", " + butGot + " " +
+                     valueOrObjectInWords(tm.givenType, kind, /* endsMessage */ true);
         }
 
         const bool disambiguateByModule = result.empty() && !hasContextDisplay && givenTypeName == wantedTypeName;
@@ -778,7 +802,23 @@ struct ErrorConverter
         if (get<TableType>(t))
             return "Key '" + e.key + "' not found in table '" + Luau::toString(t) + "'";
         else if (get<ExternType>(t))
-            return std::string(memberNoun(t)) + " '" + e.key + "' not found in " + externTypeNoun(t) + " '" + Luau::toString(t) + "'";
+        {
+            std::string message =
+                std::string(memberNoun(t)) + " '" + e.key + "' not found in " + externTypeNoun(t) + " '" + Luau::toString(t) + "'";
+            // Luwu Classes (rfcs/classes): the runtime says this in one long line. A hover gets the short message with
+            // this help under it when help is on.
+            if (e.fieldOfItsObjects)
+            {
+                std::string name = Luau::toString(t);
+                Helpifier{e.showHelp}.appendTo(
+                    message,
+                    "object field",
+                    {"Field '" + e.key + "' is a member of objects of class '" + name + "'; did you mean to access it on an object of '" +
+                     name + "' instead of the class?"}
+                );
+            }
+            return message;
+        }
         else
             return "Type '" + Luau::toString(e.table) + "' does not have key '" + e.key + "'";
     }
@@ -1122,6 +1162,7 @@ struct ErrorConverter
         {
             ToStringOptions typeOptions;
             typeOptions.sortUnionMembers = false;
+            typeOptions.classAndTraitValuesInTypeForm = true;
 
             // A name longer than this is an expression the reader has to parse, not a name.
             constexpr size_t maxSubjectNameLength = 30;
@@ -2038,7 +2079,7 @@ UnknownSymbol unknownTypeReference(const Scope& scope, const AstTypeReference& r
 
 bool UnknownProperty::operator==(const UnknownProperty& rhs) const
 {
-    return *table == *rhs.table && key == rhs.key;
+    return *table == *rhs.table && key == rhs.key && fieldOfItsObjects == rhs.fieldOfItsObjects;
 }
 
 bool PropertyAccessViolation::operator==(const PropertyAccessViolation& rhs) const

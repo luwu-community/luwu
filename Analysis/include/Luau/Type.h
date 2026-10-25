@@ -821,6 +821,10 @@ struct ExternType
     );
 };
 
+// Luwu Classes (rfcs/classes): "class" or "trait" when `etv` is the type of a class or trait value (written `class<Name>`
+// or `trait<Name>`), and nullptr for anything else, including the objects' type
+const char* nominalValueKind(const ExternType& etv);
+
 // Data required to initialize a user-defined function and its environment
 struct UserDefinedFunctionData
 {

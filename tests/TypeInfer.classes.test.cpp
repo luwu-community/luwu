@@ -1830,8 +1830,130 @@ TEST_CASE_FIXTURE(ClassesFixture, "missing_key_error_names_the_class_or_object_n
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK_EQ("Field 'age' not found in object 'Dog'", toString(result.errors[0]));
-    CHECK_EQ("Field 'age' not found in class 'Dog'", toString(result.errors[1]));
+    CHECK_EQ("Member 'age' not found in object 'Dog'", toString(result.errors[0]));
+    CHECK_EQ("Member 'age' not found in class 'Dog'", toString(result.errors[1]));
+}
+
+// A field read off its class instead of an object gets the runtime's explanation as help, under the short message
+// A trait value against an object typed by that trait reads like the class version, in words
+TEST_CASE_FIXTURE(ClassesFixture, "type_errors_tell_a_trait_value_from_its_objects")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag helpful{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+trait Colored
+    function color(self): string
+        return "default"
+    end
+end
+
+class Paint implements Colored
+end
+
+local function paint(c: Colored, t: trait<Colored>)
+    local shape: trait<Colored> = c
+    local colored: Colored = t
+end
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("Expected 'c' to be the trait 'Colored', but got an object that implements 'Colored' instead", toString(result.errors[0]));
+    CHECK_EQ("Expected 't' to be an object that implements 'Colored', but got the trait 'Colored' itself", toString(result.errors[1]));
+}
+
+// `object<C>` is the inverse of `class<T>`: an object type is its own `object<...>`, so the two round-trip
+TEST_CASE_FIXTURE(ClassesFixture, "object_of_a_class_value_round_trips")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+trait Colored
+    function color(self): string
+        return "default"
+    end
+end
+
+class Dog end
+class Cat end
+
+type RoundTrip = object<class<object<Dog>>>
+type FromUnion = object<class<Cat> | class<Dog>>
+type FromTrait = object<trait<Colored>>
+type FromAnyClass = object<class>
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Dog", toString(requireTypeAlias("RoundTrip")));
+    CHECK_EQ("Cat | Dog", toString(requireTypeAlias("FromUnion")));
+    CHECK_EQ("Colored", toString(requireTypeAlias("FromTrait")));
+    CHECK_EQ("object", toString(requireTypeAlias("FromAnyClass")));
+}
+
+// A generic over class values can name the objects they make
+TEST_CASE_FIXTURE(ClassesFixture, "object_of_a_generic_class_value_types_a_factory")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag helpful{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+class Paint
+    public gloss: number = 0
+end
+
+local function make<C>(cls: C): object<C>
+    return (cls :: any)()
+end
+
+local made = make(Paint)
+local wrong: string = made.gloss
+)");
+
+    // `made` is a `Paint`, so its `gloss` is a number
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("Expected 'made.gloss' to be 'string', but was given 'number'", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "object_of_something_that_makes_no_objects_is_an_error")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(R"(
+type Bad = object<number>
+type Empty = object<>
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("object<C> requires exactly one type argument, a class or trait value", toString(result.errors[0]));
+    CHECK_EQ("Type function instance object<number> is uninhabited", toString(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "field_read_off_its_class_has_help")
+{
+    const char* source = R"(
+        class Paint
+            public gloss: number = 0
+        end
+
+        local g = Paint.gloss
+    )";
+
+    CheckResult result = check(source);
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Member 'gloss' not found in class 'Paint'\n\n"
+        "Help (object field):\n"
+        "  • Field 'gloss' is a member of objects of class 'Paint'; did you mean to access it on an object of 'Paint' instead of "
+        "the class?",
+        toString(result.errors[0])
+    );
+
+    getFrontend().options.showHelp = false;
+    result = check(source);
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("Member 'gloss' not found in class 'Paint'", toString(result.errors[0]));
 }
 
 // A compound assignment checks its target as a write and as a read; the typo is reported once.
@@ -2215,6 +2337,33 @@ local bad: class<Cat | Dog> = Walrus
     CHECK_EQ("Walrus", toString(err->givenType));
 }
 
+// A class value and its objects' type both print as `Paint`. Type errors tell them apart: an object passed as its own
+// class (or the reverse) is said in words, and any other mismatch prints a class value as `class<Paint>`.
+TEST_CASE_FIXTURE(ClassesFixture, "type_errors_tell_a_class_value_from_its_objects")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag helpful{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+class Paint end
+class Ink end
+
+local paint = Paint
+local wrongClass: class<Paint> = Ink
+local objectForClass: class<Paint> = Ink()
+local ownObject: class<Paint> = Paint()
+local classForObject: Paint = Paint
+)");
+
+    CHECK_EQ("Paint", toString(requireType("paint")));
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ("Expected 'wrongClass' to be 'class<Paint>', but got 'class<Ink>'", toString(result.errors[0]));
+    CHECK_EQ("Expected 'objectForClass' to be 'class<Paint>', but got 'Ink'", toString(result.errors[1]));
+    CHECK_EQ("Expected 'ownObject' to be the class 'Paint', but got an object of class 'Paint' instead", toString(result.errors[2]));
+    CHECK_EQ("Expected 'classForObject' to be an object of class 'Paint', but got the class 'Paint' itself", toString(result.errors[3]));
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "class_of_an_uninhabited_object_type_is_never")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
@@ -2265,7 +2414,7 @@ local a: class<Item> = inst
 )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Expected this to be 'class<Item>', but got 'Item'", toString(result.errors[0]));
+    CHECK_EQ("Expected this to be the class 'Item', but got an object of class 'Item' instead", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "object_class_mismatch_says_which_side_is_the_class")
@@ -2282,7 +2431,7 @@ local a: Item = Item
 )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Expected this to be 'Item', but got 'class<Item>'", toString(result.errors[0]));
+    CHECK_EQ("Expected this to be an object of class 'Item', but got the class 'Item' itself", toString(result.errors[0]));
 }
 
 // The class's lines in its own module say nothing about the same lines of another module.
@@ -2520,7 +2669,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_with_any_is_compat
     CHECK_EQ(result.errors[1].location.begin.line, 15);
 }
 
-TEST_CASE_FIXTURE(ClassesFixture, "generic_class_value_against_its_object_is_spelled_as_class")
+TEST_CASE_FIXTURE(ClassesFixture, "generic_class_value_against_its_object_is_said_in_words")
 {
     CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag sffs[] = {
@@ -2537,7 +2686,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_class_value_against_its_object_is_spe
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Expected this to be 'class<Box>', but got 'Box<number>'", toString(result.errors[0]));
+    CHECK_EQ("Expected this to be the class 'Box', but got an object of class 'Box<number>' instead", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "uninstantiable_class_is_not_constructed_by_another_class_of_the_same_name")
@@ -5009,8 +5158,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "misspelled_field_write_reports_the_field_as_n
     if (FFlag::LuwuHelpfulSubtypingErrors)
         CHECK_EQ("Did you mean 'self.name' instead of 'self.nmae'?", toString(result.errors[0]));
     else
-        CHECK_EQ("Field 'nmae' not found in object 'Cat'", toString(result.errors[0]));
-    CHECK_EQ("Field 'nmae' not found in class 'Cat'", toString(result.errors[1]));
+        CHECK_EQ("Member 'nmae' not found in object 'Cat'", toString(result.errors[0]));
+    CHECK_EQ("Member 'nmae' not found in class 'Cat'", toString(result.errors[1]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "type_of_an_object_class_or_trait_value_compared_with_another_kind")
