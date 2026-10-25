@@ -81,27 +81,6 @@ struct MismatchExplanation
 
 };
 
-// Whether `written` is close enough to `meant` to be a misspelling of it: a few edits apart, and long enough that a
-// few edits don't make it a different word.
-bool looksLikeTypo(const std::string& written, const std::string& meant);
-
-// The candidate `written` is most likely a misspelling of: the fewest edits away within a typo's limit, the first of
-// those on a tie. Nullopt when none is that close. `written` itself is never one.
-std::optional<std::string> closestSpelling(const std::string& written, const std::vector<std::string>& candidates);
-
-// Luwu (helpful subtyping errors): the misspelled properties of a table literal whose expected type is `expectedType`.
-// Each is a property the type lacks, named like one the literal leaves out. For an optional property upstream reports
-// nothing: table types aren't exact, so the literal fits and the value is never read.
-std::vector<std::pair<Location, Typo>> literalPropertyTypos(const AstExprTable* expr, TypeId expectedType);
-
-// Luwu (helpful subtyping errors): `given`, the type of `literal`, with the strings written where `expected` wants a
-// string singleton typed as written. The checker widens a table literal's strings to `string`, which hides a
-// misspelled tag like `kind = "leeve"`.
-TypeId withWrittenStrings(TypeId given, const AstExpr* literal, TypeId expected, TypeArena& arena);
-
-// Where the value at `properties` is written inside the table literal `literal`, if it is.
-std::optional<Location> literalValueLocation(const AstExpr* literal, const std::vector<std::string>& properties);
-
 // Returns nullopt when the types are of a kind the differ doesn't take apart (generics, type
 // functions, classes), when no failing place can be found in two structured types, and when
 // everything found involves an error type, so the caller can fall back to the subtyping test's own

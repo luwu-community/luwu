@@ -3706,8 +3706,8 @@ TEST_CASE_FIXTURE(Fixture, "scalar_is_not_a_subtype_of_a_compatible_polymorphic_
     {
         // CLI-115090 Error reporting is quite bad in this case.
 
-        // This should be just 3
-        LUAU_REQUIRE_ERROR_COUNT(4, result);
+        // Luwu: 3, one per call. Upstream reports the last call twice, once per union member that fails.
+        LUAU_REQUIRE_ERROR_COUNT(3, result);
 
         TypeMismatch* tm1 = get<TypeMismatch>(result.errors[0]);
         REQUIRE(tm1);
@@ -3724,11 +3724,6 @@ TEST_CASE_FIXTURE(Fixture, "scalar_is_not_a_subtype_of_a_compatible_polymorphic_
         REQUIRE(tm3);
         CHECK("\"bar\" | \"baz\"" == toString(tm3->givenType));
         CHECK("t1 where t1 = { read absolutely_no_scalar_has_this_method: (t1) -> (a...) }" == toString(tm3->wantedType));
-
-        TypeMismatch* tm4 = get<TypeMismatch>(result.errors[3]);
-        REQUIRE(tm4);
-        CHECK("\"bar\" | \"baz\"" == toString(tm4->givenType));
-        CHECK("t1 where t1 = { read absolutely_no_scalar_has_this_method: (t1) -> (a...) }" == toString(tm4->wantedType));
     }
     else
     {

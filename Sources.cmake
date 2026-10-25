@@ -246,11 +246,11 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/Linter.h
     Analysis/include/Luau/LValue.h
     Analysis/include/Luau/Metamethods.h
+    Analysis/include/Luau/MismatchExplanation.h
+    Analysis/include/Luau/MismatchWording.h
     Analysis/include/Luau/Module.h
     Analysis/include/Luau/ModuleResolver.h
     Analysis/include/Luau/NonStrictTypeChecker.h
-    Analysis/include/Luau/MismatchExplanation.h
-    Analysis/include/Luau/MismatchWording.h
     Analysis/include/Luau/Normalize.h
     Analysis/include/Luau/OverloadResolver.h
     Analysis/include/Luau/Polarity.h
@@ -294,12 +294,13 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/TypePairHash.h
     Analysis/include/Luau/TypePath.h
     Analysis/include/Luau/TypeUtils.h
+    Analysis/include/Luau/Typos.h
     Analysis/include/Luau/Unifiable.h
     Analysis/include/Luau/Unifier.h
     Analysis/include/Luau/Unifier2.h
+    Analysis/include/Luau/UnifierSharedState.h
     Analysis/include/Luau/UnknownVariable.h
     Analysis/include/Luau/UnreachableProof.h
-    Analysis/include/Luau/UnifierSharedState.h
     Analysis/include/Luau/UserDefinedTypeFunction.h
     Analysis/include/Luau/VisitType.h
     Analysis/include/Luau/IterativeTypeVisitor.h
@@ -343,10 +344,10 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/JsonEmitter.cpp
     Analysis/src/Linter.cpp
     Analysis/src/LValue.cpp
-    Analysis/src/Module.cpp
-    Analysis/src/NonStrictTypeChecker.cpp
     Analysis/src/MismatchExplanation.cpp
     Analysis/src/MismatchWording.cpp
+    Analysis/src/Module.cpp
+    Analysis/src/NonStrictTypeChecker.cpp
     Analysis/src/Normalize.cpp
     Analysis/src/OverloadResolver.cpp
     Analysis/src/Quantify.cpp
@@ -383,6 +384,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/TypePack.cpp
     Analysis/src/TypePath.cpp
     Analysis/src/TypeUtils.cpp
+    Analysis/src/Typos.cpp
     Analysis/src/Unifiable.cpp
     Analysis/src/Unifier.cpp
     Analysis/src/Unifier2.cpp

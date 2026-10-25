@@ -1408,6 +1408,26 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "calling_a_method_on_an_optional_none_value_r
     CHECK_EQ("this 'string' value is optional and may be 'none', use an if condition to check", toString(result.errors[0]));
 }
 
+// Luwu: an optional argument that's wrong in a member other than its `none` is a mismatch of the whole argument, not the
+// "may be 'none'" message, which would hide that 'string' isn't a 'number'
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_optional_argument_wrong_beyond_its_none_is_a_mismatch")
+{
+    CheckResult result = check(R"(
+        local function take(n: number) end
+        local s: string | none = "a"
+        take(s)
+        local n: number | none = 1
+        take(n)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    const TypeMismatch* mismatch = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(mismatch);
+    CHECK_EQ("number", toString(mismatch->wantedType));
+    CHECK_EQ("none | string", toString(mismatch->givenType));
+    CHECK_EQ("this 'number' value is optional and may be 'none', use an if condition to check", toString(result.errors[1]));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "mm_comparisons_must_return_a_boolean")
 {
 #if 0 // CLI-115687

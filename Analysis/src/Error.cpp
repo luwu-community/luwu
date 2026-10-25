@@ -4,7 +4,7 @@
 #include "Luau/Clone.h"
 #include "Luau/Common.h"
 #include "Luau/FileResolver.h"
-#include "Luau/MismatchExplanation.h"
+#include "Luau/Typos.h"
 #include "Luau/NotNull.h"
 #include "Luau/Scope.h"
 #include "Luau/StringUtils.h"

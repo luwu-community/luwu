@@ -27,6 +27,7 @@
 #include "Luau/TypePack.h"
 #include "Luau/TypePath.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/Typos.h"
 #include "Luau/TypeOrPack.h"
 #include "Luau/VisitType.h"
 
@@ -6446,8 +6447,8 @@ void TypeChecker2::diagnoseMissingTableKey(UnknownProperty* utk, TypeErrorData& 
         data = TypeErrorData(UnknownPropButFoundLikeProp{utk->table, utk->key, std::move(candidates)});
 }
 
-// Luwu: `x` for `x`, `(x)` and `x.y.z`, `x[k]` or `x.f()`: the local a use is read through
-static const AstExprLocal* rootLocal(AstExpr* expr)
+// Luwu: `x` for `x`, `(x)` and `x.y.z`, `x[k]` or `x.f()`: the expression a use is read through
+static const AstExpr* rootOf(AstExpr* expr)
 {
     while (true)
     {
@@ -6460,8 +6461,14 @@ static const AstExprLocal* rootLocal(AstExpr* expr)
         else if (AstExprCall* call = expr->as<AstExprCall>())
             expr = call->func;
         else
-            return expr->as<AstExprLocal>();
+            return expr;
     }
+}
+
+// Luwu: the local a use is read through, if it's one
+static const AstExprLocal* rootLocal(AstExpr* expr)
+{
+    return rootOf(expr)->as<AstExprLocal>();
 }
 
 // Luwu: `x` for `x` and `(x)`
@@ -6512,13 +6519,21 @@ bool TypeChecker2::reportImproperUse(AstExpr* subject, TypeId subjectType, Impro
 
 void TypeChecker2::reportUnreachableUse(AstExpr* subject, ImproperUse use)
 {
+    if (inDefensiveBranch(*sourceModule, subject))
+        return;
+
     // Each local is reported once, its first use and uses through it (`x.y` after `x`) alike: the code after the first
-    // is just as unreachable, or just as unchecked
+    // is just as unreachable, or just as unchecked. Anything else is reported once per expression it's read through,
+    // so `dave:go()` is one error at `dave`.
     const AstExprLocal* root = rootLocal(subject);
     if (root && improperlyUsedLocals.contains(root->local))
         return;
+    if (!root && improperlyUsedRoots.contains(rootOf(subject)))
+        return;
     if (root)
         improperlyUsedLocals.insert(root->local);
+    else
+        improperlyUsedRoots.insert(rootOf(subject));
 
     // An error in its declaration (a parameter "reduced to never") already says why it's `never`
     const AstExprLocal* local = asLocal(subject);

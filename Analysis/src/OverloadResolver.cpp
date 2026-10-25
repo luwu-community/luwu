@@ -314,22 +314,19 @@ static Path argumentPackPath(const SubtypingReasoning& reason)
     return path;
 }
 
-// Luwu: `ty` is `none`, or a union with a `none` member. An argument is reported whole (see
-// `pathUpToUnionOrIntersectionMember`), so an optional one arrives as `none | string`, not as its `none`.
-static bool mayBeNone(TypeId ty)
+static constexpr std::string_view kMayBeNoneEnding = "' value is optional and may be 'none', use an if condition to check";
+
+static std::string mayBeNoneMessage(TypeId wanted)
 {
-    ty = follow(ty);
-    if (Luau::isNone(ty))
-        return true;
-    const UnionType* u = get<UnionType>(ty);
-    return u && std::any_of(
-                    u->options.begin(),
-                    u->options.end(),
-                    [](TypeId option)
-                    {
-                        return Luau::isNone(follow(option));
-                    }
-                );
+    return "this '" + Luau::toString(wanted) + std::string(kMayBeNoneEnding);
+}
+
+static bool saysMayBeNone(const TypeError& error)
+{
+    const GenericError* generic = get<GenericError>(error);
+    const std::string* message = generic ? &generic->message : nullptr;
+    return message && message->size() >= kMayBeNoneEnding.size() &&
+           message->compare(message->size() - kMayBeNoneEnding.size(), kMayBeNoneEnding.size(), kMayBeNoneEnding) == 0;
 }
 
 // Luwu: `path` up to the first step into a member of a union or intersection. A `Player?` argument where a
@@ -361,6 +358,36 @@ static ArgumentMismatchSides traverseArgumentMismatch(
     Path givenPath = pathUpToUnionOrIntersectionMember(argumentPackPath(reason));
     Path wantedPath = pathUpToUnionOrIntersectionMember(reason.subPath);
     return {traverse(argPack, givenPath, builtinTypes, arena), traverse(fnTy, wantedPath, builtinTypes, arena)};
+}
+
+// Luwu: whether the member of the argument the reasoning failed on is `none`, as in an optional argument
+static bool failsOnNone(const SubtypingReasoning& reason, TypePackId argPack, NotNull<BuiltinTypes> builtinTypes, NotNull<TypeArena> arena)
+{
+    std::optional<TypeOrPack> member = traverse(argPack, argumentPackPath(reason), builtinTypes, arena);
+    const TypeId* ty = member ? get_if<TypeId>(&*member) : nullptr;
+    return ty && Luau::isNone(follow(*ty));
+}
+
+// Luwu: an argument gets one error however many of its union members fail. Each failing member is a reasoning of its
+// own, and all of them are reported for the whole argument. Its `none` member failing alone says "may be 'none'"; any
+// other member failing is a mismatch, which replaces that. Returns whether the argument at `location` is reported.
+static bool argumentReported(ErrorVec& errors, Location location, bool onNone)
+{
+    for (auto it = errors.begin(); it != errors.end(); ++it)
+    {
+        if (it->location != location)
+            continue;
+        if (get<TypeMismatch>(*it))
+            return true;
+        if (saysMayBeNone(*it) && onNone)
+            return true;
+        if (saysMayBeNone(*it))
+        {
+            errors.erase(it);
+            return false;
+        }
+    }
+    return false;
 }
 
 // Luwu (helpful subtyping errors): the path up to a variadic's element (`tail().variadic()`), when there is one.
@@ -510,8 +537,7 @@ void OverloadResolver::reportErrors(
         // The first path component should always be PackField::Arguments
         LUAU_ASSERT(reason.subPath.components.size() > 1);
         ArgumentMismatchSides sides = traverseArgumentMismatch(reason, fnTy, argPack, builtinTypes, arena);
-
-        maybeEmplaceError(&errors, argLocation, moduleName, &reason, sides.wanted, sides.given);
+        emplaceArgumentMismatch(errors, argLocation, moduleName, reason, sides.wanted, sides.given, failsOnNone(reason, argPack, builtinTypes, arena));
         return;
     }
 
@@ -563,7 +589,7 @@ void OverloadResolver::reportErrors(
         ArgumentMismatchSides sides = traverseArgumentMismatch(reason, fnTy, argPack, builtinTypes, arena);
         if (sides.given && sides.wanted)
         {
-            maybeEmplaceError(&errors, location, moduleName, &reason, sides.wanted, sides.given);
+            emplaceArgumentMismatch(errors, location, moduleName, reason, sides.wanted, sides.given, failsOnNone(reason, argPack, builtinTypes, arena));
             return;
         }
     }
@@ -794,6 +820,24 @@ void OverloadResolver::testFunctionOrCallMetamethod(
     testFunction(result, fnTy, argsPack, fnLocation, uniqueTypes);
 }
 
+void OverloadResolver::emplaceArgumentMismatch(
+    ErrorVec& errors,
+    Location location,
+    const ModuleName& moduleName,
+    const SubtypingReasoning& reason,
+    const std::optional<TypeOrPack>& wanted,
+    const std::optional<TypeOrPack>& given,
+    bool onNone
+) const
+{
+    if (argumentReported(errors, location, onNone))
+        return;
+    if (onNone)
+        maybeEmplaceError(&errors, location, moduleName, &reason, wanted, std::optional<TypeOrPack>{builtinTypes->noneType});
+    else
+        maybeEmplaceError(&errors, location, moduleName, &reason, wanted, given);
+}
+
 void OverloadResolver::maybeEmplaceError(
     ErrorVec* errors,
     Location argLocation,
@@ -831,15 +875,9 @@ void OverloadResolver::maybeEmplaceError(
         case ErrorSuppression::DoNotSuppress:
             // A `none` branch of an optional argument/self type reaching here means the caller never
             // narrowed/checked it before using it somewhere that expects a concrete value.
-            if (mayBeNone(*givenType) && !Luau::isNone(follow(*wantedType)))
+            if (Luau::isNone(follow(*givenType)) && !Luau::isNone(follow(*wantedType)))
             {
-                errors->emplace_back(
-                    argLocation,
-                    moduleName,
-                    GenericError{
-                        "this '" + Luau::toString(*wantedType) + "' value is optional and may be 'none', use an if condition to check"
-                    }
-                );
+                errors->emplace_back(argLocation, moduleName, GenericError{mayBeNoneMessage(*wantedType)});
                 break;
             }
 

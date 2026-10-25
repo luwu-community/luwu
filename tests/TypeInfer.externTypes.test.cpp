@@ -1103,11 +1103,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "extern_type_check_key_superset")
         end
     )");
 
-    // Luwu: `IsEnabled` is a string, so the second check can't run (UnreachableCodeUse). Upstream reports nothing.
-    LUAU_REQUIRE_ERROR_COUNT(1, results);
-    const UnreachableCodeUse* unreachable = get<UnreachableCodeUse>(results.errors[0]);
-    REQUIRE(unreachable);
-    CHECK_EQ(UnreachableCodeUse::Reason::NarrowedAway, unreachable->reason);
+    // Luwu: `IsEnabled` is a string, so the second check can't run, but an `assert` is a defensive check and using a
+    // `never` value in one isn't reported (UnreachableCodeUse)
+    LUAU_REQUIRE_NO_ERRORS(results);
     CHECK_EQ("(Foobar) -> Foobar", toString(requireType("update")));
 }
 

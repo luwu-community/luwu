@@ -11,6 +11,7 @@
 #include "Luau/Type.h"
 #include "Luau/TypePack.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/Typos.h"
 
 #include <algorithm>
 #include <cstring>
@@ -31,10 +32,11 @@ using namespace MismatchWording;
 namespace
 {
 
-// Subtyping tests one whole message may run. Every node compared costs one, and choosing between union members diffs every candidate, so without a bound a
-// pathological type could make an error message the slowest thing in the check.
-constexpr int kMessageBudget = 400;
-// How much of the message's budget one candidate may spend when picking the closest member of an
+// Subtyping tests one pass of `explainOnce` may run. A message runs at most two passes, the second to print repeated
+// types by name. Every node compared costs one, and choosing between union members diffs every candidate, so without a
+// bound a pathological type could make an error message the slowest thing in the check.
+constexpr int kPassBudget = 400;
+// How much of the pass's budget one candidate may spend when picking the closest member of an
 // expected union.
 constexpr int kCandidateBudget = 60;
 // How deep a diff descends before reporting the two types at that point as they are.
@@ -49,10 +51,8 @@ constexpr size_t kNamedMembers = 5;
 // An aliased union or intersection after `type X =` shows the members the message refers to in place when that fits
 // in this many characters; a longer one lists them by number.
 constexpr size_t kMaxSpelledOutWidth = 240;
-// Members of an expected union a misspelled string is compared against.
-constexpr size_t kMaxSpellingCandidates = 256;
-// Strings longer than this aren't checked for typos: the edit distance is quadratic in their length.
-constexpr size_t kMaxSpellingLength = 128;
+// Strings one pass may compare a given string with, looking for one it misspells
+constexpr size_t kPassSpellingComparisons = 1024;
 // Aliases a message mentions without showing them (`Address` in `type Customer = { billing: Address }`) that
 // it declares, past the ones it names itself: the rest of a long chain is more than a reader needs.
 constexpr size_t kMaxMentionedAliases = 4;
@@ -134,6 +134,20 @@ const TableType* tableOf(TypeId ty)
     return nullptr;
 }
 
+// The table a metatable's `__index` reads missing properties from (the class table of metatable OOP), if it's one
+std::optional<TypeId> indexTableOf(TypeId ty)
+{
+    const MetatableType* metatable = get<MetatableType>(follow(ty));
+    const TableType* methods = metatable ? get<TableType>(follow(metatable->metatable)) : nullptr;
+    auto it = methods ? methods->props.find("__index") : TableType::Props::const_iterator{};
+    if (!methods || it == methods->props.end() || !it->second.readTy)
+        return std::nullopt;
+    TypeId index = follow(*it->second.readTy);
+    if (!get<TableType>(index) && !get<MetatableType>(index))
+        return std::nullopt;
+    return index;
+}
+
 // The name the reader wrote for this type, if it has one.
 std::optional<std::string> aliasName(TypeId ty)
 {
@@ -209,93 +223,6 @@ ToStringOptions printOptions(size_t width)
     return options;
 }
 
-// The edit distance between `a` and `b` when it's at most `limit`. Strings whose lengths alone differ by
-// more can't be that close, and long strings aren't compared at all.
-std::optional<size_t> editDistanceWithin(const std::string& a, const std::string& b, size_t limit)
-{
-    size_t lengthGap = a.size() > b.size() ? a.size() - b.size() : b.size() - a.size();
-    if (lengthGap > limit || a.size() > kMaxSpellingLength || b.size() > kMaxSpellingLength)
-        return std::nullopt;
-    // insertions, deletions, substitutions and swaps of two neighboring characters each count as one edit, so `"Bleu"`
-    // is one edit from `"Blue"`
-    size_t distance = editDistance(a, b);
-    if (distance > limit)
-        return std::nullopt;
-    return distance;
-}
-
-// Whether `shorter` abbreviates `longer`: same first letter, its letters in order, and most of the length.
-bool isAbbreviation(const std::string& shorter, const std::string& longer)
-{
-    if (shorter.empty() || shorter.size() * 10 < longer.size() * 6 || shorter[0] != longer[0])
-        return false;
-    size_t at = 0;
-    for (char c : longer)
-    {
-        if (at < shorter.size() && c == shorter[at])
-            ++at;
-    }
-    return at == shorter.size();
-}
-
-// A misspelling is at most this many edits from what was meant, and longer than this: a string that short is a few
-// edits from everything (`"t"` for `"s"`).
-constexpr size_t kMaxTypoEdits = 2;
-// A word this long or shorter gets one edit: two turn most short words into other words (`"Food"` and `"Tool"`).
-constexpr size_t kShortWordLength = 4;
-
-size_t typoEditLimit(const std::string& written)
-{
-    return written.size() <= kShortWordLength ? 1 : kMaxTypoEdits;
-}
-
-// The expected string a given string singleton was most likely a misspelling of: within two edits,
-// or an abbreviation of it (`"LeftCtrl"` for `"LeftControl"`).
-std::optional<std::string> misspelledSingleton(TypeId sub, TypeId super)
-{
-    const SingletonType* given = get<SingletonType>(follow(sub));
-    const StringSingleton* givenString = given ? get<StringSingleton>(given) : nullptr;
-    if (!givenString || givenString->value.size() <= kMaxTypoEdits)
-        return std::nullopt;
-
-    // `("Red" | "Blue")?` is a union holding a union, so collect members through nesting. A union can
-    // hold itself, so each is opened once.
-    std::vector<TypeId> candidates;
-    std::unordered_set<TypeId> opened;
-    std::vector<TypeId> pending{super};
-    while (!pending.empty() && candidates.size() < kMaxSpellingCandidates)
-    {
-        TypeId ty = follow(pending.back());
-        pending.pop_back();
-        if (const UnionType* u = get<UnionType>(ty))
-        {
-            if (opened.insert(ty).second)
-                pending.insert(pending.end(), u->options.rbegin(), u->options.rend());
-        }
-        else
-            candidates.push_back(ty);
-    }
-
-    std::optional<std::string> best;
-    size_t bestDistance = typoEditLimit(givenString->value) + 1;
-    for (TypeId candidate : candidates)
-    {
-        const SingletonType* singleton = get<SingletonType>(follow(candidate));
-        const StringSingleton* candidateString = singleton ? get<StringSingleton>(singleton) : nullptr;
-        if (!candidateString)
-            continue;
-
-        const std::string& want = candidateString->value;
-        size_t distance = editDistanceWithin(givenString->value, want, bestDistance - 1).value_or(bestDistance);
-        if (distance < bestDistance || (!best && isAbbreviation(givenString->value, want)))
-        {
-            best = "\"" + want + "\"";
-            bestDistance = std::min(distance, bestDistance);
-        }
-    }
-    return best;
-}
-
 // Whether `written` is a misspelling of the string `meant`.
 bool isMisspelledString(const SingletonType& written, const SingletonType& meant)
 {
@@ -311,10 +238,11 @@ struct Tag
     std::string value;
 };
 
-// Subtyping tests left for one message, shared by every `Differ` working on it.
+// Subtyping tests and string comparisons left for one pass, shared by every `Differ` working on it
 struct Budget
 {
-    int remaining = kMessageBudget;
+    int remaining = kPassBudget;
+    size_t spellingComparisons = kPassSpellingComparisons;
 };
 
 struct Differ
@@ -543,7 +471,7 @@ struct Differ
 
     void differ(Difference::Kind kind, const DiffPath& path, TypeId sub, TypeId super)
     {
-        std::optional<std::string> suggestion = kind == Difference::Kind::Mismatch ? misspelledSingleton(sub, super) : std::nullopt;
+        std::optional<std::string> suggestion = kind == Difference::Kind::Mismatch ? misspelledSingleton(sub, super, budget->spellingComparisons) : std::nullopt;
         Difference d{kind, path, display(sub), display(super), suggestion};
         if (const UnionType* u = get<UnionType>(follow(sub)); u && kind == Difference::Kind::CouldBeNil && aliasName(sub))
             d.subMeaning = expansion(u->options, " | ", kTypeWidth);
@@ -599,15 +527,16 @@ struct Differ
         return std::nullopt;
     }
 
-    // A property of `ty` as a reader of it sees it, following the table part of a metatable and each
-    // part of an intersection. A string-keyed indexer answers for any name.
+    // A property of `ty` as a reader of it sees it, as subtyping finds it: in the table part of a metatable, then in
+    // its `__index` table, and in each part of an intersection. A string-keyed indexer answers for any name.
     std::optional<TypeId> readProperty(TypeId ty, const std::string& name, int depth = 0)
     {
         ty = follow(ty);
+        if (depth >= kMaxWalkDepth)
+            return std::nullopt;
+
         if (const IntersectionType* intersection = get<IntersectionType>(ty))
         {
-            if (depth >= kMaxWalkDepth)
-                return std::nullopt;
             for (TypeId part : intersection->parts)
             {
                 if (std::optional<TypeId> found = readProperty(part, name, depth + 1))
@@ -626,24 +555,32 @@ struct Differ
         if (table->indexer && fits(builtinTypes->stringType, table->indexer->indexType))
             return table->indexer->indexResultType;
 
+        if (std::optional<TypeId> index = indexTableOf(ty))
+            return readProperty(*index, name, depth + 1);
+
         return std::nullopt;
     }
 
     void collectPropertyNames(TypeId ty, std::vector<std::string>& names, int depth)
     {
         ty = follow(ty);
+        if (depth >= kMaxWalkDepth)
+            return;
+
         if (const IntersectionType* intersection = get<IntersectionType>(ty))
         {
-            if (depth >= kMaxWalkDepth)
-                return;
             for (TypeId part : intersection->parts)
                 collectPropertyNames(part, names, depth + 1);
+            return;
         }
-        else if (const TableType* table = tableOf(ty))
+
+        if (const TableType* table = tableOf(ty))
         {
             for (const auto& [name, prop] : table->props)
                 names.push_back(name);
         }
+        if (std::optional<TypeId> index = indexTableOf(ty))
+            collectPropertyNames(*index, names, depth + 1);
     }
 
     std::vector<std::string> propertyNames(TypeId ty)
@@ -1952,7 +1889,7 @@ std::optional<MismatchExplanation> explainOnce(
     };
 
     // A string that is one typo away from one of the strings expected needs nothing but the correction.
-    if (std::optional<std::string> suggestion = misspelledSingleton(given, expected))
+    if (std::optional<std::string> suggestion = misspelledSingleton(given, expected, budget.spellingComparisons))
     {
         explanation.reason = paragraph(misspelledStringHelp(*suggestion, helpifier));
         explanation.typo = {differ.display(given), *suggestion};
@@ -2517,218 +2454,6 @@ std::string printedMessage(const MismatchExplanation& explanation, TypeId given,
 }
 
 } // namespace
-
-bool looksLikeTypo(const std::string& written, const std::string& meant)
-{
-    return written.size() > kMaxTypoEdits && editDistanceWithin(written, meant, typoEditLimit(written)).has_value();
-}
-
-static std::string withoutDigits(const std::string& name)
-{
-    std::string letters;
-    for (char c : name)
-    {
-        if (!std::isdigit(static_cast<unsigned char>(c)))
-            letters += c;
-    }
-    return letters;
-}
-
-std::optional<std::string> closestSpelling(const std::string& written, const std::vector<std::string>& candidates)
-{
-    if (written.size() <= kMaxTypoEdits)
-        return std::nullopt;
-
-    std::optional<std::string> best;
-    size_t bestDistance = typoEditLimit(written) + 1;
-    const std::string writtenLetters = withoutDigits(written);
-    for (const std::string& candidate : candidates)
-    {
-        // Names that differ only in digits are siblings (`Part8`, `Part0`), not misspellings of each other
-        if (candidate == written || withoutDigits(candidate) == writtenLetters)
-            continue;
-        std::optional<size_t> distance = editDistanceWithin(written, candidate, bestDistance - 1);
-        if (distance)
-        {
-            best = candidate;
-            bestDistance = *distance;
-        }
-    }
-    return best;
-}
-
-// The name of a literal's property, when it's written as one (`name = v` or `["name"] = v`).
-static std::optional<std::string> literalPropertyName(const AstExprTable::Item& item)
-{
-    if (item.kind == AstExprTable::Item::Kind::List || !item.key)
-        return std::nullopt;
-    if (AstExprConstantString* key = item.key->as<AstExprConstantString>())
-        return std::string(key->value.data, key->value.size);
-    return std::nullopt;
-}
-
-std::vector<std::pair<Location, Typo>> literalPropertyTypos(const AstExprTable* expr, TypeId expectedType)
-{
-    std::vector<std::pair<Location, Typo>> typos;
-
-    // `Config?` is checked as its `Config`.
-    TypeId expected = follow(expectedType);
-    if (const UnionType* optional = get<UnionType>(expected))
-    {
-        std::vector<TypeId> nonNil;
-        for (TypeId option : optional->options)
-        {
-            if (!isNil(follow(option)))
-                nonNil.push_back(option);
-        }
-        if (nonNil.size() != 1)
-            return typos;
-        expected = follow(nonNil.front());
-    }
-
-    const TableType* table = get<TableType>(expected);
-    if (!table || table->indexer)
-        return typos;
-
-    // This runs for every table literal with an expected table type. Most write only properties the type has.
-    bool writesUnknownProperty = false;
-    for (const AstExprTable::Item& item : expr->items)
-    {
-        std::optional<std::string> name = literalPropertyName(item);
-        if (name && !table->props.count(*name))
-        {
-            writesUnknownProperty = true;
-            break;
-        }
-    }
-
-    if (!writesUnknownProperty)
-        return typos;
-
-    std::unordered_set<std::string> written;
-    for (const AstExprTable::Item& item : expr->items)
-    {
-        if (std::optional<std::string> name = literalPropertyName(item))
-            written.insert(*name);
-    }
-
-    for (const AstExprTable::Item& item : expr->items)
-    {
-        std::optional<std::string> name = literalPropertyName(item);
-        if (!name || table->props.count(*name))
-            continue;
-
-        for (const auto& [meant, property] : table->props)
-        {
-            if (!written.count(meant) && looksLikeTypo(*name, meant))
-            {
-                typos.emplace_back(item.key->location, Typo{*name, meant});
-                break;
-            }
-        }
-    }
-    return typos;
-}
-
-// The types `ty` can be: each member of a union, else `ty` itself.
-static std::vector<TypeId> alternativesOf(TypeId ty)
-{
-    ty = follow(ty);
-    const UnionType* u = get<UnionType>(ty);
-    if (!u)
-        return {ty};
-    return std::vector<TypeId>(begin(u), end(u));
-}
-
-// The types the alternatives of `expected` give the property `name`.
-static std::vector<TypeId> expectedProperty(const std::vector<TypeId>& expected, const std::string& name)
-{
-    std::vector<TypeId> properties;
-    for (TypeId alternative : expected)
-    {
-        const TableType* table = get<TableType>(follow(alternative));
-        if (!table)
-            continue;
-        auto it = table->props.find(name);
-        if (it == table->props.end() || !it->second.readTy)
-            continue;
-        for (TypeId option : alternativesOf(*it->second.readTy))
-            properties.push_back(option);
-    }
-    return properties;
-}
-
-static TypeId withWrittenStrings(TypeId given, const AstExpr* literal, const std::vector<TypeId>& expected, TypeArena& arena)
-{
-    given = follow(given);
-    const AstExprTable* expr = literal->as<AstExprTable>();
-    const TableType* table = get<TableType>(given);
-    if (!expr || !table)
-        return given;
-
-    std::optional<TableType> copy;
-    for (const AstExprTable::Item& item : expr->items)
-    {
-        std::optional<std::string> name = literalPropertyName(item);
-        auto it = name ? table->props.find(*name) : table->props.end();
-        if (it == table->props.end() || !it->second.readTy)
-            continue;
-
-        TypeId checked = *it->second.readTy;
-        TypeId written = checked;
-        std::vector<TypeId> wanted = expectedProperty(expected, *name);
-        if (const AstExprConstantString* string = item.value->as<AstExprConstantString>())
-        {
-            bool wantsSingleton = std::any_of(
-                wanted.begin(),
-                wanted.end(),
-                [](TypeId ty)
-                {
-                    const SingletonType* singleton = get<SingletonType>(follow(ty));
-                    return singleton && get<StringSingleton>(singleton);
-                }
-            );
-            if (wantsSingleton && isString(checked))
-                written = arena.addType(SingletonType{StringSingleton{std::string(string->value.data, string->value.size)}});
-        }
-        else
-            written = withWrittenStrings(checked, item.value, wanted, arena);
-        if (written == checked)
-            continue;
-
-        if (!copy)
-            copy = *table;
-        copy->props[*name] = Property::rw(written);
-    }
-    return copy ? arena.addType(std::move(*copy)) : given;
-}
-
-TypeId withWrittenStrings(TypeId given, const AstExpr* literal, TypeId expected, TypeArena& arena)
-{
-    return withWrittenStrings(given, literal, alternativesOf(expected), arena);
-}
-
-std::optional<Location> literalValueLocation(const AstExpr* literal, const std::vector<std::string>& properties)
-{
-    for (const std::string& property : properties)
-    {
-        const AstExprTable* expr = literal->as<AstExprTable>();
-        if (!expr)
-            return std::nullopt;
-        auto found = std::find_if(
-            expr->items.begin(),
-            expr->items.end(),
-            [&](const AstExprTable::Item& item)
-            {
-                return literalPropertyName(item) == property;
-            }
-        );
-        if (found == expr->items.end())
-            return std::nullopt;
-        literal = found->value;
-    }
-    return literal->location;
-}
 
 std::optional<MismatchExplanation> explainMismatch(
     TypeId given,

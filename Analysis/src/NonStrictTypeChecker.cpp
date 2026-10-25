@@ -16,7 +16,7 @@
 #include "Luau/TypeArena.h"
 #include "Luau/TypeFunction.h"
 #include "Luau/TypeUtils.h"
-#include "Luau/MismatchExplanation.h"
+#include "Luau/Typos.h"
 #include "Luau/UnknownVariable.h"
 
 #include <iterator>

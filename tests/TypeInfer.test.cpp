@@ -3261,6 +3261,21 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_misspelled_local_is_a_typo_
     CHECK_EQ("Typo 'othrname': Did you mean 'othername'?", toString(result.errors[1]));
 }
 
+// Luwu: names that differ only in digits are siblings (`player1`, `player2`), so a variable isn't a typo of one
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_numbered_sibling_is_not_a_typo")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local player1 = 1
+        player2 = 5
+        print(player2, player1)
+    )");
+
+    for (const TypeError& error : result.errors)
+        CHECK_MESSAGE(!get<Typo>(error), toString(error));
+}
+
 // A global named like a local's plural is meant, but a plural nobody defined is still suggested
 TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_plural_global_beside_a_local_is_meant")
 {

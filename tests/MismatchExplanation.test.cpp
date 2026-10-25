@@ -1278,6 +1278,57 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "numbered_names_and_values_are_not_typos")
     CHECK_EQ(toString(result.errors[1]), "Unknown type 'Colours'");
 }
 
+// A misspelled property of a literal is found against each table of an intersection, and it's the closest unwritten
+// name that's suggested
+TEST_CASE_FIXTURE(BuiltinsFixture, "literal_property_typos_against_an_intersection_suggest_the_closest_name")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Named = { name: string, naem: string? }
+        type Aged = { age: number }
+        local person: Named & Aged = { nmae = "Ada", age = 36 }
+    )");
+
+    std::vector<std::pair<std::string, std::string>> typos;
+    for (const TypeError& error : result.errors)
+    {
+        if (const Typo* typo = get<Typo>(error))
+            typos.emplace_back(typo->written, typo->meant);
+    }
+    REQUIRE_EQ(1, typos.size());
+    CHECK_EQ("nmae", typos[0].first);
+    CHECK_EQ("name", typos[0].second);
+}
+
+// A metatable OOP object's methods are read through its metatable's `__index`, as subtyping reads them: they aren't
+// missing, and an object whose only shared properties are methods isn't unrelated
+TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_methods_are_found_through_index")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local Account = {}
+        Account.__index = Account
+        function Account.deposit(self: any, n: number) end
+        local function new()
+            return setmetatable({ balance = 0 }, Account)
+        end
+        type Wanted = { read balance: string, read deposit: (any, number) -> () }
+        local a: Wanted = new()
+        type OnlyMethods = { read deposit: (any, string) -> () }
+        local b: OnlyMethods = new()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    const std::string wrongBalance = toString(result.errors[0]);
+    CHECK_MESSAGE(wrongBalance.find("a.balance: expected 'string', got 'number'") != std::string::npos, wrongBalance);
+    CHECK_MESSAGE(wrongBalance.find("deposit") == std::string::npos, wrongBalance);
+    const std::string wrongMethod = toString(result.errors[1]);
+    CHECK_MESSAGE(wrongMethod.find("n: expected 'string', got 'number'") != std::string::npos, wrongMethod);
+    CHECK_MESSAGE(wrongMethod.find("unrelated") == std::string::npos, wrongMethod);
+}
+
 // A type name misspelled from one in scope is a typo too.
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_type_name_is_a_typo")
 {

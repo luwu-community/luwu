@@ -202,6 +202,7 @@ struct TypeChecker2
     void reportNoTypeNotes();
     // Locals with an improper use reported: each gets one error
     DenseHashSet<const AstLocal*> improperlyUsedLocals{nullptr};
+    DenseHashSet<const AstExpr*> improperlyUsedRoots{nullptr};
     // Every use of an error-typed local, and those reported as an improper use
     std::vector<const AstExprLocal*> noTypeUses;
     DenseHashSet<const AstExprLocal*> noTypeUsesReported{nullptr};

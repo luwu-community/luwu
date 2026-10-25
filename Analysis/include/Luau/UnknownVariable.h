@@ -36,7 +36,7 @@ public:
     // The name in scope that `use` is probably a misspelling of, with no other explanation.
     std::optional<std::string> misspelledName(const AstExprGlobal* use, const std::vector<std::string>& globals);
 
-    // The global names of `scope` and its parents. They're collected once per outermost scope.
+    // The global names of the module `scope` is in and of the scopes around it, collected once per module
     const std::vector<std::string>& globalsOf(const Scope& scope);
 
     enum class DeclarationKind
@@ -66,7 +66,9 @@ private:
     DenseHashMap<AstName, std::vector<size_t>> declarationsByName{AstName()};
     // The block each statement is in
     DenseHashMap<const AstNode*, const AstStatBlock*> parentBlocks{nullptr};
-    DenseHashMap<const Scope*, std::vector<std::string>> globalsByTopScope{nullptr};
+    DenseHashMap<const Scope*, std::vector<std::string>> globalsByModuleScope{nullptr};
+    // The nodes from the root down to each declaration, for the inner-scope search
+    DenseHashMap<const AstLocal*, std::vector<AstNode*>> declarationAncestries{nullptr};
     // Locals that already have a "consider moving" marker
     DenseHashSet<const AstLocal*> noted{nullptr};
 };

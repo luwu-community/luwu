@@ -209,6 +209,8 @@ struct MemberProof
     const AstLocal* local;
     // The member of the declared type being ruled out
     TypeId member;
+    // Whether tests on the local's properties still hold: false once code that can change them gets the table
+    bool propertiesKnown = true;
 
     // `expr` as a term: the local, or `local.prop`
     std::optional<Term> termOf(AstExpr* expr) const
@@ -229,6 +231,8 @@ struct MemberProof
     {
         if (!term.prop)
             return member;
+        if (!propertiesKnown)
+            return std::nullopt;
 
         const TableType* table = get<TableType>(member);
         if (const MetatableType* mt = get<MetatableType>(member))
@@ -365,15 +369,53 @@ struct MemberProof
     }
 };
 
-// Whether a statement in `body` assigns to `local` or one of its properties: a condition about either can be stale
+// What code that can make a condition stale does with `local`: assign to it or one of its properties, or hand the table
+// to code that can change its properties (a call, a method call, another binding or a table)
 struct AssignmentFinder : AstVisitor
 {
     const AstLocal* local;
     bool found = false;
+    bool escapes = false;
 
     explicit AssignmentFinder(const AstLocal* local)
         : local(local)
     {
+    }
+
+    bool isLocal(AstExpr* expr) const
+    {
+        AstExprLocal* read = stripGroups(expr)->as<AstExprLocal>();
+        return read && read->local == local;
+    }
+
+    // `type(x)` and `typeof(x)` only read their argument
+    static bool onlyReads(AstExprCall* call)
+    {
+        AstExprGlobal* callee = call->func->as<AstExprGlobal>();
+        return callee && (callee->name == "type" || callee->name == "typeof");
+    }
+
+    bool visit(AstExprCall* call) override
+    {
+        AstExprIndexName* method = call->self ? call->func->as<AstExprIndexName>() : nullptr;
+        escapes = escapes || (method && isLocal(method->expr));
+        for (AstExpr* arg : call->args)
+            escapes = escapes || (!onlyReads(call) && isLocal(arg));
+        return true;
+    }
+
+    bool visit(AstStatLocal* statement) override
+    {
+        for (AstExpr* value : statement->values)
+            escapes = escapes || isLocal(value);
+        return true;
+    }
+
+    bool visit(AstExprTable* table) override
+    {
+        for (const AstExprTable::Item& item : table->items)
+            escapes = escapes || isLocal(item.value);
+        return true;
     }
 
     bool assigns(AstExpr* target) const
@@ -396,6 +438,8 @@ struct AssignmentFinder : AstVisitor
     {
         for (AstExpr* var : assign->vars)
             found = found || assigns(var);
+        for (AstExpr* value : assign->values)
+            escapes = escapes || isLocal(value);
         return !found;
     }
 
@@ -406,6 +450,31 @@ struct AssignmentFinder : AstVisitor
     }
 };
 
+bool callsGlobal(AstNode* node, const char* name)
+{
+    AstExprCall* call = node->as<AstExprCall>();
+    AstExprGlobal* callee = call ? call->func->as<AstExprGlobal>() : nullptr;
+    return callee && callee->name == name;
+}
+
+bool isErrorCall(AstExpr* expr)
+{
+    return callsGlobal(expr, "error");
+}
+
+// Whether `block` ends by raising an error: `error(...)`, or `return error(...)`
+bool endsInError(AstStatBlock* block)
+{
+    if (block->body.size == 0)
+        return false;
+
+    AstStat* last = block->body.data[block->body.size - 1];
+    if (AstStatExpr* statement = last->as<AstStatExpr>())
+        return isErrorCall(statement->expr);
+    AstStatReturn* ret = last->as<AstStatReturn>();
+    return ret && ret->list.size == 1 && isErrorCall(ret->list.data[0]);
+}
+
 // Whether `block` always leaves before its end: it ends in `return`, `break`, `continue` or a call to `error`
 bool alwaysLeaves(AstStatBlock* block)
 {
@@ -415,11 +484,7 @@ bool alwaysLeaves(AstStatBlock* block)
     AstStat* last = block->body.data[block->body.size - 1];
     if (last->is<AstStatReturn>() || last->is<AstStatBreak>() || last->is<AstStatContinue>())
         return true;
-
-    AstStatExpr* statement = last->as<AstStatExpr>();
-    AstExprCall* call = statement ? statement->expr->as<AstExprCall>() : nullptr;
-    AstExprGlobal* callee = call ? call->func->as<AstExprGlobal>() : nullptr;
-    return callee && callee->name == "error";
+    return endsInError(block);
 }
 
 // An `if` whose every branch leaves, with no `else`: the code after it runs only when all of its conditions fail
@@ -505,6 +570,21 @@ std::vector<Condition> conditionsAt(const std::vector<AstNode*>& ancestry)
 
 } // namespace
 
+bool inDefensiveBranch(const SourceModule& source, const AstExpr* use)
+{
+    std::vector<AstNode*> ancestry = findAstAncestryOfPosition(source, use->location.begin);
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        if ((*it)->is<AstExprFunction>())
+            return false;
+        if (callsGlobal(*it, "assert") || callsGlobal(*it, "error"))
+            return true;
+        if (AstStatBlock* block = (*it)->as<AstStatBlock>())
+            return endsInError(block);
+    }
+    return false;
+}
+
 bool provesUnreachable(const SourceModule& source, const AstExprLocal* use, TypeId declared)
 {
     std::vector<AstNode*> ancestry = findAstAncestryOfPosition(source, use->location.begin);
@@ -512,9 +592,10 @@ bool provesUnreachable(const SourceModule& source, const AstExprLocal* use, Type
     if (conditions.empty())
         return false;
 
-    // Conditions are only known to still hold when nothing in the function assigns to what they test
+    // Conditions are only known to still hold when nothing assigns to what they test. That includes the functions
+    // nested in the local's own function, which can run between a condition and the use.
     AstNode* scope = source.root;
-    for (AstNode* node : ancestry)
+    for (AstNode* node : findAstAncestryOfPosition(source, use->local->location.begin))
     {
         if (node->is<AstExprFunction>())
             scope = node;
@@ -529,7 +610,8 @@ bool provesUnreachable(const SourceModule& source, const AstExprLocal* use, Type
         declared,
         [&](TypeId member)
         {
-            proven = proven && MemberProof{use->local, member}.ruledOutBy(conditions);
+            const MemberProof proof{use->local, member, !assignments.escapes};
+            proven = proven && proof.ruledOutBy(conditions);
         }
     );
     return proven;

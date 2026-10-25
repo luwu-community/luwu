@@ -1,7 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/UnknownVariable.h"
 
-#include "Luau/MismatchExplanation.h"
+#include "Luau/Typos.h"
 #include "Luau/StringUtils.h"
 
 #include <algorithm>
@@ -22,6 +22,9 @@ constexpr size_t kMaxTypoCandidates = 256;
 
 // A typo is at most two edits. Each edit changes at most two letter counts.
 constexpr size_t kMaxTypoLetterCountDifference = 4;
+
+// The most earlier declarations of a name the inner-scope search looks at for one use, latest first
+constexpr size_t kMaxInnerScopeCandidates = 64;
 
 // How far apart the letter counts of `a` and `b` are. It's cheap and rules out most names before an edit distance.
 size_t letterCountDifference(const std::string& a, const std::string& b)
@@ -284,15 +287,16 @@ void UnknownVariableExplainer::index()
 
 const std::vector<std::string>& UnknownVariableExplainer::globalsOf(const Scope& scope)
 {
-    const Scope* top = &scope;
-    while (top->parent)
-        top = top->parent.get();
+    // The module's scope is the one just inside the outermost, which holds the builtins
+    const Scope* module = &scope;
+    while (module->parent && module->parent->parent)
+        module = module->parent.get();
 
-    std::vector<std::string>& globals = globalsByTopScope[top];
-    if (!globals.empty())
-        return globals;
+    if (const std::vector<std::string>* cached = globalsByModuleScope.find(module))
+        return *cached;
 
-    for (const Scope* current = &scope; current; current = current->parent.get())
+    std::vector<std::string>& globals = globalsByModuleScope[module];
+    for (const Scope* current = module; current; current = current->parent.get())
     {
         for (const auto& [symbol, binding] : current->bindings)
         {
@@ -316,15 +320,13 @@ static std::optional<std::string> closestName(
     auto consider = [&](const std::string& candidate)
     {
         const bool sameFirstLetter = !candidate.empty() && !written.empty() && tolower(candidate[0]) == tolower(written[0]);
-        if (candidate == written || !sameFirstLetter || letterCountDifference(written, candidate) > kMaxTypoLetterCountDifference)
+        if (!sameFirstLetter || letterCountDifference(written, candidate) > kMaxTypoLetterCountDifference)
             return;
-        if (!looksLikeTypo(written, candidate))
-            return;
-        size_t distance = editDistance(written, candidate);
-        if (distance < closestDistance)
+        std::optional<size_t> distance = typoDistance(written, candidate);
+        if (distance && *distance < closestDistance)
         {
             closest = candidate;
-            closestDistance = distance;
+            closestDistance = *distance;
         }
     };
     auto declaredBefore = std::partition_point(
@@ -397,17 +399,33 @@ UnknownVariableExplanation UnknownVariableExplainer::explain(const AstExprGlobal
     }
 
     // A local in an earlier `if`, loop or `do` block of the same function. Python keeps it after the block but Luau doesn't.
+    // `sameName` is in source order, so the declarations before the use are a prefix of it.
+    auto declaredBefore = std::partition_point(
+        sameName->begin(),
+        sameName->end(),
+        [&](size_t i)
+        {
+            return declarations[i].local->location.end <= site.at;
+        }
+    );
+    const size_t considered = std::min(size_t(declaredBefore - sameName->begin()), kMaxInnerScopeCandidates);
     const AstNode* holder = nullptr;
     std::vector<const Declaration*> held;
-    for (size_t i : *sameName)
+    for (auto it = declaredBefore - considered; it != declaredBefore; ++it)
     {
-        const Declaration& declaration = declarations[i];
+        const Declaration& declaration = declarations[*it];
         const bool inUseFunction = site.function->location.encloses(declaration.local->location);
-        if (!isStatement(declaration) || site.at < declaration.local->location.end || !inUseFunction)
+        if (!isStatement(declaration) || !inUseFunction)
             continue;
 
         // The statement of a block around the use that holds the declaration
-        std::vector<AstNode*> declarationAncestry = ancestryOf(root, declaration.local->location.begin);
+        std::vector<AstNode*>* cachedAncestry = declarationAncestries.find(declaration.local);
+        if (!cachedAncestry)
+        {
+            declarationAncestries[declaration.local] = ancestryOf(root, declaration.local->location.begin);
+            cachedAncestry = declarationAncestries.find(declaration.local);
+        }
+        const std::vector<AstNode*>& declarationAncestry = *cachedAncestry;
         size_t sharedBlock = declarationAncestry.size();
         for (size_t j = 0; j < declarationAncestry.size(); ++j)
         {

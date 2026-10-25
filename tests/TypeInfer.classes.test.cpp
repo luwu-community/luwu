@@ -2704,4 +2704,39 @@ end
     CHECK_EQ(toString(missing->missing[0]), "Dog");
 }
 
+// Luwu: a callee with one `__call` signature is called like a function type, so a call with a wrong argument reports
+// that argument and still gives the signature's return type. Upstream resolves it like an overload set.
+TEST_CASE_FIXTURE(ClassesFixture, "a_misargued_single_call_signature_keeps_its_return_type")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    auto result = check(R"(
+class Cat
+    name: string
+    function __init(self, name: string)
+        self.name = name
+    end
+end
+
+local cat = Cat(1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(Location{{8, 16}, {8, 17}}, result.errors[0].location);
+    CHECK_EQ("Cat", toString(requireType("cat")));
+}
+
+// Luwu: the same for a table with a single `__call`
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_misargued_single_call_metamethod_keeps_its_return_type")
+{
+    auto result = check(R"(
+type Dog = { name: string }
+local Dogs = setmetatable({}, { __call = function(_, name: string): Dog return { name = name } end })
+local dog = Dogs(2)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(Location{{3, 17}, {3, 18}}, result.errors[0].location);
+    CHECK_EQ("Dog", toString(requireType("dog")));
+}
+
 TEST_SUITE_END();

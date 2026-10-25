@@ -532,7 +532,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "calling_an_unsimplified_never_is_unreachable
 }
 
 // Luwu: code that can't run once the declared types are taken at their word is unreachable code, tables included: a
-// property typed `nil` checked for a value, tags of a union all ruled out, or two checks that contradict each other
+// property typed `nil` checked for a value, or tags of a union all ruled out
 TEST_CASE_FIXTURE(BuiltinsFixture, "never_proven_from_the_declared_types_is_unreachable_code")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
@@ -555,18 +555,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "never_proven_from_the_declared_types_is_unre
             end
             return s.r
         end
-
-        type Holder = { enc: { go: (any) -> () }? }
-        local function fromContradiction(h: Holder)
-            if not h.enc then
-                if h.enc then
-                    h.enc:go()
-                end
-            end
-        end
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
     for (const TypeError& error : result.errors)
     {
         const UnreachableCodeUse* use = get<UnreachableCodeUse>(error);
@@ -575,35 +566,25 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "never_proven_from_the_declared_types_is_unre
     }
 }
 
-// Luwu: a `never` the declared types can't explain may be a type checker bug, which leaves the value unchecked. Here
-// the solver keeps `not h.enc` after `h.enc` is assigned, so `h` is `never` in a branch that runs.
+// Luwu: a `never` that no local's declaration explains may be a type checker bug, which leaves the value unchecked.
+// Only a local's declaration can say for sure that code can't run, so a global's `never` says so.
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_never_that_may_be_a_type_bug_says_so")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
 
-    CheckResult result = check(R"(
-        type Enc = { go: (Enc) -> () }
-        type Holder = { enc: Enc? }
-        local function f(h: Holder, make: () -> Enc)
-            if not h.enc then
-                h.enc = make()
-                if h.enc then
-                    h.enc:go()
-                end
-            end
-        end
+    loadDefinition(R"(
+        declare dave: never
     )");
 
-    std::vector<std::string> names;
-    for (const TypeError& error : result.errors)
-    {
-        if (const UnreachableCodeUse* use = get<UnreachableCodeUse>(error))
-        {
-            CHECK_EQ(UnreachableCodeUse::Reason::PossibleTypeBug, use->reason);
-            names.push_back(use->name);
-        }
-    }
-    CHECK_EQ(std::vector<std::string>{"h"}, names);
+    CheckResult result = check(R"(
+        dave:go()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const UnreachableCodeUse* use = get<UnreachableCodeUse>(result.errors[0]);
+    REQUIRE(use);
+    CHECK_EQ(UnreachableCodeUse::Reason::PossibleTypeBug, use->reason);
+    CHECK_EQ("dave", use->name);
 
     UnreachableCodeUse bug{ImproperUse::Index, "self.dave", UnreachableCodeUse::Reason::PossibleTypeBug, true};
     CHECK_EQ(
@@ -613,6 +594,163 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_never_that_may_be_a_type_bug_says_so")
         "  • Until it's fixed, nothing 'self.dave' is used for here is checked",
         toString(TypeError{Location{}, bug})
     );
+}
+
+// Luwu: a check on a property that contradicts an earlier one gives the property its declared type, refined by the
+// later check alone, instead of `never`. Something between the two checks can change the property: a call that's
+// passed the table, an assignment, or a write through another binding. Upstream gives `never` and checks nothing it's
+// used for.
+TEST_CASE_FIXTURE(BuiltinsFixture, "contradicting_property_checks_keep_the_declared_type")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Enc = { go: (Enc) -> () }
+        type Holder = { enc: Enc? }
+        local function init(h: Holder) end
+
+        local function throughCall(h: Holder)
+            if not h.enc then
+                init(h)
+                if h.enc then
+                    h.enc:go()
+                    local enc = h.enc
+                end
+            end
+        end
+
+        local function throughAssignment(h: Holder, make: () -> Enc)
+            if not h.enc then
+                h.enc = make()
+                if h.enc then
+                    h.enc:go()
+                end
+            end
+        end
+
+        type Message = { kind: "join", player: string } | { kind: "leave" }
+        local function retagged(m: Message)
+            if m.kind == "leave" then
+                init({ enc = nil })
+                if m.kind == "join" then
+                    local player = m.player
+                end
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("Enc", toString(requireTypeAtPosition({10, 34})));
+}
+
+// Luwu: checks that leave a union with no members still make it `never`, so an exhaustive match can say so
+TEST_CASE_FIXTURE(BuiltinsFixture, "exhausting_a_union_by_its_tags_is_still_never")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Message = { kind: "join", player: string } | { kind: "leave" }
+        local function handle(m: Message): number
+            if m.kind == "join" then
+                return 1
+            elseif m.kind == "leave" then
+                return 2
+            end
+            local unhandled: never = m
+            return unhandled
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu: an exhaustive check's last branch raising an error, or an `assert` checking a value against its declared type,
+// is written for a case the types say can't happen. Using a `never` value there isn't reported.
+TEST_CASE_FIXTURE(BuiltinsFixture, "never_in_a_defensive_check_is_not_reported")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Message = { kind: "join", player: string } | { kind: "leave" }
+        local function handle(m: Message): number
+            if m.kind == "join" then
+                return 1
+            elseif m.kind == "leave" then
+                return 2
+            else
+                print("unhandled", m.kind)
+                error("unknown message kind " .. m.kind)
+            end
+        end
+
+        local function returnsError(m: Message): number
+            if m.kind == "join" then
+                return 1
+            elseif m.kind == "leave" then
+                return 2
+            end
+            return error(`unknown message kind {m.kind}`)
+        end
+
+        local function checked(s: { name: string })
+            assert(type(s.name) == "string" or type(s.name) == "number", "name should be a string")
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu: tests on a table's properties stop proving anything once the table is handed to code that can change them, so
+// a `never` after that is reported as a possible type bug rather than unreachable code
+TEST_CASE_FIXTURE(BuiltinsFixture, "property_checks_dont_prove_unreachable_after_the_table_escapes")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Shape = { kind: "circle", r: number, reset: (Shape) -> () } | { kind: "square", side: number, reset: (Shape) -> () }
+        local function reshape(s: Shape) end
+
+        local function passed(s: Shape): number
+            if s.kind == "circle" then
+                return s.r
+            elseif s.kind == "square" then
+                return s.side
+            end
+            reshape(s)
+            return s.r
+        end
+
+        local function aliased(s: Shape): number
+            local alias = s
+            if s.kind == "circle" then
+                return s.r
+            elseif s.kind == "square" then
+                return s.side
+            end
+            return s.r
+        end
+
+        local function method(s: Shape): number
+            if s.kind == "circle" then
+                return s.r
+            elseif s.kind == "square" then
+                return s.side
+            end
+            s:reset()
+            return s.r
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    std::vector<std::string> names;
+    for (const TypeError& error : result.errors)
+    {
+        const UnreachableCodeUse* use = get<UnreachableCodeUse>(error);
+        REQUIRE(use);
+        CHECK_EQ(UnreachableCodeUse::Reason::PossibleTypeBug, use->reason);
+        names.push_back(use->name);
+    }
+    CHECK_EQ(std::vector<std::string>{"s", "s", "s"}, names);
 }
 
 TEST_SUITE_END();
