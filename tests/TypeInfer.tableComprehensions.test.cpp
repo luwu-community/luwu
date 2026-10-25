@@ -112,6 +112,20 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_annotation_checks_the_item")
     CHECK_EQ(toString(mismatch->givenType), "number");
     CHECK_EQ(result.errors[1].location.begin.line, 4);
 }
+// The item is checked as a literal, like a list literal's items, so an empty table fits an array property
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_item_is_checked_as_a_literal")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        type Entry = { name: string, tags: { string } }
+        local names = { "nyla", "cat" }
+        local entries: { Entry } = { for _, name in names give { name = name, tags = {} } }
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
 
 // Code after the typed text. It uses nothing the typed text declares, so it stays clean whatever is typed above it.
 const char* const kTypewriterAfter = R"(

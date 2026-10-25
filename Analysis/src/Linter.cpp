@@ -5293,6 +5293,16 @@ private:
         return visitLoopBody(node->body);
     }
 
+    // A comprehension's outermost `for` clause isn't in a block, so it's recorded here like a statement. It's what the
+    // `do` of `for ... do` is indented against.
+    bool visit(AstExprTableComprehension* node) override
+    {
+        statementStarts.push_back(node->loop->location.begin);
+        node->loop->visit(this);
+        statementStarts.pop_back();
+        return false;
+    }
+
     bool visit(AstExprDo* node) override
     {
         if (enabled.misleadingIndentation && !node->shorthand)

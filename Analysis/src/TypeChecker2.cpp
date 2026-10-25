@@ -5066,13 +5066,14 @@ void TypeChecker2::visit(AstExprTableComprehension* expr)
     if (item->key)
         testIsSubtype(lookupType(item->key), ttv->indexer->indexType, item->key->location);
 
-    // Accepted against `element | nil`, but reported against the element type, which is what the reader wrote
+    // Accepted against `element | nil`, but reported against the element type, which is what the reader wrote. Checked as
+    // a literal like a list literal's items, so `tags = {}` fits a `{ string }` property.
     TypeId valueType = lookupType(item->value);
     TypeId elementOrNil = module->internalTypes->addType(UnionType{{ttv->indexer->indexResultType, builtinTypes->nilType}});
     NotNull<Scope> scope{findInnermostScope(item->value->location)};
 
     if (!subtyping->isSubtype(valueType, elementOrNil, scope).isSubtype)
-        testIsSubtype(valueType, ttv->indexer->indexResultType, item->value->location);
+        testPotentialLiteralIsSubtype(item->value, ttv->indexer->indexResultType);
 }
 
 // Luwu Table Comprehensions (rfcs/table-comprehensions.md): see visit(AstExprTableComprehension*)

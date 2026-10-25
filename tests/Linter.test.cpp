@@ -3419,11 +3419,24 @@ local outdented = {
     local key = string.upper(line)
         give key
 }
-return nested, flat, outdented
+local short = {
+    for _, line in lines do
+        local key = string.upper(line)
+        give key
+}
+local shortOutdented = {
+    for _, line in lines do
+    local key = string.upper(line)
+        give key
+}
+return nested, flat, outdented, short, shortOutdented
 )");
 
+    // `for ... do` is short for `give do`, so its block is indented against the `for` line: `short` is fine
     std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MisleadingIndentation);
-    REQUIRE_EQ(found.size(), 3);
+    REQUIRE_EQ(found.size(), 6);
+    CHECK_EQ(found[4].text, "This line is in the 'do' expression on line 29, but is indented like the code after it");
+    CHECK_EQ(found[4].location.begin, Position(29, 4));
     CHECK_EQ(found[1].text, "This line is in the 'do' expression on line 19, but is indented like the code after it");
     CHECK_EQ(found[1].location.begin, Position(19, 4));
 }
