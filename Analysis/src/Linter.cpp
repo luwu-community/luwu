@@ -2142,6 +2142,8 @@ private:
     }
 };
 
+// Luwu: reports DuplicateKey, DuplicateProperty and DuplicateReadWrite, the parts of the TableLiteral group. Upstream
+// reports all of them as TableLiteral.
 class LintTableLiteral : AstVisitor
 {
 public:
@@ -2181,7 +2183,7 @@ private:
                 if (line)
                     emitWarning(
                         *context,
-                        LintWarning::Code_TableLiteral,
+                        LintWarning::Code_DuplicateKey,
                         expr->location,
                         "Table property '%.*s' is a duplicate; previously defined at line %d",
                         int(expr->value.size),
@@ -2196,7 +2198,7 @@ private:
                 if (expr->value >= 1 && expr->value <= double(count) && double(int(expr->value)) == expr->value)
                     emitWarning(
                         *context,
-                        LintWarning::Code_TableLiteral,
+                        LintWarning::Code_DuplicateKey,
                         expr->location,
                         "Table index %d is a duplicate; previously defined as a list entry",
                         int(expr->value)
@@ -2208,7 +2210,7 @@ private:
                     if (line)
                         emitWarning(
                             *context,
-                            LintWarning::Code_TableLiteral,
+                            LintWarning::Code_DuplicateKey,
                             expr->location,
                             "Table index %d is a duplicate; previously defined at line %d",
                             int(expr->value),
@@ -2259,7 +2261,7 @@ private:
                     if (rec->access == item.access)
                         emitWarning(
                             *context,
-                            LintWarning::Code_TableLiteral,
+                            LintWarning::Code_DuplicateProperty,
                             item.location,
                             "Table type property '%s' is a duplicate; previously defined at line %d",
                             item.name.value,
@@ -2268,7 +2270,7 @@ private:
                     else if (rec->access == AstTableAccess::ReadWrite)
                         emitWarning(
                             *context,
-                            LintWarning::Code_TableLiteral,
+                            LintWarning::Code_DuplicateReadWrite,
                             item.location,
                             "Table type property '%s' is already read-write; previously defined at line %d",
                             item.name.value,
@@ -2277,7 +2279,7 @@ private:
                     else if (rec->access == AstTableAccess::Read)
                         emitWarning(
                             *context,
-                            LintWarning::Code_TableLiteral,
+                            LintWarning::Code_DuplicateReadWrite,
                             rec->location,
                             "Table type property '%s' already has a read type defined at line %d",
                             item.name.value,
@@ -2286,7 +2288,7 @@ private:
                     else if (rec->access == AstTableAccess::Write)
                         emitWarning(
                             *context,
-                            LintWarning::Code_TableLiteral,
+                            LintWarning::Code_DuplicateReadWrite,
                             rec->location,
                             "Table type property '%s' already has a write type defined at line %d",
                             item.name.value,
@@ -2311,7 +2313,7 @@ private:
             if (line)
                 emitWarning(
                     *context,
-                    LintWarning::Code_TableLiteral,
+                    LintWarning::Code_DuplicateProperty,
                     item.location,
                     "Table type property '%s' is a duplicate; previously defined at line %d",
                     item.name.value,
@@ -7494,6 +7496,10 @@ static LintWarning::Code lintGroupOf(LintWarning::Code code)
     case LintWarning::Code_Pairs:
     case LintWarning::Code_Ipairs:
         return LintWarning::Code_LuaIterators;
+    case LintWarning::Code_DuplicateKey:
+    case LintWarning::Code_DuplicateProperty:
+    case LintWarning::Code_DuplicateReadWrite:
+        return LintWarning::Code_TableLiteral;
     default:
         return LintWarning::Code_Unknown;
     }

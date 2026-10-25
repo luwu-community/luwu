@@ -1490,6 +1490,28 @@ end
     CHECK_EQ(result.warnings[4].text, "Table type property 'first' is a duplicate; previously defined at line 24");
     CHECK_EQ(result.warnings[5].text, "Table index 1 is a duplicate; previously defined at line 36");
     CHECK_EQ(result.warnings[6].text, "Table type property 'first' is a duplicate; previously defined at line 41");
+
+    // Luwu: each mistake is its own lint, all parts of the TableLiteral group
+    for (size_t i : {0, 1, 2, 3, 5})
+        CHECK_EQ(result.warnings[i].code, LintWarning::Code_DuplicateKey);
+    for (size_t i : {4, 6})
+        CHECK_EQ(result.warnings[i].code, LintWarning::Code_DuplicateProperty);
+}
+
+// Luwu: TableLiteral is a group, so naming it turns its parts off, and each part can be turned off alone
+TEST_CASE_FIXTURE(Fixture, "table_literal_lints_are_parts_of_the_TableLiteral_group")
+{
+    const std::string source = R"(
+        local t = { a = 1, a = 2 }
+        type T = { b: number, b: string }
+        return t
+    )";
+
+    CHECK(lint("--!nolint TableLiteral" + source).warnings.empty());
+
+    LintResult result = lint("--!nolint DuplicateKey" + source);
+    REQUIRE(1 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_DuplicateProperty);
 }
 
 TEST_CASE_FIXTURE(Fixture, "read_write_table_props")
@@ -1514,6 +1536,11 @@ TEST_CASE_FIXTURE(Fixture, "read_write_table_props")
     CHECK(result.warnings[3].text == "Table type property 'x' is a duplicate; previously defined at line 7");
     CHECK(result.warnings[4].text == "Table type property 'x' already has a write type defined at line 8");
     CHECK(result.warnings[5].text == "Table type property 'x' is a duplicate; previously defined at line 9");
+
+    for (size_t i : {0, 1, 2, 4})
+        CHECK_EQ(result.warnings[i].code, LintWarning::Code_DuplicateReadWrite);
+    for (size_t i : {3, 5})
+        CHECK_EQ(result.warnings[i].code, LintWarning::Code_DuplicateProperty);
 }
 
 TEST_CASE_FIXTURE(Fixture, "ImportOnlyUsedInTypeAnnotation")

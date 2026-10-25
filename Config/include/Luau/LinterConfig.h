@@ -45,7 +45,7 @@ struct LintWarning
         Code_ImplicitReturn = 16, // disabled in Studio, superseded by type checker in strict mode
         Code_DuplicateLocal = 17,
         Code_FormatString = 18,
-        Code_TableLiteral = 19,
+        Code_TableLiteral = 19, // Luwu: a group of DuplicateKey, DuplicateProperty and DuplicateReadWrite
         Code_UninitializedLocal = 20,
         Code_DuplicateFunction = 21,
         Code_DeprecatedApi = 22,
@@ -95,6 +95,9 @@ struct LintWarning
         Code_AnyCast = 60,                 // `x :: any` without a comment saying why
         Code_AnyAnnotation = 61,           // `x: any` on a parameter, local or property, which `unknown` would type safely
         Code_LuwuOnlyApi = 62,             // Luwu: a Luwu-only library function (`table.drop`) used in a `.luau` or `.lua` file
+        Code_DuplicateKey = 63,            // Luwu: a key or index repeated in a table literal (part of TableLiteral)
+        Code_DuplicateProperty = 64,       // Luwu: a property declared twice in a table type (part of TableLiteral)
+        Code_DuplicateReadWrite = 65,      // Luwu: a table type property given its read or write type twice (part of TableLiteral)
 
         Code__Count
     };
@@ -204,6 +207,9 @@ inline constexpr const char* kWarningNames[] = {
     "AnyCast",
     "AnyAnnotation",
     "LuwuOnlyApi",
+    "DuplicateKey",
+    "DuplicateProperty",
+    "DuplicateReadWrite",
 };
 // clang-format on
 
