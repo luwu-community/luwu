@@ -14,6 +14,8 @@ void LintOptions::setDefaults()
     // Luwu: except the ones a module or codebase has to ask for (`--!lint Name`, or the config), because they're about
     // style and would flag most existing code
     warningMask.reset(LintWarning::Code_ConstLocal);
+    // Luwu: many Luau style guides ask for the one-line `if not x then return end` that this flags
+    warningMask.reset(LintWarning::Code_OneLineGuard);
     // Luwu: the group's own check, for every `any` its parts don't report; the parts are on
     warningMask.reset(LintWarning::Code_Any);
 }
