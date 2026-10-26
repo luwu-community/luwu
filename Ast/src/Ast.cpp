@@ -693,6 +693,13 @@ AstExprBinary* asOrLeave(AstExpr* expr)
     return guard && guard->op == AstExprBinary::Or ? guard : nullptr;
 }
 
+AstExprBinary* asLeaveEitherWay(AstExpr* expr)
+{
+    AstExprBinary* guard = asOrLeave(expr);
+    AstExprBinary* left = guard ? asLeaveGuard(withoutGroups(guard->left)) : nullptr;
+    return left && left->op == AstExprBinary::And ? left : nullptr;
+}
+
 bool isLeaveStatement(AstExpr* expr)
 {
     AstExprBinary* binary = expr->as<AstExprBinary>();

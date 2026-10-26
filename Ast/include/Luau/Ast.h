@@ -1859,6 +1859,10 @@ class AstExprBinary* asLeaveGuard(AstExpr* expr);
 // Luwu Do Expressions (rfcs/do-expressions.md): `expr` as `x or <leave>` (asLeaveGuard), or null.
 class AstExprBinary* asOrLeave(AstExpr* expr);
 
+// Luwu Do Expressions (rfcs/do-expressions.md): the `x and <leave>` in `x and <leave> or <leave>`, or null. Such an `expr`
+// never completes: its left side is never truthy, so the right side always runs.
+class AstExprBinary* asLeaveEitherWay(AstExpr* expr);
+
 // Luwu Do Expressions (rfcs/do-expressions.md): can `expr` be a statement? It can when it is a leave guard
 // (asLeaveGuard), or an `or` or `and` whose right operand can be one: `x or y and continue`.
 bool isLeaveStatement(AstExpr* expr);

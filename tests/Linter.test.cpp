@@ -3077,7 +3077,7 @@ local function f(x, y, t)
     end
     if x + y then return end
     if not (x or y) then return end
-    -- not reported: `-x <= 1 or return` and `"a" ~= x or return` would continue the line above
+    -- not reported: `-x > 1 and return` and `"a" == x and return` would continue the line above
     if -x > 1 then return end
     if "a" == x then return end
     if not y then
@@ -3096,17 +3096,48 @@ return f
     std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_LuaGuard);
     REQUIRE_EQ(warnings.size(), 7);
     CHECK_EQ(warnings[0].text, "Replace this with 'x or return;'");
-    CHECK_EQ(warnings[1].text, "Replace this with 'x ~= y or return 1'");
-    // a comparison flips its operator
-    CHECK_EQ(warnings[2].text, "Replace this with 'x <= 1 or return;'");
+    // a condition without `not` is kept as written, with `and`
+    CHECK_EQ(warnings[1].text, "Replace this with 'x == y and return 1'");
+    CHECK_EQ(warnings[2].text, "Replace this with 'x > 1 and return;'");
     // several values need parentheses
-    CHECK_EQ(warnings[3].text, "Replace this with 'x ~= 2 or (return x, y)'");
+    CHECK_EQ(warnings[3].text, "Replace this with 'x == 2 and (return x, y)'");
     CHECK_EQ(warnings[4].text, "Replace this with 'v.ok or continue'");
-    CHECK_EQ(warnings[5].text, "Replace this with 'not (x + y) or return;'");
+    CHECK_EQ(warnings[5].text, "Replace this with 'x + y and return;'");
     // `or` binds loosest, so the negated condition needs no parentheses
     CHECK_EQ(warnings[6].text, "Replace this with 'x or y or return;'");
     // the warning covers the whole statement it replaces
     CHECK_EQ(warnings[0].location, Location(Position(2, 4), Position(2, 28)));
+}
+
+// An `if` with several conditions splits into one guard per condition, each kept as written like a single one
+TEST_CASE_FIXTURE(Fixture, "LuaGuardSplitsConditions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(r, t)
+    if not r.ok or r.out == "" then return nil end
+    for _, v in t do
+        if v.skip or not v.ready or #v.items > 3 then continue end
+        print(v)
+    end
+    if r.a and r.b or r.c then return end
+    -- not reported: `(if ...) and return` would continue the line above, and `r.e == if ...` would take the `and`
+    if r.d or (if r.e then r.f else r.g) then return end
+    if r.e == if r.f then 1 else 2 then return end
+    return r.out
+end
+return f
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_LuaGuard);
+    REQUIRE_EQ(warnings.size(), 3);
+    CHECK_EQ(warnings[0].text, "Replace this with one guard per condition: 'r.ok or return nil', 'r.out == '' and return nil'");
+    CHECK_EQ(
+        warnings[1].text, "Replace this with one guard per condition: 'v.skip and continue', 'v.ready or continue', '#v.items > 3 and continue'"
+    );
+    // `and` binds tighter than `or`, so a condition holding one needs no parentheses
+    CHECK_EQ(warnings[2].text, "Replace this with one guard per condition: 'r.a and r.b and return;', 'r.c and return;'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "AmbiguousContinuation")
@@ -3619,6 +3650,38 @@ return f, g
     CHECK_EQ(found[0].location.begin.line, 3);
     CHECK_EQ(found[1].text, "Unreachable code (previous statement always returns)");
     CHECK_EQ(found[1].location.begin.line, 6);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `x and continue or break` leaves through one side or the other, and
+// the reason merges them like an `if`'s branches
+TEST_CASE_FIXTURE(Fixture, "UnreachableCodeAfterAndLeaveOrLeave")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(t: { boolean })
+    for _, ok in t do
+        ok and continue or break
+        print("never")
+    end
+    for _, ok in t do
+        ok and break or break
+        print("never either")
+    end
+    for _, ok in t do
+        ok and continue
+        print("runs when ok is falsy")
+    end
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].text, "Unreachable code (previous statement always continues)");
+    CHECK_EQ(found[0].location.begin.line, 4);
+    CHECK_EQ(found[1].text, "Unreachable code (previous statement always breaks)");
+    CHECK_EQ(found[1].location.begin.line, 8);
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md): a one-line `do` expression holds several statements on its line by

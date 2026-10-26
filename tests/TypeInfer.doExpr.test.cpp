@@ -272,6 +272,34 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_or_leave_inside_another_expression_narrow
     CHECK_EQ(result.errors[0].location.begin.line, 4);
 }
 
+// `x and continue or break` leaves whether `x` is truthy or falsy, so no value of `x` reaches the code after it
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_and_leave_or_leave_statement_leaves_nothing_reachable")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        type Ok = { ok: true, out: string }
+        type Err = { ok: false, err: string }
+
+        local function run(): Ok | Err
+            return { ok = false, err = "no" }
+        end
+
+        for _ = 1, 3 do
+            local r = run()
+            r.ok and continue or break
+            local e: string = r.err
+        end
+    )");
+
+    // `r` is 'never' after the statement, which the error blames on the statement rather than on the type checker
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const UnreachableCodeUse* use = get<UnreachableCodeUse>(result.errors[0]);
+    REQUIRE(use);
+    CHECK(use->reason == UnreachableCodeUse::Reason::NarrowedAway);
+}
+
 // Code after the typed text. It uses nothing the typed text declares, so it stays clean whatever is typed above it.
 const char* const kTypewriterAfter = R"(
 local unrelated = 1
@@ -319,6 +347,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_or_leave")
         kTypewriterAfter
     );
     checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    local n = v;\n    -n < 0 or break\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    local n = maybe()\n    n and continue or break\nend", kTypewriterAfter);
 }
 
 TEST_SUITE_END();

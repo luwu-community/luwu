@@ -1721,7 +1721,7 @@ private:
                 if (doesCallError(call))
                     return Error;
 
-            return Unknown;
+            return guardLeaveStatus(stat->expr);
         }
         else if (AstStatFor* stat = node->as<AstStatFor>())
         {
@@ -1741,8 +1741,9 @@ private:
         }
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): how a `do` expression that never ends normally leaves: a return or an
-    // error. Its block is checked for unreachable code when it is visited, so this only reads the status.
+    // Luwu Do Expressions (rfcs/do-expressions.md): how a `do` expression that never ends normally leaves: a break, a
+    // continue, a return or an error. Its block is checked for unreachable code when it is visited, so this only reads
+    // the status.
     Status leaveStatus(const AstExprDo* node)
     {
         bool outerSilent = silent;
@@ -1750,7 +1751,19 @@ private:
         Status status = analyze(node->body);
         silent = outerSilent;
 
-        return std::max(status, Return);
+        return status == Continue || status == Break ? status : std::max(status, Return);
+    }
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): how `x and continue or break` leaves whether `x` holds or not, merged
+    // like an `if`'s branches (see Status). Unknown for a guard that can complete.
+    Status guardLeaveStatus(AstExpr* expr)
+    {
+        AstExprBinary* left = asLeaveEitherWay(expr);
+        if (!left)
+            return Unknown;
+
+        AstExprBinary* guard = expr->as<AstExprBinary>();
+        return std::min(leaveStatus(asLeave(left->right)), leaveStatus(asLeave(guard->right)));
     }
 
     bool visit(AstExprFunction* node) override
@@ -4726,7 +4739,8 @@ private:
 // - OneLineStatement: a statement with a body (`if`, a loop, `do`, a function statement) written on one line. A function
 //   expression is left alone: a one-line callback is ordinary.
 // - OneLineGuard and LuaGuard: the one-line `if not x then return end`. A Luau file gets OneLineGuard, which asks for
-//   three lines; a Luwu file gets LuaGuard, which asks for `x or return`. Only one of them reports a guard.
+//   three lines; a Luwu file gets LuaGuard, which asks for `x or return` (or `x and return` for `if x`). Only one of
+//   them reports a guard.
 // - InlineOrLeave: `x or return` after a long `x`, at the end of a line much longer than the lines around it, where the
 //   exit is easy to miss. A long line with a short `x` (`ok or return error("a long message")`) is fine.
 class LintStyle : AstVisitor
@@ -4815,58 +4829,6 @@ private:
         return nullptr;
     }
 
-    // The comparison that is true exactly when `op` is false: `<` and `>=`, `==` and `~=`. Like any hand-written flip, it
-    // treats NaN as an ordinary number.
-    static std::optional<AstExprBinary::Op> flippedComparison(AstExprBinary::Op op)
-    {
-        switch (op)
-        {
-        case AstExprBinary::CompareEq:
-            return AstExprBinary::CompareNe;
-        case AstExprBinary::CompareNe:
-            return AstExprBinary::CompareEq;
-        case AstExprBinary::CompareLt:
-            return AstExprBinary::CompareGe;
-        case AstExprBinary::CompareGe:
-            return AstExprBinary::CompareLt;
-        case AstExprBinary::CompareGt:
-            return AstExprBinary::CompareLe;
-        case AstExprBinary::CompareLe:
-            return AstExprBinary::CompareGt;
-        default:
-            return std::nullopt;
-        }
-    }
-
-    // The condition `x or return` needs for the guard `if <condition> then return end`: `not x` gives `x`, a comparison
-    // flips its operator, and anything else is negated with `not`. `start` is set to the code the result starts with.
-    static std::string negatedCondition(AstExpr* condition, AstExpr*& start)
-    {
-        condition = withoutGroups(condition);
-
-        // `or` binds loosest of all, so `not (a or b)` needs no parentheses as `a or b or return`
-        if (AstExprUnary* unary = condition->as<AstExprUnary>(); unary && unary->op == AstExprUnary::Op::Not)
-        {
-            start = withoutGroups(unary->expr);
-            return toString(start);
-        }
-
-        AstExprBinary* binary = condition->as<AstExprBinary>();
-        std::optional<AstExprBinary::Op> flipped = binary ? flippedComparison(binary->op) : std::nullopt;
-        if (flipped)
-        {
-            start = binary->left;
-            return toString(binary->left) + " " + toString(*flipped) + " " + toString(binary->right);
-        }
-
-        // `not` binds tighter than any binary operator
-        start = nullptr;
-        if (binary)
-            return "not (" + toString(condition) + ")";
-
-        return "not " + toString(condition);
-    }
-
     // Would a statement starting with `expr` continue the line above it? A `-`, a string or a `(` at the start of a line
     // does, so `x or return` written with one could join the previous statement (see AmbiguousContinuation).
     static bool continuesLineAbove(AstExpr* expr)
@@ -4909,6 +4871,57 @@ private:
         return toString(leave);
     }
 
+    // The conditions of an `or` chain, in order: `a`, `b` and `c` in `a or (b or c)`
+    static void collectDisjuncts(AstExpr* condition, std::vector<AstExpr*>& disjuncts)
+    {
+        condition = withoutGroups(condition);
+        AstExprBinary* binary = condition->as<AstExprBinary>();
+        if (!binary || binary->op != AstExprBinary::Or)
+        {
+            disjuncts.push_back(condition);
+            return;
+        }
+
+        collectDisjuncts(binary->left, disjuncts);
+        collectDisjuncts(binary->right, disjuncts);
+    }
+
+    // Would an `and return` after `expr` end up in an if-else expression's `else` branch? (`x == if a then b else c`)
+    static bool endsWithIfElse(AstExpr* expr)
+    {
+        while (true)
+        {
+            if (AstExprBinary* binary = expr->as<AstExprBinary>())
+                expr = binary->right;
+            else if (AstExprUnary* unary = expr->as<AstExprUnary>())
+                expr = unary->expr;
+            else
+                return expr->is<AstExprIfElse>();
+        }
+    }
+
+    // The guards that replace `if <condition> then return end`, one per condition of its `or` chain, none of them
+    // flipped: `not x` as `x or return` and anything else as `x and return`. Empty when one would continue the line
+    // above it or end in an if-else expression.
+    static std::vector<std::string> guardsFor(AstExpr* condition, AstStat* leave)
+    {
+        std::vector<AstExpr*> disjuncts;
+        collectDisjuncts(condition, disjuncts);
+
+        std::vector<std::string> guards;
+        for (AstExpr* disjunct : disjuncts)
+        {
+            AstExprUnary* unary = disjunct->as<AstExprUnary>();
+            bool negated = unary && unary->op == AstExprUnary::Op::Not;
+            AstExpr* tested = negated ? withoutGroups(unary->expr) : disjunct;
+            if (continuesLineAbove(tested) || endsWithIfElse(tested))
+                return {};
+
+            guards.push_back(toString(tested) + (negated ? " or " : " and ") + orLeaveForm(leave));
+        }
+        return guards;
+    }
+
     // Reports a one-line guard (OneLineGuard or LuaGuard, by the file's language). Returns whether `node` is one, so
     // OneLineStatement leaves it to these.
     bool checkGuard(AstStatIf* node)
@@ -4930,22 +4943,27 @@ private:
             if (!enabled.luaGuard)
                 return true;
 
-            AstExpr* start = nullptr;
-            std::string condition = negatedCondition(node->condition, start);
-
-            // `-x <= 0 or return` could join the statement above it; the `if` is clearer than a `;` before it
-            if (start && continuesLineAbove(start))
+            // `-x > 0 and return` could join the statement above it; the `if` is clearer than a `;` before it
+            std::vector<std::string> guards = guardsFor(node->condition, leave);
+            if (guards.empty())
                 return true;
 
-            std::string suggestion = condition + " or " + orLeaveForm(leave);
-            if (suggestion.size() <= kMaxSuggestionLength)
-                emitWarning(*context, LintWarning::Code_LuaGuard, node->location, "Replace this with '%s'", suggestion.c_str());
+            bool split = guards.size() > 1;
+            std::string suggestion = "'" + join(guards, "', '") + "'";
+            if (suggestion.size() <= (split ? 2 : 1) * kMaxSuggestionLength)
+                emitWarning(
+                    *context,
+                    LintWarning::Code_LuaGuard,
+                    node->location,
+                    split ? "Replace this with one guard per condition: %s" : "Replace this with %s",
+                    suggestion.c_str()
+                );
             else
                 emitWarning(
                     *context,
                     LintWarning::Code_LuaGuard,
                     node->location,
-                    "Replace this with '<negated condition> or %s'",
+                    split ? "Replace this with one '<condition> and %s' guard per condition" : "Replace this with '<condition> and %s'",
                     keyword
                 );
 

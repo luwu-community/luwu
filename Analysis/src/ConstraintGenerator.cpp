@@ -6123,7 +6123,14 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         if (asLeave(right))
         {
             orLeaveRefinements[right] = leftRefinement;
-            return {leftType, rightType, leftRefinement};
+
+            // `x and continue or break` never completes: `x` would have to be both truthy and falsy
+            AstExprBinary* leftGuard = asLeaveGuard(withoutGroups(left));
+            RefinementId* falsy = leftGuard && leftGuard->op == AstExprBinary::And ? orLeaveRefinements.find(leftGuard->right) : nullptr;
+            if (falsy && *falsy)
+                orLeaveRefinements[right] = refinementArena.conjunction(get<Negation>(*falsy)->refinement, *falsy);
+
+            return {leftType, rightType, orLeaveRefinements[right]};
         }
 
         return {leftType, rightType, refinementArena.disjunction(leftRefinement, rightRefinement)};
