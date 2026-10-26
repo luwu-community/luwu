@@ -116,8 +116,10 @@ bool hasBreak(AstStat* node)
 
 // Luwu Do Expressions (rfcs/do-expressions.md): a `do` expression that evaluating `expr` always reaches, and whose block
 // never ends normally (`print(do return "x")`), so the code after the statement holding it never runs. Only parts
-// that always run count: not the right side of `and`/`or`, an if-else expression's branches or a function body.
+// that always run count: not the right side of `and`/`or` unless the left side can't decide it, an if-else
+// expression's branches or a function body.
 static const AstExprDo* findAlwaysLeavingDo(const AstExpr* expr);
+static const AstExprDo* findTruthyOnlyAfterDo(const AstExpr* expr);
 
 static const AstExprDo* findAlwaysLeavingDo(const AstArray<AstExpr*>& exprs)
 {
@@ -149,8 +151,11 @@ static const AstExprDo* findAlwaysLeavingDo(const AstExpr* expr)
         if (const AstExprDo* found = findAlwaysLeavingDo(binary->left))
             return found;
 
-        bool shortCircuits = binary->op == AstExprBinary::And || binary->op == AstExprBinary::Or;
-        return shortCircuits ? nullptr : findAlwaysLeavingDo(binary->right);
+        // `x and continue or break` leaves either way: its left side is never truthy, so the right side always runs
+        if (binary->op == AstExprBinary::Or)
+            return findTruthyOnlyAfterDo(binary->left) ? findAlwaysLeavingDo(binary->right) : nullptr;
+
+        return binary->op == AstExprBinary::And ? nullptr : findAlwaysLeavingDo(binary->right);
     }
 
     if (const AstExprIfElse* ifElse = expr->as<AstExprIfElse>())
