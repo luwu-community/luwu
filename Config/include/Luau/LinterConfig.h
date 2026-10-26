@@ -105,6 +105,9 @@ struct LintWarning
     Code code;
     Location location;
     std::string text;
+    // Luwu: report it quietly. An editor shows it with the lowest severity (an LSP hint) and leaves it out of its list of
+    // problems.
+    bool hint = false;
 
     static const char* getName(Code code);
     static Code parseName(const char* name);
