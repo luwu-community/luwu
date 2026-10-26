@@ -4053,6 +4053,40 @@ for i in ipairs(list) do print(i) end
     CHECK_EQ(ipairsWarnings[0]->location.begin.line, 14);
 }
 
+// Luwu: a branch iterating a value directly beside one using `pairs` on it means `pairs` was chosen on purpose
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsLeavesPairsBesideDirectIteration")
+{
+    LintResult result = lint(R"(
+local function caniteratenormally(t: any): boolean
+    return getmetatable(t) == nil
+end
+local t: { [string]: number } = { a = 1 }
+local u: { [string]: number } = { b = 2 }
+if caniteratenormally(t) then
+    for k in t do print(k) end
+else
+    for k in pairs(t) do print(k) end
+end
+if #u > 0 then
+    for k in u do print(k) end
+elseif caniteratenormally(t) then
+    for _, v in ipairs({ 1 }) do print(v) end
+end
+-- still reported: the other branch iterates a different table
+if caniteratenormally(t) then
+    for k in u do print(k) end
+else
+    for k in pairs(t) do print(k) end
+end
+)");
+
+    std::vector<LintWarning> pairsWarnings = warningsWithCode(result, LintWarning::Code_Pairs);
+    REQUIRE_EQ(pairsWarnings.size(), 1);
+    CHECK_EQ(pairsWarnings[0].location.begin.line, 20);
+    // `ipairs({ 1 })` iterates a literal no other branch does
+    CHECK_EQ(warningsWithCode(result, LintWarning::Code_Ipairs).size(), 1);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsReportsPairsAndIpairsSeparately")
 {
     const std::string source = R"(
@@ -4354,11 +4388,75 @@ return f
         result.warnings[2].text,
         "Removing the first element of 'queue' in a loop is O(n⁴) because it moves every other element every iteration\n\n"
         "Help (expensive loop remove):\n"
-        "  - Consider reading from a head index instead (`local item = queue[head]; head += 1`)\n"
+        "  - Keep the index of the next item instead of removing it: `local item = queue[head]; head += 1`\n"
+        "  - Leave taken items in place: nils at the start of a table break `#queue`\n"
+        "  - For a queue that keeps filling: push onto `inbox`, pop from the end of `outbox`, refill `outbox` from `inbox` reversed\n"
         "  - Add '@[nolint(InefficientTableRemove)]' over the function to silence"
     );
     CHECK(result.warnings[3].text.find("'all' in a loop is O(n²)") != std::string::npos);
     CHECK(result.warnings[4].text.find("'all' in a loop is O(n¹⁰)") != std::string::npos);
+}
+
+// Luwu: one loop's O(n²) is a hint unless the code asks for speed; O(n³) and worse are always full warnings
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintSingleLoopsAreHintsUnlessTheCodeAsksForSpeed")
+{
+    const char* source = R"(
+local function f(rows: { { string } }, jobs: { number })
+    local text = ""
+    for _, row in rows do
+        text ..= row[1]
+        table.remove(jobs, 1)
+        for _, cell in row do
+            text ..= cell
+        end
+    end
+    @native
+    local function g()
+        local fast = ""
+        for _, row in rows do
+            fast ..= row[1]
+        end
+        return fast
+    end
+    return text, g
+end
+return f
+)";
+
+    LintResult quiet = lint(source);
+    REQUIRE_EQ(quiet.warnings.size(), 4);
+    // one loop
+    CHECK(quiet.warnings[0].hint);
+    CHECK(quiet.warnings[1].hint);
+    // two loops
+    CHECK_FALSE(quiet.warnings[2].hint);
+    // in an `@native` function
+    CHECK_FALSE(quiet.warnings[3].hint);
+    CHECK_EQ(
+        quiet.warnings[1].text,
+        "Removing the first element of 'jobs' in a loop is O(n²) because it moves every other element every iteration\n\n"
+        "Help (expensive loop remove):\n"
+        "  - Keep the index of the next item instead of removing it: `local item = jobs[head]; head += 1`\n"
+        "  - Leave taken items in place: nils at the start of a table break `#jobs`\n"
+        "  - For a queue that keeps filling: push onto `inbox`, pop from the end of `outbox`, refill `outbox` from `inbox` reversed\n"
+        "  - Add '@[nolint(InefficientTableRemove)]' over the function to silence"
+    );
+
+    for (const char* directive : {"--!optimize 2\n", "--!native\n"})
+    {
+        INFO(directive);
+        LintResult fast = lint(std::string(directive) + source);
+        size_t loopWarnings = 0;
+        for (const LintWarning& warning : fast.warnings)
+        {
+            bool loopHint = warning.code == LintWarning::Code_LoopConcat || warning.code == LintWarning::Code_InefficientTableRemove;
+            if (!loopHint)
+                continue;
+            ++loopWarnings;
+            CHECK_FALSE(warning.hint);
+        }
+        CHECK_EQ(loopWarnings, 4);
+    }
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LintAttributesScopeWarnings")

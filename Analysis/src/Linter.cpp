@@ -56,6 +56,9 @@ struct LintContext
     // binding that report where it's used rather than where it's declared (LoopConcat on `s ..= x`)
     DenseHashMap<AstLocal*, LintMask> bindingNolints;
 
+    // Luwu: the module asks for speed with `--!optimize 2` or `--!native`
+    bool asksForSpeed = false;
+
     LintContext()
         : root(nullptr)
         , builtinGlobals(AstName())
@@ -4359,6 +4362,27 @@ static bool hasNativeCommentDirective(const std::vector<HotComment>& hotcomments
     return hasHeaderCommentDirective(hotcomments, "native");
 }
 
+// Luwu: `--!optimize 2` or `--!native` at the top of the module
+static bool asksForSpeed(const std::vector<HotComment>& hotcomments)
+{
+    if (hasNativeCommentDirective(hotcomments))
+        return true;
+
+    for (const HotComment& hc : hotcomments)
+    {
+        if (hc.header && hc.content.rfind("optimize", 0) == 0)
+        {
+            std::string_view level = std::string_view(hc.content).substr(strlen("optimize"));
+            while (!level.empty() && (level.front() == ' ' || level.front() == '\t'))
+                level.remove_prefix(1);
+            if (level == "2")
+                return true;
+        }
+    }
+
+    return false;
+}
+
 // Luwu: a visitor told about every assignment target: `x` in `x = v` and in `x += v`
 struct AssignmentTargetVisitor : AstVisitor
 {
@@ -5026,6 +5050,8 @@ private:
     std::vector<AstStat*> loops;
     // Whether the code being visited is inside a function, rather than at the top of the module
     bool inFunction = false;
+    // How many `@native` functions the code being visited is in
+    int nativeDepth = 0;
     // Bindings declared by a `local` or `const`, which `@[nolint]` can be written over (a parameter or a loop variable
     // can't)
     DenseHashSet<AstLocal*> declaredLocals{nullptr};
@@ -5098,7 +5124,10 @@ private:
         outer.swap(loops);
         bool outerInFunction = inFunction;
         inFunction = true;
+        int native = node->hasNativeAttribute() ? 1 : 0;
+        nativeDepth += native;
         node->body->visit(this);
+        nativeDepth -= native;
         inFunction = outerInFunction;
         loops.swap(outer);
         return false;
@@ -5164,12 +5193,17 @@ private:
     // outlives lets it grow across its iterations, so it adds 2 to the exponent: n more repetitions, each on something
     // n times bigger. A loop that declares `target` inside starts it over each iteration, so it only repeats the work
     // and adds 1. `s ..= x` is O(n²) in one loop and O(n⁴) in two, or O(n³) when `s` is declared between them.
-    std::string cost(AstExpr* target) const
+    int costExponent(AstExpr* target) const
     {
         int exponent = 0;
         for (AstStat* loop : loops)
             exponent += outlives(target, loop) ? 2 : 1;
+        return exponent;
+    }
 
+    std::string cost(AstExpr* target) const
+    {
+        int exponent = costExponent(target);
         static const char* const superscripts[] = {"⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"};
 
         std::string power;
@@ -5180,11 +5214,22 @@ private:
         return "O(n" + power + ")";
     }
 
+    // A single loop's O(n²) is often a fair trade on small inputs, so it's reported as a hint, out of the editor's problem
+    // list, unless the code asks for speed: `--!optimize 2`, `--!native` or an `@native` function. `warningsBefore` is how
+    // many warnings there were before the one to mark, which emitWarning may not have added.
+    void quietUnlessCostly(size_t warningsBefore, AstExpr* target)
+    {
+        bool costly = costExponent(target) > 2 || context->asksForSpeed || nativeDepth > 0;
+        if (!costly && context->result.size() > warningsBefore)
+            context->result.back().hint = true;
+    }
+
     void reportConcat(AstExpr* target, const Location& location)
     {
         if (!concat || !outlivesInnermostLoop(target) || silencedByBinding(target, LintWarning::Code_LoopConcat))
             return;
 
+        size_t warningsBefore = context->result.size();
         emitWarning(
             *context,
             LintWarning::Code_LoopConcat,
@@ -5198,6 +5243,7 @@ private:
             cost(target).c_str(),
             silenceHint(target, "LoopConcat").c_str()
         );
+        quietUnlessCostly(warningsBefore, target);
     }
 
     bool visit(AstStatCompoundAssign* node) override
@@ -5240,6 +5286,10 @@ private:
         if (!outlivesInnermostLoop(target) || !isConstantOne(node->args.data[1]))
             return true;
 
+        // The table's name in the help's code, or a stand-in
+        std::string name = shortExprName(unwrapGroup(target)).value_or("t");
+        size_t warningsBefore = context->result.size();
+
         if (tableInsert && function->index == "insert" && node->args.size == 3 &&
             !silencedByBinding(target, LintWarning::Code_InefficientTableInsert))
             emitWarning(
@@ -5248,10 +5298,11 @@ private:
                 node->location,
                 "Inserting at the front of %s in a loop is %s because it moves every element every iteration\n\n"
                 "Help (expensive loop insert):\n"
-                "  - Consider appending instead and iterating in reverse, or reversing once when done\n"
+                "  - Append to the end instead, then loop backwards (`for i = #%s, 1, -1`) or reverse the table once at the end\n"
                 "%s",
                 describe(target, "the table").c_str(),
                 cost(target).c_str(),
+                name.c_str(),
                 silenceHint(target, "InefficientTableInsert").c_str()
             );
         else if (tableRemove && function->index == "remove" && node->args.size == 2 &&
@@ -5262,12 +5313,18 @@ private:
                 node->location,
                 "Removing the first element of %s in a loop is %s because it moves every other element every iteration\n\n"
                 "Help (expensive loop remove):\n"
-                "  - Consider reading from a head index instead (`local item = queue[head]; head += 1`)\n"
+                "  - Keep the index of the next item instead of removing it: `local item = %s[head]; head += 1`\n"
+                "  - Leave taken items in place: nils at the start of a table break `#%s`\n"
+                "  - For a queue that keeps filling: push onto `inbox`, pop from the end of `outbox`, refill `outbox` from `inbox` reversed\n"
                 "%s",
                 describe(target, "the table").c_str(),
                 cost(target).c_str(),
+                name.c_str(),
+                name.c_str(),
                 silenceHint(target, "InefficientTableRemove").c_str()
             );
+
+        quietUnlessCostly(warningsBefore, target);
 
         return true;
     }
@@ -7267,6 +7324,81 @@ public:
 private:
     LintContext* context;
 
+    // `pairs(t)` and `ipairs(t)` loop calls in a branch of an `if` whose other branch iterates `t` directly. Code that
+    // writes both forms for the same value chose `pairs` on purpose:
+    // `if tt.caniteratenormally(t) then for k, v in t do ... else for k, v in pairs(t) do ...`
+    DenseHashSet<AstExprCall*> chosenOnPurpose{nullptr};
+
+    // The values a branch iterates directly (`for k, v in t`) and its `pairs(t)`/`ipairs(t)` loop calls, outside functions
+    struct BranchLoops : AstVisitor
+    {
+        std::vector<AstExpr*> direct;
+        std::vector<AstExprCall*> viaPairs;
+
+        bool visit(AstStatForIn* node) override
+        {
+            if (node->values.size != 1)
+                return true;
+
+            AstExpr* value = unwrapGroup(node->values.data[0]);
+            AstExprCall* call = value->as<AstExprCall>();
+            AstExprGlobal* global = call ? call->func->as<AstExprGlobal>() : nullptr;
+            bool viaIterator = global && call->args.size == 1 && (global->name == "pairs" || global->name == "ipairs");
+            if (viaIterator)
+                viaPairs.push_back(call);
+            else
+                direct.push_back(value);
+            return true;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    bool visit(AstStatIf* node) override
+    {
+        // The `then` block, each `elseif`'s, and the final `else`
+        std::vector<BranchLoops> branches;
+        for (AstStatIf* clause = node; clause;)
+        {
+            branches.emplace_back();
+            clause->thenbody->visit(&branches.back());
+
+            AstStat* rest = clause->elsebody;
+            clause = rest ? rest->as<AstStatIf>() : nullptr;
+            if (rest && !clause)
+            {
+                branches.emplace_back();
+                rest->visit(&branches.back());
+            }
+        }
+
+        for (size_t i = 0; i < branches.size(); ++i)
+        {
+            for (AstExprCall* call : branches[i].viaPairs)
+                markIfIteratedDirectly(call, branches, i);
+        }
+
+        return true;
+    }
+
+    void markIfIteratedDirectly(AstExprCall* call, const std::vector<BranchLoops>& branches, size_t branch)
+    {
+        for (size_t j = 0; j < branches.size(); ++j)
+        {
+            if (j == branch)
+                continue;
+
+            for (AstExpr* value : branches[j].direct)
+            {
+                if (sameTarget(call->args.data[0], value))
+                    chosenOnPurpose.insert(call);
+            }
+        }
+    }
+
     bool visit(AstExprCall* node) override
     {
         AstExprGlobal* global = node->func->as<AstExprGlobal>();
@@ -7274,6 +7406,13 @@ private:
         const bool isIpairs = global && global->name == "ipairs";
         if (!isPairs && !isIpairs)
             return true;
+
+        if (chosenOnPurpose.contains(node))
+        {
+            for (AstExpr* arg : node->args)
+                arg->visit(this);
+            return false;
+        }
 
         IteratedValue iterated;
         std::string name = "t";
@@ -8067,6 +8206,7 @@ std::vector<LintWarning> lint(
     context.deprecatedAttribute = names.get("deprecated");
     context.scope = env;
     context.module = module;
+    context.asksForSpeed = asksForSpeed(hotcomments);
 
     fillBuiltinGlobals(context, names, env);
 
