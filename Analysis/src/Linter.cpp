@@ -4161,6 +4161,10 @@ static void lintComments(LintContext& context, const std::vector<HotComment>& ho
 
     for (const HotComment& hc : hotcomments)
     {
+        // Luwu: `--@[nolint(...)]` is checked where it's applied, by LintScopeCollector
+        if (hc.attribute)
+            continue;
+
         // We reserve --!<space> for various informational (non-directive) comments
         if (hc.content.empty() || hc.content[0] == ' ' || hc.content[0] == '\t')
             continue;
@@ -5127,14 +5131,19 @@ private:
         return mask && (mask->test(code) || mask->test(LintWarning::Code_OptimizationHint));
     }
 
-    // The last line of the help: where `@[nolint(name)]` would silence this
+    // The last line of the help: where `@[nolint(name)]` would silence this. A Luau or Lua file can't write the attribute
+    // (upstream can't parse it), so it's offered as the comment `--@[nolint(name)]`, which covers the same statement.
     std::string silenceHint(AstExpr* target, const char* name) const
     {
+        const bool luwu = context->module && context->module->language == Language::Luwu;
+        const char* nolint = luwu ? "@[nolint(%s)]" : "--@[nolint(%s)]";
+        const std::string attribute = format(nolint, name);
+
         AstLocal* local = rootLocal(target);
         if (local && declaredLocals.contains(local))
-            return format("  - Add '@[nolint(%s)]' over '%s' to silence", name, local->name.value);
+            return format("  - Add '%s' over '%s' to silence", attribute.c_str(), local->name.value);
         if (inFunction)
-            return format("  - Add '@[nolint(%s)]' over the function to silence", name);
+            return format("  - Add '%s' over the function to silence", attribute.c_str());
         return format("  - Add '--!nolint %s' to the top of the file to silence", name);
     }
 
@@ -7147,8 +7156,103 @@ private:
     }
 };
 
+// Luwu: how many union or intersection members deep classifyIterated looks. Types can be cyclic.
+constexpr int kMaxIterationTypeDepth = 8;
+
+// Luwu: what iterating a value directly (`for k, v in t`) does differently from `pairs(t)` and `ipairs(t)`, from its type.
+// A union or intersection has a fact when any of its members does.
+struct IteratedValue
+{
+    // `for k, v in t` calls `t`: its metatable has `__call` and no `__iter`
+    bool callsIt = false;
+    // `pairs` and `ipairs` skip its `__iter`
+    bool hasIter = false;
+    // An object or extern type, which `pairs` and `ipairs` can't iterate at all
+    bool notATable = false;
+    // Keys `ipairs` doesn't visit and `for i, v in t` would: named properties, or an indexer whose keys aren't numbers
+    bool hasNonArrayKeys = false;
+    // Elements that can be `nil`, where `ipairs` stops and `for i, v in t` doesn't
+    bool hasOptionalElements = false;
+};
+
+static void classifyIterated(TypeId ty, IteratedValue& result, int depth)
+{
+    if (depth > kMaxIterationTypeDepth)
+        return;
+
+    ty = follow(ty);
+
+    std::vector<TypeId> members;
+    if (const UnionType* ut = get<UnionType>(ty))
+        members = ut->options;
+    else if (const IntersectionType* it = get<IntersectionType>(ty))
+        members = it->parts;
+
+    if (!members.empty())
+    {
+        for (TypeId member : members)
+            classifyIterated(member, result, depth + 1);
+        return;
+    }
+
+    if (get<ExternType>(ty))
+    {
+        result.notATable = true;
+        return;
+    }
+
+    const TableType* table = get<TableType>(ty);
+    if (const MetatableType* mtv = get<MetatableType>(ty))
+    {
+        table = get<TableType>(follow(mtv->table));
+        if (const TableType* metamethods = get<TableType>(follow(mtv->metatable)))
+        {
+            const bool hasIter = metamethods->props.count("__iter") > 0;
+            result.hasIter |= hasIter;
+            result.callsIt |= !hasIter && metamethods->props.count("__call") > 0;
+        }
+    }
+
+    if (!table)
+        return;
+
+    if (!table->props.empty())
+        result.hasNonArrayKeys = true;
+
+    if (table->indexer)
+    {
+        if (!isNumber(follow(table->indexer->indexType)))
+            result.hasNonArrayKeys = true;
+        if (isOptional(table->indexer->indexResultType))
+            result.hasOptionalElements = true;
+    }
+}
+
+// Luwu: `a` or `a.b.c`, how a message names the iterated value in the code it suggests; "t" for anything else
+static std::string iteratedName(AstExpr* expr)
+{
+    if (AstExprGroup* group = expr->as<AstExprGroup>())
+        return iteratedName(group->expr);
+    if (AstExprLocal* local = expr->as<AstExprLocal>())
+        return local->local->name.value;
+    if (AstExprGlobal* global = expr->as<AstExprGlobal>())
+        return global->name.value;
+    if (AstExprIndexName* index = expr->as<AstExprIndexName>(); index && index->op == '.')
+    {
+        std::string base = iteratedName(index->expr);
+        if (base != "t")
+            return base + "." + index->index.value;
+    }
+    return "t";
+}
+
 // Luwu: `pairs` and `ipairs`, which generalized iteration (`for k, v in t`) replaces. Each is its own lint so a module
-// can keep using one without turning off DeprecatedApi or the other.
+// can keep using one without turning off DeprecatedApi or the other. A call is only reported where iterating the value
+// directly does the same thing, or where `pairs` is the likely mistake: it skips an `__iter` the value was made to be
+// iterated with. Code that reads raw entries on purpose (a pretty printer) is told how to silence it, since a value
+// typed as a plain table can still have a metatable at runtime. Nothing is suggested for a table with `__call`
+// (iterating it calls it), an object or extern type (neither form iterates it), or, for `ipairs`, a table with other
+// keys or `nil` elements.
 class LintLuaIterators : AstVisitor
 {
 public:
@@ -7163,25 +7267,94 @@ public:
 private:
     LintContext* context;
 
+    bool visit(AstExprCall* node) override
+    {
+        AstExprGlobal* global = node->func->as<AstExprGlobal>();
+        const bool isPairs = global && global->name == "pairs";
+        const bool isIpairs = global && global->name == "ipairs";
+        if (!isPairs && !isIpairs)
+            return true;
+
+        IteratedValue iterated;
+        std::string name = "t";
+        if (node->args.size > 0)
+        {
+            AstExpr* arg = node->args.data[0];
+            name = iteratedName(arg);
+            if (std::optional<TypeId> ty = context->getType(arg))
+                classifyIterated(*ty, iterated, 0);
+        }
+
+        // Iterating it directly wouldn't iterate its entries, so there's nothing to suggest
+        const bool suggestible = !iterated.callsIt && !iterated.notATable;
+        const bool ipairsMeansIt = isIpairs && (iterated.hasNonArrayKeys || iterated.hasOptionalElements);
+        if (suggestible && iterated.hasIter)
+            reportSkippedIter(global, name);
+        else if (suggestible && !ipairsMeansIt)
+            report(global, name);
+
+        for (AstExpr* arg : node->args)
+            arg->visit(this);
+        return false;
+    }
+
     bool visit(AstExprGlobal* node) override
+    {
+        report(node, "t");
+        return true;
+    }
+
+    void report(AstExprGlobal* node, const std::string& name)
     {
         if (node->name == "pairs")
             emitWarning(
                 *context,
                 LintWarning::Code_Pairs,
                 node->location,
-                "'pairs' is deprecated; iterate the table directly: 'for key, value in t do'"
+                "'pairs' is deprecated; use 'for key, value in %s do' directly.\n"
+                "\n"
+                "Help (pairs):\n"
+                "  - In Luau and Luwu you can directly iterate over tables (generalized iteration)\n"
+                "  - Unlike 'pairs', generalized iteration uses the '__iter' metamethod of a table, object or extern type when it "
+                "has one\n"
+                "  - To read a table's own entries on purpose (a pretty printer, a serializer), add '--@[nolint(Pairs)]' above "
+                "it or '--!nolint LuaIterators'",
+                name.c_str()
             );
         else if (node->name == "ipairs")
             emitWarning(
                 *context,
                 LintWarning::Code_Ipairs,
                 node->location,
-                "'ipairs' is deprecated; iterate the array directly: 'for index, value in t do'. Unlike 'ipairs', it doesn't stop "
-                "at the first nil"
+                "'ipairs' is deprecated; use 'for index, value in %s do' directly.\n"
+                "\n"
+                "Help (ipairs):\n"
+                "  - In Luau and Luwu you can directly iterate over tables (generalized iteration)\n"
+                "  - Unlike 'ipairs', generalized iteration doesn't stop at the first 'nil'\n"
+                "  - If you want to stop at the first nil, add '--@[nolint(Ipairs)]' above it or '--!nolint LuaIterators' to silence",
+                name.c_str()
             );
+    }
 
-        return true;
+    void reportSkippedIter(AstExprGlobal* node, const std::string& name)
+    {
+        const bool isPairs = node->name == "pairs";
+        emitWarning(
+            *context,
+            isPairs ? LintWarning::Code_Pairs : LintWarning::Code_Ipairs,
+            node->location,
+            "'%s' skips the '__iter' of '%s'; iterate it with 'for %s, value in %s do'.\n"
+            "\n"
+            "Help (%s):\n"
+            "  - To read its own entries on purpose (a pretty printer, a serializer), add '--@[nolint(%s)]' above it or "
+            "'--!nolint LuaIterators'",
+            node->name.value,
+            name.c_str(),
+            isPairs ? "key" : "index",
+            name.c_str(),
+            node->name.value,
+            isPairs ? "Pairs" : "Ipairs"
+        );
     }
 };
 
@@ -7520,19 +7693,39 @@ struct LintScope
     LintMask disable;
 };
 
+// Luwu: every statement, in the order a visitor reaches them, so the outer one comes first where two start together
+struct StatementCollector : AstVisitor
+{
+    std::vector<AstStat*> statements;
+
+    bool visit(AstStat* node) override
+    {
+        statements.push_back(node);
+        return true;
+    }
+};
+
 class LintScopeCollector : AstVisitor
 {
 public:
     // Also reports names that aren't lints, as CommentDirective does for `--!nolint`
-    static std::vector<LintScope> collect(LintContext& context)
+    static std::vector<LintScope> collect(LintContext& context, const std::vector<HotComment>& hotcomments)
     {
         LintScopeCollector collector;
         collector.context = &context;
         context.root->visit(&collector);
+        collector.addCommentScopes(hotcomments);
         return std::move(collector.scopes);
     }
 
 private:
+    // A lint name an attribute or comment names, and where
+    struct LintName
+    {
+        std::string name;
+        Location location;
+    };
+
     LintContext* context;
     std::vector<LintScope> scopes;
     // Functions whose attributes a statement form already took, with the statement's wider range
@@ -7551,15 +7744,29 @@ private:
 
     LintMask maskOf(AstAttr* attr)
     {
+        std::vector<LintName> names;
+        for (AstExpr* arg : attr->args)
+        {
+            if (std::optional<std::string> name = argumentName(arg))
+                names.push_back(LintName{std::move(*name), arg->location});
+        }
+        // An argument that isn't a name still counts, so `@[nolint(1)]` isn't read as a bare `@[nolint]`
+        const bool bare = attr->args.size == 0;
+        return maskOf(attr->type == AstAttr::Type::Nolint, attr->name.value, names, bare, attr->location);
+    }
+
+    // `nolint` turns the names off, else they're turned on. `attributeName` is what a warning calls the attribute.
+    LintMask maskOf(bool nolint, const char* attributeName, const std::vector<LintName>& names, bool bare, const Location& location)
+    {
         // Without names, every lint but BareNolint, which asks whether that was meant (`@[nolint]`; the parser makes
         // `@[lint]` name them)
-        if (attr->args.size == 0)
+        if (bare && nolint)
         {
             if (context->warningEnabled(LintWarning::Code_BareNolint))
                 emitWarning(
                     *context,
                     LintWarning::Code_BareNolint,
-                    attr->location,
+                    location,
                     "'@nolint' without lint names turns off every lint in here; did you forget to specify lints? Name them "
                     "('@[nolint(LocalUnused)]'), or write '@[nolint(All)]' to turn them all off on purpose"
                 );
@@ -7568,29 +7775,28 @@ private:
         }
 
         LintMask mask;
-        for (AstExpr* arg : attr->args)
+        for (const LintName& lintName : names)
         {
-            std::optional<std::string> name = argumentName(arg);
-            if (!name)
-                continue;
+            const std::string& name = lintName.name;
+            const Location& nameLocation = lintName.location;
 
             // `@[lint(All)]` would also turn on the lints the type checking mode turns off because the checker already
             // reports them (UnknownGlobal in strict mode), which is why `@[lint]` has to name what it turns on
-            if (LintWarning::isAllName(name->c_str()))
+            if (LintWarning::isAllName(name.c_str()))
             {
-                if (attr->type == AstAttr::Type::Nolint)
+                if (nolint)
                     mask.set();
                 else if (context->warningEnabled(LintWarning::Code_CommentDirective))
                     emitWarning(
                         *context,
                         LintWarning::Code_CommentDirective,
-                        arg->location,
+                        nameLocation,
                         "'All' can only turn lints off; name the lints to turn on, like '@[lint(LocalUnused)]'"
                     );
                 continue;
             }
 
-            LintWarning::Code code = LintWarning::parseName(name->c_str());
+            LintWarning::Code code = LintWarning::parseName(name.c_str());
             if (code != LintWarning::Code_Unknown)
             {
                 mask.set(code);
@@ -7600,44 +7806,166 @@ private:
             if (!context->warningEnabled(LintWarning::Code_CommentDirective))
                 continue;
 
-            if (const char* suggestion = fuzzyMatch(*name, kWarningNames + 1, LintWarning::Code__Count - 1))
+            if (const char* suggestion = fuzzyMatch(name, kWarningNames + 1, LintWarning::Code__Count - 1))
                 emitWarning(
                     *context,
                     LintWarning::Code_CommentDirective,
-                    arg->location,
+                    nameLocation,
                     "%s attribute refers to unknown lint rule '%s'; did you mean '%s'?",
-                    attr->name.value,
-                    name->c_str(),
+                    attributeName,
+                    name.c_str(),
                     suggestion
                 );
             else
                 emitWarning(
                     *context,
                     LintWarning::Code_CommentDirective,
-                    arg->location,
+                    nameLocation,
                     "%s attribute refers to unknown lint rule '%s'",
-                    attr->name.value,
-                    name->c_str()
+                    attributeName,
+                    name.c_str()
                 );
         }
         return LintWarning::withGroupParts(mask);
+    }
+
+    // `bindings` are the locals a `local` or `const` declares, which a `nolint` also covers wherever they're used
+    void addScope(bool nolint, LintMask mask, const Location& range, const AstArray<AstLocal*>* bindings)
+    {
+        if (!nolint)
+        {
+            scopes.push_back(LintScope{range, mask, LintMask()});
+            return;
+        }
+
+        scopes.push_back(LintScope{range, LintMask(), mask});
+        if (bindings)
+        {
+            for (AstLocal* local : *bindings)
+                context->bindingNolints[local] |= mask;
+        }
     }
 
     void addScopes(const AstArray<AstAttr*>& attributes, const Location& range, const AstArray<AstLocal*>* bindings = nullptr)
     {
         for (AstAttr* attr : attributes)
         {
-            if (attr->type == AstAttr::Type::Nolint)
-            {
-                LintMask mask = maskOf(attr);
-                scopes.push_back(LintScope{range, LintMask(), mask});
+            const bool lintAttribute = attr->type == AstAttr::Type::Nolint || attr->type == AstAttr::Type::Lint;
+            if (lintAttribute)
+                addScope(attr->type == AstAttr::Type::Nolint, maskOf(attr), range, bindings);
+        }
+    }
 
-                if (bindings)
-                    for (AstLocal* local : *bindings)
-                        context->bindingNolints[local] |= mask;
+    // What a `--@[nolint(...)]` or `--@[lint(...)]` comment says
+    struct CommentAttribute
+    {
+        bool nolint = false;
+        // `nolint` or `lint`, as written
+        std::string name;
+        std::vector<LintName> lints;
+        // No parenthesized list at all
+        bool bare = true;
+    };
+
+    // Reads `content`, the comment after its `--`, which starts at `start`. nullopt for any other comment that starts
+    // with `@[`.
+    static std::optional<CommentAttribute> parseCommentAttribute(const std::string& content, Position start)
+    {
+        auto isNameChar = [](char c)
+        {
+            return isalnum(static_cast<unsigned char>(c)) || c == '_';
+        };
+        auto at = [&](size_t offset)
+        {
+            return Position(start.line, start.column + unsigned(offset));
+        };
+
+        size_t i = 2; // past `@[`
+        size_t nameEnd = i;
+        while (nameEnd < content.size() && isNameChar(content[nameEnd]))
+            nameEnd++;
+
+        CommentAttribute result;
+        result.name = content.substr(i, nameEnd - i);
+        if (result.name != "nolint" && result.name != "lint")
+            return std::nullopt;
+        result.nolint = result.name == "nolint";
+
+        i = nameEnd;
+        if (i < content.size() && content[i] == '(')
+        {
+            size_t close = content.find(')', i);
+            if (close == std::string::npos)
+                return std::nullopt;
+
+            result.bare = false;
+            for (size_t item = i + 1; item < close;)
+            {
+                size_t itemEnd = std::min(content.find(',', item), close);
+                size_t first = content.find_first_not_of(" \t\"'", item);
+                size_t last = content.find_last_not_of(" \t\"'", itemEnd - 1);
+                if (first != std::string::npos && first < itemEnd && last >= first)
+                    result.lints.push_back(LintName{content.substr(first, last - first + 1), Location(at(first), at(last + 1))});
+                item = itemEnd + 1;
             }
-            else if (attr->type == AstAttr::Type::Lint)
-                scopes.push_back(LintScope{range, maskOf(attr), LintMask()});
+            i = close + 1;
+        }
+
+        if (i >= content.size() || content[i] != ']')
+            return std::nullopt;
+        return result;
+    }
+
+    // Each `--@[nolint(...)]` covers the statement after it, as the attribute covers the function or local it's on
+    void addCommentScopes(const std::vector<HotComment>& hotcomments)
+    {
+        std::vector<const HotComment*> comments;
+        for (const HotComment& hc : hotcomments)
+        {
+            if (hc.attribute)
+                comments.push_back(&hc);
+        }
+        if (comments.empty())
+            return;
+
+        StatementCollector collector;
+        context->root->visit(&collector);
+
+        for (const HotComment* hc : comments)
+        {
+            // The content starts after the comment's `--`
+            Position contentStart(hc->location.begin.line, hc->location.begin.column + 2);
+            std::optional<CommentAttribute> attribute = parseCommentAttribute(hc->content, contentStart);
+            if (!attribute)
+                continue;
+
+            // `@[lint]` can't be written without names, so the comment says what's missing instead of doing nothing
+            const bool bareLint = !attribute->nolint && attribute->bare;
+            if (bareLint)
+            {
+                if (context->warningEnabled(LintWarning::Code_CommentDirective))
+                    emitWarning(
+                        *context,
+                        LintWarning::Code_CommentDirective,
+                        hc->location,
+                        "Please specify the lints to enable (like '--@[lint(ConstLocal)]')"
+                    );
+                continue;
+            }
+
+            AstStat* next = nullptr;
+            for (AstStat* stat : collector.statements)
+            {
+                const bool after = hc->location.end <= stat->location.begin;
+                if (after && (!next || stat->location.begin < next->location.begin))
+                    next = stat;
+            }
+            if (!next)
+                continue;
+
+            LintMask mask = maskOf(attribute->nolint, attribute->name.c_str(), attribute->lints, attribute->bare, hc->location);
+            const AstStatLocal* local = next->as<AstStatLocal>();
+            addScope(attribute->nolint, mask, next->location, local ? &local->vars : nullptr);
         }
     }
 
@@ -7773,7 +8101,7 @@ std::vector<LintWarning> lint(
 
     // Luwu: a lint a scope turns on has to run even where the module turns it off; filterByLintScopes then drops what
     // isn't on where it was reported
-    std::vector<LintScope> scopes = LintScopeCollector::collect(context);
+    std::vector<LintScope> scopes = LintScopeCollector::collect(context, hotcomments);
     for (const LintScope& scope : scopes)
         context.options.warningMask |= scope.enable;
 

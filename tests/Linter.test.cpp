@@ -3880,6 +3880,48 @@ return f
     CHECK(warningsOf(scoped, LintWarning::Code_AnyAnnotation).empty());
 }
 
+// A Luau file can't write `@[nolint]`, so the help offers the comment form, and following it silences the warning
+TEST_CASE_FIXTURE(BuiltinsFixture, "SilenceHintInLuauFilesIsTheCommentForm")
+{
+    auto loopConcats = [&](const ModuleName& name, const std::string& source)
+    {
+        fileResolver.source[name] = source;
+        configResolver.configFiles[name].language = Language::Luau;
+        std::vector<LintWarning> found;
+        for (const LintWarning& warning : lintModule(name).warnings)
+        {
+            if (warning.code == LintWarning::Code_LoopConcat)
+                found.push_back(warning);
+        }
+        return found;
+    };
+
+    std::vector<LintWarning> reported = loopConcats("game/a", R"(
+local function f(n: number)
+    local s = ""
+    for i = 1, n do
+        s ..= tostring(i)
+    end
+    return s
+end
+return f
+)");
+    REQUIRE_EQ(reported.size(), 1);
+    CHECK(reported[0].text.find("  - Add '--@[nolint(LoopConcat)]' over 's' to silence") != std::string::npos);
+
+    CHECK(loopConcats("game/b", R"(
+local function f(n: number)
+    --@[nolint(LoopConcat)]
+    local s = ""
+    for i = 1, n do
+        s ..= tostring(i)
+    end
+    return s
+end
+return f
+)").empty());
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")
 {
     const std::string source = R"(
@@ -3918,6 +3960,97 @@ return removed, frozen, shadowed, owner, check
     std::vector<LintWarning> inLua = luwuOnly("game/c", Language::Lua);
     REQUIRE_EQ(inLua.size(), 3);
     CHECK_EQ(inLua[0].text, "'table.drop' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
+}
+
+// Luwu: pairs and ipairs are only reported where iterating the value directly does the same thing, or where `pairs`
+// skips the `__iter` the value was made to be iterated with
+// Luwu: `--@[nolint(...)]` is the attribute as a comment, for Luau and Lua files, which upstream couldn't parse with
+// `@[nolint]` in them. It covers the statement after it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "LintAttributeComments")
+{
+    LintResult result = lint(R"(
+local t = { a = 1 }
+--@[nolint(Pairs)]
+for k in pairs(t) do print(k) end
+for k in pairs(t) do print(k) end
+--@[nolint(LocalUnused)] the comment can explain why
+local unused = 1
+--@[nolint(Pairs, LocalUnsed)]
+local x = 2
+--@[lint]
+print(x)
+)");
+
+    auto withCode = [&](LintWarning::Code code)
+    {
+        std::vector<LintWarning> found;
+        for (const LintWarning& warning : result.warnings)
+        {
+            if (warning.code == code)
+                found.push_back(warning);
+        }
+        return found;
+    };
+
+    // only the loop the comment isn't above
+    std::vector<LintWarning> pairsWarnings = withCode(LintWarning::Code_Pairs);
+    REQUIRE_EQ(pairsWarnings.size(), 1);
+    CHECK_EQ(pairsWarnings[0].location.begin.line, 4);
+
+    CHECK(withCode(LintWarning::Code_LocalUnused).empty());
+
+    // the comments aren't directives placed after code; their names are checked like the attribute's
+    std::vector<LintWarning> directives = withCode(LintWarning::Code_CommentDirective);
+    REQUIRE_EQ(directives.size(), 2);
+    CHECK_EQ(directives[0].text, "nolint attribute refers to unknown lint rule 'LocalUnsed'; did you mean 'LocalUnused'?");
+    CHECK_EQ(directives[0].location, Location({7, 18}, {7, 28}));
+    CHECK_EQ(directives[1].text, "Please specify the lints to enable (like '--@[lint(ConstLocal)]')");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsOnlySuggestsWhatIteratesTheSame")
+{
+    LintResult result = lint(R"(
+local list = { 1, 2 }
+local record = { name = "nyla", age = 3 }
+local holes: { number? } = { 1, nil, 3 }
+local callable = setmetatable({ 1, 2 }, { __call = function() return nil end })
+local iterable = setmetatable({ 1, 2 }, { __iter = function(t) return next, {} end })
+local either = if math.random() > 0.5 then callable else list
+for k in pairs(callable) do print(k) end
+for i in ipairs(callable) do print(i) end
+for k in pairs(either) do print(k) end
+for i in ipairs(record) do print(i) end
+for i in ipairs(holes) do print(i) end
+for k in pairs(iterable) do print(k) end
+for k in pairs(record) do print(k) end
+for i in ipairs(list) do print(i) end
+)");
+
+    std::vector<const LintWarning*> pairsWarnings;
+    std::vector<const LintWarning*> ipairsWarnings;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == LintWarning::Code_Pairs)
+            pairsWarnings.push_back(&warning);
+        else if (warning.code == LintWarning::Code_Ipairs)
+            ipairsWarnings.push_back(&warning);
+    }
+
+    REQUIRE_EQ(pairsWarnings.size(), 2);
+    CHECK_EQ(
+        pairsWarnings[0]->text.substr(0, pairsWarnings[0]->text.find('\n')),
+        "'pairs' skips the '__iter' of 'iterable'; iterate it with 'for key, value in iterable do'."
+    );
+    // reading the entries on purpose (a pretty printer) is told how to silence it
+    CHECK(pairsWarnings[0]->text.find("add '--@[nolint(Pairs)]' above it") != std::string::npos);
+    CHECK_EQ(pairsWarnings[1]->location.begin.line, 13);
+    CHECK_EQ(
+        pairsWarnings[1]->text.substr(0, pairsWarnings[1]->text.find('\n')),
+        "'pairs' is deprecated; use 'for key, value in record do' directly."
+    );
+
+    REQUIRE_EQ(ipairsWarnings.size(), 1);
+    CHECK_EQ(ipairsWarnings[0]->location.begin.line, 14);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsReportsPairsAndIpairsSeparately")

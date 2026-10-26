@@ -7325,7 +7325,11 @@ void Parser::nextLexeme()
             return;
 
         // Comments starting with ! are called "hot comments" and contain directives for type checking / linting / compiling
-        if (lexeme.type == Lexeme::Comment && lexeme.getLength() && lexeme.data[0] == '!')
+        // Luwu: so are `--@[nolint(...)]` and `--@[lint(...)]`, the attributes written as comments. Upstream can't parse
+        // `@[nolint]`, so a comment is the only way a Luau or Lua file can turn a lint off for one statement.
+        const bool directive = lexeme.type == Lexeme::Comment && lexeme.getLength() && lexeme.data[0] == '!';
+        const bool attribute = lexeme.type == Lexeme::Comment && lexeme.getLength() >= 2 && lexeme.data[0] == '@' && lexeme.data[1] == '[';
+        if (directive || attribute)
         {
             const char* text = lexeme.data;
 
@@ -7333,7 +7337,9 @@ void Parser::nextLexeme()
             while (end > 0 && isSpace(text[end - 1]))
                 --end;
 
-            hotcomments.push_back({hotcommentHeader, lexeme.location, std::string(text + 1, text + end)});
+            // A directive's content starts after its '!'; an attribute's keeps its '@'
+            const unsigned int start = directive ? 1 : 0;
+            hotcomments.push_back({hotcommentHeader, lexeme.location, std::string(text + start, text + end), attribute});
         }
 
         type = lexer.next(/* skipComments= */ false, /* updatePrevLocation= */ false).type;

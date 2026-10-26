@@ -5189,6 +5189,18 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_luwu_only_members_out_
     CHECK_EQ(ac.entryMap.count("insert"), 1);
 }
 
+// Luwu: inside `--@[nolint(...)]`, the comment form Luau and Lua files can write, the lint names not listed yet
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_attribute_comments")
+{
+    check("--\\@[nolint(LocalShadow, @1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::HotComment);
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 1);
+    CHECK_EQ(ac.entryMap.count("LocalShadow"), 0);
+    // directive names belong after `--!`, not here
+    CHECK_EQ(ac.entryMap.count("strict"), 0);
+}
+
 // Luwu: inside `@[nolint(...)]` and `@[lint(...)]`, the lint names, without the ones the attribute already lists
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_lint_attributes")
 {
