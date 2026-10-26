@@ -9289,6 +9289,11 @@ TEST_CASE_FIXTURE(Fixture, "expression_statements_that_dont_leave_get_one_error"
         "local function f(x, a, b)\n    x or return a, b\n    return x\nend",
         "'or return' returns one value unless parenthesized: 'x or (return a, b)'"
     );
+    matchOnlyIfLocalError(
+        *this,
+        "local function f(x, a, b)\n    x and return a, b\n    return x\nend",
+        "'and return' returns one value unless parenthesized: 'x and (return a, b)'"
+    );
 
     // a statement keyword can't be the value of a bare `or return`
     matchOnlyIfLocalError(

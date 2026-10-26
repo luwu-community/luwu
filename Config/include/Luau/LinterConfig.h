@@ -109,6 +109,8 @@ struct LintWarning
         Code_LuaGuard = 73,                // `if not x then return end` on one line, in a Luwu file, which can write `x or return`
         Code_OrReturnComma = 74,           // Luwu: `f(x or return a, b)`, where `b` is the next argument, not a second return value
         Code_MisleadingIndentation = 75,   // Luwu: a `do` expression's block reaching lines indented like the code after it
+        Code_AmbiguousContinuation = 76,   // Luwu: a line starting with `-` or a string that continues the expression above it
+        Code_UnflippedGuard = 77,          // Luwu: `x == nil or return` followed by code using `x`, which is always nil there
 
         Code__Count
     };
@@ -231,6 +233,8 @@ inline constexpr const char* kWarningNames[] = {
     "LuaGuard",
     "OrReturnComma",
     "MisleadingIndentation",
+    "AmbiguousContinuation",
+    "UnflippedGuard",
 };
 // clang-format on
 

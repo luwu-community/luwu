@@ -899,6 +899,10 @@ AstStat* Parser::parseStat()
     if (operatorFollows)
         return parseOrLeaveStatement(parseBinaryTail(expr, start, 0), errorsBeforeExpr);
 
+    // `n ~` while `~=` is being typed: one incomplete statement, see parseOrLeaveStatement
+    if (FFlag::LuwuDoExpr && !expr->is<AstExprError>() && lexer.current().type == '~')
+        return parseOrLeaveStatement(expr, errorsBeforeExpr);
+
     if (expr->is<AstExprCall>())
         return allocator.alloc<AstStatExpr>(expr->location, expr);
 
@@ -8532,13 +8536,21 @@ AstStat* Parser::parseOrLeaveStatement(AstExpr* expr, size_t errorsBeforeStateme
         // Nothing around a statement can take a second value: `x or return a, b` meant to return both
         if (lexer.current().type == ',')
         {
+            // the operator before the leave: `and` in `x or y and return a, b`
+            AstExprBinary* guard = expr->as<AstExprBinary>();
+            while (!asLeave(guard->right))
+                guard = withoutGroups(guard->right)->as<AstExprBinary>();
+            const char* introducer = guard->op == AstExprBinary::And ? "and" : "or";
+
             Location comma = lexer.current().location;
             nextLexeme();
             TempVector<AstExpr*> rest(scratchExpr);
             parseExprList(rest);
             report(
                 Location(comma, lexer.previousLocation()),
-                "'or return' returns one value unless parenthesized: 'x or (return a, b)'"
+                "'%s return' returns one value unless parenthesized: 'x %s (return a, b)'",
+                introducer,
+                introducer
             );
         }
 
@@ -8547,9 +8559,9 @@ AstStat* Parser::parseOrLeaveStatement(AstExpr* expr, size_t errorsBeforeStateme
         return node;
     }
 
-    // `v > 2 or v =` while `==` is being typed: the `=`, and a value after it on its line, belong to this incomplete
-    // statement instead of starting the next one
-    if (lexer.current().type == '=')
+    // `v > 2 or v =` and `n ~` while `==` or `~=` is being typed: the `=` or `~`, and a value after it on its line, belong
+    // to this incomplete statement instead of starting the next one
+    if (lexer.current().type == '=' || lexer.current().type == '~')
     {
         unsigned int line = lexer.current().location.begin.line;
         nextLexeme();

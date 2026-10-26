@@ -4815,29 +4815,81 @@ private:
         return nullptr;
     }
 
-    // The condition `x or return` needs for the guard `if <condition> then return end`: `not x` gives `x`, `==` and `~=`
-    // swap, and anything else is negated with `not`
-    static std::string negatedCondition(AstExpr* condition)
+    // The comparison that is true exactly when `op` is false: `<` and `>=`, `==` and `~=`. Like any hand-written flip, it
+    // treats NaN as an ordinary number.
+    static std::optional<AstExprBinary::Op> flippedComparison(AstExprBinary::Op op)
     {
-        while (AstExprGroup* group = condition->as<AstExprGroup>())
-            condition = group->expr;
+        switch (op)
+        {
+        case AstExprBinary::CompareEq:
+            return AstExprBinary::CompareNe;
+        case AstExprBinary::CompareNe:
+            return AstExprBinary::CompareEq;
+        case AstExprBinary::CompareLt:
+            return AstExprBinary::CompareGe;
+        case AstExprBinary::CompareGe:
+            return AstExprBinary::CompareLt;
+        case AstExprBinary::CompareGt:
+            return AstExprBinary::CompareLe;
+        case AstExprBinary::CompareLe:
+            return AstExprBinary::CompareGt;
+        default:
+            return std::nullopt;
+        }
+    }
 
+    // The condition `x or return` needs for the guard `if <condition> then return end`: `not x` gives `x`, a comparison
+    // flips its operator, and anything else is negated with `not`. `start` is set to the code the result starts with.
+    static std::string negatedCondition(AstExpr* condition, AstExpr*& start)
+    {
+        condition = withoutGroups(condition);
+
+        // `or` binds loosest of all, so `not (a or b)` needs no parentheses as `a or b or return`
         if (AstExprUnary* unary = condition->as<AstExprUnary>(); unary && unary->op == AstExprUnary::Op::Not)
-            return toString(unary->expr);
+        {
+            start = withoutGroups(unary->expr);
+            return toString(start);
+        }
 
         AstExprBinary* binary = condition->as<AstExprBinary>();
-        bool equality = binary && (binary->op == AstExprBinary::CompareEq || binary->op == AstExprBinary::CompareNe);
-        if (equality)
+        std::optional<AstExprBinary::Op> flipped = binary ? flippedComparison(binary->op) : std::nullopt;
+        if (flipped)
         {
-            const char* op = binary->op == AstExprBinary::CompareEq ? " ~= " : " == ";
-            return toString(binary->left) + op + toString(binary->right);
+            start = binary->left;
+            return toString(binary->left) + " " + toString(*flipped) + " " + toString(binary->right);
         }
 
         // `not` binds tighter than any binary operator
+        start = nullptr;
         if (binary)
             return "not (" + toString(condition) + ")";
 
         return "not " + toString(condition);
+    }
+
+    // Would a statement starting with `expr` continue the line above it? A `-`, a string or a `(` at the start of a line
+    // does, so `x or return` written with one could join the previous statement (see AmbiguousContinuation).
+    static bool continuesLineAbove(AstExpr* expr)
+    {
+        while (true)
+        {
+            if (AstExprBinary* binary = expr->as<AstExprBinary>())
+                expr = binary->left;
+            else if (AstExprCall* call = expr->as<AstExprCall>())
+                expr = call->func;
+            else if (AstExprIndexName* index = expr->as<AstExprIndexName>())
+                expr = index->expr;
+            else if (AstExprIndexExpr* index = expr->as<AstExprIndexExpr>())
+                expr = index->expr;
+            else if (AstExprTypeAssertion* cast = expr->as<AstExprTypeAssertion>())
+                expr = cast->expr;
+            else
+                break;
+        }
+
+        AstExprUnary* unary = expr->as<AstExprUnary>();
+        bool minus = unary && unary->op == AstExprUnary::Op::Minus;
+        return minus || expr->is<AstExprConstantString>() || expr->is<AstExprInterpString>() || expr->is<AstExprGroup>();
     }
 
     // How `leave` is written after `or`: a bare `return` needs a `;` and several values need parentheses, or the parser
@@ -4878,7 +4930,14 @@ private:
             if (!enabled.luaGuard)
                 return true;
 
-            std::string suggestion = negatedCondition(node->condition) + " or " + orLeaveForm(leave);
+            AstExpr* start = nullptr;
+            std::string condition = negatedCondition(node->condition, start);
+
+            // `-x <= 0 or return` could join the statement above it; the `if` is clearer than a `;` before it
+            if (start && continuesLineAbove(start))
+                return true;
+
+            std::string suggestion = condition + " or " + orLeaveForm(leave);
             if (suggestion.size() <= kMaxSuggestionLength)
                 emitWarning(*context, LintWarning::Code_LuaGuard, node->location, "Replace this with '%s'", suggestion.c_str());
             else
@@ -5089,20 +5148,29 @@ private:
 
     struct BareReturn
     {
-        // `or` or `else`
+        // `or`, `and` or `else`
         const char* introducer = nullptr;
         AstStatReturn* ret = nullptr;
     };
 
-    // The unparenthesized `return` with a value that `expr` ends in, after `or` or `else`
+    // The unparenthesized `return` with a value that `expr` ends in, after `or`, `and` or `else`. In `x or y and return v`
+    // it is the `and`'s.
     static std::optional<BareReturn> bareReturnOf(AstExpr* expr)
     {
         AstExpr* leave = nullptr;
         BareReturn result;
-        if (AstExprBinary* binary = expr->as<AstExprBinary>(); binary && binary->op == AstExprBinary::Or)
+        if (AstExprBinary* binary = expr->as<AstExprBinary>(); binary && (binary->op == AstExprBinary::Or || binary->op == AstExprBinary::And))
         {
+            // A parenthesized operand ends at its `)`, so only an unparenthesized one can end in a bare `return`
+            AstExprBinary* inner = binary->right->as<AstExprBinary>();
+            while (inner && (inner->op == AstExprBinary::Or || inner->op == AstExprBinary::And))
+            {
+                binary = inner;
+                inner = binary->right->as<AstExprBinary>();
+            }
+
             leave = binary->right;
-            result.introducer = "or";
+            result.introducer = binary->op == AstExprBinary::And ? "and" : "or";
         }
         else if (AstExprIfElse* ifElse = expr->as<AstExprIfElse>())
         {
@@ -5212,7 +5280,8 @@ private:
     }
 };
 
-// Luwu Do Expressions (rfcs/do-expressions.md): ReturnOnNextLine, OrContinue and MisleadingIndentation
+// Luwu Do Expressions (rfcs/do-expressions.md): ReturnOnNextLine, OrContinue, MisleadingIndentation,
+// AmbiguousContinuation and UnflippedGuard
 class LintDoExpressions : AstVisitor
 {
 public:
@@ -5221,6 +5290,8 @@ public:
         bool returnOnNextLine = false;
         bool orContinue = false;
         bool misleadingIndentation = false;
+        bool ambiguousContinuation = false;
+        bool unflippedGuard = false;
     };
 
     LUAU_NOINLINE static void process(LintContext& context, Enabled enabled)
@@ -5246,8 +5317,12 @@ private:
 
     bool visit(AstStatBlock* node) override
     {
-        for (AstStat* stat : node->body)
+        for (size_t i = 0; i < node->body.size; ++i)
         {
+            AstStat* stat = node->body.data[i];
+            if (enabled.unflippedGuard)
+                checkUnflippedGuard(stat, node->body, i + 1);
+
             statementStarts.push_back(stat->location.begin);
             stat->visit(this);
             statementStarts.pop_back();
@@ -5255,6 +5330,247 @@ private:
 
         return false;
     }
+
+    // What a guard leaves a local as, when that is a single value: after `x == nil or return`, `x` is nil
+    struct PinnedLocal
+    {
+        AstLocal* local = nullptr;
+        // The value as a message names it: `nil`, `false`, `nil or false` or `""`
+        const char* value = nullptr;
+        // Pinned to a falsy value by a truthiness test (`not x`), rather than to one value by a comparison
+        bool falsy = false;
+    };
+
+    // `nil`, `false` or `""`: the values a guard usually leaves on, so leaving on anything else is likely a mistake
+    static const char* emptyValueName(AstExpr* expr)
+    {
+        if (expr->is<AstExprConstantNil>())
+            return "nil";
+        if (AstExprConstantBool* boolean = expr->as<AstExprConstantBool>(); boolean && !boolean->value)
+            return "false";
+        if (AstExprConstantString* string = expr->as<AstExprConstantString>(); string && string->value.size == 0)
+            return "\"\"";
+        return nullptr;
+    }
+
+    // `x == nil`, `nil == x` and the like: the local compared and the empty value it is compared with
+    static std::optional<std::pair<AstExprLocal*, AstExpr*>> comparedWithEmpty(AstExprBinary* comparison)
+    {
+        AstExprLocal* left = withoutGroups(comparison->left)->as<AstExprLocal>();
+        AstExprLocal* right = withoutGroups(comparison->right)->as<AstExprLocal>();
+
+        if (left && emptyValueName(comparison->right))
+            return std::make_pair(left, comparison->right);
+        if (right && emptyValueName(comparison->left))
+            return std::make_pair(right, comparison->left);
+        return std::nullopt;
+    }
+
+    // The local a guard leaves as a single empty value, if any. `continuesWhenTruthy` is how the guard reads `condition`:
+    // `condition or return` continues when it's truthy; `condition and return` and `if condition then return end` when it's
+    // falsy. So `x or return` pins nothing, `not x or return` and `if x then return end` pin `x` to a falsy value, and
+    // `x == nil or return` and `if x ~= nil then return end` pin it to nil.
+    static std::optional<PinnedLocal> pinnedByGuard(AstExpr* condition, bool continuesWhenTruthy)
+    {
+        condition = withoutGroups(condition);
+        PinnedLocal result;
+
+        AstExprLocal* tested = nullptr;
+        if (continuesWhenTruthy)
+        {
+            AstExprUnary* negation = condition->as<AstExprUnary>();
+            if (negation && negation->op == AstExprUnary::Op::Not)
+                tested = withoutGroups(negation->expr)->as<AstExprLocal>();
+        }
+        else
+        {
+            tested = condition->as<AstExprLocal>();
+        }
+
+        if (tested)
+        {
+            result.local = tested->local;
+            result.value = "nil or false";
+            result.falsy = true;
+            return result;
+        }
+
+        AstExprBinary* comparison = condition->as<AstExprBinary>();
+        AstExprBinary::Op pinningOp = continuesWhenTruthy ? AstExprBinary::CompareEq : AstExprBinary::CompareNe;
+        if (!comparison || comparison->op != pinningOp)
+            return std::nullopt;
+
+        std::optional<std::pair<AstExprLocal*, AstExpr*>> compared = comparedWithEmpty(comparison);
+        if (!compared)
+            return std::nullopt;
+
+        result.local = compared->first->local;
+        result.value = emptyValueName(compared->second);
+        return result;
+    }
+
+    struct FindRead : AstVisitor
+    {
+        AstLocal* local = nullptr;
+        bool found = false;
+
+        bool visit(AstExprLocal* node) override
+        {
+            found = found || node->local == local;
+            return !found;
+        }
+    };
+
+    // Does a statement from `body[next]` on read `local`? An assignment to it ends the search: what follows reads the new value.
+    static bool readLater(AstLocal* local, const AstArray<AstStat*>& body, size_t next)
+    {
+        for (size_t i = next; i < body.size; ++i)
+        {
+            FindRead read;
+            read.local = local;
+
+            AstStatAssign* assign = body.data[i]->as<AstStatAssign>();
+            if (!assign)
+            {
+                body.data[i]->visit(&read);
+                if (read.found)
+                    return true;
+                continue;
+            }
+
+            bool reassigned = false;
+            for (AstExpr* value : assign->values)
+                value->visit(&read);
+            for (AstExpr* var : assign->vars)
+            {
+                AstExprLocal* target = var->as<AstExprLocal>();
+                if (target && target->local == local)
+                    reassigned = true;
+                else
+                    var->visit(&read);
+            }
+
+            if (read.found)
+                return true;
+            if (reassigned)
+                return false;
+        }
+
+        return false;
+    }
+
+    // `name == "" or continue` where `name ~= "" or continue` was meant, and `if name ~= "" then continue end` where `==`
+    // was: the guard leaves on every useful value, so the local can only be empty after it, yet the code after it uses it
+    void checkUnflippedGuard(AstStat* stat, const AstArray<AstStat*>& body, size_t next)
+    {
+        // A suggestion longer than this is described instead of quoted
+        constexpr size_t kMaxSuggestionLength = 80;
+
+        AstExpr* condition = nullptr;
+        AstNode* leave = nullptr;
+        std::optional<PinnedLocal> pinned;
+        bool ifGuard = false;
+
+        if (AstStatIf* ifStat = stat->as<AstStatIf>())
+        {
+            bool guardShape = !ifStat->elsebody && ifStat->clauses.size == 0 && ifStat->thenbody->body.size == 1;
+            AstStat* only = guardShape ? ifStat->thenbody->body.data[0] : nullptr;
+            bool leaves = only && (only->is<AstStatReturn>() || only->is<AstStatBreak>() || only->is<AstStatContinue>());
+            if (!leaves)
+                return;
+
+            condition = ifStat->condition;
+            leave = only;
+            ifGuard = true;
+            pinned = pinnedByGuard(condition, /* continuesWhenTruthy= */ false);
+        }
+        else if (AstStatExpr* statExpr = stat->as<AstStatExpr>())
+        {
+            AstExprBinary* guard = asLeaveGuard(statExpr->expr);
+            if (!guard)
+                return;
+
+            condition = guard->left;
+            leave = guard->right;
+            pinned = pinnedByGuard(condition, guard->op == AstExprBinary::Or);
+        }
+
+        if (!pinned || !readLater(pinned->local, body, next))
+            return;
+
+        // `not cached or return cached` returns the local when it's set, on purpose
+        FindRead leaveRead;
+        leaveRead.local = pinned->local;
+        leave->visit(&leaveRead);
+        if (leaveRead.found)
+            return;
+
+        // The fix leaves when the local is empty: an `if` tests for that, `or` for the opposite
+        std::string name = pinned->local->name.value;
+        std::string flipped;
+        if (ifGuard)
+            flipped = "if " + (pinned->falsy ? "not " + name : name + " == " + pinned->value) + " then";
+        else
+            flipped = (pinned->falsy ? name : name + " ~= " + pinned->value) + " or " + toString(leave);
+
+        std::string question = flipped.size() <= kMaxSuggestionLength ? "Did you mean '" + flipped + "'?" : "Did you mean to flip this condition?";
+        emitWarning(
+            *context,
+            LintWarning::Code_UnflippedGuard,
+            condition->location,
+            "%s '%s' is always %s after this guard, but the code below uses it",
+            question.c_str(),
+            name.c_str(),
+            pinned->value
+        );
+    }
+
+    // A statement can start with `-` or a string in a Luwu file (`-n < 0 or break`), but a line starting with one still
+    // continues the expression above it, as everywhere in Lua. Indented no deeper than the statement it continues, the
+    // line reads as a new statement. `operand` is the code that starts the line, after the `-` if there is one.
+    void checkContinuation(AstExpr* continued, AstExpr* operand, unsigned int extraColumns, const std::string& reading)
+    {
+        if (statementStarts.empty() || continued->location.end.line >= operand->location.begin.line)
+            return;
+
+        if (operand->location.begin.column > statementStarts.back().column + extraColumns)
+            return;
+
+        Location line = operand->location;
+        if (line.end.line != line.begin.line)
+            line.end = line.begin;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_AmbiguousContinuation,
+            line,
+            "This line continues the expression above it as %s; to start a new statement here, end line %d with ';'",
+            reading.c_str(),
+            continued->location.end.line + 1
+        );
+    }
+
+    bool luwuFile() const
+    {
+        return !context->module || context->module->language == Language::Luwu;
+    }
+
+    bool visit(AstExprCall* node) override
+    {
+        AstExpr* argument = node->args.size == 1 ? node->args.data[0] : nullptr;
+        bool stringArgument = argument && (argument->is<AstExprConstantString>() || argument->is<AstExprInterpString>());
+        if (enabled.ambiguousContinuation && stringArgument && luwuFile())
+        {
+            std::string callee = toString(node->func);
+            std::string reading = callee.size() <= kMaxContinuationQuote ? "a call to '" + callee + "'" : "a call";
+            checkContinuation(node->func, node->args.data[0], 0, reading);
+        }
+
+        return true;
+    }
+
+    // The longest code a continuation warning quotes
+    static constexpr size_t kMaxContinuationQuote = 40;
 
     bool visitLoopBody(AstStatBlock* body)
     {
@@ -5438,6 +5754,14 @@ private:
 
     bool visit(AstExprBinary* node) override
     {
+        if (enabled.ambiguousContinuation && node->op == AstExprBinary::Sub && luwuFile())
+        {
+            std::string subtraction = toString(node->left) + " - " + toString(node->right);
+            std::string reading = subtraction.size() <= kMaxContinuationQuote ? "'" + subtraction + "'" : "a subtraction";
+            // the operand starts after the `-` and maybe a space
+            checkContinuation(node->left, node->right, 2, reading);
+        }
+
         if (!enabled.orContinue || node->op != AstExprBinary::Or || loopDepth == 0)
             return true;
 
@@ -8739,6 +9063,81 @@ public:
 private:
     LintContext* context;
 
+    // `pairs(t)` and `ipairs(t)` loop calls in a branch of an `if` whose other branch iterates `t` directly. Code that
+    // writes both forms for the same value chose `pairs` on purpose:
+    // `if tt.caniteratenormally(t) then for k, v in t do ... else for k, v in pairs(t) do ...`
+    DenseHashSet<AstExprCall*> chosenOnPurpose{nullptr};
+
+    // The values a branch iterates directly (`for k, v in t`) and its `pairs(t)`/`ipairs(t)` loop calls, outside functions
+    struct BranchLoops : AstVisitor
+    {
+        std::vector<AstExpr*> direct;
+        std::vector<AstExprCall*> viaPairs;
+
+        bool visit(AstStatForIn* node) override
+        {
+            if (node->values.size != 1)
+                return true;
+
+            AstExpr* value = unwrapGroup(node->values.data[0]);
+            AstExprCall* call = value->as<AstExprCall>();
+            AstExprGlobal* global = call ? call->func->as<AstExprGlobal>() : nullptr;
+            bool viaIterator = global && call->args.size == 1 && (global->name == "pairs" || global->name == "ipairs");
+            if (viaIterator)
+                viaPairs.push_back(call);
+            else
+                direct.push_back(value);
+            return true;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    bool visit(AstStatIf* node) override
+    {
+        // The `then` block, each `elseif`'s, and the final `else`
+        std::vector<BranchLoops> branches;
+        for (AstStatIf* clause = node; clause;)
+        {
+            branches.emplace_back();
+            clause->thenbody->visit(&branches.back());
+
+            AstStat* rest = clause->elsebody;
+            clause = rest ? rest->as<AstStatIf>() : nullptr;
+            if (rest && !clause)
+            {
+                branches.emplace_back();
+                rest->visit(&branches.back());
+            }
+        }
+
+        for (size_t i = 0; i < branches.size(); ++i)
+        {
+            for (AstExprCall* call : branches[i].viaPairs)
+                markIfIteratedDirectly(call, branches, i);
+        }
+
+        return true;
+    }
+
+    void markIfIteratedDirectly(AstExprCall* call, const std::vector<BranchLoops>& branches, size_t branch)
+    {
+        for (size_t j = 0; j < branches.size(); ++j)
+        {
+            if (j == branch)
+                continue;
+
+            for (AstExpr* value : branches[j].direct)
+            {
+                if (sameTarget(call->args.data[0], value))
+                    chosenOnPurpose.insert(call);
+            }
+        }
+    }
+
     bool visit(AstExprCall* node) override
     {
         AstExprGlobal* global = node->func->as<AstExprGlobal>();
@@ -8746,6 +9145,13 @@ private:
         const bool isIpairs = global && global->name == "ipairs";
         if (!isPairs && !isIpairs)
             return true;
+
+        if (chosenOnPurpose.contains(node))
+        {
+            for (AstExpr* arg : node->args)
+                arg->visit(this);
+            return false;
+        }
 
         IteratedValue iterated;
         std::string name = "t";
@@ -9627,11 +10033,16 @@ std::vector<LintWarning> lint(
     if (FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_OrReturnComma))
         LintOrReturnComma::process(context);
 
+    // UnflippedGuard also checks plain `if` guards, so it runs without do expressions
     LintDoExpressions::Enabled doExpressions;
-    doExpressions.returnOnNextLine = context.warningEnabled(LintWarning::Code_ReturnOnNextLine);
-    doExpressions.orContinue = context.warningEnabled(LintWarning::Code_OrContinue);
-    doExpressions.misleadingIndentation = context.warningEnabled(LintWarning::Code_MisleadingIndentation);
-    if (FFlag::LuwuDoExpr && (doExpressions.returnOnNextLine || doExpressions.orContinue || doExpressions.misleadingIndentation))
+    doExpressions.returnOnNextLine = FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_ReturnOnNextLine);
+    doExpressions.orContinue = FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_OrContinue);
+    doExpressions.misleadingIndentation = FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_MisleadingIndentation);
+    doExpressions.ambiguousContinuation = FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_AmbiguousContinuation);
+    doExpressions.unflippedGuard = context.warningEnabled(LintWarning::Code_UnflippedGuard);
+    bool anyDoExpressionLint = doExpressions.returnOnNextLine || doExpressions.orContinue || doExpressions.misleadingIndentation ||
+                               doExpressions.ambiguousContinuation || doExpressions.unflippedGuard;
+    if (anyDoExpressionLint)
         LintDoExpressions::process(context, doExpressions);
 
     if (FFlag::LuwuNonePrimitive && context.warningEnabled(LintWarning::Code_NilNoneComparison))
