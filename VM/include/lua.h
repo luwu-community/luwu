@@ -504,6 +504,11 @@ LUA_API int lua_refpool(lua_State* L, int idx);
 LUA_API void lua_unrefpool(lua_State* L, int ref);
 LUA_API int lua_getrefpool(lua_State* L, int ref);
 
+LUA_API int lua_cstackdepth(lua_State* L);
+LUA_API int lua_cstacklimit(lua_State* L);
+LUA_API void lua_cstackreserve(lua_State* L, int n);
+LUA_API void lua_cstackrelease(lua_State* L, int n);
+
 /*
 ** ===============================================================
 ** some useful macros
