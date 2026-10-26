@@ -421,6 +421,29 @@ static std::optional<std::string> classOfObject(TypeId member)
 
 // Luwu: the check that narrows a union to its members that have the key, with no change to the types: a field that tells
 // them apart (`r.ok`), `type()`, or `class.isinstance`. Nullopt when none of them can.
+// Luwu: the condition that `field`, read as `read`, has a value the members in `having` give it: `r.ok`, `not r.ok`, or
+// `arg.is == "Flag" or arg.is == "Named"`. A string field is always truthy, so it needs the comparison.
+static std::string discriminantCheck(const std::string& read, const std::string& field, const std::vector<TypeId>& having)
+{
+    std::vector<std::string> values;
+    for (TypeId member : having)
+    {
+        std::optional<std::string> value = singletonFieldValue(member, field);
+        if (value && std::find(values.begin(), values.end(), *value) == values.end())
+            values.push_back(*value);
+    }
+
+    if (values.size() == 1 && values[0] == "true")
+        return read;
+    if (values.size() == 1 && values[0] == "false")
+        return "not " + read;
+
+    std::string check;
+    for (const std::string& value : values)
+        check += (check.empty() ? "" : " or ") + read + " == " + value;
+    return check;
+}
+
 static std::optional<std::string> narrowingCheck(const MissingUnionProperty& e, const UnionType* ut, const std::vector<TypeId>& having)
 {
     std::string value = e.receiver.empty() ? "the value" : e.receiver;
@@ -429,7 +452,7 @@ static std::optional<std::string> narrowingCheck(const MissingUnionProperty& e, 
     for (TypeId option : ut->options)
         allTables = allTables && get<TableType>(follow(option));
     if (std::optional<std::string> field = allTables ? discriminantField(ut, e.missing) : std::nullopt)
-        return e.receiver.empty() ? *field : e.receiver + "." + *field;
+        return discriminantCheck(e.receiver.empty() ? *field : e.receiver + "." + *field, *field, having);
 
     if (std::optional<std::string> name = separatingTypeName(having, e.missing))
         return "type(" + value + ") == \"" + *name + "\"";

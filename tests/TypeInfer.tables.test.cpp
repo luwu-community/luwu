@@ -7837,6 +7837,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_another_modules_unio
         export type Err = { ok: false, err: string }
         export type Found = { path: string }
         export type Missing = { reason: string }
+        export type Flag = { is: "Flag", aliases: { string } }
+        export type Named = { is: "Named", aliases: { string } }
+        export type Positional = { is: "Positional" }
         return {}
     )";
 
@@ -7851,14 +7854,18 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_another_modules_unio
         local function name(): string | { name: string }
             error("unused")
         end
+        local function arg(): library.Flag | library.Named | library.Positional
+            error("unused")
+        end
         local result = run()
         local found = find()
         local named = name()
-        print(result.out, found.path, named.name)
+        local a = arg()
+        print(result.out, found.path, named.name, a.aliases)
     )";
 
     CheckResult result = getFrontend().check("game/user");
-    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
     CHECK_EQ(
         "Key 'out' is missing from 'Err' in the type 'Err | Ok'\n\n"
         "Help (telling members apart):\n"
@@ -7877,6 +7884,13 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_another_modules_unio
         "Help (telling members apart):\n"
         "  • Check 'type(named) == \"table\"' before reading 'name': only '{ name: string }' has it",
         toString(result.errors[2])
+    );
+    // a string field is always truthy, so the check compares it
+    CHECK_EQ(
+        "Key 'aliases' is missing from 'Positional' in the type 'Flag | Named | Positional'\n\n"
+        "Help (telling members apart):\n"
+        "  • Check 'a.is == \"Flag\" or a.is == \"Named\"' before reading 'aliases': only 'Flag', 'Named' have it",
+        toString(result.errors[3])
     );
 }
 
