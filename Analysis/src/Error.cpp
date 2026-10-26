@@ -16,6 +16,7 @@
 #include "Luau/UnknownVariable.h"
 
 #include <optional>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <unordered_set>
@@ -293,6 +294,68 @@ std::string noTypeNote(const std::string& name, std::optional<Location> origin)
 
 // Luwu: how to tell the members of a union of table types apart by a field some of them lack; nullopt when a member
 // that lacks it isn't a table type, which no field can be added to
+// Luwu: the singleton type `field` has in `option`, printed; nullopt when it isn't a singleton there
+static std::optional<std::string> singletonFieldValue(TypeId option, const std::string& field)
+{
+    const TableType* table = get<TableType>(follow(option));
+    if (!table)
+        return std::nullopt;
+
+    auto it = table->props.find(field);
+    if (it == table->props.end() || !it->second.readTy || !get<SingletonType>(follow(*it->second.readTy)))
+        return std::nullopt;
+    return toString(*it->second.readTy);
+}
+
+// Luwu: whether `field` is a singleton in every member of `ut` and no value of it is shared by a member lacking the key
+// (`missing`) and one that has it
+static bool separatesMembers(const UnionType* ut, const std::string& field, const std::vector<TypeId>& missing)
+{
+    std::set<std::string> lackingValues;
+    std::set<std::string> havingValues;
+    for (TypeId option : ut->options)
+    {
+        std::optional<std::string> value = singletonFieldValue(option, field);
+        if (!value)
+            return false;
+
+        bool lacks = std::find(missing.begin(), missing.end(), option) != missing.end();
+        (lacks ? lackingValues : havingValues).insert(*value);
+    }
+
+    for (const std::string& value : havingValues)
+    {
+        if (lackingValues.count(value))
+            return false;
+    }
+    return true;
+}
+
+// Luwu: a field whose value tells the members lacking the key from the rest: `ok` in
+// `{ ok: true, out: string } | { ok: false, err: string }`
+static std::optional<std::string> discriminantField(const UnionType* ut, const std::vector<TypeId>& missing)
+{
+    const TableType* first = get<TableType>(follow(ut->options.front()));
+    if (!first)
+        return std::nullopt;
+
+    for (const auto& [name, _] : first->props)
+    {
+        if (separatesMembers(ut, name, missing))
+            return name;
+    }
+    return std::nullopt;
+}
+
+// Luwu: `members` as a quoted list
+static std::string quotedTypes(const std::vector<TypeId>& members)
+{
+    std::string list;
+    for (TypeId member : members)
+        list += (list.empty() ? "'" : ", '") + toString(member) + "'";
+    return list;
+}
+
 static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionProperty& e)
 {
     const UnionType* ut = get<UnionType>(follow(e.type));
@@ -304,13 +367,21 @@ static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionPro
             return std::nullopt;
     }
 
-    std::string lacking;
-    for (TypeId missing : e.missing)
-        lacking += (lacking.empty() ? "'" : ", '") + toString(missing) + "'";
+    std::string addNil = "'" + e.key + ": nil' to " + quotedTypes(e.missing) + " so that checking '" + e.key + "' tells the members apart";
+    std::optional<std::string> discriminant = discriminantField(ut, e.missing);
+    if (!discriminant)
+        return Helpifier{e.showHelp}("telling members apart", {"Add " + addNil});
 
-    return Helpifier{e.showHelp}(
-        "telling members apart", {"Add '" + e.key + ": nil' to " + lacking + " so that checking '" + e.key + "' tells the members apart"}
-    );
+    std::vector<TypeId> having;
+    for (TypeId option : ut->options)
+    {
+        if (std::find(e.missing.begin(), e.missing.end(), option) == e.missing.end())
+            having.push_back(option);
+    }
+
+    std::string check = "Check '" + *discriminant + "' before reading '" + e.key + "': only " + quotedTypes(having) +
+                        (having.size() == 1 ? " has" : " have") + " it";
+    return Helpifier{e.showHelp}("telling members apart", {check, "Or add " + addNil});
 }
 
 struct ErrorConverter

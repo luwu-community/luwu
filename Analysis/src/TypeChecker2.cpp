@@ -6031,6 +6031,40 @@ PropertyTypes TypeChecker2::lookupProp(
     return {std::move(typesOfProp), std::move(typesMissingTheProp)};
 }
 
+// Luwu: `(Ok | Err) & { methods }` read as the union in it, when only the union decides whether `prop` is there. Reporting
+// the union names its members ('Err') instead of the normalized intersections it would otherwise print in full.
+static std::optional<MissingUnionProperty> missingFromIntersectedUnion(TypeId ty, const std::string& prop, bool showHelp)
+{
+    const IntersectionType* intersection = get<IntersectionType>(follow(ty));
+    if (!intersection)
+        return std::nullopt;
+
+    TypeId unionTy = nullptr;
+    for (TypeId part : intersection->parts)
+    {
+        const TableType* table = get<TableType>(follow(part));
+        if (table && !table->props.count(prop))
+            continue;
+        if (unionTy || !get<UnionType>(follow(part)))
+            return std::nullopt;
+        unionTy = part;
+    }
+    if (!unionTy)
+        return std::nullopt;
+
+    std::vector<TypeId> missing;
+    for (TypeId option : get<UnionType>(follow(unionTy))->options)
+    {
+        const TableType* table = get<TableType>(follow(option));
+        if (!table)
+            return std::nullopt;
+        if (!table->props.count(prop))
+            missing.push_back(option);
+    }
+    if (missing.empty())
+        return std::nullopt;
+    return MissingUnionProperty{unionTy, std::move(missing), prop, showHelp};
+}
 
 bool TypeChecker2::checkIndexTypeFromType(
     TypeId tableTy,
@@ -6063,7 +6097,10 @@ bool TypeChecker2::checkIndexTypeFromType(
     if (propTypes.foundMissingProp())
     {
         if (propTypes.foundOneProp())
-            reportError(MissingUnionProperty{tableTy, propTypes.missingProp, prop, helpifier.enabled}, location);
+        {
+            std::optional<MissingUnionProperty> fromUnion = missingFromIntersectedUnion(tableTy, prop, helpifier.enabled);
+            reportError(fromUnion.value_or(MissingUnionProperty{tableTy, propTypes.missingProp, prop, helpifier.enabled}), location);
+        }
         // For class LValues, we don't want to report an extension error,
         // because extern typeArguments come into being with full knowledge of their
         // shape. We instead want to report the unknown property error of

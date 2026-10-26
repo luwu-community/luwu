@@ -7827,4 +7827,31 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_union_members_lack_says_how_to_
     );
 }
 
+// Luwu: a result type with methods, `(Ok | Err) & { methods }`, names the union's members, and a singleton field that
+// tells them apart is the check to make first
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_an_intersected_union_lack_names_the_members")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Ok = { ok: true, out: string }
+        type Err = { ok: false, err: string }
+        type Result = (Ok | Err) & { unwrap: (self: Result) -> string }
+        local function run(): Result
+            error("unused")
+        end
+        local result = run()
+        print(result.out)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Key 'out' is missing from 'Err' in the type 'Err | Ok'\n\n"
+        "Help (telling members apart):\n"
+        "  • Check 'ok' before reading 'out': only 'Ok' has it\n"
+        "  • Or add 'out: nil' to 'Err' so that checking 'out' tells the members apart",
+        toString(result.errors[0])
+    );
+}
+
 TEST_SUITE_END();
