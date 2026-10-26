@@ -8628,8 +8628,103 @@ private:
     }
 };
 
+// Luwu: how many union or intersection members deep classifyIterated looks. Types can be cyclic.
+constexpr int kMaxIterationTypeDepth = 8;
+
+// Luwu: what iterating a value directly (`for k, v in t`) does differently from `pairs(t)` and `ipairs(t)`, from its type.
+// A union or intersection has a fact when any of its members does.
+struct IteratedValue
+{
+    // `for k, v in t` calls `t`: its metatable has `__call` and no `__iter`
+    bool callsIt = false;
+    // `pairs` and `ipairs` skip its `__iter`
+    bool hasIter = false;
+    // An object or extern type, which `pairs` and `ipairs` can't iterate at all
+    bool notATable = false;
+    // Keys `ipairs` doesn't visit and `for i, v in t` would: named properties, or an indexer whose keys aren't numbers
+    bool hasNonArrayKeys = false;
+    // Elements that can be `nil`, where `ipairs` stops and `for i, v in t` doesn't
+    bool hasOptionalElements = false;
+};
+
+static void classifyIterated(TypeId ty, IteratedValue& result, int depth)
+{
+    if (depth > kMaxIterationTypeDepth)
+        return;
+
+    ty = follow(ty);
+
+    std::vector<TypeId> members;
+    if (const UnionType* ut = get<UnionType>(ty))
+        members = ut->options;
+    else if (const IntersectionType* it = get<IntersectionType>(ty))
+        members = it->parts;
+
+    if (!members.empty())
+    {
+        for (TypeId member : members)
+            classifyIterated(member, result, depth + 1);
+        return;
+    }
+
+    if (get<ExternType>(ty))
+    {
+        result.notATable = true;
+        return;
+    }
+
+    const TableType* table = get<TableType>(ty);
+    if (const MetatableType* mtv = get<MetatableType>(ty))
+    {
+        table = get<TableType>(follow(mtv->table));
+        if (const TableType* metamethods = get<TableType>(follow(mtv->metatable)))
+        {
+            const bool hasIter = metamethods->props.count("__iter") > 0;
+            result.hasIter |= hasIter;
+            result.callsIt |= !hasIter && metamethods->props.count("__call") > 0;
+        }
+    }
+
+    if (!table)
+        return;
+
+    if (!table->props.empty())
+        result.hasNonArrayKeys = true;
+
+    if (table->indexer)
+    {
+        if (!isNumber(follow(table->indexer->indexType)))
+            result.hasNonArrayKeys = true;
+        if (isOptional(table->indexer->indexResultType))
+            result.hasOptionalElements = true;
+    }
+}
+
+// Luwu: `a` or `a.b.c`, how a message names the iterated value in the code it suggests; "t" for anything else
+static std::string iteratedName(AstExpr* expr)
+{
+    if (AstExprGroup* group = expr->as<AstExprGroup>())
+        return iteratedName(group->expr);
+    if (AstExprLocal* local = expr->as<AstExprLocal>())
+        return local->local->name.value;
+    if (AstExprGlobal* global = expr->as<AstExprGlobal>())
+        return global->name.value;
+    if (AstExprIndexName* index = expr->as<AstExprIndexName>(); index && index->op == '.')
+    {
+        std::string base = iteratedName(index->expr);
+        if (base != "t")
+            return base + "." + index->index.value;
+    }
+    return "t";
+}
+
 // Luwu: `pairs` and `ipairs`, which generalized iteration (`for k, v in t`) replaces. Each is its own lint so a module
-// can keep using one without turning off DeprecatedApi or the other.
+// can keep using one without turning off DeprecatedApi or the other. A call is only reported where iterating the value
+// directly does the same thing, or where `pairs` is the likely mistake: it skips an `__iter` the value was made to be
+// iterated with. Code that reads raw entries on purpose (a pretty printer) is told how to silence it, since a value
+// typed as a plain table can still have a metatable at runtime. Nothing is suggested for a table with `__call`
+// (iterating it calls it), an object or extern type (neither form iterates it), or, for `ipairs`, a table with other
+// keys or `nil` elements.
 class LintLuaIterators : AstVisitor
 {
 public:
@@ -8644,34 +8739,94 @@ public:
 private:
     LintContext* context;
 
+    bool visit(AstExprCall* node) override
+    {
+        AstExprGlobal* global = node->func->as<AstExprGlobal>();
+        const bool isPairs = global && global->name == "pairs";
+        const bool isIpairs = global && global->name == "ipairs";
+        if (!isPairs && !isIpairs)
+            return true;
+
+        IteratedValue iterated;
+        std::string name = "t";
+        if (node->args.size > 0)
+        {
+            AstExpr* arg = node->args.data[0];
+            name = iteratedName(arg);
+            if (std::optional<TypeId> ty = context->getType(arg))
+                classifyIterated(*ty, iterated, 0);
+        }
+
+        // Iterating it directly wouldn't iterate its entries, so there's nothing to suggest
+        const bool suggestible = !iterated.callsIt && !iterated.notATable;
+        const bool ipairsMeansIt = isIpairs && (iterated.hasNonArrayKeys || iterated.hasOptionalElements);
+        if (suggestible && iterated.hasIter)
+            reportSkippedIter(global, name);
+        else if (suggestible && !ipairsMeansIt)
+            report(global, name);
+
+        for (AstExpr* arg : node->args)
+            arg->visit(this);
+        return false;
+    }
+
     bool visit(AstExprGlobal* node) override
+    {
+        report(node, "t");
+        return true;
+    }
+
+    void report(AstExprGlobal* node, const std::string& name)
     {
         if (node->name == "pairs")
             emitWarning(
                 *context,
                 LintWarning::Code_Pairs,
                 node->location,
-                "'pairs' is deprecated; use 'for key, value in t do' directly.\n"
+                "'pairs' is deprecated; use 'for key, value in %s do' directly.\n"
                 "\n"
                 "Help (pairs):\n"
-                "  - In Luau and Luwu you can directly iterate over tables, objects, or extern types (generalized iteration)\n"
-                "  - Unlike 'pairs', generalized iteration uses the value's '__iter' metamethod when it has one\n"
-                "  - If you want to skip '__iter' or '__call', add '@[nolint(Pairs)]' or '--!nolint LuaIterators' to silence"
+                "  - In Luau and Luwu you can directly iterate over tables (generalized iteration)\n"
+                "  - Unlike 'pairs', generalized iteration uses the '__iter' metamethod of a table, object or extern type when it "
+                "has one\n"
+                "  - To read a table's own entries on purpose (a pretty printer, a serializer), add '--@[nolint(Pairs)]' above "
+                "it or '--!nolint LuaIterators'",
+                name.c_str()
             );
         else if (node->name == "ipairs")
             emitWarning(
                 *context,
                 LintWarning::Code_Ipairs,
                 node->location,
-                "'ipairs' is deprecated; use 'for index, value in t do' directly.\n"
+                "'ipairs' is deprecated; use 'for index, value in %s do' directly.\n"
                 "\n"
                 "Help (ipairs):\n"
-                "  - In Luau and Luwu you can directly iterate over tables, objects, or extern types (generalized iteration)\n"
+                "  - In Luau and Luwu you can directly iterate over tables (generalized iteration)\n"
                 "  - Unlike 'ipairs', generalized iteration doesn't stop at the first 'nil'\n"
-                "  - If you want to stop at the first nil, add '@[nolint(Ipairs)]' or '--!nolint LuaIterators' to silence"
+                "  - If you want to stop at the first nil, add '--@[nolint(Ipairs)]' above it or '--!nolint LuaIterators' to silence",
+                name.c_str()
             );
+    }
 
-        return true;
+    void reportSkippedIter(AstExprGlobal* node, const std::string& name)
+    {
+        const bool isPairs = node->name == "pairs";
+        emitWarning(
+            *context,
+            isPairs ? LintWarning::Code_Pairs : LintWarning::Code_Ipairs,
+            node->location,
+            "'%s' skips the '__iter' of '%s'; iterate it with 'for %s, value in %s do'.\n"
+            "\n"
+            "Help (%s):\n"
+            "  - To read its own entries on purpose (a pretty printer, a serializer), add '--@[nolint(%s)]' above it or "
+            "'--!nolint LuaIterators'",
+            node->name.value,
+            name.c_str(),
+            isPairs ? "key" : "index",
+            name.c_str(),
+            node->name.value,
+            isPairs ? "Pairs" : "Ipairs"
+        );
     }
 };
 
