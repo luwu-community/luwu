@@ -251,16 +251,47 @@ static const AstAttr* findLintAttributeArgumentsAt(const std::vector<AstNode*>& 
     return result;
 }
 
+// Luwu: in `--@[nolint(...)]` or `--@[lint(...)]`, the lint names inside the parentheses that aren't listed yet. `typed`
+// is the comment's content up to the cursor.
+static AutocompleteEntryMap autocompleteAttributeComment(const std::string& typed)
+{
+    const bool nolint = typed.rfind("@[nolint(", 0) == 0;
+    const bool lint = typed.rfind("@[lint(", 0) == 0;
+    const size_t open = typed.find('(');
+    const bool inList = (nolint || lint) && typed.find(')') == std::string::npos;
+    if (!inList)
+        return {};
+
+    // the names before the one being typed, separated by commas
+    std::unordered_set<std::string> written;
+    const std::string list = typed.substr(open + 1);
+    size_t start = 0;
+    for (size_t comma = list.find(','); comma != std::string::npos; comma = list.find(',', start))
+    {
+        const std::string item = list.substr(start, comma - start);
+        const size_t first = item.find_first_not_of(" \t");
+        if (first != std::string::npos)
+            written.insert(item.substr(first, item.find_last_not_of(" \t") - first + 1));
+        start = comma + 1;
+    }
+
+    return autocompleteLintNames(written, nolint, AutocompleteEntryKind::HotComment);
+}
+
 // Luwu: in a comment directive, what can be written at `position`: a directive name after `--!`, a lint name after
 // `--!nolint` or `--!lint`, and an optimization level after `--!optimize`
 static AutocompleteEntryMap autocompleteHotComment(const HotComment& hotComment, Position position)
 {
-    // `content` starts after the `--!` and has no trailing whitespace, so a cursor past its end follows a space
-    const unsigned contentStart = hotComment.location.begin.column + 3;
+    // `content` starts after the `--!` (after the `--` for `--@[nolint(...)]`, whose content keeps its '@') and has no
+    // trailing whitespace, so a cursor past its end follows a space
+    const unsigned contentStart = hotComment.location.begin.column + (hotComment.attribute ? 2 : 3);
     const size_t offset = position.column > contentStart ? position.column - contentStart : 0;
     std::string typed = hotComment.content.substr(0, std::min(offset, hotComment.content.size()));
     if (offset > hotComment.content.size())
         typed += ' ';
+
+    if (hotComment.attribute)
+        return autocompleteAttributeComment(typed);
 
     AutocompleteEntryMap result;
     const size_t space = typed.find_first_of(" \t");
