@@ -97,6 +97,28 @@ print(_)
     CHECK_EQ(result.warnings[0].text, "Placeholder value '_' is read here; consider using a named variable");
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): `_.{x, y}` names the destructured value `_` for readers who'd rather not
+// write a bare `.{x, y}`; reading its fields is the pattern's job, not a read of the placeholder
+TEST_CASE_FIXTURE(Fixture, "PlaceholderNamedPattern")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    LintResult result = lint(R"(
+local points = { { x = 1, y = 2 } }
+for _, _.{x, y} in points do
+    print(x + y)
+end
+const _.{x} = points[1]
+print(x)
+local _ = 5
+return _
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].text, "Placeholder value '_' is read here; consider using a named variable");
+    CHECK_EQ(result.warnings[0].location.begin.line, 8);
+}
+
 TEST_CASE_FIXTURE(Fixture, "PlaceholderWrite")
 {
     LintResult result = lint(R"(

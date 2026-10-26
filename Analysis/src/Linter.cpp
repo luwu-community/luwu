@@ -372,6 +372,13 @@ private:
         return true;
     }
 
+    // Luwu Destructuring (rfcs/destructuring.md): `local x = _.x`, desugared from `_.{x}`, reads a field of the
+    // pattern's name, which the source doesn't read
+    bool visit(AstStatLocal* node) override
+    {
+        return !node->isDesugaredField();
+    }
+
     bool visit(AstStatAssign* node) override
     {
         for (size_t i = 0; i < node->vars.size; ++i)
@@ -909,6 +916,11 @@ private:
 
     void reportUsedLocal(AstLocal* local, const Local& info)
     {
+        // Luwu Destructuring (rfcs/destructuring.md): a `_` is only used through its pattern (`for _, _.{x} in t`), and
+        // PlaceholderRead reports any other read
+        if (local->name == context->placeholder)
+            return;
+
         if (AstLocal* shadow = local->shadow)
         {
             // LintDuplicateFunctions will catch this.
