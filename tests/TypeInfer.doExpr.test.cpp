@@ -309,6 +309,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_or_leave")
     checkTypewriting(*this, kTypewriterBefore, "local function f(): number?\n    local n = maybe() or return nil\n    return n + 1\nend", kTypewriterAfter);
     checkTypewriting(*this, kTypewriterBefore, "local function f(): number\n    local n = maybe()\n    n or return 0\n    return n\nend", kTypewriterAfter);
     checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    local n = maybe() or continue\n    print(v + n)\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    #nums >= v or continue\n    print(v)\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    v > 2 or v == 1 and continue\n    print(v)\nend", kTypewriterAfter);
 }
 
 TEST_SUITE_END();

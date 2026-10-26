@@ -111,9 +111,10 @@ struct ConstraintGenerator
     };
     std::vector<GiveContext> giveContexts;
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): for `x or return`, keyed by its right operand, what holds when the
-    // expression completes: `x`'s truthiness refinement. A statement whose whole value (or a declaration's or
-    // assignment's value) is such an expression applies it to the code after it (applyOrLeaveRefinements).
+    // Luwu Do Expressions (rfcs/do-expressions.md): for `x or return` and `x and return`, keyed by the right operand, what
+    // holds when the expression completes: `x`'s truthiness refinement, or its negation after `and`. A statement whose
+    // whole value (or a declaration's or assignment's value) is such an expression applies it to the code after it
+    // (applyOrLeaveRefinements).
     DenseHashMap<const AstExpr*, RefinementId> orLeaveRefinements{nullptr};
     void applyOrLeaveRefinements(const ScopePtr& scope, const AstArray<AstExpr*>& values);
 

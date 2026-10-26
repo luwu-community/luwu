@@ -668,4 +668,42 @@ do
     assert(h(nil) == "left" and calls == 2)
 end
 
+-- leave statements that start with a value, and leave forms after `and`
+do
+    local out = {}
+    local t = { 1, 2 }
+    for i = 1, 4 do
+        #t >= i or continue
+        not (i == 2) or continue
+        table.insert(out, i)
+    end
+    assert(table.concat(out, ",") == "1")
+
+    out = {}
+    for i = 1, 5 do
+        i == 4 and break
+        local skip, keep = i == 2, i == 1
+        keep or skip and continue
+        table.insert(out, i)
+    end
+    assert(table.concat(out, ",") == "1,3")
+
+    -- `(continue)` is the shorthand too, in any of its positions
+    out = {}
+    for i = 1, 4 do
+        const v = do
+            give if i == 2 then (continue) else i
+        const w = v ~= 3 and v or (continue)
+        table.insert(out, w)
+    end
+    assert(table.concat(out, ",") == "1,4")
+
+    -- `x and return v` returns when `x` is truthy, and the code after it sees `x` falsy
+    local function f(x)
+        x and return "x"
+        return "none"
+    end
+    assert(f(1) == "x" and f(nil) == "none" and f(false) == "none")
+end
+
 return "OK"

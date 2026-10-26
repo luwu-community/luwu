@@ -1844,10 +1844,24 @@ public:
     bool alwaysLeaves() const;
 };
 
-// Luwu Do Expressions (rfcs/do-expressions.md): `expr` as `x or <leave>`, an `or` whose right operand (parenthesized
-// or not) always leaves (AstExprDo::alwaysLeaves), or null. As a whole statement, or as a declaration's or assignment's
-// value, it only completes when `x` is truthy.
+// Luwu Do Expressions (rfcs/do-expressions.md): `expr` without the parentheses around it.
+AstExpr* withoutGroups(AstExpr* expr);
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `operand` (parenthesized or not) as a `do` expression that always leaves
+// (AstExprDo::alwaysLeaves), or null.
+AstExprDo* asLeave(AstExpr* operand);
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `expr` as `x or <leave>` or `x and <leave>` (asLeave), or null. As a
+// whole statement, or as a declaration's or assignment's value, `x or <leave>` only completes when `x` is truthy, and
+// `x and <leave>` when it's falsy.
+class AstExprBinary* asLeaveGuard(AstExpr* expr);
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `expr` as `x or <leave>` (asLeaveGuard), or null.
 class AstExprBinary* asOrLeave(AstExpr* expr);
+
+// Luwu Do Expressions (rfcs/do-expressions.md): can `expr` be a statement? It can when it is a leave guard
+// (asLeaveGuard), or an `or` or `and` whose right operand can be one: `x or y and continue`.
+bool isLeaveStatement(AstExpr* expr);
 
 // Luwu Table Comprehensions (rfcs/table-comprehensions.md): `{ for ... in ... when ... give item }`, a table built by
 // a loop. It is stored as the loop it runs: `loop` is an ordinary AstStatFor or AstStatForIn, so every pass that

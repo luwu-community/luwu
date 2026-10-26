@@ -178,8 +178,9 @@ public:
     void nextline();
 
     Lexeme lookahead();
-    // Luwu: the lexeme after lookahead(), for the few places one token of lookahead can't decide.
+    // Luwu: the lexeme after lookahead(), and the one after that, for the few places one token of lookahead can't decide.
     Lexeme lookaheadSecond();
+    Lexeme lookaheadThird();
 
     const Lexeme& current() const
     {
@@ -205,6 +206,9 @@ public:
     std::optional<Lexer::BraceType> peekBraceStackTop();
 
 private:
+    // Luwu: the lexeme `count` lexemes after the current one, for count >= 2 (lookahead() is the fast path for 1)
+    Lexeme lookaheadBy(unsigned int count);
+
     char peekch() const;
     char peekch(unsigned int lookahead) const;
 

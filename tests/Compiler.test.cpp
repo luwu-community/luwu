@@ -1529,6 +1529,16 @@ TEST_CASE("OrLeaveStatement")
         compileFunction0("for _, v in t do v or continue print(v) end"),
         compileFunction0("for _, v in t do if not v then continue end print(v) end")
     );
+
+    // `x and break` is `if x then break end`, and a leave statement on the right becomes the `if` body
+    CHECK_EQ(
+        compileFunction0("for _, v in t do v.done and break print(v) end"),
+        compileFunction0("for _, v in t do if v.done then break end print(v) end")
+    );
+    CHECK_EQ(
+        compileFunction0("for _, v in t do v.a or v.b and continue print(v) end"),
+        compileFunction0("for _, v in t do if not v.a then if v.b then continue end end print(v) end")
+    );
 }
 
 TEST_CASE("IfLocal")
