@@ -4,6 +4,8 @@
 #include "Luau/Clone.h"
 #include "Luau/Common.h"
 #include "Luau/FileResolver.h"
+#include "Luau/MismatchExplanation.h"
+#include "Luau/MismatchWording.h"
 #include "Luau/Typos.h"
 #include "Luau/NotNull.h"
 #include "Luau/Scope.h"
@@ -157,7 +159,7 @@ std::string mismatchNotationLegend(uint8_t notation, const Helpifier& helpifier)
     std::string_view parts[kMaxLegendParts];
     size_t count = 0;
     if (notation & MismatchNotationUnionMember)
-        parts[count++] = "'#2' is the 2nd member of a union, counting in the order printed";
+        parts[count++] = "'#2' is the 2nd variant of a union, counting in the order printed";
     if (notation & MismatchNotationOverload)
         parts[count++] = "'#2' is the 2nd overload of a function, counting in the order printed";
     if (notation & MismatchNotationIndexer)
@@ -465,9 +467,34 @@ static std::optional<std::string> narrowingCheck(const MissingUnionProperty& e, 
 
 // Luwu: how to read a key only some members of a union have. Narrowing comes first because it needs no change to the
 // types; changing them is only suggested for types declared in the module being checked.
+// Luwu: the union a missing key is reported in: the type itself, or the one union in an intersection that adds methods
+// to it (`(Ok | Err) & { methods }`). Null when there's no such union.
+static TypeId unionIn(TypeId ty)
+{
+    ty = follow(ty);
+    if (get<UnionType>(ty))
+        return ty;
+
+    const IntersectionType* intersection = get<IntersectionType>(ty);
+    if (!intersection)
+        return nullptr;
+
+    TypeId found = nullptr;
+    for (TypeId part : intersection->parts)
+    {
+        if (!get<UnionType>(follow(part)))
+            continue;
+        if (found)
+            return nullptr;
+        found = follow(part);
+    }
+    return found;
+}
+
 static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionProperty& e)
 {
-    const UnionType* ut = get<UnionType>(follow(e.type));
+    TypeId unionTy = unionIn(e.type);
+    const UnionType* ut = unionTy ? get<UnionType>(unionTy) : nullptr;
     if (!ut || !e.showHelp)
         return std::nullopt;
 
@@ -480,24 +507,23 @@ static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionPro
     if (having.empty())
         return std::nullopt;
 
-    std::string only = quotedTypes(having) + (having.size() == 1 ? " has" : " have") + " it";
     std::vector<std::string> bullets;
     if (std::optional<std::string> check = narrowingCheck(e, ut, having))
-        bullets.push_back("Check '" + *check + "' before reading '" + e.key + "': only " + only);
+        bullets.push_back("Make sure this is the correct variant by checking '" + *check + "' before reading '" + e.key + "'");
 
     if (e.membersDeclaredHere)
     {
-        std::string addNil = "'" + e.key + ": nil' to " + quotedTypes(e.missing) + " so that checking '" + e.key + "' tells the members apart";
+        std::string addNil = "'" + e.key + ": nil' to " + quotedTypes(e.missing) + " so that checking '" + e.key + "' tells the variants apart";
         bullets.push_back((bullets.empty() ? "Add " : "Or add ") + addNil);
     }
 
     if (bullets.empty())
     {
         std::string value = e.receiver.empty() ? "the value" : "'" + e.receiver + "'";
-        bullets.push_back("Narrow " + value + " to " + quotedTypes(having) + " before reading '" + e.key + "': only " + only);
+        bullets.push_back("Narrow " + value + " to a variant that has '" + e.key + "' before reading it");
     }
     std::vector<std::string_view> views(bullets.begin(), bullets.end());
-    return Helpifier{e.showHelp}("telling members apart", views.data(), views.size());
+    return Helpifier{e.showHelp}("telling variants apart", views.data(), views.size());
 }
 
 struct ErrorConverter
@@ -1175,18 +1201,17 @@ struct ErrorConverter
     {
         std::string ss = "Key '" + e.key + "' is missing from ";
 
-        bool first = true;
-        for (auto ty : e.missing)
-        {
-            if (first)
-                first = false;
-            else
-                ss += ", ";
-
-            ss += "'" + toString(ty) + "'";
-        }
-
-        ss += " in the type '" + toString(e.type) + "'";
+        // Luwu: a named union is printed by its name and a count of the variants lacking the key, and so is a union too
+        // long for one line. The reader finds its variants in the hover over the value.
+        std::string variants = std::to_string(e.missing.size()) + (e.missing.size() == 1 ? " variant" : " variants");
+        TypeId unionTy = unionIn(e.type);
+        std::string printed = toString(unionTy ? unionTy : e.type);
+        if (std::optional<std::string> name = aliasName(e.type))
+            ss += variants + " of the union '" + *name + "'";
+        else if (printed.size() > MismatchWording::kLineWidth)
+            ss += variants + " of the union";
+        else
+            ss += quotedTypes(e.missing) + " in the type '" + printed + "'";
 
         // Luwu: a table type is a shape, so reading a field a member doesn't declare can raise (a class object, a vector
         // or an extern value fits it). Declaring the field as `nil` makes testing it tell the members apart.

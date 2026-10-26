@@ -85,6 +85,9 @@ struct MismatchExplanation
 // functions, classes), when no failing place can be found in two structured types, and when
 // everything found involves an error type, so the caller can fall back to the subtyping test's own
 // reasonings.
+// Luwu (helpful subtyping errors): the name the reader wrote for a type (`type Arg = Flag | Named`), if it has one
+std::optional<std::string> aliasName(TypeId ty);
+
 std::optional<MismatchExplanation> explainMismatch(
     TypeId given,
     TypeId expected,

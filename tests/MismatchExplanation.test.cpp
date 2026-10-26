@@ -229,7 +229,7 @@ TEST_CASE_FIXTURE(ExplainFixture, "huge_given_union_shares_one_budget" * doctest
     REQUIRE(explanation);
     INFO(explanation->reason);
     // Members the budget didn't reach may fit, so it doesn't claim that none do.
-    CHECK(explanation->reason.find("Not every member of the union is compatible with the expected type:") != std::string::npos);
+    CHECK(explanation->reason.find("Not every variant of the union is compatible with the expected type:") != std::string::npos);
     CHECK(explanation->reason.find(" more") != std::string::npos);
     CHECK(explanation->reason.size() < 20000);
 }
@@ -381,8 +381,8 @@ TEST_CASE_FIXTURE(ExplainFixture, "long_aliased_union_lists_only_members_it_refe
     INFO(*explanation->givenExpansion);
 
     // Three detailed, five named, and the rest counted.
-    CHECK(explanation->reason.find("...and 32 more members") != std::string::npos);
-    CHECK(explanation->givenExpansion->rfind("a union of 40 members, including:\n#1 = { a: number, b: number, t0: number }\n", 0) == 0);
+    CHECK(explanation->reason.find("...and 32 more variants") != std::string::npos);
+    CHECK(explanation->givenExpansion->rfind("a union of 40 variants, including:\n#1 = { a: number, b: number, t0: number }\n", 0) == 0);
     CHECK(countLines(*explanation->givenExpansion, "#") == 8);
     CHECK(explanation->givenExpansion->find("\n#8 = ") != std::string::npos);
     CHECK(explanation->givenExpansion->find("\n#9 = ") == std::string::npos);
@@ -941,7 +941,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "union_members_the_message_doesnt_refer_to_ar
         "but was given\n"
         "    type Drop = … | { id: string, weight: number } | … (2 more)\n"
         "\n"
-        "No member of 'Drop' is compatible with the expected type:\n"
+        "No variant of 'Drop' is compatible with the expected type:\n"
         "lastDrop#2 = { id: string, weight: number } is almost what we expected, but:\n"
         "  • missing property 'lastDrop.count: number'"
     );

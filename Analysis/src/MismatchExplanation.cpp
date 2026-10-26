@@ -29,6 +29,28 @@ namespace Luau
 
 using namespace MismatchWording;
 
+// The name the reader wrote for this type, if it has one.
+std::optional<std::string> aliasName(TypeId ty)
+{
+    ty = follow(ty);
+    if (const TableType* table = get<TableType>(ty))
+    {
+        // An instantiated generic (`Box<string>`) would lose its arguments if printed by name alone. A
+        // `syntheticName` is the name of the local a table literal was assigned to, not a type name.
+        if (table->name && table->instantiatedTypeParams.empty() && table->instantiatedTypePackParams.empty())
+            return table->name;
+        return std::nullopt;
+    }
+    // A metatable type's alias name can only be stored as its `syntheticName`.
+    if (const MetatableType* metatable = get<MetatableType>(ty))
+        return metatable->syntheticName;
+    if (const UnionType* u = get<UnionType>(ty))
+        return u->name;
+    if (const IntersectionType* i = get<IntersectionType>(ty))
+        return i->name;
+    return std::nullopt;
+}
+
 namespace
 {
 
@@ -146,28 +168,6 @@ std::optional<TypeId> indexTableOf(TypeId ty)
     if (!get<TableType>(index) && !get<MetatableType>(index))
         return std::nullopt;
     return index;
-}
-
-// The name the reader wrote for this type, if it has one.
-std::optional<std::string> aliasName(TypeId ty)
-{
-    ty = follow(ty);
-    if (const TableType* table = get<TableType>(ty))
-    {
-        // An instantiated generic (`Box<string>`) would lose its arguments if printed by name alone. A
-        // `syntheticName` is the name of the local a table literal was assigned to, not a type name.
-        if (table->name && table->instantiatedTypeParams.empty() && table->instantiatedTypePackParams.empty())
-            return table->name;
-        return std::nullopt;
-    }
-    // A metatable type's alias name can only be stored as its `syntheticName`.
-    if (const MetatableType* metatable = get<MetatableType>(ty))
-        return metatable->syntheticName;
-    if (const UnionType* u = get<UnionType>(ty))
-        return u->name;
-    if (const IntersectionType* i = get<IntersectionType>(ty))
-        return i->name;
-    return std::nullopt;
 }
 
 // A table literal held in a local, which prints as the local's name: its `syntheticName` isn't a type.
@@ -1617,7 +1617,7 @@ bool describeEmptyTableForUnion(
         ++shownMembers;
     }
     if (hiddenMembers > 0)
-        lines.push_back(andMore(hiddenMembers, true, "members"));
+        lines.push_back(andMore(hiddenMembers, true, "variants"));
     return true;
 }
 
@@ -2111,7 +2111,7 @@ std::optional<MismatchExplanation> explainOnce(
                 }
 
                 if (unmentioned > 0)
-                    lines.push_back(andMore(unmentioned, false, "members"));
+                    lines.push_back(andMore(unmentioned, false, "variants"));
             }
 
             if (nilFails)

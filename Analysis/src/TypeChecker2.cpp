@@ -6031,8 +6031,8 @@ PropertyTypes TypeChecker2::lookupProp(
     return {std::move(typesOfProp), std::move(typesMissingTheProp)};
 }
 
-// Luwu: `(Ok | Err) & { methods }` read as the union in it, when only the union decides whether `prop` is there. Reporting
-// the union names its members ('Err') instead of the normalized intersections it would otherwise print in full.
+// Luwu: `(Ok | Err) & { methods }` read as the union in it, when only the union decides whether `prop` is there. The
+// missing members are the union's own ('Err') instead of the normalized intersections, which print in full.
 static std::optional<MissingUnionProperty> missingFromIntersectedUnion(TypeId ty, const std::string& prop, bool showHelp)
 {
     const IntersectionType* intersection = get<IntersectionType>(follow(ty));
@@ -6063,7 +6063,7 @@ static std::optional<MissingUnionProperty> missingFromIntersectedUnion(TypeId ty
     }
     if (missing.empty())
         return std::nullopt;
-    return MissingUnionProperty{unionTy, std::move(missing), prop, showHelp};
+    return MissingUnionProperty{ty, std::move(missing), prop, showHelp};
 }
 
 bool TypeChecker2::checkIndexTypeFromType(

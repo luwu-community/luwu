@@ -7821,8 +7821,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_union_members_lack_says_how_to_
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         "Key 'message' is missing from 'Err' in the type 'Err | Ok'\n\n"
-        "Help (telling members apart):\n"
-        "  • Add 'message: nil' to 'Err' so that checking 'message' tells the members apart",
+        "Help (telling variants apart):\n"
+        "  • Add 'message: nil' to 'Err' so that checking 'message' tells the variants apart",
         toString(result.errors[0])
     );
 }
@@ -7840,6 +7840,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_another_modules_unio
         export type Flag = { is: "Flag", aliases: { string } }
         export type Named = { is: "Named", aliases: { string } }
         export type Positional = { is: "Positional" }
+        export type Arg = Flag | Named | Positional
         return {}
     )";
 
@@ -7854,7 +7855,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_another_modules_unio
         local function name(): string | { name: string }
             error("unused")
         end
-        local function arg(): library.Flag | library.Named | library.Positional
+        local function arg(): library.Arg
             error("unused")
         end
         local result = run()
@@ -7868,34 +7869,34 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_another_modules_unio
     LUAU_REQUIRE_ERROR_COUNT(4, result);
     CHECK_EQ(
         "Key 'out' is missing from 'Err' in the type 'Err | Ok'\n\n"
-        "Help (telling members apart):\n"
-        "  • Check 'result.ok' before reading 'out': only 'Ok' has it",
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'result.ok' before reading 'out'",
         toString(result.errors[0])
     );
     // nothing tells these apart, and the types aren't the reader's to change
     CHECK_EQ(
         "Key 'path' is missing from 'Missing' in the type 'Found | Missing'\n\n"
-        "Help (telling members apart):\n"
-        "  • Narrow 'found' to 'Found' before reading 'path': only 'Found' has it",
+        "Help (telling variants apart):\n"
+        "  • Narrow 'found' to a variant that has 'path' before reading it",
         toString(result.errors[1])
     );
     CHECK_EQ(
         "Key 'name' is missing from 'string' in the type 'string | { name: string }'\n\n"
-        "Help (telling members apart):\n"
-        "  • Check 'type(named) == \"table\"' before reading 'name': only '{ name: string }' has it",
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'type(named) == \"table\"' before reading 'name'",
         toString(result.errors[2])
     );
-    // a string field is always truthy, so the check compares it
+    // a named union is counted rather than printed, and a string field is always truthy, so the check compares it
     CHECK_EQ(
-        "Key 'aliases' is missing from 'Positional' in the type 'Flag | Named | Positional'\n\n"
-        "Help (telling members apart):\n"
-        "  • Check 'a.is == \"Flag\" or a.is == \"Named\"' before reading 'aliases': only 'Flag', 'Named' have it",
+        "Key 'aliases' is missing from 1 variant of the union 'Arg'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'a.is == \"Flag\" or a.is == \"Named\"' before reading 'aliases'",
         toString(result.errors[3])
     );
 }
 
-// Luwu: a result type with methods, `(Ok | Err) & { methods }`, names the union's members, and a singleton field that
-// tells them apart is the check to make first
+// Luwu: a result type with methods, `(Ok | Err) & { methods }`, is named by its alias, and a singleton field that tells
+// its variants apart is the check to make first
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_an_intersected_union_lack_names_the_members")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
@@ -7913,10 +7914,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_an_intersected_union
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
-        "Key 'out' is missing from 'Err' in the type 'Err | Ok'\n\n"
-        "Help (telling members apart):\n"
-        "  • Check 'result.ok' before reading 'out': only 'Ok' has it\n"
-        "  • Or add 'out: nil' to 'Err' so that checking 'out' tells the members apart",
+        "Key 'out' is missing from 1 variant of the union 'Result'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'result.ok' before reading 'out'\n"
+        "  • Or add 'out: nil' to 'Err' so that checking 'out' tells the variants apart",
         toString(result.errors[0])
     );
 }

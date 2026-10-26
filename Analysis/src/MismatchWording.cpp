@@ -805,7 +805,7 @@ std::string couldBeNilHeader(const std::string& subject)
 
 std::string unionMembersHeader(bool noneFit, const std::string& unionName, const std::string& target)
 {
-    return (noneFit ? "No member of " : "Not every member of ") + unionName + " is compatible with " + target + ":";
+    return (noneFit ? "No variant of " : "Not every variant of ") + unionName + " is compatible with " + target + ":";
 }
 
 std::string scalarsHeader(const std::vector<std::string>& names, const std::string& expected, bool article)
@@ -927,13 +927,13 @@ Line couldBeNilBullet(Rendering& rendering)
 
 std::string missingEveryMembersFieldsHeader(const std::string& subject, const std::string& target)
 {
-    return subject + " is missing the properties of every member of " + target + ":";
+    return subject + " is missing the properties of every variant of " + target + ":";
 }
 
 std::string missingCommonFieldsHeader(const std::string& subject, size_t count, const std::string& target)
 {
     std::string fields = count == 1 ? std::string("a property") : std::to_string(count) + " properties";
-    return subject + " is missing " + fields + " every member of " + target + " has:";
+    return subject + " is missing " + fields + " every variant of " + target + " has:";
 }
 
 Line fieldBullet(const std::string& name, const std::string& type)
@@ -943,7 +943,7 @@ Line fieldBullet(const std::string& name, const std::string& type)
 
 Line someMembersNeedMoreLine()
 {
-    return Line{false, {"Some members need more:"}};
+    return Line{false, {"Some variants need more:"}};
 }
 
 Line memberNeedsBullet(const std::string& who, bool beyondCommon, const std::vector<std::string>& fields)
@@ -968,7 +968,7 @@ std::string hiddenMembers(size_t count)
 
 std::string unionSummary(size_t members, bool optional, const std::vector<std::pair<size_t, std::string>>& listed)
 {
-    std::string text = std::string(optional ? "an optional union of " : "a union of ") + std::to_string(members) + " members, including:";
+    std::string text = std::string(optional ? "an optional union of " : "a union of ") + std::to_string(members) + " variants, including:";
     for (const auto& [number, type] : listed)
         text += "\n#" + std::to_string(number) + " = " + type;
     if (members > listed.size())
