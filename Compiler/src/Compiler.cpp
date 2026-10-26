@@ -7790,19 +7790,24 @@ struct Compiler
     }
 
     // Luwu Do Expressions (rfcs/do-expressions.md): `x or return v` as a statement compiles as the
-    // `if not x then return v end` it replaces, with every shortcut an `if` gets (a `break` or `continue` body is a
-    // single jump to the loop's exit or continue label).
-    void compileStatOrLeave(AstStatExpr* stat, AstExprBinary* orLeave)
+    // `if not x then return v end` it replaces, and `x and break` as `if x then break end`, with every shortcut an `if`
+    // gets (a `break` or `continue` body is a single jump to the loop's exit or continue label). In `x or y and continue`
+    // the `if` body is the statement `y and continue`.
+    void compileStatLeave(AstStatExpr* stat, AstExprBinary* binary)
     {
-        AstExpr* right = orLeave->right;
-        while (AstExprGroup* group = right->as<AstExprGroup>())
-            right = group->expr;
+        AstExpr* right = withoutGroups(binary->right);
 
-        AstExprDo* leave = right->as<AstExprDo>();
-        LUAU_ASSERT(leave);
+        AstStatExpr rightStat(right->location, right);
+        AstStat* rightStats[] = {&rightStat};
+        AstStatBlock rightBlock(right->location, AstArray<AstStat*>{rightStats, 1});
 
-        AstExprUnary notLeft(orLeave->left->location, AstExprUnary::Op::Not, orLeave->left);
-        AstStatIf guard(stat->location, &notLeft, leave->body, nullptr, std::nullopt, std::nullopt, stat->location);
+        AstExprDo* leave = asLeave(right);
+        AstStatBlock* body = leave ? leave->body : &rightBlock;
+
+        AstExprUnary notLeft(binary->left->location, AstExprUnary::Op::Not, binary->left);
+        AstExpr* condition = binary->op == AstExprBinary::Or ? static_cast<AstExpr*>(&notLeft) : binary->left;
+
+        AstStatIf guard(stat->location, condition, body, nullptr, std::nullopt, std::nullopt, stat->location);
         compileStatIf(&guard);
     }
 
@@ -8798,9 +8803,9 @@ struct Compiler
                     patchJumps(stat, assertSkip, bytecode.emitLabel());
                 }
             }
-            else if (AstExprBinary* orLeave = asOrLeave(stat->expr))
+            else if (isLeaveStatement(stat->expr))
             {
-                compileStatOrLeave(stat, orLeave);
+                compileStatLeave(stat, stat->expr->as<AstExprBinary>());
             }
             else
             {

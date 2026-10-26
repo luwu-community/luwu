@@ -1590,7 +1590,12 @@ TEST_CASE_FIXTURE(Fixture, "prettyPrint_error_stat")
     auto names = AstNameTable{allocator};
     ParseResult parseResult = Parser::parse(code.data(), code.size(), names, allocator, {});
 
-    CHECK_EQ("(error-stat: (error-expr))", prettyPrintWithTypes(*parseResult.root));
+    // Luwu Do Expressions (rfcs/do-expressions.md): a statement can start with a value (`-n < 0 or return`), so the `-`
+    // is parsed as a unary operator missing its operand
+    if (FFlag::LuwuDoExpr)
+        CHECK_EQ("(error-stat: -(error-expr))", prettyPrintWithTypes(*parseResult.root));
+    else
+        CHECK_EQ("(error-stat: (error-expr))", prettyPrintWithTypes(*parseResult.root));
 }
 
 TEST_CASE_FIXTURE(Fixture, "prettyPrint_error_type")

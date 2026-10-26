@@ -885,13 +885,19 @@ AstStat* Parser::parseStat()
 
     // we need to disambiguate a few cases, primarily assignment (lvalue = ...) vs statements-that-are calls
     size_t errorsBeforeExpr = parseErrors.size();
+
+    // Luwu Do Expressions (rfcs/do-expressions.md): `#t > 0 or continue` and `not ok or return`. A token that can only
+    // start a value starts one of those statements.
+    if (FFlag::LuwuDoExpr && onlyStartsValue(lexer.current()))
+        return parseOrLeaveStatement(parseExpr(), errorsBeforeExpr);
+
     AstExpr* expr = parsePrimaryExpr(/* asStatement= */ true);
 
     // Luwu Do Expressions (rfcs/do-expressions.md): `x or return v`, `f() or continue` and the like as statements. An
     // expression statement is otherwise always a call, so no Luau statement starts like this.
     bool operatorFollows = !expr->is<AstExprError>() && parseBinaryOp(lexer.current());
     if (operatorFollows)
-        return parseOrLeaveStatement(expr, start, errorsBeforeExpr);
+        return parseOrLeaveStatement(parseBinaryTail(expr, start, 0), errorsBeforeExpr);
 
     if (expr->is<AstExprCall>())
         return allocator.alloc<AstStatExpr>(expr->location, expr);
@@ -6421,6 +6427,17 @@ AstExpr* Parser::parseExpr(unsigned int limit)
     return expr;
 }
 
+// Luwu Do Expressions (rfcs/do-expressions.md): `expr` is a `break` or `continue` shorthand without parentheses
+static bool endsInBareLeave(AstExpr* expr)
+{
+    AstExprDo* leave = expr->as<AstExprDo>();
+    if (!leave || !leave->shorthand || leave->body->body.size != 1)
+        return false;
+
+    AstStat* stat = leave->body->body.data[0];
+    return stat->is<AstStatBreak>() || stat->is<AstStatContinue>();
+}
+
 // The binary operators after `expr` (which starts at `start`) whose priorities are higher than `limit`.
 AstExpr* Parser::parseBinaryTail(AstExpr* expr, const Location& start, unsigned int limit)
 {
@@ -6459,19 +6476,27 @@ AstExpr* Parser::parseBinaryTail(AstExpr* expr, const Location& start, unsigned 
         // read sub-expression with higher priority
         AstExpr* next = nullptr;
 
-        // Luwu Do Expressions (rfcs/do-expressions.md): `x or return v`, `x or break`, `x or continue`
-        bool orContinue = *op == AstExprBinary::Or && orContinueFollows();
-        if (*op == AstExprBinary::Or && (orLeaveFollows() || orContinue))
-            next = parseOrLeave();
+        // Luwu Do Expressions (rfcs/do-expressions.md): `x or return v`, `x or break`, `done and continue`
+        bool isAndOr = *op == AstExprBinary::Or || *op == AstExprBinary::And;
+        const char* introducer = *op == AstExprBinary::And ? "and" : "or";
+        bool orContinue = isAndOr && orContinueFollows();
+        if (isAndOr && (orLeaveFollows() || orContinue))
+            next = parseOrLeave(introducer);
         else
             next = parseExpr(binaryPriority[*op].right);
 
         expr = allocator.alloc<AstExprBinary>(Location(start, next->location), *op, expr, next);
         if (orContinue)
-            orContinues.push_back(&static_cast<AstExprBinary*>(expr)->right);
+            recordOrContinue(&static_cast<AstExprBinary*>(expr)->right, introducer);
         if (options.storeCstData)
             cstNodeMap[expr] = allocator.alloc<CstExprOp>(opPosition);
         op = parseBinaryOp(lexer.current());
+
+        // Luwu Do Expressions (rfcs/do-expressions.md): a bare `break` or `continue` has no value for arithmetic or a
+        // comparison to use, so after `x or continue` a line starting `-n < 0 or break` is a new statement
+        bool valueOperator = op && *op != AstExprBinary::Or && *op != AstExprBinary::And;
+        if (valueOperator && endsInBareLeave(next))
+            break;
 
         if (!op)
             op = checkBinaryConfusables(binaryPriority, limit);
@@ -8103,9 +8128,9 @@ AstExpr* Parser::parseIfElseExpr()
     AstExprIfElse* node =
         allocator.alloc<AstExprIfElse>(Location(start, end), condition, hasThen, trueExpr, hasElse, falseExpr, start, thenLocation, elseLocation);
     if (thenContinue)
-        orContinues.push_back(&node->trueExpr);
+        recordOrContinue(&node->trueExpr, "then");
     if (elseContinue)
-        orContinues.push_back(&node->falseExpr);
+        recordOrContinue(&node->falseExpr, "else");
     node->clauses = clauses;
     node->luwuOnly = clauses.size != 0;
     if (options.storeCstData)
@@ -8301,49 +8326,94 @@ bool Parser::orLeaveFollows()
     return lexer.current().type == '(' && isLeave(lexer.lookahead());
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): `continue` right after `or` is the shorthand for `or do continue`, inside a
-// loop, unless `continue` is a variable there: a local in scope, a name followed by a call or an index, or, decided at
-// the end of the module (resolveOrContinues), a name the module uses anywhere. In valid Luau, `x or continue` reads a
-// variable named `continue`, which a module that never names it can't be relying on.
+// Luwu Do Expressions (rfcs/do-expressions.md): a name followed by `next` is part of a call or an index
+static bool continuesAsExpression(Lexeme::Type next)
+{
+    return next == '(' || next == '.' || next == ':' || next == '[' || next == '{' || next == Lexeme::QuotedString || next == Lexeme::RawString ||
+           next == Lexeme::InterpStringBegin || next == Lexeme::InterpStringSimple;
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `continue` or `(continue)` right after `or` or `and` is the shorthand
+// for `do continue`, inside a loop, unless `continue` is a variable there: a local in scope, a name followed by a call
+// or an index, or, decided at the end of the module (resolveOrContinues), a name the module uses anywhere. In valid
+// Luau, `x or continue` reads a variable named `continue`, which a module that never names it can't be relying on.
 bool Parser::orContinueFollows()
 {
     if (!FFlag::LuwuDoExpr || functionStack.back().loopDepth == 0)
         return false;
 
-    if (lexer.current().type != Lexeme::Name || AstName(lexer.current().name) != "continue")
+    bool parenthesized = lexer.current().type == '(';
+    Lexeme name = parenthesized ? lexer.lookahead() : lexer.current();
+
+    if (name.type != Lexeme::Name || AstName(name.name) != "continue")
         return false;
 
-    if (AstLocal* const* local = localMap.find(AstName(lexer.current().name)); local && *local)
+    if (AstLocal* const* local = localMap.find(AstName(name.name)); local && *local)
         return false;
 
-    Lexeme::Type next = lexer.lookahead().type;
-    bool continuesAsExpression = next == '(' || next == '.' || next == ':' || next == '[' || next == '{' || next == Lexeme::QuotedString ||
-                                 next == Lexeme::RawString || next == Lexeme::InterpStringBegin || next == Lexeme::InterpStringSimple;
-    return !continuesAsExpression;
+    if (parenthesized)
+        return lexer.lookaheadSecond().type == ')' && !continuesAsExpression(lexer.lookaheadThird().type);
+
+    return !continuesAsExpression(lexer.lookahead().type);
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md): a module that uses `continue` as a name anywhere keeps Luau's meaning for
 // `x or continue`, a read of that variable. No local was in scope at any of them (orContinueFollows checked), so each is
-// a global read.
+// a global read. In any other module each one is the shorthand, a Luwu-only feature.
 void Parser::resolveOrContinues()
 {
-    if (continueNameUses == 0)
-        return;
-
-    for (AstExpr** slot : orContinues)
+    for (const OrContinue& orContinue : orContinues)
     {
-        Location location = (*slot)->location;
-        *slot = allocator.alloc<AstExprGlobal>(location, nameContinue);
+        Location location = (*orContinue.slot)->location;
+
+        if (continueNameUses == 0)
+            checkLeaveShorthandFeature(location, orContinue.introducer);
+        else
+            *orContinue.slot = allocator.alloc<AstExprGlobal>(location, nameContinue);
     }
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): the shorthand after `or`, and after the `else` of an if-else expression
-// (`introducer`, for the error messages):
+// Luwu Do Expressions (rfcs/do-expressions.md): the `continue` shorthand stored in `slot` (see orContinueFollows)
+void Parser::recordOrContinue(AstExpr** slot, const char* introducer)
+{
+    orContinues.push_back(OrContinue{slot, introducer});
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): the shorthand in `slot`, if it is the `continue` one, stays the keyword
+// even in a module that uses `continue` as a name
+void Parser::keepOrContinueKeyword(AstExpr** slot)
+{
+    auto found = std::find_if(
+        orContinues.begin(),
+        orContinues.end(),
+        [slot](const OrContinue& orContinue)
+        {
+            return orContinue.slot == slot;
+        }
+    );
+
+    if (found == orContinues.end())
+        return;
+
+    checkLeaveShorthandFeature((*slot)->location, found->introducer);
+    orContinues.erase(found);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): the leave shorthand after `introducer` is a Luwu-only feature
+void Parser::checkLeaveShorthandFeature(const Location& keyword, const char* introducer)
+{
+    std::string leaveName = format("'%s return', '%s break' and '%s continue'", introducer, introducer, introducer);
+    checkLuwuFeature(keyword, LuwuFeature{leaveName.c_str(), /* plural= */ true, "LuwuDoExpr"}, FFlag::LuwuDoExpr);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): the shorthand after `or` and `and`, and after the `then` and `else` of an
+// if-else expression (`introducer`, for the error messages):
 //
 //   x or return v      x or (do return v)
 //   x or break         x or (do break)
 //   x or continue      x or (do continue)       (see orContinueFollows)
 //   x or (return a, b) x or (do return a, b)
+//   x and break        x and (do break)
 //
 // Unparenthesized, `return` takes exactly one value: in `local a, b = x or return y, z` the `, z` belongs to the
 // `local`. More values, or none, need the parentheses (`x or (return)`), for the same reason `(do return)` does.
@@ -8415,8 +8485,9 @@ AstExpr* Parser::parseOrLeave(const char* introducer)
     expr->shorthand = true;
     expr->luwuOnly = true;
 
-    std::string leaveName = format("'%s return', '%s break' and '%s continue'", introducer, introducer, introducer);
-    checkLuwuFeature(keyword, LuwuFeature{leaveName.c_str(), /* plural= */ true, "LuwuDoExpr"}, FFlag::LuwuDoExpr);
+    // A `continue` shorthand is checked once the module is parsed (resolveOrContinues)
+    if (!leave->is<AstStatContinue>())
+        checkLeaveShorthandFeature(keyword, introducer);
 
     if (!matchParen)
         return expr;
@@ -8436,19 +8507,27 @@ AstExpr* Parser::parseOrLeave(const char* introducer)
     return group;
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): a statement that is an expression ending in `or` and a leave form,
-// `x or return v`, `ok and valid or break`, `str.startswith(s, "x") or continue`, or `x or do ... return`. The operand
-// before the last `or` always runs, and the statement only completes when it is truthy. `expr` is the statement's first
-// operand, already parsed.
-AstStat* Parser::parseOrLeaveStatement(AstExpr* first, const Location& start, size_t errorsBeforeStatement)
+// Luwu Do Expressions (rfcs/do-expressions.md): no statement starts with `l`, only a value: a unary operator or a literal
+bool Parser::onlyStartsValue(const Lexeme& l)
 {
-    AstExpr* expr = parseBinaryTail(first, start, 0);
+    bool unaryOperator = l.type == Lexeme::ReservedNot || l.type == '-' || l.type == '#';
+    bool literal = l.type == Lexeme::Number || l.type == Lexeme::QuotedString || l.type == Lexeme::RawString ||
+                   l.type == Lexeme::InterpStringBegin || l.type == Lexeme::InterpStringSimple || l.type == Lexeme::ReservedNil ||
+                   l.type == Lexeme::ReservedTrue || l.type == Lexeme::ReservedFalse || l.type == Lexeme::Dot3;
+    return unaryOperator || literal;
+}
 
-    if (AstExprBinary* binary = asOrLeave(expr))
+// Luwu Do Expressions (rfcs/do-expressions.md): a statement that is an expression ending in a leave form after `or` or
+// `and` (isLeaveStatement): `x or return v`, `ok and valid or break`, `#t > 0 or continue`, `done and break`,
+// `x or y and continue`, or `x or do ... return`.
+AstStat* Parser::parseOrLeaveStatement(AstExpr* expr, size_t errorsBeforeStatement)
+{
+    if (isLeaveStatement(expr))
     {
         // There is no value for `continue` to be a variable read in, so it is the keyword even in a module that uses
         // `continue` as a name (see resolveOrContinues)
-        orContinues.erase(std::remove(orContinues.begin(), orContinues.end(), &binary->right), orContinues.end());
+        for (AstExprBinary* binary = expr->as<AstExprBinary>(); binary; binary = withoutGroups(binary->right)->as<AstExprBinary>())
+            keepOrContinueKeyword(&binary->right);
 
         // Nothing around a statement can take a second value: `x or return a, b` meant to return both
         if (lexer.current().type == ',')
@@ -8466,6 +8545,17 @@ AstStat* Parser::parseOrLeaveStatement(AstExpr* first, const Location& start, si
         AstStatExpr* node = allocator.alloc<AstStatExpr>(expr->location, expr);
         node->luwuOnly = true;
         return node;
+    }
+
+    // `v > 2 or v =` while `==` is being typed: the `=`, and a value after it on its line, belong to this incomplete
+    // statement instead of starting the next one
+    if (lexer.current().type == '=')
+    {
+        unsigned int line = lexer.current().location.begin.line;
+        nextLexeme();
+
+        if (lexer.current().location.begin.line == line && !valueEnds(lexer.current()))
+            parseExpr();
     }
 
     // in a `do` expression, a value where a statement goes was usually meant as the result

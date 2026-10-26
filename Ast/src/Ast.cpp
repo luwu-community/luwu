@@ -666,18 +666,45 @@ bool AstExprDo::alwaysLeaves() const
     return !finder.found;
 }
 
-AstExprBinary* asOrLeave(AstExpr* expr)
+AstExpr* withoutGroups(AstExpr* expr)
+{
+    while (AstExprGroup* group = expr->as<AstExprGroup>())
+        expr = group->expr;
+
+    return expr;
+}
+
+AstExprDo* asLeave(AstExpr* operand)
+{
+    AstExprDo* leave = withoutGroups(operand)->as<AstExprDo>();
+    return leave && leave->alwaysLeaves() ? leave : nullptr;
+}
+
+AstExprBinary* asLeaveGuard(AstExpr* expr)
 {
     AstExprBinary* binary = expr->as<AstExprBinary>();
-    if (!binary || binary->op != AstExprBinary::Or)
-        return nullptr;
+    bool isAndOr = binary && (binary->op == AstExprBinary::Or || binary->op == AstExprBinary::And);
+    return isAndOr && asLeave(binary->right) ? binary : nullptr;
+}
 
-    AstExpr* right = binary->right;
-    while (AstExprGroup* group = right->as<AstExprGroup>())
-        right = group->expr;
+AstExprBinary* asOrLeave(AstExpr* expr)
+{
+    AstExprBinary* guard = asLeaveGuard(expr);
+    return guard && guard->op == AstExprBinary::Or ? guard : nullptr;
+}
 
-    AstExprDo* leave = right->as<AstExprDo>();
-    return leave && leave->alwaysLeaves() ? binary : nullptr;
+bool isLeaveStatement(AstExpr* expr)
+{
+    AstExprBinary* binary = expr->as<AstExprBinary>();
+    while (binary && (binary->op == AstExprBinary::Or || binary->op == AstExprBinary::And))
+    {
+        if (asLeave(binary->right))
+            return true;
+
+        binary = withoutGroups(binary->right)->as<AstExprBinary>();
+    }
+
+    return false;
 }
 
 AstExprDo::AstExprDo(const Location& location, AstStatBlock* body)

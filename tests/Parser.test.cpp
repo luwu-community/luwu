@@ -1306,7 +1306,15 @@ TEST_CASE_FIXTURE(Fixture, "parse_interpolated_string_call_without_parens")
     }
     catch (const ParseErrors& e)
     {
-        CHECK_EQ("Expected identifier when parsing expression, got `{", e.getErrors().front().getMessage());
+        // Luwu Do Expressions (rfcs/do-expressions.md): a statement can start with a value (`#t > 0 or return`), so the
+        // string is parsed as one that doesn't leave
+        if (FFlag::LuwuDoExpr)
+            CHECK_EQ(
+                "Incomplete statement: expected assignment, a function call, or an expression ending in 'or return', 'or break' or 'or continue'",
+                e.getErrors().front().getMessage()
+            );
+        else
+            CHECK_EQ("Expected identifier when parsing expression, got `{", e.getErrors().front().getMessage());
     }
 }
 
@@ -9118,6 +9126,126 @@ TEST_CASE_FIXTURE(Fixture, "or_leave_statements")
     REQUIRE_EQ(loopBody->body.size, 2);
     CHECK(asOrLeave(loopBody->body.data[0]->as<AstStatExpr>()->expr));
     CHECK(asOrLeave(loopBody->body.data[1]->as<AstStatExpr>()->expr));
+}
+
+TEST_CASE_FIXTURE(Fixture, "leave_statements_can_start_with_any_value")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        for _, t in ts do
+            #t >= 0 or continue
+            not t.skip or continue
+            -t.n < 0 or break
+            "stop" ~= t.name or break
+            nil == t.next and continue
+        end
+    )");
+
+    AstStatBlock* loopBody = block->body.data[0]->as<AstStatForIn>()->body;
+    REQUIRE_EQ(loopBody->body.size, 5);
+
+    for (AstStat* stat : loopBody->body)
+    {
+        AstStatExpr* expr = stat->as<AstStatExpr>();
+        REQUIRE(expr);
+        CHECK(isLeaveStatement(expr->expr));
+    }
+
+    // a value that doesn't leave is an incomplete statement, not a missing identifier
+    matchOnlyIfLocalError(
+        *this,
+        "local t\n#t > 0",
+        "Incomplete statement: expected assignment, a function call, or an expression ending in 'or return', 'or break' or 'or continue'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "and_takes_the_leave_forms")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        for _, v in t do
+            v.done and break
+            v.a or v.b and continue
+            local w = v.c and return 1
+        end
+    )");
+
+    AstStatBlock* loopBody = block->body.data[0]->as<AstStatForIn>()->body;
+    REQUIRE_EQ(loopBody->body.size, 3);
+
+    AstStatExpr* andBreak = loopBody->body.data[0]->as<AstStatExpr>();
+    REQUIRE(andBreak);
+    AstExprBinary* guard = asLeaveGuard(andBreak->expr);
+    REQUIRE(guard);
+    CHECK_EQ(guard->op, AstExprBinary::And);
+    CHECK(!asOrLeave(andBreak->expr));
+
+    // `v.a or (v.b and continue)`: only the right operand leaves
+    AstStatExpr* nested = loopBody->body.data[1]->as<AstStatExpr>();
+    REQUIRE(nested);
+    CHECK(isLeaveStatement(nested->expr));
+    CHECK(!asLeaveGuard(nested->expr));
+    AstExprBinary* orExpr = nested->expr->as<AstExprBinary>();
+    REQUIRE(orExpr);
+    CHECK(asLeaveGuard(orExpr->right));
+
+    AstExprBinary* value = loopBody->body.data[2]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+    REQUIRE(value);
+    CHECK(asLeave(value->right));
+}
+
+TEST_CASE_FIXTURE(Fixture, "parenthesized_continue_is_the_shorthand")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        for i = 1, 3 do
+            local a = f(i) or (continue)
+            local b = do
+                give if i == 2 then (continue) else i
+        end
+    )");
+
+    AstStatBlock* loopBody = block->body.data[0]->as<AstStatFor>()->body;
+    REQUIRE_EQ(loopBody->body.size, 2);
+    AstExprBinary* a = loopBody->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+    REQUIRE(a);
+    CHECK(asLeave(a->right));
+
+    // followed by a call or an index, it is a variable read, as in Luau
+    AstStatBlock* reads = parse(R"(
+        for i = 1, 3 do
+            local c = f(i) or (continue).x
+            local d = f(i) or (continue)(i)
+        end
+    )");
+
+    AstStatBlock* readsBody = reads->body.data[0]->as<AstStatFor>()->body;
+    REQUIRE_EQ(readsBody->body.size, 2);
+    for (AstStat* stat : readsBody->body)
+    {
+        AstExprBinary* value = stat->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+        REQUIRE(value);
+        CHECK(!asLeave(value->right));
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "or_continue_reading_a_variable_is_valid_luau")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    // `continue` names a variable in this module, so each `or continue` reads it: valid Luau, not the Luwu shorthand
+    ParseResult reads = tryParse("continue = 1\nfor i = 1, 2 do\n    local a = i or continue\n    local b = i or (continue)\nend", luau);
+    CHECK(reads.errors.empty());
+
+    ParseResult shorthand = tryParse("for i = 1, 2 do\n    local a = i or continue\nend", luau);
+    REQUIRE_EQ(shorthand.errors.size(), 1);
+    CHECK_EQ(shorthand.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'or return', 'or break' and 'or continue'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "or_continue_statement_is_the_keyword_even_where_continue_is_a_name")

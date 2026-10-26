@@ -3645,16 +3645,16 @@ static void bindFreeType(TypeId a, TypeId b)
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md): every value of a statement runs, so after a value that is `x or return`
-// (asOrLeave), `x` is truthy.
+// (asLeaveGuard), `x` is truthy, and after `x and return`, falsy.
 void ConstraintGenerator::applyOrLeaveRefinements(const ScopePtr& scope, const AstArray<AstExpr*>& values)
 {
     for (AstExpr* value : values)
     {
-        AstExprBinary* orLeave = asOrLeave(value);
-        if (!orLeave)
+        AstExprBinary* guard = asLeaveGuard(value);
+        if (!guard)
             continue;
 
-        if (RefinementId* refinement = orLeaveRefinements.find(orLeave->right); refinement && *refinement)
+        if (RefinementId* refinement = orLeaveRefinements.find(guard->right); refinement && *refinement)
             applyRefinements(scope, value->location, *refinement);
     }
 }
@@ -6100,6 +6100,10 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         applyRefinements(rightScope, right->location, leftRefinement);
         auto [rightType, rightRefinement] = check(rightScope, right, expectedType);
 
+        // Luwu Do Expressions (rfcs/do-expressions.md): `x and break` only completes when `x` is falsy
+        if (asLeave(right))
+            orLeaveRefinements[right] = refinementArena.negation(leftRefinement);
+
         return {leftType, rightType, refinementArena.conjunction(leftRefinement, rightRefinement)};
     }
     else if (op == AstExprBinary::Or)
@@ -6116,11 +6120,7 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         auto [rightType, rightRefinement] = check(rightScope, right, expectedType);
 
         // Luwu Do Expressions (rfcs/do-expressions.md): `x or return` only has a value when `x` is truthy
-        AstExpr* leaveOperand = right;
-        while (AstExprGroup* group = leaveOperand->as<AstExprGroup>())
-            leaveOperand = group->expr;
-
-        if (AstExprDo* leave = leaveOperand->as<AstExprDo>(); leave && leave->alwaysLeaves())
+        if (asLeave(right))
         {
             orLeaveRefinements[right] = leftRefinement;
             return {leftType, rightType, leftRefinement};

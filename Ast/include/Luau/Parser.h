@@ -434,7 +434,8 @@ public:
 
 private:
     AstExpr* parseBinaryTail(AstExpr* expr, const Location& start, unsigned int limit);
-    AstStat* parseOrLeaveStatement(AstExpr* first, const Location& start, size_t errorsBeforeStatement);
+    bool onlyStartsValue(const Lexeme& l);
+    AstStat* parseOrLeaveStatement(AstExpr* expr, size_t errorsBeforeStatement);
     AstStatError* reportIncompleteStatement(AstExpr* expr, size_t errorsBeforeStatement, const char* message);
 
     std::optional<AstExprUnary::Op> checkUnaryConfusables();
@@ -758,8 +759,18 @@ private:
     // Luwu Do Expressions (rfcs/do-expressions.md): `x or continue` is the continue shorthand only in a module that never
     // uses `continue` as a name. Name uses are counted as the module is parsed, and each shorthand keeps the slot it was
     // stored in, so resolveOrContinues can turn it back into a variable read if the count isn't zero at the end.
+    // Whether one is a Luwu-only feature in this module is only known then too.
+    struct OrContinue
+    {
+        AstExpr** slot;
+        // `or`, `and`, `then` or `else`, for the feature error
+        const char* introducer;
+    };
     size_t continueNameUses = 0;
-    std::vector<AstExpr**> orContinues;
+    std::vector<OrContinue> orContinues;
+    void recordOrContinue(AstExpr** slot, const char* introducer);
+    void keepOrContinueKeyword(AstExpr** slot);
+    void checkLeaveShorthandFeature(const Location& keyword, const char* introducer);
 
     AstName nameSelf;
     // Luwu match expressions: the globals and functions `is` / `implements` call, and a `match` subject's hidden name
