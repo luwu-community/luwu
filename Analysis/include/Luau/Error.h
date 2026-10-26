@@ -450,6 +450,11 @@ struct MissingUnionProperty
     Name key;
     // Luwu: whether the message carries help (see Helpifier)
     bool showHelp = true;
+    // Luwu: the name the value is read through (`name_result` in `name_result.out`); empty when it has none
+    std::string receiver;
+    // Luwu: whether every member lacking the key was declared in the module being checked, so the help can suggest
+    // changing them. A library's types (seal's `process.RunResult`) aren't the reader's to edit.
+    bool membersDeclaredHere = false;
 
     bool operator==(const MissingUnionProperty& rhs) const;
 };

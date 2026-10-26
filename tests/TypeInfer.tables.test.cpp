@@ -7827,6 +7827,59 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_union_members_lack_says_how_to_
     );
 }
 
+// Luwu: a library's types aren't the reader's to edit, so the help only says how to narrow to the members with the key
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_another_modules_union_lack_says_how_to_narrow")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    fileResolver.source["game/library"] = R"(
+        export type Ok = { ok: true, out: string }
+        export type Err = { ok: false, err: string }
+        export type Found = { path: string }
+        export type Missing = { reason: string }
+        return {}
+    )";
+
+    fileResolver.source["game/user"] = R"(
+        local library = require(game.library)
+        local function run(): library.Ok | library.Err
+            error("unused")
+        end
+        local function find(): library.Found | library.Missing
+            error("unused")
+        end
+        local function name(): string | { name: string }
+            error("unused")
+        end
+        local result = run()
+        local found = find()
+        local named = name()
+        print(result.out, found.path, named.name)
+    )";
+
+    CheckResult result = getFrontend().check("game/user");
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ(
+        "Key 'out' is missing from 'Err' in the type 'Err | Ok'\n\n"
+        "Help (telling members apart):\n"
+        "  • Check 'result.ok' before reading 'out': only 'Ok' has it",
+        toString(result.errors[0])
+    );
+    // nothing tells these apart, and the types aren't the reader's to change
+    CHECK_EQ(
+        "Key 'path' is missing from 'Missing' in the type 'Found | Missing'\n\n"
+        "Help (telling members apart):\n"
+        "  • Narrow 'found' to 'Found' before reading 'path': only 'Found' has it",
+        toString(result.errors[1])
+    );
+    CHECK_EQ(
+        "Key 'name' is missing from 'string' in the type 'string | { name: string }'\n\n"
+        "Help (telling members apart):\n"
+        "  • Check 'type(named) == \"table\"' before reading 'name': only '{ name: string }' has it",
+        toString(result.errors[2])
+    );
+}
+
 // Luwu: a result type with methods, `(Ok | Err) & { methods }`, names the union's members, and a singleton field that
 // tells them apart is the check to make first
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_an_intersected_union_lack_names_the_members")
@@ -7848,7 +7901,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_an_intersected_union
     CHECK_EQ(
         "Key 'out' is missing from 'Err' in the type 'Err | Ok'\n\n"
         "Help (telling members apart):\n"
-        "  • Check 'ok' before reading 'out': only 'Ok' has it\n"
+        "  • Check 'result.ok' before reading 'out': only 'Ok' has it\n"
         "  • Or add 'out: nil' to 'Err' so that checking 'out' tells the members apart",
         toString(result.errors[0])
     );

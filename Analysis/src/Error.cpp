@@ -356,21 +356,97 @@ static std::string quotedTypes(const std::vector<TypeId>& members)
     return list;
 }
 
+// Luwu: what `type()` gives for a union member, for telling members apart; nullopt when the type alone can't say
+static std::optional<std::string> typeNameOf(TypeId member)
+{
+    member = follow(member);
+    if (const PrimitiveType* pt = get<PrimitiveType>(member))
+    {
+        switch (pt->type)
+        {
+        case PrimitiveType::NilType:
+            return "nil";
+        case PrimitiveType::Boolean:
+            return "boolean";
+        case PrimitiveType::Number:
+            return "number";
+        case PrimitiveType::String:
+            return "string";
+        case PrimitiveType::Thread:
+            return "thread";
+        case PrimitiveType::Buffer:
+            return "buffer";
+        default:
+            return std::nullopt;
+        }
+    }
+    if (const SingletonType* st = get<SingletonType>(member))
+        return get<BooleanSingleton>(st) ? "boolean" : "string";
+    if (get<FunctionType>(member))
+        return "function";
+    if (get<TableType>(member))
+        return "table";
+    return std::nullopt;
+}
+
+// Luwu: the `type()` name every member in `having` shares and no member in `lacking` has; nullopt when there is none
+static std::optional<std::string> separatingTypeName(const std::vector<TypeId>& having, const std::vector<TypeId>& lacking)
+{
+    std::optional<std::string> shared = typeNameOf(having.front());
+    if (!shared)
+        return std::nullopt;
+
+    for (TypeId member : having)
+    {
+        if (typeNameOf(member) != shared)
+            return std::nullopt;
+    }
+    for (TypeId member : lacking)
+    {
+        std::optional<std::string> name = typeNameOf(member);
+        if (!name || name == shared)
+            return std::nullopt;
+    }
+    return shared;
+}
+
+// Luwu: the class whose objects `member` is; nullopt when it isn't a class object
+static std::optional<std::string> classOfObject(TypeId member)
+{
+    const ExternType* etv = get<ExternType>(follow(member));
+    if (!etv || !etv->relation || !etv->relation->get_if<Klass>())
+        return std::nullopt;
+    return etv->name;
+}
+
+// Luwu: the check that narrows a union to its members that have the key, with no change to the types: a field that tells
+// them apart (`r.ok`), `type()`, or `class.isinstance`. Nullopt when none of them can.
+static std::optional<std::string> narrowingCheck(const MissingUnionProperty& e, const UnionType* ut, const std::vector<TypeId>& having)
+{
+    std::string value = e.receiver.empty() ? "the value" : e.receiver;
+
+    bool allTables = true;
+    for (TypeId option : ut->options)
+        allTables = allTables && get<TableType>(follow(option));
+    if (std::optional<std::string> field = allTables ? discriminantField(ut, e.missing) : std::nullopt)
+        return e.receiver.empty() ? *field : e.receiver + "." + *field;
+
+    if (std::optional<std::string> name = separatingTypeName(having, e.missing))
+        return "type(" + value + ") == \"" + *name + "\"";
+
+    std::optional<std::string> cls = having.size() == 1 ? classOfObject(having.front()) : std::nullopt;
+    if (cls)
+        return "class.isinstance(" + value + ", " + *cls + ")";
+    return std::nullopt;
+}
+
+// Luwu: how to read a key only some members of a union have. Narrowing comes first because it needs no change to the
+// types; changing them is only suggested for types declared in the module being checked.
 static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionProperty& e)
 {
     const UnionType* ut = get<UnionType>(follow(e.type));
     if (!ut || !e.showHelp)
         return std::nullopt;
-    for (TypeId missing : e.missing)
-    {
-        if (!get<TableType>(follow(missing)))
-            return std::nullopt;
-    }
-
-    std::string addNil = "'" + e.key + ": nil' to " + quotedTypes(e.missing) + " so that checking '" + e.key + "' tells the members apart";
-    std::optional<std::string> discriminant = discriminantField(ut, e.missing);
-    if (!discriminant)
-        return Helpifier{e.showHelp}("telling members apart", {"Add " + addNil});
 
     std::vector<TypeId> having;
     for (TypeId option : ut->options)
@@ -378,10 +454,27 @@ static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionPro
         if (std::find(e.missing.begin(), e.missing.end(), option) == e.missing.end())
             having.push_back(option);
     }
+    if (having.empty())
+        return std::nullopt;
 
-    std::string check = "Check '" + *discriminant + "' before reading '" + e.key + "': only " + quotedTypes(having) +
-                        (having.size() == 1 ? " has" : " have") + " it";
-    return Helpifier{e.showHelp}("telling members apart", {check, "Or add " + addNil});
+    std::string only = quotedTypes(having) + (having.size() == 1 ? " has" : " have") + " it";
+    std::vector<std::string> bullets;
+    if (std::optional<std::string> check = narrowingCheck(e, ut, having))
+        bullets.push_back("Check '" + *check + "' before reading '" + e.key + "': only " + only);
+
+    if (e.membersDeclaredHere)
+    {
+        std::string addNil = "'" + e.key + ": nil' to " + quotedTypes(e.missing) + " so that checking '" + e.key + "' tells the members apart";
+        bullets.push_back((bullets.empty() ? "Add " : "Or add ") + addNil);
+    }
+
+    if (bullets.empty())
+    {
+        std::string value = e.receiver.empty() ? "the value" : "'" + e.receiver + "'";
+        bullets.push_back("Narrow " + value + " to " + quotedTypes(having) + " before reading '" + e.key + "': only " + only);
+    }
+    std::vector<std::string_view> views(bullets.begin(), bullets.end());
+    return Helpifier{e.showHelp}("telling members apart", views.data(), views.size());
 }
 
 struct ErrorConverter

@@ -6099,7 +6099,19 @@ bool TypeChecker2::checkIndexTypeFromType(
         if (propTypes.foundOneProp())
         {
             std::optional<MissingUnionProperty> fromUnion = missingFromIntersectedUnion(tableTy, prop, helpifier.enabled);
-            reportError(fromUnion.value_or(MissingUnionProperty{tableTy, propTypes.missingProp, prop, helpifier.enabled}), location);
+            MissingUnionProperty error = fromUnion.value_or(MissingUnionProperty{tableTy, propTypes.missingProp, prop, helpifier.enabled});
+            // `receiver` ends in the `.` or `:` it was read with
+            error.receiver = receiver.empty() ? "" : receiver.substr(0, receiver.size() - 1);
+            error.membersDeclaredHere = std::all_of(
+                error.missing.begin(),
+                error.missing.end(),
+                [&](TypeId member)
+                {
+                    const TableType* table = get<TableType>(follow(member));
+                    return table && table->definitionModuleName == module->name;
+                }
+            );
+            reportError(std::move(error), location);
         }
         // For class LValues, we don't want to report an extension error,
         // because extern typeArguments come into being with full knowledge of their
