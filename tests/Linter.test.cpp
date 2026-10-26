@@ -3962,8 +3962,6 @@ return removed, frozen, shadowed, owner, check
     CHECK_EQ(inLua[0].text, "'table.drop' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
 }
 
-// Luwu: pairs and ipairs are only reported where iterating the value directly does the same thing, or where `pairs`
-// skips the `__iter` the value was made to be iterated with
 // Luwu: `--@[nolint(...)]` is the attribute as a comment, for Luau and Lua files, which upstream couldn't parse with
 // `@[nolint]` in them. It covers the statement after it.
 TEST_CASE_FIXTURE(BuiltinsFixture, "LintAttributeComments")
@@ -4007,6 +4005,8 @@ print(x)
     CHECK_EQ(directives[1].text, "Please specify the lints to enable (like '--@[lint(ConstLocal)]')");
 }
 
+// Luwu: pairs and ipairs are only reported where iterating the value directly does the same thing, or where `pairs`
+// skips the `__iter` the value was made to be iterated with
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsOnlySuggestsWhatIteratesTheSame")
 {
     LintResult result = lint(R"(
