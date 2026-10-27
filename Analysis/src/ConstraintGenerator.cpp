@@ -1795,6 +1795,17 @@ void ConstraintGenerator::bindModuleAliases(const ScopePtr& scope, AstStatLocal*
         std::optional<Name> path = isRequire ? std::optional<Name>{name} : importedModulePath(scope, value);
         std::optional<ModuleName> moduleName = path ? findImportedModule(scope, *path) : std::nullopt;
         ModulePtr imported = moduleName && *moduleName != module->name ? moduleResolver->getModule(*moduleName) : nullptr;
+
+        // A builtin library (`const lib = collections`) has its types filed in the global scope but no module to resolve
+        if (!imported && !isRequire && moduleName)
+        {
+            if (const std::unordered_map<Name, TypeFun>* types = findImportedTypes(scope, *path))
+            {
+                scope->importedTypeBindings[name] = *types;
+                scope->importedModules[name] = *moduleName;
+            }
+        }
+
         if (!imported)
             continue;
 
@@ -1882,6 +1893,17 @@ std::optional<Name> ConstraintGenerator::importedModulePath(const ScopePtr& scop
         return std::nullopt;
 
     return path;
+}
+
+const std::unordered_map<Name, TypeFun>* ConstraintGenerator::findImportedTypes(const ScopePtr& scope, const Name& path)
+{
+    for (const Scope* s = scope.get(); s; s = s->parent.get())
+    {
+        if (auto it = s->importedTypeBindings.find(path); it != s->importedTypeBindings.end())
+            return &it->second;
+    }
+
+    return nullptr;
 }
 
 std::optional<ModuleName> ConstraintGenerator::findImportedModule(const ScopePtr& scope, const Name& path)

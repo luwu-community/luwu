@@ -1427,6 +1427,33 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "locals_bound_to_an_imported_field_bring_the_
     CHECK_EQ(result.errors[0].location.begin.line, 7);
 }
 
+// A builtin library files its types in the global scope like a required module's (as `collections` does), so its
+// fields bring their types the same way
+TEST_CASE_FIXTURE(BuiltinsFixture, "fields_of_a_builtin_library_bring_its_types")
+{
+    ScopedFastFlag sff[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    loadDefinition("declare shapes: { Point: { x: number } }");
+    ScopePtr globals = getFrontend().globals.globalScope;
+    globals->importedTypeBindings["shapes"]["Point"] = TypeFun{{}, getBuiltins()->numberType};
+    globals->importedModules["shapes"] = "@test/shapes";
+
+    CheckResult result = check(R"(
+        --!strict
+        const .{ Point } = shapes
+        local p: Point = 1
+        local q: shapes.Point = 2
+        local wrong: Point = "x"
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 5);
+}
+
 // A class's type comes with its value however the module exports it and however it's imported
 TEST_CASE_FIXTURE(BuiltinsFixture, "every_common_way_to_export_a_class_brings_its_type")
 {
