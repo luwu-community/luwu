@@ -11,6 +11,8 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDeclareStatements)
+LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
@@ -3241,6 +3243,159 @@ return f, ok
     CHECK(warnings[3].text.find("'lib.pair()'") != std::string::npos);
     CHECK(warnings[4].text.find("'...'") != std::string::npos);
     CHECK_EQ(warnings[5].location.begin.line, 11);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "declared_globals_are_known")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    // UnknownGlobal only runs in nocheck files
+    LintResult result = lint(R"(
+--!nocheck
+print(early)
+local function f()
+    print(counter)
+end
+f()
+declare early: number
+declare counter: number
+)");
+
+    REQUIRE(0 == result.warnings.size());
+}
+
+// A declared global the file writes is checked like an undeclared one. A global the file only reads comes from the
+// environment, even when one function is all that reads it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "declared_globals_written_in_one_function_can_be_locals")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    LintResult result = lint(R"(
+declare counter: number
+declare total: number
+declare version: string
+
+function bump()
+    counter = 1
+    return counter
+end
+
+local function reset()
+    total = 0
+end
+
+local function show()
+    print(version)
+end
+
+return bump, reset, show
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 2);
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_GlobalUsedAsLocal);
+    CHECK_EQ(result.warnings[1].code, LintWarning::Code_GlobalUsedAsLocal);
+    std::vector<std::string> texts = {result.warnings[0].text, result.warnings[1].text};
+    std::sort(texts.begin(), texts.end());
+    CHECK_EQ(
+        texts[0],
+        "Global 'counter' is only used in the enclosing function 'bump'; consider changing it to local and removing its 'declare'"
+    );
+    CHECK_EQ(
+        texts[1],
+        "Global 'total' is only used in the enclosing function 'reset'; consider changing it to local and removing its 'declare'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "DeclareMismatch")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    loadDefinition(R"(
+        export type Path = { path: string }
+        declare script: Path
+        declare version: string
+        declare function exit(code: number): never
+    )");
+
+    // The same declaration as the loaded definitions, spelled with or without the alias, is silent
+    LintResult same = lint(R"(
+declare script: Path
+declare version: string
+declare function exit(code: number): never
+)");
+    CHECK(0 == same.warnings.size());
+
+    LintResult different = lint(R"(
+declare version: number
+declare function exit(code: string): never
+declare unrelated: number
+)");
+    REQUIRE(2 == different.warnings.size());
+    CHECK_EQ(different.warnings[0].code, LintWarning::Code_DeclareMismatch);
+    CHECK_EQ(
+        different.warnings[0].text,
+        "'version' is declared here as 'number', but the loaded definitions declare it as 'string'; add '--!nolint "
+        "DeclareMismatch' if this is intended"
+    );
+    CHECK_EQ(different.warnings[0].location.begin.line, 1);
+    CHECK_EQ(different.warnings[1].code, LintWarning::Code_DeclareMismatch);
+    CHECK_EQ(different.warnings[1].location.begin.line, 2);
+
+    LintResult silenced = lint(R"(
+--!nolint DeclareMismatch
+declare version: number
+)");
+    CHECK(0 == silenced.warnings.size());
+}
+
+TEST_CASE_FIXTURE(Fixture, "DeclareMismatchOnTypes")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    loadDefinition(R"(
+        declare extern type Path with
+            raw: string
+            function join(self, other: string): Path
+        end
+    )");
+
+    // The same declaration, with or without `with`, is silent
+    LintResult same = lint(R"(
+export declare extern type Path
+    raw: string
+    function join(self, other: string): Path
+end
+)");
+    CHECK(0 == same.warnings.size());
+
+    LintResult different = lint(R"(
+declare extern type Path
+    raw: number
+    function join(self, other: string): Path
+end
+)");
+    REQUIRE(1 == different.warnings.size());
+    CHECK_EQ(different.warnings[0].code, LintWarning::Code_DeclareMismatch);
+    CHECK_EQ(
+        different.warnings[0].text,
+        "Type 'Path' is declared here differently from the loaded definitions; add '--!nolint DeclareMismatch' if this is intended"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "DeclareMismatchIgnoresUntypedDeclarations")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    loadDefinition(R"(
+        declare version: string
+    )");
+
+    // `declare version` takes the environment's type, so there is nothing to disagree about
+    LintResult result = lint(R"(
+declare version
+return version
+)");
+    CHECK(0 == result.warnings.size());
 }
 
 TEST_SUITE_END();
