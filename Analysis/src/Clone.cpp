@@ -256,6 +256,10 @@ private:
         Property cloned = Property::create(cloneReadTy, cloneWriteTy);
         cloned.deprecated = p.deprecated;
         cloned.deprecatedSuggestion = p.deprecatedSuggestion;
+        // Luwu Classes (rfcs/classes): without these, a class whose types are cloned (one from a definition file, the
+        // builtin classes included) loses its private and const checks
+        cloned.isPrivate = p.isPrivate;
+        cloned.isConst = p.isConst;
         cloned.location = p.location;
         cloned.tags = p.tags;
         cloned.documentationSymbol = p.documentationSymbol;

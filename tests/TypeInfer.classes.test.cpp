@@ -29,6 +29,8 @@ LUAU_FASTINT(LuauSolverConstraintLimit)
 LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 LUAU_FASTFLAG(LuauCstAttr)
+LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(LuwuNonePrimitive)
 
 
 TEST_SUITE_BEGIN("TypeInferClasses");
@@ -6033,6 +6035,120 @@ local c = class.isinstance(p, Point)
     UnknownProperty* luauOnly = get<UnknownProperty>(luwu.errors[0]);
     REQUIRE(luauOnly);
     CHECK_EQ(luauOnly->key, "classof");
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "classes_from_definition_files_keep_private_and_const_members")
+{
+    loadDefinition(R"(
+        export class Counter(public const step: number)
+            private count = 0
+            public function bump(self)
+                self.count += self.step
+            end
+        end
+        declare counters: { Counter: class<Counter> }
+    )");
+
+    CheckResult result = check(R"(
+        --!strict
+        local counter = counters.Counter(1)
+        local count = counter.count
+        counter.step = 2
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<PrivatePropertyAccess>(result.errors[0]));
+    CHECK(get<ConstPropertyAssignment>(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_declarations")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local map = collections.orderedmap<<string, number>>()
+        map:set("a", 1)
+        local value = map:get("a")
+        local range = collections.pair(1, "x")
+        local first = range.first
+        local second = range.second
+        for key, entry in map do
+            local k: string = key
+            local v: number = entry
+        end
+        local queue = collections.vecdeque<<string>>()
+        queue:pushback("a")
+        local front = queue:popfront()
+        local list = collections.vec<<number>>()
+        for position, item in list do
+            local p: number = position
+            local i: number = item
+        end
+        map:set(1, "a")
+        list:push("a")
+        local private = map.order
+        range.first = 2
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    // `map:set(1, "a")`: the key and the value both have the wrong type
+    CHECK_EQ(result.errors[0].location.begin.line, 20);
+    CHECK_EQ(result.errors[1].location.begin.line, 20);
+    CHECK_EQ(result.errors[2].location.begin.line, 21);
+    // the declarations leave out private fields, which only the VM's classes have
+    CHECK_EQ(result.errors[3].location.begin.line, 22);
+    CHECK(get<ConstPropertyAssignment>(result.errors[4]));
+    CHECK_EQ(toString(requireType("map")), "orderedmap<string, number>");
+    CHECK_EQ(toString(requireType("value")), "number?");
+    CHECK_EQ(toString(requireType("first")), "number");
+    CHECK_EQ(toString(requireType("second")), "string");
+    CHECK_EQ(toString(requireType("front")), "string?");
+}
+
+// Luwu collections: an empty option is `none`, which gets `get` and `expect` while the library exists
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local empty = none:get()
+        local function fail(): number
+            return none:expect("no value")
+        end
+        local hit = collections.option.some(5)
+        local value = hit:get()
+        local good = collections.result.ok("x")
+        local text = good:expect()
+        local bad = collections.result.err(42)
+        local code = bad:err()
+        local missing = bad:get()
+        local typed: collections.option<number> = collections.option.none
+        local typedhit: collections.option<number> = hit
+        local notglobal: option<number> = hit
+    )");
+
+    // the library's types are its exports, not global type names
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
+    CHECK_EQ(toString(requireType("empty")), "none");
+    CHECK_EQ(toString(requireType("value")), "number");
+    CHECK_EQ(toString(requireType("text")), "string");
+    CHECK_EQ(toString(requireType("code")), "number");
+    CHECK_EQ(toString(requireType("missing")), "none");
 }
 
 TEST_SUITE_END();

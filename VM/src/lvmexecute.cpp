@@ -2689,19 +2689,28 @@ reentry:
                     {
                         LuaTable* mt = ttistable(ra) ? hvalue(ra)->metatable : ttisuserdata(ra) ? uvalue(ra)->metatable : cast_to(LuaTable*, NULL);
                         const TValue* fn = fasttm(L, mt, TM_ITER);
+                        // Luwu collections: a vec or vecdeque runs on the table iteration below over its storage
+                        LuaTable* items = NULL;
 
                         if (LUAU_UNLIKELY(fn == NULL && ttisobject(ra)))
                         {
-                            fn = luaT_gettmbyobj(L, ra, TM_ITER);
+                            items = luaR_collectionitems(L, objectvalue(ra));
+                            fn = items ? NULL : luaT_gettmbyobj(L, ra, TM_ITER);
                             // if the metamethod is not present, error.
-                            if (ttisnil(fn))
+                            if (!items && ttisnil(fn))
                             {
                                 VM_PROTECT_PC();
                                 luaG_typeerror(L, ra, "iterate over");
                             }
                         }
 
-                        if (fn)
+                        if (items)
+                        {
+                            sethvalue(L, ra + 1, items);
+                            setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(0)), LU_TAG_ITERATOR);
+                            setnilvalue(ra);
+                        }
+                        else if (fn)
                         {
                             setobj2s(L, ra + 1, ra);
                             setobj2s(L, ra, fn);

@@ -182,6 +182,35 @@ LUAI_FUNC void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* n
 
 LUAI_FUNC void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page);
 
+// Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits.
+struct luaR_NativeMember
+{
+    const char* name;
+    lua_CFunction method;
+    uint8_t flags;
+};
+
+/**
+ * Luwu builtin classes: builds a class from C++, the way the loader builds one from bytecode, and leaves it on the
+ * stack. `members` lists the fields first, in the order of their offsets, then the methods and metamethods. `init` is
+ * the class's `__init`, called with the new object and the constructor's arguments; without one, the class constructs
+ * like a class without `__init`. Names must outlive the state: methods use them as their debug names.
+ */
+LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init);
+
+/**
+ * Luwu builtin classes: the object a C method of `classdef` was called on, its first argument. Raises the error a
+ * Luwu method's prologue raises (luaG_selfclasserror) when that isn't an object of `classdef`.
+ */
+LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method);
+
+/**
+ * Luwu collections: the table a generic for loop over `object` runs on, or NULL when `object` isn't a `vec` or
+ * `vecdeque`. Its array part holds positions 1 to the count in order with nil after them, so the VM's own table
+ * iteration visits the same positions and values `__iter` would, with no call per step.
+ */
+LUAI_FUNC LuaTable* luaR_collectionitems(lua_State* L, LuauObject* object);
+
 /**
  * Callback for creating objects. This is written as a Lua API function and expects the stack to be:
  *

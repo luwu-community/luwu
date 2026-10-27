@@ -1,0 +1,569 @@
+--!nocheck
+-- Luwu collections: the `collections` library's builtin classes, which the VM builds in C++.
+
+local function entries(map): string
+    local text = ""
+    for key, value in map do
+        text ..= `{key}={value} `
+    end
+    return text
+end
+
+local function raises(f: () -> (), message: string)
+    local ok, err = pcall(f)
+    assert(not ok, `expected an error containing '{message}'`)
+    assert(string.find(tostring(err), message, 1, true), `expected '{message}' in '{err}'`)
+end
+
+-- pair, triple and quad hold their values under Kotlin's names
+do
+    const range = collections.pair(1, "x")
+    assert(range.first == 1 and range.second == "x")
+    assert(class.isinstance(range, collections.pair))
+    assert(class.name(range) == "pair")
+    assert(range == collections.pair(1, "x"))
+    assert(range ~= collections.pair(1, "y"))
+    assert(range ~= collections.triple(1, "x", nil))
+    assert(tostring(range) == `pair(1, "x")`)
+    assert(tostring(collections.pair("a\"b", nil)) == `pair("a\\"b", nil)`)
+
+    const color = collections.triple(255, 128, 0)
+    assert(color.first == 255 and color.second == 128 and color.third == 0)
+    assert(color == collections.triple(255, 128, 0))
+    assert(tostring(color) == "triple(255, 128, 0)")
+
+    const margins = collections.quad(1, 2, 3, 4)
+    assert(margins.fourth == 4)
+    assert(margins == collections.quad(1, 2, 3, 4))
+    assert(margins ~= collections.quad(1, 2, 3, 5))
+    assert(tostring(margins) == "quad(1, 2, 3, 4)")
+
+    -- the elements compare with ==, so nested tuples compare by value too
+    assert(collections.pair(range, 1) == collections.pair(collections.pair(1, "x"), 1))
+
+    raises(function()
+        range.first = 2
+    end, "'first' is a const member of 'pair'")
+    raises(function()
+        print(range.third)
+    end, "third")
+end
+
+-- a new key goes at the end; an existing key keeps its place
+do
+    const map = collections.orderedmap()
+    assert(#map == 0)
+    assert(map:get("a") == nil)
+    map:set("a", 1)
+    map:set("b", 2)
+    map:set("c", 3)
+    map:set("a", 10)
+    assert(entries(map) == "a=10 b=2 c=3 ")
+    assert(#map == 3)
+    assert(map:has("b") and not map:has("z"))
+    assert(map:index("c") == 3)
+    assert(map:index("z") == nil)
+    const key, value = map:at(2)
+    assert(key == "b" and value == 2)
+    assert(map:at(4) == nil)
+    assert(map:at(1.5) == nil)
+    assert(class.isinstance(map, collections.orderedmap))
+end
+
+-- entries move anywhere, and the positions follow
+do
+    const map = collections.orderedmap()
+    map:set("a", 1)
+    map:set("b", 2)
+    map:set("c", 3)
+    map:insert(1, "z", 26)
+    assert(entries(map) == "z=26 a=1 b=2 c=3 ")
+    map:move("c", 2)
+    assert(entries(map) == "z=26 c=3 a=1 b=2 ")
+    map:move("z", 4)
+    assert(entries(map) == "c=3 a=1 b=2 z=26 ")
+    map:movebefore("z", "c")
+    assert(entries(map) == "z=26 c=3 a=1 b=2 ")
+    map:moveafter("z", "b")
+    assert(entries(map) == "c=3 a=1 b=2 z=26 ")
+    map:swap("c", "z")
+    assert(entries(map) == "z=26 a=1 b=2 c=3 ")
+    map:insert(2, "c", 30)
+    assert(entries(map) == "z=26 c=30 a=1 b=2 ")
+    map:sort(function(a, b)
+        return a < b
+    end)
+    assert(entries(map) == "a=1 b=2 c=30 z=26 ")
+    for position = 1, #map do
+        const key = map:at(position)
+        assert(map:index(key) == position)
+    end
+end
+
+-- sort is stable, and survives a comparator that isn't a valid order
+do
+    const map = collections.orderedmap()
+    for i = 1, 50 do
+        map:set(i, i % 3)
+    end
+    map:sort(function(a, b)
+        return a % 3 < b % 3
+    end)
+    local previous = -1
+    local last = 0
+    for key in map do
+        if key % 3 == previous then
+            assert(key > last)
+        end
+        previous = key % 3
+        last = key
+    end
+
+    map:sort(function()
+        return math.random() < 0.5
+    end)
+    assert(#map == 50)
+    for position = 1, #map do
+        const key = map:at(position)
+        assert(map:index(key) == position)
+    end
+
+    local removed = false
+    raises(function()
+        map:sort(function(a, b)
+            if not removed then
+                removed = true
+                map:remove(a)
+            end
+            return (a or 0) < (b or 0)
+        end)
+    end, "orderedmap changed while it was being sorted")
+end
+
+-- removed entries free their ids for new keys
+do
+    const map = collections.orderedmap()
+    map:set("a", 1)
+    map:set("b", 2)
+    map:set("c", 3)
+    assert(map:remove("b") == 2)
+    assert(map:remove("b") == nil)
+    assert(entries(map) == "a=1 c=3 ")
+    map:set("d", 4)
+    map:set("e", 5)
+    assert(entries(map) == "a=1 c=3 d=4 e=5 ")
+    assert(map:index("e") == 4)
+    map:remove("a")
+    assert(map:index("c") == 1)
+    assert(map:at(1) == "c")
+end
+
+-- any value can be a key, and keys are compared like table keys
+do
+    const map = collections.orderedmap()
+    const t = {}
+    map:set(t, "table")
+    map:set(1, "one")
+    map:set(true, "yes")
+    assert(map:get(t) == "table" and map:get(1) == "one" and map:get(true) == "yes")
+    assert(map:get({}) == nil)
+    raises(function()
+        map:set(nil, 1)
+    end, "key can't be nil")
+    raises(function()
+        map:set(0 / 0, 1)
+    end, "key can't be NaN")
+end
+
+-- out-of-range positions and missing keys raise at the caller
+do
+    const map = collections.orderedmap()
+    map:set("a", 1)
+    raises(function()
+        map:move("missing", 1)
+    end, `orderedmap has no key "missing"`)
+    raises(function()
+        map:move("a", 2)
+    end, "position 2 is out of range 1 to 1")
+    raises(function()
+        map:insert(3, "b", 2)
+    end, "position 3 is out of range 1 to 2")
+    raises(function()
+        map:move("a", 1.5)
+    end, "position 1.5 is out of range")
+
+    const ok, err = pcall(function()
+        map:move("missing", 1)
+    end)
+    assert(string.find(err, "collections.luwu:", 1, true), err)
+end
+
+-- iterating stops on a key removed under it
+do
+    const map = collections.orderedmap()
+    map:set("a", 1)
+    map:set("b", 2)
+    raises(function()
+        for key in map do
+            map:remove(key)
+        end
+    end, `orderedmap lost key "a" while it was being iterated`)
+end
+
+-- private state stays private
+do
+    const map = collections.orderedmap()
+    raises(function()
+        print(map.order)
+    end, "'order' is a private member of 'orderedmap'")
+    raises(function()
+        map.count = 5
+    end, "'count' is a private member of 'orderedmap'")
+end
+
+-- a method called on the wrong receiver names the method and what it got
+do
+    const map = collections.orderedmap()
+    const list = collections.vec()
+    raises(function()
+        map.get(list, 1)
+    end, "attempt to call method 'orderedmap.get' with 'self' of class 'vec'")
+    raises(function()
+        map.get(nil, 1)
+    end, "attempt to call method 'orderedmap.get' with 'self' of type 'nil'")
+end
+
+-- vec: a growable array
+do
+    const list = collections.vec()
+    assert(#list == 0 and list:pop() == nil and list:at(1) == nil)
+    list:push(10)
+    list:push(30)
+    list:insert(2, 20)
+    list:insert(1, 5)
+    list:insert(5, 40)
+    local text = ""
+    for i, x in list do
+        text ..= `{i}:{x} `
+    end
+    assert(text == "1:5 2:10 3:20 4:30 5:40 ")
+    assert(list:remove(1) == 5)
+    assert(list:remove(4) == 40)
+    assert(list:pop() == 30)
+    assert(#list == 2 and list:at(1) == 10 and list:at(2) == 20)
+    list:set(2, 25)
+    assert(list:at(2) == 25)
+    raises(function()
+        list:set(3, 1)
+    end, "position 3 is out of range 1 to 2")
+    raises(function()
+        list:remove(0)
+    end, "position 0 is out of range 1 to 2")
+    list:clear()
+    assert(#list == 0)
+    -- the element type outlives a clear
+    raises(function()
+        list:push("x")
+    end, "this vec can only accept numbers, but you passed a string")
+end
+
+-- vecdeque: both ends, through growth and wrap-around
+do
+    const queue = collections.vecdeque()
+    assert(queue:front() == nil and queue:back() == nil and queue:popfront() == nil and queue:popback() == nil)
+    queue:pushback("b")
+    queue:pushfront("a")
+    queue:pushback("c")
+    for i = 1, 20 do
+        queue:pushback(`x{i}`)
+        queue:pushfront(`y{i}`)
+    end
+    for i = 1, 20 do
+        assert(queue:popback() == `x{21 - i}`)
+        assert(queue:popfront() == `y{21 - i}`)
+    end
+    assert(#queue == 3 and queue:front() == "a" and queue:back() == "c" and queue:at(2) == "b")
+    queue:set(2, "B")
+    local text = ""
+    for i, x in queue do
+        text ..= `{i}{x}`
+    end
+    assert(text == "1a2B3c")
+    assert(queue:popfront() == "a" and queue:popback() == "c" and queue:popfront() == "B" and #queue == 0)
+
+    -- a long run in one direction wraps the ring many times
+    const numbers = collections.vecdeque()
+    for i = 1, 1000 do
+        numbers:pushback(i)
+        if i % 3 == 0 then
+            numbers:popfront()
+        end
+    end
+    assert(#numbers == 667 and numbers:front() == 334 and numbers:back() == 1000)
+    numbers:clear()
+    assert(#numbers == 0 and numbers:front() == nil)
+end
+
+-- vec and vecdeque take one type of value, and never nil
+do
+    raises(function()
+        collections.vecdeque():pushback(nil)
+    end, "this vecdeque can't accept nil")
+
+    const queue = collections.vecdeque()
+    queue:pushback("a")
+    raises(function()
+        queue:pushfront({})
+    end, "this vecdeque can only accept strings, but you passed a table")
+    raises(function()
+        queue:pushback(none)
+    end, "this vecdeque can only accept strings, but you passed none")
+
+    const tuples = collections.vec()
+    tuples:push(collections.pair(1, 2))
+    raises(function()
+        tuples:push(collections.orderedmap())
+    end, "this vec can only accept 'pair' objects, but you passed an 'orderedmap' object")
+    raises(function()
+        tuples:insert(1, collections.triple(1, 2, 3))
+    end, "this vec can only accept 'pair' objects, but you passed a 'triple' object")
+
+    const flags = collections.vec()
+    flags:push(true)
+    raises(function()
+        flags:push(1)
+    end, "this vec can only accept booleans, but you passed a number")
+end
+
+-- vec and vecdeque take an optional list, checked value by value like `push` does, and print as that call
+do
+    const list = collections.vec({ 1, 2, 3 })
+    assert(#list == 3 and list:at(1) == 1 and list:at(3) == 3)
+    assert(tostring(list) == "vec({1, 2, 3})")
+    assert(tostring(collections.vec()) == "vec()")
+
+    const queue = collections.vecdeque({ "a", "b" })
+    queue:pushfront("z")
+    assert(queue:front() == "z" and queue:back() == "b")
+    assert(tostring(queue) == `vecdeque(\{"z", "a", "b"})`)
+
+    raises(function()
+        collections.vec({ 1, "two" })
+    end, "this vec can only accept numbers, but you passed a string")
+    raises(function()
+        collections.vecdeque({ 1, nil, 3 })
+    end, "this vecdeque can only accept numbers, but you passed nil")
+    raises(function()
+        collections.vec(5)
+    end, "vec() takes a list of values, but you passed a number")
+end
+
+-- a generic for loop over a vec or vecdeque visits positions 1 to the count in order, wherever the storage starts
+do
+    const function collect(container): string
+        const parts = {}
+        for position, value in container do
+            table.insert(parts, `{position}={value}`)
+        end
+        return table.concat(parts, " ")
+    end
+
+    const queue = collections.vecdeque({ 3, 4 })
+    queue:pushfront(2)
+    queue:pushfront(1)
+    queue:pushback(5)
+    assert(collect(queue) == "1=1 2=2 3=3 4=4 5=5")
+    queue:popfront()
+    queue:pushfront(0)
+    assert(collect(queue) == "1=0 2=2 3=3 4=4 5=5")
+    assert(queue:front() == 0 and queue:back() == 5 and queue:at(3) == 3)
+    for _ = 1, 5 do
+        queue:popback()
+    end
+    assert(collect(queue) == "" and queue:front() == nil)
+
+    const list = collections.vec()
+    for i = 1, 100 do
+        list:insert(1, i)
+    end
+    list:remove(1)
+    list:pop()
+    local expected = 99
+    local visited = 0
+    for position, value in list do
+        visited += 1
+        assert(position == visited and value == expected)
+        expected -= 1
+    end
+    assert(visited == 98)
+
+    -- pushing while looping is unspecified but memory safe
+    const growing = collections.vec({ 1 })
+    local steps = 0
+    for _, value in growing do
+        steps += 1
+        if value < 50 then
+            growing:push(value + 1)
+        end
+        if steps > 1000 then
+            break
+        end
+    end
+    assert(#growing == 50)
+end
+
+-- printing a large container grows its string buffer while values are shown, and an element's own __tostring may
+-- change the container it's printed from
+class Named
+    name: string
+    function __tostring(self)
+        return `Named({self.name})`
+    end
+end
+
+-- what a Clearing object clears when it's printed
+local printing: collections.vec<Clearing>? = nil
+
+class Clearing
+    function __tostring(self)
+        assert(printing):clear()
+        return "cleared"
+    end
+end
+
+do
+    const queue = collections.vecdeque()
+    for i = 1, 200 do
+        queue:pushback(Named { name = string.rep("x", i) })
+    end
+    const shown = tostring(queue)
+    assert(#shown > 20000 and string.find(shown, "Named(" .. string.rep("x", 200) .. ")", 1, true))
+
+    const long = string.rep("\"quoted\"\n", 500)
+    assert(#tostring(collections.vec({ long, long })) > 2 * #long)
+    assert(#tostring(collections.pair(long, long)) > 2 * #long)
+    assert(#tostring(collections.option.some(long)) > #long)
+
+    const list = collections.vec({ Clearing {}, Clearing {}, Clearing {} })
+    printing = list
+    assert(tostring(list) == "vec({cleared, nil, nil})")
+end
+
+-- option: a `some` object, or `none` itself, which gets `get` and `expect` from collections
+do
+    const option = collections.option
+    assert(option.none == none)
+
+    const hit = option.some("ada")
+    assert(hit:get() == "ada" and hit:expect("missing") == "ada")
+    assert(class.isinstance(hit, option.some) and class.name(hit) == "some")
+    assert(hit == option.some("ada") and hit ~= option.some("bob"))
+    assert(tostring(hit) == `option.some("ada")`)
+
+    assert(none:get() == none)
+    raises(function()
+        none:expect("no user 2")
+    end, "no user 2")
+    raises(function()
+        none:expect()
+    end, "expected a value, but got none")
+
+    -- `none` has only those two: indexing it otherwise raises as it always did
+    raises(function()
+        print(none.foo)
+    end, "attempt to index none with 'foo'")
+    raises(function()
+        none.get = 1
+    end, "none")
+
+    raises(function()
+        option.some(nil)
+    end, "option.some needs a value, but you passed nil")
+    raises(function()
+        option.some(none)
+    end, "option.some needs a value, but you passed none")
+    raises(function()
+        hit.value = 1
+    end, "'value' is a private member of 'some'")
+end
+
+-- result: an `ok` or an `err` object
+do
+    const result = collections.result
+    const good = result.ok(5)
+    const bad = result.err("not a number")
+    assert(good:get() == 5 and good:expect("why") == 5 and good:err() == none)
+    assert(bad:get() == none and bad:err() == "not a number")
+    assert(tostring(good) == "result.ok(5)" and tostring(bad) == `result.err("not a number")`)
+    assert(good == result.ok(5) and bad ~= result.err("other") and good ~= result.err(5))
+    assert(class.isinstance(bad, result.err) and not class.isinstance(bad, result.ok))
+
+    -- `ok` holds any value, `nil` included
+    assert(result.ok(nil):get() == nil)
+
+    raises(function()
+        bad:expect("parsing failed")
+    end, "parsing failed: not a number")
+
+    -- without a message, `expect` raises the error itself, so one that isn't a string arrives intact
+    const structured = result.err({ code = 7 })
+    const ok, raised = pcall(function()
+        structured:expect()
+    end)
+    assert(not ok and raised.code == 7)
+end
+
+-- a container of an option or a result takes all of its variants: `none` goes in as the empty option
+do
+    const options = collections.vec()
+    options:push(none)
+    options:push(collections.option.some(1))
+    options:push(collections.option.some("x"))
+    assert(#options == 3 and options:at(1) == none and options:at(2):get() == 1)
+    raises(function()
+        options:push(collections.result.ok(1))
+    end, "this vec can only accept options, but you passed an 'ok' object")
+    raises(function()
+        options:push(nil)
+    end, "this vec can only accept options, but you passed nil")
+
+    const results = collections.vecdeque()
+    results:pushback(collections.result.ok(1))
+    results:pushfront(collections.result.err("no"))
+    assert(results:front():err() == "no" and results:back():get() == 1)
+    raises(function()
+        results:pushback(none)
+    end, "this vecdeque can only accept results, but you passed none")
+
+    const strings = collections.vec()
+    strings:push("a")
+    raises(function()
+        strings:push(none)
+    end, "this vec can only accept strings, but you passed none")
+end
+
+-- every class's data lives in ordinary values, which collections keep alive
+do
+    const maps = {}
+    for i = 1, 200 do
+        const map = collections.orderedmap()
+        for j = 1, 20 do
+            map:set(`k{j}`, { j })
+        end
+        map:remove("k5")
+        table.insert(maps, map)
+
+        const queue = collections.vecdeque()
+        for j = 1, 20 do
+            queue:pushback({ j })
+        end
+        table.insert(maps, queue)
+    end
+    collectgarbage()
+    for i = 1, #maps, 2 do
+        assert(maps[i]:get("k20")[1] == 20 and maps[i]:get("k5") == nil)
+        assert(maps[i + 1]:back()[1] == 20)
+    end
+end
+
+return "OK"

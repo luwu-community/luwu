@@ -1741,6 +1741,13 @@ static bool isTopLevelStatementPosition(const std::vector<AstNode*>& ancestry)
     return true;
 }
 
+// Luwu: a Luau or Lua module can't use a global only Luwu has (LuwuOnlyApi), so it isn't offered there. A local of
+// that name is the module's own.
+static bool isLuwuOnlyGlobalIn(const Module& module, const Symbol& name)
+{
+    return module.language != Language::Luwu && !name.local && name.global.value && isLuwuOnlyGlobal(name.global.value);
+}
+
 static AutocompleteEntryMap autocompleteStatement(
     const Module& module,
     const std::vector<AstNode*>& ancestry,
@@ -1763,7 +1770,7 @@ static AutocompleteEntryMap autocompleteStatement(
     {
         for (const auto& [name, binding] : scope->bindings)
         {
-            if (!isBindingLegalAtCurrentPosition(name, binding, position))
+            if (!isBindingLegalAtCurrentPosition(name, binding, position) || isLuwuOnlyGlobalIn(module, name))
                 continue;
 
             std::string n = toString(name);
@@ -1973,7 +1980,7 @@ static AutocompleteContext autocompleteExpression(
         {
             for (const auto& [name, binding] : scope->bindings)
             {
-                if (!isBindingLegalAtCurrentPosition(name, binding, position))
+                if (!isBindingLegalAtCurrentPosition(name, binding, position) || isLuwuOnlyGlobalIn(module, name))
                     continue;
 
                 if (isBeingDefined(ancestry, name))

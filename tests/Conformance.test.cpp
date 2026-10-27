@@ -4,6 +4,7 @@
 #include "lua.h"
 #include "lapix.h"
 #include "lobject.h"
+#include "lstate.h"
 #include "lualib.h"
 #include "luacode.h"
 #include "luacodegen.h"
@@ -27,6 +28,7 @@
 #include <fstream>
 #include <chrono>
 #include <functional>
+#include <set>
 #include <tuple>
 #include <thread>
 #include <string>
@@ -106,6 +108,8 @@ LUAU_FASTFLAG(LuauCodegenFixTwoResA64Builtin)
 LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
@@ -4790,6 +4794,122 @@ TEST_CASE("CursedClasses")
     };
 
     runConformance("cursed_classes.luwu");
+}
+
+static std::string joinNames(const std::set<std::string>& names)
+{
+    std::string joined;
+    for (const std::string& name : names)
+        joined += name + " ";
+    return joined;
+}
+
+// The public members a builtin class's objects have in the VM, metamethods included
+static std::string vmClassMembers(const LuauClass* classdef)
+{
+    std::set<std::string> names;
+    for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+    {
+        const TString* name = classdef->offsettomember[i];
+        if (name && !(classdef->memberflags[i] & LBC_CLASSMEMBER_PRIVATE))
+            names.insert(getstr(name));
+    }
+    return joinNames(names);
+}
+
+// The public members the type checker gives the objects of the class value `classValue`: their properties, except
+// `__init`, which can't be read, and the metamethods in their metatable
+static std::string declaredClassMembers(Luau::TypeId classValue)
+{
+    std::set<std::string> names;
+    const Luau::ExternType* value = Luau::get<Luau::ExternType>(Luau::follow(classValue));
+    REQUIRE(value);
+    REQUIRE(value->relation);
+    const Luau::Obj* obj = Luau::get_if<Luau::Obj>(&*value->relation);
+    REQUIRE(obj);
+    const Luau::ExternType* object = Luau::get<Luau::ExternType>(Luau::follow(obj->ty));
+    REQUIRE(object);
+
+    for (const auto& prop : object->props())
+    {
+        if (!prop.second.isPrivate && prop.first != "__init")
+            names.insert(prop.first);
+    }
+
+    if (object->metatable)
+    {
+        const Luau::TableType* metatable = Luau::get<Luau::TableType>(Luau::follow(*object->metatable));
+        REQUIRE(metatable);
+        for (const auto& metamethod : metatable->props)
+            names.insert(metamethod.first);
+    }
+    return joinNames(names);
+}
+
+// The declared class value named `name` in the library table, or in a table it holds (`option.some`)
+static std::optional<Luau::TypeId> declaredClassValue(const Luau::TableType* library, const std::string& name)
+{
+    auto direct = library->props.find(name);
+    if (direct != library->props.end() && direct->second.readTy)
+        return direct->second.readTy;
+
+    for (const auto& prop : library->props)
+    {
+        const Luau::TableType* nested = prop.second.readTy ? Luau::get<Luau::TableType>(Luau::follow(*prop.second.readTy)) : nullptr;
+        if (!nested)
+            continue;
+        auto inner = nested->props.find(name);
+        if (inner != nested->props.end() && inner->second.readTy)
+            return inner->second.readTy;
+    }
+    return std::nullopt;
+}
+
+// Luwu collections: the builtin definitions declare each class the VM builds, with exactly its public members
+TEST_CASE("CollectionsDeclarationsMatchTheVm")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    Luau::NullFileResolver fileResolver;
+    Luau::NullConfigResolver configResolver;
+    Luau::Frontend frontend{Luau::SolverMode::New, &fileResolver, &configResolver};
+    Luau::registerBuiltinGlobals(frontend, frontend.globals);
+
+    const Luau::TableType* library = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "collections")));
+    REQUIRE(library);
+
+    StateRef state(luaL_newstate(), lua_close);
+    luaL_openlibs(state.get());
+
+    for (int kind = 0; kind < LUWU_BUILTIN__COUNT; kind++)
+    {
+        const LuauClass* classdef = state->global->builtinclasses[kind];
+        REQUIRE(classdef);
+        std::string name = getstr(classdef->name);
+        INFO(name);
+
+        std::optional<Luau::TypeId> declared = declaredClassValue(library, name);
+        REQUIRE(declared);
+        CHECK_EQ(declaredClassMembers(*declared), vmClassMembers(classdef));
+    }
+}
+
+TEST_CASE("Collections")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    runConformance("collections.luwu");
 }
 
 TEST_CASE("ClassesExportHoistingRepro")

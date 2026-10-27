@@ -924,18 +924,26 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
         // Luwu Classes (rfcs/classes): an object's __iter lives on its class's instance metatable. Native code
         // runs every generic for loop's prep through here, so this has to match VM_CASE(LOP_FORGPREP) in
         // lvmexecute.cpp.
+        LuaTable* items = NULL;
         if (FFlag::LuwuClasses && LUAU_UNLIKELY(fn == NULL && ttisobject(ra)))
         {
-            fn = luaT_gettmbyobj(L, ra, TM_ITER);
+            items = luaR_collectionitems(L, objectvalue(ra));
+            fn = items ? NULL : luaT_gettmbyobj(L, ra, TM_ITER);
             // if the metamethod is not present, error.
-            if (ttisnil(fn))
+            if (!items && ttisnil(fn))
             {
                 VM_PROTECT_PC();
                 luaG_typeerror(L, ra, "iterate over");
             }
         }
 
-        if (fn)
+        if (items)
+        {
+            sethvalue(L, ra + 1, items);
+            setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(0)), LU_TAG_ITERATOR);
+            setnilvalue(ra);
+        }
+        else if (fn)
         {
             setobj2s(L, ra + 1, ra);
             setobj2s(L, ra, fn);
