@@ -112,6 +112,7 @@ LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(LuwuBufferMemcmp)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
 
@@ -1281,6 +1282,8 @@ TEST_CASE("Basic")
 
 TEST_CASE("Buffers")
 {
+    ScopedFastFlag bufferMemcmpFlag{FFlag::LuwuBufferMemcmp, true};
+
     runConformance(
         "buffers.luau",
         [](lua_State* L)
@@ -1391,6 +1394,20 @@ TEST_CASE("TableDropFlagDisabled")
 
     lua_getglobal(L, "table");
     lua_getfield(L, -1, "drop");
+    CHECK(lua_isnil(L, -1));
+
+    lua_close(L);
+}
+
+TEST_CASE("BufferMemcmpFlagDisabled")
+{
+    ScopedFastFlag bufferMemcmpFlag{FFlag::LuwuBufferMemcmp, false};
+
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+
+    lua_getglobal(L, "buffer");
+    lua_getfield(L, -1, "memcmp");
     CHECK(lua_isnil(L, -1));
 
     lua_close(L);
@@ -2226,6 +2243,7 @@ TEST_CASE("Types")
     ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
     ScopedFastFlag nonePrimitive{FFlag::LuwuNonePrimitive, true};
     ScopedFastFlag tableDropFlag{FFlag::LuwuTableDrop, true};
+    ScopedFastFlag bufferMemcmpFlag{FFlag::LuwuBufferMemcmp, true};
 
     runConformance(
         "types.luau",

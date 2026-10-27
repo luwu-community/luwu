@@ -10,6 +10,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(LuwuBufferMemcmp)
 LUAU_FASTFLAG(LuwuTableDrop)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuDeclareStatements)
@@ -312,6 +313,11 @@ static constexpr const char* kBuiltinDefinitionBufferSrcBatched = R"BUILTIN_SRC(
     packf64: @checked (b: buffer, offset: number, ...number) -> (),
 )BUILTIN_SRC";
 
+// Luwu buffer.memcmp (rfcs/buffer-memcmp.md):
+static constexpr const char* kBuiltinDefinitionBufferSrcMemcmp = R"BUILTIN_SRC(
+    memcmp: @checked (b1: buffer, b2: buffer, offset1: number?, offset2: number?, count: number?) -> number,
+)BUILTIN_SRC";
+
 static constexpr const char* kBuiltinDefinitionBufferSrcClose = R"BUILTIN_SRC(
 }
 
@@ -561,6 +567,8 @@ std::string getBuiltinDefinitionSource()
         result += kBuiltinDefinitionBufferSrcIsFrozen;
     if (FFlag::LuwuBufferBatched)
         result += kBuiltinDefinitionBufferSrcBatched;
+    if (FFlag::LuwuBufferMemcmp)
+        result += kBuiltinDefinitionBufferSrcMemcmp;
     result += kBuiltinDefinitionBufferSrcClose;
 
     result += kBuiltinDefinitionVectorSrc;
