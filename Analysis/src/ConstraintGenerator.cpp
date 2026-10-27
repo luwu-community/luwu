@@ -1746,8 +1746,8 @@ void ConstraintGenerator::recordNeededTypeArguments(
 
 void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<AstStat*>& statements)
 {
-    // A trait statement, or a `declare trait type` (Luwu Declare Statements, rfcs/declare-statements.md), which the
-    // file's own block links, like it prototypes it.
+    // A trait statement, or a `declare trait` or `trait type` (Luwu Declare Statements, rfcs/declare-statements.md),
+    // which the file's own block links, like it prototypes it.
     auto traitOf = [&](AstStat* stat) -> AstStatClass*
     {
         AstStatClass* trait = stat->as<AstStatClass>();
