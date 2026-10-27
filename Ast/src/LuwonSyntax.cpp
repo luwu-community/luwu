@@ -258,14 +258,12 @@ struct LuwonSyntaxChecker
             report(stat->location, "Data files can only hold 'const' and 'type' declarations and a final 'return'");
     }
 
-    // Even a constructor call is a mistake on its own line because nothing receives its value.
+    // A call on its own line: nothing receives its value, so even a constructor is a mistake. An expression statement is
+    // always a call; the parser reports anything else.
     void checkStatExpr(AstStatExpr* stat)
     {
-        AstExprCall* call = stat->expr->as<AstExprCall>();
-        if (call && luwonConstructorOf(call) == LuwonConstructor::None)
-            report(stat->location, kOnlyConstructorsMessage);
-        else
-            report(stat->location, "Bind this value with 'const' or return it");
+        if (stat->expr->is<AstExprCall>())
+            report(stat->location, "Only 'vector.create', 'buffer.fromstring' and classes can be called in a data file, to give a const or the returned value");
     }
 
     void checkChunk(AstStatBlock* root)

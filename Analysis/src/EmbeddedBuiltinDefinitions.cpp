@@ -367,13 +367,14 @@ declare integer: {
 )BUILTIN_SRC";
 
 // Luwu object notation: the `luwon` library. Tables a file returns carry their comments and locations in a metatable
-// luwon owns; `comments` and `setcomments` read and replace them. `classes` maps the names a file may construct to
-// classes, or to `{ class = C, args = function(object) ... end }` to write them too.
+// luwon owns; `comments` and `setcomments` read and replace them. `decode<<T>>` gives the value the type the caller
+// expects, the way a JSON decoder does: the file itself isn't checked against it. `classes` maps the names a file may
+// construct to classes, or to `{ class = C, args = function(object) ... end }` to write them too.
 static const char* const kBuiltinDefinitionLuwonSrc = R"BUILTIN_SRC(
 
 declare luwon: {
-    decode: @checked (text: string, classes: { [string]: unknown }?) -> unknown,
-    encode: @checked (value: unknown, classes: { [string]: unknown }?) -> string,
+    decode: @checked <T>(text: string, classes: { [string]: unknown }?) -> T,
+    encode: @checked <T>(value: T, classes: { [string]: unknown }?) -> string,
     comments: ((t: {}, key: string | number | boolean) -> {
         above: { { text: string, location: { begin: vector, ["end"]: vector }? } },
         after: { text: string, location: { begin: vector, ["end"]: vector }? }?,

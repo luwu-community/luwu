@@ -8,6 +8,7 @@
 
 #include "doctest.h"
 
+#include <algorithm>
 #include <string>
 #include <string.h>
 #include <vector>
@@ -145,7 +146,8 @@ TEST_CASE("luwon_rejects_everything_but_data")
     CHECK(firstError("for i = 1, 2 do end\nreturn 1") == "Data files can't loop");
     CHECK(firstError("if true then end\nreturn 1") == "Data files can't branch: 'if' statements aren't allowed");
     CHECK(firstError("y = 2\nreturn 1") == "Data files can't reassign anything: every binding is const");
-    CHECK(firstError("vector.create(1, 2, 3)\nreturn 1") == "Bind this value with 'const' or return it");
+    CHECK(firstError("vector.create(1, 2, 3)\nreturn 1") == "Only 'vector.create', 'buffer.fromstring' and classes can be called in a data file, to give a const or the returned value");
+    CHECK(firstError("print(1)\nreturn 1") == "Only 'vector.create', 'buffer.fromstring' and classes can be called in a data file, to give a const or the returned value");
     CHECK(firstError("return 1, 2") == "Return exactly one value from a data file");
     CHECK(firstError("const x = 1") == "End the data file with 'return <value>'");
 }
@@ -437,6 +439,46 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "luwon_syntax_errors_are_reported_by_analysis
     const SyntaxError* error = get<SyntaxError>(result.errors[0]);
     REQUIRE(error);
     CHECK(error->message == "Declare 'x' with 'const': data files have no 'local' bindings");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "luwon_reports_calling_a_function_as_a_class")
+{
+    fileResolver.source["game/config.luwon"] = R"(
+const x = 2
+return { y = print(x), origin = Point(1, 2) }
+)";
+
+    CheckResult result = getFrontend().check("game/config.luwon");
+
+    std::vector<std::string> messages;
+    for (const TypeError& error : result.errors)
+        messages.push_back(toString(error));
+
+    // `Point` may be a class the reader passes in, which analysis can't see: it's only an unknown global
+    REQUIRE_EQ(messages.size(), 2);
+    CHECK(std::find(
+              messages.begin(),
+              messages.end(),
+              "'print' is a function, and only 'vector.create', 'buffer.fromstring' and classes can be called in a data file"
+          ) != messages.end());
+    bool reportsPointAsUnknown = get<UnknownSymbol>(result.errors[0]) || get<UnknownSymbol>(result.errors[1]);
+    CHECK(reportsPointAsUnknown);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "luwon_decode_takes_the_type_to_give_its_value")
+{
+    CheckResult result = check(R"(
+type Config = { threads: number }
+
+local config = luwon.decode<<Config>>("return { threads = 4 }")
+local threads: number = config.threads
+local name: string = config.threads
+
+local text: string = luwon.encode<<Config>>(config)
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(result.errors[0].location.begin.line == 5);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "luwon_typewriting")
