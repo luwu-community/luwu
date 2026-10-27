@@ -8461,7 +8461,7 @@ TEST_CASE_FIXTURE(Fixture, "class_and_trait_keywords_in_an_extern_type")
         CHECK_EQ(errors[0], message);
     };
 
-    const std::string accessSpecifier = "Extern types have no access specifiers; every member is public. To declare a class, use 'declare class type'";
+    const std::string accessSpecifier = "Extern types have no access specifiers; every member is public. For a class's type, use 'class type'";
     onlyError("declare extern type Cat\n    public function meow(self)\nend", accessSpecifier);
     onlyError("declare extern type Cat\n    private name: string\nend", accessSpecifier);
     onlyError("declare extern type Cat\n    const name: string\nend", "Extern types have no 'const'; write 'read' for a read-only property");
