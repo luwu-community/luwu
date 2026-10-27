@@ -1,0 +1,4 @@
+-- exports are const, so reassigning one is an error
+export foo = 5
+
+foo = 6

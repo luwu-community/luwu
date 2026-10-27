@@ -215,8 +215,8 @@ TEST_CASE_FIXTURE(FrontendFixture, "export_value_modules_have_typed_require_surf
 
     fileResolver.source["game/ModuleA"] = R"(
         --!strict
-        export local version = "1.0.0"
-        export const answer = 42
+        export version = "1.0.0"
+        export answer = 42
 
         export function inc(x: number): number
             return x + 1

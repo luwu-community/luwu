@@ -63,6 +63,10 @@ namespace
 // Users have read that as "my Luwu build is broken", so say what is actually wrong.
 const LuwuFeature kClassesFeature{"classes", /* plural= */ true, "LuwuClasses"};
 const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ true, "LuwuDefaultArguments"};
+// Luwu Export Values (rfcs/export-values.md): exporting values (`export x = v`, `export function`). Upstream only has
+// them behind LuauExportValueSyntax, which its library and Roblox leave off, so they're Luwu's. `export type` is ordinary
+// Luau.
+const LuwuFeature kExportsFeature{"exported values", /* plural= */ true, "LuauExportValueSyntax"};
 // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, `declare` is only allowed where it
 // visibly applies to the whole file.
 const char* const kDeclarationPlacementError =
@@ -200,16 +204,66 @@ std::vector<std::pair<Location, std::string>> deprecatedArgsValidator(Location a
     return errors;
 }
 
+// Luwu: `@[nolint(...)]` and `@[lint(...)]` take lint names, written bare like `--!nolint` takes them
+// (`@[nolint(LocalUnused)]`), or as strings. The linter checks that the names exist; the parser doesn't know them.
+std::vector<std::pair<Location, std::string>> lintNamesArgsValidator(Location attrLoc, const AstArray<AstExpr*>& args)
+{
+    std::vector<std::pair<Location, std::string>> errors;
+    for (AstExpr* arg : args)
+    {
+        bool isName = arg->is<AstExprGlobal>() || arg->is<AstExprLocal>() || arg->is<AstExprConstantString>();
+        if (!isName)
+            errors.emplace_back(arg->location, "Lint attributes take lint names, like '@[nolint(LocalUnused)]'");
+    }
+    return errors;
+}
+
+// Luwu: `@nodiscard`, or `@[nodiscard("reason")]` with one string saying what to do with the result
+std::vector<std::pair<Location, std::string>> nodiscardArgsValidator(Location attrLoc, const AstArray<AstExpr*>& args)
+{
+    bool valid = args.size == 0 || (args.size == 1 && args.data[0]->is<AstExprConstantString>());
+    if (!valid)
+        return {{attrLoc, "@nodiscard takes at most one string, the reason: '@[nodiscard(\"use the returned copy\")]'"}};
+
+    return {};
+}
+
+// Luwu: `@[lint]` has to name what it turns on. "Every lint" would include the ones the type checking mode turns off
+// because the checker already reports them, such as UnknownGlobal in strict mode.
+std::vector<std::pair<Location, std::string>> lintOnArgsValidator(Location attrLoc, const AstArray<AstExpr*>& args)
+{
+    if (args.size == 0)
+        return {{attrLoc, "@lint needs the lints to turn on, like '@[lint(LocalUnused)]'"}};
+
+    return lintNamesArgsValidator(attrLoc, args);
+}
+
+// Luwu: the attributes whose arguments are names rather than literals
+static bool takesNameArguments(const char* attributeName)
+{
+    return strcmp(attributeName, "nolint") == 0 || strcmp(attributeName, "lint") == 0;
+}
+
 // @checked and @native describe how a function is compiled or typechecked, so they mean nothing
 // anywhere else. @deprecated marks an API as one callers should stop using, which every position
 // can have.
 // The fields deprecatedArgsValidator accepts.
 const char* const kDeprecatedArgumentFields[] = {"use", "reason", nullptr};
 
+// Luwu: where `@[nolint]` and `@[lint]` may be written: anything with a body whose warnings they scope, and a `local`
+// or `const`, whose bindings they cover wherever a lint reports their use
+const AstAttr::Context kLintScopeContexts = AstAttr::Context(
+    unsigned(AstAttr::Context::AnyFunction) | unsigned(AstAttr::Context::Class) | unsigned(AstAttr::Context::ClassField) |
+    unsigned(AstAttr::Context::Local)
+);
+
 AttributeEntry kAttributeEntries[] = {
     {"checked", AstAttr::Type::Checked, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
     {"native", AstAttr::Type::Native, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
     {"deprecated", AstAttr::Type::Deprecated, AstAttr::Context::Any, nullptr, kDeprecatedArgumentFields, deprecatedArgsValidator},
+    {"nolint", AstAttr::Type::Nolint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintNamesArgsValidator},
+    {"lint", AstAttr::Type::Lint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintOnArgsValidator},
+    {"nodiscard", AstAttr::Type::Nodiscard, AstAttr::Context::AnyFunction, "functions", nullptr, nodiscardArgsValidator},
     {nullptr, AstAttr::Type::Checked, AstAttr::Context::None, nullptr, nullptr, {}}
 };
 
@@ -529,6 +583,8 @@ AstStatBlock* Parser::parseChunk()
     if (lexer.current().type != Lexeme::Eof)
         expectAndConsumeFail(Lexeme::Eof, nullptr);
 
+    reportValuelessExports(result);
+
     return result;
 }
 
@@ -701,6 +757,11 @@ AstStat* Parser::parseStat()
                 Location typeKeywordLocation = current.location;
                 nextLexeme();
                 return parseTypeAlias(expr->location, /* exported= */ true, typeKeywordPosition, typeKeywordLocation);
+            }
+            // Luwu: `export value = y` is `export const value = y`
+            else if (current.type == Lexeme::Name)
+            {
+                return parseExportValue(expr->location, expr->location, AstArray<AstAttr*>({nullptr, 0}));
             }
         }
         // TODO: remove with LuauExportValueSyntax
@@ -1242,7 +1303,8 @@ void Parser::parseAttrList(TempVector<AstAttr*>& attributes, TempVector<CstAttrL
                 auto [args, argsLocation, _exprLocation] =
                     options.storeCstData ? parseCallList(&argCommaPositions, &closeParenPosition) : parseCallList(nullptr, nullptr);
 
-                reportNonLiteralAttributeArgs(args, argsLocation);
+                if (!takesNameArguments(attrName))
+                    reportNonLiteralAttributeArgs(args, argsLocation);
 
                 std::optional<AstAttr::Type> type = validateAttribute(nameLoc, attrName, attributes, args, context);
 
@@ -1390,7 +1452,8 @@ void Parser::parseAttribute_DEPRECATED(TempVector<AstAttr*>& attributes, AstAttr
 
                     auto [args, argsLocation, _exprLocation] = parseCallList(nullptr);
 
-                    reportNonLiteralAttributeArgs(args, argsLocation);
+                    if (!takesNameArguments(attrName))
+                        reportNonLiteralAttributeArgs(args, argsLocation);
 
                     std::optional<AstAttr::Type> type = validateAttribute(nameLoc, attrName, attributes, args, context);
 
@@ -1833,7 +1896,10 @@ AstStat* Parser::parseLocal(
         // Both error as there's probably user error (`foo` and `baz` can
         // only ever be `nil`). We report an error but return the
         // declaration as-is, as it's still reasonable syntactically.
-        if (isConst && !isEnoughValues(values, vars.size()))
+        bool missingValue = isConst && !isEnoughValues(values, vars.size());
+        if (missingValue && parsingExport)
+            valuelessExports.push_back({node->location, node, /* writtenAsLocal= */ false});
+        else if (missingValue)
             report(node->location, "Missing initializer in const declaration");
 
         return node;
@@ -3629,6 +3695,64 @@ AstStat* Parser::parseAssignment(AstExpr* initial)
     return node;
 }
 
+// Luwu Export Values (rfcs/export-values.md): `local` or `const` after `export`, which every export already is. An
+// exported local without a value waits for reportValuelessExports, which knows whether the module assigns it later.
+void Parser::reportRedundantExportKeyword(const Location& keywordLocation, const char* keyword, AstStatLocal* stat)
+{
+    // Outside a Luwu module the export itself is the error
+    if (options.language != Language::Luwu)
+        return;
+
+    // A value-less `export const x` was already recorded by parseLocal
+    bool valueless = stat && stat->values.size == 0 && stat->vars.size > 0;
+    if (valueless && strcmp(keyword, "local") == 0)
+        valuelessExports.push_back({keywordLocation, stat, /* writtenAsLocal= */ true});
+    else if (!valueless)
+        report(keywordLocation, "Remove '%s' here; exports are always const", keyword);
+}
+
+// Luwu Export Values (rfcs/export-values.md): an export without a value usually lacks one by mistake. Written as
+// `export local x`, or assigned by a later top-level statement (`function x()`, `x = ...`), it was meant as a forward
+// declaration instead.
+void Parser::reportValuelessExports(AstStatBlock* root)
+{
+    for (const ValuelessExport& valueless : valuelessExports)
+    {
+        AstStatLocal* stat = valueless.stat;
+        auto declaredHere = [stat](AstExpr* expr)
+        {
+            // An assignment to a const export is wrapped in the error that reports it
+            if (AstExprError* error = expr->as<AstExprError>(); error && error->expressions.size > 0)
+                expr = error->expressions.data[0];
+
+            AstExprLocal* local = expr->as<AstExprLocal>();
+            return local && std::find(stat->vars.begin(), stat->vars.end(), local->local) != stat->vars.end();
+        };
+
+        bool assignedLater = false;
+        bool afterDeclaration = false;
+        for (AstStat* later : root->body)
+        {
+            if (later == stat)
+                afterDeclaration = true;
+            else if (!afterDeclaration)
+                continue;
+            else if (AstStatFunction* function = later->as<AstStatFunction>(); function && declaredHere(function->name))
+                assignedLater = true;
+            else if (AstStatAssign* assign = later->as<AstStatAssign>())
+                assignedLater = assignedLater || std::any_of(assign->vars.begin(), assign->vars.end(), declaredHere);
+        }
+
+        if (valueless.writtenAsLocal || assignedLater)
+            report(
+                valueless.location,
+                "Forward declare a local binding to export a hoisted function: local f; ... export function f() ... end"
+            );
+        else
+            report(valueless.location, "Exported values are const and must be initialized");
+    }
+}
+
 AstStat* Parser::parseExportValue(
     const Location& start,
     const Location& keywordLocation,
@@ -3641,6 +3765,12 @@ AstStat* Parser::parseExportValue(
 
     if (hasModuleReturn)
         report(start, "Exporting values is not compatible with top-level return (export/return conflict)");
+
+    // `export class` and `export declare` report their own feature
+    Lexeme next = lexer.current();
+    bool exportsOwnFeature = next.type == Lexeme::Name && (AstName(next.name) == "class" || AstName(next.name) == "declare");
+    if (!exportsOwnFeature)
+        checkLuwuFeature(start, kExportsFeature, /* enabled= */ true);
 
     auto checkDuplicateExport = [&](AstName name, const Location& location) -> bool
     {
@@ -3676,6 +3806,41 @@ AstStat* Parser::parseExportValue(
         return stat;
     };
 
+    // `constKeywordLocation` is the `const` of `export const function`, if written
+    auto exportFunctionStat = [&]() -> AstStat*
+    {
+        // Luwu Export Values (rfcs/export-values.md): like `function f()`, `export function f()` assigns a local `f` that's
+        // already declared, so functions declared before it can call it. Upstream declares a new local, which leaves a
+        // forward declaration (`local f`) nil.
+        Lexeme name = lexer.lookahead();
+        AstLocal** declared = name.type == Lexeme::Name ? localMap.find(AstName(name.name)) : nullptr;
+        if (declared && *declared)
+        {
+            AstLocal* local = *declared;
+            AstStatFunction* filled = parseFunctionStat(attributes, cstAttrLists);
+            if (!checkDuplicateExport(local->name, local->location))
+                report(filled->name->location, "Duplicate exported identifier '%s'", local->name.value);
+
+            local->isExported = true;
+            local->isConst = true;
+            return filled;
+        }
+
+        auto funcStat = parseLocal(start, keywordLocation, attributes, true, cstAttrLists);
+        if (!funcStat->is<AstStatLocalFunction>())
+            // parseLocal returned a parse error
+            return funcStat;
+
+        auto func = funcStat->as<AstStatLocalFunction>();
+
+        if (!checkDuplicateExport(func->name->name, func->name->location))
+            report(func->name->location, "Duplicate exported identifier '%s'", func->name->name.value);
+
+        func->name->isExported = true;
+        func->name->isConst = true;
+        return func;
+    };
+
     if (attributes.size != 0 && lexer.current().type != Lexeme::ReservedFunction)
     {
         report(
@@ -3696,37 +3861,39 @@ AstStat* Parser::parseExportValue(
             return parseLocal(start, localKeywordLocation, {nullptr, 0}, true);
         }
 
-        return exportLocalStat(parseLocal(start, keywordLocation, {nullptr, 0}, false), localKeywordLocation);
+        // Luwu Export Values (rfcs/export-values.md): exports are always const, so `export local` is an error. Upstream
+        // exports a mutable local, which raises anyway once its module returns and freezes the export table.
+        AstStat* stat = exportLocalStat(parseLocal(start, keywordLocation, {nullptr, 0}, false), localKeywordLocation);
+        if (AstStatLocal* localStat = stat->as<AstStatLocal>())
+            reportRedundantExportKeyword(localKeywordLocation, "local", localStat);
+        return stat;
     }
     else if (lexer.current().type == Lexeme::ReservedFunction)
     {
-        auto funcStat = parseLocal(start, keywordLocation, attributes, true, cstAttrLists);
-        if (!funcStat->is<AstStatLocalFunction>())
-            // parseLocal returned a parse error
-            return funcStat;
-
-        auto func = funcStat->as<AstStatLocalFunction>();
-
-        if (!checkDuplicateExport(func->name->name, func->name->location))
-            report(func->name->location, "Duplicate exported identifier '%s'", func->name->name.value);
-
-        func->name->isExported = true;
-        func->name->isConst = true;
-        return func;
+        return exportFunctionStat();
     }
     else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const")
     {
+        // Luwu Export Values (rfcs/export-values.md): exports are always const, so `const` after `export` is an error. The
+        // declaration is parsed without it.
         Location constKeywordLocation = lexer.current().location;
         nextLexeme();
 
         if (lexer.current().type == Lexeme::ReservedFunction)
         {
-            report(start, "'export' must be followed by an identifier or 'function'");
-            // still parse the function for error recovery
-            return parseLocal(start, constKeywordLocation, {nullptr, 0}, true);
+            reportRedundantExportKeyword(constKeywordLocation, "const", nullptr);
+            return exportFunctionStat();
         }
 
-        return exportLocalStat(parseLocal(start, constKeywordLocation, {nullptr, 0}, true), constKeywordLocation);
+        parsingExport = true;
+        AstStat* stat = exportLocalStat(parseLocal(start, start, {nullptr, 0}, true), start);
+        parsingExport = false;
+        if (AstStatLocal* localStat = stat->as<AstStatLocal>())
+        {
+            localStat->keywordLocation = std::nullopt;
+            reportRedundantExportKeyword(constKeywordLocation, "const", localStat);
+        }
+        return stat;
     }
     else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class")
     {
@@ -3743,6 +3910,16 @@ AstStat* Parser::parseExportValue(
 
             classStat->name->isExported = true;
         }
+        return stat;
+    }
+    else if (lexer.current().type == Lexeme::Name)
+    {
+        // Luwu: `export value = y` is `export const value = y`. It has no `const` keyword to point at.
+        parsingExport = true;
+        AstStat* stat = exportLocalStat(parseLocal(start, start, {nullptr, 0}, true), start);
+        parsingExport = false;
+        if (AstStatLocal* localStat = stat->as<AstStatLocal>())
+            localStat->keywordLocation = std::nullopt;
         return stat;
     }
 
@@ -7148,7 +7325,11 @@ void Parser::nextLexeme()
             return;
 
         // Comments starting with ! are called "hot comments" and contain directives for type checking / linting / compiling
-        if (lexeme.type == Lexeme::Comment && lexeme.getLength() && lexeme.data[0] == '!')
+        // Luwu: so are `--@[nolint(...)]` and `--@[lint(...)]`, the attributes written as comments. Upstream can't parse
+        // `@[nolint]`, so a comment is the only way a Luau or Lua file can turn a lint off for one statement.
+        const bool directive = lexeme.type == Lexeme::Comment && lexeme.getLength() && lexeme.data[0] == '!';
+        const bool attribute = lexeme.type == Lexeme::Comment && lexeme.getLength() >= 2 && lexeme.data[0] == '@' && lexeme.data[1] == '[';
+        if (directive || attribute)
         {
             const char* text = lexeme.data;
 
@@ -7156,7 +7337,9 @@ void Parser::nextLexeme()
             while (end > 0 && isSpace(text[end - 1]))
                 --end;
 
-            hotcomments.push_back({hotcommentHeader, lexeme.location, std::string(text + 1, text + end)});
+            // A directive's content starts after its '!'; an attribute's keeps its '@'
+            const unsigned int start = directive ? 1 : 0;
+            hotcomments.push_back({hotcommentHeader, lexeme.location, std::string(text + start, text + end), attribute});
         }
 
         type = lexer.next(/* skipComments= */ false, /* updatePrevLocation= */ false).type;
