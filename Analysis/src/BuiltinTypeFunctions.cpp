@@ -2627,6 +2627,101 @@ TypeFunctionReductionResult<TypeId> classTypeFunction(
     return classValueHelper(typeParams.at(0), ctx);
 }
 
+// Luwu: `oneof<Ok, Err>` is `Ok | Err` with every field of one member that another lacks added to it as `nil`:
+// `{ message: string, err: nil } | { err: string, message: nil }`. A table type is a shape that a vector, an extern
+// type's value or a class object can fit, so reading a field a member doesn't declare is an error; declared as `nil`,
+// testing the field (`if result.message then`) tells the members apart. Its arguments are flattened, unions included:
+// `oneof<Result, Timeout>` works on an existing union. Members that aren't table types are kept as they are.
+TypeFunctionReductionResult<TypeId> oneofTypeFunction(
+    TypeId instance,
+    const std::vector<TypeId>& typeParams,
+    const std::vector<TypePackId>& packParams,
+    NotNull<TypeFunctionContext> ctx
+)
+{
+    if (!typeParams.empty() || packParams.size() != 1)
+    {
+        ctx->ice->ice("oneof type function: encountered a type function instance without the required argument structure");
+        LUAU_ASSERT(false);
+    }
+
+    // A tail (`oneof<T...>`) has members that aren't known yet
+    auto [arguments, tail] = flatten(packParams[0]);
+    if (tail)
+    {
+        TypePackId rest = follow(*tail);
+        bool pending = get<BlockedTypePack>(rest) || get<FreeTypePack>(rest) || get<TypeFunctionInstanceTypePack>(rest);
+        if (pending)
+            return {std::nullopt, Reduction::MaybeOk, {}, {rest}};
+        return {std::nullopt, Reduction::MaybeOk, {}, {}};
+    }
+
+    std::vector<TypeId> members;
+    DenseHashSet<TypeId> seen{nullptr};
+    std::vector<TypeId> pending;
+    std::vector<TypeId> queue{arguments.rbegin(), arguments.rend()};
+    while (!queue.empty())
+    {
+        TypeId ty = follow(queue.back());
+        queue.pop_back();
+        if (seen.contains(ty))
+            continue;
+        seen.insert(ty);
+
+        if (isPending(ty, ctx->solver))
+            pending.push_back(ty);
+        else if (const UnionType* ut = get<UnionType>(ty))
+            queue.insert(queue.end(), ut->options.rbegin(), ut->options.rend());
+        else
+            members.push_back(ty);
+    }
+    if (!pending.empty())
+        return {std::nullopt, Reduction::MaybeOk, std::move(pending), {}};
+
+    // Every field of a table member: the members in order, each one's fields by name
+    std::vector<Name> fields;
+    for (TypeId member : members)
+    {
+        if (const TableType* table = get<TableType>(member))
+        {
+            for (const auto& [name, _] : table->props)
+            {
+                if (std::find(fields.begin(), fields.end(), name) == fields.end())
+                    fields.push_back(name);
+            }
+        }
+    }
+
+    std::vector<TypeId> options;
+    options.reserve(members.size());
+    for (TypeId member : members)
+    {
+        const TableType* table = get<TableType>(member);
+        if (!table)
+        {
+            options.push_back(member);
+            continue;
+        }
+
+        // A copy without the alias's name: it has fields the alias doesn't, and printing it as `Ok` would hide them
+        TableType withNils = *table;
+        withNils.name.reset();
+        withNils.syntheticName.reset();
+        for (const Name& field : fields)
+        {
+            if (!withNils.props.count(field))
+                withNils.props[field] = Property::readonly(ctx->builtins->nilType);
+        }
+        options.push_back(ctx->arena->addType(std::move(withNils)));
+    }
+
+    if (options.empty())
+        return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
+    if (options.size() == 1)
+        return {options[0], Reduction::MaybeOk, {}, {}};
+    return {ctx->arena->addType(UnionType{std::move(options)}), Reduction::MaybeOk, {}, {}};
+}
+
 TypeFunctionReductionResult<TypeId> weakoptionalTypeFunc(
     TypeId instance,
     const std::vector<TypeId>& typeParams,
@@ -2742,6 +2837,7 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , classFunc{"class", classTypeFunction}
     , weakoptionalFunc{"weakoptional", weakoptionalTypeFunc}
     , unlessneverFunc{"unlessnever", unlessneverTypeFunction}
+    , oneofFunc{"oneof", oneofTypeFunction}
 {
 }
 
@@ -2800,6 +2896,11 @@ void BuiltinTypeFunctions::addToScope(NotNull<TypeArena> arena, NotNull<Scope> s
 
     scope->exportedTypeBindings[setmetatableFunc.name] = mkBinaryTypeFunction(&setmetatableFunc);
     scope->exportedTypeBindings[getmetatableFunc.name] = mkUnaryTypeFunction(&getmetatableFunc);
+
+    // Luwu: `oneof<A, B, ...>` takes any number of types, so its one generic is a pack
+    TypePackId members = arena->addTypePack(GenericTypePack{"T"});
+    scope->exportedTypeBindings[oneofFunc.name] =
+        TypeFun{{}, {GenericTypePackDefinition{members}}, arena->addType(TypeFunctionInstanceType{NotNull{&oneofFunc}, {}, {members}})};
 }
 
 } // namespace Luau
