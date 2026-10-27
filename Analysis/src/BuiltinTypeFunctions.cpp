@@ -361,6 +361,80 @@ TypeFunctionReductionResult<TypeId> unmTypeFunction(
         return {std::nullopt, Reduction::Erroneous, {}, {}};
 }
 
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `<-container` gives an array's element or nil, and a value
+// with `__pop` whatever that returns first. Anything else reduces to the error type, and TypeChecker2 says why.
+TypeFunctionReductionResult<TypeId> popTypeFunction(
+    TypeId instance,
+    const std::vector<TypeId>& typeParams,
+    const std::vector<TypePackId>& packParams,
+    NotNull<TypeFunctionContext> ctx
+)
+{
+    if (typeParams.size() != 1 || !packParams.empty())
+    {
+        ctx->ice->ice("pop type function: encountered a type function instance without the required argument structure");
+        LUAU_ASSERT(false);
+    }
+
+    TypeId containerTy = follow(typeParams.at(0));
+
+    if (containerTy == instance)
+        return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
+
+    if (isPending(containerTy, ctx->solver))
+        return {std::nullopt, Reduction::MaybeOk, {containerTy}, {}};
+
+    std::shared_ptr<const NormalizedType> normTy = ctx->normalizer->normalize(containerTy);
+    if (!normTy)
+        return {std::nullopt, Reduction::MaybeOk, {}, {}};
+
+    if (normTy->shouldSuppressErrors())
+        return {ctx->builtins->anyType, Reduction::MaybeOk, {}, {}};
+
+    if (is<NeverType>(containerTy))
+        return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
+
+    if (auto result = tryDistributeTypeFunctionApp(popTypeFunction, instance, typeParams, packParams, ctx))
+        return *result;
+
+    // findMetatableEntry demands the ability to emit errors, so we must give it
+    // the necessary state to do that, even if we intend to just eat the errors.
+    ErrorVec dummy;
+
+    if (std::optional<TypeId> mmType = findMetatableEntry(ctx->builtins, dummy, containerTy, "__pop", Location{}))
+    {
+        TypeId popFn = follow(*mmType);
+        if (isPending(popFn, ctx->solver))
+            return {std::nullopt, Reduction::MaybeOk, {popFn}, {}};
+
+        auto result = solveFunctionCall(ctx, ctx->constraint ? ctx->constraint->location : Location{}, popFn, ctx->arena->addTypePack({containerTy}));
+        if (!result)
+            return {ctx->builtins->errorType, Reduction::MaybeOk, {}, {}};
+
+        if (std::optional<TypeId> popped = first(*result))
+            return {*popped, Reduction::MaybeOk, {}, {}};
+
+        return {ctx->builtins->nilType, Reduction::MaybeOk, {}, {}};
+    }
+
+    // without `__pop`, a table pops raw, whatever its other metamethods
+    TypeId tableTy = containerTy;
+    if (const MetatableType* metatable = get<MetatableType>(containerTy))
+        tableTy = follow(metatable->table);
+
+    const TableType* table = get<TableType>(tableTy);
+    if (std::optional<TypeId> element = table ? rawArrayElement(*table, ctx->builtins) : std::nullopt)
+    {
+        // an empty table pops nil
+        if (get<NeverType>(follow(*element)))
+            return {ctx->builtins->nilType, Reduction::MaybeOk, {}, {}};
+
+        return {addUnion(ctx->arena, ctx->builtins, {*element, ctx->builtins->nilType}), Reduction::MaybeOk, {}, {}};
+    }
+
+    return {ctx->builtins->errorType, Reduction::MaybeOk, {}, {}};
+}
+
 TypeFunctionContext::TypeFunctionContext(
     NotNull<ConstraintSolver> cs,
     NotNull<Scope> scope,
@@ -2877,6 +2951,7 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , notFunc{"not", notTypeFunction}
     , lenFunc{"len", lenTypeFunction}
     , unmFunc{"unm", unmTypeFunction}
+    , popFunc{"pop", popTypeFunction}
     , addFunc{"add", addTypeFunction}
     , subFunc{"sub", subTypeFunction}
     , mulFunc{"mul", mulTypeFunction}

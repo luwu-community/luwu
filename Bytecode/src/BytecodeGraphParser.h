@@ -1045,6 +1045,27 @@ struct BytecodeGraphParser
                 addImmInput(node, static_cast<int32_t>(aux));
                 break;
 
+            case LOP_PUSH:
+            {
+                // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): reads the container and the values, writes
+                // no register. Like SETLIST, a multret value list runs up to the stack top.
+                int count = LUAU_INSN_C(insn) - 1;
+                addImmInput(node, static_cast<int32_t>(count));
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                for (Reg param = 0; param < count; param++)
+                    addVmRegInput(node, LUAU_INSN_B(insn) + param);
+                if (count < 0)
+                    for (auto inp : findProducersUpToTop(currentBlock, LUAU_INSN_B(insn)))
+                        func.addUse(node, inp);
+                break;
+            }
+
+            case LOP_POP:
+                // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): reads the container, writes the target
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addProducer(LUAU_INSN_A(insn), nodeOp);
+                break;
+
             case LOP_APPENDTABLE:
                 // Luwu Table Comprehensions (rfcs/table-comprehensions.md): reads the table and the value, and
                 // updates the count in C

@@ -1592,6 +1592,7 @@ static void analyzeBytecodeTypesPass(
             case LOP_JUMPXISA:
             case LOP_SETOBJECTMEMBER:
             case LOP_PRESIZETABLE:
+            case LOP_PUSH:
                 break;
             case LOP_APPENDTABLE:
             {
@@ -1603,6 +1604,14 @@ static void analyzeBytecodeTypesPass(
             case LOP_INITTRAITS:
             {
                 // Luwu Traits (rfcs/classes/traits.md): A gets the runner, or nil when the jump is taken
+                int ra = LUAU_INSN_A(*pc);
+                regTags[ra] = LBC_TYPE_ANY;
+                bcType.result = regTags[ra];
+                break;
+            }
+            case LOP_POP:
+            {
+                // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): any element, or whatever __pop returns
                 int ra = LUAU_INSN_A(*pc);
                 regTags[ra] = LBC_TYPE_ANY;
                 bcType.result = regTags[ra];
@@ -1712,6 +1721,10 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
         break;
     case LOP_APPENDTABLE:
         visit(LUAU_INSN_C(*code), uint8_t(LBC_TYPE_NUMBER));
+        break;
+    case LOP_POP:
+        // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): writes only A, with any element or __pop's result
+        visitRange(ra, 1);
         break;
     case LOP_NAMECALL:
     case LOP_NAMECALLUDATA:

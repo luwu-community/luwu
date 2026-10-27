@@ -259,6 +259,10 @@ private:
     void reportErrorsFromAssigningToNever(AstExpr* lhs, TypeId rhsType);
     void visit(AstStatAssign* assign);
     void visit(AstStatCompoundAssign* stat);
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    void visit(AstStatPush* stat);
+    void visit(AstExprPop* expr);
+    std::optional<TypeId> pushedOrPoppedElement(TypeId containerTy, const struct PushPopOperator& op, const Location& location);
     void visit(AstStatFunction* stat);
     void visit(AstStatLocalFunction* stat);
     void visit(const AstTypeList* typeList);

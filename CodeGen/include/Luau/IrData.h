@@ -1020,6 +1020,21 @@ enum class IrCmd : uint8_t
     // D: int (form, LBC_PRESIZE_*)
     FALLBACK_PRESIZETABLE,
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_PUSH, through the interpreter's implementation. It can
+    // call a __push metamethod.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (the container)
+    // C: Rn (the first value)
+    // D: int (value count, or -1 for every value from C up to L->top)
+    FALLBACK_PUSH,
+
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_POP, through the interpreter's implementation. It can
+    // call a __pop metamethod.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (the target, written)
+    // C: Rn (the container)
+    FALLBACK_POP,
+
     // Instruction that passes value through, it is produced by constant folding and users substitute it with the value
     // A: operand of any type
     SUBSTITUTE,

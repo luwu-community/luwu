@@ -3640,6 +3640,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.invalidateUserCall();
         break;
     case IrCmd::FALLBACK_SETTABLEKS:
+    case IrCmd::FALLBACK_PUSH:
+        state.invalidateUserCall();
+        break;
+    case IrCmd::FALLBACK_POP:
+        state.invalidate(OP_B(inst));
         state.invalidateUserCall();
         break;
     case IrCmd::FALLBACK_NAMECALL:

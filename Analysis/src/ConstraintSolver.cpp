@@ -1053,6 +1053,8 @@ bool ConstraintSolver::tryDispatch(NotNull<const Constraint> constraint, bool fo
         success = tryDispatch(*uc, constraint);
     else if (auto uc = get<AssignIndexConstraint>(*constraint))
         success = tryDispatch(*uc, constraint);
+    else if (auto pc = get<PushConstraint>(*constraint))
+        success = tryDispatch(*pc, constraint);
     else if (auto uc = get<UnpackConstraint>(*constraint))
         success = tryDispatch(*uc, constraint);
     else if (auto rc = get<ReduceConstraint>(*constraint))
@@ -3271,6 +3273,44 @@ bool ConstraintSolver::tryDispatch(const AssignPropConstraint& c, NotNull<const 
     }
 
     bind(constraint, c.propType, builtinTypes->errorType);
+
+    return true;
+}
+
+bool ConstraintSolver::tryDispatch(const PushConstraint& c, NotNull<const Constraint> constraint)
+{
+    const TypeId containerType = follow(c.containerType);
+
+    if (isBlocked(containerType))
+        return block(containerType, constraint);
+
+    if (isBlocked(c.valuesPack))
+        return block(c.valuesPack, constraint);
+
+    // Only a plain table grows from a push. A value with metatables is checked against its `__push` by TypeChecker2.
+    bool plainTable = get<FreeType>(containerType) || get<TableType>(containerType);
+    if (!plainTable)
+        return true;
+
+    auto [values, tail] = flatten(c.valuesPack);
+    if (tail)
+    {
+        if (const VariadicTypePack* variadic = get<VariadicTypePack>(follow(*tail)))
+            values.push_back(variadic->ty);
+    }
+
+    // each value is stored at a new number index; a nil value pushes nothing, so it doesn't widen the element type
+    for (TypeId value : values)
+    {
+        TypeId propType = arena->addType(BlockedType{});
+        NotNull<Constraint> assign = pushConstraint(
+            constraint->scope,
+            constraint->location,
+            AssignIndexConstraint{containerType, builtinTypes->numberType, stripNil(builtinTypes, *arena, value), propType}
+        );
+        getMutable<BlockedType>(propType)->setOwner(assign);
+        inheritBlocks(constraint, assign);
+    }
 
     return true;
 }

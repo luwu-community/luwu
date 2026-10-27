@@ -606,6 +606,21 @@ enum LuauOpcode
     // C: register holding the element count so far
     LOP_APPENDTABLE,
 
+    // PUSH: Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `A <+ values`. Calls A's `__push` once with every
+    // non-nil value when it has one; otherwise A must be a table, and each non-nil value is stored raw at its length + 1,
+    // like table.insert.
+    // A: register holding the container
+    // B: register holding the first value
+    // C: value count + 1, or 0 for every value from B up to the stack top (a multret call or `...` last)
+    LOP_PUSH,
+
+    // POP: Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `<-B`. Calls B's `__pop` when it has one, keeping
+    // its first result; otherwise B must be a table, and its last element (at its raw length) is removed, like
+    // table.remove. An empty table pops nil.
+    // A: target register
+    // B: register holding the container
+    LOP_POP,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };

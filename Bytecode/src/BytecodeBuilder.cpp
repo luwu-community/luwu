@@ -11,6 +11,7 @@
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
 
@@ -1488,6 +1489,10 @@ uint8_t BytecodeBuilder::getVersion()
     if (FFlag::LuwuTableComprehensions)
         return LWBC_VERSION_WIP;
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_PUSH and LOP_POP are WIP bytecode too
+    if (FFlag::DebugLuwuPoperators)
+        return LWBC_VERSION_WIP;
+
     return LWBC_VERSION_TARGET;
 }
 
@@ -2022,6 +2027,19 @@ void BytecodeBuilder::validateInstructions() const
             VREG(LUAU_INSN_C(insn));
             break;
 
+        case LOP_PUSH:
+        {
+            int count = LUAU_INSN_C(insn) - 1;
+            VREG(LUAU_INSN_A(insn));
+            VREGRANGE(LUAU_INSN_B(insn), count);
+        }
+        break;
+
+        case LOP_POP:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            break;
+
         case LOP_PRESIZETABLE:
             LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_PRESIZE_TRIM);
             VREG(LUAU_INSN_A(insn));
@@ -2130,7 +2148,10 @@ void BytecodeBuilder::validateVariadic() const
             LUAU_ASSERT(!variadicSeq);
             variadicSeq = true;
         }
-        else if ((op == LOP_RETURN && LUAU_INSN_B(insn) == 0) || (op == LOP_SETLIST && LUAU_INSN_C(insn) == 0))
+        else if (
+            (op == LOP_RETURN && LUAU_INSN_B(insn) == 0) || (op == LOP_SETLIST && LUAU_INSN_C(insn) == 0) ||
+            (op == LOP_PUSH && LUAU_INSN_C(insn) == 0)
+        )
         {
             // consumer instruction ends a variadic sequence
             LUAU_ASSERT(variadicSeq);
@@ -2868,6 +2889,14 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_APPENDTABLE:
         formatAppend(result, "APPENDTABLE R%d R%d R%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn));
+        break;
+
+    case LOP_PUSH:
+        formatAppend(result, "PUSH R%d R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn) - 1);
+        break;
+
+    case LOP_POP:
+        formatAppend(result, "POP R%d R%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn));
         break;
 
     case LOP_PRESIZETABLE:

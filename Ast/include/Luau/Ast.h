@@ -1274,6 +1274,24 @@ public:
     AstExpr* value;
 };
 
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `target <+ v1, v2, ...` appends every non-nil value to
+// `target`, or hands them all to its `__push` in one call.
+class AstStatPush : public AstStat
+{
+public:
+    LUAU_RTTI(AstStatPush)
+
+    AstStatPush(const Location& location, AstExpr* target, const Location& opLocation, const AstArray<AstExpr*>& values);
+
+    void visit(AstVisitor* visitor) override;
+
+    AstExpr* target;
+    // The `<+`
+    Location opLocation;
+    // The last value may be a call or `...`, which pushes all of its values.
+    AstArray<AstExpr*> values;
+};
+
 class AstStatFunction : public AstStat
 {
 public:
@@ -1971,6 +1989,20 @@ public:
     unsigned clauseCount;
 };
 
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `<-container` removes the last element of `container` (or
+// calls its `__pop`) and evaluates to it.
+class AstExprPop : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprPop)
+
+    AstExprPop(const Location& location, AstExpr* expr);
+
+    void visit(AstVisitor* visitor) override;
+
+    AstExpr* expr;
+};
+
 class AstExprError : public AstExpr
 {
 public:
@@ -2204,6 +2236,10 @@ public:
     {
         return visit(static_cast<AstExpr*>(node));
     }
+    virtual bool visit(class AstExprPop* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
     virtual bool visit(class AstExprDo* node)
     {
         return visit(static_cast<AstExpr*>(node));
@@ -2283,6 +2319,10 @@ public:
         return visit(static_cast<AstStat*>(node));
     }
     virtual bool visit(class AstStatCompoundAssign* node)
+    {
+        return visit(static_cast<AstStat*>(node));
+    }
+    virtual bool visit(class AstStatPush* node)
     {
         return visit(static_cast<AstStat*>(node));
     }
