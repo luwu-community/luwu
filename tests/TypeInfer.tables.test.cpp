@@ -9,6 +9,7 @@
 #include "Luau/Type.h"
 
 #include "Fixture.h"
+#include "Typewriter.h"
 
 #include "ScopedFlags.h"
 #include "doctest.h"
@@ -19,6 +20,9 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauTruthyFalsy)
 
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
@@ -7922,6 +7926,90 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_an_intersected_union
         "  • Or write the type as 'oneof<Ok, Err>', which adds each variant's missing fields as 'nil'",
         toString(result.errors[0])
     );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "destructuring_binds_the_types_of_the_fields")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local point = { x = 1, y = "two" }
+        local .{x, y} = point
+        const p.{y as why} = point
+        local .{missing} = point
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(toString(result.errors[0]), "Key 'missing' not found in table 'point'");
+    CHECK_EQ("number", toString(requireType("x")));
+    CHECK_EQ("string", toString(requireType("y")));
+    CHECK_EQ("string", toString(requireType("why")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "destructuring_field_annotations_are_checked")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local point = { x = 1, y = "two" }
+        local .{x: number, y as label: number} = point
+    )");
+
+    // `y` is a string, annotated number; `x` matches
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 3);
+    CHECK_EQ("number", toString(requireType("x")));
+    CHECK_EQ("number", toString(requireType("label")));
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): typing patterns, and the `.{...}` tables built the same way
+const char* const kDestructuringTypewriterBefore = R"(local point = { x = 1, y = "two", inner = { z = true } }
+local points = { point }
+local function make(t: { x: number }): number
+    return t.x
+end
+)";
+
+// Code after the typed text. It uses nothing the typed text declares, so it stays clean whatever is typed above it.
+const char* const kDestructuringTypewriterAfter = R"(
+local unrelated = 1
+print(unrelated + 1)
+)";
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+    const char* before = kDestructuringTypewriterBefore;
+    const char* after = kDestructuringTypewriterAfter;
+
+    checkTypewriting(*this, before, "local .{x, y} = point", after);
+    checkTypewriting(*this, before, "const p.{y as why, inner.{z}} = point", after);
+    checkTypewriting(*this, before, "local .{x: number, y as label: string} = point", after);
+    checkTypewriting(*this, before, "for _, .{x, y} in points do\n    print(x, y)\nend", after);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_exported_destructuring")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true}, {FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}
+    };
+    const char* before = kDestructuringTypewriterBefore;
+    const char* after = kDestructuringTypewriterAfter;
+
+    checkTypewriting(*this, before, "export const .{x, y} = point", after);
+    checkTypewriting(*this, before, "export .{x, y} = point", after);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_dot_table_constructors")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+    const char* before = "local x, y = 1, 2\nlocal function make(t: { x: number }): number\n    return t.x\nend\n";
+    const char* after = kDestructuringTypewriterAfter;
+
+    checkTypewriting(*this, before, "local t = .{x, y = y + 1}", after);
+    checkTypewriting(*this, before, "local n = make.{x}", after);
 }
 
 TEST_SUITE_END();

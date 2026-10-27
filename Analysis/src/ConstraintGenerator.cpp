@@ -3343,6 +3343,267 @@ void ConstraintGenerator::importRequiredTypes(const ScopePtr& scope, AstStatLoca
                 tf = TypeFun{{}, {}, builtinTypes->anyType};
         }
     }
+
+    bindModuleAliases(scope, statLocal);
+
+    if (FFlag::LuwuClasses)
+        bindImportedTypes(scope, statLocal);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): how deep `hub.a.b` paths to modules a required module exports go, and how
+// many of them one local imports. Modules that export the same modules under several names multiply the paths.
+constexpr size_t kMaxExportedModuleDepth = 8;
+constexpr size_t kMaxExportedModulePaths = 256;
+
+// Luwu Destructuring (rfcs/destructuring.md): a local holding a module, `const m = require(p)`, `const m = hub.t` or
+// `const m = other`, imports its types like a require does, along with the modules it exports (`m.t.Cat`). An exported
+// one is exported as a module too.
+void ConstraintGenerator::bindModuleAliases(const ScopePtr& scope, AstStatLocal* statLocal)
+{
+    for (size_t i = 0; i < statLocal->values.size && i < statLocal->vars.size; ++i)
+    {
+        AstLocal* local = statLocal->vars.data[i];
+        const Name name{local->name.value};
+        AstExpr* value = statLocal->values.data[i];
+
+        // A require was imported just before this, under the local's name
+        const AstExprCall* call = value->as<AstExprCall>();
+        bool isRequire = call && matchRequire(*call);
+
+        std::optional<Name> path = isRequire ? std::optional<Name>{name} : importedModulePath(scope, value);
+        std::optional<ModuleName> moduleName = path ? findImportedModule(scope, *path) : std::nullopt;
+        ModulePtr imported = moduleName && *moduleName != module->name ? moduleResolver->getModule(*moduleName) : nullptr;
+
+        // A builtin library (`const lib = collections`) has its types filed in the global scope but no module to resolve
+        if (!imported && !isRequire && moduleName)
+        {
+            if (const std::unordered_map<Name, TypeFun>* types = findImportedTypes(scope, *path))
+            {
+                scope->importedTypeBindings[name] = *types;
+                scope->importedModules[name] = *moduleName;
+            }
+        }
+
+        if (!imported)
+            continue;
+
+        if (!isRequire)
+        {
+            scope->importedTypeBindings[name] = imported->exportedTypeBindings;
+            scope->importedModules[name] = *moduleName;
+        }
+
+        importExportedModules(scope, name, imported, *moduleName);
+
+        if (local->isExported && scope.get() == rootScope)
+            module->exportedModules[name] = *moduleName;
+    }
+}
+
+// Imports the modules `imported` (named `importedName`) exports under `alias.field`, and the ones they export under
+// `alias.field.field`, shorter paths first
+void ConstraintGenerator::importExportedModules(
+    const ScopePtr& scope,
+    const Name& alias,
+    const ModulePtr& imported,
+    const ModuleName& importedName
+)
+{
+    struct PendingPath
+    {
+        Name path;
+        ModulePtr module;
+        // the modules the path went through, `module` last
+        std::vector<ModuleName> modules;
+    };
+
+    std::vector<PendingPath> queue{PendingPath{alias, imported, {importedName}}};
+    size_t importedPaths = 0;
+    for (size_t i = 0; i < queue.size(); ++i)
+    {
+        // a copy: pushing to the queue can move its entries
+        const PendingPath current = queue[i];
+        if (current.modules.size() > kMaxExportedModuleDepth)
+            continue;
+
+        for (const auto& [field, nestedName] : current.module->exportedModules)
+        {
+            // A module in a require cycle with this one isn't checked yet. One already on the path (two modules that
+            // export each other) is imported under the shorter path.
+            bool onPath = std::find(current.modules.begin(), current.modules.end(), nestedName) != current.modules.end();
+            bool revisits = nestedName == module->name || onPath;
+            ModulePtr nested = revisits ? nullptr : moduleResolver->getModule(nestedName);
+            if (!nested)
+                continue;
+
+            if (importedPaths == kMaxExportedModulePaths)
+                return;
+            ++importedPaths;
+
+            const Name path = current.path + "." + field;
+            scope->importedTypeBindings[path] = nested->exportedTypeBindings;
+            scope->importedModules[path] = nestedName;
+
+            std::vector<ModuleName> modules = current.modules;
+            modules.push_back(nestedName);
+            queue.push_back(PendingPath{path, nested, std::move(modules)});
+        }
+    }
+}
+
+// The name a module is imported under when `expr` holds one: a local (`m`), or a path through the modules it exports
+// (`hub.t`)
+std::optional<Name> ConstraintGenerator::importedModulePath(const ScopePtr& scope, const AstExpr* expr)
+{
+    std::optional<Name> path;
+    if (const AstExprLocal* local = expr->as<AstExprLocal>())
+        path = Name{local->local->name.value};
+    // a builtin library, whose types the global scope files like a required module's
+    else if (const AstExprGlobal* global = expr->as<AstExprGlobal>())
+        path = Name{global->name.value};
+    else if (const AstExprIndexName* index = expr->as<AstExprIndexName>())
+    {
+        if (std::optional<Name> base = importedModulePath(scope, index->expr))
+            path = *base + "." + index->index.value;
+    }
+
+    if (!path || !findImportedModule(scope, *path))
+        return std::nullopt;
+
+    return path;
+}
+
+const std::unordered_map<Name, TypeFun>* ConstraintGenerator::findImportedTypes(const ScopePtr& scope, const Name& path)
+{
+    for (const Scope* s = scope.get(); s; s = s->parent.get())
+    {
+        if (auto it = s->importedTypeBindings.find(path); it != s->importedTypeBindings.end())
+            return &it->second;
+    }
+
+    return nullptr;
+}
+
+std::optional<ModuleName> ConstraintGenerator::findImportedModule(const ScopePtr& scope, const Name& path)
+{
+    for (const Scope* s = scope.get(); s; s = s->parent.get())
+    {
+        if (auto it = s->importedModules.find(path); it != s->importedModules.end())
+            return it->second;
+    }
+
+    return std::nullopt;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a local bound to a field of a module that exports a type of the same name,
+// `local Point = geometry.Point`, `local Point = require(...).Point` or a destructured `const geometry.{Point} =
+// require(...)`, brings that type along, as if `type Point = geometry.Point` were written next to it. The type is a
+// class's for a class, and any type the module exports under the field's name otherwise. A builtin library's types come
+// the same way (`const .{ option } = collections`). An exported local exports the type too. A type the scope already
+// declares under that name wins.
+void ConstraintGenerator::bindImportedTypes(const ScopePtr& scope, AstStatLocal* statLocal)
+{
+    for (size_t i = 0; i < statLocal->values.size && i < statLocal->vars.size; ++i)
+    {
+        const AstExprIndexName* index = statLocal->values.data[i]->as<AstExprIndexName>();
+        if (!index)
+            continue;
+
+        std::optional<TypeFun> imported = importedFieldType(scope, index);
+        if (!imported)
+            continue;
+
+        AstLocal* local = statLocal->vars.data[i];
+        const Name name{local->name.value};
+        if (scope->privateTypeBindings.count(name) || scope->exportedTypeBindings.count(name))
+            continue;
+
+        if (local->isExported)
+            scope->exportedTypeBindings[name] = *imported;
+        else
+            scope->privateTypeBindings[name] = *imported;
+
+        importedTypeLocals.insert(local);
+    }
+}
+
+// The type a required module exports under `index`'s field name, read through a local holding the module
+// (`geometry.Point`), a module it exports (`hub.t.Point`), a builtin library (`collections.option`) or straight off the
+// require (`require(...).Point`)
+std::optional<TypeFun> ConstraintGenerator::importedFieldType(const ScopePtr& scope, const AstExprIndexName* index)
+{
+    const Name field{index->index.value};
+    std::optional<TypeFun> imported;
+
+    if (std::optional<Name> modulePath = importedModulePath(scope, index->expr))
+        imported = scope->lookupImportedType(*modulePath, field);
+    else if (const AstExprCall* call = index->expr->as<AstExprCall>())
+    {
+        std::optional<AstExpr*> require = matchRequire(*call);
+        std::optional<ModuleInfo> moduleInfo = require ? moduleResolver->resolveModuleInfo(module->name, **require) : std::nullopt;
+        ModulePtr required = moduleInfo ? moduleResolver->getModule(moduleInfo->name) : nullptr;
+        if (!required)
+            return std::nullopt;
+
+        // A module in a require cycle with this one has no types to give yet
+        for (const RequireCycle& cycle : requireCycles)
+        {
+            if (!cycle.path.empty() && cycle.path.front() == moduleInfo->name)
+                return std::nullopt;
+        }
+
+        if (auto it = required->exportedTypeBindings.find(field); it != required->exportedTypeBindings.end())
+            imported = it->second;
+    }
+
+    return imported;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a module that returns its classes in a table, `return { Cat = Cat }` or
+// `return .{Cat}`, exports their types under the table's keys, like `export class` does. A required module in it is
+// exported as one (`return { t = t }`).
+void ConstraintGenerator::exportReturnedTypes(const ScopePtr& scope, AstStatReturn* ret)
+{
+    if (scope.get() != rootScope || ret->list.size != 1)
+        return;
+
+    const AstExprTable* table = ret->list.data[0]->as<AstExprTable>();
+    if (!table)
+        return;
+
+    for (const AstExprTable::Item& item : table->items)
+    {
+        if (item.kind != AstExprTable::Item::Kind::Record)
+            continue;
+
+        const AstExprConstantString* key = item.key->as<AstExprConstantString>();
+        if (!key)
+            continue;
+
+        const Name name{key->value.data, key->value.size};
+        if (std::optional<Name> modulePath = importedModulePath(scope, item.value))
+        {
+            if (std::optional<ModuleName> moduleName = findImportedModule(scope, *modulePath))
+                module->exportedModules[name] = *moduleName;
+            continue;
+        }
+
+        // A class declared in this module is referenced as a global
+        std::optional<AstName> className;
+        if (const AstExprGlobal* global = item.value->as<AstExprGlobal>(); global && classGlobalNames.contains(global->name))
+            className = global->name;
+        else if (const AstExprLocal* local = item.value->as<AstExprLocal>(); local && importedTypeLocals.contains(local->local))
+            className = local->local->name;
+
+        if (!className)
+            continue;
+
+        std::optional<TypeFun> classType = scope->lookupType(className->value);
+        if (!classType || scope->exportedTypeBindings.count(name))
+            continue;
+
+        scope->exportedTypeBindings[name] = *classType;
+    }
 }
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatFor* for_)
@@ -3677,6 +3938,8 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatReturn* ret
     }
     addConstraint(scope, ret->location, std::move(returnConstraint));
 
+    exportReturnedTypes(scope, ret);
+
     return ControlFlow::Returns;
 }
 
@@ -3886,6 +4149,19 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeAlias* 
         return ControlFlow::None;
 
     ScopePtr defnScope = *defnScopePtr;
+
+    // Luwu Destructuring (rfcs/destructuring.md): `type .{List} = mod` is written without type arguments, so a generic
+    // `mod.List` is aliased whole: the alias takes its type and its generics.
+    if (std::optional<TypeFun> imported = importedGenericOfDestructuredAlias(*scope, alias))
+    {
+        TypeId aliasTy = bindingIt->second.type;
+        LUAU_ASSERT(get<BlockedType>(aliasTy));
+        emplaceType<BoundType>(asMutable(aliasTy), imported->type);
+        bindingIt->second.typeParams = imported->typeParams;
+        bindingIt->second.typePackParams = imported->typePackParams;
+        return ControlFlow::None;
+    }
+
     resolveGenericDefaultParameters(defnScope, alias, bindingIt->second);
 
     TypeId ty = resolveType(

@@ -69,6 +69,7 @@ void luaC_validate(lua_State* L);
 #define lua_pushvector3(L, x, y, z) lua_pushvector(L, x, y, z)
 #endif
 
+LUAU_FASTFLAG(DebugLuwuLuauClassCompat)
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
 LUAU_FASTFLAG(LuauBytecodeFold)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
@@ -84,7 +85,13 @@ LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
@@ -4944,6 +4951,50 @@ std::string classesCApiProtected(lua_State* L, std::function<void(lua_State*)> f
 
 } // namespace
 
+TEST_CASE("LuauModulesRunUpstreamClassesWithClassCompat")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuLuauClassCompat, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    // upstream Luau 0.742's class syntax: `public` fields next to unqualified methods, construction by calling, `classof`
+    const char* source = R"(
+class Point
+    public x
+    public y
+
+    function magnitude(self)
+        return math.sqrt(self.x * self.x + self.y * self.y)
+    end
+end
+
+local p = Point { x = 3, y = 4 }
+assert(p:magnitude() == 5)
+assert(class.isinstance(p, Point))
+assert(class.classof(p) == Point)
+return "OK"
+)";
+
+    lua_CompileOptions options = {};
+    options.optimizationLevel = 1;
+    options.debugLevel = 1;
+    options.language = LUA_LANGUAGE_LUAU;
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), &options, &bytecodeSize);
+    int loadResult = luau_load(L, "=LuauClassCompat", bytecode, bytecodeSize, 0);
+    free(bytecode);
+
+    REQUIRE(loadResult == 0);
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK_EQ(std::string(lua_tostring(L, -1)), "OK");
+}
+
 TEST_CASE("ClassesCApi")
 {
     ScopedFastFlag sffs[] = {
@@ -6550,6 +6601,88 @@ TEST_CASE("DefaultArguments")
     runConformance("defaultarg.luwu");
 }
 
+TEST_CASE("Destructuring")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    runConformance("destructuring.luwu");
+}
+
+TEST_CASE("IfLocal")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    runConformance("if_local.luwu");
+}
+
+// Luwu If Local (rfcs/if-local.md): `when` chains on `for` and `while`, and destructured `for` bindings
+TEST_CASE("LoopWhenChains")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    runConformance("loop_when.luwu");
+}
+
+TEST_CASE("DoExpressions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    runConformance("do_expr.luwu");
+}
+
+TEST_CASE("TableComprehensions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    runConformance("table_comprehensions.luwu");
+}
+
+TEST_CASE("TableFunctionFields")
+{
+    ScopedFastFlag tableFunctions{FFlag::LuwuTableFunctionFields, true};
+
+    runConformance("table_function_fields.luwu");
+}
+
+TEST_CASE("DoExpressionsCursed")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    runConformance("do_expr_cursed.luwu");
+}
+
+TEST_CASE("PushPopOperators")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuPoperators, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    runConformance("push_pop.luwu");
+}
+
 TEST_CASE("None")
 {
     ScopedFastFlag sff{FFlag::LuwuNonePrimitive, true};
@@ -6694,11 +6827,18 @@ TEST_CASE("LuwuBytecodeHeader")
     {
         // a WIP feature's flag switches the version to LWBC_VERSION_WIP
         ScopedFastFlag luwuClassesOff{FFlag::LuwuClasses, false};
+        ScopedFastFlag comprehensionsOff{FFlag::LuwuTableComprehensions, false};
         std::string bytecode = Luau::compile("return 1");
         REQUIRE(bytecode.size() > LWBC_HEADER_SIZE);
         CHECK(uint8_t(bytecode[0]) == LWBC_MAGIC);
         CHECK(uint8_t(bytecode[1]) == LWBC_VERSION_TARGET);
         CHECK(getLoadError(bytecode) == "");
+
+        // Luwu Table Comprehensions (rfcs/table-comprehensions.md): their opcodes are WIP bytecode too
+        ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+        std::string withComprehensions = Luau::compile("return 1");
+        REQUIRE(withComprehensions.size() > LWBC_HEADER_SIZE);
+        CHECK(uint8_t(withComprehensions[1]) == LWBC_VERSION_WIP);
     }
 
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};

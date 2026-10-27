@@ -17,14 +17,22 @@ LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTINT(LuauTypeLengthLimit)
 LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_DYNAMIC_FASTFLAG(DebugLuauReportReturnTypeVariadicWithTypeSuffix)
+LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(DebugLuwuLuauClassCompat)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -2283,6 +2291,43 @@ TEST_CASE_FIXTURE(Fixture, "disabled_luwu_features_say_which_fflag_enables_them"
     result = tryParse("class Point end");
     REQUIRE(!result.errors.empty());
     CHECK_EQ(result.errors[0].getMessage(), "attempt to use disabled Luwu feature classes; enable via FFlag 'LuwuClasses'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "luau_modules_with_class_compat_parse_upstream_class_syntax")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // upstream Luau's classes leave methods unqualified next to `public` fields
+    const std::string source = R"(
+class Point
+    public x
+    function magnitude(self) return self.x end
+end
+)";
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    {
+        ScopedFastFlag classCompat{FFlag::DebugLuwuLuauClassCompat, true};
+        CHECK(tryParse(source, luau).errors.empty());
+
+        // a Luwu module keeps Luwu's rule
+        ParseResult luwu = tryParse(source);
+        REQUIRE_EQ(luwu.errors.size(), 1);
+        CHECK(luwu.errors[0].getMessage().find("This class mixes explicit and implicit 'public'") == 0);
+    }
+
+    // upstream's own class flag asks for the same
+    {
+        ScopedFastFlag upstreamClasses{FFlag::DebugLuauUserDefinedClasses, true};
+        CHECK(tryParse(source, luau).errors.empty());
+    }
+
+    // without class compat, classes are Luwu-only in a Luau module
+    ParseResult withoutCompat = tryParse(source, luau);
+    REQUIRE(!withoutCompat.errors.empty());
+    CHECK_EQ(withoutCompat.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: classes");
 }
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_luwu_only")
@@ -8428,6 +8473,1445 @@ TEST_CASE_FIXTURE(Fixture, "extern_read_write_attributes")
     CHECK_EQ(declaredExternType->props.data[3].access, AstTableAccess::ReadWrite);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md)
+
+static AstStatLocal* destructuredLocal(AstStatBlock* block, size_t index)
+{
+    REQUIRE(index < block->body.size);
+    AstStatLocal* local = block->body.data[index]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->vars.size, 1);
+    REQUIRE_EQ(local->values.size, 1);
+    return local;
+}
+
+// `local` of `name` whose value is `<object>.<key>`, with `object` the first var of `from`
+static void checkFieldRead(AstStatLocal* local, const char* name, AstStatLocal* from, const char* key)
+{
+    CHECK_EQ(std::string(local->vars.data[0]->name.value), name);
+    AstExprIndexName* read = local->values.data[0]->as<AstExprIndexName>();
+    REQUIRE(read);
+    CHECK_EQ(std::string(read->index.value), key);
+    AstExprLocal* object = read->expr->as<AstExprLocal>();
+    REQUIRE(object);
+    CHECK_EQ(object->local, from->vars.data[0]);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_desugars_to_one_local_per_binding")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const fs.{readfile as rf, path} = require("@std/fs")
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+
+    AstStatLocal* whole = destructuredLocal(block, 0);
+    CHECK_EQ(std::string(whole->vars.data[0]->name.value), "fs");
+    CHECK(whole->values.data[0]->is<AstExprCall>());
+    CHECK(whole->isConst);
+    CHECK(whole->vars.data[0]->isConst);
+    CHECK(whole->destructuredFrom == nullptr);
+
+    AstStatLocal* rf = destructuredLocal(block, 1);
+    checkFieldRead(rf, "rf", whole, "readfile");
+    CHECK(rf->vars.data[0]->isConst);
+    CHECK_EQ(rf->destructuredFrom, whole);
+
+    AstStatLocal* path = destructuredLocal(block, 2);
+    checkFieldRead(path, "path", whole, "path");
+    CHECK_EQ(path->destructuredFrom, whole);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_without_a_name_binds_the_value_to_a_hidden_local")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        local .{x, y} = t
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+    AstStatLocal* hidden = destructuredLocal(block, 0);
+    CHECK_EQ(std::string(hidden->vars.data[0]->name.value), kDestructuredLocalName);
+    CHECK(!hidden->isConst);
+    checkFieldRead(destructuredLocal(block, 1), "x", hidden, "x");
+    checkFieldRead(destructuredLocal(block, 2), "y", hidden, "y");
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_nests_depth_first_in_source_order")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // `tar as .{...}` doesn't bind `tar`; `a.{...}` binds `a`
+    AstStatBlock* block = parse(R"(
+        const .{tar as .{gz as targz}, a.{b}, zip} = archive
+    )");
+
+    REQUIRE_EQ(block->body.size, 6);
+    AstStatLocal* value = destructuredLocal(block, 0);
+    AstStatLocal* tar = destructuredLocal(block, 1);
+    checkFieldRead(tar, kDestructuredLocalName, value, "tar");
+    checkFieldRead(destructuredLocal(block, 2), "targz", tar, "gz");
+    AstStatLocal* a = destructuredLocal(block, 3);
+    checkFieldRead(a, "a", value, "a");
+    checkFieldRead(destructuredLocal(block, 4), "b", a, "b");
+    checkFieldRead(destructuredLocal(block, 5), "zip", value, "zip");
+    CHECK_EQ(destructuredLocal(block, 5)->destructuredFrom, value);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_const_is_told_apart_from_indexing_a_global_named_const")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const .{x} = t
+        const.y = 1
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+    CHECK(destructuredLocal(block, 0)->isConst);
+    checkFieldRead(destructuredLocal(block, 1), "x", destructuredLocal(block, 0), "x");
+    CHECK(block->body.data[2]->is<AstStatAssign>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_annotation_types_the_whole_value")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const fs.{path}: FsLib = require("@std/fs")
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    CHECK(destructuredLocal(block, 0)->vars.data[0]->annotation != nullptr);
+    CHECK(destructuredLocal(block, 1)->vars.data[0]->annotation == nullptr);
+}
+
+static std::string annotationOf(AstStatLocal* local)
+{
+    AstTypeReference* reference = local->vars.data[0]->annotation ? local->vars.data[0]->annotation->as<AstTypeReference>() : nullptr;
+    return reference ? reference->name.value : "(none)";
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_annotation_follows_the_binding_it_types")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // leaf, renamed leaf, a nested pattern's value, a pattern after `as`, the whole value
+    AstStatBlock* block = parse(R"(
+        local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole = t
+    )");
+
+    REQUIRE_EQ(block->body.size, 7);
+    CHECK_EQ(annotationOf(destructuredLocal(block, 0)), "Whole");
+    CHECK_EQ(annotationOf(destructuredLocal(block, 1)), "number");
+    CHECK_EQ(annotationOf(destructuredLocal(block, 2)), "string");
+    CHECK_EQ(std::string(destructuredLocal(block, 2)->vars.data[0]->name.value), "py");
+    CHECK_EQ(annotationOf(destructuredLocal(block, 3)), "Vec2");
+    CHECK_EQ(annotationOf(destructuredLocal(block, 4)), "(none)");
+    CHECK_EQ(annotationOf(destructuredLocal(block, 5)), "Archive");
+    CHECK_EQ(std::string(destructuredLocal(block, 5)->vars.data[0]->name.value), kDestructuredLocalName);
+    CHECK_EQ(annotationOf(destructuredLocal(block, 6)), "(none)");
+
+    // a table type after `:` is still just a type
+    AstStatBlock* tableTyped = parse("local .{i: {number}, am} = t");
+    REQUIRE_EQ(tableTyped->body.size, 3);
+    CHECK(destructuredLocal(tableTyped, 1)->vars.data[0]->annotation->is<AstTypeTable>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_trailing_semicolon_belongs_to_the_last_binding")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        local .{a, b} = t; print(a)
+    )");
+
+    REQUIRE_EQ(block->body.size, 4);
+    CHECK(!block->body.data[0]->hasSemicolon);
+    CHECK(block->body.data[2]->hasSemicolon);
+    CHECK(block->body.data[3]->is<AstStatExpr>());
+}
+
+// Every mistake below gets exactly one error, naming a form that works
+static void matchOnlyDestructuringError(Fixture& fixture, const std::string& source, const std::string& message)
+{
+    ParseResult result = fixture.tryParse(source);
+    INFO(source);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), message);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_parse_errors")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(*this, "local .{} = t", "A destructuring pattern needs at least one field");
+    matchOnlyDestructuringError(*this, "local .{x}", "Expected '=' and a value after the destructuring pattern");
+    matchOnlyDestructuringError(*this, "local .{x} = a, b", "A destructuring declaration takes exactly one value");
+    matchOnlyDestructuringError(*this, "local .{x as} = t", "Expected a name or '.{' after 'as', got '}'");
+    matchOnlyDestructuringError(*this, "@deprecated local .{x} = t", "Attributes can't be applied to a destructuring declaration");
+}
+
+TEST_CASE_FIXTURE(Fixture, "exported_destructuring_exports_every_name_it_binds")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDestructuring, true}, {FFlag::LuauExportValueSyntax, true}};
+
+    AstStatBlock* block = parse(R"(
+        export const .{x, y} = t
+        export local m.{z} = t
+        export .{w} = t
+    )");
+
+    // The hidden local of an unnamed pattern isn't exported; every name the declaration binds is
+    REQUIRE_EQ(block->body.size, 7);
+    const bool exported[] = {false, true, true, true, true, false, true};
+    for (size_t i = 0; i < 7; ++i)
+    {
+        AstStatLocal* local = destructuredLocal(block, i);
+        INFO(i);
+        CHECK(local->isExported);
+        CHECK_EQ(local->isConst, i != 3 && i != 4);
+        CHECK_EQ(local->vars.data[0]->isExported, exported[i]);
+    }
+
+    // `export .{w} = t` is const, with no keyword after `export`
+    CHECK(!destructuredLocal(block, 5)->keywordLocation);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // JavaScript habits
+    matchOnlyDestructuringError(*this, "local {x, y} = t", "Destructuring needs a '.' before '{': 'local .{x, y} = t'");
+    matchOnlyDestructuringError(*this, "local .{x: number as y} = t", "An annotation goes after the name it types: 'x as y: T'");
+    matchOnlyDestructuringError(*this, "local .{...rest} = t", "Destructuring has no rest pattern; bind the value with a name to keep the rest: 'local t.{x} = ...'");
+    matchOnlyDestructuringError(
+        *this, "local .{x = 1, y} = t", "Destructured fields can't have default values; a missing field reads as whatever indexing the value gives"
+    );
+
+    // Keys other than names
+    for (const char* source : {"local .{[1] as x} = t", "local .{\"x\"} = t", "local .{1} = t"})
+        matchOnlyDestructuringError(*this, source, "Destructured fields are names; read any other key by indexing the value: 'local v = t[key]'");
+
+    // A path instead of a nested pattern
+    matchOnlyDestructuringError(
+        *this, "local .{tar.gz} = t", "To take 'gz' out of 'tar', write 'tar.{gz}' to bind both, or 'tar as .{gz}' to bind only 'gz'"
+    );
+    matchOnlyDestructuringError(*this, "local .{.{x}} = t", "A nested pattern needs the field it destructures: 'field.{...}' or 'field as .{...}'");
+    // Found by fuzzing: this recovery path used to leave the field with nothing to bind to
+    matchOnlyDestructuringError(*this, "local .{fs as .x} = t", "To take 'x' out of 'fs', write 'fs.{x}' to bind both, or 'fs as .{x}' to bind only 'x'");
+
+    // Punctuation
+    matchOnlyDestructuringError(*this, "local .{x y} = t", "Expected ',' between destructured fields, got 'y'");
+    matchOnlyDestructuringError(*this, "local .{x as (function() end)()} = t", "Expected a name or '.{' after 'as', got '('");
+
+    // Missing keyword, and patterns where only names go
+    matchOnlyDestructuringError(*this, ".{x} = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "fs.{path} = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "local a, .{b} = t", "A destructuring pattern has to be the only binding in its declaration");
+    matchOnlyDestructuringError(
+        *this, "local function f(.{x}) end", "Destructuring isn't supported in function parameters; destructure the parameter in the body"
+    );
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{x, y = v}` builds `{x = x, y = v}`
+TEST_CASE_FIXTURE(Fixture, "dot_tables_name_their_fields_after_bare_names")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+local x = 1
+return .{x, y = 2, z}
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatReturn* ret = block->body.data[1]->as<AstStatReturn>();
+    REQUIRE(ret);
+    REQUIRE_EQ(ret->list.size, 1);
+    AstExprTable* table = ret->list.data[0]->as<AstExprTable>();
+    REQUIRE(table);
+    CHECK(table->luwuOnly);
+    REQUIRE_EQ(table->items.size, 3);
+
+    const char* keys[] = {"x", "y", "z"};
+    for (size_t i = 0; i < 3; ++i)
+    {
+        const AstExprTable::Item& item = table->items.data[i];
+        CHECK(item.kind == AstExprTable::Item::Kind::Record);
+        AstExprConstantString* key = item.key->as<AstExprConstantString>();
+        REQUIRE(key);
+        CHECK_EQ(std::string(key->value.data, key->value.size), keys[i]);
+    }
+
+    // a bare name reads the local or global of that name
+    CHECK(table->items.data[0].value->is<AstExprLocal>());
+    CHECK(table->items.data[1].value->is<AstExprConstantNumber>());
+    CHECK(table->items.data[2].value->is<AstExprGlobal>());
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `f.{x}` is a call like `f{x = x}`, except where a statement starting
+// with it is a destructuring declaration missing its keyword
+TEST_CASE_FIXTURE(Fixture, "dot_tables_are_call_arguments")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+local c = Color .{r, g}
+register.{name, handler}
+obj:configure .{width}
+local nested = make.{inner = wrap.{a}}
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 4);
+
+    AstStatLocal* local = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->values.size, 1);
+    AstExprCall* call = local->values.data[0]->as<AstExprCall>();
+    REQUIRE(call);
+    REQUIRE_EQ(call->args.size, 1);
+    CHECK(call->args.data[0]->is<AstExprTable>());
+
+    AstStatExpr* statement = block->body.data[1]->as<AstStatExpr>();
+    REQUIRE(statement);
+    CHECK(statement->expr->is<AstExprCall>());
+
+    AstStatExpr* method = block->body.data[2]->as<AstStatExpr>();
+    REQUIRE(method);
+    AstExprCall* methodCall = method->expr->as<AstExprCall>();
+    REQUIRE(methodCall);
+    CHECK(methodCall->self);
+
+    // `fs.{path} = t` is still a declaration missing 'local'
+    matchOnlyDestructuringError(*this, "fs.{path} = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "fs.{path}: Fs = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "dot_table_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(
+        *this, "local t = .{a as b}", "'as' renames only when destructuring; to build the field 'b' from 'a', write 'b = a'"
+    );
+    for (const char* source : {"local t = .{1}", "local t = .{self.x}", "local t = .{f()}", "local t = .{[k] = v}"})
+        matchOnlyDestructuringError(*this, source, "Fields in '.{...}' are names or 'key = value'; use '{...}' for list items and '[key]' fields");
+    matchOnlyDestructuringError(*this, "local t = .{a b}", "Expected ',' after table constructor element");
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a `.` with no `{` after it yet is one error, and the next line still parses
+TEST_CASE_FIXTURE(Fixture, "a_bare_dot_is_a_dot_table_missing_its_brace")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    ParseResult result = tryParse(R"(
+local cat = .
+local unrelated = 1
+)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected '{' after '.': '.{x, y}' builds a table from the locals 'x' and 'y'");
+    REQUIRE_EQ(result.root->body.size, 2);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a `const` on the line after an unclosed `.{` ends the table, and the one
+// error is the missing `}`. Read as the table's next field, it would be an error that consumes nothing, repeated until
+// the parser runs out of memory.
+TEST_CASE_FIXTURE(Fixture, "a_const_below_an_unclosed_dot_table_ends_it")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    ParseResult result = tryParse("const y = 2\nlocal t = .{\n    y\nconst x = 1\n");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK(result.errors[0].getMessage().find("Expected '}'") == 0);
+    REQUIRE_EQ(result.root->body.size, 3);
+    CHECK(result.root->body.data[2]->is<AstStatLocal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "dot_tables_need_luwu_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, false};
+
+    ParseResult result = tryParse("local t = .{x}");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use disabled Luwu feature '.{...}' table constructors; enable via FFlag 'LuwuDestructuring'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_for_in_bindings_start_the_body_with_their_fields")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        for _, .{name, age as years} in people do
+            print(name, years)
+        end
+        for i, entry.{kind} in entries do
+            print(entry)
+        end
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatForIn* unnamed = block->body.data[0]->as<AstStatForIn>();
+    REQUIRE(unnamed);
+    CHECK(unnamed->luwuOnly);
+    REQUIRE_EQ(unnamed->destructure.size, 2);
+    CHECK(!unnamed->destructure.data[0]);
+    REQUIRE(unnamed->destructure.data[1]);
+    AstLocal* hidden = unnamed->vars.data[1];
+    CHECK_EQ(std::string(hidden->name.value), kDestructuredLocalName);
+    CHECK_EQ(unnamed->destructure.data[1]->local, hidden);
+
+    // the body starts with the fields, read from the loop variable
+    REQUIRE_EQ(unnamed->body->body.size, 3);
+    AstStatLocal* name = unnamed->body->body.data[0]->as<AstStatLocal>();
+    AstStatLocal* years = unnamed->body->body.data[1]->as<AstStatLocal>();
+    REQUIRE(name);
+    REQUIRE(years);
+    CHECK(name->destructuredFromLoop);
+    CHECK(name->isDesugaredField());
+    CHECK(name->luwuOnly);
+    CHECK_EQ(std::string(years->vars.data[0]->name.value), "years");
+    AstExprIndexName* read = name->values.data[0]->as<AstExprIndexName>();
+    REQUIRE(read);
+    REQUIRE(read->expr->is<AstExprLocal>());
+    CHECK_EQ(read->expr->as<AstExprLocal>()->local, hidden);
+
+    AstStatForIn* named = block->body.data[1]->as<AstStatForIn>();
+    REQUIRE(named);
+    REQUIRE_EQ(named->vars.size, 2);
+    CHECK_EQ(std::string(named->vars.data[1]->name.value), "entry");
+    REQUIRE_EQ(named->body->body.size, 2);
+    CHECK(named->body->body.data[0]->as<AstStatLocal>()->destructuredFromLoop);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_a_numeric_for_variable_gets_one_error")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(
+        *this, "for .{x} = 1, 2 do end", "A numeric 'for' loop's variable is a number; only 'for ... in' bindings can be destructured"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "type_destructuring_desugars_to_one_alias_per_type")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        type .{Metadata, Entry as FileEntry} = fs
+        export type .{Box} = fs
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+
+    AstStatTypeAlias* first = block->body.data[0]->as<AstStatTypeAlias>();
+    AstStatTypeAlias* renamed = block->body.data[1]->as<AstStatTypeAlias>();
+    AstStatTypeAlias* exported = block->body.data[2]->as<AstStatTypeAlias>();
+    REQUIRE(first);
+    REQUIRE(renamed);
+    REQUIRE(exported);
+
+    // the first spans the declaration and holds its source form; the rest point back to it
+    REQUIRE(first->destructure);
+    CHECK_EQ(first->location, Location{{1, 8}, {1, 49}});
+    CHECK_EQ(std::string(first->destructure->module.value), "fs");
+    REQUIRE_EQ(first->destructure->fields.size, 2);
+    CHECK(!first->destructure->fields.data[0].asLocation);
+    CHECK(first->destructure->fields.data[1].asLocation);
+    CHECK_EQ(first->destructure->fields.data[1].alias, renamed);
+    CHECK_EQ(renamed->destructuredFrom, first);
+    CHECK(first->luwuOnly);
+    CHECK(renamed->luwuOnly);
+
+    // `type FileEntry = fs.Entry`
+    CHECK_EQ(std::string(renamed->name.value), "FileEntry");
+    CHECK_EQ(renamed->generics.size, 0);
+    AstTypeReference* reference = renamed->destructuredReference();
+    REQUIRE(reference);
+    REQUIRE(reference->prefix);
+    CHECK_EQ(std::string(reference->prefix->value), "fs");
+    CHECK_EQ(std::string(reference->name.value), "Entry");
+    CHECK(!reference->hasParameterList);
+
+    CHECK(exported->exported);
+    CHECK_EQ(std::string(exported->name.value), "Box");
+    CHECK(exported->destructure);
+}
+
+// `type .{Age} = hub.t` reads from a module `hub` exports: its alias's prefix is the whole path
+TEST_CASE_FIXTURE(Fixture, "type_destructuring_reads_from_a_path_to_a_module")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        type .{Age} = hub.t
+        type .{Name} = hub.a.b
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    for (size_t i = 0; i < 2; ++i)
+    {
+        AstStatTypeAlias* alias = block->body.data[i]->as<AstStatTypeAlias>();
+        REQUIRE(alias);
+        AstTypeReference* reference = alias->destructuredReference();
+        REQUIRE(reference);
+        REQUIRE(reference->prefix);
+        CHECK_EQ(std::string(reference->prefix->value), i == 0 ? "hub.t" : "hub.a.b");
+        CHECK_EQ(std::string(alias->destructure->module.value), i == 0 ? "hub.t" : "hub.a.b");
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "type_destructuring_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(*this, "type fs.{A} = fs", "A type destructuring declares only the types; drop 'fs' before '.{'");
+    matchOnlyDestructuringError(*this, "type .{A} = fs<number>", "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(*this, "type .{A} = fs | other", "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(
+        *this, "type .{A} = { x: number }", "A type destructuring reads types from a required module: 'type .{A, B} = module'"
+    );
+    matchOnlyDestructuringError(
+        *this, "type .{inner.{A}} = fs", "A type destructuring can't nest; list the module's types directly: 'type .{A, B} = module'"
+    );
+    matchOnlyDestructuringError(*this, "type .{A: number} = fs", "A destructured type takes no annotation: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(*this, "type .{A}", "Expected '=' and a module after the destructuring pattern: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(*this, "type .{} = fs", "A destructuring pattern needs at least one field");
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_is_luwu_only")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const fs.{path, tar as .{gz}} = require("@std/fs")
+        local plain = 1
+    )");
+
+    REQUIRE_EQ(block->body.size, 5);
+    for (size_t i = 0; i < 4; ++i)
+        CHECK(block->body.data[i]->luwuOnly);
+    CHECK(!block->body.data[4]->luwuOnly);
+
+    // The synthesized reads are ordinary syntax
+    CHECK(!destructuredLocal(block, 1)->values.data[0]->luwuOnly);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_without_the_flag_says_how_to_enable_it")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, false};
+
+    matchParseError("local .{x} = t", "attempt to use disabled Luwu feature destructuring; enable via FFlag 'LuwuDestructuring'");
+    matchParseError("const .{x} = t", "attempt to use disabled Luwu feature destructuring; enable via FFlag 'LuwuDestructuring'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_is_an_error_in_a_luau_module")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    ParseResult result = tryParse("local .{x} = t", luau);
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: destructuring");
+}
+
+static void matchOnlyIfLocalError(Fixture& fixture, const std::string& source, const std::string& message)
+{
+    ParseResult result = fixture.tryParse(source);
+    INFO(source);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), message);
+}
+
+static AstExprLocal* calledWithLocal(AstStat* stat)
+{
+    AstStatExpr* expr = stat->as<AstStatExpr>();
+    REQUIRE(expr);
+    AstExprCall* call = expr->expr->as<AstExprCall>();
+    REQUIRE(call);
+    REQUIRE_EQ(call->args.size, 1);
+    AstExprLocal* local = call->args.data[0]->as<AstExprLocal>();
+    REQUIRE(local);
+    return local;
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_parses_a_when_chain")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    AstStatBlock* block = parse(R"(
+        if local a = f() when a > 1 when const b = g(a) then
+        end
+    )");
+
+    REQUIRE_EQ(block->body.size, 1);
+    AstStatIf* stat = block->body.data[0]->as<AstStatIf>();
+    REQUIRE(stat);
+    REQUIRE_EQ(stat->clauses.size, 3);
+    CHECK(stat->luwuOnly);
+
+    const AstIfClause& a = stat->clauses.data[0];
+    REQUIRE(a.declaration);
+    CHECK_EQ(std::string(a.local->name.value), "a");
+    CHECK(!a.local->isConst);
+    CHECK(a.expr->is<AstExprCall>());
+    CHECK(!a.whenLocation);
+    CHECK_EQ(stat->condition, a.expr);
+    CHECK_EQ(a.declaration->vars.data[0], a.local);
+    CHECK_EQ(a.declaration->values.data[0], a.expr);
+
+    const AstIfClause& test = stat->clauses.data[1];
+    CHECK(!test.declaration);
+    CHECK(!test.local);
+    CHECK(test.expr->is<AstExprBinary>());
+    CHECK(test.whenLocation);
+
+    const AstIfClause& b = stat->clauses.data[2];
+    REQUIRE(b.declaration);
+    CHECK(b.local->isConst);
+    CHECK(b.declaration->isConst);
+
+    // `g(a)` reads the first clause's binding
+    AstExprCall* call = b.expr->as<AstExprCall>();
+    REQUIRE(call);
+    AstExprLocal* arg = call->args.data[0]->as<AstExprLocal>();
+    REQUIRE(arg);
+    CHECK_EQ(arg->local, a.local);
+
+    CHECK_EQ(stat->conditionLocation().begin, a.declaration->location.begin);
+    CHECK_EQ(stat->conditionLocation().end, b.expr->location.end);
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_bindings_are_visible_only_in_their_chain_and_branch")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = 1
+        if local a = a then
+            print(a)
+        elseif local b = a then
+            print(a)
+        else
+            print(a)
+        end
+        print(a)
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+    AstLocal* outer = block->body.data[0]->as<AstStatLocal>()->vars.data[0];
+    AstStatIf* stat = block->body.data[1]->as<AstStatIf>();
+    REQUIRE(stat);
+    REQUIRE_EQ(stat->clauses.size, 1);
+    AstLocal* inner = stat->clauses.data[0].local;
+
+    // The initializer can't see its own binding
+    CHECK_EQ(stat->clauses.data[0].expr->as<AstExprLocal>()->local, outer);
+    CHECK_EQ(calledWithLocal(stat->thenbody->body.data[0])->local, inner);
+
+    AstStatIf* elseif = stat->elsebody->as<AstStatIf>();
+    REQUIRE(elseif);
+    CHECK_EQ(elseif->clauses.data[0].expr->as<AstExprLocal>()->local, outer);
+    CHECK_EQ(calledWithLocal(elseif->thenbody->body.data[0])->local, outer);
+
+    AstStatBlock* elseBlock = elseif->elsebody->as<AstStatBlock>();
+    REQUIRE(elseBlock);
+    CHECK_EQ(calledWithLocal(elseBlock->body.data[0])->local, outer);
+    CHECK_EQ(calledWithLocal(block->body.data[2])->local, outer);
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_expression")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = 0
+        local x = if const a = f() when a then a else a
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    AstLocal* outer = block->body.data[0]->as<AstStatLocal>()->vars.data[0];
+    AstExprIfElse* expr = block->body.data[1]->as<AstStatLocal>()->values.data[0]->as<AstExprIfElse>();
+    REQUIRE(expr);
+    REQUIRE_EQ(expr->clauses.size, 2);
+    CHECK(expr->luwuOnly);
+
+    AstLocal* inner = expr->clauses.data[0].local;
+    REQUIRE(inner);
+    CHECK(inner->isConst);
+    CHECK_EQ(expr->clauses.data[1].expr->as<AstExprLocal>()->local, inner);
+    CHECK_EQ(expr->trueExpr->as<AstExprLocal>()->local, inner);
+    CHECK_EQ(expr->falseExpr->as<AstExprLocal>()->local, outer);
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_const_still_reads_a_variable_named_const")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    for (const char* source : {"if const then end", "if const.x then end", "if const {1} then end", "if const == 1 then end", "if const 'x' then end"})
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        CHECK(result.errors.empty());
+        REQUIRE_EQ(result.root->body.size, 1);
+        AstStatIf* stat = result.root->body.data[0]->as<AstStatIf>();
+        REQUIRE(stat);
+        CHECK_EQ(stat->clauses.size, 0);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_mistakes_get_one_error")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    matchOnlyIfLocalError(
+        *this,
+        "if local a, b = x(), y() then end",
+        "'if local' binds one name; bind the next one in a 'when' clause: 'if local a = x() when local b = y() then'"
+    );
+    matchOnlyIfLocalError(
+        *this,
+        "if const a, b = x() then end",
+        "'if const' binds one name; bind the next one in a 'when' clause: 'if const a = x() when const b = y() then'"
+    );
+    matchOnlyIfLocalError(*this, "if local a then end", "Expected '=' and a value after 'local a'");
+    matchOnlyIfLocalError(*this, "if local a = x(), y() then end", "'if local' takes exactly one value");
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_local_without_the_flag_says_how_to_enable_it")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, false};
+
+    const char* message = "attempt to use disabled Luwu feature 'if local' and 'when'; enable via FFlag 'LuwuIfLocal'";
+    matchParseError("if local a = f() then end", message);
+    matchParseError("if a when b then end", message);
+    matchParseError("local x = if const a = f() then a else nil", message);
+}
+
+TEST_CASE_FIXTURE(Fixture, "for_when_is_stored_as_a_guard_around_the_body")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    AstStatBlock* block = parse(R"(
+        for i = 1, 10 when i > 2 do
+            print(i)
+        end
+        for _, v in xs when local w = v.inner when w > 1 do
+            print(w)
+        end
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatFor* range = block->body.data[0]->as<AstStatFor>();
+    REQUIRE(range);
+    REQUIRE(range->whenGuard);
+    CHECK(range->luwuOnly);
+    CHECK(range->whenGuard->isWhenGuard);
+    REQUIRE_EQ(range->body->body.size, 1);
+    CHECK_EQ(range->body->body.data[0], range->whenGuard);
+    // a single plain `when` is the guard's own condition
+    CHECK_EQ(range->whenGuard->clauses.size, 0);
+    CHECK(range->whenGuard->condition->is<AstExprBinary>());
+    CHECK_EQ(calledWithLocal(range->whenGuard->thenbody->body.data[0])->local, range->var);
+
+    AstStatForIn* generic = block->body.data[1]->as<AstStatForIn>();
+    REQUIRE(generic);
+    REQUIRE(generic->whenGuard);
+    REQUIRE_EQ(generic->whenGuard->clauses.size, 2);
+    const AstIfClause& w = generic->whenGuard->clauses.data[0];
+    REQUIRE(w.declaration);
+    // the binding reads the loop variable, and the body reads the binding
+    CHECK_EQ(w.expr->as<AstExprIndexName>()->expr->as<AstExprLocal>()->local, generic->vars.data[1]);
+    CHECK_EQ(calledWithLocal(generic->whenGuard->thenbody->body.data[0])->local, w.local);
+}
+
+TEST_CASE_FIXTURE(Fixture, "while_local_parses_a_when_chain")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    AstStatBlock* block = parse(R"(
+        local line = 1
+        while local line = read() when line ~= "" do
+            print(line)
+        end
+        print(line)
+        while ready when const job = pop() do end
+        while running do end
+    )");
+
+    REQUIRE_EQ(block->body.size, 5);
+    AstLocal* outer = block->body.data[0]->as<AstStatLocal>()->vars.data[0];
+
+    AstStatWhile* first = block->body.data[1]->as<AstStatWhile>();
+    REQUIRE(first);
+    CHECK(first->luwuOnly);
+    REQUIRE_EQ(first->clauses.size, 2);
+    AstLocal* inner = first->clauses.data[0].local;
+    REQUIRE(inner);
+    CHECK_EQ(first->condition, first->clauses.data[0].expr);
+    CHECK_EQ(calledWithLocal(first->body->body.data[0])->local, inner);
+    // the binding ends with the loop
+    CHECK_EQ(calledWithLocal(block->body.data[2])->local, outer);
+
+    AstStatWhile* second = block->body.data[3]->as<AstStatWhile>();
+    REQUIRE(second);
+    REQUIRE_EQ(second->clauses.size, 2);
+    CHECK(!second->clauses.data[0].declaration);
+    CHECK(second->clauses.data[1].declaration);
+
+    AstStatWhile* plain = block->body.data[4]->as<AstStatWhile>();
+    REQUIRE(plain);
+    CHECK_EQ(plain->clauses.size, 0);
+    CHECK(!plain->luwuOnly);
+}
+
+TEST_CASE_FIXTURE(Fixture, "loop_when_without_the_flag_says_how_to_enable_it")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, false};
+
+    matchParseError("for i = 1, 2 when i > 1 do end", "attempt to use disabled Luwu feature 'when' on a loop; enable via FFlag 'LuwuIfLocal'");
+    matchParseError("while local x = f() do end", "attempt to use disabled Luwu feature 'while local' and 'when'; enable via FFlag 'LuwuIfLocal'");
+}
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+TEST_CASE_FIXTURE(Fixture, "table_comprehension_is_stored_as_its_loop")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = { for _, v in xs when v > 1 when local w = v * 2 for i = 1, w give [i] = w }
+    )");
+
+    REQUIRE_EQ(block->body.size, 1);
+    AstStatLocal* local = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(local);
+    AstExprTableComprehension* expr = local->values.data[0]->as<AstExprTableComprehension>();
+    REQUIRE(expr);
+    CHECK(expr->luwuOnly);
+    CHECK_EQ(expr->clauseCount, 2);
+
+    // for ... in, its `when` chain as an if, then the numeric for, then the item
+    AstStatForIn* outer = expr->loop->as<AstStatForIn>();
+    REQUIRE(outer);
+    REQUIRE_EQ(outer->body->body.size, 1);
+    AstStatIf* guard = outer->body->body.data[0]->as<AstStatIf>();
+    REQUIRE(guard);
+    REQUIRE_EQ(guard->clauses.size, 2);
+    REQUIRE(guard->clauses.data[1].local);
+    CHECK(!guard->elsebody);
+    REQUIRE_EQ(guard->thenbody->body.size, 1);
+    AstStatFor* inner = guard->thenbody->body.data[0]->as<AstStatFor>();
+    REQUIRE(inner);
+    REQUIRE_EQ(inner->body->body.size, 1);
+    CHECK_EQ(inner->body->body.data[0], expr->item);
+
+    // the item sees every binding
+    REQUIRE(expr->item->key);
+    CHECK_EQ(expr->item->key->as<AstExprLocal>()->local, inner->var);
+    CHECK_EQ(expr->item->value->as<AstExprLocal>()->local, guard->clauses.data[1].local);
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_comprehension_parse_errors")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    matchParseError("local a = { for _, v in xs give v, 1 }", "A table comprehension must be the only item in its table");
+    matchParseError("local a = { 1, for _, v in xs do v }", "A table comprehension must be the only item in its table");
+    matchParseError(
+        "local a = { for _, v in xs give x = v }", "A table comprehension's item is a value or '[key] = value'; 'name = value' writes one key"
+    );
+    matchParseError("local a = { for _, v in xs v }", "Expected 'give' when parsing table comprehension, got 'v'");
+    // pointed at the `do`, in a single-line and a multi-line comprehension
+    matchParseError("local a = { for _, v in xs do v }", "Table comprehensions don't use 'do'; did you mean 'give'?", Location{{0, 27}, {0, 29}});
+    matchParseError(
+        "local a = {\n    for _, v in xs\n        when v > 1\n    do v\n}",
+        "Table comprehensions don't use 'do'; did you mean 'give'?",
+        Location{{3, 4}, {3, 6}}
+    );
+    matchParseError(
+        "local a = { for _, v in xs give [v] /= 2 }", "A table comprehension can accumulate with '+=', '-=', '*=' or '..=', not '/='"
+    );
+
+    // an accumulating item records its operator
+    AstStatBlock* tally = parse("local a = { for _, v in xs give [v] += 1 }");
+    AstExprTableComprehension* counted = tally->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprTableComprehension>();
+    REQUIRE(counted);
+    CHECK(counted->item->accumulate == AstExprBinary::Add);
+
+    // the bindings aren't visible after the comprehension
+    AstStatBlock* block = parse("local a = { for i = 1, 2 give i } local b = i");
+    REQUIRE_EQ(block->body.size, 2);
+    CHECK(block->body.data[1]->as<AstStatLocal>()->values.data[0]->is<AstExprGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_comprehension_needs_its_flag")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, false};
+
+    matchParseError(
+        "local a = { for _, v in xs give v }", "attempt to use disabled Luwu feature table comprehensions; enable via FFlag 'LuwuTableComprehensions'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_function_fields")
+{
+    ScopedFastFlag tableFunctions{FFlag::LuwuTableFunctionFields, true};
+
+    AstStatBlock* block = parse(R"(
+        local t = {
+            function foo(a: number): number return a end,
+            function() end;
+            bar = 1,
+        }
+    )");
+
+    REQUIRE_EQ(block->body.size, 1);
+    AstExprTable* table = block->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprTable>();
+    REQUIRE(table);
+    REQUIRE_EQ(table->items.size, 3);
+
+    // `function foo() end` is `foo = function() end`, named after its key
+    const AstExprTable::Item& foo = table->items.data[0];
+    CHECK(foo.kind == AstExprTable::Item::Kind::Record);
+    REQUIRE(foo.key->is<AstExprConstantString>());
+    CHECK_EQ(std::string(foo.key->as<AstExprConstantString>()->value.data, 3), "foo");
+    AstExprFunction* fn = foo.value->as<AstExprFunction>();
+    REQUIRE(fn);
+    CHECK_EQ(std::string(fn->debugname.value), "foo");
+    CHECK_EQ(fn->args.size, 1);
+    CHECK(!fn->self);
+
+    // an anonymous function is still a list item
+    CHECK(table->items.data[1].kind == AstExprTable::Item::Kind::List);
+    CHECK(table->items.data[1].value->is<AstExprFunction>());
+
+    matchParseError("local t = {\n    function a() end\n    function b() end\n}", "Expected ',' after table constructor element");
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_function_fields_need_their_flag")
+{
+    ScopedFastFlag tableFunctions{FFlag::LuwuTableFunctionFields, false};
+
+    matchParseError(
+        "local t = { function foo() end }",
+        "attempt to use disabled Luwu feature named functions in table literals; enable via FFlag 'LuwuTableFunctionFields'"
+    );
+}
+
+static AstExprDo* doExprValue(AstStatBlock* block, size_t index)
+{
+    REQUIRE(index < block->body.size);
+    AstStatLocal* local = block->body.data[index]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->values.size, 1);
+    AstExprDo* expr = local->values.data[0]->as<AstExprDo>();
+    REQUIRE(expr);
+    return expr;
+}
+
+TEST_CASE_FIXTURE(Fixture, "do_expression_ends_at_its_terminator")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        local x = do
+            local a = 1
+            if a then
+                give a
+            end
+            give 2
+        print(x)
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    AstExprDo* expr = doExprValue(block, 0);
+    CHECK(!expr->shorthand);
+    CHECK(expr->luwuOnly);
+    REQUIRE_EQ(expr->body->body.size, 3);
+    CHECK(expr->body->body.data[2]->is<AstStatGive>());
+    CHECK(block->body.data[1]->is<AstStatExpr>());
+
+    // the give's value sees the block's locals
+    AstStatGive* give = expr->body->body.data[2]->as<AstStatGive>();
+    CHECK(give->value->is<AstExprConstantNumber>());
+    AstStatIf* stat = expr->body->body.data[1]->as<AstStatIf>();
+    REQUIRE(stat);
+    AstStatGive* early = stat->thenbody->body.data[0]->as<AstStatGive>();
+    REQUIRE(early);
+    CHECK_EQ(early->value->as<AstExprLocal>()->local, expr->body->body.data[0]->as<AstStatLocal>()->vars.data[0]);
+}
+
+TEST_CASE_FIXTURE(Fixture, "do_expression_terminators")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    for (const char* source : {
+             "local x = do give 1",
+             "local function f() local x = do return 1 end",
+             "for i = 1, 2 do local x = do break end",
+             "for i = 1, 2 do local x = do continue end",
+             "local x = 1 or (do return)",
+             "local x = f(do give 1, 2)",
+             "local x = if a then do give 1 else 2",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        CHECK(result.errors.empty());
+    }
+}
+
+static void matchOnlyDoExprError(Fixture& fixture, const std::string& source, const std::string& message)
+{
+    ParseResult result = fixture.tryParse(source);
+    INFO(source);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), message);
+}
+
+TEST_CASE_FIXTURE(Fixture, "do_expression_mistakes_get_one_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    const std::string mustEnd = "A 'do' expression must end with 'give <value>', 'return', 'break' or 'continue'";
+    matchOnlyDoExprError(*this, "local x = do local y = 1", mustEnd);
+    matchOnlyDoExprError(*this, "local x = f(do local y = 1)", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do if a then give 1 end", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do error('x')", mustEnd + "; to raise an error there, write 'give error(...)'");
+    matchOnlyDoExprError(
+        *this,
+        "local x = a or do return",
+        "A 'do' expression that ends in a bare 'return' must be parenthesized, '(do return)', so a value on the next line isn't read as "
+        "the value to return"
+    );
+    matchOnlyDoExprError(
+        *this,
+        "local x = a or return",
+        "'or return' with no value must be parenthesized, 'or (return)', or end its statement with ';', so a value on the next "
+        "line isn't read as the value to return"
+    );
+    matchOnlyDoExprError(*this, "local x = do if a then give 1, 2 end give 3", "'give' gives exactly one value");
+    matchOnlyDoExprError(*this, "local x = do give", "Expected a value after 'give'");
+    matchOnlyDoExprError(*this, "local x = do local give = 1 give 1", "'give' is a keyword inside a 'do' expression and can't name a variable there");
+    matchOnlyDoExprError(*this, "local x = do print(continue) give 1", "'continue' is a keyword inside a 'do' expression and can't name a variable there");
+    matchOnlyDoExprError(*this, "local function f(a = do return 1) end", "A default value can't 'return': it runs before the function's body does");
+    matchOnlyDoExprError(*this, "local function f(a = nil or return 1) end", "A default value can't 'return': it runs before the function's body does");
+    matchOnlyDoExprError(*this, "for i = 1, 2 do local function f(a = do break) end end", "break statement must be inside a loop");
+}
+
+TEST_CASE_FIXTURE(Fixture, "malformed_do_expressions_do_not_cascade")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    const std::string mustEnd = "A 'do' expression must end with 'give <value>', 'return', 'break' or 'continue'";
+    matchOnlyDoExprError(*this, "local x = do", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do\nprint(1)", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do do end", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do do end\nprint(1)", mustEnd);
+    matchOnlyDoExprError(*this, "print(do, 2)\nprint(3)", mustEnd);
+    matchOnlyDoExprError(*this, "local t = { do, 2 }", mustEnd);
+    matchOnlyDoExprError(*this, "if do then print(1) end", mustEnd);
+    matchOnlyDoExprError(*this, "local x = do do\nprint(1)", "Expected 'end' (to close 'do' at line 1), got <eof>");
+    matchOnlyDoExprError(*this, "local x = do do do do", "Expected 'end' (to close 'do' at column 20), got <eof>");
+
+    // a value right after `do`, or where a statement goes, was meant as the result
+    for (const char* source : {"local x = do 1", "local x = do 'x'\nprint(x)", "local x = do { 1 }", "local x = do -y", "local x = do not y"})
+        matchOnlyDoExprError(*this, source, "A 'do' expression's block holds statements; to give a value, write 'do give <value>'");
+    matchOnlyDoExprError(*this, "local x = do x + 1 * 2\nprint(x)", "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'");
+    matchOnlyDoExprError(*this, "local x = do local a = 1 a .. 'b'", "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'");
+}
+
+// While a do or if-else expression is still being written, only its keyword is an error, and the next statement is
+// left alone
+TEST_CASE_FIXTURE(Fixture, "incomplete_expression_errors_go_on_the_keyword")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    ParseResult result = tryParse("local x = do\n    local a = 1\nprint(x)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getLocation(), Location(Position(0, 10), Position(0, 12)));
+
+    result = tryParse("local x = if a then 1\nprint(x)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected 'else' when parsing if then else expression, got 'print'");
+    CHECK_EQ(result.errors[0].getLocation(), Location(Position(0, 10), Position(0, 12)));
+    REQUIRE_EQ(result.root->body.size, 2);
+    CHECK(result.root->body.data[1]->is<AstStatExpr>());
+
+    result = tryParse("local x = if a\nprint(x)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected 'then' when parsing if then else expression, got 'print'");
+    REQUIRE_EQ(result.root->body.size, 2);
+    CHECK(result.root->body.data[1]->is<AstStatExpr>());
+
+    // a missing keyword with a value after it on the same line is a typo, and that value is still the arm
+    result = tryParse("local a = if true 1 else 2");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.root->body.size, 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "an_end_after_an_expression_that_takes_none_gets_one_error")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    const std::string ifElse = "An if-else expression doesn't end with 'end'; this 'end' closes the block around it instead";
+    const std::string doEnd = "A 'do' expression doesn't end with 'end'; this 'end' closes the block around it instead";
+
+    matchOnlyDoExprError(*this, "local x = if a then 1 else 2 end", ifElse);
+    matchOnlyDoExprError(*this, "local x = do give 1 end", doEnd);
+    matchOnlyDoExprError(*this, "while true do\n    local x = do give 1 end\nend", doEnd);
+
+    // the stray `end` closes the function early, and the function's own `end` is left over: the stray one is blamed
+    ParseResult result = tryParse("local function f()\n    local x = do\n        give 1\n    end\n    return x\nend");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), doEnd);
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(3, 4));
+
+    matchOnlyDoExprError(
+        *this, "local x = do foo() end", "A 'do' expression doesn't end with 'end'; end it with 'give <value>', 'return', 'break' or 'continue'"
+    );
+    matchOnlyDoExprError(
+        *this,
+        "local x = if a then 1 end",
+        "Expected 'else' when parsing if then else expression, got 'end'; an if-else expression doesn't end with 'end'"
+    );
+
+    // an `end` after an expression that closes the block around it is fine, however it's indented
+    for (const char* source : {
+             "local function f()\n    return if a then 1 else 2\nend",
+             "local function f()\nreturn if a then 1 else 2\nend",
+             "function f() return if a then 1 else 2 end",
+             "local function f()\nlocal x = do give 1\nend",
+         })
+    {
+        INFO(source);
+        CHECK(tryParse(source).errors.empty());
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "give_and_continue_are_keywords_only_in_do_expression_variable_positions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    for (const char* source : {
+             "local x = do local t = { give = 1, continue = 2 } t.give = 3 give t:continue()",
+             "local x = do local function f() local give = 1 return give end give f()",
+             "local give = 1 local continue = 2 print(give, continue)",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        CHECK(result.errors.empty());
+    }
+
+    // `give (f)(x)` is a give of `(f)(x)`, not a call to a function named give
+    AstStatBlock* block = parse("local x = do give (f)(x)");
+    AstExprDo* expr = doExprValue(block, 0);
+    AstStatGive* give = expr->body->body.data[0]->as<AstStatGive>();
+    REQUIRE(give);
+    CHECK(give->value->is<AstExprCall>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "or_leave_statements")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        local function f(x, s)
+            x or return nil
+            ok and valid or (return "no", "pair")
+            for _, v in s do
+                string.find(v, "^a") or continue
+                v ~= "stop" or break
+            end
+            x or do
+                print("x")
+                return 1
+        end
+    )");
+
+    AstStatBlock* body = block->body.data[0]->as<AstStatLocalFunction>()->func->body;
+    REQUIRE_EQ(body->body.size, 4);
+
+    for (size_t i : {size_t(0), size_t(1), size_t(3)})
+    {
+        AstStatExpr* stat = body->body.data[i]->as<AstStatExpr>();
+        REQUIRE(stat);
+        CHECK(stat->luwuOnly);
+        CHECK(asOrLeave(stat->expr));
+    }
+
+    // `ok and valid or ...` is `(ok and valid) or ...`
+    AstExprBinary* andOr = body->body.data[1]->as<AstStatExpr>()->expr->as<AstExprBinary>();
+    CHECK(andOr->left->is<AstExprBinary>());
+
+    AstStatBlock* loopBody = body->body.data[2]->as<AstStatForIn>()->body;
+    REQUIRE_EQ(loopBody->body.size, 2);
+    CHECK(asOrLeave(loopBody->body.data[0]->as<AstStatExpr>()->expr));
+    CHECK(asOrLeave(loopBody->body.data[1]->as<AstStatExpr>()->expr));
+}
+
+TEST_CASE_FIXTURE(Fixture, "or_continue_statement_is_the_keyword_even_where_continue_is_a_name")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    // `continue` names a variable here, so `x or continue` in an expression reads it; a statement has no value to read
+    // it into, so there it is the keyword
+    AstStatBlock* block = parse(R"(
+        continue = 1
+        for _, v in t do
+            local a = v or continue
+            v or continue
+        end
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    AstStatForIn* loop = block->body.data[1]->as<AstStatForIn>();
+    REQUIRE(loop);
+    AstStatBlock* loopBody = loop->body;
+    REQUIRE_EQ(loopBody->body.size, 2);
+    AstExprBinary* value = loopBody->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+    REQUIRE(value);
+    CHECK(value->right->is<AstExprGlobal>());
+    CHECK(asOrLeave(loopBody->body.data[1]->as<AstStatExpr>()->expr));
+}
+
+TEST_CASE_FIXTURE(Fixture, "expression_statements_that_dont_leave_get_one_error")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    const char* message =
+        "Incomplete statement: expected assignment, a function call, or an expression ending in 'or return', 'or break' or 'or continue'";
+    matchOnlyIfLocalError(*this, "local x, y\nx or y", message);
+    matchOnlyIfLocalError(*this, "local a, b\na + b", message);
+    matchOnlyIfLocalError(*this, "local x\nx or do give 1", message);
+    matchOnlyIfLocalError(*this, "local x\nf() or x", message);
+    // nothing around a statement can take a second value
+    matchOnlyIfLocalError(
+        *this,
+        "local function f(x, a, b)\n    x or return a, b\n    return x\nend",
+        "'or return' returns one value unless parenthesized: 'x or (return a, b)'"
+    );
+
+    // a statement keyword can't be the value of a bare `or return`
+    matchOnlyIfLocalError(
+        *this,
+        "local x\nx or return\nlocal y = 1",
+        "'or return' with no value must be parenthesized, 'or (return)', or end its statement with ';', so a value on the next line "
+        "isn't read as the value to return"
+    );
+
+    // a `;` ends a bare `or return` as a statement or as a declaration's value
+    ParseResult semicolons = tryParse("local function f(x)\n    x or return;\n    const y = f(x) or return;\n    return y\nend");
+    CHECK(semicolons.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "or_return_and_or_break_are_do_expressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        local function f()
+            local a = x or return 1
+            local b, c = x or return 2, 3
+            local d = x or (return 4, 5)
+            for i = 1, 2 do
+                local e = x or break
+            end
+        end
+    )");
+
+    AstExprFunction* func = block->body.data[0]->as<AstStatLocalFunction>()->func;
+    AstStatBlock* body = func->body;
+
+    AstExprBinary* a = body->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+    REQUIRE(a);
+    CHECK_EQ(a->op, AstExprBinary::Or);
+    AstExprDo* aDo = a->right->as<AstExprDo>();
+    REQUIRE(aDo);
+    CHECK(aDo->shorthand);
+    REQUIRE_EQ(aDo->body->body.size, 1);
+    CHECK_EQ(aDo->body->body.data[0]->as<AstStatReturn>()->list.size, 1);
+
+    // the comma after an unparenthesized `or return` belongs to the local
+    AstStatLocal* bc = body->body.data[1]->as<AstStatLocal>();
+    REQUIRE_EQ(bc->values.size, 2);
+
+    AstExprGroup* d = body->body.data[2]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>()->right->as<AstExprGroup>();
+    REQUIRE(d);
+    CHECK_EQ(d->expr->as<AstExprDo>()->body->body.data[0]->as<AstStatReturn>()->list.size, 2);
+
+    AstStatFor* loop = body->body.data[3]->as<AstStatFor>();
+    AstExprDo* e = loop->body->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>()->right->as<AstExprDo>();
+    REQUIRE(e);
+    CHECK(e->body->body.data[0]->is<AstStatBreak>());
+}
+
+// `x or continue` is the shorthand in a loop of a module that never uses `continue` as a name; anywhere else it keeps
+// Luau's meaning, a read of the variable
+TEST_CASE_FIXTURE(Fixture, "or_continue_is_the_shorthand_unless_the_module_names_continue")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    auto orRight = [](AstStatBlock* loopBody) -> AstExpr*
+    {
+        AstStatLocal* local = loopBody->body.data[0]->as<AstStatLocal>();
+        REQUIRE(local);
+        AstExprBinary* binary = local->values.data[0]->as<AstExprBinary>();
+        REQUIRE(binary);
+        return binary->right;
+    };
+
+    AstStatBlock* block = parse("for i = 1, 2 do local x = i or continue end");
+    AstExprDo* shorthand = orRight(block->body.data[0]->as<AstStatFor>()->body)->as<AstExprDo>();
+    REQUIRE(shorthand);
+    CHECK(shorthand->shorthand);
+    CHECK(shorthand->body->body.data[0]->is<AstStatContinue>());
+
+    // a use of the name anywhere, even after the loop, keeps the read
+    for (const char* source : {
+             "for i = 1, 2 do local x = i or continue end local continue = 1",
+             "for i = 1, 2 do local x = i or continue end print(continue)",
+             "continue = 5 for i = 1, 2 do local x = i or continue end",
+             "for i = 1, 2 do local x = i or continue end local function f(continue) end",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE(result.errors.empty());
+        AstStatFor* loop = nullptr;
+        for (AstStat* stat : result.root->body)
+            if (AstStatFor* found = stat->as<AstStatFor>())
+                loop = found;
+        REQUIRE(loop);
+        AstExprGlobal* global = orRight(loop->body)->as<AstExprGlobal>();
+        REQUIRE(global);
+        CHECK_EQ(std::string(global->name.value), "continue");
+    }
+
+    // a `continue` statement isn't a use of the name
+    block = parse("for i = 1, 2 do local x = i or continue if i then continue end end");
+    CHECK(orRight(block->body.data[0]->as<AstStatFor>()->body)->is<AstExprDo>());
+
+    // outside a loop, or followed by a call or index, it is the variable
+    CHECK(parse("local x = y or continue")->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>()->right->is<AstExprGlobal>());
+    CHECK(orRight(parse("for i = 1, 2 do local x = i or continue() end")->body.data[0]->as<AstStatFor>()->body)->is<AstExprCall>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "if_else_expression_arms_can_leave")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        local function f(x)
+            for i = 1, 2 do
+                local a = if x then break else x
+                local b = if x then x else return 1
+                local c = if x then return else continue
+                local d = if x then (return 1, 2) else x
+            end
+        end
+    )");
+
+    AstStatBlock* body = block->body.data[0]->as<AstStatLocalFunction>()->func->body->body.data[0]->as<AstStatFor>()->body;
+    auto arms = [&](size_t i) -> AstExprIfElse*
+    {
+        AstExprIfElse* expr = body->body.data[i]->as<AstStatLocal>()->values.data[0]->as<AstExprIfElse>();
+        REQUIRE(expr);
+        return expr;
+    };
+    auto leave = [](AstExpr* arm) -> AstStat*
+    {
+        AstExprDo* expr = arm->as<AstExprDo>();
+        REQUIRE(expr);
+        CHECK(expr->shorthand);
+        REQUIRE_EQ(expr->body->body.size, 1);
+        return expr->body->body.data[0];
+    };
+
+    CHECK(leave(arms(0)->trueExpr)->is<AstStatBreak>());
+    REQUIRE(leave(arms(1)->falseExpr)->is<AstStatReturn>());
+    CHECK_EQ(leave(arms(1)->falseExpr)->as<AstStatReturn>()->list.size, 1);
+    REQUIRE(leave(arms(2)->trueExpr)->is<AstStatReturn>());
+    CHECK_EQ(leave(arms(2)->trueExpr)->as<AstStatReturn>()->list.size, 0);
+    CHECK(leave(arms(2)->falseExpr)->is<AstStatContinue>());
+    AstExprGroup* group = arms(3)->trueExpr->as<AstExprGroup>();
+    REQUIRE(group);
+    REQUIRE(leave(group->expr)->is<AstStatReturn>());
+    CHECK_EQ(leave(group->expr)->as<AstStatReturn>()->list.size, 2);
+
+    // a bare `return` needs parentheses unless `else` or `elseif` follows it
+    matchOnlyDoExprError(
+        *this,
+        "local function f(x) local v = if x then x else return end",
+        "'else return' with no value must be parenthesized, 'else (return)', or end its statement with ';', so a value on the next "
+        "line isn't read as the value to return"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "do_expression_without_the_flag_says_how_to_enable_it")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, false};
+
+    matchParseError("local x = do give 1", "attempt to use disabled Luwu feature 'do' expressions; enable via FFlag 'LuwuDoExpr'");
+    matchParseError(
+        "local function f() local x = y or return 1 end",
+        "attempt to use disabled Luwu feature 'or return', 'or break' and 'or continue'; enable via FFlag 'LuwuDoExpr'"
+    );
+
+    // without the flag, `give` and `continue` outside a do expression are untouched
+    ParseResult result = tryParse("local give = 1 for i = 1, 2 do local continue = give end");
+    CHECK(result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "expressive_control_flow_is_an_error_in_a_luau_module")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuTableFunctionFields, true},
+    };
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    ParseResult ifLocal = tryParse("if local a = f() then end", luau);
+    REQUIRE(!ifLocal.errors.empty());
+    CHECK_EQ(ifLocal.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'if local' and 'when'");
+
+    ParseResult loopWhen = tryParse("for i = 1, 2 when i > 1 do end", luau);
+    REQUIRE(!loopWhen.errors.empty());
+    CHECK_EQ(loopWhen.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'when' on a loop");
+
+    ParseResult doExpr = tryParse("local x = do give 1", luau);
+    REQUIRE(!doExpr.errors.empty());
+    CHECK_EQ(doExpr.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'do' expressions");
+
+    ParseResult orReturn = tryParse("local function f() local x = y or return 1 end", luau);
+    REQUIRE(!orReturn.errors.empty());
+    CHECK_EQ(orReturn.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'or return', 'or break' and 'or continue'");
+
+    ParseResult comprehension = tryParse("local a = { for _, v in xs give v }", luau);
+    REQUIRE(!comprehension.errors.empty());
+    CHECK_EQ(comprehension.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: table comprehensions");
+
+    ParseResult functionField = tryParse("local t = { function foo() end }", luau);
+    REQUIRE(!functionField.errors.empty());
+    CHECK_EQ(functionField.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: named functions in table literals");
+}
+
 // Parses as ordinary source, the way the compiler and the Frontend do, rather than as a definition file.
 static ParseResult parseSource(Allocator& allocator, AstNameTable& names, const std::string& source)
 {
@@ -9022,6 +10506,110 @@ local function c() end
 
     REQUIRE(1 == result.errors.size());
     CHECK_EQ("@nodiscard takes at most one string, the reason: '@[nodiscard(\"use the returned copy\")]'", result.errors[0].getMessage());
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_and_pop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    AstStatBlock* block = parse(R"(
+        const t = {}
+        t <+ 1, f()
+        local x = <-t.items
+        local y = a<-b
+    )");
+
+    REQUIRE_EQ(block->body.size, 4);
+
+    // a const variable can be pushed to: the push changes the table, not the variable
+    AstStatPush* push = block->body.data[1]->as<AstStatPush>();
+    REQUIRE(push);
+    CHECK(push->luwuOnly);
+    CHECK(push->target->is<AstExprLocal>());
+    CHECK_EQ(push->opLocation, Location{{2, 10}, {2, 12}});
+    REQUIRE_EQ(push->values.size, 2);
+    CHECK(push->values.data[1]->is<AstExprCall>());
+
+    // pop binds like `#`: the whole field is the operand
+    AstStatLocal* popped = block->body.data[2]->as<AstStatLocal>();
+    REQUIRE(popped);
+    AstExprPop* pop = popped->values.data[0]->as<AstExprPop>();
+    REQUIRE(pop);
+    CHECK(pop->luwuOnly);
+    CHECK(pop->expr->is<AstExprIndexName>());
+
+    // between two operands, `<-` is still a comparison with a negation
+    AstStatLocal* compared = block->body.data[3]->as<AstStatLocal>();
+    REQUIRE(compared);
+    AstExprBinary* comparison = compared->values.data[0]->as<AstExprBinary>();
+    REQUIRE(comparison);
+    CHECK_EQ(comparison->op, AstExprBinary::CompareLt);
+    CHECK(comparison->right->is<AstExprUnary>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_pop_after_less_than_is_not_explicit_type_arguments")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = x < <-t
+        local b = f< <number>>()
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatLocal* compared = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(compared);
+    AstExprBinary* comparison = compared->values.data[0]->as<AstExprBinary>();
+    REQUIRE(comparison);
+    CHECK_EQ(comparison->op, AstExprBinary::CompareLt);
+    CHECK(comparison->right->is<AstExprPop>());
+
+    // `< <` with no `-` after it still opens type arguments
+    AstStatLocal* instantiated = block->body.data[1]->as<AstStatLocal>();
+    REQUIRE(instantiated);
+    AstExprCall* call = instantiated->values.data[0]->as<AstExprCall>();
+    REQUIRE(call);
+    CHECK(call->func->is<AstExprInstantiate>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "an_arrow_statement_suggests_push_or_pop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    matchParseError("x <- y", "Did you mean 'x <+ y' to push, or 'x = <-y' to pop? A pop's '<-' goes before its container", Location{{0, 0}, {0, 6}});
+    matchParseError("t.items <- y", "Did you mean '<+' to push, or '= <-' to pop? A pop's '<-' goes before its container");
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_target_must_be_a_variable_or_a_field")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    matchParseError("(t) <+ 1", "'<+' can only push to a variable or a field");
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_and_pop_need_their_flag")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, false};
+
+    matchParseError("t <+ 1", "attempt to use disabled Luwu feature push operator '<+'; enable via FFlag 'DebugLuwuPoperators'", Location{{0, 2}, {0, 4}});
+    matchParseError("local x = <-t", "attempt to use disabled Luwu feature pop operator '<-'; enable via FFlag 'DebugLuwuPoperators'", Location{{0, 10}, {0, 12}});
+}
+
+TEST_CASE_FIXTURE(Fixture, "push_and_pop_are_errors_in_a_luau_module")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    ParseResult push = tryParse("t <+ 1", luau);
+    REQUIRE(!push.errors.empty());
+    CHECK_EQ(push.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: push operator '<+'");
+
+    ParseResult pop = tryParse("local x = <-t", luau);
+    REQUIRE(!pop.errors.empty());
+    CHECK_EQ(pop.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: pop operator '<-'");
 }
 
 // TODO unit tests for various parse errors.
