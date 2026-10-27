@@ -397,6 +397,40 @@ print(arg)
     CHECK_EQ(result.warnings[0].text, "Variable 'arg' shadows previous declaration at line 2");
 }
 
+// Luwu: a global that is only read is an unknown global, already a type error, so a local with its name isn't reported
+TEST_CASE_FIXTURE(BuiltinsFixture, "LocalShadowUnknownGlobal")
+{
+    LintResult result = lint(R"(
+local function parts(s)
+    print(prefix)
+end
+
+local function other()
+    local prefix = 1
+    return prefix
+end
+
+function defined() end
+
+local function third()
+    local defined = 2
+    return defined
+end
+
+return parts, other, third
+)");
+
+    std::vector<std::string> shadows;
+    for (const LintWarning& w : result.warnings)
+    {
+        if (w.code == LintWarning::Code_LocalShadow)
+            shadows.push_back(w.text);
+    }
+
+    REQUIRE_EQ(shadows.size(), 1);
+    CHECK_EQ(shadows[0], "Variable 'defined' shadows a global variable used at line 11");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LocalShadowGlobal")
 {
     LintResult result = lint(R"(

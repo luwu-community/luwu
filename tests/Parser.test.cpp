@@ -5813,6 +5813,31 @@ return a +
     }
 }
 
+// Luwu: a `type Name` with nothing after it doesn't take the next line's statement as its type
+TEST_CASE_FIXTURE(Fixture, "unfinished_type_alias_leaves_the_next_statement_alone")
+{
+    try
+    {
+        parse(R"(
+type Validator
+local function f(x: number): number
+    return x
+end
+type Same number
+return f
+)");
+        FAIL("Expected ParseErrors to be thrown");
+    }
+    catch (const Luau::ParseErrors& e)
+    {
+        // the unfinished alias, and `number` on the same line as `type Same`, which stays its type
+        REQUIRE_EQ(2, e.getErrors().size());
+        CHECK_EQ("Expected '=' when parsing type alias, got 'local'", e.getErrors()[0].getMessage());
+        CHECK_EQ(Location{{2, 0}, {2, 5}}, e.getErrors()[0].getLocation());
+        CHECK_EQ("Expected '=' when parsing type alias, got 'number'", e.getErrors()[1].getMessage());
+    }
+}
+
 // check that we are not skipping tokens that weren't processed at all
 TEST_CASE_FIXTURE(Fixture, "statement_error_recovery_expected")
 {
@@ -5934,7 +5959,8 @@ TEST_CASE_FIXTURE(Fixture, "recovery_error_limit_2")
 
     try
     {
-        parse("escape escape escape");
+        // Luwu: one line reports one incomplete statement, so each is on its own line. Upstream has all three on one.
+        parse("escape\nescape\nescape");
         FAIL("Expected ParseErrors to be thrown");
     }
     catch (const Luau::ParseErrors& e)
@@ -5943,6 +5969,143 @@ TEST_CASE_FIXTURE(Fixture, "recovery_error_limit_2")
         CHECK_EQ("3 parse errors", std::string(e.what()));
         CHECK_EQ("Reached error limit (2)", e.getErrors().back().getMessage());
     }
+}
+
+// Luwu: a word still being typed (`n o` on the way to `n or`) is several statements, and one error
+TEST_CASE_FIXTURE(Fixture, "one_incomplete_statement_error_per_line")
+{
+    ParseResult result = tryParse("local n = 1\nn o\nn\n");
+    REQUIRE_EQ(2, result.errors.size());
+    CHECK_EQ(Location({1, 0}, {1, 1}), result.errors[0].getLocation());
+    CHECK_EQ(Location({2, 0}, {2, 1}), result.errors[1].getLocation());
+}
+
+// Luwu: `t.` with no name yet reports only the missing name, not an incomplete statement too
+TEST_CASE_FIXTURE(Fixture, "an_index_with_no_name_is_one_error")
+{
+    ParseResult result = tryParse("local t = {}\nt.\n");
+    REQUIRE_EQ(1, result.errors.size());
+    CHECK_EQ("Expected identifier, got <eof>", result.errors[0].getMessage());
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_missing_value_above_a_const_declaration_is_one_error")
+{
+    ParseResult result = tryParse("local x =\nconst y = 1\n");
+    REQUIRE_EQ(1, result.errors.size());
+    CHECK_EQ("Expected identifier when parsing expression, got 'const'", result.errors[0].getMessage());
+    REQUIRE_EQ(2, result.root->body.size);
+    AstStatLocal* declaration = result.root->body.data[1]->as<AstStatLocal>();
+    REQUIRE(declaration);
+    CHECK(declaration->isConst);
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_missing_name_above_a_const_declaration_is_one_error")
+{
+    ParseResult index = tryParse("local t = {}\nlocal n = t.\nconst y = 1\n");
+    REQUIRE_EQ(1, index.errors.size());
+    CHECK_EQ("Expected identifier, got 'const'", index.errors[0].getMessage());
+    CHECK_EQ(3, index.root->body.size);
+
+    ParseResult binding = tryParse("local\nconst y = 1\n");
+    REQUIRE_EQ(1, binding.errors.size());
+    CHECK_EQ("Expected identifier when parsing variable name, got 'const'", binding.errors[0].getMessage());
+    CHECK_EQ(2, binding.root->body.size);
+}
+
+// An unfinished `local`, `const` or `x =` above a line that can't continue it is one error on the unfinished line, and
+// the next line parses on its own
+TEST_CASE_FIXTURE(Fixture, "an_unfinished_statement_stops_before_a_next_line_that_cannot_continue_it")
+{
+    const std::string missingName = "Expected a variable name; the next line starts a new statement";
+    const std::string missingValue = "Expected a value; the next line starts a new statement";
+
+    for (const auto& testCase : std::vector<std::pair<const char*, std::string>>{
+             {"local total = 0\nlocal\ntotal += 1\n", missingName},
+             {"local total = 0\nconst\nprint(total)\n", missingName},
+             {"local total = 0\nlocal\ntotal.x = 1\n", missingName},
+             {"local total = 0\nlocal a =\ntotal += 1\n", missingValue},
+             {"local total = 0\ntotal =\ntotal = 2\n", missingValue},
+         })
+    {
+        const char* source = testCase.first;
+        const std::string& message = testCase.second;
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(result.errors.size(), 1);
+        CHECK_EQ(result.errors[0].getMessage(), message);
+        CHECK_EQ(result.errors[0].getLocation().begin.line, 1);
+        CHECK_EQ(result.root->body.size, 3);
+    }
+}
+
+// Code that parses keeps its parse, however it's indented
+TEST_CASE_FIXTURE(Fixture, "an_unindented_continuation_that_parses_is_left_alone")
+{
+    for (const char* source : {
+             "local a =\nprint(1)\n",
+             "local\nx = 1\n",
+             "local\nx: number = 1\n",
+             "local a =\nfoo.bar\n",
+             "if true then\n    local\n        total += 1\nend\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        // the last one stays an error (an indented `total` still reads as the name), just not this rule's
+        if (std::string(source).find("total") == std::string::npos)
+            CHECK_EQ(result.errors.size(), 0);
+        for (const ParseError& error : result.errors)
+            CHECK_NE(error.getMessage().find("the next line starts a new statement"), 0);
+    }
+}
+
+// The next line's type alias is a declaration of its own, not a global `type` then a statement. The one error is the
+// missing value or name, reported at the declaration as for `const`.
+TEST_CASE_FIXTURE(Fixture, "a_missing_value_above_a_type_alias_is_one_error")
+{
+    for (const char* source : {
+             "local x =\ntype Line = {\n    ln: number,\n}\nlocal l: Line = { ln = 1 }\n",
+             "local x =\n-- a comment\nexport type Line<T> = { ln: T }\nlocal l: Line<number> = { ln = 1 }\n",
+             "local t = {}\nlocal n = t.\ntype function f()\n    return types.number\nend\nlocal l = 1\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(1, result.errors.size());
+        AstStat* declaration = result.root->body.data[result.root->body.size - 2];
+        bool declaresType = declaration->is<AstStatTypeAlias>() || declaration->is<AstStatTypeFunction>();
+        CHECK(declaresType);
+    }
+}
+
+// A declaration on the line after an unclosed table's last element ends the table, and the one error is the missing `}`.
+// Read as the table's next element, it would be an error that consumes nothing, repeated until the parser runs out of
+// memory.
+TEST_CASE_FIXTURE(Fixture, "a_declaration_below_an_unclosed_table_ends_it")
+{
+    for (const char* source : {
+             "local t = {\n    1\nconst x = 1\n",
+             "local t = {\n    a = 1\nconst x = 1\n",
+             "local t = {\n    [1] = 1\ntype X = number\n",
+             "local t = f({\n    g(1)\nexport type X = number\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(1, result.errors.size());
+        CHECK(result.errors[0].getMessage().find("Expected '}'") == 0);
+        REQUIRE_EQ(2, result.root->body.size);
+        AstStat* declaration = result.root->body.data[1];
+        bool declares = declaration->is<AstStatLocal>() || declaration->is<AstStatTypeAlias>();
+        CHECK(declares);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_global_named_const_is_still_a_value")
+{
+    // Valid Luau <= 0.730: `const` read as a global wherever a name doesn't follow it on its own line
+    ParseResult result = tryParse("local x = const y = 1\nlocal z =\nconst\ny = 2\n");
+    CHECK_EQ(0, result.errors.size());
 }
 
 class CountAstNodes : public AstVisitor

@@ -21,6 +21,38 @@ local unrelated = 1
 print(unrelated + 1)
 )";
 
+// The same, declared with `const`: a value still being typed above it must not read the `const` as a global.
+const char* const kAfterConst = R"(
+const unrelated = 1
+print(unrelated + 1)
+)";
+
+// Typed into a function body, above the rest of it: code at the same indentation that starts with names, calls,
+// updates, blocks and a `return`, the way code below the cursor usually looks
+const char* const kBodyBefore = R"(local function maybe(): number?
+    return nil
+end
+local nums = {1, 2, 3}
+local function body(s: string): number
+    local total = 0
+)";
+
+const char* const kBodyAfter = R"(
+    total += #s
+    print(total)
+    if total > 0 then
+        total -= 1
+    end
+    for _, v in nums do
+        total += v
+    end
+    local doubled = total * 2
+    const halved = total // 2
+    return doubled + halved
+end
+print(body("a"))
+)";
+
 } // namespace
 
 TEST_SUITE_BEGIN("Typewriter");
@@ -39,6 +71,51 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_a_call_in_an_if_else_branch")
 {
     const char* before = "local a = 1\nlocal function two(): (number, number) return a, a end\n";
     checkTypewriting(*this, before, "local x = if a > 0 then two() else 0", kAfter);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_field_assignments_and_constants")
+{
+    const char* before = "local t = { x = 1 }\n";
+    checkTypewriting(*this, before, "t.x = 2", kAfter);
+    checkTypewriting(*this, before, "local n = t.x", kAfter);
+    checkTypewriting(*this, before, "const n = t.x", kAfter);
+    checkTypewriting(*this, before, "local function f()\n    t.x = 3\nend", kAfter);
+    checkTypewriting(*this, before, "local n = t.x", kAfterConst);
+    checkTypewriting(*this, before, "t.x = 2", kAfterConst);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_above_the_rest_of_a_function_body")
+{
+    for (const char* text : {
+             "    local a = 1",
+             "    const a = 1",
+             "    local a = maybe() or 0",
+             "    local a, b = 1, 2",
+             "    local a: number = 1",
+             "    print(s)",
+             "    total = total + 1",
+             "    if total > 1 then\n        print(total)\n    end",
+             "    local a = if total > 1 then 1 else 2",
+             "    for i = 1, 3 do\n        print(i)\n    end",
+             "    local f = function(x: number): number\n        return x\n    end",
+             "    local t = { a = 1, b = 2 }",
+         })
+    {
+        INFO(text);
+        checkTypewriting(*this, kBodyBefore, text, kBodyAfter);
+    }
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_type_aliases")
+{
+    const char* before = "local a = 1\n";
+    checkTypewriting(*this, before, "type Point = { x: number, y: number }", kAfter);
+    checkTypewriting(*this, before, "export type Point = { x: number, y: number }", kAfter);
+    checkTypewriting(*this, before, "type Pair<T> = { first: T, second: T }", kAfter);
+    checkTypewriting(*this, before, "type Fn = (number, string) -> boolean", kAfter);
+    checkTypewriting(*this, before, "type Thunk = () -> number", kAfter);
+    checkTypewriting(*this, before, "local f: (number) -> string = tostring", kAfter);
+    checkTypewriting(*this, before, "local n = a :: number", kAfter);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_blocks")
