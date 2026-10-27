@@ -47,6 +47,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_blocks")
     checkTypewriting(*this, before, "local function f(x: number): number\n    return x + a\nend", kAfter);
     checkTypewriting(*this, before, "if a > 0 then\n    print(a)\nend", kAfter);
     checkTypewriting(*this, before, "for i = 1, a do\n    print(i)\nend", kAfter);
+    checkTypewriting(*this, before, "local function f(t: { string })\n    if #t < a then\n        return nil\n    end\n    return t[a]\nend", kAfter);
+    checkTypewriting(
+        *this,
+        before,
+        "local function g(n: number)\n    if n == 1 then\n        return 1\n    elseif n == 2 then\n        return 2\n    elseif n == 3 then\n"
+        "        return 3\n    end\n    return 4\nend",
+        kAfter
+    );
 }
 
 // Luwu: `export name = value`, which is `export const name = value`

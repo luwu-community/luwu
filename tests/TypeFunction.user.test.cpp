@@ -20,6 +20,11 @@ LUAU_FASTFLAG(LuauTypeFunctionTableIndexerIsReadOnly)
 LUAU_DYNAMIC_FASTINT(LuauTypeFunctionSerdeIterationLimit)
 LUAU_FASTFLAG(LuauUdtfCreateSingletonFixErrorMessage)
 LUAU_FASTFLAG(LuauUdtfTypeToStringMetamethod)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTINT(LuwuTypeFunctionTimeLimitMs)
+LUAU_FASTINT(LuwuTypeFunctionMemoryLimitMb)
+LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(LuwuTraits)
 
 TEST_SUITE_BEGIN("UserDefinedTypeFunctionTests");
 
@@ -685,7 +690,11 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_table_serialization_works")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
     REQUIRE(tm);
-    CHECK(toString(tm->givenType) == "{ [string]: number, boolean: boolean, number: number }");
+    // Luwu: a type the type function passed through unchanged is still the alias it was
+    CHECK(toString(tm->givenType) == "type_being_serialized");
+    ToStringOptions expanded;
+    expanded.alwaysExpandRootAlias = true;
+    CHECK(toString(tm->givenType, expanded) == "{ [string]: number, boolean: boolean, number: number }");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_newtable_can_do_readonly_or_writeonly_types")
@@ -701,9 +710,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_newtable_can_do_readonly_or_writeonly_t
         local function ok(idx: gettable<>): never return idx end
     )");
 
-    // FIXME(CLI-178738): The first error should not exist, only the one described above.
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
-    TypeMismatch* tm = get<TypeMismatch>(result.errors[1]);
+    // Luwu: upstream's FIXME(CLI-178738) said a first error shouldn't exist; `newtable` takes read-only tables, so it doesn't
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
     REQUIRE(tm);
     CHECK(toString(tm->givenType) == "{ write bar: string, read foo: number }");
 }
@@ -1142,7 +1151,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_2")
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
 
     CheckResult result = check(R"(
-        type function first(arg)
+        type function first(arg: string)
             return arg
         end
         type function second(arg)
@@ -1224,7 +1233,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_no_shared_state")
             return glob
         end
         type function bar(prefix)
-            return types.singleton(prefix:value() .. foo())
+            return types.singleton(tostring(prefix:value()) .. foo())
         end
         local function ok1(idx: bar<'x'>): nil return idx end
         local function ok2(idx: bar<'y'>): nil return idx end
@@ -1524,6 +1533,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "implicit_export")
 
     fileResolver.source["game/A"] = R"(
 type function concat(a: type, b: type)
+    assert(a:is("singleton") and b:is("singleton"))
     local as = a:value()
     local bs = b:value()
     assert(typeof(as) == "string")
@@ -1578,6 +1588,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "explicit_export")
 
     fileResolver.source["game/A"] = R"(
 export type function concat(a: type, b: type)
+    assert(a:is("singleton") and b:is("singleton"))
     local as = a:value()
     local bs = b:value()
     assert(typeof(as) == "string")
@@ -3494,6 +3505,840 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "types_singleton_error_message")
         toString(results.errors[0]),
         "'meow' type function errored at runtime: [string \"meow\"]:4: types.singleton: can't create a singleton from a type"
     );
+}
+
+// Luwu: `types.error(message)` returned from a type function is reported as `message`
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_types_error_reports_its_message")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+type function NotNumber(t: type): type
+    if t:is("number") then
+        return types.error("numbers aren't allowed here")
+    end
+    return t
+end
+
+type function Nested(t: type): type
+    return types.unionof(types.string, types.error("nope"))
+end
+
+type function Tag(t: type): type
+    return types.singleton(types.error("x").tag)
+end
+
+local a: NotNumber<string> = "fine"
+local b: NotNumber<number> = nil :: any
+local c: Nested<number> = nil :: any
+local d: Tag<number> = "error"
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 17);
+    CHECK_EQ(toString(result.errors[0]), "numbers aren't allowed here");
+    CHECK_EQ(result.errors[1].location.begin.line, 18);
+    CHECK_EQ(toString(result.errors[1]), "types.error(...) can only be returned from a type function, not used inside another type");
+}
+
+// Luwu: a generic function's `Row<C>` is left unreduced by its module. A caller in another module used to re-push the
+// argument into it until the solver gave up ("Code is too complex", "failed to complete").
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_of_a_generic_parameter_from_another_module")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    fileResolver.source["game/A"] = R"(
+export type function Row(columns: type): type
+    return types.newtable({ [types.singleton("x")] = types.string })
+end
+local function with_rows<C>(rows: { Row<C> }) end
+return { with_rows = with_rows }
+    )";
+
+    CheckResult result = check(R"(
+local A = require(game.A)
+A.with_rows({ { x = "a" } })
+A.with_rows({ { y = "a" } })
+    )");
+
+    // The mismatch is reported twice, in one module as well: both errors are the same one
+    REQUIRE_EQ(result.errors.size(), 2);
+    for (const TypeError& error : result.errors)
+    {
+        CHECK_EQ(error.location.begin.line, 3);
+        CHECK(get<TypeMismatch>(error));
+    }
+}
+
+// Luwu: an imported generic class's member that holds a type function of the class's generics (`Row<C>`,
+// `Append<Headings, N>`) is built as it is: nothing in the importing module will reduce it in the template.
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_of_class_generics_from_another_module")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    fileResolver.source["game/A"] = R"(
+type function Append(prev: type, new: type): type
+    return new
+end
+export type function Row(columns: type): type
+    return types.newtable({ [types.singleton("x")] = types.string })
+end
+class Header<Headings = "">()
+    function column<N>(self, name: N | ""): Header<Append<Headings, N>>
+        return self
+    end
+end
+class Grid<C>
+    function with_rows(self, rows: { Row<C> }) end
+end
+return { Header = Header, Grid = Grid }
+    )";
+
+    CheckResult result = check(R"(
+local A = require(game.A)
+local h = A.Header():column("a"):column("b")
+A.Grid<<"x">>():with_rows({ { x = "a" } })
+A.Grid<<"x">>():with_rows({ { y = "a" } })
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+    CHECK_EQ(toString(requireType("h")), R"(Header<"b">)");
+}
+
+// Luwu: a generic call waits for a type function in its argument (`Box<Same<'a>>`) to reduce, so `T` is what it reduces
+// to rather than `unknown`
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_in_an_argument_infers_the_generic")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+type function Same(t: type): type
+    return t
+end
+
+class Box<T>()
+    function retag<N>(self, tag: N | ""): Box<Same<N>>
+        return self
+    end
+end
+
+class Wrap<T>(box: Box<T>) end
+
+local function wrap<T>(box: Box<T>): Wrap<T>
+    return Wrap(box)
+end
+
+local b = Box():retag("x")
+local constructed = Wrap(b)
+local called = wrap(Box():retag("y"))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("constructed")), R"(Wrap<"x">)");
+    CHECK_EQ(toString(requireType("called")), R"(Wrap<"y">)");
+}
+
+// Luwu: `types.error` in a method's return type is reported at the call, once: not again where the value is used
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_types_error_in_a_method_return_type")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+type function Reject(t: type): type
+    return types.error("rejected")
+end
+
+class Box<T>()
+    function retag<N>(self, tag: N | ""): Box<Reject<N>>
+        return self
+    end
+
+    function use(self) end
+end
+
+Box():retag("x")
+local used = Box():retag("y")
+used:use()
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 13);
+    CHECK_EQ(toString(result.errors[0]), "rejected");
+    CHECK_EQ(result.errors[1].location.begin.line, 14);
+    CHECK_EQ(toString(result.errors[1]), "rejected");
+}
+
+// Luwu: an imported generic function's `keyof<T>` is irreducible in the caller too, so a literal argument keeps its
+// literal type rather than widening while it waits for it
+TEST_CASE_FIXTURE(BuiltinsFixture, "keyof_of_a_generic_parameter_from_another_module")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    fileResolver.source["game/A"] = R"(
+local function pick<T>(rows: { T }, column: keyof<T>) end
+local function picks<T>(rows: { T }, columns: { keyof<T> }) end
+return { pick = pick, picks = picks }
+    )";
+
+    CheckResult result = check(R"(
+local A = require(game.A)
+type Pet = { name: string, age: number }
+local pets: { Pet } = {}
+A.pick(pets, "name")
+A.picks(pets, { "name", "age" })
+A.pick(pets, "nam")
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].location.begin.line, 6);
+}
+
+// Luwu: a type function that loops or allocates without end (easy to have half-typed in an editor) stops at its own
+// limits, as a type function error, whether or not the embedder set a time limit for the module
+TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_runaway_loops_and_allocations_stop")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastInt timeLimit{FInt::LuwuTypeFunctionTimeLimitMs, 50};
+    ScopedFastInt memoryLimit{FInt::LuwuTypeFunctionMemoryLimitMb, 16};
+
+    CheckResult result = check(R"(
+type function Loop(t: type): type
+    while true do
+    end
+    return t
+end
+
+type function Hog(t: type): type
+    local all = {}
+    while true do
+        table.insert(all, table.create(1000, 1))
+    end
+    return t
+end
+
+local a: Loop<string> = "a"
+local b: Hog<string> = "b"
+    )");
+
+    // Each runtime error comes with the mismatch every type function error has ("Expected 'a' to be 'Loop<string>'")
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(result.errors[0].location.begin.line, 15);
+    CHECK(toString(result.errors[0]).find("type function ran for more than 50 ms") != std::string::npos);
+    CHECK_EQ(result.errors[2].location.begin.line, 16);
+    CHECK(toString(result.errors[2]).find("not enough memory") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_functions_keep_docs_and_parameter_names")
+{
+    ScopedFastFlag serializeArgNames{FFlag::LuauTypeFunctionSerializeArgNames, true};
+
+    CheckResult result = check(R"(
+type function Partial(t: type): type
+    local out = types.copy(t)
+    if not out:is("table") then
+        return out
+    end
+    for key, prop in out:properties() do
+        out:setproperty(key, types.optional(prop.read :: type))
+    end
+    return out
+end
+
+type function Same(t: type): type
+    return t
+end
+
+type Config = {
+    name: string,
+}
+
+local function greet(who: string, times: number): string
+    return who
+end
+
+type P = Partial<Config>
+type G = Same<typeof(greet)>
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    const TableType* config = get<TableType>(follow(requireTypeAlias("Config")));
+    const TableType* partial = get<TableType>(follow(requireTypeAlias("P")));
+    REQUIRE(config);
+    REQUIRE(partial);
+    // the rebuilt table and its property point at where the original was written, which is how docs are found
+    CHECK_EQ(partial->definitionLocation, config->definitionLocation);
+    REQUIRE(partial->props.count("name"));
+    CHECK_EQ(partial->props.at("name").location, config->props.at("name").location);
+    REQUIRE(partial->props.at("name").readTy);
+    CHECK_EQ(toString(*partial->props.at("name").readTy), "string?");
+
+    const FunctionType* greet = get<FunctionType>(follow(requireTypeAlias("G")));
+    REQUIRE(greet);
+    REQUIRE(greet->definition);
+    CHECK_EQ(greet->definition->definitionLocation.begin.line, 20);
+    REQUIRE_EQ(greet->argNames.size(), 2);
+    REQUIRE(greet->argNames[0]);
+    CHECK_EQ(greet->argNames[0]->name, "who");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_functions_name_parameters")
+{
+    ScopedFastFlag serializeArgNames{FFlag::LuauTypeFunctionSerializeArgNames, true};
+
+    CheckResult result = check(R"(
+type function Rename(f: type): type
+    local out = types.copy(f)
+    if not out:is("function") then
+        return out
+    end
+    local names = out:getparameternames()
+    out:setparametername(1, names[2])
+    out:setparametername(2, nil)
+    return out
+end
+
+type function OutOfRange(f: type): type
+    local out = types.copy(f)
+    if out.tag ~= "function" then
+        return out
+    end
+    out:setparametername(3, "c")
+    return out
+end
+
+type F = Rename<(a: number, b: string) -> ()>
+type G = OutOfRange<(a: number, b: string) -> ()>
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const FunctionType* renamed = get<FunctionType>(follow(requireTypeAlias("F")));
+    REQUIRE(renamed);
+    REQUIRE_EQ(renamed->argNames.size(), 2);
+    REQUIRE(renamed->argNames[0]);
+    CHECK_EQ(renamed->argNames[0]->name, "b");
+    CHECK_FALSE(renamed->argNames[1]);
+    CHECK(
+        toString(result.errors[0]).find("type.setparametername: index 3 is out of range; the function has 2 parameters before its tail") !=
+        std::string::npos
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_function_metadata_outlives_the_type_function")
+{
+    CheckResult result = check(R"(
+type function Tag(t: type): type
+    local out = types.copy(t)
+    local metadata = out:metadata()
+    metadata.count = (metadata.count or 0) + 1
+    metadata.original = t
+    metadata.nested = { flag = true, list = { "a", "b" } }
+    out:setmetadata(metadata)
+    return out
+end
+
+type function Count(t: type): type
+    local metadata = t:metadata()
+    local original = metadata.original
+    return types.singleton(`{metadata.count} {metadata.nested.list[2]} {original.tag}`)
+end
+
+type A = { x: number }
+type B = Tag<Tag<A>>
+type C = Count<B>
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireTypeAlias("C")), "\"2 b table\"");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_function_metadata_holds_only_what_outlives_it")
+{
+    CheckResult result = check(R"(
+type function Function(t: type): type
+    local out = types.copy(t)
+    out:setmetadata({ f = function() end })
+    return out
+end
+
+type function Cycle(t: type): type
+    local out = types.copy(t)
+    local m = {}
+    m.self = m
+    out:setmetadata(m)
+    return out
+end
+
+type function Shared(t: type): type
+    types.number:setmetadata({})
+    return t
+end
+
+
+type A = Function<{}>
+type B = Cycle<{}>
+type C = Shared<{}>
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    auto mentions = [&](size_t i, const char* text)
+    {
+        std::string message = toString(result.errors[i]);
+        INFO(message);
+        CHECK(message.find(text) != std::string::npos);
+    };
+    mentions(0, "metadata can only hold booleans, numbers, strings, types and tables of those, not a function");
+    mentions(1, "a metadata table can't contain itself");
+    mentions(2, "a number type is shared by every use of it, so it can't have metadata of its own");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "declared_types_carry_their_comments_in_metadata")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(R"(
+type function Comments(t: type): type
+    local out = {}
+    for _, c in t:metadata().comments or {} do
+        table.insert(out, `{c.location} {c.prefix} {c.message}`)
+    end
+    return types.singleton(table.concat(out, "|"))
+end
+
+type function Same(t: type): type
+    return t
+end
+
+local unrelated = 1 -- not about Config
+
+--- Config docs
+-- second line
+--[==[ block ]==]
+type Config = { -- the side
+    name: string,
+}
+
+-- a function
+local function f(a: number): string -- returns a string
+    return ""
+end
+
+-- separated by a blank line
+
+local value = { y = 1 }
+
+--!nolint LocalUnused
+-- the class
+class Cat
+end
+
+type A = Comments<Config>
+type B = Comments<typeof(f)>
+type C = Comments<typeof(value)>
+type D = Comments<Cat>
+type E = Comments<Same<Config>>
+type F = Comments<number>
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    const char* configComments = "\"above --- Config docs|above -- second line|above --[==[ block|side -- the side\"";
+    CHECK_EQ(toString(requireTypeAlias("A")), configComments);
+    CHECK_EQ(toString(requireTypeAlias("B")), "\"above -- a function|side -- returns a string\"");
+    CHECK_EQ(toString(requireTypeAlias("C")), "\"\"");
+    CHECK_EQ(toString(requireTypeAlias("D")), "\"above -- the class\"");
+    // a type a type function returns keeps the original's metadata
+    CHECK_EQ(toString(requireTypeAlias("E")), configComments);
+    CHECK_EQ(toString(requireTypeAlias("F")), "\"\"");
+}
+
+// the text of a string singleton type, or "" when `ty` isn't one
+static std::string stringSingletonOf(TypeId ty)
+{
+    const SingletonType* singleton = get<SingletonType>(follow(ty));
+    const StringSingleton* string = singleton ? get<StringSingleton>(singleton) : nullptr;
+    return string ? string->value : "";
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_type_passed_through_a_type_function_keeps_its_alias_names")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(R"(
+type function Show(t: type): type
+    return types.singleton(types.format(t))
+end
+type function Copied(t: type): type
+    return types.copy(t)
+end
+type function Edited(t: type): type
+    local out = types.copy(t) :: any
+    local q = out:readproperty(types.singleton("q"))
+    q:setproperty(types.singleton("b"), types.number)
+    out:setproperty(types.singleton("q"), q)
+    return out
+end
+
+type P = string | number
+type Q = { a: P }
+type R = { q: Q, p: P }
+
+local shown: Show<R> = nil :: any
+local copied: Copied<R> = nil :: any
+local edited: Edited<R> = nil :: any
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    // the type itself prints as its structure, like a hover, and what's inside it by name
+    CHECK_EQ(stringSingletonOf(requireType("shown")), "{ p: P, q: Q }");
+    // a type a type function didn't change is still the alias it was
+    CHECK_EQ(toString(requireType("copied")), "R");
+    // one it changed isn't, and neither is anything that reaches the change; what it didn't touch keeps its name
+    CHECK_EQ(toString(requireType("edited")), "{ p: P, q: { a: P, b: number } }");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "types_format_prints_a_type_with_options")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag argNames{FFlag::LuauTypeFunctionSerializeArgNames, true};
+
+    CheckResult result = check(R"(
+type function None(t: type): type
+    return types.singleton(types.format(t, { expand = "none" }))
+end
+type function All(t: type): type
+    return types.singleton(types.format(t, { expand = "all", parameternames = false }))
+end
+type function Multi(t: type): type
+    return types.singleton(types.format(t, { multiline = true, indent = 2, comments = 16 }))
+end
+type function Bad(t: type): type
+    return types.singleton(types.format(t, { colour = true } :: any))
+end
+
+type P = string | number
+type R = {
+    --- The path to a file that is read
+    path: P,
+    -- not a doc comment
+    read: (path: P) -> string,
+}
+
+local none: None<R> = nil :: any
+local all: All<R> = nil :: any
+local multi: Multi<R> = nil :: any
+local bad: Bad<R> = nil :: any
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(toString(result.errors[0]).find("types.format: 'colour' isn't an option") != std::string::npos);
+    CHECK_EQ(stringSingletonOf(requireType("none")), "R");
+    CHECK_EQ(stringSingletonOf(requireType("all")), "{ path: number | string, read: (number | string) -> string }");
+    // the comment above `path` is cut to 16 characters; a plain `--` comment isn't a doc comment
+    CHECK_EQ(stringSingletonOf(requireType("multi")), "{\n  --- The path to a f…\n  path: P,\n  read: (path: P) -> string\n}");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "types_format_shows_the_comments_of_functions_declared_into_a_table")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag argNames{FFlag::LuauTypeFunctionSerializeArgNames, true};
+
+    CheckResult result = check(R"(
+local str = {}
+--- check if a string starts with `prefix`
+function str.startswith(s: string, prefix: string): boolean
+    return true
+end
+str.plain = function() end
+
+type function Show(t: type): type
+    return types.singleton(types.format(t, { multiline = true, comments = true }))
+end
+local shown: Show<typeof(str)> = nil :: any
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    // the property has no comments of its own; the function declared into it does
+    CHECK_EQ(
+        stringSingletonOf(requireType("shown")),
+        "{\n    plain: (...any) -> (),\n    --- check if a string starts with `prefix`\n    startswith: (s: string, prefix: string, ...any) -> boolean\n}"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_block_comment_message_loses_its_source_indentation")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    CheckResult result = check(R"(
+type function Message(t: type): type
+    local comments = t:metadata().comments :: { { message: string } }
+    return types.singleton(comments[1].message)
+end
+
+--[=[
+    A filesystem library.
+    
+        indented further
+    the end
+]=]
+type Fs = { x: number }
+
+local message: Message<Fs> = nil :: any
+local x: never = message
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const TypeMismatch* mismatch = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(mismatch);
+    CHECK_EQ(toString(mismatch->givenType), "\"A filesystem library.\\n\\n    indented further\\nthe end\"");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "luwu_type_kinds_have_only_their_own_methods")
+{
+    CheckResult result = check(R"(
+type function Keys(t: type): type
+    local unnarrowed = t:properties()
+    if t:is("table") then
+        local names: { type } = {}
+        for key in t:properties() do
+            table.insert(names, key)
+        end
+        return types.unionof(table.unpack(names))
+    elseif t.tag == "function" then
+        local params = t:parameters()
+        return types.never
+    else
+        local notATable = t:properties()
+        return types.never
+    end
+end
+
+type function Fill(t: type): type
+    local out = types.newtable()
+    out:setproperty(types.singleton("a"), types.number)
+    local tag: "union" | "table" = if t.tag == "union" then "union" else "table"
+    if t:is(tag) then
+        local unknownTag = t:components()
+    end
+    return out
+end
+
+type K = Keys<{ a: number, b: string }>
+type F = Fill<number>
+    )");
+
+    // `t:properties()` before narrowing, in the branch left with extern types (which have properties) and the kinds
+    // without, and `components` when the tag could be one of several
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 2);
+    CHECK_EQ(result.errors[1].location.begin.line, 13);
+    CHECK_EQ(result.errors[2].location.begin.line, 23);
+    CHECK_EQ(toString(requireTypeAlias("K")), "\"a\" | \"b\"");
+    const TableType* filled = get<TableType>(follow(requireTypeAlias("F")));
+    REQUIRE(filled);
+    CHECK(filled->props.count("a"));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_functions_see_objects_classes_and_traits")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+    ScopedFastFlag genericNominals{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+trait Greeter
+    expect public name: string
+    expect public function speak?(self): string
+    public function greet(self): string
+        return self.name
+    end
+end
+
+class Cat(public name: string, private secret: number) implements Greeter
+    public const legs = 4
+    public function speak(self): string
+        return "meow"
+    end
+    private function purr(self) end
+    public function __tostring(self): string
+        return self.name
+    end
+end
+
+class Box<T>(public value: T)
+end
+
+type function Describe(t: type): type
+    local out: { string } = { t.tag }
+    if t:is("object") then
+        local cls = t:class()
+        table.insert(out, if cls then "class=" .. cls:name() else "noclass")
+        for _, trait in t:traits() do
+            table.insert(out, "trait=" .. trait:name())
+        end
+        local fields: { string } = {}
+        for name, field in t:fields() do
+            table.insert(fields, `{name}{if field.private then ":private" else ""}{if field.const then ":const" else ""}{if field.expected then ":expected" else ""}`)
+        end
+        table.sort(fields)
+        table.insert(out, "fields=" .. table.concat(fields, ","))
+        local functions: { string } = {}
+        for name, fn in t:functions() do
+            table.insert(functions, `{name}{if fn.private then ":private" else ""}{if fn.expected then ":expected" else ""}{if fn.optional then ":optional" else ""}`)
+        end
+        table.sort(functions)
+        table.insert(out, "functions=" .. table.concat(functions, ","))
+        for _, arg in t:typearguments() do
+            table.insert(out, "arg=" .. arg.tag)
+        end
+    elseif t:is("class") then
+        local ctor = t:constructor()
+        local params: { string } = {}
+        if ctor and ctor.type:is("function") then
+            for _, param in ctor.type:parameters().head or {} do
+                table.insert(params, param.tag)
+            end
+        end
+        table.insert(out, `object={t:object():name()} ctor=({table.concat(params, ",")})`)
+    elseif t:is("trait") then
+        table.insert(out, `object={t:object():name()} needs={#t:needs()}`)
+    end
+    return types.singleton(table.concat(out, " "))
+end
+
+type A = Describe<Cat>
+type B = Describe<Greeter>
+type C = Describe<Box<number>>
+type D = Describe<class<Cat>>
+type E = Describe<trait<Greeter>>
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(
+        toString(requireTypeAlias("A")),
+        R"x("object class=Cat trait=Greeter fields=legs:const,name,secret:private functions=__tostring,greet,purr:private,speak")x"
+    );
+    // a value of a trait type is an object, with no one class
+    CHECK_EQ(toString(requireTypeAlias("B")), R"x("object noclass trait=Greeter fields=name:expected functions=greet,speak:expected:optional")x");
+    CHECK_EQ(toString(requireTypeAlias("C")), R"x("object class=Box fields=value functions= arg=number")x");
+    CHECK_EQ(toString(requireTypeAlias("D")), R"x("class object=Cat ctor=(string,number)")x");
+    CHECK_EQ(toString(requireTypeAlias("E")), R"x("trait object=Greeter needs=0")x");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_functions_make_classes_and_traits")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+    ScopedFastFlag traits{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+type function Named(): Trait
+    return types.newtrait("Named", {
+        fields = { name = { type = types.string, expected = true } },
+        functions = { describe = { type = types.newfunction({}, { head = { types.string } }), method = true } },
+    })
+end
+
+type function Point(withZ: type): type
+    local fields: { [string]: FieldDefinition } = { x = types.number, y = { type = types.number, const = true }, name = types.string }
+    if withZ:is("singleton") and withZ:value() == true then
+        fields.z = types.number
+    end
+    return types.newclass("Point", {
+        fields = fields,
+        functions = { length = { type = types.newfunction({}, { head = { types.number } }), method = true } },
+        implements = { Named() },
+        constructor = types.newfunction({ head = { types.number, types.number } }),
+    })
+end
+
+type function Nameless(): type
+    return types.newclass("Nameless", { implements = { Named() } })
+end
+
+type function Object(t: type): type
+    assert(t:is("class") or t:is("trait"))
+    return t:object()
+end
+
+type P = Object<Point<false>>
+type P2 = Object<Point<false>>
+type P3 = Object<Point<true>>
+type N = Object<Named<>>
+
+local PointClass = (nil :: any) :: Point<false>
+local p: P = PointClass(1, 2)
+local again: P2 = p
+local len: number = p:length()
+local text: string = p:describe()
+local named: N = p
+p.y = 5
+local other: P3 = p
+type Broken = Nameless<>
+    )");
+
+    // `y` is const; a `Point` with a `z` field is another class, though both are named `Point`; `Nameless` lacks the
+    // `name` its trait expects
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 46);
+    CHECK_EQ(result.errors[1].location.begin.line, 47);
+    CHECK_EQ(result.errors[2].location.begin.line, 48);
+    CHECK(toString(result.errors[2]).find("class 'Nameless' doesn't have 'name', which trait 'Named' expects") != std::string::npos);
+    CHECK_EQ(toString(requireType("p")), "Point");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "classes_type_functions_make_are_the_same_across_modules")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    fileResolver.source["game/A"] = R"(
+        export type function Vec(): type
+            return types.newclass("Vec", { fields = { x = types.number, y = types.number } })
+        end
+        export type V = Vec<>
+        return { make = function(): V return nil :: any end }
+    )";
+    fileResolver.source["game/B"] = R"(
+        type function Vec(): type
+            return types.newclass("Vec", { fields = { x = types.number, y = types.number } })
+        end
+        type function Object(t: type): type
+            assert(t:is("class"))
+            return t:object()
+        end
+        local a = require(game.A)
+        local mine: Object<Vec<>> = (a.make() :: any) :: Object<a.Vec<>>
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "an_error_inside_a_type_functions_argument_is_reported_once")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    // the unknown type is the only error: the call is an error type quietly, as any use of an error type is
+    CheckResult result = check(R"(
+        type function Same(t: type): type
+            return t
+        end
+        type Lib = Same<{ file: { read: (path: Pathlike) -> string } }>
+        type Top = Same<Pathlike>
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    for (const TypeError& error : result.errors)
+    {
+        const UnknownSymbol* unknown = get<UnknownSymbol>(error);
+        REQUIRE(unknown);
+        CHECK_EQ(unknown->name, "Pathlike");
+    }
 }
 
 TEST_SUITE_END();

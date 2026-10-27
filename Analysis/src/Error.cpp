@@ -1883,6 +1883,13 @@ struct ErrorConverter
         return message;
     }
 
+    std::string operator()(const InconsistentReturn& e) const
+    {
+        return "This function's other " + std::to_string(e.otherReturns) + " codepaths return '" + toString(e.othersReturn) +
+               "', are you sure you meant to return '" + toString(e.returned) +
+               "' here? Explicitly annotate this function's return type to silence";
+    }
+
     std::string operator()(const DocSyntaxError& e) const
     {
         return e.message;
@@ -2347,6 +2354,11 @@ bool UnreachableCodeUse::operator==(const UnreachableCodeUse& rhs) const
 bool NoTypeUse::operator==(const NoTypeUse& rhs) const
 {
     return use == rhs.use && name == rhs.name && origin == rhs.origin && showHelp == rhs.showHelp;
+}
+
+bool InconsistentReturn::operator==(const InconsistentReturn& rhs) const
+{
+    return otherReturns == rhs.otherReturns && othersReturn == rhs.othersReturn && returned == rhs.returned;
 }
 
 bool DocSyntaxError::operator==(const DocSyntaxError& rhs) const
@@ -2948,6 +2960,11 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
         e.table = clone(e.table);
     else if constexpr (std::is_same_v<T, Typo> || std::is_same_v<T, UnreachableCodeUse> || std::is_same_v<T, NoTypeUse>)
     {
+    }
+    else if constexpr (std::is_same_v<T, InconsistentReturn>)
+    {
+        e.othersReturn = clone(e.othersReturn);
+        e.returned = clone(e.returned);
     }
     else if constexpr (std::is_same_v<T, DocSyntaxError>)
     {

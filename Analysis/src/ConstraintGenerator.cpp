@@ -202,6 +202,28 @@ static bool signatureNamesSelf(AstExprFunction* fn)
     return names.found;
 }
 
+// Luwu doc references: the first table or function type written as an argument of a user-defined type function call
+// (`Freeze<{ ... }>`), or null
+static AstType* typeFunctionLiteralArgument(const Scope& scope, AstType* annotation)
+{
+    AstTypeReference* call = annotation->as<AstTypeReference>();
+    if (!call || call->prefix || call->parameters.size == 0)
+        return nullptr;
+
+    std::optional<TypeFun> callee = scope.lookupType(call->name.value);
+    const TypeFunctionInstanceType* function = callee ? get<TypeFunctionInstanceType>(follow(callee->type)) : nullptr;
+    if (!function || !function->userFuncData.definition)
+        return nullptr;
+
+    for (const AstTypeOrPack& param : call->parameters)
+    {
+        if (param.type && (param.type->is<AstTypeTable>() || param.type->is<AstTypeFunction>()))
+            return param.type;
+    }
+
+    return nullptr;
+}
+
 static bool isValidClassMetamethod(const Name& name)
 {
     return name == "__call" || name == "__concat" || name == "__unm" || name == "__add" || name == "__sub" || name == "__mul" || name == "__div" ||
@@ -256,6 +278,10 @@ void forEachConstraint(const Checkpoint& start, const Checkpoint& end, const Con
     }
 }
 
+// Luwu: upstream gives function bodies a second version of this, `addAllAsDependenciesAndChainReturns` ("HACK!! TODO
+// clip"). It also makes each `return` wait for the one before it so that the first `return` decides the function's type.
+// Luwu joins a function's returns (ConstraintSolver::dispatchInferredReturn) and doesn't need them in order.
+
 /**
  * For all constraints [C] from [start] to [end], block dispatching
  * [target] on [C].
@@ -295,37 +321,75 @@ LUAU_NOINLINE void addAllAsReverseDependencies(
     );
 }
 
-/**
- * For all constraints [C] from [start] to [end], block dispatching
- * [target] on [C].
- *
- * HACK: Additionally, chain `PackSubtypeConstraint`s that are tied to return
- * statements in order to preserve some behavior from the old solver.
- */
-LUAU_NOINLINE void addAllAsDependenciesAndChainReturns(
-    const Checkpoint& start,
-    const Checkpoint& end,
-    const ConstraintGenerator* cg,
-    NotNull<Constraint> target
+// Luwu: the shape of `fn`'s returns if its return type is inferred from them. A function with one `return` takes that
+// return's type as it is and needs none.
+std::optional<ConstraintGenerator::ReturnShape> inferredReturnShape(const AstExprFunction* fn)
+{
+    if (fn->returnAnnotation)
+        return std::nullopt;
+
+    std::vector<AstStatReturn*> returns = findOwnReturns(fn);
+    if (returns.size() < 2)
+        return std::nullopt;
+
+    // Which positions some `return` gives a cast to `any`, and which a value of its own. A call or `...` at the end gives
+    // values at its position and every one after it.
+    size_t positions = 0;
+    for (AstStatReturn* ret : returns)
+        positions = std::max(positions, size_t(ret->list.size));
+    if (positions == 0)
+        return std::nullopt;
+
+    std::vector<bool> casts(positions, false);
+    std::vector<bool> ownValues(positions, false);
+    for (AstStatReturn* ret : returns)
+    {
+        for (size_t i = 0; i < ret->list.size; ++i)
+        {
+            AstExpr* value = ret->list.data[i];
+            if (isAnyCast(value))
+            {
+                casts[i] = true;
+                continue;
+            }
+
+            bool givesTheRest = i + 1 == ret->list.size && (value->is<AstExprCall>() || value->is<AstExprVarargs>());
+            for (size_t j = i; j < (givesTheRest ? positions : i + 1); ++j)
+                ownValues[j] = true;
+        }
+    }
+
+    ConstraintGenerator::ReturnShape shape;
+    shape.ignoredAnyCasts.resize(positions);
+    for (size_t i = 0; i < positions; ++i)
+        shape.ignoredAnyCasts[i] = casts[i] && ownValues[i];
+    return shape;
+}
+
+// Luwu: `exprTypes`, the values of `ret`, with each `x :: any` the shape ignores replaced by `never` so it adds nothing to
+// the join
+TypePackId withoutAnyCasts(
+    NotNull<TypeArena> arena,
+    NotNull<BuiltinTypes> builtinTypes,
+    const ConstraintGenerator::ReturnShape& shape,
+    AstStatReturn* ret,
+    TypePackId exprTypes
 )
 {
-    Constraint* previous = nullptr;
-    forEachConstraint(
-        start,
-        end,
-        cg,
-        [cg, target, &previous](const ConstraintPtr& constraint)
+    auto [values, tail] = flatten(exprTypes);
+    bool replaced = false;
+    for (size_t i = 0; i < ret->list.size && i < values.size() && i < shape.ignoredAnyCasts.size(); ++i)
+    {
+        if (shape.ignoredAnyCasts[i] && isAnyCast(ret->list.data[i]))
         {
-            cg->cgraph->addDependencyOf(constraint.get(), target);
-            if (auto psc = get<PackSubtypeConstraint>(*constraint); psc && psc->returns)
-            {
-                if (previous)
-                    cg->cgraph->addDependencyOf(previous, constraint.get());
-
-                previous = constraint.get();
-            }
+            values[i] = builtinTypes->neverType;
+            replaced = true;
         }
-    );
+    }
+
+    if (!replaced)
+        return exprTypes;
+    return arena->addTypePack(TypePack{std::move(values), tail});
 }
 
 struct HasFreeType : TypeOnceVisitor
@@ -3424,28 +3488,6 @@ static std::string nodiscardReasonOf(const AstAttr* attr)
     return reason ? std::string(reason->value.data, reason->value.size) : std::string();
 }
 
-// Luwu doc references: the first table or function type written as an argument of a user-defined type function call
-// (`Freeze<{ ... }>`), or null
-static AstType* typeFunctionLiteralArgument(const Scope& scope, AstType* annotation)
-{
-    AstTypeReference* call = annotation->as<AstTypeReference>();
-    if (!call || call->prefix || call->parameters.size == 0)
-        return nullptr;
-
-    std::optional<TypeFun> callee = scope.lookupType(call->name.value);
-    const TypeFunctionInstanceType* function = callee ? get<TypeFunctionInstanceType>(follow(callee->type)) : nullptr;
-    if (!function || !function->userFuncData.definition)
-        return nullptr;
-
-    for (const AstTypeOrPack& param : call->parameters)
-    {
-        if (param.type && (param.type->is<AstTypeTable>() || param.type->is<AstTypeFunction>()))
-            return param.type;
-    }
-
-    return nullptr;
-}
-
 static void propagateDeprecatedAttributeToConstraint(ConstraintV& c, const AstExprFunction* func)
 {
     if (GeneralizationConstraint* genConstraint = c.get_if<GeneralizationConstraint>())
@@ -3500,7 +3542,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocalFuncti
 
     propagateDeprecatedAttributeToConstraint(c->c, function->func);
 
-    addAllAsDependenciesAndChainReturns(start, end, this, NotNull{c.get()});
+    addAllAsDependencies(start, end, this, NotNull{c.get()});
     getMutable<BlockedType>(functionType)->setOwner(addConstraint(scope, std::move(c)));
     module->astTypes[function->func] = functionType;
 
@@ -3574,7 +3616,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatFunction* f
 
     propagateDeprecatedAttributeToConstraint(c->c, function->func);
 
-    addAllAsDependenciesAndChainReturns(start, end, this, c);
+    addAllAsDependencies(start, end, this, c);
     std::optional<TypeId> existingFunctionTy = follow(lookup(scope, function->name->location, def));
 
     if (AstExprLocal* localName = function->name->as<AstExprLocal>())
@@ -3627,7 +3669,13 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatReturn* ret
     for (TypeId ty : scope->returnType)
         expectedTypes.emplace_back(ty);
     TypePackId exprTypes = checkPack(scope, ret->list, expectedTypes).tp;
-    addConstraint(scope, ret->location, PackSubtypeConstraint{exprTypes, scope->returnType, /*returns*/ true});
+    PackSubtypeConstraint returnConstraint{exprTypes, scope->returnType};
+    if (const ReturnShape* shape = inferredReturnShapes.find(scope->returnType))
+    {
+        returnConstraint.subPack = withoutAnyCasts(arena, builtinTypes, *shape, ret, exprTypes);
+        returnConstraint.inferredReturn = true;
+    }
+    addConstraint(scope, ret->location, std::move(returnConstraint));
 
     return ControlFlow::Returns;
 }
@@ -3930,7 +3978,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeFunctio
     getMutable<BlockedType>(generalizedTy)->setOwner(gc);
     interiorFreeTypes.pop_back();
 
-    addAllAsDependenciesAndChainReturns(startCheckpoint, endCheckpoint, this, gc);
+    addAllAsDependencies(startCheckpoint, endCheckpoint, this, gc);
     std::optional<TypeId> existingFunctionTy = environmentScope->lookup(function->name);
 
     if (!existingFunctionTy)
@@ -4756,7 +4804,7 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                             gc->classGenericPacks.push_back(param.tp);
                     }
 
-                    addAllAsDependenciesAndChainReturns(start, end, this, NotNull{c.get()});
+                    addAllAsDependencies(start, end, this, NotNull{c.get()});
 
                     NotNull<Constraint> generalization = addConstraint(scope, std::move(c));
                     getMutable<BlockedType>(functionType)->setOwner(generalization);
@@ -5698,7 +5746,7 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprFunction* fun
 
     getMutable<BlockedType>(generalizedTy)->setOwner(gc);
 
-    addAllAsDependenciesAndChainReturns(startCheckpoint, endCheckpoint, this, gc);
+    addAllAsDependencies(startCheckpoint, endCheckpoint, this, gc);
     if (generalize && hasFreeType(sig.signature))
     {
         return Inference{generalizedTy};
@@ -6401,6 +6449,8 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     // return type gets propagated to bodyScope.
     returnType = freshTypePack(signatureScope, Polarity::Positive);
     signatureScope->returnType = returnType;
+    if (std::optional<ReturnShape> shape = inferredReturnShape(fn))
+        inferredReturnShapes[returnType] = *shape;
 
     bodyScope = childScope(fn->body, signatureScope);
 

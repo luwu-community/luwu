@@ -117,6 +117,8 @@ struct TypeChecker2
     DenseHashSet<TypeId> seenTypeFunctionInstances{nullptr};
     // Luwu: see requiredProperties
     DenseHashMap<const TableType*, std::vector<std::string>> requiredPropertiesCache{nullptr};
+    // Luwu: see TypeFunctionContext::reportedApplications
+    std::set<std::string> reportedTypeFunctionApplications;
 
     Normalizer normalizer;
     Subtyping _subtyping;
@@ -365,6 +367,14 @@ private:
         std::optional<std::string> contextVerb = std::nullopt
     );
     void explainError(TypePackId subTy, TypePackId superTy, Location location, const SubtypingResult& result);
+
+    // Luwu: the values `ret` gives, a call or `...` at the end giving its whole pack
+    TypePackId returnedPack(AstStatReturn* ret);
+    // Luwu: the checks on a function whose return type was inferred from its returns (ConstraintSolver::dispatchInferredReturn)
+    void checkInferredReturns(const AstExprFunction* fn);
+    void reportInconsistentReturn(const std::vector<AstStatReturn*>& returns);
+    void reportReturnedKeyTypos(const std::vector<AstStatReturn*>& returns);
+    void reportReturnedStringTypos(const std::vector<AstStatReturn*>& returns);
 
     bool testLiteralOrAstTypeIsSubtype(AstExpr* expr, TypeId expectedType);
 

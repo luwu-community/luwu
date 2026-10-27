@@ -1312,10 +1312,10 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_property_syntax_resolves_
     CHECK_EQ("number", toString(requireType("x")));
 }
 
-TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_property_syntax_still_broken_without_flag")
+TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_property_syntax_works_without_the_definition_scope")
 {
-    // Without the fix, `T` fails to resolve while checking the definition file itself
-    // (not the code that uses Cat), so loading the definition file is where this fails.
+    // Without the extern type's definition scope, the method's generics get a scope that is a sibling of the extern type's.
+    // `T` still resolves, because the scope lookup takes the narrowest enclosing sibling (Scope::findNarrowestScopeContaining).
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::LuwuExternTypeUseDefinitionScope, false},
@@ -1335,9 +1335,9 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generic_method_property_syntax_still_bro
     );
     freeze(getFrontend().globals.globalTypes);
 
-    CHECK(!loadResult.success);
+    CHECK(loadResult.success);
     REQUIRE(loadResult.module);
-    CHECK(!loadResult.module->errors.empty());
+    CHECK(loadResult.module->errors.empty());
 }
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_function_sugar_generic_method_resolves")
@@ -1644,20 +1644,11 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_two_params_with_method")
     LUAU_CHECK_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(Fixture, "extern_type_generics_explicit_partial_instantiation_KNOWN_BUG_produces_cyclic_type")
+TEST_CASE_FIXTURE(Fixture, "extern_type_generics_explicit_partial_instantiation")
 {
-    // KNOWN BUG, not yet fixed: explicitly instantiating only a leading subset of a function's
-    // generics (e.g. `try_<<string>>(...)`, pinning E and leaving Args/T to be inferred) while its
-    // return type expands a generic nominal type (`declare extern type Result<Ok, Err> with ...`)
-    // produces a corrupted, self-referential result type (toString shows `Result<Result<*CYCLE*>,
-    // string>` -- guarded against hanging/unbounded output by the cycle check in ToString.cpp, but
-    // the underlying type is still wrong) and an "outstanding free or blocked type" internal error
-    // from TypeChecker2 on any subsequent method call. Traced to a single TypeAliasExpansionConstraint
-    // dispatch for `Result<T, E>` whose own `T` argument ends up bound back to the result type itself
-    // -- likely a Unifier2/instantiate2 issue unifying a still-pending return type against the fresh
-    // inferred return pack, not something in the substitution/display work this test file otherwise
-    // covers. The identical explicit-partial-instantiation pattern against a plain table return type
-    // works correctly, so this is specific to generic nominal (extern type) expansion.
+    // Explicitly instantiating only a leading subset of a function's generics (`try_<<string>>(...)` pins E) leaves the
+    // rest to be inferred from the arguments. This used to give a self-referential `Result<Result<*CYCLE*>, string>`: the
+    // generics not given were free types the call never settled (ConstraintSolver::instantiateFunctionType).
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::LuwuExternTypeUseDefinitionScope, true},
@@ -1685,8 +1676,8 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_explicit_partial_instantiation_
         end
     )");
 
-    // Once fixed, this should be LUAU_CHECK_NO_ERRORS(result) with r typed as Result<string, string>.
-    CHECK(!result.errors.empty());
+    LUAU_CHECK_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("r")), "Result<string, string>");
 }
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics_independent_instantiations_are_compatible")

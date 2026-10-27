@@ -640,7 +640,8 @@ struct ConstructorReadByName
 // Luwu (helpful subtyping errors): something written where a similar thing was almost certainly meant, when that is the
 // whole problem: a property of a table literal named like one the expected table has and the literal leaves out (table
 // types aren't exact, so an optional one is otherwise never reported, and the value is never read), a string one typo
-// from an expected one (`"LeftCtrl"` for `"LeftControl"`), or a table whose one problem is a misspelled property.
+// from an expected one (`"LeftCtrl"` for `"LeftControl"`), or a table whose one problem is a misspelled property. Also
+// a key or string literal a function returns that its other returns spell differently (`tpye` for `type`).
 struct Typo
 {
     Name written;
@@ -714,6 +715,17 @@ struct DiagnosticNote
 
 // The note on a use of the local `name`, which has no type because of the error at `origin`.
 std::string noTypeNote(const std::string& name, std::optional<Location> origin);
+
+// Luwu: in a function whose return type is inferred, the one `return` whose values differ from what all its other
+// returns agree on. It is most likely a mistake rather than a value the function means to return.
+struct InconsistentReturn
+{
+    size_t otherReturns;
+    TypePackId othersReturn;
+    TypePackId returned;
+
+    bool operator==(const InconsistentReturn& rhs) const;
+};
 
 // Luwu doc references: code in a doc comment that doesn't parse, or isn't allowed there (`[f = function() end]`). Its own
 // kind rather than a SyntaxError: the module itself parsed and runs, and nothing should mistake this for a broken file.
@@ -1020,7 +1032,8 @@ using TypeErrorData = Variant<
     Typo,
     UnreachableCodeUse,
     NoTypeUse,
-    DocSyntaxError>;
+    DocSyntaxError,
+    InconsistentReturn>;
 
 struct TypeErrorSummary
 {
