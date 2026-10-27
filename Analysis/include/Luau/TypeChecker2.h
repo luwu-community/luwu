@@ -317,6 +317,7 @@ private:
     void visit(AstExprGlobal* expr);
     void visit(AstExprVarargs* expr);
     void visitCall(AstExprCall* call);
+    void checkUnionMethodSelves(AstExprIndexName* indexExpr);
     void visit(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);
