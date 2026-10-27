@@ -589,6 +589,32 @@ static bool containsParseError(AstNode* node)
             found = true;
             return false;
         }
+
+        // Types and type packs aren't visited by default
+        bool visit(AstType*) override
+        {
+            return !found;
+        }
+
+        bool visit(AstTypePack*) override
+        {
+            return !found;
+        }
+
+        // `type T =` or `x ::` with no type yet
+        bool visit(AstTypeError*) override
+        {
+            found = true;
+            return false;
+        }
+
+        // `t.` with no name yet: the parser gave the index the error name instead of an error node
+        bool visit(AstExprIndexName* node) override
+        {
+            if (node->index == kParseNameError)
+                found = true;
+            return !found;
+        }
     };
 
     Finder finder;
@@ -805,6 +831,8 @@ private:
     {
         bool used;
         bool builtin;
+        // Luwu: written somewhere in this module; one that is only read and isn't builtin is an unknown global
+        bool assigned = false;
         AstExprGlobal* firstRef;
     };
 
@@ -891,6 +919,8 @@ private:
         {
             if (global->builtin)
                 ; // there are many builtins with common names like 'table'; some of them are deprecated as well
+            else if (!global->assigned)
+                ; // Luwu: using it is an unknown global, already a type error; repeating it at every same-named local is noise
             else if (global->firstRef)
             {
                 emitWarning(
@@ -959,6 +989,9 @@ private:
     {
         for (AstExpr* var : node->vars)
         {
+            if (AstExprGlobal* global = var->as<AstExprGlobal>())
+                globals[global->name].assigned = true;
+
             // We don't visit locals here because it's a local *write*, and visit(AstExprLocal*) assumes it's a local *read*
             if (!var->is<AstExprLocal>())
                 var->visit(this);
@@ -968,6 +1001,15 @@ private:
             value->visit(this);
 
         return false;
+    }
+
+    // Luwu: `function name() end` writes the global `name`
+    bool visit(AstStatFunction* node) override
+    {
+        if (AstExprGlobal* global = node->name->as<AstExprGlobal>())
+            globals[global->name].assigned = true;
+
+        return true;
     }
 
     bool visit(AstStatLocal* node) override
