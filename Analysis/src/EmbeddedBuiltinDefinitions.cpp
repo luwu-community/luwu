@@ -380,6 +380,12 @@ declare luwon: {
         after: { text: string, location: { begin: vector, ["end"]: vector }? }?,
         location: { begin: vector, ["end"]: vector }?,
         keylocation: { begin: vector, ["end"]: vector }?,
+        binding: {
+            name: string,
+            location: { begin: vector, ["end"]: vector },
+            above: { { text: string, location: { begin: vector, ["end"]: vector }? } },
+            after: { text: string, location: { begin: vector, ["end"]: vector }? }?,
+        }?,
     }?) & ((t: {}) -> { { text: string, location: { begin: vector, ["end"]: vector }? } }?),
     setcomments: @checked (t: {}, key: string | number | boolean, comments: { above: { string }?, after: string? }) -> (),
     source: @checked (t: {}) -> string?,

@@ -145,6 +145,31 @@ return "ok"
 )LUA") == "ok");
 }
 
+TEST_CASE("luwon_values_written_as_a_const_carry_its_binding")
+{
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state = newState();
+
+    CHECK(run(state.get(), R"LUA(
+local manifest = luwon.decode(
+    "--- the registry's name\nconst name = \"chimera\"\n\n-- what chimera needs at runtime\nconst dependencies = {\n    json = \"1.0.0\",\n} -- pinned\n\n"
+        .. "return {\n    name = name,\n    dependencies = dependencies,\n    url = \"x\",\n}\n"
+)
+
+local deps = luwon.comments(manifest, "dependencies").binding
+assert(deps.name == "dependencies")
+assert(deps.above[1].text == "-- what chimera needs at runtime" and deps.after.text == "-- pinned")
+assert(deps.location.begin.x == 5)
+
+assert(luwon.comments(manifest, "name").binding.above[1].text == "--- the registry's name")
+assert(luwon.comments(manifest, "url").binding == nil)
+
+-- setcomments keeps it
+luwon.setcomments(manifest, "name", { above = { "the name" } })
+assert(luwon.comments(manifest, "name").binding.name == "name")
+return "ok"
+)LUA") == "ok");
+}
+
 TEST_CASE("luwon_encode_edits_the_file_a_table_came_from")
 {
     std::unique_ptr<lua_State, void (*)(lua_State*)> state = newState();

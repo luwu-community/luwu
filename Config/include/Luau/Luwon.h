@@ -49,6 +49,33 @@ struct LuwonValue
     std::vector<LuwonValue> args;
 };
 
+struct LuwonComment
+{
+    // The comment's text, `--` included.
+    std::string text;
+    // Unset for a comment set by code rather than read from a file.
+    std::optional<Location> location;
+};
+
+// The comments that belong to an item of a table.
+struct LuwonComments
+{
+    // The ones on lines of their own right above the item.
+    std::vector<LuwonComment> above;
+    // The one after the item on its last line.
+    std::optional<LuwonComment> after;
+};
+
+// A const a value is written as the name of (`dependencies = dependencies`), and what's written about it.
+struct LuwonConstant
+{
+    std::string name;
+    // The declaration, from `const` to the end of its value.
+    Location declaration;
+    // The comments above the declaration and after it on its last line.
+    LuwonComments comments;
+};
+
 // Where a value is written in the file it was read from.
 struct LuwonSite
 {
@@ -65,23 +92,8 @@ struct LuwonSite
     std::optional<Location> binding;
     // A `.{name}` field, whose key and value are the one name. A literal written there needs its key spelled out.
     bool shorthand = false;
-};
-
-struct LuwonComment
-{
-    // The comment's text, `--` included.
-    std::string text;
-    // Unset for a comment set by code rather than read from a file.
-    std::optional<Location> location;
-};
-
-// The comments that belong to an item of a table.
-struct LuwonComments
-{
-    // The ones on lines of their own right above the item.
-    std::vector<LuwonComment> above;
-    // The one after the item on its last line.
-    std::optional<LuwonComment> after;
+    // When the value is written as a const's name, that const.
+    std::optional<LuwonConstant> constant;
 };
 
 struct LuwonEntry

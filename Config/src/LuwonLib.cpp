@@ -29,7 +29,9 @@ LUAU_FASTFLAG(LuwuNonePrimitive)
 //         comments = { Comment },       -- only on the table a file returns: every comment in the file
 //     }
 //
-//     Info = { above = { Comment }, after = Comment?, location = Location?, keylocation = Location? }
+//     Info = { above = { Comment }, after = Comment?, location = Location?, keylocation = Location?, binding = Binding? }
+//     Binding = { name = string, location = Location, above = { Comment }, after = Comment? }
+//         -- the const a value is written as the name of (`dependencies = dependencies`), and its declaration's comments
 //     Comment = { text = string, location = Location? }
 //     Location = { begin = vector, end = vector }   -- line, column (both from 1) and byte offset, as `ast` gives them
 
@@ -267,34 +269,52 @@ private:
     }
 
     // `{ above, after?, location, keylocation? }` for an item of a table read from the file.
-    void pushInfo(const LuwonEntry& entry, bool keyed)
+    // Sets `above` and `after` on the table on top of the stack.
+    void setComments(const LuwonComments* comments)
     {
-        lua_createtable(L, 0, 4);
-
-        const std::vector<LuwonComment>& above = entry.comments ? entry.comments->above : std::vector<LuwonComment>{};
-        lua_createtable(L, int(above.size()), 0);
-        for (size_t i = 0; i < above.size(); i++)
+        size_t count = comments ? comments->above.size() : 0;
+        lua_createtable(L, int(count), 0);
+        for (size_t i = 0; i < count; i++)
         {
-            pushComment(above[i]);
+            pushComment(comments->above[i]);
             lua_rawseti(L, -2, int(i + 1));
         }
         lua_setfield(L, -2, "above");
 
-        if (entry.comments && entry.comments->after)
+        if (comments && comments->after)
         {
-            pushComment(*entry.comments->after);
+            pushComment(*comments->after);
             lua_setfield(L, -2, "after");
         }
+    }
 
-        if (entry.site)
+    // `{ above, after?, location, keylocation?, binding? }` for an item of a table read from the file.
+    void pushInfo(const LuwonEntry& entry, bool keyed)
+    {
+        lua_createtable(L, 0, 5);
+        setComments(entry.comments ? &*entry.comments : nullptr);
+
+        if (!entry.site)
+            return;
+
+        pushLocationOf(entry.site->value);
+        lua_setfield(L, -2, "location");
+        if (keyed)
         {
-            pushLocationOf(entry.site->value);
+            pushLocationOf(entry.site->key);
+            lua_setfield(L, -2, "keylocation");
+        }
+
+        // The const the value is written as the name of: `{ name, location, above, after? }`
+        if (const std::optional<LuwonConstant>& constant = entry.site->constant)
+        {
+            lua_createtable(L, 0, 4);
+            lua_pushlstring(L, constant->name.data(), constant->name.size());
+            lua_setfield(L, -2, "name");
+            pushLocationOf(constant->declaration);
             lua_setfield(L, -2, "location");
-            if (keyed)
-            {
-                pushLocationOf(entry.site->key);
-                lua_setfield(L, -2, "keylocation");
-            }
+            setComments(&constant->comments);
+            lua_setfield(L, -2, "binding");
         }
     }
 
@@ -1159,6 +1179,8 @@ bool pushNewInfo(lua_State* L, int given, int old)
         lua_setfield(L, -2, "location");
         lua_rawgetfield(L, old, "keylocation");
         lua_setfield(L, -2, "keylocation");
+        lua_rawgetfield(L, old, "binding");
+        lua_setfield(L, -2, "binding");
     }
 
     return true;

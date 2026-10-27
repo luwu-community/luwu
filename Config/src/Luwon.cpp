@@ -360,6 +360,7 @@ public:
                 rootSite.key = rootSite.value;
                 rootSite.item = rootSite.value;
                 rootSite.binding = bindingOf(value);
+                rootSite.constant = constantOf(value);
                 return evaluate(ret->list.data[0]);
             }
         }
@@ -376,6 +377,7 @@ private:
     std::unordered_map<AstLocal*, LuwonValue> consts;
     // Where each const's value is written, for the consts declared with one.
     std::unordered_map<AstLocal*, Location> bindings;
+    std::unordered_map<AstLocal*, LuwonConstant> constants;
     // The nesting depth of each table and object built so far, by the address of its contents.
     std::unordered_map<const void*, size_t> depths;
     size_t builtBytes = 0;
@@ -392,6 +394,13 @@ private:
         for (AstExpr* value : local->values)
             values.push_back(evaluate(value));
 
+        // What's written about the declaration, for the places that use its names
+        LuwonSite declaration;
+        declaration.item = local->location;
+        LuwonComments declarationComments = commentsOf(comments, declaration, source, lineOffsets);
+        for (AstLocal* var : local->vars)
+            constants[var] = LuwonConstant{var->name.value, local->location, declarationComments};
+
         for (size_t i = 0; i < local->vars.size; i++)
         {
             consts[local->vars.data[i]] = i < values.size() ? values[i] : LuwonValue{};
@@ -399,6 +408,20 @@ private:
             if (i < local->values.size)
                 bindings[local->vars.data[i]] = bindingOf(local->values.data[i]).value_or(innermost(local->values.data[i])->location);
         }
+    }
+
+    // The const `expr` names, when `expr` is a const's name.
+    std::optional<LuwonConstant> constantOf(AstExpr* expr) const
+    {
+        const AstExprLocal* local = innermost(expr)->as<AstExprLocal>();
+        if (!local)
+            return std::nullopt;
+
+        auto it = constants.find(local->local);
+        if (it == constants.end())
+            return std::nullopt;
+
+        return it->second;
     }
 
     // Where the const `expr` names has its value written, when `expr` is a const's name.
@@ -524,6 +547,7 @@ private:
         site.key = item.key ? item.key->location : site.value;
         site.item = Location(site.key, item.value->location);
         site.binding = bindingOf(item.value);
+        site.constant = constantOf(item.value);
         site.shorthand = item.key && item.key->location == item.value->location;
 
         CstNode* const* cstNode = cst.find(expr);
