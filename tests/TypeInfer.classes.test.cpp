@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "ClassesFixture.h"
+#include "Typewriter.h"
 #include "Fixture.h"
 #include "Typewriter.h"
 
@@ -2915,7 +2916,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "declared_class_types")
         local s: string = tostring(q)
 
         do
-            declare class type Path(public raw: string, public sep = string)
+            class type Path(public raw: string, public sep = string)
                 public function join(self, other: string): Path
                 public function cwd(): Path
                 public function __tostring(self): string
@@ -2932,18 +2933,98 @@ TEST_CASE_FIXTURE(ClassesFixture, "declared_class_types")
     CHECK_EQ(toString(requireType("r")), "Path");
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "declare_class_declares_the_class_value")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    // `declare` declares a value: the class an embedder provides, along with its type
+    CheckResult result = check(R"(
+        --!strict
+        declare class Semver(public const major: number, private minor: number)
+            public function bump(self): Semver
+        end
+
+        local version = Semver(1, 2)
+        local major: number = version.major
+        local next: Semver = version:bump()
+        version.major = 3
+        local wrong = Semver("a", 2)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(toString(result.errors[0]).find("constant") != std::string::npos);
+    CHECK(result.errors[1].location.begin.line == 10);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "declare_trait_declares_the_trait_value")
+{
+    ScopedFastFlag flags[] = {
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    // `declare trait` is the trait and its type; `trait type` is the type alone
+    CheckResult result = check(R"(
+        --!strict
+        declare trait Named
+            expect name: string
+        end
+
+        trait type Titled
+            expect title: string
+        end
+
+        local named: trait<Named> = Named
+        local titled = Titled
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
+    CHECK(result.errors[0].location.begin.line == 11);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_type_declares_no_value")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    // `class type` is the type alone: objects come from elsewhere, and there's no class to call
+    CheckResult result = check(R"(
+        --!strict
+        class type Path(public raw: string)
+        end
+
+        local function name(p: Path): string
+            return p.raw
+        end
+
+        local p = Path("a")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "declaring_classes_is_typed_without_cascades")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated)\n";
+    checkTypewriting(*this, "", "declare class Semver(public major: number)\n    public function bump(self): Semver\nend", after);
+    checkTypewriting(*this, "", "class type Path(public raw: string)\nend", after);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "declared_class_construction_and_access")
 {
     ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
 
     CheckResult result = check(R"(
         --!strict
-        declare class type Point
+        class type Point
             x: number
             y = number
         end
 
-        declare class type Counter
+        class type Counter
             private count: number
             public function __init(self, start: number)
             public function bump(self): number
@@ -2977,7 +3058,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "declared_class_has_no_value")
 
     CheckResult result = check(R"(
         --!strict
-        declare class type Path
+        class type Path
             raw: string
         end
         local p = Path({ raw = "a" })
@@ -2995,10 +3076,10 @@ TEST_CASE_FIXTURE(ClassesFixture, "declared_classes_are_scoped_like_types")
 
     fileResolver.source["game/A"] = R"(
         --!strict
-        export declare class type Path(raw: string)
+        export class type Path(raw: string)
             function join(self, other: string): Path
         end
-        declare class type Hidden
+        class type Hidden
             name: string
         end
         return {} :: { Path: class<Path>, cwd: () -> Path }
@@ -3025,7 +3106,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "declared_classes_are_scoped_like_types")
 
     CheckResult result = check(R"(
         --!strict
-        declare class type List<T>(items: { T })
+        class type List<T>(items: { T })
             function get(self, index: number): T
             function push(self, value: T)
             function map<U>(self, f: (T) -> U): List<U>
@@ -3059,7 +3140,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_to_a_declared_class")
 
     CheckResult result = check(R"(
         --!strict
-        declare class type Path
+        class type Path
             raw: string
         end
 
@@ -3082,7 +3163,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_to_an_imported_declared_cl
 
     fileResolver.source["game/A"] = R"(
         --!strict
-        export declare class type Path
+        export class type Path
             raw: string
         end
         return {} :: { Path: class<Path> }
@@ -3116,11 +3197,11 @@ TEST_CASE_FIXTURE(ClassesFixture, "declared_trait_types")
 
     CheckResult result = check(R"(
         --!strict
-        declare trait type Named
+        trait type Named
             expect public name: string
         end
 
-        declare trait type Greeter needs Named
+        trait type Greeter needs Named
             expect public function speak?(self): string
             private secret: number
             public function greet(self): string
@@ -3190,12 +3271,12 @@ TEST_CASE_FIXTURE(ClassesFixture, "classes_implement_declared_traits")
 
     CheckResult result = check(R"(
         --!strict
-        declare trait type Greeter
+        trait type Greeter
             expect public name: string
             public function greet(self): string
         end
 
-        declare class type Robot implements Greeter
+        class type Robot implements Greeter
             public name: string
             public serial: number
         end
@@ -3242,11 +3323,11 @@ TEST_CASE_FIXTURE(ClassesFixture, "declared_traits_are_scoped_like_types")
 
     fileResolver.source["game/A"] = R"(
         --!strict
-        export declare trait type Greeter
+        export trait type Greeter
             expect public name: string
             public function greet(self): string
         end
-        declare trait type Hidden
+        trait type Hidden
             public function hide(self)
         end
         return {} :: { Greeter: trait<Greeter> }
