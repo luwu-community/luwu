@@ -609,6 +609,24 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     attachTag(requireTy, kRequireTagName);
     attachMagicFunction(requireTy, std::make_shared<MagicRequire>());
 
+    // Luwu collections: a builtin module. Its types are its exports, filed under `collections` the way a required
+    // module's are, so code imports them (`type .{ option } = collections`, `const .{ orderedmap } = collections`) or
+    // names them (`collections.option<T>`) instead of finding them as globals. The `collections` value is a global.
+    if (collectionsLibraryEnabled())
+    {
+        ScopePtr library = std::make_shared<Scope>(globals.globalScope);
+        LoadDefinitionFileResult collections = frontend.loadDefinitionFile(
+            globals, library, getCollectionsDefinitionSource(), "@luau", /* captureComments */ false, typeCheckForAutocomplete
+        );
+        LUAU_ASSERT(collections.success);
+
+        const Name name = "collections";
+        globals.globalScope->importedTypeBindings[name] = library->exportedTypeBindings;
+        globals.globalScope->importedModules[name] = "@luau/collections";
+        for (const auto& [symbol, binding] : library->bindings)
+            globals.globalScope->bindings[symbol] = binding;
+    }
+
     // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder
     globals.globalTypeFunctionScope->exportedTypeBindings = globals.globalScope->exportedTypeBindings;
     globals.globalTypeFunctionScope->builtinTypeNames = globals.globalScope->builtinTypeNames;
