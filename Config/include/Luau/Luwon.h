@@ -171,6 +171,9 @@ struct LuwonWriteResult
 // A data file holding `value`: `return` and its literals.
 LuwonWriteResult writeLuwon(const LuwonValue& value);
 
+// `value` as a literal on its own, the way a data file would write it: `Semver(0, 2, 0)`.
+std::string writeLuwonLiteral(const LuwonValue& value);
+
 // `source` with the values in it changed to `value`. Only the expressions whose values changed are rewritten, so
 // comments, consts, types and layout stay as they were. `source` must read without errors.
 LuwonWriteResult editLuwon(std::string_view source, const LuwonValue& value);

@@ -431,7 +431,16 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionBufferSrcClose;
 
     result += kBuiltinDefinitionVectorSrc;
-    result += kBuiltinDefinitionLuwonSrc;
+    // Luwu object notation: `luwon.tagged` is a class, and the `class` type only exists with classes on
+    std::string luwonSrc = kBuiltinDefinitionLuwonSrc;
+    if (FFlag::LuwuClasses)
+    {
+        const std::string sourceEntry = "    source: @checked (t: {}) -> string?,\n";
+        size_t sourcePos = luwonSrc.find(sourceEntry);
+        if (sourcePos != std::string::npos)
+            luwonSrc.insert(sourcePos + sourceEntry.size(), "    tagged: class,\n");
+    }
+    result += luwonSrc;
 
     if (FFlag::LuauIntegerType2 && FFlag::LuauIntegerLibrary)
     {

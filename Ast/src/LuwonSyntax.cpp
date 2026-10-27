@@ -235,7 +235,10 @@ struct LuwonSyntaxChecker
 
     void checkStat(AstStat* stat)
     {
-        if (stat->is<AstStatTypeAlias>() || stat->is<AstStatTypeFunction>() || stat->is<AstStatError>())
+        // Types and declarations are only analysis, and the reader skips them
+        bool typesOnly = stat->is<AstStatTypeAlias>() || stat->is<AstStatTypeFunction>() || stat->is<AstStatDeclareGlobal>() ||
+                         stat->is<AstStatDeclareFunction>() || stat->is<AstStatDeclareExternType>();
+        if (typesOnly || stat->is<AstStatError>())
             return;
 
         if (AstStatLocal* local = stat->as<AstStatLocal>())

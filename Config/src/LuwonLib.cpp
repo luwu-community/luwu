@@ -3,6 +3,7 @@
 
 #include "luwon.h"
 
+#include "Luau/Compiler.h"
 #include "Luau/LuwonSyntax.h"
 #include "Luau/StringUtils.h"
 
@@ -13,6 +14,7 @@
 #include <string.h>
 
 LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(LuwuClasses)
 
 // Luwu object notation: the `luwon` library, and `luwon_load` for `require`. Values cross between Lua and the
 // notation's value tree here.
@@ -97,6 +99,57 @@ static void pushBuiltinClass(lua_State* L, const LuwonBuiltinClass& builtin)
     else
         lua_pushnil(L);
     lua_remove(L, -2);
+}
+
+// The registry keys of the classes that implement `luwon.data` by name, which the trait's `__implemented` hook fills, and of
+// the class `luwon.tagged`.
+static const char* kRegisteredClassesKey = "luwon_registeredclasses";
+static const char* kTaggedClassKey = "luwon_tagged";
+
+// Pushes the table of classes that implement `luwon.data`, creating it the first time.
+static void pushRegisteredClasses(lua_State* L)
+{
+    lua_getfield(L, LUA_REGISTRYINDEX, kRegisteredClassesKey);
+    if (lua_istable(L, -1))
+        return;
+
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, kRegisteredClassesKey);
+}
+
+// Whether the class at `idx` implements `luwon.data`, which lets a data file construct it whatever it holds.
+static bool implementsData(lua_State* L, int idx)
+{
+    idx = lua_absindex(L, idx);
+    pushRegisteredClasses(L);
+    lua_getfield(L, -1, lua_getclassname(L, idx));
+    bool implements = lua_rawequal(L, -1, idx);
+    lua_pop(L, 2);
+    return implements;
+}
+
+// Why a data file can't construct the class at `idx`, or nullopt when it can: the class has no methods and a constructor
+// that only sets its fields, or it implements `luwon.data`.
+static std::optional<std::string> refusalOf(lua_State* L, int idx)
+{
+    idx = lua_absindex(L, idx);
+    if (implementsData(L, idx))
+        return std::nullopt;
+
+    int top = lua_gettop(L);
+    int hasmethods = 0;
+    int shape = lua_getclassdatashape(L, idx, &hasmethods);
+    lua_settop(L, top);
+
+    const char* name = lua_getclassname(L, idx);
+    if (hasmethods)
+        return format("'%s' has methods, so a data file can't construct it unless it implements luwon.data", name);
+    if (shape == LUA_CLASSDATA_NONE)
+        return format("'%s' has a constructor that runs code, so a data file can't construct it unless it implements luwon.data", name);
+
+    return std::nullopt;
 }
 
 // A position as the `ast` library pushes one: a vector of its line, its column (both from 1) and its byte offset.
@@ -401,29 +454,61 @@ private:
         return callProtected(L, int(object.args.size()), 1, error);
     }
 
-    // Calls the class the reader allows under the object's name with its arguments. The call runs the class's own
-    // constructor: only classes the reader names are ever built.
+    // Pushes the class a data file names, from `classes` or else the classes that implement `luwon.data`, and returns true.
+    // Returns false with nothing pushed when neither has it.
+    bool pushNamedClass(const std::string& name)
+    {
+        if (classes != 0)
+        {
+            lua_getfield(L, classes, name.c_str());
+            if (!lua_isnil(L, -1))
+            {
+                pushEntryClass(L, lua_gettop(L));
+                lua_remove(L, -2);
+                if (lua_type(L, -1) == LUA_TCLASS)
+                    return true;
+            }
+            lua_pop(L, 1);
+        }
+
+        pushRegisteredClasses(L);
+        lua_getfield(L, -1, name.c_str());
+        lua_remove(L, -2);
+        if (lua_type(L, -1) == LUA_TCLASS)
+            return true;
+
+        lua_pop(L, 1);
+        return false;
+    }
+
+    // Builds an object with its class's own constructor, when the class is known and a data file may construct it, and
+    // otherwise a `luwon.tagged` holding the name and the arguments, so a file reads without knowing its classes.
     bool pushObject(const LuwonValue& object)
     {
         if (std::optional<LuwonBuiltinClass> builtin = builtinNamed(object.bytes))
             return pushBuiltinObject(*builtin, object);
 
-        bool allowed = false;
-        if (classes != 0)
+        if (pushNamedClass(object.bytes))
         {
-            lua_getfield(L, classes, object.bytes.c_str());
-            if (!lua_isnil(L, -1))
-            {
-                pushEntryClass(L, lua_gettop(L));
-                lua_remove(L, -2);
-                allowed = lua_type(L, -1) == LUA_TCLASS;
-            }
+            if (std::optional<std::string> refusal = refusalOf(L, -1))
+                return fail(*refusal);
+            return pushArgsAndCall(object);
         }
 
-        if (!allowed)
-            return fail(format("'%s' isn't a class this file may construct; pass it in luwon.decode's classes", object.bytes.c_str()));
+        lua_getfield(L, LUA_REGISTRYINDEX, kTaggedClassKey);
+        if (lua_type(L, -1) != LUA_TCLASS)
+            return fail(format("'%s' isn't a class this file may construct; pass it to luwon.decode, or make it implement luwon.data", object.bytes.c_str()));
 
-        return pushArgsAndCall(object);
+        lua_pushlstring(L, object.bytes.data(), object.bytes.size());
+        lua_createtable(L, int(object.args.size()), 0);
+        for (size_t i = 0; i < object.args.size(); i++)
+        {
+            if (!push(object.args[i]))
+                return false;
+            lua_rawseti(L, -2, int(i + 1));
+        }
+
+        return callProtected(L, 2, 1, error);
     }
 };
 
@@ -804,19 +889,22 @@ private:
         return key.boolean ? "[true]" : "[false]";
     }
 
-    // An object of a class the writer is given, as its constructor call with the arguments the class's `args` returns.
+    // An object as its constructor call. A builtin class's and a `luwon.tagged`'s are written as they were read, an object
+    // `classes` has an `args` function for with what it returns, and any other one a data file may construct from its fields.
     bool convertObject(int idx, LuwonValue& out, const std::string& path)
     {
         if (std::optional<bool> converted = convertBuiltinObject(idx, out, path))
+            return *converted;
+        if (std::optional<bool> converted = convertTagged(idx, out, path))
             return *converted;
 
         std::optional<std::string> name = findClassEntry(idx);
         if (error)
             return false;
         if (!name)
-            return fail(format("a data file can't hold an object of class '%s' unless luwon.encode's classes has it, at %s", lua_getclassname(L, idx), path.c_str()));
+            return convertByFields(idx, out, path);
 
-        // The entry is on the stack. A class on its own only lets a file construct it.
+        // The entry is on the stack. A class on its own is written from its fields.
         bool hasArgs = false;
         if (lua_istable(L, -1))
         {
@@ -828,7 +916,7 @@ private:
         if (!hasArgs)
         {
             lua_pop(L, 1);
-            return fail(format("'%s' needs an 'args' function in classes to be written: { class = %s, args = function(object) ... end }", name->c_str(), name->c_str()));
+            return convertByFields(idx, out, path);
         }
 
         int top = lua_gettop(L) - 1;
@@ -851,6 +939,136 @@ private:
             out.args.push_back(std::move(arg));
         }
         depth--;
+
+        lua_settop(L, top);
+        return true;
+    }
+
+    // A `luwon.tagged`, as the constructor call it was read from. Returns nullopt for any other object.
+    std::optional<bool> convertTagged(int idx, LuwonValue& out, const std::string& path)
+    {
+        lua_getfield(L, LUA_REGISTRYINDEX, kTaggedClassKey);
+        if (lua_type(L, -1) != LUA_TCLASS || !pushClassOf(idx))
+        {
+            lua_pop(L, 1);
+            return error ? std::optional<bool>(false) : std::nullopt;
+        }
+
+        bool tagged = lua_rawequal(L, -1, -2);
+        lua_pop(L, 2);
+        if (!tagged)
+            return std::nullopt;
+
+        lua_getfield(L, idx, "name");
+        lua_getfield(L, idx, "args");
+        bool shaped = lua_type(L, -2) == LUA_TSTRING && lua_istable(L, -1);
+        if (!shaped)
+        {
+            lua_pop(L, 2);
+            return fail(format("a luwon.tagged needs a string name and a table of args, at %s", path.c_str()));
+        }
+
+        out = LuwonValue{LuwonValue::Kind::Object};
+        out.bytes = lua_tostring(L, -2);
+        int args = lua_gettop(L);
+        depth++;
+        for (int i = 1;; i++)
+        {
+            lua_rawgeti(L, args, i);
+            if (lua_isnil(L, -1))
+            {
+                lua_pop(L, 1);
+                break;
+            }
+
+            LuwonValue arg;
+            bool converted = convert(-1, arg, format("%s(argument %d)", path.c_str(), i));
+            lua_pop(L, 1);
+            if (!converted)
+            {
+                depth--;
+                lua_pop(L, 2);
+                return false;
+            }
+            out.args.push_back(std::move(arg));
+        }
+        depth--;
+
+        lua_pop(L, 2);
+        return true;
+    }
+
+    // An object of a class a data file may construct, written from its fields the way its constructor takes them:
+    // positionally for a primary constructor, as a table for the default one.
+    bool convertByFields(int idx, LuwonValue& out, const std::string& path)
+    {
+        const char* className = lua_getclassname(L, idx);
+        if (!pushClassOf(idx))
+            return error ? false : fail(format("a data file can't hold an object of class '%s' without the class library, at %s", className, path.c_str()));
+
+        int top = lua_gettop(L) - 1;
+        int cls = lua_gettop(L);
+        if (std::optional<std::string> refusal = refusalOf(L, cls))
+        {
+            lua_settop(L, top);
+            return fail(format("%s, at %s", refusal->c_str(), path.c_str()));
+        }
+
+        int hasmethods = 0;
+        int shape = lua_getclassdatashape(L, cls, &hasmethods);
+        if (shape == LUA_CLASSDATA_NONE)
+        {
+            lua_settop(L, top);
+            return fail(format(
+                "'%s' has a constructor that takes something other than its fields; give it an 'args' function in luwon.encode's "
+                "classes, at %s",
+                className,
+                path.c_str()
+            ));
+        }
+
+        int names = lua_gettop(L);
+        out = LuwonValue{LuwonValue::Kind::Object};
+        out.bytes = className;
+
+        std::shared_ptr<LuwonTable> fields = std::make_shared<LuwonTable>();
+        depth++;
+        for (int i = 1;; i++)
+        {
+            lua_rawgeti(L, names, i);
+            if (lua_isnil(L, -1))
+            {
+                lua_pop(L, 1);
+                break;
+            }
+
+            LuwonValue key{LuwonValue::Kind::String};
+            key.bytes = lua_tostring(L, -1);
+            lua_gettable(L, idx);
+
+            LuwonValue value;
+            bool converted = convert(-1, value, path + "." + key.bytes);
+            lua_pop(L, 1);
+            if (!converted)
+            {
+                depth--;
+                lua_settop(L, top);
+                return false;
+            }
+
+            if (shape == LUA_CLASSDATA_POSITIONAL)
+                out.args.push_back(std::move(value));
+            else
+                fields->add(std::move(key), std::move(value));
+        }
+        depth--;
+
+        if (shape == LUA_CLASSDATA_TABLE)
+        {
+            LuwonValue table{LuwonValue::Kind::Table};
+            table.table = std::move(fields);
+            out.args.push_back(std::move(table));
+        }
 
         lua_settop(L, top);
         return true;
@@ -1252,6 +1470,42 @@ int luwonSource(lua_State* L)
     return 1;
 }
 
+// A `luwon.tagged` as the constructor call it holds, for its `__tostring`.
+int describeTagged(lua_State* L)
+{
+    std::optional<std::string> error;
+    {
+        LuwonFromLua converter(L, 0);
+        LuwonValue value;
+        if (converter.convert(1, value, "value"))
+        {
+            std::string text = writeLuwonLiteral(value);
+            lua_pushlstring(L, text.data(), text.size());
+        }
+        else
+            error = converter.error;
+    }
+
+    if (error)
+        luaL_error(L, "%s", error->c_str());
+
+    return 1;
+}
+
+// `luwon.tagged`, what a data file's constructor call reads to when no class is known for its name. It's a class written
+// in Luwu: compiled and run here, it pushes the class and remembers it in the registry.
+const char* const kTaggedClassSource = R"(
+const describe = ...
+
+class tagged(public name: string, public args: { unknown })
+    public function __tostring(self): string
+        return describe(self)
+    end
+end
+
+return tagged
+)";
+
 const luaL_Reg kLuwonLib[] = {
     {"decode", luwonDecode},
     {"encode", luwonEncode},
@@ -1263,11 +1517,37 @@ const luaL_Reg kLuwonLib[] = {
 
 } // namespace
 
+// Pushes the class `luwon.tagged`, compiling it from kTaggedClassSource, and remembers it in the registry.
+static void openTaggedClass(lua_State* L)
+{
+    CompileOptions options;
+    options.language = int(Language::Luwu);
+    std::string bytecode = compile(kTaggedClassSource, options);
+
+    int loaded = luau_load(L, "=luwon.tagged", bytecode.data(), bytecode.size(), 0);
+    LUAU_ASSERT(loaded == 0);
+    if (loaded != 0)
+        lua_error(L);
+
+    lua_pushcfunction(L, describeTagged, "describe");
+    lua_call(L, 1, 1);
+
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, kTaggedClassKey);
+}
+
 } // namespace Luau
 
 int luaopen_luwon(lua_State* L)
 {
     luaL_register(L, "luwon", Luau::kLuwonLib);
+
+    if (FFlag::LuwuClasses)
+    {
+        Luau::openTaggedClass(L);
+        lua_setfield(L, -2, "tagged");
+    }
+
     return 1;
 }
 

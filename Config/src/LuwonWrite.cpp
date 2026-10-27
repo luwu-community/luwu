@@ -257,8 +257,12 @@ private:
         return layout(items, indent);
     }
 
+    // A constructor call. One table argument is written `Point { x = 1 }`, the way the default constructor is called.
     std::string writeObject(const LuwonValue& value, const std::string& indent)
     {
+        if (value.args.size() == 1 && value.args[0].kind == LuwonValue::Kind::Table)
+            return value.bytes + " " + write(value.args[0], indent);
+
         std::vector<std::string> args;
         for (const LuwonValue& arg : value.args)
             args.push_back(write(arg, indent));
@@ -664,10 +668,15 @@ static bool commentsMatch(const LuwonValue& expected, const LuwonValue& actual, 
     return true;
 }
 
-LuwonWriteResult writeLuwon(const LuwonValue& value)
+std::string writeLuwonLiteral(const LuwonValue& value)
 {
     LuwonWriter writer;
-    return {"return " + writer.write(value, "") + "\n", std::nullopt};
+    return writer.write(value, "");
+}
+
+LuwonWriteResult writeLuwon(const LuwonValue& value)
+{
+    return {"return " + writeLuwonLiteral(value) + "\n", std::nullopt};
 }
 
 LuwonWriteResult editLuwon(std::string_view source, const LuwonValue& value)

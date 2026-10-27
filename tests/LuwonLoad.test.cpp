@@ -228,25 +228,70 @@ TEST_CASE("luwon_encode_writes_new_values")
     CHECK(run(state.get(), "return luwon.encode({ f = print })") == "error: test:1: luwon.encode: a data file can't hold a function, at value.f");
 }
 
-TEST_CASE("luwon_classes_are_built_and_written_only_when_allowed")
+TEST_CASE("luwon_reads_unknown_classes_as_tagged_values")
 {
     ScopedFastFlag classes{FFlag::LuwuClasses, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> state = newState();
 
     CHECK(run(state.get(), R"LUA(
+local config = luwon.decode("return { version = Semver(0, 2, 0) }")
+local version = config.version
+assert(class.isinstance(version, luwon.tagged))
+assert(version.name == "Semver" and version.args[2] == 2)
+assert(tostring(version) == "Semver(0, 2, 0)")
+
+-- written back as it was read, and edits to it are written too
+assert(luwon.encode(config) == "return { version = Semver(0, 2, 0) }")
+version.args[2] = 3
+return luwon.encode(config)
+)LUA") == "return { version = Semver(0, 3, 0) }");
+}
+
+TEST_CASE("luwon_builds_and_writes_data_classes")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state = newState();
+
+    // A primary constructor's fields are its arguments, in order; the default constructor takes a table of them, written
+    // in the order the class declares them
+    CHECK(run(state.get(), R"LUA(
 class Point(public x: number, public y: number)
 end
 
-local allowed = { Point = { class = Point, args = function(p) return p.x, p.y end } }
-local spawn = luwon.decode("return { origin = Point(1, 2) }", allowed)
-assert(class.isinstance(spawn.origin, Point) and spawn.origin.y == 2)
+class Size
+    public width: number
+    public height: number
+end
 
-assert(not pcall(luwon.decode, "return Point(1, 2)"))
-assert(not pcall(luwon.encode, Point(1, 2)))
+local spawn = luwon.decode("return { origin = Point(1, 2), size = Size { width = 3, height = 4 } }", { Point = Point, Size = Size })
+assert(class.isinstance(spawn.origin, Point) and spawn.origin.y == 2)
+assert(class.isinstance(spawn.size, Size) and spawn.size.height == 4)
+
 spawn.origin = Point(3, 4)
-return luwon.encode(spawn, allowed)
-)LUA") == "return { origin = Point(3, 4) }");
+spawn.size = Size { width = 5, height = 6 }
+return luwon.encode(spawn)
+)LUA") == "return { origin = Point(3, 4), size = Size { width = 5, height = 6 } }");
+
+    // A class with methods can't be built from data, even when it's passed
+    CHECK(run(state.get(), R"LUA(
+class Counter(public count: number)
+    public function bump(self)
+        self.count += 1
+    end
+end
+
+return luwon.decode("return Counter(1)", { Counter = Counter })
+)LUA").find("'Counter' has methods, so a data file can't construct it unless it implements luwon.data") != std::string::npos);
+
+    // An `args` function still decides how an object is written
+    CHECK(run(state.get(), R"LUA(
+class Point(public x: number, public y: number)
+end
+
+return luwon.encode(Point(1, 2), { Point = { class = Point, args = function(p) return p.y, p.x end } })
+)LUA") == "return Point(2, 1)\n");
 }
 
 TEST_SUITE_END();
