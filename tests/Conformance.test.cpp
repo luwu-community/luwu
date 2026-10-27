@@ -98,6 +98,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuauAutoStack)
 LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauUdataMetatablePinned)
 LUAU_FASTFLAG(LuauGcTraceUdata)
 LUAU_DYNAMIC_FASTFLAG(LuauGcTableStepFix)
@@ -1361,6 +1362,53 @@ TEST_CASE("Clear")
 TEST_CASE("Strings")
 {
     runConformance("strings.luau");
+}
+
+TEST_CASE("StringExtensions")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    runConformance("string_extensions.luau");
+}
+
+TEST_CASE("StringExtensionsFlagDisabled")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, false};
+
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+
+    lua_getglobal(L, "string");
+    for (const char* name : {"trim", "trimstart", "trimend", "startswith", "endswith", "contains", "replace"})
+    {
+        lua_getfield(L, -1, name);
+        CHECK_MESSAGE(lua_isnil(L, -1), name);
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+
+    // split ignores a third argument, as upstream's does
+    const char* source = "return #string.split('a,b,c', ',', 2)";
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    REQUIRE(luau_load(L, "=split", bytecode, bytecodeSize, 0) == 0);
+    free(bytecode);
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK(lua_tonumber(L, -1) == 3);
+    lua_pop(L, 1);
+
+    // bytecode compiled with the fastcalls still raises: string.startswith is nil, so the fastcall falls back to calling it
+    std::string fastcallSource = "return string.startswith('abc', 'a')";
+    char* fastcallBytecode = nullptr;
+    {
+        ScopedFastFlag compileWithExtensions{FFlag::LuwuStringExtensions, true};
+        fastcallBytecode = luau_compile(fastcallSource.data(), fastcallSource.size(), nullptr, &bytecodeSize);
+    }
+    REQUIRE(luau_load(L, "=fastcall", fastcallBytecode, bytecodeSize, 0) == 0);
+    free(fastcallBytecode);
+    CHECK(lua_pcall(L, 0, 1, 0) != LUA_OK);
+
+    lua_close(L);
 }
 
 TEST_CASE("StringInterp")

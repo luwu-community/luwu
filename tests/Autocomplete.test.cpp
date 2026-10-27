@@ -27,6 +27,7 @@ LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
@@ -492,7 +493,8 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_string_completions")
 
     auto ac = autocomplete('1');
 
-    CHECK_EQ(17, ac.entryMap.size());
+    // Luwu: LuwuStringExtensions adds 7 methods (trim, trimstart, trimend, startswith, endswith, contains, replace)
+    CHECK_EQ(FFlag::LuwuStringExtensions ? 24 : 17, ac.entryMap.size());
     LUAU_CHECK_HAS_NO_KEY(ac.entryMap, "drop");
     CHECK_EQ(ac.context, AutocompleteContext::Property);
 }
@@ -3978,6 +3980,25 @@ s:@1
     REQUIRE(ac.entryMap.count("sub"));
     CHECK(ac.entryMap["sub"].wrongIndexType == false);
     CHECK(ac.entryMap["sub"].indexedWithSelf);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "luwu_string_extensions_are_methods")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    check(R"(
+local s = "hello"
+s:@1
+    )");
+
+    auto ac = autocomplete('1');
+
+    for (const char* name : {"trim", "trimstart", "trimend", "startswith", "endswith", "contains", "replace"})
+    {
+        REQUIRE_MESSAGE(ac.entryMap.count(name), name);
+        CHECK_MESSAGE(ac.entryMap[name].wrongIndexType == false, name);
+        CHECK_MESSAGE(ac.entryMap[name].indexedWithSelf, name);
+    }
 }
 
 TEST_CASE_FIXTURE(ACFixture, "string_prim_non_self_calls_are_avoided")

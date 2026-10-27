@@ -34,3 +34,9 @@ LUAI_FUNC void luaS_free(lua_State* L, TString* ts, struct lua_Page* page);
 
 LUAI_FUNC TString* luaS_bufstart(lua_State* L, size_t size);
 LUAI_FUNC TString* luaS_buffinish(lua_State* L, TString* ts);
+
+// Luwu String Extensions (rfcs/string-extensions.md): the tests behind string.startswith, string.endswith and
+// string.contains, shared by the library functions and their fastcalls. An empty needle always matches.
+LUAI_FUNC bool luaS_startswith(const char* s, size_t len, const char* needle, size_t needlelen);
+LUAI_FUNC bool luaS_endswith(const char* s, size_t len, const char* needle, size_t needlelen);
+LUAI_FUNC bool luaS_contains(const char* s, size_t len, const char* needle, size_t needlelen);

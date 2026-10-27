@@ -30,6 +30,11 @@ LUAU_FASTFLAGVARIABLE(DebugLuwuLuauClassCompat)
 LUAU_FASTFLAGVARIABLE(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAGVARIABLE(DebugLuauUserDefinedClassesRuntime)
 
+// Luwu String Extensions (rfcs/string-extensions.md): trim, trimstart, trimend, startswith, endswith, contains, replace
+// and split's maxpieces argument. Off, the string library is exactly upstream's. The compiler reads it to emit the
+// startswith, endswith and contains fastcalls.
+LUAU_FASTFLAGVARIABLE(LuwuStringExtensions)
+
 namespace Luau
 {
 
