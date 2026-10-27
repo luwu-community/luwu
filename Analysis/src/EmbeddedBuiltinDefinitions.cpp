@@ -395,22 +395,22 @@ declare class: {
 // their public members, which the Conformance test `CollectionsDeclarationsMatchTheVm` checks against the VM's classes.
 // The types are the library's exports, not globals (registerBuiltinGlobals).
 static const char* kBuiltinDefinitionCollectionsSrc = R"BUILTIN_SRC(
-declare class type pair<A, B>(public const first: A, public const second: B)
+class type pair<A, B>(public const first: A, public const second: B)
     public function __eq(self, other: pair<A, B>): boolean
     public function __tostring(self): string
 end
 
-declare class type triple<A, B, C>(public const first: A, public const second: B, public const third: C)
+class type triple<A, B, C>(public const first: A, public const second: B, public const third: C)
     public function __eq(self, other: triple<A, B, C>): boolean
     public function __tostring(self): string
 end
 
-declare class type quad<A, B, C, D>(public const first: A, public const second: B, public const third: C, public const fourth: D)
+class type quad<A, B, C, D>(public const first: A, public const second: B, public const third: C, public const fourth: D)
     public function __eq(self, other: quad<A, B, C, D>): boolean
     public function __tostring(self): string
 end
 
-declare class type orderedmap<K, V>
+class type orderedmap<K, V>
     public function __init(self)
     public function get(self, key: K): V?
     public function set(self, key: K, value: V)
@@ -428,7 +428,7 @@ declare class type orderedmap<K, V>
     public function __iter(self): ((orderedmap<K, V>, K?) -> (K?, V), orderedmap<K, V>, nil)
 end
 
-declare class type vec<T>
+class type vec<T>
     public function __init(self, items: {T}?)
     public function push(self, value: T)
     public function pop(self): T?
@@ -442,7 +442,7 @@ declare class type vec<T>
     public function __tostring(self): string
 end
 
-declare class type vecdeque<T>
+class type vecdeque<T>
     public function __init(self, items: {T}?)
     public function pushfront(self, value: T)
     public function pushback(self, value: T)
@@ -458,7 +458,7 @@ declare class type vecdeque<T>
     public function __tostring(self): string
 end
 
-declare class type some<T>
+class type some<T>
     public function __init(self, value: T)
     public function get(self): T
     public function expect(self, message: string?): T
@@ -466,7 +466,7 @@ declare class type some<T>
     public function __tostring(self): string
 end
 
-declare class type ok<T>
+class type ok<T>
     public function __init(self, value: T)
     public function get(self): T
     public function expect(self, message: string?): T
@@ -475,7 +475,7 @@ declare class type ok<T>
     public function __tostring(self): string
 end
 
-declare class type err<E>
+class type err<E>
     public function __init(self, error: E)
     public function get(self): none
     public function expect(self, message: string?): never
