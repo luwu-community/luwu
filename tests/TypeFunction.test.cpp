@@ -2144,5 +2144,37 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "oneof_lets_a_field_tell_union_members_apart"
     );
 }
 
+// Luwu: a table literal checked against `Fields & oneof<A, B>` gets the same field-by-field check as one checked against a
+// single table, so a field may hold any value of its declared type.
+TEST_CASE_FIXTURE(BuiltinsFixture, "table_literal_fits_fields_intersected_with_oneof")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Version = number | string
+        type Dependency = { name: string, version: Version } & oneof<{ url: string }, { path: string }>
+        local dependency: Dependency = { name = "pikas", version = 3, path = "./src" }
+        local dependencies: { Dependency } = { { name = "pikas", version = "0.1.2", url = "seal-runtime/pikas" } }
+
+        type Spelled = { name: string, version: Version } & ({ url: string, read path: nil } | { path: string, read url: nil })
+        local spelled: Spelled = { name = "pikas", version = 3, path = "./src" }
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu: the literal still has to fit the variant it matches.
+TEST_CASE_FIXTURE(BuiltinsFixture, "table_literal_against_fields_intersected_with_oneof_reports_a_wrong_field")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Dependency = { name: string, version: number } & oneof<{ url: string }, { path: string }>
+        local dependency: Dependency = { name = "pikas", version = "0.1.2", path = "./src" }
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+}
+
 
 TEST_SUITE_END();
