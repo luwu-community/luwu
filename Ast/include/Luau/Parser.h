@@ -272,6 +272,9 @@ private:
     void checkDuplicateDeclaration(const Name& name);
     void checkTypeName(const Name& name, bool declared);
     bool declaresClass();
+    void declareClassValue(AstStatClass* shape, AstName valueType, const Location& declareLocation);
+    bool startsClassType();
+    AstStat* parseClassType(const Location& start, const Location& classKeywordLocation, bool exported);
     bool legacyDeclareClass();
     void skipClassOnlyExternTypeKeywords();
     AstType* untypedDeclarationType(const Location& location);
@@ -646,6 +649,7 @@ private:
     AstName nameAny;
     AstName nameError;
     AstName nameNil;
+    AstName nameClass;
 
     MatchLexeme endMismatchSuspect;
 
@@ -735,6 +739,11 @@ private:
         TempVector<CstAttrList*>* cstAttrLists;
     };
     std::optional<PendingFunctionAttributes> pendingFunctionAttributes;
+
+    // Luwu Declare Statements (rfcs/declare-statements.md): a declaration can desugar to several statements, as
+    // `declare Name: class type Name(...)` does to the class and the global holding it. parseStat returns the first, and
+    // parseBlockNoScope appends these right after it.
+    std::vector<AstStat*> pendingStatements;
 };
 
 } // namespace Luau
