@@ -7088,22 +7088,31 @@ private:
         return std::nullopt;
     }
 
-    bool visit(AstExprIndexName* node) override
+    void report(const Location& location, const std::string& name)
     {
-        std::optional<std::string> library = libraryOf(node);
-        if (!library || !isLuwuOnlyMember(*library, node->index.value))
-            return true;
-
-        std::string qualified = *library + "." + node->index.value;
         const char* language = context->module->language == Language::Lua ? "Lua" : "Luau";
         emitWarning(
             *context,
             LintWarning::Code_LuwuOnlyApi,
-            node->location,
+            location,
             "'%s' only exists in Luwu, but this is a %s file; rename it to '.luwu' if it's Luwu code",
-            qualified.c_str(),
+            name.c_str(),
             language
         );
+    }
+
+    bool visit(AstExprIndexName* node) override
+    {
+        std::optional<std::string> library = libraryOf(node);
+        if (library && isLuwuOnlyMember(*library, node->index.value))
+            report(node->location, *library + "." + node->index.value);
+        return true;
+    }
+
+    bool visit(AstExprGlobal* node) override
+    {
+        if (isLuwuOnlyGlobal(node->name.value))
+            report(node->location, node->name.value);
         return true;
     }
 };

@@ -372,6 +372,31 @@ static void finalizeGlobalBindings(ScopePtr scope)
 // `vector` is a language primitive (its own nominal root) that reuses the ExternType
 // representation for its x/y/z fields and operator metatable. Like the string metatable, this is
 // built directly on the shared `builtinTypes` arena so there is a single canonical `vector` type.
+// Luwu collections: `none` is the empty option, so it has `get` (giving `none`) and `expect` (which raises), which
+// `collections` gives it at runtime through its type's metatable
+void makeNoneMetatable(NotNull<BuiltinTypes> builtinTypes)
+{
+    PrimitiveType* none = getMutable<PrimitiveType>(builtinTypes->noneType);
+    LUAU_ASSERT(none);
+
+    // Every GlobalTypes (the checker's and autocomplete's) calls this on the same shared `none`
+    if (none->metatable)
+        return;
+
+    NotNull<TypeArena> arena{builtinTypes->arena.get()};
+    TypeId noneTy = builtinTypes->noneType;
+    TypeId message = makeOption(builtinTypes, *arena, builtinTypes->stringType);
+
+    TableType methods{{}, std::nullopt, TypeLevel{}, TableState::Sealed};
+    methods.props["get"] = {makeFunction(*arena, noneTy, {}, {noneTy})};
+    methods.props["expect"] = {makeFunction(*arena, noneTy, {message}, {builtinTypes->neverType})};
+
+    TableType metatable{{}, std::nullopt, TypeLevel{}, TableState::Sealed};
+    metatable.props["__index"] = {arena->addType(std::move(methods))};
+    none->metatable = arena->addType(std::move(metatable));
+    persist(*none->metatable);
+}
+
 void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
 {
     NotNull<TypeArena> arena{builtinTypes->arena.get()};

@@ -6,6 +6,8 @@ LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauTruthyFalsy)
+LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(LuwuNonePrimitive)
 
 namespace Luau
 {
@@ -49,6 +51,9 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     asMutable(builtinTypes->stringType)->ty.emplace<PrimitiveType>(PrimitiveType::String, stringMetatableTy);
     persist(stringMetatableTy);
     makeVectorMetatable(builtinTypes);
+    // Luwu collections: the same flags as the library itself (luaL_openlibs)
+    if (FFlag::LuwuClasses && FFlag::DebugLuwuCollections && FFlag::LuwuNonePrimitive)
+        makeNoneMetatable(builtinTypes);
     freeze(*builtinTypes->arena);
 }
 

@@ -9,6 +9,9 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(LuwuDeclareStatements)
+LUAU_FASTFLAG(LuwuNonePrimitive)
 
 namespace Luau
 {
@@ -388,6 +391,112 @@ declare class: {
 }
 )CLASS_SRC";
 
+// Luwu collections: the `collections` library's classes. The VM builds them in C++ (lcollectionslib.cpp); these are
+// their public members, which the Conformance test `CollectionsDeclarationsMatchTheVm` checks against the VM's classes.
+static const char* kBuiltinDefinitionCollectionsSrc = R"BUILTIN_SRC(
+declare class type pair<A, B>(public const first: A, public const second: B)
+    public function __eq(self, other: pair<A, B>): boolean
+    public function __tostring(self): string
+end
+
+declare class type triple<A, B, C>(public const first: A, public const second: B, public const third: C)
+    public function __eq(self, other: triple<A, B, C>): boolean
+    public function __tostring(self): string
+end
+
+declare class type quad<A, B, C, D>(public const first: A, public const second: B, public const third: C, public const fourth: D)
+    public function __eq(self, other: quad<A, B, C, D>): boolean
+    public function __tostring(self): string
+end
+
+declare class type orderedmap<K, V>
+    public function __init(self)
+    public function get(self, key: K): V?
+    public function set(self, key: K, value: V)
+    public function has(self, key: K): boolean
+    public function remove(self, key: K): V?
+    public function insert(self, position: number, key: K, value: V)
+    public function move(self, key: K, position: number)
+    public function movebefore(self, key: K, other: K)
+    public function moveafter(self, key: K, other: K)
+    public function swap(self, a: K, b: K)
+    public function sort(self, comesbefore: (K, K) -> boolean)
+    public function index(self, key: K): number?
+    public function at(self, position: number): (K?, V?)
+    public function __len(self): number
+    public function __iter(self): ((orderedmap<K, V>, K?) -> (K?, V), orderedmap<K, V>, nil)
+end
+
+declare class type vec<T>
+    public function __init(self)
+    public function push(self, value: T)
+    public function pop(self): T?
+    public function at(self, position: number): T?
+    public function set(self, position: number, value: T)
+    public function insert(self, position: number, value: T)
+    public function remove(self, position: number): T
+    public function clear(self)
+    public function __len(self): number
+    public function __iter(self): ((vec<T>, number?) -> (number?, T), vec<T>, nil)
+end
+
+declare class type vecdeque<T>
+    public function __init(self)
+    public function pushfront(self, value: T)
+    public function pushback(self, value: T)
+    public function popfront(self): T?
+    public function popback(self): T?
+    public function front(self): T?
+    public function back(self): T?
+    public function at(self, position: number): T?
+    public function set(self, position: number, value: T)
+    public function clear(self)
+    public function __len(self): number
+    public function __iter(self): ((vecdeque<T>, number?) -> (number?, T), vecdeque<T>, nil)
+end
+
+declare class type some<T>
+    public function __init(self, value: T)
+    public function get(self): T
+    public function expect(self, message: string?): T
+    public function __eq(self, other: some<T>): boolean
+    public function __tostring(self): string
+end
+
+declare class type ok<T>
+    public function __init(self, value: T)
+    public function get(self): T
+    public function expect(self, message: string?): T
+    public function err(self): none
+    public function __eq(self, other: ok<T>): boolean
+    public function __tostring(self): string
+end
+
+declare class type err<E>
+    public function __init(self, error: E)
+    public function get(self): none
+    public function expect(self, message: string?): never
+    public function err(self): E
+    public function __eq(self, other: err<E>): boolean
+    public function __tostring(self): string
+end
+
+-- An empty option is `none` itself, which has `get` and `expect` while `collections` exists (makeNoneMetatable)
+export type option<T> = some<T> | none
+export type result<T, E> = ok<T> | err<E>
+
+declare collections: {
+    pair: class<pair>,
+    triple: class<triple>,
+    quad: class<quad>,
+    orderedmap: class<orderedmap>,
+    vec: class<vec>,
+    vecdeque: class<vecdeque>,
+    option: { some: class<some>, none: none },
+    result: { ok: class<ok>, err: class<err> },
+}
+)BUILTIN_SRC";
+
 std::string getBuiltinDefinitionSource()
 {
     std::string result = kBuiltinDefinitionBaseSrc;
@@ -427,6 +536,11 @@ std::string getBuiltinDefinitionSource()
     {
         result += FFlag::LuwuTraits ? kBuiltinDefinitionClassTraitsSrc : kBuiltinDefinitionClassSrc;
     }
+
+    // the same flags as the library itself (luaL_openlibs), and the declarations are `declare class type`, which
+    // LuwuDeclareStatements parses
+    if (FFlag::LuwuClasses && FFlag::DebugLuwuCollections && FFlag::LuwuNonePrimitive && FFlag::LuwuDeclareStatements)
+        result += kBuiltinDefinitionCollectionsSrc;
 
     return result;
 }

@@ -19,6 +19,10 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -5262,6 +5266,35 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_luwu_only_members_out_
     ac = autocomplete('1');
     CHECK_EQ(ac.entryMap.count("drop"), 0);
     CHECK_EQ(ac.entryMap.count("insert"), 1);
+}
+
+// Luwu: a Luau or Lua module isn't offered a global only Luwu has, but a local of that name is still offered
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_luwu_only_globals_out_of_luau_modules")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    check("local m = coll@1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("collections"), 1);
+
+    configResolver.defaultConfig.language = Language::Luau;
+    check("local m = coll@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("collections"), 0);
+    CHECK_EQ(ac.entryMap.count("table"), 1);
+
+    check(R"(
+        local collections = {}
+        local m = coll@1
+    )");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("collections"), 1);
 }
 
 // Luwu: inside `@[nolint(...)]` and `@[lint(...)]`, the lint names, without the ones the attribute already lists

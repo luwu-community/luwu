@@ -191,6 +191,22 @@ struct lua_UdataDirectAccessData
 ** `global state', shared by all threads of this state
 */
 // clang-format off
+// Luwu builtin classes: the classes the VM builds in C++ (luaR_newnativeclass), one slot each in global_State
+enum LuwuBuiltinClass
+{
+    LUWU_BUILTIN_PAIR,
+    LUWU_BUILTIN_TRIPLE,
+    LUWU_BUILTIN_QUAD,
+    LUWU_BUILTIN_ORDEREDMAP,
+    LUWU_BUILTIN_VEC,
+    LUWU_BUILTIN_VECDEQUE,
+    LUWU_BUILTIN_SOME,
+    LUWU_BUILTIN_OK,
+    LUWU_BUILTIN_ERR,
+
+    LUWU_BUILTIN__COUNT
+};
+
 typedef struct global_State
 {
     stringtable strt; // hash table for strings
@@ -227,6 +243,9 @@ typedef struct global_State
     // Luwu Traits (rfcs/classes/traits.md): the C function LOP_INITTRAITS calls to run an object's trait initializers. One per
     // state, made with it and marked as a root, so construction never allocates it.
     Closure* traitinitrunner;
+    // Luwu builtin classes: each builtin class once its library has built it, NULL until then. A GC root, so a class
+    // lives as long as the state even when no library table holds it. Native methods check `self` against these.
+    struct LuauClass* builtinclasses[LUWU_BUILTIN__COUNT];
     TString* tmname[TM_N]; // array with tag-method names
 
     TValue pseudotemp; // storage for temporary values used in pseudo2addr
