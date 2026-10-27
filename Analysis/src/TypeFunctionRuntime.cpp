@@ -2549,7 +2549,7 @@ static int isSubtypeOf(lua_State* L)
 TypeFunctionTypeId deepClone(NotNull<TypeFunctionRuntime> runtime, TypeFunctionTypeId ty); // Forward declaration
 
 // Luwu: `types.newclass` and `types.newtrait`. A class or trait a type function makes is a type and nothing else, like
-// `declare class type`: no value exists for it unless something at run time makes one and casts it. Its identity is its
+// `class type`: no value exists for it unless something at run time makes one and casts it. Its identity is its
 // key (ExternType::generatedKey), since the type function runs again wherever it's used.
 
 namespace

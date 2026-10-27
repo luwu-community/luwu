@@ -617,7 +617,7 @@ declare types: {
         generics: { read [number]: type }?
     ) -> Function,
     copy: @checked <T>(arg: T) -> T,
-    -- a class or trait that's only a type, like `declare class type`; two with the same name, members and traits are the
+    -- a class or trait that's only a type, like `class type`; two with the same name, members and traits are the
     -- same type
     newclass: @checked (name: string, definition: ClassDefinition?) -> Class,
     newtrait: @checked (name: string, definition: TraitDefinition?) -> Trait,
