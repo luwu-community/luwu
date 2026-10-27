@@ -906,6 +906,11 @@ static void markroot(lua_State* L)
     markvalue(g, registry(L));
     if (g->traitinitrunner)
         markobject(g, g->traitinitrunner);
+    for (int i = 0; i < LUWU_BUILTIN__COUNT; i++)
+    {
+        if (g->builtinclasses[i])
+            markobject(g, g->builtinclasses[i]);
+    }
     g->gc_ref_gray = 0;
     for (int i = 0; i < g->ref_size; i++) {
         if (g->ref_array[i].tt != LUA_TNONE)

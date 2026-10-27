@@ -2449,3 +2449,67 @@ bool luaR_implements(const LuauClass* classdef, const LuauClass* trait)
 
     return false;
 }
+
+static void luaR_addnativemethod(lua_State* L, LuauClass* classdef, const char* name, lua_CFunction method)
+{
+    Closure* cl = luaF_newCclosure(L, 0, L->gt);
+    cl->c.f = method;
+    cl->c.debugname = name;
+
+    TValue value;
+    setclvalue(L, &value, cl);
+    luaR_addclassmember(L, classdef, luaS_new(L, name), &value);
+}
+
+LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init)
+{
+    uint32_t numfields = 0;
+    while (numfields < uint32_t(count) && !members[numfields].method)
+        numfields++;
+
+    luaD_checkstack(L, 1);
+
+    // Every part of the class is allocated separately, as the loader does it, so no GC step may run until the class is
+    // anchored on the stack
+    const ScopedSetGCThreshold pauseGC{L->global, SIZE_MAX};
+
+    // every class has an `__init` member, `init` or the one that's only there to be refused by name
+    uint32_t numstatic = uint32_t(count) - numfields + 1;
+    LuauClass* classdef = luaR_newclass(L, luaS_new(L, name), numfields, numstatic, /* hasmemberdefaults= */ false);
+    setclassvalue(L, L->top, classdef);
+    incr_top(L);
+
+    for (uint32_t idx = 0; idx < uint32_t(count); idx++)
+    {
+        LUAU_ASSERT((idx < numfields) == !members[idx].method);
+        TString* membername = luaS_new(L, members[idx].name);
+        classdef->offsettomember[idx] = membername;
+        classdef->memberflags[idx] = members[idx].flags;
+        setnvalue(luaH_setstr(L, classdef->memberstooffset, membername), double(idx));
+    }
+
+    TString* initname = luaS_newliteral(L, "__init");
+    classdef->offsettomember[count] = initname;
+    classdef->memberflags[count] = 0;
+    setnvalue(luaH_setstr(L, classdef->memberstooffset, initname), double(count));
+
+    luaR_sealclassshape(L, classdef);
+
+    for (uint32_t idx = numfields; idx < uint32_t(count); idx++)
+        luaR_addnativemethod(L, classdef, members[idx].name, members[idx].method);
+
+    if (init)
+        luaR_addnativemethod(L, classdef, "__init", init);
+
+    return classdef;
+}
+
+LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method)
+{
+    if (L->top > L->base && ttisobject(L->base) && objectvalue(L->base)->lclass == classdef)
+        return objectvalue(L->base);
+
+    TValue none;
+    setnilvalue(&none);
+    luaG_selfclasserror(L, L->top > L->base ? L->base : &none, classdef, luaS_new(L, method), false);
+}
