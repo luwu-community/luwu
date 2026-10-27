@@ -14,6 +14,7 @@
 
 using namespace Luau;
 
+LUAU_FASTFLAG(DebugLuwuLuauClassCompat)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuGenericNominals)
@@ -5992,6 +5993,42 @@ local function wrong(_x: Input = { padding = 1 }) end
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(result.errors[0].location.begin.line, 6);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "class_compat_gives_each_language_its_own_class_library")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true},
+        {FFlag::DebugLuwuLuauClassCompat, true},
+    };
+
+    const std::string source = R"(
+class Point
+    public x: number
+end
+local p = Point { x = 1 }
+local a = class.classof(p)
+local b = class.of(p)
+local c = class.isinstance(p, Point)
+)";
+    fileResolver.source["game/luau"] = source;
+    fileResolver.source["game/luwu"] = source;
+    configResolver.configFiles["game/luau"].language = Language::Luau;
+
+    // Luau modules see upstream's `classof`, and none of Luwu's `of`, `name` or `fields`
+    CheckResult luau = getFrontend().check("game/luau");
+    LUAU_REQUIRE_ERROR_COUNT(1, luau);
+    UnknownProperty* luwuOnly = get<UnknownProperty>(luau.errors[0]);
+    REQUIRE(luwuOnly);
+    CHECK_EQ(luwuOnly->key, "of");
+
+    // Luwu modules are the other way around
+    CheckResult luwu = getFrontend().check("game/luwu");
+    LUAU_REQUIRE_ERROR_COUNT(1, luwu);
+    UnknownProperty* luauOnly = get<UnknownProperty>(luwu.errors[0]);
+    REQUIRE(luauOnly);
+    CHECK_EQ(luauOnly->key, "classof");
 }
 
 TEST_SUITE_END();

@@ -8,6 +8,7 @@
 #include "lstate.h"
 
 #include "Luau/Common.h"
+#include "Luau/LuwuFlags.h"
 
 LUAU_FASTFLAG(LuwuNonePrimitive)
 
@@ -124,5 +125,14 @@ static const luaL_Reg classlib[] = {
 int luaopen_class(lua_State* L)
 {
     luaL_register(L, LUA_CLASSLIBNAME, classlib);
+
+    // Luwu: upstream Luau's name for `class.of`, for Luau modules with class compat. One library serves every module in
+    // the state, so Luwu modules can reach it too; the type checker keeps each module to its own language's names.
+    if (Luau::luauClassCompat())
+    {
+        lua_pushcfunction(L, class_of, "classof");
+        lua_setfield(L, -2, "classof");
+    }
+
     return 1;
 }

@@ -3,6 +3,7 @@
 
 #include "Luau/Ast.h"
 #include "Luau/Common.h"
+#include "Luau/LuwuFlags.h"
 #include "Luau/StringUtils.h"
 #include "Luau/TimeTrace.h"
 
@@ -3778,7 +3779,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     // what the declaration is called in messages
     const char* kind = isTrait ? "trait" : "class";
 
-    if (!isTrait)
+    // Upstream Luau has classes too, so with class compat they aren't a Luwu-only feature in a Luau module
+    if (!isTrait && !luauClassModule())
         checkLuwuFeature(classKeywordLocation, kClassesFeature, /* enabled= */ true);
 
     std::optional<Name> name = parseNameOpt("type name");
@@ -4553,9 +4555,12 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     // These checks wait until the class parses. While a class is half-typed, a word on its way to
     // being `end` or a member parses as an unqualified field, and reporting it as one only buries the
     // syntax error.
+    //
+    // Luwu: upstream Luau's classes mix `public` fields with unqualified methods, which are public, so a Luau module with
+    // class compat (luauClassModule) doesn't ask for the specifiers to agree
     bool classParsed = parseErrors.size() == errorsBeforeClass;
-    bool needsQualifiers = sawPrivateMember || sawQualifiedParam || !explicitPublicQualifierLocations.empty();
-    if (classParsed && needsQualifiers)
+    bool specifiersMustAgree = sawPrivateMember || sawQualifiedParam || !explicitPublicQualifierLocations.empty();
+    if (classParsed && specifiersMustAgree && !luauClassModule())
     {
         if (sawPrivateMember || sawQualifiedParam)
         {
@@ -11041,6 +11046,11 @@ bool Parser::checkLuwuFeature(const Location& location, const LuwuFeature& featu
     }
 
     return true;
+}
+
+bool Parser::luauClassModule() const
+{
+    return options.language != Language::Luwu && luauClassCompat();
 }
 
 AstStatError* Parser::reportLuwuFeatureStat(const Location& location, const AstArray<AstExpr*>& expressions, const LuwuFeature& feature)
