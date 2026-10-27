@@ -8,6 +8,8 @@
 #include <string.h>
 #include <stdio.h>
 
+LUAU_FASTFLAG(LuwuStringExtensions)
+
 // macro to `unsign' a character
 #define uchar(c) ((unsigned char)(c))
 
@@ -1084,6 +1086,13 @@ static int str_split(lua_State* L)
     size_t needleLen;
     const char* needle = luaL_optlstring(L, 2, ",", &needleLen);
 
+    // Luwu String Extensions (rfcs/string-extensions.md): an optional maximum number of pieces. The last piece holds the
+    // rest of the string.
+    bool limited = FFlag::LuwuStringExtensions && !lua_isnoneornil(L, 3);
+    int maxPieces = limited ? luaL_checkinteger(L, 3) : 0;
+    luaL_argcheck(L, !limited || maxPieces >= 1, 3, "must be at least 1");
+    bool stoppedEarly = false;
+
     const char* begin = haystack;
     const char* end = haystack + haystackLen;
     const char* spanStart = begin;
@@ -1105,6 +1114,12 @@ static int str_split(lua_State* L)
         // exception.
         if (memcmp(iter, needle, needleLen) == 0)
         {
+            if (limited && numMatches + 1 == maxPieces)
+            {
+                stoppedEarly = true;
+                break;
+            }
+
             lua_pushinteger(L, ++numMatches);
             lua_pushlstring(L, spanStart, iter - spanStart);
             lua_settable(L, -3);
@@ -1115,7 +1130,7 @@ static int str_split(lua_State* L)
         }
     }
 
-    if (needleLen > 0)
+    if (needleLen > 0 || stoppedEarly)
     {
         lua_pushinteger(L, ++numMatches);
         lua_pushlstring(L, spanStart, end - spanStart);
@@ -1124,6 +1139,245 @@ static int str_split(lua_State* L)
 
     return 1;
 }
+
+/*
+** {======================================================
+** Luwu String Extensions (rfcs/string-extensions.md)
+** =======================================================
+*/
+
+struct ByteSpan
+{
+    const char* data;
+    size_t size;
+};
+
+#define BYTE_SPAN(literal) {literal, sizeof(literal) - 1}
+
+// What trim, trimstart and trimend remove when given no strings: every Unicode White_Space character, and the byte order
+// mark (U+FEFF) because it's never wanted at either end of text. These are the multi-byte ones; isAsciiWhitespace has the
+// rest.
+static const ByteSpan kMultiByteWhitespace[] = {
+    BYTE_SPAN("\xC2\x85"),     // U+0085 next line
+    BYTE_SPAN("\xC2\xA0"),     // U+00A0 no-break space
+    BYTE_SPAN("\xE1\x9A\x80"), // U+1680 ogham space mark
+    BYTE_SPAN("\xE2\x80\x80"), // U+2000 to U+200A: the typographic spaces
+    BYTE_SPAN("\xE2\x80\x81"),
+    BYTE_SPAN("\xE2\x80\x82"),
+    BYTE_SPAN("\xE2\x80\x83"),
+    BYTE_SPAN("\xE2\x80\x84"),
+    BYTE_SPAN("\xE2\x80\x85"),
+    BYTE_SPAN("\xE2\x80\x86"),
+    BYTE_SPAN("\xE2\x80\x87"),
+    BYTE_SPAN("\xE2\x80\x88"),
+    BYTE_SPAN("\xE2\x80\x89"),
+    BYTE_SPAN("\xE2\x80\x8A"),
+    BYTE_SPAN("\xE2\x80\xA8"), // U+2028 line separator
+    BYTE_SPAN("\xE2\x80\xA9"), // U+2029 paragraph separator
+    BYTE_SPAN("\xE2\x80\xAF"), // U+202F narrow no-break space
+    BYTE_SPAN("\xE2\x81\x9F"), // U+205F medium mathematical space
+    BYTE_SPAN("\xE3\x80\x80"), // U+3000 ideographic space
+    BYTE_SPAN("\xEF\xBB\xBF"), // U+FEFF byte order mark
+};
+
+#undef BYTE_SPAN
+
+// Tab, line feed, vertical tab, form feed, carriage return and space.
+static bool isAsciiWhitespace(unsigned char c)
+{
+    return c == ' ' || (c >= '\t' && c <= '\r');
+}
+
+// Whether the text [begin, begin + available) starts with, or ends with, the given bytes. Matching whole UTF-8 sequences
+// at an end needs no lookbehind: a lead byte is never a continuation byte.
+static bool spanAtEdge(const char* data, size_t size, const char* begin, size_t available, bool atEnd)
+{
+    if (size > available)
+        return false;
+
+    const char* edge = atEnd ? begin + available - size : begin;
+    return memcmp(edge, data, size) == 0;
+}
+
+// How many bytes to trim from one end of [begin, end): the first of the strings in arguments firstArg onwards that the
+// text starts (or ends) with, or whitespace when there are no such arguments. Like Python's strip, it never matches an empty
+// string.
+static size_t trimLengthAtEdge(lua_State* L, int firstArg, const char* begin, const char* end, bool atEnd)
+{
+    size_t available = end - begin;
+    int top = lua_gettop(L);
+
+    if (top < firstArg)
+    {
+        if (available == 0)
+            return 0;
+
+        // An ASCII edge byte is a whole character, so only a non-ASCII one needs the multi-byte comparisons.
+        unsigned char edge = uchar(atEnd ? end[-1] : begin[0]);
+        if (edge < 0x80)
+            return isAsciiWhitespace(edge) ? 1 : 0;
+
+        for (const ByteSpan& whitespace : kMultiByteWhitespace)
+        {
+            if (spanAtEdge(whitespace.data, whitespace.size, begin, available, atEnd))
+                return whitespace.size;
+        }
+
+        return 0;
+    }
+
+    for (int arg = firstArg; arg <= top; arg++)
+    {
+        size_t size;
+        const char* data = luaL_checklstring(L, arg, &size);
+
+        if (size > 0 && spanAtEdge(data, size, begin, available, atEnd))
+            return size;
+    }
+
+    return 0;
+}
+
+// Removes the given strings, or whitespace, from the start and/or the end of argument 1 until none is left there.
+static int trimEdges(lua_State* L, bool fromStart, bool fromEnd)
+{
+    size_t length;
+    const char* s = luaL_checklstring(L, 1, &length);
+    const char* begin = s;
+    const char* end = s + length;
+
+    if (fromStart)
+    {
+        while (size_t trimmed = trimLengthAtEdge(L, 2, begin, end, /* atEnd */ false))
+            begin += trimmed;
+    }
+
+    if (fromEnd)
+    {
+        while (size_t trimmed = trimLengthAtEdge(L, 2, begin, end, /* atEnd */ true))
+            end -= trimmed;
+    }
+
+    if (begin == s && end == s + length)
+        lua_pushvalue(L, 1);
+    else
+        lua_pushlstring(L, begin, end - begin);
+
+    return 1;
+}
+
+static int str_trim(lua_State* L)
+{
+    return trimEdges(L, /* fromStart */ true, /* fromEnd */ true);
+}
+
+static int str_trimstart(lua_State* L)
+{
+    return trimEdges(L, /* fromStart */ true, /* fromEnd */ false);
+}
+
+static int str_trimend(lua_State* L)
+{
+    return trimEdges(L, /* fromStart */ false, /* fromEnd */ true);
+}
+
+typedef bool (*NeedleTest)(const char* s, size_t length, const char* needle, size_t needleLength);
+
+// Whether argument 1 passes the test for any needle. The first needle (argument 2) is required; the rest are
+// alternatives.
+static int testAnyNeedle(lua_State* L, NeedleTest test)
+{
+    size_t length;
+    const char* s = luaL_checklstring(L, 1, &length);
+    luaL_checkstring(L, 2);
+
+    int top = lua_gettop(L);
+    for (int arg = 2; arg <= top; arg++)
+    {
+        size_t needleLength;
+        const char* needle = luaL_checklstring(L, arg, &needleLength);
+
+        if (test(s, length, needle, needleLength))
+        {
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+    }
+
+    lua_pushboolean(L, 0);
+    return 1;
+}
+
+static int str_startswith(lua_State* L)
+{
+    return testAnyNeedle(L, luaS_startswith);
+}
+
+static int str_endswith(lua_State* L)
+{
+    return testAnyNeedle(L, luaS_endswith);
+}
+
+static int str_contains(lua_State* L)
+{
+    return testAnyNeedle(L, luaS_contains);
+}
+
+// Replaces at most `max` literal (not pattern) occurrences of `old`, left to right without overlaps.
+static int str_replace(lua_State* L)
+{
+    size_t length;
+    const char* s = luaL_checklstring(L, 1, &length);
+    size_t oldLength;
+    const char* old = luaL_checklstring(L, 2, &oldLength);
+    size_t newLength;
+    const char* replacement = luaL_checklstring(L, 3, &newLength);
+    luaL_argcheck(L, oldLength > 0, 2, "can't be an empty string");
+
+    bool limited = !lua_isnoneornil(L, 4);
+    int maxReplacements = limited ? luaL_checkinteger(L, 4) : 0;
+    luaL_argcheck(L, !limited || maxReplacements >= 0, 4, "can't be negative");
+
+    const char* end = s + length;
+    const char* match = lmemfind(s, length, old, oldLength);
+
+    if (!match || (limited && maxReplacements == 0))
+    {
+        lua_pushvalue(L, 1);
+        return 1;
+    }
+
+    luaL_Strbuf b;
+    luaL_buffinit(L, &b);
+
+    const char* rest = s;
+    int replacements = 0;
+    while (match && (!limited || replacements < maxReplacements))
+    {
+        luaL_addlstring(&b, rest, match - rest);
+        luaL_addlstring(&b, replacement, newLength);
+        rest = match + oldLength;
+        replacements++;
+        match = lmemfind(rest, end - rest, old, oldLength);
+    }
+
+    luaL_addlstring(&b, rest, end - rest);
+    luaL_pushresult(&b);
+    return 1;
+}
+
+static const luaL_Reg strlibextensions[] = {
+    {"trim", str_trim},
+    {"trimstart", str_trimstart},
+    {"trimend", str_trimend},
+    {"startswith", str_startswith},
+    {"endswith", str_endswith},
+    {"contains", str_contains},
+    {"replace", str_replace},
+    {NULL, NULL},
+};
+
+// }======================================================
 
 /*
 ** {======================================================
@@ -1682,6 +1936,8 @@ static void createmetatable(lua_State* L)
 int luaopen_string(lua_State* L)
 {
     luaL_register(L, LUA_STRLIBNAME, strlib);
+    if (FFlag::LuwuStringExtensions)
+        luaL_register(L, NULL, strlibextensions);
     createmetatable(L);
 
     return 1;
