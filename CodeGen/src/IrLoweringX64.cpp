@@ -3060,6 +3060,11 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         regs.assertNoSpills();
         emitInstCall(regs, build, helpers, vmRegOp(OP_A(inst)), intOp(OP_B(inst)), intOp(OP_C(inst)));
         break;
+    case IrCmd::TAILCALL:
+        regs.assertAllFree();
+        regs.assertNoSpills();
+        emitInstTailCall(regs, build, helpers, vmRegOp(OP_A(inst)), intOp(OP_B(inst)));
+        break;
     case IrCmd::RETURN:
         regs.assertAllFree();
         regs.assertNoSpills();

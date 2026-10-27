@@ -354,6 +354,21 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
             activeFastcallFallback = false;
         }
         break;
+    case LOP_TAILCALL:
+        inst(IrCmd::INTERRUPT, constUint(i));
+        inst(IrCmd::SET_SAVEDPC, constUint(i + 1));
+
+        inst(IrCmd::TAILCALL, vmReg(LUAU_INSN_A(*pc)), constInt(LUAU_INSN_B(*pc) - 1));
+
+        if (activeFastcallFallback)
+        {
+            inst(IrCmd::JUMP, fastcallFallbackReturn);
+
+            beginBlock(fastcallFallbackReturn);
+
+            activeFastcallFallback = false;
+        }
+        break;
     case LOP_RETURN:
         inst(IrCmd::INTERRUPT, constUint(i));
 
@@ -654,7 +669,7 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
             {
                 static const int namecall = getOpLength(static_cast<LuauOpcode>(LOP_NAMECALL));
                 int callOp = LUAU_INSN_OP(*(pc + namecall));
-                LUAU_ASSERT(callOp == LOP_CALL || callOp == LOP_CALLFB);
+                LUAU_ASSERT(callOp == LOP_CALL || callOp == LOP_CALLFB || callOp == LOP_TAILCALL);
                 int call = getOpLength(static_cast<LuauOpcode>(callOp));
                 cmdSkipTarget = i + namecall + call;
             }

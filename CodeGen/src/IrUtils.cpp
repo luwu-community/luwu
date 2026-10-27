@@ -368,6 +368,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::CAPTURE:
     case IrCmd::SETLIST:
     case IrCmd::CALL:
+    case IrCmd::TAILCALL:
     case IrCmd::RETURN:
     case IrCmd::FORGLOOP:
     case IrCmd::FORGLOOP_FALLBACK:

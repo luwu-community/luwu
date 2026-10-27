@@ -3311,6 +3311,25 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // reentry with x0=closure (NULL implies C function; CALL_FALLBACK_YIELD will trigger exit)
         build.cbnz(x0, helpers.continueCall);
         break;
+    case IrCmd::TAILCALL:
+        regs.spill(index);
+        // argtop = (nparams == LUA_MULTRET) ? L->top : ra + 1 + nparams;
+        if (intOp(OP_B(inst)) == LUA_MULTRET)
+            build.ldr(x2, mem(rState, offsetof(lua_State, top)));
+        else
+            build.add(x2, rBase, uint16_t((vmRegOp(OP_A(inst)) + 1 + intOp(OP_B(inst))) * sizeof(TValue)));
+
+        // tailcallFallback(L, ra, argtop)
+        build.mov(x0, rState);
+        build.add(x1, rBase, uint16_t(vmRegOp(OP_A(inst)) * sizeof(TValue)));
+        build.ldr(x4, mem(rNativeContext, offsetof(NativeContext, tailcallFallback)));
+        build.blr(x4);
+
+        emitUpdateBase(build);
+
+        // reentry with x0=closure (NULL implies C function; CALL_FALLBACK_YIELD will trigger exit)
+        build.cbnz(x0, helpers.continueCall);
+        break;
     case IrCmd::RETURN:
         regs.spill(index);
 

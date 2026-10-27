@@ -1273,6 +1273,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::INTERRUPT:
     case IrCmd::CHECK_GC:
     case IrCmd::CALL:
+    case IrCmd::TAILCALL:
     case IrCmd::FORGLOOP_FALLBACK:
     case IrCmd::FALLBACK_GETGLOBAL:
     case IrCmd::FALLBACK_SETGLOBAL:
@@ -1330,6 +1331,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         // CALL directly executes a Luau function on the same native stack frame
     case IrCmd::CALL:
+    case IrCmd::TAILCALL:
         // These instructions use lowering that is not aware of register allocator and demand no active values to exist
     case IrCmd::SETLIST:
     case IrCmd::FORGLOOP:
