@@ -864,7 +864,7 @@ static const luaR_NativeMember kOrderedMapMembers[] = {
 };
 
 // vecdeque: a double-ended queue on a ring buffer, the array part of a table. The entry `i` places from the front
-// (from 0) is in slot (head + i) % capacity + 1.
+// (from 0) is in slot (head + i) % capacity + 1, computed without a division (vdwrap).
 
 enum VecDequeField
 {
@@ -893,10 +893,18 @@ static LuauObject* checkdeque(lua_State* L, const char* method)
     return luaR_checknativeself(L, builtinclass(L, LUWU_BUILTIN_VECDEQUE), method);
 }
 
+// `ringindex` % `capacity` for a `ringindex` under twice the capacity, which every slot computation stays within:
+// one compare instead of an integer division
+static uint32_t vdwrap(uint32_t ringindex, uint32_t capacity)
+{
+    LUAU_ASSERT(ringindex < 2 * capacity);
+    return ringindex >= capacity ? ringindex - capacity : ringindex;
+}
+
 // The table slot of the entry `offset` places from the front
 static int vdslot(LuauObject* dq, uint32_t offset)
 {
-    return int((vdnumber(dq, VD_HEAD) + offset) % vdnumber(dq, VD_CAPACITY)) + 1;
+    return int(vdwrap(vdnumber(dq, VD_HEAD) + offset, vdnumber(dq, VD_CAPACITY))) + 1;
 }
 
 // Replaces the ring with one of `capacity` slots, holding the entries in order from slot 1
@@ -950,7 +958,7 @@ static int vecdequepushfront(lua_State* L)
     checkelement(L, dq, VD_ELEMENTTYPE, 2);
     vdreserveone(L, dq);
     uint32_t capacity = vdnumber(dq, VD_CAPACITY);
-    vdsetnumber(dq, VD_HEAD, (vdnumber(dq, VD_HEAD) + capacity - 1) % capacity);
+    vdsetnumber(dq, VD_HEAD, vdwrap(vdnumber(dq, VD_HEAD) + capacity - 1, capacity));
     vdstore(L, dq, vdslot(dq, 0), L->base + 1);
     vdsetnumber(dq, VD_COUNT, vdnumber(dq, VD_COUNT) + 1);
     return 0;
@@ -990,7 +998,7 @@ static int vecdequepopfront(lua_State* L)
     }
 
     vdtake(L, dq, 0);
-    vdsetnumber(dq, VD_HEAD, (vdnumber(dq, VD_HEAD) + 1) % vdnumber(dq, VD_CAPACITY));
+    vdsetnumber(dq, VD_HEAD, vdwrap(vdnumber(dq, VD_HEAD) + 1, vdnumber(dq, VD_CAPACITY)));
     vdsetnumber(dq, VD_COUNT, count - 1);
     return 1;
 }
