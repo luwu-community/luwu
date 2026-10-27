@@ -13,6 +13,8 @@
 #include "ltable.h"
 #include "lvm.h"
 
+#include <algorithm>
+
 #include <stdio.h>
 #include <string.h>
 
@@ -1104,7 +1106,8 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     {"__tostring", vecdequetostring, 0},
 };
 
-// vec: a growable array, entries 1 to count of a table's array part
+// vec: a growable array, entries 1 to count of a table's array part. The vec grows the array part itself, so no
+// entry is ever in the hash part, which a generic for loop relies on (luaR_collectionitems).
 
 enum VecField
 {
@@ -1133,8 +1136,20 @@ static void vecsetcount(LuauObject* vec, uint32_t count)
     setnvalue(&vec->members[VEC_COUNT], double(count));
 }
 
+// Makes room for entries 1 to `size` in the items' array part, doubling it as it grows
+static void vecreserve(lua_State* L, LuauObject* vec, uint32_t size)
+{
+    LuaTable* items = vecitems(vec);
+    if (size <= uint32_t(items->sizearray))
+        return;
+
+    uint32_t grown = std::max(uint32_t(items->sizearray) * 2, uint32_t(4));
+    luaH_resizearray(L, items, int(std::max(size, grown)));
+}
+
 static void vecstore(lua_State* L, LuauObject* vec, uint32_t position, const TValue* value)
 {
+    vecreserve(L, vec, position);
     LuaTable* items = vecitems(vec);
     setobj2t(L, luaH_setnum(L, items, int(position)), value);
     luaC_barriert(L, items, value);
@@ -1220,6 +1235,7 @@ static int vecinsert(lua_State* L)
     uint32_t count = veccount(vec);
     uint32_t position = checkposition(L, 2, count + 1);
     checkelement(L, vec, VEC_ELEMENTTYPE, 3);
+    vecreserve(L, vec, count + 1);
     vecshift(L, vec, position, count, 1);
     vecstore(L, vec, position, L->base + 2);
     vecsetcount(vec, count + 1);
@@ -1488,6 +1504,26 @@ static void setnonemetatable(lua_State* L)
     lua_insert(L, -2);
     lua_setmetatable(L, -2);
     lua_pop(L, 1);
+}
+
+LuaTable* luaR_collectionitems(lua_State* L, LuauObject* object)
+{
+    LuauClass** builtins = L->global->builtinclasses;
+    if (object->lclass == builtins[LUWU_BUILTIN_VEC])
+        return vecitems(object);
+
+    if (object->lclass != builtins[LUWU_BUILTIN_VECDEQUE])
+        return NULL;
+
+    // A ring starting past slot 1 is rotated to start there, which keeps every entry's position
+    LuaTable* ring = hvalue(&object->members[VD_ITEMS]);
+    uint32_t head = vdnumber(object, VD_HEAD);
+    if (head != 0)
+    {
+        std::rotate(ring->array, ring->array + head, ring->array + vdnumber(object, VD_CAPACITY));
+        vdsetnumber(object, VD_HEAD, 0);
+    }
+    return ring;
 }
 
 // Builds a class, records it as builtin `kind` and stores it in the library table on top of the stack

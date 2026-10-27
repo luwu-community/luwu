@@ -358,6 +358,60 @@ do
     end, "vec() takes a list of values, but you passed a number")
 end
 
+-- a generic for loop over a vec or vecdeque visits positions 1 to the count in order, wherever the storage starts
+do
+    const function collect(container): string
+        const parts = {}
+        for position, value in container do
+            table.insert(parts, `{position}={value}`)
+        end
+        return table.concat(parts, " ")
+    end
+
+    const queue = collections.vecdeque({ 3, 4 })
+    queue:pushfront(2)
+    queue:pushfront(1)
+    queue:pushback(5)
+    assert(collect(queue) == "1=1 2=2 3=3 4=4 5=5")
+    queue:popfront()
+    queue:pushfront(0)
+    assert(collect(queue) == "1=0 2=2 3=3 4=4 5=5")
+    assert(queue:front() == 0 and queue:back() == 5 and queue:at(3) == 3)
+    for _ = 1, 5 do
+        queue:popback()
+    end
+    assert(collect(queue) == "" and queue:front() == nil)
+
+    const list = collections.vec()
+    for i = 1, 100 do
+        list:insert(1, i)
+    end
+    list:remove(1)
+    list:pop()
+    local expected = 99
+    local visited = 0
+    for position, value in list do
+        visited += 1
+        assert(position == visited and value == expected)
+        expected -= 1
+    end
+    assert(visited == 98)
+
+    -- pushing while looping is unspecified but memory safe
+    const growing = collections.vec({ 1 })
+    local steps = 0
+    for _, value in growing do
+        steps += 1
+        if value < 50 then
+            growing:push(value + 1)
+        end
+        if steps > 1000 then
+            break
+        end
+    end
+    assert(#growing == 50)
+end
+
 -- printing a large container grows its string buffer while values are shown, and an element's own __tostring may
 -- change the container it's printed from
 class Named

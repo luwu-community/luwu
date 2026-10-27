@@ -205,6 +205,13 @@ LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const l
 LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method);
 
 /**
+ * Luwu collections: the table a generic for loop over `object` runs on, or NULL when `object` isn't a `vec` or
+ * `vecdeque`. Its array part holds positions 1 to the count in order with nil after them, so the VM's own table
+ * iteration visits the same positions and values `__iter` would, with no call per step.
+ */
+LUAI_FUNC LuaTable* luaR_collectionitems(lua_State* L, LuauObject* object);
+
+/**
  * Callback for creating objects. This is written as a Lua API function and expects the stack to be:
  *
  *  [ BASE ]
