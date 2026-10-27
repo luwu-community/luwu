@@ -175,7 +175,11 @@ std::optional<SourceCode> TestFileResolver::readSource(const ModuleName& name)
     if (it2 != sourceTypes.end())
         sourceType = it2->second;
 
-    return SourceCode{it->second, sourceType};
+    SourceCode code{it->second, sourceType};
+    // Luwu object notation: a module named like a `.luwon` file is a data file
+    bool namedLuwon = name.size() > 6 && name.compare(name.size() - 6, 6, ".luwon") == 0;
+    code.luwon = namedLuwon || luwonModules.count(name) > 0;
+    return code;
 }
 
 std::optional<ModuleInfo> TestFileResolver::resolveModule(const ModuleInfo* context, AstExpr* expr, const TypeCheckLimits& limits)
@@ -379,6 +383,9 @@ ParseResult Fixture::tryParse(const std::string& source, const ParseOptions& par
 {
     ParseOptions options = parseOptions;
     options.allowDeclarationSyntax = true;
+    // Luwu object notation: parse like the main module. Typing into a data file has to see its errors.
+    if (fileResolver.luwonModules.count(fromString(mainModuleName)))
+        options.luwon = true;
 
     sourceModule.reset(new SourceModule);
     ParseResult result = Parser::parse(source.c_str(), source.length(), *sourceModule->names, *sourceModule->allocator, options);

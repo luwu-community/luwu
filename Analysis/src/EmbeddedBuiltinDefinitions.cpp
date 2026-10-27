@@ -366,6 +366,26 @@ declare integer: {
 
 )BUILTIN_SRC";
 
+// Luwu object notation: the `luwon` library. Tables a file returns carry their comments and locations in a metatable
+// luwon owns; `comments` and `setcomments` read and replace them. `classes` maps the names a file may construct to
+// classes, or to `{ class = C, args = function(object) ... end }` to write them too.
+static const char* const kBuiltinDefinitionLuwonSrc = R"BUILTIN_SRC(
+
+declare luwon: {
+    decode: @checked (text: string, classes: { [string]: unknown }?) -> unknown,
+    encode: @checked (value: unknown, classes: { [string]: unknown }?) -> string,
+    comments: ((t: {}, key: string | number | boolean) -> {
+        above: { { text: string, location: { begin: vector, ["end"]: vector }? } },
+        after: { text: string, location: { begin: vector, ["end"]: vector }? }?,
+        location: { begin: vector, ["end"]: vector }?,
+        keylocation: { begin: vector, ["end"]: vector }?,
+    }?) & ((t: {}) -> { { text: string, location: { begin: vector, ["end"]: vector }? } }?),
+    setcomments: @checked (t: {}, key: string | number | boolean, comments: { above: { string }?, after: string? }) -> (),
+    source: @checked (t: {}) -> string?,
+}
+
+)BUILTIN_SRC";
+
 static const char* kBuiltinDefinitionClassSrc = R"CLASS_SRC(
 declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
@@ -404,6 +424,7 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionBufferSrcClose;
 
     result += kBuiltinDefinitionVectorSrc;
+    result += kBuiltinDefinitionLuwonSrc;
 
     if (FFlag::LuauIntegerType2 && FFlag::LuauIntegerLibrary)
     {

@@ -907,12 +907,13 @@ std::optional<CheckResult> Frontend::getCheckResult(const ModuleName& name, bool
 
 // How the Frontend parses a module: with comments, in the language its config says, and with errors worded for static
 // analysis.
-static ParseOptions analysisParseOptions(const Config& config)
+static ParseOptions analysisParseOptions(const Config& config, const SourceCode& source)
 {
     ParseOptions opts = config.parseOptions;
     opts.captureComments = true;
     opts.analysisErrors = true;
     opts.language = config.language;
+    opts.luwon = source.luwon;
     return opts;
 }
 
@@ -927,7 +928,7 @@ std::vector<ModuleName> Frontend::getRequiredScripts(const ModuleName& name, con
             return {};
         }
         const Config& config = configResolver->getConfig(name, limits);
-        SourceModule result = parse(name, source->source, analysisParseOptions(config));
+        SourceModule result = parse(name, source->source, analysisParseOptions(config, *source));
         result.type = source->type;
         result.language = config.language;
         require = traceRequires(fileResolver, result.root, name, limits);
@@ -1999,7 +2000,7 @@ std::pair<SourceNode*, SourceModule*> Frontend::getSourceNode(const ModuleName& 
     }
 
     const Config& config = configResolver->getConfig(name, limits);
-    SourceModule result = parse(name, source->source, analysisParseOptions(config));
+    SourceModule result = parse(name, source->source, analysisParseOptions(config, *source));
     result.type = source->type;
     result.language = config.language;
 

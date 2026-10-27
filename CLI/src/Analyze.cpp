@@ -182,7 +182,9 @@ struct CliFileResolver : Luau::FileResolver
         if (!source)
             return std::nullopt;
 
-        return Luau::SourceCode{*source, sourceType};
+        Luau::SourceCode code{*source, sourceType};
+        code.luwon = isLuwonPath(name);
+        return code;
     }
 
     std::optional<Luau::ModuleInfo> resolveModule(const Luau::ModuleInfo* context, Luau::AstExpr* node, const Luau::TypeCheckLimits& limits) override

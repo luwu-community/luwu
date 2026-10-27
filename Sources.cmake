@@ -28,6 +28,7 @@ target_sources(Luwu.Ast PRIVATE
     Ast/include/Luau/Cst.h
     Ast/include/Luau/Lexer.h
     Ast/include/Luau/Location.h
+    Ast/include/Luau/LuwonSyntax.h
     Ast/include/Luau/ParseOptions.h
     Ast/include/Luau/Parser.h
     Ast/include/Luau/ParseResult.h
@@ -39,6 +40,7 @@ target_sources(Luwu.Ast PRIVATE
     Ast/src/Cst.cpp
     Ast/src/Lexer.cpp
     Ast/src/Location.cpp
+    Ast/src/LuwonSyntax.cpp
     Ast/src/Parser.cpp
     Ast/src/PrettyPrinter.cpp
 )
@@ -100,10 +102,15 @@ target_sources(Luwu.Config PRIVATE
     Config/include/Luau/Config.h
     Config/include/Luau/LinterConfig.h
     Config/include/Luau/LuauConfig.h
+    Config/include/Luau/Luwon.h
+    Config/include/luwon.h
 
     Config/src/Config.cpp
     Config/src/LinterConfig.cpp
     Config/src/LuauConfig.cpp
+    Config/src/Luwon.cpp
+    Config/src/LuwonLib.cpp
+    Config/src/LuwonWrite.cpp
 )
 
 # Luwu.CodeGen Sources
@@ -535,6 +542,7 @@ if(TARGET Luwu.UnitTest)
         tests/JsonEmitter.test.cpp
         tests/Lexer.test.cpp
         tests/Linter.test.cpp
+        tests/Luwon.test.cpp
         tests/LValue.test.cpp
         tests/Module.test.cpp
         tests/NonstrictMode.test.cpp
@@ -616,6 +624,7 @@ if(TARGET Luwu.Conformance)
         tests/DirectFieldAccess.test.cpp
         tests/FeedbackVector.test.cpp
         tests/IrLowering.test.cpp
+        tests/LuwonLoad.test.cpp
         tests/SharedCodeAllocator.test.cpp
         tests/main.cpp)
 endif()

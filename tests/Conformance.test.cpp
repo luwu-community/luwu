@@ -8,6 +8,7 @@
 #include "luacode.h"
 #include "luacodegen.h"
 #include "luajitinliner.h"
+#include "luwon.h"
 
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/DenseHash.h"
@@ -324,6 +325,9 @@ static StateRef runConformance(
         luau_enable_jit_inliner(L);
 
     luaL_openlibs(L);
+    // Luwu object notation: hosts open `luwon` next to the standard libraries
+    luaopen_luwon(L);
+    lua_pop(L, 1);
 
     // Register a few global functions for conformance tests
     std::vector<luaL_Reg> funcs = {

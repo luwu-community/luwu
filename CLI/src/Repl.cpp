@@ -5,6 +5,7 @@
 #include "Luau/Common.h"
 #include "lua.h"
 #include "lualib.h"
+#include "luwon.h"
 
 #include "Luau/CodeGen.h"
 #include "Luau/Compiler.h"
@@ -212,6 +213,9 @@ void setupState(lua_State* L)
         Luau::JitInliner::setup(L);
 
     luaL_openlibs(L);
+    // Luwu object notation: reading and writing `.luwon` text from code
+    luaopen_luwon(L);
+    lua_pop(L, 1);
 
     static const luaL_Reg funcs[] = {
         {"loadstring", lua_loadstring},

@@ -3,6 +3,7 @@
 
 #include "Luau/Ast.h"
 #include "Luau/Common.h"
+#include "Luau/LuwonSyntax.h"
 #include "Luau/StringUtils.h"
 #include "Luau/TimeTrace.h"
 
@@ -317,6 +318,9 @@ ParseResult Parser::parse(const char* buffer, size_t bufferSize, AstNameTable& n
     try
     {
         AstStatBlock* root = p.parseChunk();
+        if (options.luwon)
+            checkLuwonSyntax(root, p.parseErrors);
+
         size_t lines = p.lexer.current().location.end.line + (bufferSize > 0 && buffer[bufferSize - 1] != '\n');
 
         return ParseResult{root, lines, std::move(p.hotcomments), std::move(p.parseErrors), std::move(p.commentLocations), std::move(p.cstNodeMap)};
