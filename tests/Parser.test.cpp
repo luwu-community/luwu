@@ -25,6 +25,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuDeclareStatements)
@@ -8599,6 +8600,34 @@ TEST_CASE_FIXTURE(Fixture, "if_local_without_the_flag_says_how_to_enable_it")
     matchParseError("if local a = f() then end", message);
     matchParseError("if a when b then end", message);
     matchParseError("local x = if const a = f() then a else nil", message);
+}
+
+TEST_CASE_FIXTURE(Fixture, "match_without_the_flag_says_how_to_enable_it")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, false},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    // One error at the keyword, not a cascade through the arms
+    ParseResult result = matchParseError(
+        R"(
+local function which(arg: string)
+    return match const a = arg
+        case "p" | "patch" then "patch"
+        else `other:{a}`
+end
+local is_string = x is string
+)",
+        "attempt to use disabled Luwu feature 'match' expressions; enable via FFlag 'DebugLuwuMatchExpressions'",
+        Location{{2, 11}, {2, 16}}
+    );
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(
+        result.errors[1].getMessage(),
+        "attempt to use disabled Luwu feature 'is' and 'implements' type tests; enable via FFlag 'DebugLuwuMatchExpressions'"
+    );
 }
 
 TEST_CASE_FIXTURE(Fixture, "for_when_is_stored_as_a_guard_around_the_body")

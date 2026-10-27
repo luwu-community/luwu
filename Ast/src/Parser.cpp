@@ -7643,11 +7643,15 @@ static bool isTypeTestKeyword(const Lexeme& lexeme)
 }
 
 // Luwu match expressions: only in Luwu files. In a Luau file `x is` and `match x` keep their upstream parse
-// (`local a = x is = 1` is two statements there).
+// (`local a = x is = 1` is two statements there). A Luwu file parses them even with the flag off, so parseMatchExpr and
+// parseTypeTest can say the flag is off instead of the rest of the expression cascading into syntax errors.
 bool Parser::matchExpressionsAvailable()
 {
-    return FFlag::DebugLuwuMatchExpressions && options.language == Language::Luwu;
+    return options.language == Language::Luwu;
 }
+
+const LuwuFeature kMatchFeature{"'match' expressions", /* plural= */ true, "DebugLuwuMatchExpressions"};
+const LuwuFeature kTypeTestFeature{"'is' and 'implements' type tests", /* plural= */ true, "DebugLuwuMatchExpressions"};
 
 // Luwu match expressions: `is` or `implements` after an operand, followed by a name, `not`, `function` or `nil`. Anything else
 // after it (`is = 1`, `is(f)`, `is.x`, `is "s"`) is a statement using a variable named `is`, which Luau code may have
@@ -7700,6 +7704,7 @@ std::optional<AstExpr*> Parser::parseNothingValue()
 // and are parsed as those calls, so narrowing and the compiler's fused class checks apply as they do to the calls.
 AstExpr* Parser::parseTypeTest(AstExpr* value, const Location& start)
 {
+    checkLuwuFeature(lexer.current().location, kTypeTestFeature, FFlag::DebugLuwuMatchExpressions);
     bool implements = AstName(lexer.current().name) == "implements";
     nextLexeme(); // is / implements
 
@@ -7827,6 +7832,7 @@ bool Parser::matchExpressionFollows()
 AstExpr* Parser::parseMatchExpr(bool inStatement)
 {
     Location start = lexer.current().location;
+    checkLuwuFeature(start, kMatchFeature, FFlag::DebugLuwuMatchExpressions);
     nextLexeme(); // match
 
     unsigned int localsBegin = saveLocals();
