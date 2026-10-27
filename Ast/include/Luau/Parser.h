@@ -505,6 +505,7 @@ private:
 
     // Name
     std::optional<Name> parseNameOpt(const char* context = nullptr);
+    std::optional<Name> parseNameBeforeDeclaration(const char* context);
     Name parseName(const char* context = nullptr);
     Name parseIndexName(const char* context, const Position& previous);
 
@@ -539,6 +540,13 @@ private:
     // check that parser is at lexeme/symbol, move to next lexeme/symbol on success, report failure and continue on failure
     bool expectAndConsume(char value, const char* context = nullptr);
     bool expectAndConsume(Lexeme::Type type, const char* context = nullptr);
+    bool consumeExpected(Lexeme::Type type, const char* context);
+    AstTypeError* missingTypeHere();
+    bool continuesOnSameLine();
+    bool startsConstDeclaration();
+    bool startsTypeAliasDeclaration();
+    bool nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName));
+    bool statementReportedError();
     bool expectAndConsumeFailWithLookahead(Lexeme::Type type, const char* context);
     void expectAndConsumeFail(Lexeme::Type type, const char* context);
     void reportExpected(const Location& location, Lexeme::Type type, const char* context);
@@ -698,6 +706,9 @@ private:
 
     bool hotcommentHeader = true;
 
+    // Luwu: where the statement being parsed starts (see nextLineStartsStatement)
+    Position statementStart{0, 0};
+
     unsigned int recursionCounter;
 
     // Luwu Do Expressions (rfcs/do-expressions.md): where the expression directly inside the innermost `(` being parsed
@@ -742,6 +753,10 @@ private:
     std::vector<ParseError> parseErrors;
 
     std::vector<unsigned int> matchRecoveryStopOnToken;
+
+    // Luwu: the line of the last "Incomplete statement" error. A word still being typed (`n o` on the way to `n or`)
+    // splits into several statements on one line, and only the first is reported.
+    std::optional<unsigned> incompleteStatementLine;
 
     DenseHashMap<AstName, Location> declaredExportBindings;
     // Luwu Export Values (rfcs/export-values.md): exports declared without a value, reported once the module is parsed
