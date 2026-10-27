@@ -1029,6 +1029,10 @@ struct NonStrictTypeChecker
         Scope* scope = findInnermostScope(ty->location);
         LUAU_ASSERT(scope);
 
+        // Luwu literal types: `literal<B>` isn't a type in scope. The constraint generator resolves it and reports misuse.
+        if (isLiteralTypeReference(*scope, ty))
+            return;
+
         std::optional<TypeFun> alias = ty->prefix ? scope->lookupImportedType(ty->prefix->value, ty->name.value) : scope->lookupType(ty->name.value);
 
         if (alias.has_value())
