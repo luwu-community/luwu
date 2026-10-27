@@ -8469,14 +8469,14 @@ TEST_CASE_FIXTURE(Fixture, "declare_class")
     Allocator allocator;
     AstNameTable names(allocator);
     ParseResult result = parseSource(allocator, names, R"(
-export declare class type Path(public raw: string, public sep = string)
+export class type Path(public raw: string, public sep = string)
     public const drive: string?
     private cache = { string }
     public function join(self, other: string): Path
     public function cwd(): Path
     public function __tostring(self): string
 end
-declare class type Counter
+class type Counter
     function __init(self, start: number)
     function bump(self)
 end
@@ -8526,12 +8526,12 @@ TEST_CASE_FIXTURE(Fixture, "declare_trait")
     Allocator allocator;
     AstNameTable names(allocator);
     ParseResult result = parseSource(allocator, names, R"(
-export declare trait type Container<T>
+export trait type Container<T>
     expect public function __len(self): number
     expect public function front?(self): T?
     expect public function back?(self): T?
 end
-declare trait type Handler(public name = string) needs Container<string>
+trait type Handler(public name = string) needs Container<string>
     private cb: (() -> ())?
     public final tag: string
     public final function on_callback(self, cb: () -> ())
@@ -8585,17 +8585,20 @@ TEST_CASE_FIXTURE(Fixture, "declare_trait_mistakes")
         CHECK_EQ(errors[0], message);
     };
 
-    onlyError("declare trait Handler\nend", "A declared trait is written 'declare trait type Name'");
-    onlyError("declare trait type A\n    expect x = number\nend", "Expected fields can't have default values");
-    onlyError("declare trait type A\n    c\nend", "Declared trait field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
-    onlyError("declare trait type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
-    onlyError("declare trait type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
-    onlyError("declare trait type A implements B\nend", "Traits can't implement traits; did you mean 'needs'?");
+    onlyError(
+        "declare trait type Handler\nend",
+        "Write 'trait type Handler' for the type alone, or 'declare trait Handler' for the trait and its type: 'declare' declares a value"
+    );
+    onlyError("trait type A\n    expect x = number\nend", "Expected fields can't have default values");
+    onlyError("trait type A\n    c\nend", "Declared trait field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
+    onlyError("trait type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
+    onlyError("trait type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("trait type A implements B\nend", "Traits can't implement traits; did you mean 'needs'?");
 
-    // `export` goes first, and a declared trait is a type
+    // `export` goes first
     Allocator allocator;
     AstNameTable names(allocator);
-    ParseResult result = parseSource(allocator, names, "declare export trait type A\nend");
+    ParseResult result = parseSource(allocator, names, "declare export trait A\nend");
     REQUIRE_EQ(result.errors.size(), 1);
     CHECK_EQ(result.errors[0].getMessage(), "'export' goes before 'declare': write 'export declare'");
     AstStatDeclareClass* trait = result.root->body.data[0]->as<AstStatDeclareClass>();
@@ -8615,12 +8618,12 @@ TEST_CASE_FIXTURE(Fixture, "declare_class_mistakes")
         CHECK_EQ(errors[0], message);
     };
 
-    onlyError("declare class type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
-    onlyError("declare class type A\n    x: number = {}\n    y: string\nend", "In a declaration, a default is written as its type: 'name = T'");
-    onlyError("declare class type A(x: number = string)\nend", "In a declaration, a default is written as its type: 'name = T'");
-    onlyError("declare class type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
-    onlyError("declare class type A(x)\nend", "All declaration parameters must be annotated");
-    onlyError("declare class type A\n    function f(self, ...)\nend", "All declaration parameters must be annotated");
+    onlyError("class type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("class type A\n    x: number = {}\n    y: string\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("class type A(x: number = string)\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("class type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
+    onlyError("class type A(x)\nend", "All declaration parameters must be annotated");
+    onlyError("class type A\n    function f(self, ...)\nend", "All declaration parameters must be annotated");
 }
 
 TEST_CASE_FIXTURE(Fixture, "declared_parameter_defaults_are_types")
@@ -8634,7 +8637,7 @@ declare function split(s: string, sep = string): { string }
 declare extern type File
     function read(self, count = number): string
 end
-declare class type Path
+class type Path
     function join(self, other = string): Path
 end
 )");
@@ -8656,11 +8659,36 @@ end
     CHECK_EQ(errors[0], "In a declaration, a default is written as its type: 'name = T'");
 }
 
+TEST_CASE_FIXTURE(Fixture, "declare_class_is_followed_by_its_global")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    AstStatBlock* block = parse("declare class Semver(public major: number)\nend\nclass type Path\nend\n");
+
+    // `declare class Semver` is the class's type and `declare Semver: class<Semver>`; `class type Path` is the type alone
+    REQUIRE(block->body.size == 3);
+    AstStatDeclareClass* semver = block->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(semver);
+    CHECK(semver->declareLocation);
+
+    AstStatDeclareGlobal* global = block->body.data[1]->as<AstStatDeclareGlobal>();
+    REQUIRE(global);
+    CHECK(global->name == "Semver");
+    AstTypeReference* type = global->type ? global->type->as<AstTypeReference>() : nullptr;
+    REQUIRE(type);
+    CHECK(type->name == "class");
+    CHECK(type->parameters.size == 1);
+
+    AstStatDeclareClass* path = block->body.data[2]->as<AstStatDeclareClass>();
+    REQUIRE(path);
+    CHECK(!path->declareLocation);
+}
+
 TEST_CASE_FIXTURE(Fixture, "declare_export_is_written_export_declare")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
 
-    for (const char* source : {"declare export extern type Path\nend", "declare export class type Path\nend"})
+    for (const char* source : {"declare export extern type Path\nend", "declare export class Path\nend"})
     {
         INFO(std::string(source));
         Allocator allocator;
@@ -8670,7 +8698,8 @@ TEST_CASE_FIXTURE(Fixture, "declare_export_is_written_export_declare")
         // One error, and the declaration is still exported
         REQUIRE_EQ(result.errors.size(), 1);
         CHECK_EQ(result.errors[0].getMessage(), "'export' goes before 'declare': write 'export declare'");
-        REQUIRE_EQ(result.root->body.size, 1);
+        // A declared class is followed by the global holding it
+        REQUIRE(result.root->body.size >= 1);
         AstStat* stat = result.root->body.data[0];
         if (AstStatDeclareExternType* externType = stat->as<AstStatDeclareExternType>())
             CHECK(externType->exportLocation);
@@ -8685,7 +8714,7 @@ TEST_CASE_FIXTURE(Fixture, "declare_export_is_written_export_declare")
     // The statement starts at `export`
     Allocator allocator;
     AstNameTable names(allocator);
-    ParseResult result = parseSource(allocator, names, "export declare class type Path\nend");
+    ParseResult result = parseSource(allocator, names, "export class type Path\nend");
     REQUIRE(result.errors.empty());
     REQUIRE_EQ(result.root->body.size, 1);
     CHECK_EQ(result.root->body.data[0]->location.begin, Position{0, 0});
@@ -8704,14 +8733,15 @@ TEST_CASE_FIXTURE(Fixture, "declared_types_are_written_out_and_never_shadowed")
     };
 
     onlyError(
-        "declare class Path\nend", "A declared class is written 'declare class type Name'; to declare an extern type, write 'declare extern type Name'"
+        "declare class type Path\nend",
+        "Write 'class type Path' for the type alone, or 'declare class Path' for the class and its type: 'declare' declares a value"
     );
-    onlyError("declare class type A\n    c\nend", "Declared class field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
+    onlyError("class type A\n    c\nend", "Declared class field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
 
     const std::string declaredOnLine1 = "Type 'A' is declared on line 1, and a declared type can't be shadowed";
-    onlyError("declare extern type A\nend\ndeclare class type A\nend", declaredOnLine1);
+    onlyError("declare extern type A\nend\nclass type A\nend", declaredOnLine1);
     onlyError("declare extern type A\nend\nlocal function f()\n    type A = number\nend", declaredOnLine1);
-    onlyError("declare class type A\nend\nclass A\nend", declaredOnLine1);
+    onlyError("class type A\nend\nclass A\nend", declaredOnLine1);
     onlyError("declare extern type A\nend\ntype function A()\n    return types.number\nend", declaredOnLine1);
     onlyError("type A = number\ndeclare extern type A\nend", "Type 'A' is already defined on line 1, and a declared type can't shadow it");
 
@@ -8753,7 +8783,7 @@ declare typed: number
     // Type declarations still write their types
     std::vector<std::string> errors = sourceParseErrors("declare extern type A\n    function f(self, x)\nend");
     REQUIRE_FALSE(errors.empty());
-    errors = sourceParseErrors("declare class type A\n    function f(self, x)\nend");
+    errors = sourceParseErrors("class type A\n    function f(self, x)\nend");
     REQUIRE_EQ(errors.size(), 1);
     CHECK_EQ(errors[0], "All declaration parameters must be annotated");
 }

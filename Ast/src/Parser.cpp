@@ -81,9 +81,10 @@ const char* const kDeclareExportValueError =
     "Only types can be exported with 'export declare'; to declare a global for several files, use a definitions file";
 // Luwu: upstream's legacy `declare class` declares an extern type; in Luwu it is a class or nothing.
 const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead";
-const char* const kDeclareClassNeedsTypeError =
-    "A declared class is written 'declare class type Name'; to declare an extern type, write 'declare extern type Name'";
-const char* const kDeclareTraitNeedsTypeError = "A declared trait is written 'declare trait type Name'";
+const char* const kDeclareClassTypeError =
+    "Write 'class type %s' for the type alone, or 'declare class %s' for the class and its type: 'declare' declares a value";
+const char* const kDeclareTraitTypeError =
+    "Write 'trait type %s' for the type alone, or 'declare trait %s' for the trait and its type: 'declare' declares a value";
 const char* const kDeclareExportOrderError = "'export' goes before 'declare': write 'export declare'";
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
@@ -545,6 +546,8 @@ Parser::Parser(const char* buffer, size_t bufferSize, AstNameTable& names, Alloc
     nameAny = names.getOrAdd("any");
     nameError = names.getOrAdd(kParseNameError);
     nameNil = names.getOrAdd("nil"); // nil is a reserved keyword
+    nameClass = names.getOrAdd("class");
+    nameTrait = names.getOrAdd("trait");
 
     matchRecoveryStopOnToken.assign(Lexeme::Type::Reserved_END, 0);
     matchRecoveryStopOnToken[Lexeme::Type::Eof] = 1;
@@ -673,6 +676,10 @@ AstStatBlock* Parser::parseBlockNoScope()
 
         body.push_back(stat);
 
+        for (AstStat* desugared : pendingStatements)
+            body.push_back(desugared);
+        pendingStatements.clear();
+
         if (isStatLast(stat))
             break;
     }
@@ -757,6 +764,8 @@ AstStat* Parser::parseStat()
 
     if (ident == "class")
     {
+        if (FFlag::LuwuClasses && startsClassType())
+            return parseClassType(start, expr->location, /* exported= */ false);
         if (FFlag::LuwuClasses)
             return parseClassStat(start, /*exported*/ false, start);
 
@@ -768,6 +777,9 @@ AstStat* Parser::parseStat()
 
     // Luwu Traits (rfcs/classes/traits.md): `trait Name`. Like `class`, `trait` is only a keyword where a declaration starts,
     // so a variable named `trait` keeps working.
+    // Luwu Declare Statements (rfcs/declare-statements.md): `trait type Name`, a trait's type with no value
+    if (ident == "trait" && traitsEnabled() && startsClassType())
+        return parseClassType(start, expr->location, /* exported= */ false, /* isTrait= */ true);
     if (ident == "trait" && traitsEnabled() && lexer.current().type == Lexeme::Name)
         return parseClassStat(start, /* exported= */ false, start, {nullptr, 0}, /* declared= */ false, /* isTrait= */ true);
 
@@ -780,6 +792,30 @@ AstStat* Parser::parseStat()
             Location declareLocation = lexer.current().location;
             nextLexeme();
             return parseDeclaration(declareLocation, AstArray<AstAttr*>({nullptr, 0}), expr->location);
+        }
+
+        // Luwu Declare Statements (rfcs/declare-statements.md): `export class type Name`
+        bool exportsClassType = FFlag::LuwuClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class" &&
+                                lexer.lookahead().type == Lexeme::Name && AstName(lexer.lookahead().name) == "type";
+        if (exportsClassType)
+        {
+            Location classKeywordLocation = lexer.current().location;
+            nextLexeme();
+            if (startsClassType())
+                return parseClassType(start, classKeywordLocation, /* exported= */ true);
+            return parseClassStat(start, /*exported*/ true, classKeywordLocation);
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): `export trait type Name`
+        bool exportsTraitType = traitsEnabled() && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "trait" &&
+                                lexer.lookahead().type == Lexeme::Name && AstName(lexer.lookahead().name) == "type";
+        if (exportsTraitType)
+        {
+            Location traitKeywordLocation = lexer.current().location;
+            nextLexeme();
+            if (startsClassType())
+                return parseClassType(start, traitKeywordLocation, /* exported= */ true, /* isTrait= */ true);
+            return parseClassStat(start, /* exported= */ true, traitKeywordLocation, {nullptr, 0}, /* declared= */ false, /* isTrait= */ true);
         }
 
         if (FFlag::LuauExportValueSyntax)
@@ -3533,21 +3569,23 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         }
     }
 
-    // Luwu Traits (rfcs/classes/traits.md): `declare trait type Name` declares a trait the way `declare class type` declares a
-    // class, as the same shape.
+    // Luwu Traits (rfcs/classes/traits.md): `declare trait Name` declares a trait the way `declare class Name` declares a
+    // class, as the same shape, and the global holding it.
     bool isTrait = declaresTrait();
     if (isTrait || declaresClass())
     {
         Location classKeywordLocation = lexer.current().location;
         nextLexeme();
 
-        // `declare class type Name`: the `type` says this is a type and brings no value into scope. Without it, report
-        // and parse the class it meant.
+        // `declare class Name` declares the class: its type, and the global holding it, the way `class Name` defines both.
+        // `declare class type Name` mixes that with `class type Name` (the type alone); report it and parse the type.
         bool typeKeyword = lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "type" && lexer.lookahead().type == Lexeme::Name;
         if (typeKeyword)
+        {
+            const char* message = isTrait ? kDeclareTraitTypeError : kDeclareClassTypeError;
+            report(Location(classKeywordLocation, lexer.current().location), message, lexer.lookahead().name, lexer.lookahead().name);
             nextLexeme();
-        else
-            report(classKeywordLocation, "%s", isTrait ? kDeclareTraitNeedsTypeError : kDeclareClassNeedsTypeError);
+        }
 
         AstStat* stat = parseClassStat(
             start, /* exported= */ exportLocation.has_value(), classKeywordLocation, {nullptr, 0}, /* declared= */ true, isTrait
@@ -3559,6 +3597,9 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         Location location = shape->location;
         if (exportKeywordLocation)
             location.begin = exportKeywordLocation->begin;
+
+        if (!typeKeyword)
+            declareClassValue(shape, isTrait ? nameTrait : nameClass, start);
 
         return allocator.alloc<AstStatDeclareClass>(location, shape, start);
     }
@@ -3871,6 +3912,12 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
             declaration->luwuOnly = true;
         return declaration;
     }
+    // Luwu Declare Statements (rfcs/declare-statements.md): one error for a `declare` with nothing it can declare after it.
+    // parseNameOpt would report a missing name, and the error below another.
+    else if (FFlag::LuwuDeclareStatements && lexer.current().type != Lexeme::Name)
+    {
+        return reportStatError(start, {}, {}, "declare must be followed by an identifier, 'function', 'class' or 'extern type'");
+    }
     else if (std::optional<Name> globalName = parseNameOpt("global variable name"))
     {
         // Luwu Declare Statements (rfcs/declare-statements.md): `declare name` with no type says the global exists and
@@ -3879,6 +3926,7 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         if (lexer.current().type == ':' || !FFlag::LuwuDeclareStatements)
         {
             expectAndConsume(':', "global variable declaration");
+
             type = parseType(/* in declaration context */ true);
         }
 
@@ -3936,6 +3984,44 @@ void Parser::skipClassOnlyExternTypeKeywords()
     }
 }
 
+
+
+// Luwu Declare Statements (rfcs/declare-statements.md): whether `class` is followed by `type Name`. `class type` alone
+// (`class type(...)`) is a class named `type`.
+bool Parser::startsClassType()
+{
+    return FFlag::LuwuDeclareStatements && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "type" &&
+           lexer.lookahead().type == Lexeme::Name;
+}
+
+// Luwu Declare Statements (rfcs/declare-statements.md): `class type Name ... end` (or `trait type`), a class's type with no
+// value, for objects that come from elsewhere. `declare class Name` declares the class value too. `class` is already parsed.
+AstStat* Parser::parseClassType(const Location& start, const Location& classKeywordLocation, bool exported, bool isTrait)
+{
+    nextLexeme(); // type
+
+    AstStat* stat = parseClassStat(start, exported, classKeywordLocation, {nullptr, 0}, /* declared= */ true, isTrait);
+    AstStatClass* shape = stat->as<AstStatClass>();
+    if (!shape)
+        return stat;
+
+    return allocator.alloc<AstStatDeclareClass>(shape->location, shape, std::nullopt);
+}
+// Luwu Declare Statements (rfcs/declare-statements.md): the global a `declare class` (or `declare trait`) brings into
+// scope, `declare Name: class<Name>`, queued to follow the declaration. `valueType` is `class` or `trait`.
+void Parser::declareClassValue(AstStatClass* shape, AstName valueType, const Location& declareLocation)
+{
+    Name name{shape->name->name, shape->name->location};
+    checkDuplicateDeclaration(name);
+
+    AstType* objectType = allocator.alloc<AstTypeReference>(name.location, std::nullopt, name.name, std::nullopt, name.location);
+    AstTypeOrPack parameter{objectType, nullptr};
+    AstType* type = allocator.alloc<AstTypeReference>(
+        shape->keywordLocation, std::nullopt, valueType, std::nullopt, shape->keywordLocation, /* hasParameterList= */ true, copy(&parameter, 1)
+    );
+
+    pendingStatements.push_back(allocator.alloc<AstStatDeclareGlobal>(shape->location, name.name, name.location, type, declareLocation));
+}
 // Upstream's legacy `declare class Name`, an extern type, where it isn't a Luwu class
 bool Parser::legacyDeclareClass()
 {
