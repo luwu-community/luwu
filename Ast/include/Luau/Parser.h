@@ -454,6 +454,7 @@ private:
 
     // Name
     std::optional<Name> parseNameOpt(const char* context = nullptr);
+    std::optional<Name> parseNameBeforeDeclaration(const char* context);
     Name parseName(const char* context = nullptr);
     Name parseIndexName(const char* context, const Position& previous);
 
@@ -488,6 +489,23 @@ private:
     // check that parser is at lexeme/symbol, move to next lexeme/symbol on success, report failure and continue on failure
     bool expectAndConsume(char value, const char* context = nullptr);
     bool expectAndConsume(Lexeme::Type type, const char* context = nullptr);
+    bool consumeExpected(Lexeme::Type type, const char* context);
+    AstTypeError* missingTypeHere();
+    bool continuesOnSameLine();
+    bool startsConstDeclaration();
+    bool startsTypeAliasDeclaration();
+    bool nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName));
+    bool nextLineStartsUnpatternedStatement();
+    bool statementReportedError();
+    AstExpr* unfinishedIfElseExpr(
+        const Location& start,
+        AstExpr* condition,
+        size_t errorsBefore,
+        const char* keyword,
+        bool hasThen,
+        AstExpr* trueExpr = nullptr,
+        std::optional<Location> thenLocation = std::nullopt
+    );
     bool expectAndConsumeFailWithLookahead(Lexeme::Type type, const char* context);
     void expectAndConsumeFail(Lexeme::Type type, const char* context);
 
@@ -651,6 +669,9 @@ private:
 
     bool hotcommentHeader = true;
 
+    // Luwu: where the statement being parsed starts (see nextLineStartsStatement)
+    Position statementStart{0, 0};
+
     unsigned int recursionCounter;
 
     AstName nameSelf;
@@ -672,6 +693,10 @@ private:
     std::vector<ParseError> parseErrors;
 
     std::vector<unsigned int> matchRecoveryStopOnToken;
+
+    // Luwu: the line of the last "Incomplete statement" error. A word still being typed (`n o` on the way to `n or`)
+    // splits into several statements on one line, and only the first is reported.
+    std::optional<unsigned> incompleteStatementLine;
 
     DenseHashMap<AstName, Location> declaredExportBindings;
     bool hasModuleReturn = false;
