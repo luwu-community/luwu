@@ -242,6 +242,59 @@ static void checkelement(lua_State* L, LuauObject* container, int typefield, int
     luaL_error(L, "%s", lua_tostring(L, -1));
 }
 
+// `from`: a new `kind` holding entries 1 to #items of a table, each added by `push` so it's checked like any other
+static int containerfrom(lua_State* L, LuwuBuiltinClass kind, lua_CFunction push, const char* pushname)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    int count = lua_objlen(L, 1);
+
+    TValue classvalue;
+    setclassvalue(L, &classvalue, builtinclass(L, kind));
+    luaA_pushvalue(L, &classvalue);
+    lua_call(L, 0, 1);
+
+    for (int i = 1; i <= count; i++)
+    {
+        lua_pushcfunction(L, push, pushname);
+        lua_pushvalue(L, -2);
+        lua_rawgeti(L, 1, i);
+        lua_call(L, 2, 0);
+    }
+    return 1;
+}
+
+// `__tostring`: the call that builds an equal container, `vec.from({1, 2})`, or `vec()` when it's empty. `at` reads
+// an entry by position.
+static int containertostring(lua_State* L, LuauObject* container, uint32_t count, lua_CFunction at)
+{
+    const char* name = getstr(container->lclass->name);
+    luaL_Strbuf b;
+    luaL_buffinit(L, &b);
+    luaL_addstring(&b, name);
+    if (count == 0)
+    {
+        luaL_addstring(&b, "()");
+        luaL_pushresult(&b);
+        return 1;
+    }
+
+    luaL_addstring(&b, ".from({");
+    for (uint32_t i = 1; i <= count; i++)
+    {
+        if (i > 1)
+            luaL_addstring(&b, ", ");
+        lua_pushcfunction(L, at, "at");
+        lua_pushvalue(L, 1);
+        lua_pushnumber(L, i);
+        lua_call(L, 2, 1);
+        addshown(&b, -1);
+        lua_pop(L, 1);
+    }
+    luaL_addstring(&b, "})");
+    luaL_pushresult(&b);
+    return 1;
+}
+
 // pair, triple and quad: `first` to `fourth`, public and const
 
 template<LuwuBuiltinClass Kind>
@@ -278,7 +331,6 @@ static int tupletostring(lua_State* L)
     LuauObject* tuple = checktuple<Kind>(L, "__tostring");
     luaL_Strbuf b;
     luaL_buffinit(L, &b);
-    luaL_addstring(&b, "collections.");
     luaL_addstring(&b, getstr(tuple->lclass->name));
     luaL_addchar(&b, '(');
     for (uint32_t i = 0; i < tuple->numberofmembers; i++)
@@ -1009,6 +1061,17 @@ static int vecdequeiter(lua_State* L)
     return 3;
 }
 
+static int vecdequefrom(lua_State* L)
+{
+    return containerfrom(L, LUWU_BUILTIN_VECDEQUE, vecdequepushback, "pushback");
+}
+
+static int vecdequetostring(lua_State* L)
+{
+    LuauObject* dq = checkdeque(L, "__tostring");
+    return containertostring(L, dq, vdnumber(dq, VD_COUNT), vecdequeat);
+}
+
 static const luaR_NativeMember kVecDequeMembers[] = {
     {"items", NULL, kPrivateField},
     {"head", NULL, kPrivateField},
@@ -1024,8 +1087,10 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     {"at", vecdequeat, 0},
     {"set", vecdequeset, 0},
     {"clear", vecdequeclear, 0},
+    {"from", vecdequefrom, 0},
     {"__len", vecdequelen, 0},
     {"__iter", vecdequeiter, 0},
+    {"__tostring", vecdequetostring, 0},
 };
 
 // vec: a growable array, entries 1 to count of a table's array part
@@ -1202,6 +1267,17 @@ static int veciter(lua_State* L)
     return 3;
 }
 
+static int vecfrom(lua_State* L)
+{
+    return containerfrom(L, LUWU_BUILTIN_VEC, vecpush, "push");
+}
+
+static int vectostring(lua_State* L)
+{
+    LuauObject* vec = checkvec(L, "__tostring");
+    return containertostring(L, vec, veccount(vec), vecat);
+}
+
 static const luaR_NativeMember kVecMembers[] = {
     {"items", NULL, kPrivateField},
     {"count", NULL, kPrivateField},
@@ -1213,8 +1289,10 @@ static const luaR_NativeMember kVecMembers[] = {
     {"insert", vecinsert, 0},
     {"remove", vecremove, 0},
     {"clear", vecclear, 0},
+    {"from", vecfrom, 0},
     {"__len", veclen, 0},
     {"__iter", veciter, 0},
+    {"__tostring", vectostring, 0},
 };
 
 // option and result. A full option is a `some` object and an empty one is the `none` primitive itself, so an empty
@@ -1279,14 +1357,14 @@ static int payloadeq(lua_State* L)
     return 1;
 }
 
-// `__tostring`: the constructor call, `collections.option.some(1)`
+// `__tostring`: the constructor call, `option.some(1)`
 template<LuwuBuiltinClass Kind>
 static int payloadtostring(lua_State* L)
 {
     LuauObject* holder = checkpayload<Kind>(L, "__tostring");
     luaL_Strbuf b;
     luaL_buffinit(L, &b);
-    luaL_addstring(&b, Kind == LUWU_BUILTIN_SOME ? "collections.option." : "collections.result.");
+    luaL_addstring(&b, Kind == LUWU_BUILTIN_SOME ? "option." : "result.");
     luaL_addstring(&b, getstr(holder->lclass->name));
     luaL_addchar(&b, '(');
     luaA_pushvalue(L, &holder->members[kPayload]);
