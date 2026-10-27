@@ -1395,6 +1395,38 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "locals_bound_to_an_imported_class_bring_its_
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+// Not only classes: a field brings any type the module exports under the field's name
+TEST_CASE_FIXTURE(BuiltinsFixture, "locals_bound_to_an_imported_field_bring_the_type_of_that_name")
+{
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    fileResolver.source["game/A"] = R"(
+        export type Config = { name: string }
+        return { Config = { name = "default" } }
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        const .{ Config } = require(game.A)
+        local A = require(game.A)
+        local Settings = A.Config
+        local c: Config = { name = "x" }
+        local s: Settings = { name = "y" }
+        local wrong: Config = { name = 1 }
+    )";
+
+    // `wrong` is the one error: both locals brought the module's `Config` type
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+}
+
 // A class's type comes with its value however the module exports it and however it's imported
 TEST_CASE_FIXTURE(BuiltinsFixture, "every_common_way_to_export_a_class_brings_its_type")
 {
