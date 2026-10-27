@@ -14697,7 +14697,7 @@ TEST_CASE("DeclaredClassesCompileToNothing")
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     CHECK_EQ("\n" + compileFunction0Coverage(R"(
-declare class type Path(raw: string)
+class type Path(raw: string)
     function join(self, other: string): Path
 end
 print(Path)
@@ -14732,7 +14732,7 @@ TEST_CASE("DeclaredTraitsCompileToNothing")
     ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
 
     CHECK_EQ("\n" + compileFunction0Coverage(R"(
-declare trait type Greeter needs Named
+trait type Greeter needs Named
     expect name: string
     function greet(self): string
 end

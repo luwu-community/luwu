@@ -1532,7 +1532,7 @@ void AstStatDeclareExternType::visit(AstVisitor* visitor)
     }
 }
 
-AstStatDeclareClass::AstStatDeclareClass(const Location& location, AstStatClass* shape, const Location& declareLocation)
+AstStatDeclareClass::AstStatDeclareClass(const Location& location, AstStatClass* shape, std::optional<Location> declareLocation)
     : AstStat(ClassIndex(), location)
     , shape(shape)
     , declareLocation(declareLocation)
