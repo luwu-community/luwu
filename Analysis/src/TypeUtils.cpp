@@ -437,6 +437,9 @@ std::optional<TypeId> mergeUnionMethods(NotNull<BuiltinTypes> builtinTypes, NotN
     const FunctionType* first = nullptr;
     std::vector<TypeId> firstParams;
     std::optional<TypePackId> firstParamTail;
+    // A member that takes no extra arguments decides for all: a class method's `...any` meets a table's `(N) -> none`
+    // whenever a union mixes the two
+    bool anyWithoutParamTail = false;
     std::vector<TypeId> firstReturns;
     std::optional<TypePackId> firstReturnTail;
 
@@ -468,12 +471,18 @@ std::optional<TypeId> mergeUnionMethods(NotNull<BuiltinTypes> builtinTypes, NotN
         }
         else
         {
-            // as many parameters and returns, and the same variadic tails
+            // as many parameters and returns, and the same variadic tails where each member has one
             bool sameShape = methodParams.size() == firstParams.size() && rets.size() == firstReturns.size() &&
-                             paramTail.has_value() == firstParamTail.has_value() && retTail.has_value() == firstReturnTail.has_value();
-            if (!sameShape || (paramTail && !samePack(*paramTail, *firstParamTail)) || (retTail && !samePack(*retTail, *firstReturnTail)))
+                             retTail.has_value() == firstReturnTail.has_value();
+            bool differentParamTails = paramTail && firstParamTail && !samePack(*paramTail, *firstParamTail);
+            if (!sameShape || differentParamTails || (retTail && !samePack(*retTail, *firstReturnTail)))
                 return std::nullopt;
         }
+
+        if (!paramTail)
+            anyWithoutParamTail = true;
+        else if (!firstParamTail)
+            firstParamTail = paramTail;
 
         selves.push_back(methodParams[0]);
         for (size_t i = 1; i < methodParams.size(); ++i)
@@ -500,7 +509,8 @@ std::optional<TypeId> mergeUnionMethods(NotNull<BuiltinTypes> builtinTypes, NotN
     for (const std::vector<TypeId>& alternatives : returns)
         mergedReturns.push_back(unionOf(alternatives));
 
-    FunctionType merged{arena->addTypePack(std::move(mergedParams), firstParamTail), arena->addTypePack(std::move(mergedReturns), firstReturnTail)};
+    std::optional<TypePackId> mergedParamTail = anyWithoutParamTail ? std::nullopt : firstParamTail;
+    FunctionType merged{arena->addTypePack(std::move(mergedParams), mergedParamTail), arena->addTypePack(std::move(mergedReturns), firstReturnTail)};
     merged.argNames = first->argNames;
     merged.hasSelf = true;
     return arena->addType(std::move(merged));

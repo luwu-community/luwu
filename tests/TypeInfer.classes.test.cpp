@@ -2677,4 +2677,29 @@ TEST_CASE_FIXTURE(ClassesFixture, "method_call_on_a_union_of_classes")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+// A class method takes extra arguments (`...any`) where a table's signature takes none; merged, the method takes none
+TEST_CASE_FIXTURE(ClassesFixture, "method_call_on_a_union_of_a_class_and_a_table")
+{
+    CheckResult result = check(R"(
+        --!strict
+        type Named = { name: (self: Named) -> number }
+        class Cat(public label: string)
+            public function name(self): string
+                return self.label
+            end
+        end
+
+        local function adopt(): Cat | Named
+            return Cat("tom")
+        end
+        local pet = adopt()
+        local n = pet:name()
+        pet:name("extra")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 14);
+    CHECK_EQ(toString(requireType("n")), "number | string");
+}
+
 TEST_SUITE_END();
