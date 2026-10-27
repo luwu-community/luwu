@@ -4540,7 +4540,7 @@ void Parser::skipClassOnlyExternTypeKeywords()
         if (keyword == "public" || keyword == "private")
             report(
                 lexer.current().location,
-                "Extern types have no access specifiers; every member is public. To declare a class, use 'declare class type'"
+                "Extern types have no access specifiers; every member is public. For a class's type, use 'class type'"
             );
         else if (keyword == "const")
             report(lexer.current().location, "Extern types have no 'const'; write 'read' for a read-only property");
