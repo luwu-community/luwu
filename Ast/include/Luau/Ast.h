@@ -586,6 +586,9 @@ public:
     AstArray<AstExpr*> args;
     bool self;
     Location argLocation;
+    // Luwu match expressions: a call the parser wrote for a type test (`x is Point` is `class.isinstance(x, Point)`),
+    // not one in the code. Editor features that show a call's parameters skip it.
+    bool fromTypeTest = false;
 };
 
 class AstExprIndexName : public AstExpr
@@ -778,6 +781,28 @@ public:
     AstType* annotation;
 };
 
+// Luwu If Local (rfcs/if-local.md): one clause of an `if`/`elseif` condition written as a `when` chain, in a
+// statement or an expression. The clauses run left to right, and the branch is taken only when every clause
+// passes. A binding passes when the value it binds is truthy; a plain condition passes when it is truthy.
+// A binding is visible to the clauses after it and to its branch, and nowhere else.
+class AstStatLocal;
+struct AstIfClause
+{
+    // A binding's declaration: a `local`/`const` statement with one name and one value, so passes that handle
+    // `local` handle the binding the same way. Null for a plain condition. `local .{x, y} = v` desugars to
+    // several clauses, one per declaration it desugars to (see Parser::desugarDestructuring).
+    AstStatLocal* declaration = nullptr;
+    // The declared local, or null for a plain condition.
+    AstLocal* local = nullptr;
+    // The binding's value, or the plain condition.
+    AstExpr* expr = nullptr;
+    // The `when` before this clause. Unset on the first clause.
+    std::optional<Location> whenLocation;
+    // False for a binding that holds its value whatever it is, with no truthiness test: a field a pattern binds after
+    // a type test (`x is Point.{x, y}`), which has to bind even when the field is `false`.
+    bool tested = true;
+};
+
 class AstExprIfElse : public AstExpr
 {
 public:
@@ -813,6 +838,17 @@ public:
     // Only set for a literal `else` token: an `elseif` clause carries its own keyword as the
     // ifLocation of the nested AstExprIfElse it parses into, and leaves this unset.
     std::optional<Location> elseLocation;
+
+    // Luwu If Local (rfcs/if-local.md): the condition's `when` chain. Empty for an ordinary condition. When
+    // it is set, `condition` is the first clause's expression, and code that evaluates or checks the
+    // condition has to go through the clauses instead.
+    AstArray<AstIfClause> clauses{nullptr, 0};
+
+    // Visits the condition: `condition`, or every clause of the `when` chain (a binding's declaration, or a
+    // plain condition).
+    void visitCondition(AstVisitor* visitor);
+    // Where the condition is written: `condition`, or the whole `when` chain from its first keyword.
+    Location conditionLocation() const;
 };
 
 class AstExprInterpString : public AstExpr
@@ -897,6 +933,21 @@ public:
 
     // Location of the leading 'if' or 'elseif' keyword token only (not the whole clause).
     Location ifLocation;
+
+    // Luwu If Local (rfcs/if-local.md): the condition's `when` chain. Empty for an ordinary condition. When
+    // it is set, `condition` is the first clause's expression, and code that evaluates or checks the
+    // condition has to go through the clauses instead.
+    AstArray<AstIfClause> clauses{nullptr, 0};
+
+    // Luwu If Local (rfcs/if-local.md): this `if` is a loop's `when` chain (AstStatFor::whenGuard), not one written
+    // as an `if`. It has no `then`, no `else` and no `end` of its own.
+    bool isWhenGuard = false;
+
+    // Visits the condition: `condition`, or every clause of the `when` chain (a binding's declaration, or a
+    // plain condition).
+    void visitCondition(AstVisitor* visitor);
+    // Where the condition is written: `condition`, or the whole `when` chain from its first keyword.
+    Location conditionLocation() const;
 };
 
 class AstStatWhile : public AstStat
@@ -923,6 +974,16 @@ public:
 
     // Location of the leading 'while' keyword token only.
     Location whileLocation;
+
+    // Luwu If Local (rfcs/if-local.md): the condition's `when` chain (`while local x = f() when x.ok do`), checked
+    // before every iteration; the loop ends when a clause fails. Empty for an ordinary condition. When it is set,
+    // `condition` is the first clause's expression, as for AstStatIf::clauses.
+    AstArray<AstIfClause> clauses{nullptr, 0};
+
+    // Visits the condition: `condition`, or every clause of the `when` chain.
+    void visitCondition(AstVisitor* visitor);
+    // Where the condition is written: `condition`, or the whole `when` chain.
+    Location conditionLocation() const;
 };
 
 class AstStatRepeat : public AstStat
@@ -960,6 +1021,41 @@ public:
     AstStatBreak(const Location& location);
 
     void visit(AstVisitor* visitor) override;
+};
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `give exp`, which exits the innermost `do` expression with exp as
+// its value.
+class AstStatGive : public AstStat
+{
+public:
+    LUAU_RTTI(AstStatGive)
+
+    AstStatGive(const Location& location, AstExpr* value);
+
+    void visit(AstVisitor* visitor) override;
+
+    AstExpr* value;
+};
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): a comprehension's item, `value`, `[key] = value` or an
+// accumulating `[key] op= value`, run once per iteration of the innermost clause. A nil value adds nothing.
+class AstStatComprehensionItem : public AstStat
+{
+public:
+    LUAU_RTTI(AstStatComprehensionItem)
+
+    AstStatComprehensionItem(const Location& location, AstExpr* key, AstExpr* value);
+
+    void visit(AstVisitor* visitor) override;
+
+    // Null for an array comprehension.
+    AstExpr* key;
+    AstExpr* value;
+    // `[key] += value` (or -=, *=, ..=): combines with what `key` already holds. An absent key takes the value as is
+    // (negated for -=), which is what starting from 0, 1 or "" gives without assuming the value is a number.
+    std::optional<AstExprBinary::Op> accumulate;
+    // False when the item is a `do` block written in place of `give do`; `value` is then that AstExprDo.
+    bool hasGive = true;
 };
 
 class AstStatContinue : public AstStat
@@ -1099,6 +1195,11 @@ public:
 
     // Location of the leading 'for' keyword token only.
     Location forLocation;
+
+    // Luwu If Local (rfcs/if-local.md): the `if` holding the loop's `when` chain (`for i = 1, n when i % 2 == 0 do`),
+    // or null. It is then the only statement of `body`, and the loop's block as written is its `thenbody`: a
+    // failing chain skips the iteration. Table comprehensions store their `when`s the same way.
+    AstStatIf* whenGuard = nullptr;
 };
 
 class AstStatForIn : public AstStat
@@ -1137,6 +1238,10 @@ public:
     // null for a plain name; empty when no binding is a pattern. The loop variable is the pattern's local (hidden for
     // `.{x, y}`), and `body` starts with one `local` per bound name (AstStatLocal::destructuredFromLoop).
     AstArray<AstDestructurePattern*> destructure{nullptr, 0};
+
+    // Luwu If Local (rfcs/if-local.md): see AstStatFor::whenGuard. With destructured bindings, `body` starts with
+    // their fields and the guard follows them.
+    AstStatIf* whenGuard = nullptr;
 };
 
 class AstStatAssign : public AstStat
@@ -1793,6 +1898,79 @@ public:
     AstArray<AstType*> types;
 };
 
+// Luwu Do Expressions (rfcs/do-expressions.md): `do block`, an expression that runs a block and evaluates to
+// what its `give` gives. The block ends in a `give`, `return`, `break` or `continue` (see Parser::parseDoExpr);
+// a `give` in a nested block exits early. There is no closing `end`.
+class AstExprDo : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprDo)
+
+    AstExprDo(const Location& location, AstStatBlock* body);
+
+    void visit(AstVisitor* visitor) override;
+
+    AstStatBlock* body;
+
+    // Written as `x or return v` or `x or break` rather than with `do`: the body is that one statement
+    // (see Parser::parseOrLeave).
+    bool shorthand = false;
+
+    // Luwu match expressions: parsed from a `match` expression (see Parser::parseMatchExpr). The body is the subject's
+    // `local` and a `give` of an if-else expression with one arm per `case`, none of them written as statements.
+    bool fromMatch = false;
+
+    // Does every path leave it with `return`, `break` or `continue`, so it never has a value? True for the shorthand,
+    // and for a `do` expression with no `give` of its own.
+    bool alwaysLeaves() const;
+};
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `expr` without the parentheses around it.
+AstExpr* withoutGroups(AstExpr* expr);
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `operand` (parenthesized or not) as a `do` expression that always leaves
+// (AstExprDo::alwaysLeaves), or null.
+AstExprDo* asLeave(AstExpr* operand);
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `expr` as `x or <leave>` or `x and <leave>` (asLeave), or null. As a
+// whole statement, or as a declaration's or assignment's value, `x or <leave>` only completes when `x` is truthy, and
+// `x and <leave>` when it's falsy.
+class AstExprBinary* asLeaveGuard(AstExpr* expr);
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `expr` as `x or <leave>` (asLeaveGuard), or null.
+class AstExprBinary* asOrLeave(AstExpr* expr);
+
+// Luwu Do Expressions (rfcs/do-expressions.md): the `x and <leave>` in `x and <leave> or <leave>`, or null. Such an `expr`
+// never completes: its left side is never truthy, so the right side always runs.
+class AstExprBinary* asLeaveEitherWay(AstExpr* expr);
+
+// Luwu Do Expressions (rfcs/do-expressions.md): can `expr` be a statement? It can when it is a leave guard
+// (asLeaveGuard), or an `or` or `and` whose right operand can be one: `x or y and continue`.
+bool isLeaveStatement(AstExpr* expr);
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): `{ for ... in ... when ... give item }`, a table built by
+// a loop. It is stored as the loop it runs: `loop` is an ordinary AstStatFor or AstStatForIn, so every pass that
+// handles loops and if-local chains handles a comprehension through that code. A clause's `when` chain is the
+// loop's `whenGuard` (an ordinary condition for a single plain `when`, the chain's `clauses` otherwise), the last
+// statement of its body; destructured bindings' fields come before it. A following `for` clause is the last statement
+// of the previous clause's body (or the only one of its `when` if), and the innermost body ends with `item`, an
+// AstStatComprehensionItem. The loops' `doLocation` is the `give`.
+class AstExprTableComprehension : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprTableComprehension)
+
+    AstExprTableComprehension(const Location& location, AstStat* loop, class AstStatComprehensionItem* item, unsigned clauseCount);
+
+    void visit(AstVisitor* visitor) override;
+
+    // The outermost clause's AstStatFor or AstStatForIn.
+    AstStat* loop;
+    class AstStatComprehensionItem* item;
+    // The number of `for` clauses, 1 unless the comprehension flattens nested loops.
+    unsigned clauseCount;
+};
+
 class AstExprError : public AstExpr
 {
 public:
@@ -2022,6 +2200,14 @@ public:
     {
         return visit(static_cast<AstExpr*>(node));
     }
+    virtual bool visit(class AstExprTableComprehension* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
+    virtual bool visit(class AstExprDo* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
     virtual bool visit(class AstExprInterpString* node)
     {
         return visit(static_cast<AstExpr*>(node));
@@ -2061,6 +2247,14 @@ public:
         return visit(static_cast<AstStat*>(node));
     }
     virtual bool visit(class AstStatContinue* node)
+    {
+        return visit(static_cast<AstStat*>(node));
+    }
+    virtual bool visit(class AstStatComprehensionItem* node)
+    {
+        return visit(static_cast<AstStat*>(node));
+    }
+    virtual bool visit(class AstStatGive* node)
     {
         return visit(static_cast<AstStat*>(node));
     }

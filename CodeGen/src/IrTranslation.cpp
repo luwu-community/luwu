@@ -1594,6 +1594,43 @@ void translateInstSetTableN(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::JUMP, next);
 }
 
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): APPENDTABLE. The table and the count register are the
+// comprehension's own (see LOP_APPENDTABLE), so their tags, the metatable and readonly aren't checked: only the array
+// size, whose miss stores through the generic SET_TABLE, which grows the table.
+void translateInstAppendTable(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    int rb = LUAU_INSN_B(*pc);
+    int rc = LUAU_INSN_C(*pc);
+
+    IrOp next = build.blockAtInst(pcpos + 1);
+    IrOp store = build.block(IrBlockKind::Internal);
+
+    IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_EQ_TAG, tb, build.constTag(LUA_TNIL), next, store);
+
+    build.beginBlock(store);
+
+    IrOp count = build.inst(IrCmd::ADD_NUM, build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(rc)), build.constDouble(1.0));
+    build.inst(IrCmd::STORE_DOUBLE, build.vmReg(rc), count);
+
+    IrOp index = build.inst(IrCmd::SUB_INT, build.inst(IrCmd::NUM_TO_INT, count), build.constInt(1));
+    IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(ra));
+
+    IrOp fallback = build.fallbackBlock(pcpos);
+    build.inst(IrCmd::CHECK_ARRAY_SIZE, table, index, fallback);
+
+    IrOp slot = build.inst(IrCmd::GET_ARR_ADDR, table, index);
+    build.inst(IrCmd::STORE_TVALUE, slot, build.inst(IrCmd::LOAD_TVALUE, build.vmReg(rb)));
+    build.inst(IrCmd::BARRIER_TABLE_FORWARD, table, build.vmReg(rb), build.undef());
+
+    FallbackStreamScope scope(build, fallback, next);
+
+    build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + 1));
+    build.inst(IrCmd::SET_TABLE, build.vmReg(rb), build.vmReg(ra), build.vmReg(rc));
+    build.inst(IrCmd::JUMP, next);
+}
+
 void translateInstGetTable(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);

@@ -1,0 +1,97 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+-- Luwu match expressions: `match`, `is`, `is not` and `implements`
+print("testing match expressions")
+
+class Point(public x: number, public y: number)
+end
+class Circle(public radius: number)
+end
+
+-- literals and alternatives, and the subject named for `else`
+local function which(arg: string)
+    return match const a = arg
+        case "p" | "patch" then "patch"
+        case "u" | "unpatch" then "unpatch"
+        else `other:{a}`
+end
+assert(which("p") == "patch")
+assert(which("patch") == "patch")
+assert(which("unpatch") == "unpatch")
+assert(which("x") == "other:x")
+
+-- type tests and guards, first matching arm wins
+local function describe(value: unknown): string
+    return match const v = value
+        case is string then `text:{v}`
+        case is number when v > 0 then "positive"
+        case is number then "number"
+        case is Point then `point:{v.x},{v.y}`
+        case is Circle when const r = v.radius when r > 1 then `big:{r}`
+        case nil then "nil"
+        else "other"
+end
+assert(describe("hi") == "text:hi")
+assert(describe(3) == "positive")
+assert(describe(-1) == "number")
+assert(describe(Point(1, 2)) == "point:1,2")
+assert(describe(Circle(5)) == "big:5")
+assert(describe(Circle(0.5)) == "other")
+assert(describe(nil) == "nil")
+assert(describe(true) == "other")
+
+-- an unnamed subject is evaluated once
+local calls = 0
+local function next_value()
+    calls += 1
+    return calls
+end
+local first = match next_value()
+    case 2 then "two"
+    case 1 then "one"
+    else "many"
+assert(first == "one" and calls == 1)
+
+-- the operators in expressions
+local p = Point(1, 2)
+assert(p is Point)
+assert(p is not Circle)
+assert(not (p is Circle))
+assert(p is object)
+assert("s" is string and 1 is not string)
+assert((function() end) is function)
+assert((match p
+    case is Circle then "circle"
+    else "not a circle") == "not a circle")
+
+-- `nil` and `none` as patterns and after `is`
+local function nothing(v: unknown): string
+    return match v
+        case nil then "nil"
+        case none then "none"
+        else "something"
+end
+assert(nothing(nil) == "nil")
+assert(nothing(none) == "none")
+assert(nothing(false) == "something")
+assert(nothing(0) == "something")
+local function nothing_is(v: unknown): string
+    return match v
+        case is nil then "nil"
+        case is none then "none"
+        else "something"
+end
+assert(nothing_is(nil) == "nil")
+assert(nothing_is(none) == "none")
+assert(nothing_is("x") == "something")
+assert(none is none and none is not nil and nil is nil and 1 is not none)
+
+-- a local named like the globals the operators call doesn't capture them
+do
+    local type = function() return "nope" end
+    local class = {}
+    assert("s" is string)
+    assert(p is Point)
+    assert(type() == "nope" and class)
+end
+
+return "OK"

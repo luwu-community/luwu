@@ -379,7 +379,8 @@ bool containsToposortableNode(const std::vector<AstStat*>& block)
 
 bool isBlockTerminator(const AstStat& stat)
 {
-    return stat.is<AstStatReturn>() || stat.is<AstStatBreak>() || stat.is<AstStatContinue>();
+    // Luwu Do Expressions (rfcs/do-expressions.md): `give` ends its block too
+    return stat.is<AstStatReturn>() || stat.is<AstStatBreak>() || stat.is<AstStatContinue>() || stat.is<AstStatGive>();
 }
 
 // Clip arcs to and from the node

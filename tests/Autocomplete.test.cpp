@@ -699,7 +699,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     )");
 
     auto ac4 = autocomplete('1');
-    CHECK_EQ(ac4.entryMap.count("do"), 0);
+    // Luwu Do Expressions (rfcs/do-expressions.md): `do` also starts a value, so it's offered where one goes
+    CHECK_EQ(ac4.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac4.entryMap.count("end"), 0);
     CHECK_EQ(ac4.context, AutocompleteContext::Expression);
 
@@ -709,7 +710,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
 
     auto ac5 = autocomplete('1');
     CHECK_EQ(ac5.entryMap.count("math"), 1);
-    CHECK_EQ(ac5.entryMap.count("do"), 0);
+    CHECK_EQ(ac5.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac5.entryMap.count("end"), 0);
     CHECK_EQ(ac5.context, AutocompleteContext::Expression);
 
@@ -740,7 +741,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     {
         auto ac8 = autocomplete('1' + i);
         CHECK_EQ(ac8.entryMap.count("Foo"), 1);
-        CHECK_EQ(ac8.entryMap.count("do"), 0);
+        CHECK_EQ(ac8.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     }
 
     check(R"(local Foo = 1
@@ -751,7 +752,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     {
         auto ac9 = autocomplete('1' + i);
         CHECK_EQ(ac9.entryMap.count("Foo"), 1);
-        CHECK_EQ(ac9.entryMap.count("do"), 0);
+        CHECK_EQ(ac9.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     }
 }
 
@@ -784,7 +785,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_in_middle_keywords")
 
     auto ac3 = autocomplete('1');
     CHECK_EQ(ac3.entryMap.count("table"), 1);
-    CHECK_EQ(ac3.entryMap.count("do"), 0);
+    // Luwu Do Expressions (rfcs/do-expressions.md): `do` also starts a value, so it's offered where one goes
+    CHECK_EQ(ac3.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac3.context, AutocompleteContext::Expression);
 
     check(R"(
@@ -838,7 +840,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac1 = autocomplete('1');
-    CHECK_EQ(ac1.entryMap.count("do"), 0);
+    // Luwu Do Expressions (rfcs/do-expressions.md): `do` also starts a value, so it's offered where one goes
+    CHECK_EQ(ac1.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac1.entryMap.count("end"), 0);
     CHECK_EQ(ac1.context, AutocompleteContext::Expression);
 
@@ -880,7 +883,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac5 = autocomplete('1');
-    CHECK_EQ(ac5.entryMap.count("do"), 0);
+    CHECK_EQ(ac5.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac5.entryMap.count("true"), 1);
     CHECK_EQ(ac5.entryMap.count("false"), 1);
 }
@@ -948,8 +951,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_loop_when_keywords")
         {"while x @1", {"do", "when"}},
         {"while local x = f() @1", {"do", "when"}},
         {"while local x = f() when x > 1 @1", {"do", "when"}},
-        {"local t = { for _, v in xs @1 }", {"give", "when", "for"}},
-        {"local t = { for _, v in xs when v > 1 @1 }", {"give", "when", "for"}},
+        {"local t = { for _, v in xs @1 }", {"give", "do", "when", "for"}},
+        {"local t = { for _, v in xs when v > 1 @1 }", {"give", "do", "when", "for"}},
     };
 
     for (const Case& c : cases)
@@ -1007,6 +1010,18 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_give_inside_do_expressions")
         @1
     )");
     CHECK_EQ(autocomplete('1').entryMap.count("give"), 0);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `do` where a value goes, so typing it doesn't complete to a name
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_do_where_a_value_goes")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    check(R"(
+        local DirectoryPath = 1
+        const prefix = d@1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("do"), 1);
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_middle_keywords")

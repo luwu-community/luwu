@@ -5189,11 +5189,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "misspelled_field_write_reports_the_field_as_n
 
     // not "Property nmae of type 'Cat' is read-only", which is what an extern type gets
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    // Luwu (helpful subtyping errors): the object's `nmae` is one typo from `name`; the class has no `name`
-    if (FFlag::LuwuHelpfulSubtypingErrors)
-        CHECK_EQ("Did you mean 'self.name' instead of 'self.nmae'?", toString(result.errors[0]));
-    else
-        CHECK_EQ("Member 'nmae' not found in object 'Cat'", toString(result.errors[0]));
+    CHECK_EQ("Member 'nmae' not found in object 'Cat'", toString(result.errors[0]));
     CHECK_EQ("Member 'nmae' not found in class 'Cat'", toString(result.errors[1]));
 }
 

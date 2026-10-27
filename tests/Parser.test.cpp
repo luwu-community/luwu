@@ -28,6 +28,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuwuDeclareStatements)
@@ -1310,7 +1311,15 @@ TEST_CASE_FIXTURE(Fixture, "parse_interpolated_string_call_without_parens")
     }
     catch (const ParseErrors& e)
     {
-        CHECK_EQ("Expected identifier when parsing expression, got `{", e.getErrors().front().getMessage());
+        // Luwu Do Expressions (rfcs/do-expressions.md): a statement can start with a value (`#t > 0 or return`), so the
+        // string is parsed as one that doesn't leave
+        if (FFlag::LuwuDoExpr)
+            CHECK_EQ(
+                "Incomplete statement: expected assignment, a function call, or an expression ending in 'or return', 'or break' or 'or continue'",
+                e.getErrors().front().getMessage()
+            );
+        else
+            CHECK_EQ("Expected identifier when parsing expression, got `{", e.getErrors().front().getMessage());
     }
 }
 
@@ -9042,6 +9051,31 @@ static AstExprLocal* calledWithLocal(AstStat* stat)
     return local;
 }
 
+// `and` before a binding was meant as `when`: one error on the `and`, and the binding is a `when` clause
+TEST_CASE_FIXTURE(Fixture, "and_before_a_condition_binding_is_read_as_when")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    ParseResult result = tryParse("if a == 1 and const alias = f() then\n    print(alias)\nend\n");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Use 'when' instead of 'and' to bind 'alias' in a condition");
+    CHECK_EQ(result.errors[0].getLocation(), Location(Position(0, 10), Position(0, 13)));
+
+    REQUIRE_EQ(result.root->body.size, 1);
+    AstStatIf* stat = result.root->body.data[0]->as<AstStatIf>();
+    REQUIRE(stat);
+    REQUIRE_EQ(stat->clauses.size, 2);
+    CHECK(stat->clauses.data[0].expr->is<AstExprBinary>());
+    REQUIRE(stat->clauses.data[1].declaration);
+    CHECK_EQ(stat->clauses.data[1].whenLocation, Location(Position(0, 10), Position(0, 13)));
+
+    // `local` and `while` too, and an `and` without a binding after it is still `and`
+    result = tryParse("while a and local n = f() do\n    print(n)\nend\n");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Use 'when' instead of 'and' to bind 'n' in a condition");
+    CHECK_EQ(tryParse("if a and const then end\nlocal x = a and const\n").errors.size(), 0);
+}
+
 TEST_CASE_FIXTURE(Fixture, "if_local_parses_a_when_chain")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
@@ -9195,6 +9229,34 @@ TEST_CASE_FIXTURE(Fixture, "if_local_without_the_flag_says_how_to_enable_it")
     matchParseError("local x = if const a = f() then a else nil", message);
 }
 
+TEST_CASE_FIXTURE(Fixture, "match_without_the_flag_says_how_to_enable_it")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, false},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    // One error at the keyword, not a cascade through the arms
+    ParseResult result = matchParseError(
+        R"(
+local function which(arg: string)
+    return match const a = arg
+        case "p" | "patch" then "patch"
+        else `other:{a}`
+end
+local is_string = x is string
+)",
+        "attempt to use disabled Luwu feature 'match' expressions; enable via FFlag 'DebugLuwuMatchExpressions'",
+        Location{{2, 11}, {2, 16}}
+    );
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(
+        result.errors[1].getMessage(),
+        "attempt to use disabled Luwu feature 'is' and 'implements' type tests; enable via FFlag 'DebugLuwuMatchExpressions'"
+    );
+}
+
 TEST_CASE_FIXTURE(Fixture, "for_when_is_stored_as_a_guard_around_the_body")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
@@ -9319,22 +9381,68 @@ TEST_CASE_FIXTURE(Fixture, "table_comprehension_is_stored_as_its_loop")
     CHECK_EQ(expr->item->value->as<AstExprLocal>()->local, guard->clauses.data[1].local);
 }
 
+TEST_CASE_FIXTURE(Fixture, "table_comprehension_do_item_is_a_do_expression")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    AstStatBlock* block = parse(R"(
+        local a = { for _, v in xs do print(v); give v }
+        local b = { for _, v in xs give do print(v); give v }
+        local c = { for _, v in xs do v > 1 or continue; give v }
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+
+    auto itemOf = [](AstStat* stat)
+    {
+        AstStatLocal* local = stat->as<AstStatLocal>();
+        REQUIRE(local);
+        AstExprTableComprehension* expr = local->values.data[0]->as<AstExprTableComprehension>();
+        REQUIRE(expr);
+        return expr->item;
+    };
+
+    // `do` is short for `give do`: the same item, with `hasGive` telling them apart
+    AstStatComprehensionItem* a = itemOf(block->body.data[0]);
+    AstExprDo* aBody = a->value->as<AstExprDo>();
+    REQUIRE(aBody);
+    CHECK(!a->hasGive);
+    CHECK_EQ(aBody->body->body.size, 2);
+    // the item starts at the `do`, as it starts at `give`
+    CHECK_EQ(a->location.begin, aBody->location.begin);
+
+    AstStatComprehensionItem* b = itemOf(block->body.data[1]);
+    CHECK(b->hasGive);
+    CHECK(b->value->is<AstExprDo>());
+
+    // `continue` in the block skips the element
+    AstStatComprehensionItem* c = itemOf(block->body.data[2]);
+    AstExprDo* cBody = c->value->as<AstExprDo>();
+    REQUIRE(cBody);
+    REQUIRE_EQ(cBody->body->body.size, 2);
+    CHECK(!cBody->body->body.data[0]->is<AstStatError>());
+}
+
 TEST_CASE_FIXTURE(Fixture, "table_comprehension_parse_errors")
 {
-    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
 
     matchParseError("local a = { for _, v in xs give v, 1 }", "A table comprehension must be the only item in its table");
     matchParseError("local a = { 1, for _, v in xs do v }", "A table comprehension must be the only item in its table");
     matchParseError(
         "local a = { for _, v in xs give x = v }", "A table comprehension's item is a value or '[key] = value'; 'name = value' writes one key"
     );
-    matchParseError("local a = { for _, v in xs v }", "Expected 'give' when parsing table comprehension, got 'v'");
-    // pointed at the `do`, in a single-line and a multi-line comprehension
-    matchParseError("local a = { for _, v in xs do v }", "Table comprehensions don't use 'do'; did you mean 'give'?", Location{{0, 27}, {0, 29}});
+    matchParseError("local a = { for _, v in xs v }", "Expected 'give' or 'do' when parsing table comprehension, got 'v'");
+    // a `do` item follows the rules of a `do` expression
+    matchParseError("local a = { for _, v in xs do v }", "Incomplete statement: to give a value from a 'do' expression, write 'give <value>'");
     matchParseError(
-        "local a = {\n    for _, v in xs\n        when v > 1\n    do v\n}",
-        "Table comprehensions don't use 'do'; did you mean 'give'?",
-        Location{{3, 4}, {3, 6}}
+        "local a = { for _, v in xs do print(v) }", "A 'do' expression must end with 'give <value>', 'return', 'break' or 'continue'"
     );
     matchParseError(
         "local a = { for _, v in xs give [v] /= 2 }", "A table comprehension can accumulate with '+=', '-=', '*=' or '..=', not '/='"
@@ -9565,18 +9673,32 @@ TEST_CASE_FIXTURE(Fixture, "an_end_after_an_expression_that_takes_none_gets_one_
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
-    const std::string ifElse = "An if-else expression doesn't end with 'end'; this 'end' closes the block around it instead";
-    const std::string doEnd = "A 'do' expression doesn't end with 'end'; this 'end' closes the block around it instead";
+    const std::string ifElse = "Remove this 'end'; an if-else expression ends at the value after its 'else'";
+    const std::string doEnd = "Remove this 'end'; a 'do' expression ends at its 'give', 'return', 'break' or 'continue'";
 
     matchOnlyDoExprError(*this, "local x = if a then 1 else 2 end", ifElse);
     matchOnlyDoExprError(*this, "local x = do give 1 end", doEnd);
     matchOnlyDoExprError(*this, "while true do\n    local x = do give 1 end\nend", doEnd);
 
-    // the stray `end` closes the function early, and the function's own `end` is left over: the stray one is blamed
-    ParseResult result = tryParse("local function f()\n    local x = do\n        give 1\n    end\n    return x\nend");
+    // the stray `end` closes the function early, and the function's own `end` is left over: the stray one is blamed, and
+    // skipped, so the rest of the function and the code after it parse where they belong
+    ParseResult result = tryParse("local function f()\n    local x = do\n        give 1\n    end\n    return x\nend\nprint(f())");
     REQUIRE_EQ(result.errors.size(), 1);
     CHECK_EQ(result.errors[0].getMessage(), doEnd);
     CHECK_EQ(result.errors[0].getLocation().begin, Position(3, 4));
+    REQUIRE_EQ(result.root->body.size, 2);
+    AstStatLocalFunction* f = result.root->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(f);
+    CHECK_EQ(f->func->body->body.size, 2);
+
+    result = tryParse("local function f()\n    local y = if a then 1 else 2 end\n    return y\nend\nprint(f())");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), ifElse);
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(1, 33));
+    REQUIRE_EQ(result.root->body.size, 2);
+    f = result.root->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(f);
+    CHECK_EQ(f->func->body->body.size, 2);
 
     matchOnlyDoExprError(
         *this, "local x = do foo() end", "A 'do' expression doesn't end with 'end'; end it with 'give <value>', 'return', 'break' or 'continue'"
@@ -9662,6 +9784,126 @@ TEST_CASE_FIXTURE(Fixture, "or_leave_statements")
     CHECK(asOrLeave(loopBody->body.data[1]->as<AstStatExpr>()->expr));
 }
 
+TEST_CASE_FIXTURE(Fixture, "leave_statements_can_start_with_any_value")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        for _, t in ts do
+            #t >= 0 or continue
+            not t.skip or continue
+            -t.n < 0 or break
+            "stop" ~= t.name or break
+            nil == t.next and continue
+        end
+    )");
+
+    AstStatBlock* loopBody = block->body.data[0]->as<AstStatForIn>()->body;
+    REQUIRE_EQ(loopBody->body.size, 5);
+
+    for (AstStat* stat : loopBody->body)
+    {
+        AstStatExpr* expr = stat->as<AstStatExpr>();
+        REQUIRE(expr);
+        CHECK(isLeaveStatement(expr->expr));
+    }
+
+    // a value that doesn't leave is an incomplete statement, not a missing identifier
+    matchOnlyIfLocalError(
+        *this,
+        "local t\n#t > 0",
+        "Incomplete statement: expected assignment, a function call, or an expression ending in 'or return', 'or break' or 'or continue'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "and_takes_the_leave_forms")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        for _, v in t do
+            v.done and break
+            v.a or v.b and continue
+            local w = v.c and return 1
+        end
+    )");
+
+    AstStatBlock* loopBody = block->body.data[0]->as<AstStatForIn>()->body;
+    REQUIRE_EQ(loopBody->body.size, 3);
+
+    AstStatExpr* andBreak = loopBody->body.data[0]->as<AstStatExpr>();
+    REQUIRE(andBreak);
+    AstExprBinary* guard = asLeaveGuard(andBreak->expr);
+    REQUIRE(guard);
+    CHECK_EQ(guard->op, AstExprBinary::And);
+    CHECK(!asOrLeave(andBreak->expr));
+
+    // `v.a or (v.b and continue)`: only the right operand leaves
+    AstStatExpr* nested = loopBody->body.data[1]->as<AstStatExpr>();
+    REQUIRE(nested);
+    CHECK(isLeaveStatement(nested->expr));
+    CHECK(!asLeaveGuard(nested->expr));
+    AstExprBinary* orExpr = nested->expr->as<AstExprBinary>();
+    REQUIRE(orExpr);
+    CHECK(asLeaveGuard(orExpr->right));
+
+    AstExprBinary* value = loopBody->body.data[2]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+    REQUIRE(value);
+    CHECK(asLeave(value->right));
+}
+
+TEST_CASE_FIXTURE(Fixture, "parenthesized_continue_is_the_shorthand")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        for i = 1, 3 do
+            local a = f(i) or (continue)
+            local b = do
+                give if i == 2 then (continue) else i
+        end
+    )");
+
+    AstStatBlock* loopBody = block->body.data[0]->as<AstStatFor>()->body;
+    REQUIRE_EQ(loopBody->body.size, 2);
+    AstExprBinary* a = loopBody->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+    REQUIRE(a);
+    CHECK(asLeave(a->right));
+
+    // followed by a call or an index, it is a variable read, as in Luau
+    AstStatBlock* reads = parse(R"(
+        for i = 1, 3 do
+            local c = f(i) or (continue).x
+            local d = f(i) or (continue)(i)
+        end
+    )");
+
+    AstStatBlock* readsBody = reads->body.data[0]->as<AstStatFor>()->body;
+    REQUIRE_EQ(readsBody->body.size, 2);
+    for (AstStat* stat : readsBody->body)
+    {
+        AstExprBinary* value = stat->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+        REQUIRE(value);
+        CHECK(!asLeave(value->right));
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "or_continue_reading_a_variable_is_valid_luau")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    // `continue` names a variable in this module, so each `or continue` reads it: valid Luau, not the Luwu shorthand
+    ParseResult reads = tryParse("continue = 1\nfor i = 1, 2 do\n    local a = i or continue\n    local b = i or (continue)\nend", luau);
+    CHECK(reads.errors.empty());
+
+    ParseResult shorthand = tryParse("for i = 1, 2 do\n    local a = i or continue\nend", luau);
+    REQUIRE_EQ(shorthand.errors.size(), 1);
+    CHECK_EQ(shorthand.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'or return', 'or break' and 'or continue'");
+}
+
 TEST_CASE_FIXTURE(Fixture, "or_continue_statement_is_the_keyword_even_where_continue_is_a_name")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
@@ -9702,6 +9944,11 @@ TEST_CASE_FIXTURE(Fixture, "expression_statements_that_dont_leave_get_one_error"
         *this,
         "local function f(x, a, b)\n    x or return a, b\n    return x\nend",
         "'or return' returns one value unless parenthesized: 'x or (return a, b)'"
+    );
+    matchOnlyIfLocalError(
+        *this,
+        "local function f(x, a, b)\n    x and return a, b\n    return x\nend",
+        "'and return' returns one value unless parenthesized: 'x and (return a, b)'"
     );
 
     // a statement keyword can't be the value of a bare `or return`

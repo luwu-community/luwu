@@ -3125,6 +3125,11 @@ local function f(x, y, t)
         if not v.ok then continue end
         print(v)
     end
+    if x + y then return end
+    if not (x or y) then return end
+    -- not reported: `-x > 1 and return` and `"a" == x and return` would continue the line above
+    if -x > 1 then return end
+    if "a" == x then return end
     if not y then
         return
     end
@@ -3139,22 +3144,192 @@ return f
     CHECK(warningsWithCode(result, LintWarning::Code_OneLineGuard).empty());
 
     std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_LuaGuard);
-    REQUIRE_EQ(warnings.size(), 5);
+    REQUIRE_EQ(warnings.size(), 7);
     CHECK_EQ(warnings[0].text, "Replace this with 'x or return;'");
-    CHECK_EQ(warnings[1].text, "Replace this with 'x ~= y or return 1'");
-    CHECK_EQ(warnings[2].text, "Replace this with 'not (x > 1) or return;'");
+    // a condition without `not` is kept as written, with `and`
+    CHECK_EQ(warnings[1].text, "Replace this with 'x == y and return 1'");
+    CHECK_EQ(warnings[2].text, "Replace this with 'x > 1 and return;'");
     // several values need parentheses
-    CHECK_EQ(warnings[3].text, "Replace this with 'x ~= 2 or (return x, y)'");
+    CHECK_EQ(warnings[3].text, "Replace this with 'x == 2 and (return x, y)'");
     CHECK_EQ(warnings[4].text, "Replace this with 'v.ok or continue'");
+    CHECK_EQ(warnings[5].text, "Replace this with 'x + y and return;'");
+    // `or` binds loosest, so the negated condition needs no parentheses
+    CHECK_EQ(warnings[6].text, "Replace this with 'x or y or return;'");
     // the warning covers the whole statement it replaces
     CHECK_EQ(warnings[0].location, Location(Position(2, 4), Position(2, 28)));
+}
+
+// An `if` with several conditions splits into one guard per condition, each kept as written like a single one
+TEST_CASE_FIXTURE(Fixture, "LuaGuardSplitsConditions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(r, t)
+    if not r.ok or r.out == "" then return nil end
+    for _, v in t do
+        if v.skip or not v.ready or #v.items > 3 then continue end
+        print(v)
+    end
+    if r.a and r.b or r.c then return end
+    -- not reported: `(if ...) and return` would continue the line above, and `r.e == if ...` would take the `and`
+    if r.d or (if r.e then r.f else r.g) then return end
+    if r.e == if r.f then 1 else 2 then return end
+    return r.out
+end
+return f
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_LuaGuard);
+    REQUIRE_EQ(warnings.size(), 3);
+    CHECK_EQ(warnings[0].text, "Replace this with one guard per condition: 'r.ok or return nil', 'r.out == '' and return nil'");
+    CHECK_EQ(
+        warnings[1].text, "Replace this with one guard per condition: 'v.skip and continue', 'v.ready or continue', '#v.items > 3 and continue'"
+    );
+    // `and` binds tighter than `or`, so a condition holding one needs no parentheses
+    CHECK_EQ(warnings[2].text, "Replace this with one guard per condition: 'r.a and r.b and return;', 'r.c and return;'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "AmbiguousContinuation")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(xs, y, n)
+    for _, x in xs do
+        local a = y
+        -x < 0 or break
+        not n or return n
+        "a" == y or continue
+        print(a)
+    end
+    -- not reported: indented past the statement, or ended with ';'
+    local total = y
+        - n
+    local b = y;
+    -n < 0 or return
+    return total, b
+end
+return f
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_AmbiguousContinuation);
+    REQUIRE_EQ(warnings.size(), 2);
+    CHECK_EQ(warnings[0].text, "This line continues the expression above it as 'y - x'; to start a new statement here, end line 4 with ';'");
+    CHECK_EQ(warnings[0].location, Location(Position(4, 9), Position(4, 10)));
+    CHECK_EQ(warnings[1].text, "This line continues the expression above it as a call to 'n'; to start a new statement here, end line 6 with ';'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AmbiguousContinuationIsOnlyForLuwuFiles")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    // a Luau statement can't start with `-`, so an outdented continuation is only odd layout there
+    configResolver.defaultConfig.language = Language::Luau;
+    LintResult result = lint("local y, n = 1, 2\nlocal a = y\n- n\nprint(a)\n");
+    CHECK(warningsWithCode(result, LintWarning::Code_AmbiguousContinuation).empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "UnflippedGuard")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(xs, name, n)
+    for _, x in xs do
+        name == "" or continue
+        print(name, x)
+    end
+    not n or return 1
+    n ~= nil and return 2
+    print(n)
+    return n
+end
+local function g(name, n, cached)
+    -- not reported: flipped the right way, the local isn't used after, it's reassigned first, or returned on purpose
+    for _ = 1, 2 do
+        name ~= "" or continue
+        print(name)
+    end
+    n == nil or return 1
+    n = 5
+    not cached or return cached
+    print(name, n, cached)
+    return 0
+end
+return f, g
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_UnflippedGuard);
+    REQUIRE_EQ(warnings.size(), 3);
+    CHECK_EQ(
+        warnings[0].text,
+        "Did you mean 'name ~= \"\" or continue'? 'name' is always \"\" after this guard, but the code below uses it"
+    );
+    CHECK_EQ(warnings[0].location, Location(Position(3, 8), Position(3, 18)));
+    CHECK_EQ(
+        warnings[1].text,
+        "Did you mean 'n or return 1'? 'n' is always nil or false after this guard, but the code below uses it"
+    );
+    // an `and` guard flips to `or`
+    CHECK_EQ(
+        warnings[2].text,
+        "Did you mean 'n ~= nil or return 2'? 'n' is always nil after this guard, but the code below uses it"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "UnflippedGuardInAnIf")
+{
+    LintResult result = lint(R"(
+local function f(xs, name, n)
+    for _, x in xs do
+        if name ~= "" then
+            continue
+        end
+        print(name, x)
+    end
+    if n then return 1 end
+    print(n)
+    return 0
+end
+local function g(xs, name, n)
+    -- not reported: flipped the right way, or with more than a leave in the body
+    for _ = 1, 2 do
+        if name == "" then
+            continue
+        end
+        print(name)
+    end
+    if not n then return 1 end
+    if n ~= nil then
+        print("set")
+        return 2
+    end
+    print(xs, n)
+    return 0
+end
+return f, g
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_UnflippedGuard);
+    REQUIRE_EQ(warnings.size(), 2);
+    // the fix flips the `if`'s condition
+    CHECK_EQ(
+        warnings[0].text,
+        "Did you mean 'if name == \"\" then'? 'name' is always \"\" after this guard, but the code below uses it"
+    );
+    CHECK_EQ(warnings[0].location, Location(Position(3, 11), Position(3, 21)));
+    CHECK_EQ(
+        warnings[1].text,
+        "Did you mean 'if not n then'? 'n' is always nil or false after this guard, but the code below uses it"
+    );
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "OneLineGuardInALuauFileOnlySuggestsThreeLines")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
-    fileResolver.source["game/a"] = "local function f(x)\n    if not x then return end\n    return x\nend\nreturn f\n";
+    fileResolver.source["game/a"] = "--!lint OneLineGuard\nlocal function f(x)\n    if not x then return end\n    return x\nend\nreturn f\n";
     configResolver.configFiles["game/a"].language = Language::Luau;
 
     std::vector<LintWarning> warnings;
@@ -3167,6 +3342,24 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "OneLineGuardInALuauFileOnlySuggestsThreeLine
         warnings[0].text,
         "Put the 'return' on its own line, so it isn't hidden at the end of this one"
     );
+}
+
+// OneLineGuard is off until a module or config asks for it, and with it off nothing else reports a one-line guard
+TEST_CASE_FIXTURE(BuiltinsFixture, "OneLineGuardIsOffUntilAskedFor")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    const std::string source = "local function f(t)\n    for _, v in t do\n        if not v then continue end\n        if v.done then "
+                               "break end\n    end\n    if not t then return end\n    return t\nend\nreturn f\n";
+    fileResolver.source["game/off"] = source;
+    configResolver.configFiles["game/off"].language = Language::Luau;
+    fileResolver.source["game/on"] = "--!lint OneLineGuard\n" + source;
+    configResolver.configFiles["game/on"].language = Language::Luau;
+
+    LintResult off = lintModule("game/off");
+    CHECK(warningsWithCode(off, LintWarning::Code_OneLineGuard).empty());
+    CHECK(warningsWithCode(off, LintWarning::Code_OneLineStatement).empty());
+    CHECK_EQ(warningsWithCode(lintModule("game/on"), LintWarning::Code_OneLineGuard).size(), 3);
 }
 
 TEST_CASE_FIXTURE(Fixture, "InlineOrLeave")
@@ -3184,7 +3377,11 @@ local function f(x, path)
     local e = 5
     local broken = locate_the_thing_we_are_looking_for(path, x, "with a long argument")
         or return nil
-    return a, b, c, d, e, found, short, broken
+    local f = 6
+    -- a long line whose exit starts early: what follows the exit is the long part
+    path == "patch" or path == "unpatch" or return error(`arg should be patch or unpatch, got {path}`)
+    local g = 7
+    return a, b, c, d, e, f, g, found, short, broken
 end
 return f
 )");
@@ -3200,6 +3397,9 @@ return f
 
 TEST_CASE_FIXTURE(Fixture, "StyleGroupTurnsOffItsParts")
 {
+    // With do expressions on, a Luwu file's one-line guard is a LuaGuard instead
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, false};
+
     LintResult result = lint(R"(--!nolint Style
 local t = {}
 if t.a then print(1) end
@@ -3216,6 +3416,7 @@ return f
 
     // and a part can be turned off alone
     LintResult part = lint(R"(--!nolint OneLineStatement
+--!lint OneLineGuard
 local t = {}
 if t.a then print(1) end
 local function f(x)
@@ -3282,21 +3483,25 @@ local function f(x, a, b)
     local q, r = x or return a, b
     print(x or return a, b)
     local v, w = if a then b else return a, x
+    local m, n = x or a and return b, x
     -- not reported: parenthesized either way, or the last value
     local s, t = (x or return a), b
     local u = x or (return a, b)
     local y = b, x or return a
-    return q, r, s, t, u, v, w, y
+    local o, p = x or (a and return b), x
+    return q, r, s, t, u, v, w, y, m, n, o, p
 end
 return f
 )");
 
     std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_OrReturnComma);
-    REQUIRE_EQ(warnings.size(), 3);
+    REQUIRE_EQ(warnings.size(), 4);
     CHECK_EQ(warnings[0].location, Location(Position(2, 32), Position(2, 33)));
     CHECK_EQ(warnings[0].text, "'b' is assigned to 'r', not part of 'or return'; to return both, write 'or (return a, b)'");
     CHECK_EQ(warnings[1].text, "'b' is the next argument, not part of 'or return'; to return both, write 'or (return a, b)'");
     CHECK_EQ(warnings[2].text, "'x' is assigned to 'w', not part of 'else return'; to return both, write 'else (return a, x)'");
+    // the bare `return` belongs to the `and`
+    CHECK_EQ(warnings[3].text, "'x' is assigned to 'n', not part of 'and return'; to return both, write 'and (return b, x)'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "BindingSwallowsCondition")
@@ -3347,6 +3552,274 @@ if local grouped = (find(1) and t.flag == 1) then print(grouped) end
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md)
+// Luwu Do Expressions (rfcs/do-expressions.md): an unfinished `do` typed above code that ends in `return` takes that code
+// as its block; the first line indented like the code after the `do` is pointed out, with the `do` and the `return`
+TEST_CASE_FIXTURE(Fixture, "MisleadingIndentation")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(s: string)
+    const prefix = do
+
+    const splits = string.split(s, "/")
+    print(splits)
+    return {
+        prefix = 1,
+    }
+end
+local function g(s: string)
+    const a = do
+        print(s)
+    give 1
+    return a
+end
+return f, g
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MisleadingIndentation);
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(found[0].text, "The 'return' on line 7 ends the 'do' expression on line 3");
+    CHECK_EQ(found[0].location, Location(Position(2, 19), Position(2, 21)));
+    CHECK_EQ(found[1].text, "This line is in the 'do' expression on line 3, but is indented like the code after it");
+    CHECK_EQ(found[1].location, Location(Position(4, 4), Position(4, 39)));
+    CHECK_EQ(found[2].text, found[0].text);
+    CHECK_EQ(found[2].location, Location(Position(6, 4), Position(6, 10)));
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): a `do` body is indented one level past the line the `do` is on. A table
+// comprehension's `when` clauses, at the `for`'s indent or one level in, don't change that for `give do`.
+// Luwu Table Comprehensions: a comprehension's clauses are parts of the statement around it, so a nested `for` and its
+// `when` aligned with the first `for` aren't a statement spanning lines; a clause at the statement's own indent is
+TEST_CASE_FIXTURE(Fixture, "MultiLineStatementComprehensionClauses")
+{
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    LintResult result = lint(R"(
+local grid = { { 1, 0 }, { 0, 3 } }
+local filled = {
+    for _, row in grid
+    for _, cell in row
+    when cell ~= 0
+    give cell
+}
+local nested = {
+    for _, row in grid
+        for _, cell in row
+            when cell ~= 0
+    give cell
+}
+local bad = {
+for _, row in grid
+    give row
+}
+return filled, nested, bad
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MultiLineStatement);
+    REQUIRE_EQ(found.size(), 1);
+    CHECK_EQ(found[0].location.begin, Position(15, 0));
+}
+
+TEST_CASE_FIXTURE(Fixture, "MisleadingIndentationGiveDoInComprehensions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+    ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
+
+    LintResult result = lint(R"(
+local lines = { "a", "", "b" }
+local nested = {
+    for _, line in lines
+        when line ~= ""
+    give do
+        local key = string.upper(line)
+        give key
+}
+local flat = {
+    for _, line in lines
+    when line ~= ""
+    give do
+        local key = string.upper(line)
+        give key
+}
+local outdented = {
+    for _, line in lines
+    give do
+    local key = string.upper(line)
+        give key
+}
+local short = {
+    for _, line in lines do
+        local key = string.upper(line)
+        give key
+}
+local shortOutdented = {
+    for _, line in lines do
+    local key = string.upper(line)
+        give key
+}
+return nested, flat, outdented, short, shortOutdented
+)");
+
+    // `for ... do` is short for `give do`, so its block is indented against the `for` line: `short` is fine
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MisleadingIndentation);
+    REQUIRE_EQ(found.size(), 6);
+    CHECK_EQ(found[4].text, "This line is in the 'do' expression on line 29, but is indented like the code after it");
+    CHECK_EQ(found[4].location.begin, Position(29, 4));
+    CHECK_EQ(found[1].text, "This line is in the 'do' expression on line 19, but is indented like the code after it");
+    CHECK_EQ(found[1].location.begin, Position(19, 4));
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): a statement that always runs a returning `do` ends the code path, and a
+// condition that can only be true after one returns guards a branch that never runs
+TEST_CASE_FIXTURE(Fixture, "UnreachableCodeAfterReturningDoExpressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(s: string)
+    if s == "a" and (do return "a") then
+        print("never")
+    end
+    print(do return "b")
+    print("never either")
+end
+local function g(s: string)
+    if s == "a" or (do return "a") then
+        print("runs when s is 'a'")
+    end
+    print(s and do return "b")
+    print("runs when s is falsy")
+end
+return f, g
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].text, "Unreachable code (the condition always returns before it can be true)");
+    CHECK_EQ(found[0].location.begin.line, 3);
+    CHECK_EQ(found[1].text, "Unreachable code (previous statement always returns)");
+    CHECK_EQ(found[1].location.begin.line, 6);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `x and continue or break` leaves through one side or the other, and
+// the reason merges them like an `if`'s branches
+TEST_CASE_FIXTURE(Fixture, "UnreachableCodeAfterAndLeaveOrLeave")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(t: { boolean })
+    for _, ok in t do
+        ok and continue or break
+        print("never")
+    end
+    for _, ok in t do
+        ok and break or break
+        print("never either")
+    end
+    for _, ok in t do
+        ok and continue
+        print("runs when ok is falsy")
+    end
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].text, "Unreachable code (previous statement always continues)");
+    CHECK_EQ(found[0].location.begin.line, 4);
+    CHECK_EQ(found[1].text, "Unreachable code (previous statement always breaks)");
+    CHECK_EQ(found[1].location.begin.line, 8);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): a one-line `do` expression holds several statements on its line by
+// design; a later line of a longer one is checked as usual
+TEST_CASE_FIXTURE(Fixture, "SameLineStatementInDoExpressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(s: any)
+    local ok = if typeof(s) ~= "string" then (do s = tostring(s) give true) else true
+    local v = do
+        print(s) print(ok)
+        give 1
+    return v
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_SameLineStatement);
+    REQUIRE_EQ(found.size(), 1);
+    CHECK_EQ(found[0].location.begin.line, 4);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): `x = x or return nil` assigns `x` to itself; the guard alone does the
+// same narrowing
+TEST_CASE_FIXTURE(Fixture, "SelfAssignmentOfAGuard")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(comments: string?, t: { x: number? })
+    comments = comments or return nil
+    for _ = 1, 2 do
+        comments = comments or continue
+    end
+    local other = comments or return nil
+    comments = other or return nil
+    t.x = t.x or return nil
+    return comments, other
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_SelfAssignment);
+    // the field too: the fixture is strict, where SelfAssignment reports fields
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(found[0].text, "Replace this with 'comments or return nil'");
+    CHECK_EQ(found[0].location, Location(Position(2, 4), Position(2, 37)));
+    CHECK_EQ(found[1].text, "Replace this with 'comments or continue'");
+    CHECK_EQ(found[2].text, "Replace this with 't.x or return nil'");
+}
+
+// Luwu If Local (rfcs/if-local.md): a condition binding a name to itself tests nothing a plain condition doesn't
+TEST_CASE_FIXTURE(Fixture, "SelfAssignmentInConditionBindings")
+{
+    ScopedFastFlag ifLocal{FFlag::LuwuIfLocal, true};
+
+    LintResult result = lint(R"(
+local function f(s: string?, n: number?)
+    if const s = s then
+        print(s)
+    end
+    if n when local n = n then
+        print(n)
+    end
+    while local s = s do
+        print(s)
+        break
+    end
+    if local s: string = s then
+        print(s)
+    end
+    local v = if const n = n then n else 0
+    return v
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_SelfAssignment);
+    REQUIRE_EQ(found.size(), 4);
+    CHECK_EQ(found[0].text, "Binding 's' to itself does nothing; test it directly with 'if s'");
+    CHECK_EQ(found[0].location, Location(Position(2, 13), Position(2, 18)));
+    CHECK_EQ(found[1].text, "Binding 'n' to itself does nothing; test it directly with 'when n'");
+    CHECK_EQ(found[2].text, "Binding 's' to itself does nothing; test it directly with 'while s'");
+    CHECK_EQ(found[3].text, "Binding 'n' to itself does nothing; test it directly with 'if n'");
+}
+
 TEST_CASE_FIXTURE(Fixture, "ReturnOnNextLine")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
@@ -3498,10 +3971,13 @@ local w = do
 print(v, w)
 )");
 
+    // `w`'s `do` always raises, so the `print` after it never runs
     std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
-    REQUIRE_EQ(found.size(), 1);
+    REQUIRE_EQ(found.size(), 2);
     CHECK_EQ(found[0].location.begin.line, 4);
     CHECK_EQ(found[0].text, "Unreachable code (previous statement always gives)");
+    CHECK_EQ(found[1].location.begin.line, 8);
+    CHECK_EQ(found[1].text, "Unreachable code (previous statement always errors)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "DuplicateConditionsExpr")
@@ -4885,6 +5361,37 @@ return f
     CHECK_EQ(misleading[0].location.begin.line, 2);
     CHECK_EQ(misleading[0].text, "an 'a and b or c' expression is misleading when 'b' is falsy, use 'if a then b else c' instead");
     CHECK_EQ(countWarnings(result, LintWarning::Code_LuaAndOr), 2);
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): an `or` that leaves has no value to pick
+TEST_CASE_FIXTURE(BuiltinsFixture, "AndOrThatLeavesIsNotATernary")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+for _, entry in { "hp=10", "broken" } do
+    local key, value = string.match(entry, "^(%a+)=(%d+)$")
+    key and value or continue
+    print(key, value)
+end
+
+local function first(list: { string }): string?
+    local item = list[1]
+    item and #item > 0 or return nil
+    local label = item and item:upper() or (do return nil)
+    return label
+end
+local function describe(name: string?)
+    return name and name:upper() or "nobody"
+end
+return first, describe
+)");
+
+    CHECK_EQ(countWarnings(result, LintWarning::Code_MisleadingAndOr), 0);
+    // Only the ternary in `describe`
+    std::vector<LintWarning> luaAndOr = warningsWithCode(result, LintWarning::Code_LuaAndOr);
+    REQUIRE_EQ(luaAndOr.size(), 1);
+    CHECK_EQ(luaAndOr[0].location.begin.line, 14);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "AndOrUsedAsBooleanLogicIsNotATernary")

@@ -584,14 +584,165 @@ AstExprIfElse::AstExprIfElse(
 {
 }
 
+// Luwu If Local (rfcs/if-local.md)
+static void visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses, AstVisitor* visitor)
+{
+    if (clauses.size == 0)
+    {
+        condition->visit(visitor);
+        return;
+    }
+
+    for (const AstIfClause& clause : clauses)
+    {
+        if (clause.declaration)
+            clause.declaration->visit(visitor);
+        else
+            clause.expr->visit(visitor);
+    }
+}
+
+static Location ifConditionLocation(AstExpr* condition, const AstArray<AstIfClause>& clauses)
+{
+    if (clauses.size == 0)
+        return condition->location;
+
+    const AstIfClause& first = clauses.data[0];
+    Position begin = first.declaration ? first.declaration->location.begin : first.expr->location.begin;
+    return Location{begin, clauses.data[clauses.size - 1].expr->location.end};
+}
+
+Location AstExprIfElse::conditionLocation() const
+{
+    return ifConditionLocation(condition, clauses);
+}
+
+void AstExprIfElse::visitCondition(AstVisitor* visitor)
+{
+    visitIfCondition(condition, clauses, visitor);
+}
+
 void AstExprIfElse::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
-        condition->visit(visitor);
+        visitCondition(visitor);
         trueExpr->visit(visitor);
         falseExpr->visit(visitor);
     }
+}
+
+bool AstExprDo::alwaysLeaves() const
+{
+    if (shorthand)
+        return true;
+
+    struct GiveFinder : AstVisitor
+    {
+        bool found = false;
+
+        bool visit(AstStatGive*) override
+        {
+            found = true;
+            return false;
+        }
+
+        // a nested `do` expression's gives are its own, and a function's body is another function
+        bool visit(AstExprDo*) override
+        {
+            return false;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    GiveFinder finder;
+    for (AstStat* stat : body->body)
+        stat->visit(&finder);
+
+    return !finder.found;
+}
+
+AstExpr* withoutGroups(AstExpr* expr)
+{
+    while (AstExprGroup* group = expr->as<AstExprGroup>())
+        expr = group->expr;
+
+    return expr;
+}
+
+AstExprDo* asLeave(AstExpr* operand)
+{
+    AstExprDo* leave = withoutGroups(operand)->as<AstExprDo>();
+    return leave && leave->alwaysLeaves() ? leave : nullptr;
+}
+
+AstExprBinary* asLeaveGuard(AstExpr* expr)
+{
+    AstExprBinary* binary = expr->as<AstExprBinary>();
+    bool isAndOr = binary && (binary->op == AstExprBinary::Or || binary->op == AstExprBinary::And);
+    return isAndOr && asLeave(binary->right) ? binary : nullptr;
+}
+
+AstExprBinary* asOrLeave(AstExpr* expr)
+{
+    AstExprBinary* guard = asLeaveGuard(expr);
+    return guard && guard->op == AstExprBinary::Or ? guard : nullptr;
+}
+
+AstExprBinary* asLeaveEitherWay(AstExpr* expr)
+{
+    AstExprBinary* guard = asOrLeave(expr);
+    AstExprBinary* left = guard ? asLeaveGuard(withoutGroups(guard->left)) : nullptr;
+    return left && left->op == AstExprBinary::And ? left : nullptr;
+}
+
+bool isLeaveStatement(AstExpr* expr)
+{
+    AstExprBinary* binary = expr->as<AstExprBinary>();
+    while (binary && (binary->op == AstExprBinary::Or || binary->op == AstExprBinary::And))
+    {
+        if (asLeave(binary->right))
+            return true;
+
+        binary = withoutGroups(binary->right)->as<AstExprBinary>();
+    }
+
+    return false;
+}
+
+AstExprDo::AstExprDo(const Location& location, AstStatBlock* body)
+    : AstExpr(ClassIndex(), location)
+    , body(body)
+{
+}
+
+void AstExprDo::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        body->visit(visitor);
+}
+
+AstExprTableComprehension::AstExprTableComprehension(
+    const Location& location,
+    AstStat* loop,
+    AstStatComprehensionItem* item,
+    unsigned clauseCount
+)
+    : AstExpr(ClassIndex(), location)
+    , loop(loop)
+    , item(item)
+    , clauseCount(clauseCount)
+{
+}
+
+void AstExprTableComprehension::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        loop->visit(visitor);
 }
 
 AstExprError::AstExprError(const Location& location, const AstArray<AstExpr*>& expressions, unsigned messageIndex)
@@ -678,11 +829,21 @@ AstStatIf::AstStatIf(
 {
 }
 
+Location AstStatIf::conditionLocation() const
+{
+    return ifConditionLocation(condition, clauses);
+}
+
+void AstStatIf::visitCondition(AstVisitor* visitor)
+{
+    visitIfCondition(condition, clauses, visitor);
+}
+
 void AstStatIf::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
-        condition->visit(visitor);
+        visitCondition(visitor);
         thenbody->visit(visitor);
 
         if (elsebody)
@@ -707,11 +868,21 @@ AstStatWhile::AstStatWhile(
 {
 }
 
+Location AstStatWhile::conditionLocation() const
+{
+    return ifConditionLocation(condition, clauses);
+}
+
+void AstStatWhile::visitCondition(AstVisitor* visitor)
+{
+    visitIfCondition(condition, clauses, visitor);
+}
+
 void AstStatWhile::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
-        condition->visit(visitor);
+        visitCondition(visitor);
         body->visit(visitor);
     }
 }
@@ -750,6 +921,35 @@ AstStatBreak::AstStatBreak(const Location& location)
 void AstStatBreak::visit(AstVisitor* visitor)
 {
     visitor->visit(this);
+}
+
+AstStatGive::AstStatGive(const Location& location, AstExpr* value)
+    : AstStat(ClassIndex(), location)
+    , value(value)
+{
+}
+
+void AstStatGive::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        value->visit(visitor);
+}
+
+AstStatComprehensionItem::AstStatComprehensionItem(const Location& location, AstExpr* key, AstExpr* value)
+    : AstStat(ClassIndex(), location)
+    , key(key)
+    , value(value)
+{
+}
+
+void AstStatComprehensionItem::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+    {
+        if (key)
+            key->visit(visitor);
+        value->visit(visitor);
+    }
 }
 
 AstStatContinue::AstStatContinue(const Location& location)
