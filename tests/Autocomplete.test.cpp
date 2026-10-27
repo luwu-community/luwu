@@ -5441,6 +5441,28 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_comment_directives")
 }
 
 // Luwu: a Luau or Lua module isn't offered what Luwu adds to a library (the LuwuOnlyApi lint's members)
+// Luwu String Extensions (rfcs/string-extensions.md): nor its string extensions, as methods or library functions
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_string_extensions_out_of_luau_modules")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    check("local s = \"a\"\nlocal t = s:@1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("startswith"), 1);
+
+    configResolver.defaultConfig.language = Language::Luau;
+    check("local s = \"a\"\nlocal t = s:@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("startswith"), 0);
+    CHECK_EQ(ac.entryMap.count("trim"), 0);
+    CHECK_EQ(ac.entryMap.count("upper"), 1);
+
+    check("local t = string.@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("contains"), 0);
+    CHECK_EQ(ac.entryMap.count("sub"), 1);
+}
+
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_luwu_only_members_out_of_luau_modules")
 {
     ScopedFastFlag tableDrop{FFlag::LuwuTableDrop, true};

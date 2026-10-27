@@ -3,6 +3,7 @@
 #include "Luau/BuiltinDefinitions.h"
 
 #include "Fixture.h"
+#include "Typewriter.h"
 #include "ScopedFlags.h"
 
 #include "doctest.h"
@@ -25,6 +26,7 @@ LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
 LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 
@@ -1475,8 +1477,10 @@ string.gsub(s, '[A-Z]+(%d)', "%0%1")
 string.gsub(s, 'foo', "%0")
 )");
 
-    // Luwu: these calls are made for their warnings, so their discarded results don't matter here
+    // Luwu: these calls are made for their warnings, so their discarded results don't matter here, and neither does
+    // StringOperations reporting the empty pattern
     result.warnings = withoutCode(result, LintWarning::Code_DiscardedResult);
+    result.warnings = withoutCode(result, LintWarning::Code_StringOperations);
 
     REQUIRE(4 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Invalid match replacement: unfinished replacement");
@@ -4914,6 +4918,97 @@ return removed, frozen, shadowed, owner, check
     CHECK_EQ(inLua[0].text, "'table.drop' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
 }
 
+// Luwu: `--@[nolint(...)]` is the attribute as a comment, for Luau and Lua files, which upstream couldn't parse with
+// `@[nolint]` in them. It covers the statement after it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "LintAttributeComments")
+{
+    LintResult result = lint(R"(
+local t = { a = 1 }
+--@[nolint(Pairs)]
+for k in pairs(t) do print(k) end
+for k in pairs(t) do print(k) end
+--@[nolint(LocalUnused)] the comment can explain why
+local unused = 1
+--@[nolint(Pairs, LocalUnsed)]
+local x = 2
+--@[lint]
+print(x)
+)");
+
+    auto withCode = [&](LintWarning::Code code)
+    {
+        std::vector<LintWarning> found;
+        for (const LintWarning& warning : result.warnings)
+        {
+            if (warning.code == code)
+                found.push_back(warning);
+        }
+        return found;
+    };
+
+    // only the loop the comment isn't above
+    std::vector<LintWarning> pairsWarnings = withCode(LintWarning::Code_Pairs);
+    REQUIRE_EQ(pairsWarnings.size(), 1);
+    CHECK_EQ(pairsWarnings[0].location.begin.line, 4);
+
+    CHECK(withCode(LintWarning::Code_LocalUnused).empty());
+
+    // the comments aren't directives placed after code; their names are checked like the attribute's
+    std::vector<LintWarning> directives = withCode(LintWarning::Code_CommentDirective);
+    REQUIRE_EQ(directives.size(), 2);
+    CHECK_EQ(directives[0].text, "nolint attribute refers to unknown lint rule 'LocalUnsed'; did you mean 'LocalUnused'?");
+    CHECK_EQ(directives[0].location, Location({7, 18}, {7, 28}));
+    CHECK_EQ(directives[1].text, "Please specify the lints to enable (like '--@[lint(ConstLocal)]')");
+}
+
+// Luwu: pairs and ipairs are only reported where iterating the value directly does the same thing, or where `pairs`
+// skips the `__iter` the value was made to be iterated with
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsOnlySuggestsWhatIteratesTheSame")
+{
+    LintResult result = lint(R"(
+local list = { 1, 2 }
+local record = { name = "nyla", age = 3 }
+local holes: { number? } = { 1, nil, 3 }
+local callable = setmetatable({ 1, 2 }, { __call = function() return nil end })
+local iterable = setmetatable({ 1, 2 }, { __iter = function(t) return next, {} end })
+local either = if math.random() > 0.5 then callable else list
+for k in pairs(callable) do print(k) end
+for i in ipairs(callable) do print(i) end
+for k in pairs(either) do print(k) end
+for i in ipairs(record) do print(i) end
+for i in ipairs(holes) do print(i) end
+for k in pairs(iterable) do print(k) end
+for k in pairs(record) do print(k) end
+for i in ipairs(list) do print(i) end
+)");
+
+    std::vector<const LintWarning*> pairsWarnings;
+    std::vector<const LintWarning*> ipairsWarnings;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == LintWarning::Code_Pairs)
+            pairsWarnings.push_back(&warning);
+        else if (warning.code == LintWarning::Code_Ipairs)
+            ipairsWarnings.push_back(&warning);
+    }
+
+    REQUIRE_EQ(pairsWarnings.size(), 2);
+    CHECK_EQ(
+        pairsWarnings[0]->text.substr(0, pairsWarnings[0]->text.find('\n')),
+        "'pairs' skips the '__iter' of 'iterable'; iterate it with 'for key, value in iterable do'."
+    );
+    // reading the entries on purpose (a pretty printer) is told how to silence it
+    CHECK(pairsWarnings[0]->text.find("add '--@[nolint(Pairs)]' above it") != std::string::npos);
+    CHECK_EQ(pairsWarnings[1]->location.begin.line, 13);
+    CHECK_EQ(
+        pairsWarnings[1]->text.substr(0, pairsWarnings[1]->text.find('\n')),
+        "'pairs' is deprecated; use 'for key, value in record do' directly."
+    );
+
+    REQUIRE_EQ(ipairsWarnings.size(), 1);
+    CHECK_EQ(ipairsWarnings[0]->location.begin.line, 14);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "DiscardedValuesReportsIfElseBranchesGivingMoreThanOneValue")
 {
     LintResult result = lint(R"(
@@ -5156,95 +5251,42 @@ return removed, frozen, shadowed, owner, check
     CHECK_EQ(inLua[0].text, "'table.drop' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
 }
 
-// Luwu: `--@[nolint(...)]` is the attribute as a comment, for Luau and Lua files, which upstream couldn't parse with
-// `@[nolint]` in them. It covers the statement after it.
-TEST_CASE_FIXTURE(BuiltinsFixture, "LintAttributeComments")
+// Luwu String Extensions (rfcs/string-extensions.md): the new string functions and methods are Luwu-only too
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsStringExtensions")
 {
-    LintResult result = lint(R"(
-local t = { a = 1 }
---@[nolint(Pairs)]
-for k in pairs(t) do print(k) end
-for k in pairs(t) do print(k) end
---@[nolint(LocalUnused)] the comment can explain why
-local unused = 1
---@[nolint(Pairs, LocalUnsed)]
-local x = 2
---@[lint]
-print(x)
-)");
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
 
-    auto withCode = [&](LintWarning::Code code)
+    const std::string source = R"(
+local s = "a.luau"
+local a = string.startswith(s, "a")
+local b = s:trim()
+local c = ("x"):contains("x")
+local str = { trim = function(x: string) return x end }
+local d = str.trim(s)
+local e = s:upper()
+return a, b, c, d, e
+)";
+
+    auto luwuOnly = [&](const ModuleName& name, Language language)
     {
+        fileResolver.source[name] = source;
+        configResolver.configFiles[name].language = language;
         std::vector<LintWarning> found;
-        for (const LintWarning& warning : result.warnings)
-        {
-            if (warning.code == code)
+        for (const LintWarning& warning : lintModule(name).warnings)
+            if (warning.code == LintWarning::Code_LuwuOnlyApi)
                 found.push_back(warning);
-        }
         return found;
     };
 
-    // only the loop the comment isn't above
-    std::vector<LintWarning> pairsWarnings = withCode(LintWarning::Code_Pairs);
-    REQUIRE_EQ(pairsWarnings.size(), 1);
-    CHECK_EQ(pairsWarnings[0].location.begin.line, 4);
+    // `str` is the module's own table, and `upper` is upstream's
+    std::vector<LintWarning> inLuau = luwuOnly("game/a", Language::Luau);
+    REQUIRE_EQ(inLuau.size(), 3);
+    CHECK_EQ(inLuau[0].text, "'string.startswith' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+    CHECK_EQ(inLuau[1].text, "'string.trim' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+    CHECK_EQ(inLuau[2].location.begin.line, 4);
 
-    CHECK(withCode(LintWarning::Code_LocalUnused).empty());
-
-    // the comments aren't directives placed after code; their names are checked like the attribute's
-    std::vector<LintWarning> directives = withCode(LintWarning::Code_CommentDirective);
-    REQUIRE_EQ(directives.size(), 2);
-    CHECK_EQ(directives[0].text, "nolint attribute refers to unknown lint rule 'LocalUnsed'; did you mean 'LocalUnused'?");
-    CHECK_EQ(directives[0].location, Location({7, 18}, {7, 28}));
-    CHECK_EQ(directives[1].text, "Please specify the lints to enable (like '--@[lint(ConstLocal)]')");
-}
-
-// Luwu: pairs and ipairs are only reported where iterating the value directly does the same thing, or where `pairs`
-// skips the `__iter` the value was made to be iterated with
-TEST_CASE_FIXTURE(BuiltinsFixture, "LuaIteratorsOnlySuggestsWhatIteratesTheSame")
-{
-    LintResult result = lint(R"(
-local list = { 1, 2 }
-local record = { name = "nyla", age = 3 }
-local holes: { number? } = { 1, nil, 3 }
-local callable = setmetatable({ 1, 2 }, { __call = function() return nil end })
-local iterable = setmetatable({ 1, 2 }, { __iter = function(t) return next, {} end })
-local either = if math.random() > 0.5 then callable else list
-for k in pairs(callable) do print(k) end
-for i in ipairs(callable) do print(i) end
-for k in pairs(either) do print(k) end
-for i in ipairs(record) do print(i) end
-for i in ipairs(holes) do print(i) end
-for k in pairs(iterable) do print(k) end
-for k in pairs(record) do print(k) end
-for i in ipairs(list) do print(i) end
-)");
-
-    std::vector<const LintWarning*> pairsWarnings;
-    std::vector<const LintWarning*> ipairsWarnings;
-    for (const LintWarning& warning : result.warnings)
-    {
-        if (warning.code == LintWarning::Code_Pairs)
-            pairsWarnings.push_back(&warning);
-        else if (warning.code == LintWarning::Code_Ipairs)
-            ipairsWarnings.push_back(&warning);
-    }
-
-    REQUIRE_EQ(pairsWarnings.size(), 2);
-    CHECK_EQ(
-        pairsWarnings[0]->text.substr(0, pairsWarnings[0]->text.find('\n')),
-        "'pairs' skips the '__iter' of 'iterable'; iterate it with 'for key, value in iterable do'."
-    );
-    // reading the entries on purpose (a pretty printer) is told how to silence it
-    CHECK(pairsWarnings[0]->text.find("add '--@[nolint(Pairs)]' above it") != std::string::npos);
-    CHECK_EQ(pairsWarnings[1]->location.begin.line, 13);
-    CHECK_EQ(
-        pairsWarnings[1]->text.substr(0, pairsWarnings[1]->text.find('\n')),
-        "'pairs' is deprecated; use 'for key, value in record do' directly."
-    );
-
-    REQUIRE_EQ(ipairsWarnings.size(), 1);
-    CHECK_EQ(ipairsWarnings[0]->location.begin.line, 14);
+    CHECK_EQ(luwuOnly("game/b", Language::Lua).size(), 3);
+    CHECK(luwuOnly("game/c", Language::Luwu).empty());
 }
 
 // Luwu: a branch iterating a value directly beside one using `pairs` on it means `pairs` was chosen on purpose
@@ -6402,6 +6444,319 @@ return f
 )");
 
     CHECK_EQ(result.warnings.size(), 0);
+}
+
+// The LuaStringHelper warnings in `source`, in order
+static std::vector<std::string> luaStringHelpers(const LintResult& result)
+{
+    std::vector<std::string> texts;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == LintWarning::Code_LuaStringHelper)
+            texts.push_back(warning.text);
+    }
+    return texts;
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperSubComparisons")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
+local function f(path: string, p: string)
+    local a = string.sub(path, 1, 2) == "./"
+    local b = path:sub(-5) == ".luwu"
+    local c = string.sub(path, 1, #p) == p
+    local d = path:sub(-#p) ~= p
+    local e = string.sub(path, 1, 3) == "./"
+    return a, b, c, d, e
+end
+
+return f
+)"));
+
+    // `e` compares three characters with a two-character string, which isn't a prefix check
+    REQUIRE_EQ(warnings.size(), 4);
+    CHECK_EQ(warnings[0], "Consider 'path:startswith(\"./\")' instead of a manual prefix check");
+    CHECK_EQ(warnings[1], "Consider 'path:endswith(\".luwu\")' instead of a manual suffix check");
+    CHECK_EQ(warnings[2], "Consider 'path:startswith(p)' instead of a manual prefix check");
+    CHECK_EQ(warnings[3], "Consider 'not path:endswith(p)' instead of a manual suffix check");
+}
+
+// Suggestions are method calls, or the function form when the subject would need parentheses
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperSuggestsMethodCalls")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
+local function f(a: string, b: string)
+    return string.sub(a .. b, 1, 1) == "x"
+end
+
+return f
+)"));
+
+    REQUIRE_EQ(warnings.size(), 1);
+    CHECK_EQ(warnings[0], "Consider 'string.startswith(a .. b, \"x\")' instead of a manual prefix check");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperSearches")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
+local function f(path: string)
+    if string.match(path, "%.luwu$") then
+        print(path)
+    end
+    if not path:find("^@") then
+        print(path)
+    end
+    while string.find(path, "/", 1, true) do
+        break
+    end
+    if path:find("\n", 1, true) then
+        print(path)
+    end
+    local x = if path:match("^%./") ~= nil then 1 else 2
+    local y = string.match(path, "%.luwu$")
+    if string.match(path, "^a.b") then
+        print(path)
+    end
+    return x, y
+end
+
+return f
+)"));
+
+    // `y` uses the match as a value, and "^a.b" has a special character
+    REQUIRE_EQ(warnings.size(), 5);
+    CHECK_EQ(warnings[0], "Consider 'path:endswith(\".luwu\")' instead of a manual suffix check");
+    CHECK_EQ(warnings[1], "Consider 'not path:startswith(\"@\")' instead of a manual prefix check");
+    CHECK_EQ(warnings[2], "Consider 'path:contains(\"/\")' for a substring check instead of 'string.find' with plain matching");
+    CHECK_EQ(warnings[3], "Consider 'path:contains(\"\\n\")' for a substring check instead of 'path:find' with plain matching");
+    CHECK_EQ(warnings[4], "Consider 'path:startswith(\"./\")' instead of a manual prefix check");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperTrimAndReplace")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
+local function f(s: string)
+    local a = s:match("^%s*(.-)%s*$")
+    local b = (string.gsub(s, "^%s+", ""))
+    local c = s:gsub("%s+$", "")
+    local d = string.gsub(s, "%.", "/")
+    local e, n = s:gsub("a", "b")
+    local g = s:gsub("a", "%0%0")
+    return a, b, c, d, e, n, g
+end
+
+return f
+)"));
+
+    // `e` reads the count, and `g`'s replacement has a capture
+    REQUIRE_EQ(warnings.size(), 4);
+    CHECK_EQ(warnings[0], "Replace this with 's:trim()' to correctly trim Unicode whitespace");
+    CHECK_EQ(warnings[1], "Replace this with 's:trimstart()' to correctly trim Unicode whitespace");
+    CHECK_EQ(warnings[2], "Replace this with 's:trimend()' to correctly trim Unicode whitespace");
+    CHECK_EQ(warnings[3], "Consider 's:replace(\".\", \"/\")' instead of 'string.gsub' here because this pattern doesn't have magic characters");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperHelpers")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
+local function startswith(s: string, prefix: string): boolean
+    return s:find(prefix, 1, true) == 1
+end
+
+local function trim(xs: { string }): { string }
+    return xs
+end
+
+local lib = {
+    endswith = function(s: string, suffix: string): boolean
+        return true
+    end,
+    trim = function(s: string, ...: string): string
+        return s
+    end,
+}
+
+local path = "a.luwu"
+local a = lib.endswith(path, ".luwu")
+local b = lib.trim(path, "-")
+return startswith, trim, a, b
+)"));
+
+    // `trim` does no string work, and `lib.trim` takes extra strings, which another library's trim may treat as patterns
+    REQUIRE_EQ(warnings.size(), 2);
+    CHECK_EQ(warnings[0], "Consider 'string.startswith' for a prefix check instead of defining 'startswith'");
+    CHECK_EQ(
+        warnings[1],
+        "Consider 'path:endswith(\".luwu\")' for a suffix check instead of 'lib.endswith' unless the library function provides "
+        "additional functionality"
+    );
+}
+
+// Each library helper and each helper definition says what its builtin is for
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperSaysWhatTheBuiltinIsFor")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = luaStringHelpers(lint(R"(
+local function ends_with(s: string, suffix: string): boolean
+    return s:sub(-#suffix) == suffix
+end
+
+local lib = {
+    startswith = function(s: string, prefix: string): boolean
+        return true
+    end,
+    trim = function(s: string): string
+        return s
+    end,
+}
+
+local path = "a.luwu"
+local a = lib.startswith(path, "a")
+local b = lib.trim(path)
+local c = lib.startswith(path, "%a+")
+return ends_with, a, b, c
+)"));
+
+    // `ends_with`'s body is a manual suffix check too, and `c` passes a pattern, which another library may take
+    REQUIRE_EQ(warnings.size(), 4);
+    CHECK_EQ(warnings[0], "Consider 'string.endswith' for a suffix check instead of defining 'ends_with'");
+    CHECK_EQ(warnings[1], "Consider 's:endswith(suffix)' instead of a manual suffix check");
+    CHECK_EQ(
+        warnings[2],
+        "Consider 'path:startswith(\"a\")' for a prefix check instead of 'lib.startswith' unless the library function provides "
+        "additional functionality"
+    );
+    CHECK_EQ(
+        warnings[3],
+        "Consider 'path:trim()' for trimming whitespace instead of 'lib.trim' unless the library function provides additional "
+        "functionality"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperOnlyInLuwuModules")
+{
+    const std::string source = R"(
+local function f(path: string)
+    return string.sub(path, 1, 2) == "./"
+end
+
+return f
+)";
+
+    {
+        ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, false};
+        CHECK(luaStringHelpers(lint(source)).empty());
+    }
+
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+    CHECK_EQ(luaStringHelpers(lint(source)).size(), 1);
+
+    configResolver.defaultConfig.language = Language::Luau;
+    CHECK(luaStringHelpers(lint(source)).empty());
+}
+
+// An empty string makes no prefix, suffix or substring check worth suggesting: StringOperations reports those calls
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperLeavesEmptyStringsToStringOperations")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    LintResult result = lint(R"(
+local lib = {
+    startswith = function(s: string, prefix: string): boolean
+        return true
+    end,
+}
+
+local function f(path: string)
+    if path:find("", 1, true) then
+        print(path)
+    end
+    return lib.startswith(path, "")
+end
+
+return f
+)");
+
+    CHECK(luaStringHelpers(result).empty());
+}
+
+// The StringOperations warnings in `result`, in order
+static std::vector<std::string> stringOperations(const LintResult& result)
+{
+    std::vector<std::string> texts;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == LintWarning::Code_StringOperations)
+            texts.push_back(warning.text);
+    }
+    return texts;
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "StringOperationsReportsEmptyStringArguments")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    std::vector<std::string> warnings = stringOperations(lint(R"(
+local function f(path: string, r: string)
+    local a = path:startswith("")
+    local b = string.endswith(path, "")
+    local c = path:contains("")
+    local d = path:find("")
+    local e = path:find("", 1, true)
+    local g = path:find("", 3)
+    local h = path:gsub("", "-")
+    local i = path:replace("", r)
+    local j = path:startswith("x")
+    return a, b, c, d, e, g, h, i, j
+end
+
+return f
+)"));
+
+    // `path:find("", 3)` gives 3, or nil past the end of `path`
+    REQUIRE_EQ(warnings.size(), 7);
+    CHECK_EQ(warnings[0], "'path:startswith(\"\")' is always true");
+    CHECK_EQ(warnings[1], "'string.endswith(path, \"\")' is always true");
+    CHECK_EQ(warnings[2], "'path:contains(\"\")' is always true");
+    CHECK_EQ(warnings[3], "'path:find(\"\")' always returns 1");
+    CHECK_EQ(warnings[4], "'path:find(\"\", 1, true)' always returns 1");
+    CHECK_EQ(warnings[5], "'path:gsub(\"\", \"-\")' puts the replacement before every character and at the end");
+    CHECK_EQ(warnings[6], "'path:replace(\"\", r)' always raises because the string to replace can't be empty");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "StringOperationsTypewriting")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    checkTypewriting(
+        *this,
+        "local path = \"a.luwu\"\n",
+        "local found = path:find(\"\")\nprint(found)\n",
+        "\nlocal unrelated = 1\nprint(unrelated + 1)\n"
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperTypewriting")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    checkTypewriting(
+        *this,
+        "local path = \"a.luwu\"\n",
+        "if string.sub(path, -5) == \".luwu\" then\nprint(path)\n",
+        "\nlocal unrelated = 1\nprint(unrelated + 1)\n"
+    );
 }
 
 TEST_SUITE_END();

@@ -18,6 +18,10 @@ inline bool isLuwuOnlyMember(std::string_view library, std::string_view member)
         return member == "drop";
     if (library == "buffer")
         return member == "isfrozen";
+    // Luwu String Extensions (rfcs/string-extensions.md)
+    if (library == "string")
+        return member == "trim" || member == "trimstart" || member == "trimend" || member == "startswith" || member == "endswith" ||
+               member == "contains" || member == "replace";
     return false;
 }
 
