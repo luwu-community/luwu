@@ -220,6 +220,7 @@ ToStringOptions printOptions(size_t width)
     ToStringOptions options;
     options.sortUnionMembers = false;
     options.maxTypeLength = width;
+    options.classAndTraitValuesInTypeForm = true;
     return options;
 }
 
@@ -2481,6 +2482,7 @@ std::optional<MismatchExplanation> explainMismatch(
     ToStringOptions header;
     header.sortUnionMembers = false;
     header.functionTypeArguments = true;
+    header.classAndTraitValuesInTypeForm = true;
 
     // The two types as the message shows them: a large table a field per line, and a repeated type by its
     // name.

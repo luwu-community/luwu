@@ -691,11 +691,24 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
     // rather than handing it to the interpreter at the first construction. (CHECKSELFCLASS does have a
     // real lowering; see translateInstCheckSelfClass.)
     case LOP_NEWCLASSMEMBER:
-        inst(IrCmd::FALLBACK_NEWCLASSMEMBER, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_C(*pc)));
+    {
+        // Luwu Traits (rfcs/classes/traits.md): the IMPLEMENTS form reads the traits and their argument counts, and the
+        // TRAITCOPY form the copy and its trait
+        int regCount = 1;
+        if (LUAU_INSN_B(*pc) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
+            regCount = int(pc[1]) * 2;
+        else if (LUAU_INSN_B(*pc) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+            regCount = 2;
+        inst(IrCmd::FALLBACK_NEWCLASSMEMBER, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_C(*pc)), constInt(regCount));
         break;
+    }
 
     case LOP_NEWOBJECT:
         translateInstNewObject(*this, pc, i);
+        break;
+
+    case LOP_INITTRAITS:
+        translateInstInitTraits(*this, pc, i);
         break;
 
     case LOP_GETOBJECTMEMBER:

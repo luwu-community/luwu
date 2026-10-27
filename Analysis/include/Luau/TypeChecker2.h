@@ -214,6 +214,14 @@ struct TypeChecker2
     bool testIsSubtype(TypeId subTy, TypeId superTy, Location location);
     bool testIsSubtype(TypePackId subTy, TypePackId superTy, Location location);
 
+    // Luwu Traits (rfcs/classes/traits.md): a trait's version of a function a class writes in place of it, with `Self` as
+    // the class
+    struct OverriddenTraitFunction
+    {
+        const ExternType* trait;
+        TypeId function;
+    };
+
 private:
     static bool allowsNoReturnValues(const TypePackId tp);
     static Location getEndLocation(const AstExprFunction* function);
@@ -256,6 +264,46 @@ private:
     void visit(AstStatDeclareGlobal* stat);
     void visit(AstStatDeclareExternType* stat);
     void visit(AstStatClass* stat);
+    bool worksAsTraitFunction(TypeId function, TypeId as, NotNull<Scope> scope);
+    void checkTraitFunctionOverride(
+        const ExternType* classType,
+        const Name& name,
+        TypeId override,
+        const std::vector<OverriddenTraitFunction>& versions,
+        Location location
+    );
+    // Luwu Traits (rfcs/classes/traits.md): the first parameter an override requires that the overridden function lacks
+    std::optional<std::string> requiredExtraParameter(TypeId override, TypeId overridden);
+    // Luwu Traits (rfcs/classes/traits.md): a trait function as a class has it, with the class for `Self`
+    TypeId traitFunctionFor(const ExternType* traitType, TypeId classTy, const Name& name, TypeId function);
+    std::optional<TypeId> selfFieldFor(const ExternType* traitType, TypeId classTy, const Name& name);
+    // Luwu Traits (rfcs/classes/traits.md): the class's fields against the types of the fields its traits expect
+    void checkTraitFieldExpectations(AstStatClass* stat);
+    // Luwu Traits (rfcs/classes/traits.md): the class's constructor against the trait's expected `__init`
+    void checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType);
+    void checkTraitArguments(AstStatClass* stat);
+    // Luwu Traits (rfcs/classes/traits.md): the class implements the instantiation of each trait its traits need with
+    // the type arguments their `needs` entries give it
+    void checkNeededTraitArguments(AstStatClass* stat);
+    void checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTraitRef>& refs);
+    void checkTraitOverrides(AstStatClass* stat);
+    // Luwu Traits (rfcs/classes/traits.md): the members a class is missing, reported on one `implements` entry
+    struct MissingTraitMembers
+    {
+        Location location;
+        std::string traitName;
+        std::vector<std::string> members;
+        size_t fields = 0;
+        size_t functions = 0;
+    };
+    void addMissingTraitMember(
+        std::vector<MissingTraitMembers>& missing,
+        AstStatClass* stat,
+        const ExternType* traitType,
+        const Name& name,
+        bool isField
+    );
+    void reportMissingTraitMembers(const ExternType* classType, const MissingTraitMembers& group);
     void visit(AstStatDeclareClass* stat);
     void visit(AstStatError* stat);
     void visit(AstExpr* expr, ValueContext context);
@@ -281,6 +329,9 @@ private:
     void visit(AstExprTable* expr);
     void visit(AstExprUnary* expr);
     TypeId visit(AstExprBinary* expr, AstNode* overrideKey = nullptr);
+    // Luwu Classes (rfcs/classes): `type(x) == "table"` where `x` is an object, a class or a trait value, whose `type`
+    // is always "object", "class" or "trait"
+    void checkLuwuNominalTypeComparison(AstExprBinary* expr);
     void visit(AstExprTypeAssertion* expr);
     void visit(AstExprIfElse* expr);
     void visit(AstExprInterpString* interpString);
@@ -367,7 +418,8 @@ private:
     // definition block, report an error.
     void checkPrivateConstructorAccess(TypeId classTy, const Location& location);
     // Luwu Classes (rfcs/classes): steers `typeof(Cat)` to `class<Cat>`.
-    void reportClassTypeofSpelling(AstTypeTypeof* ty, const std::string& className, TypeId objectTy);
+    TypeId withoutSelfParameter(TypeId fnTy);
+    void reportClassTypeofSpelling(AstTypeTypeof* ty, const std::string& className, TypeId objectTy, const char* valueKind);
     // Luwu Classes (rfcs/classes): reports reading `__init` from a class or object; true if it did.
     bool checkConstructorReadByName(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location);
     PropertyType hasIndexTypeFromType(

@@ -199,6 +199,14 @@ static int luaB_gcinfo(lua_State* L)
 static int luaB_type(lua_State* L)
 {
     luaL_checkany(L, 1);
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait is a class value, but its type is "trait"
+    if (lua_istrait(L, 1))
+    {
+        lua_pushstring(L, getstr(L->global->traittypename));
+        return 1;
+    }
+
     // resulting name doesn't differentiate between userdata types
     lua_pushstring(L, lua_typename(L, lua_type(L, 1)));
     return 1;

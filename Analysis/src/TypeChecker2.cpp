@@ -2,6 +2,7 @@
 #include "Luau/TypeChecker2.h"
 #include "Luau/UnreachableProof.h"
 
+#include "Luau/ApplyTypeFunction.h"
 #include "Luau/Ast.h"
 #include "Luau/AstUtils.h"
 #include "Luau/AstQuery.h"
@@ -11,6 +12,7 @@
 #include "Luau/DenseHash.h"
 #include "Luau/Error.h"
 #include "Luau/Instantiation.h"
+#include "Luau/Instantiation2.h"
 #include "Luau/MismatchExplanation.h"
 #include "Luau/RepeatedTypeNames.h"
 #include "Luau/Metamethods.h"
@@ -68,31 +70,6 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
 {
-
-// Luwu (helpful subtyping errors): gives a member a value for the lifetime of the guard and restores the one it
-// had on every exit, including a `TimeLimitError` or `UserCancelError` thrown through it.
-template<typename T>
-struct ScopedMemberValue
-{
-    ScopedMemberValue(T& target, T value)
-        : member(target)
-        , previous(std::move(target))
-    {
-        member = std::move(value);
-    }
-
-    ~ScopedMemberValue()
-    {
-        member = std::move(previous);
-    }
-
-    ScopedMemberValue(const ScopedMemberValue&) = delete;
-    ScopedMemberValue& operator=(const ScopedMemberValue&) = delete;
-
-private:
-    T& member;
-    T previous;
-};
 
 struct TypeChecker2::DeclarationIndex
 {
@@ -1006,13 +983,43 @@ static bool returnsOnlyNil(TypePackId tp)
 // value that is nil. Lua hides the difference in the common case -- `local x = f()` gives nil either way --
 // and upstream reports it as "Expected this to be 'nil', but got '()'", which doesn't say the two differ.
 // Returns the whole message, or nullopt when the mismatch isn't between something and nothing.
+static std::string valueCount(size_t count)
+{
+    if (count == 1)
+        return "1 value";
+    return std::to_string(count) + " values";
+}
+
+// Luwu (helpful subtyping errors): two return lists of different lengths. Upstream prints both lists in full ("Expected
+// this to be 'number', but got 'number, string'"), which hides the count among the types: a function-typed value makes
+// the two sides near-identical walls of text that differ by a `, {T}` at the end.
+static std::optional<std::string> explainReturnLengthMismatch(TypePackId givenTp, TypePackId wantedTp)
+{
+    // A variadic list, or one ending in a call or `...`, can make up the difference
+    if (!finite(givenTp) || !finite(wantedTp))
+        return std::nullopt;
+
+    const size_t wanted = size(wantedTp);
+    const size_t given = size(givenTp);
+    if (wanted == given)
+        return std::nullopt;
+
+    std::string message = "Expected this function to return " + valueCount(wanted) + ", but it returns " + valueCount(given) + ".\n";
+    if (given > wanted)
+        message += "Consider annotating every value it returns (e.g. ': (A, B)'), or removing the extra ones.";
+    else
+        message += "Consider returning every value the annotation lists, or removing the ones it doesn't from the annotation.";
+
+    return message;
+}
+
 static std::optional<std::string> explainReturnCountMismatch(TypePackId givenTp, TypePackId wantedTp)
 {
     const bool wantsNothing = returnsNoValues(wantedTp);
     const bool givesNothing = returnsNoValues(givenTp);
 
     if (wantsNothing == givesNothing)
-        return std::nullopt;
+        return explainReturnLengthMismatch(givenTp, wantedTp);
 
     if (wantsNothing)
     {
@@ -1208,6 +1215,16 @@ void TypeChecker2::visit(AstStatFor* forStatement)
     checkNumber(forStatement->step);
 
     visit(forStatement->body);
+}
+
+// Luwu Classes (rfcs/classes): `for ... in x` where `x` is an object (or a class or trait value) without `__iter`.
+// `kind` is luwuNominalKind(iteratorTy).
+static std::string notIterableMessage(TypeId iteratorTy, const char* kind)
+{
+    if (std::string_view(kind) == "object")
+        return "Cannot iterate over " + describeLuwuNominalValue(iteratorTy) + ": its class doesn't define '__iter'";
+
+    return "Cannot iterate over " + describeLuwuNominalValue(iteratorTy) + " itself; only objects can be iterated, when their class defines '__iter'";
 }
 
 void TypeChecker2::visit(AstStatForIn* forInStatement)
@@ -1487,7 +1504,12 @@ void TypeChecker2::visit(AstStatForIn* forInStatement)
     }
     else if (!iteratorNorm || !iteratorNorm->shouldSuppressErrors())
     {
-        reportError(CannotCallNonFunction{iteratorTy}, forInStatement->values.data[0]->location);
+        // Luwu Classes (rfcs/classes): upstream reports any other iteratee as "Cannot call a value of type X", which
+        // for an object hides that its class just doesn't define `__iter`.
+        if (const char* kind = luwuNominalKind(iteratorTy))
+            reportError(GenericError{notIterableMessage(iteratorTy, kind)}, forInStatement->values.data[0]->location);
+        else
+            reportError(CannotCallNonFunction{iteratorTy}, forInStatement->values.data[0]->location);
     }
 }
 
@@ -1723,6 +1745,857 @@ void TypeChecker2::visit(AstStatDeclareClass* stat)
     }
 }
 
+// Luwu Traits (rfcs/classes/traits.md): where `stat` declares its member `name` (`__init` included: the method, or the
+// primary constructor), so an error about how it meets a trait's expectation goes on it
+static std::optional<Location> classMemberLocation(AstStatClass* stat, const Name& name)
+{
+    for (const AstClassMember& member : stat->members)
+    {
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && name == prop->name.value)
+            return prop->nameLocation;
+        if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && name == method->functionName.value)
+            return method->nameLocation;
+    }
+
+    if (const AstClassPrimaryConstructor* primaryConstructor = stat->primaryConstructor)
+    {
+        if (name == "__init")
+            return primaryConstructor->argLocation;
+
+        for (AstLocal* param : primaryConstructor->args)
+            if (name == param->name.value)
+                return param->location;
+    }
+
+    return std::nullopt;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): where to report something about `trait` in `stat`: its `implements` entry, or for
+// a trait implied through another one's `needs`, the entry that implies it. Never the class's name: the class header is
+// not where a trait's requirement is broken.
+static const AstClassTraitRef& traitRefFor(NotNull<Scope> scope, AstStatClass* stat, const ExternType* trait)
+{
+    LUAU_ASSERT(stat->implements.size > 0);
+
+    for (const AstClassTraitRef& ref : stat->implements)
+    {
+        AstName name;
+        if (AstExprGlobal* global = ref.trait->as<AstExprGlobal>())
+            name = global->name;
+        else if (AstExprIndexName* index = ref.trait->as<AstExprIndexName>())
+            name = index->index;
+
+        if (name.value && trait->name == name.value)
+            return ref;
+    }
+
+    for (const AstClassTraitRef& ref : stat->implements)
+    {
+        std::optional<TypeFun> listed = scope->lookupTraitRef(ref);
+        const ExternType* listedType = listed ? get<ExternType>(follow(listed->type)) : nullptr;
+        if (listedType && isSubclass(listedType, trait))
+            return ref;
+    }
+
+    // a trait none of the entries resolves to or needs (an instantiation of a generic one) still goes on the list
+    return stat->implements.data[0];
+}
+
+static Location traitRefLocation(NotNull<Scope> scope, AstStatClass* stat, const ExternType* trait)
+{
+    return traitRefFor(scope, stat, trait).trait->location;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the class's constructor has to accept what the trait's expected `__init` takes
+// after `self`, since the trait's code constructs it with those; parameters beyond them must accept nil.
+void TypeChecker2::checkTraitConstructorExpectation(AstStatClass* stat, const ExternType* classType, const ExternType* traitType)
+{
+    auto expectedInit = traitType->props().find("__init");
+    bool expectsInit = traitType->traitInfo->expectations.count("__init") && expectedInit != traitType->props().end() && expectedInit->second.readTy;
+    const FunctionType* expected = expectsInit ? get<FunctionType>(follow(*expectedInit->second.readTy)) : nullptr;
+
+    const Klass* klass = classType->relation ? get_if<Klass>(&*classType->relation) : nullptr;
+    const ExternType* classValue = klass ? get<ExternType>(follow(klass->ty)) : nullptr;
+    const TableType* metatable = classValue && classValue->metatable ? get<TableType>(follow(*classValue->metatable)) : nullptr;
+    auto call = metatable ? metatable->props.find("__call") : TableType::Props::const_iterator{};
+    bool hasCall = metatable && call != metatable->props.end() && call->second.readTy;
+    const FunctionType* ctor = hasCall ? get<FunctionType>(follow(*call->second.readTy)) : nullptr;
+
+    if (!expected || !ctor)
+        return;
+
+    // `__init(self, ...)` against the constructor `(class, ...) -> Class`: position 0 is `self` and the class respectively
+    auto [expectedArgs, expectedTail] = flatten(expected->argTypes);
+    auto [ctorArgs, ctorTail] = flatten(ctor->argTypes);
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+    Location location = classMemberLocation(stat, "__init").value_or(traitRefLocation(scope, stat, traitType));
+
+    for (size_t i = 1; i < ctorArgs.size(); ++i)
+    {
+        TypeId passed = i < expectedArgs.size() ? expectedArgs[i] : builtinTypes->nilType;
+        testIsSubtype(passed, ctorArgs[i], location);
+    }
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `fn` without its `self` parameter, when it has one. A method's `self` is its own
+// class's type, so a class's method is never a subtype of the trait's expectation with `self` left in.
+TypeId TypeChecker2::withoutSelfParameter(TypeId fnTy)
+{
+    const FunctionType* fn = get<FunctionType>(follow(fnTy));
+    bool hasSelf = fn && !fn->argNames.empty() && fn->argNames[0] && fn->argNames[0]->name == "self";
+    if (!hasSelf)
+        return fnTy;
+
+    return withoutFirstParameter(*module->internalTypes, fnTy);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the name of the first parameter `override` requires past those `overridden` takes,
+// if any. Luau's subtyping lets a function that wants more arguments stand in for one called with fewer, which would call
+// an override with nil for a parameter that can't be nil.
+std::optional<std::string> TypeChecker2::requiredExtraParameter(TypeId override, TypeId overridden)
+{
+    const FunctionType* overrideFn = get<FunctionType>(follow(override));
+    const FunctionType* overriddenFn = get<FunctionType>(follow(overridden));
+    if (!overrideFn || !overriddenFn)
+        return std::nullopt;
+
+    // A method's signature ends in an implicit `...any`; only a `...` the function writes takes more arguments
+    auto [overriddenParams, overriddenTail] = flatten(overriddenFn->argTypes);
+    bool writesVararg = overriddenFn->definition && overriddenFn->definition->varargLocation;
+    bool takesAnyMore = overriddenTail && (writesVararg || get<GenericTypePack>(follow(*overriddenTail)));
+    if (takesAnyMore)
+        return std::nullopt;
+
+    auto [overrideParams, _] = flatten(overrideFn->argTypes);
+    for (size_t i = overriddenParams.size(); i < overrideParams.size(); ++i)
+    {
+        if (isOptional(overrideParams[i]) || get<AnyType>(follow(overrideParams[i])) || get<UnknownType>(follow(overrideParams[i])))
+            continue;
+
+        bool named = i < overrideFn->argNames.size() && overrideFn->argNames[i];
+        return named ? overrideFn->argNames[i]->name : "#" + std::to_string(i + 1);
+    }
+    return std::nullopt;
+}
+
+static std::string extraRequiredParameterMessage(const Name& function, const std::string& parameter, const std::string& trait)
+{
+    return format(
+        "'%s' requires '%s', which trait '%s' doesn't pass when it calls '%s'; make '%s' optional",
+        function.c_str(),
+        parameter.c_str(),
+        trait.c_str(),
+        function.c_str(),
+        parameter.c_str()
+    );
+}
+
+// Luwu Traits (rfcs/classes/traits.md): traits whose versions of a function can't be called each other's way, which no
+// function in the class can stand in for
+static std::string conflictingTraitFunctionsMessage(
+    const std::string& className,
+    const Name& function,
+    const std::vector<std::pair<std::string, std::string>>& versions
+)
+{
+    std::string traits;
+    for (size_t i = 0; i < versions.size(); ++i)
+    {
+        if (i > 0)
+            traits += i + 1 == versions.size() ? " and " : ", ";
+        traits += "'" + versions[i].first + "'";
+    }
+
+    std::string message = format("Traits %s conflict on function '%s'.", traits.c_str(), function.c_str());
+    for (const auto& [trait, signature] : versions)
+        message += format("\n- '%s' has '%s: %s'", trait.c_str(), function.c_str(), signature.c_str());
+
+    message += format(
+        "\n\nHelp (conflicting trait functions):\n  - '%s' in class '%s' can't be called as each of these at once\n"
+        "  - Rename '%s' in one of the traits",
+        function.c_str(),
+        className.c_str(),
+        function.c_str()
+    );
+    return message;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait function as `classTy` has it, with the class for `Self`
+TypeId TypeChecker2::traitFunctionFor(const ExternType* traitType, TypeId classTy, const Name& name, TypeId function)
+{
+    const ExternType::TraitInfo& info = *traitType->traitInfo;
+    auto self = info.selfFunctions.find(name);
+    if (self == info.selfFunctions.end())
+        return function;
+
+    // As the class's copy of the trait function gets it (InstantiateNominalPropConstraint)
+    ApplyTypeFunction substitution{module->internalTypes.get()};
+    substitution.typeArguments[self->second.generic] = classTy;
+    substitution.typeArguments[self->second.selfType] = classTy;
+    std::optional<TypeId> substituted = substitution.substitute(function);
+    if (!substituted)
+        return function;
+
+    if (*substituted != function)
+        dropSubstitutedGenerics(*substituted);
+    return *substituted;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait field naming `Self`, as `classTy` has it
+std::optional<TypeId> TypeChecker2::selfFieldFor(const ExternType* traitType, TypeId classTy, const Name& name)
+{
+    const ExternType::TraitInfo& info = *traitType->traitInfo;
+    auto fieldTemplate = info.selfFieldTemplates.find(name);
+    if (fieldTemplate == info.selfFieldTemplates.end() || !info.selfMarker)
+        return std::nullopt;
+
+    DenseHashMap<TypeId, TypeId> replacements{nullptr};
+    DenseHashMap<TypePackId, TypePackId> packReplacements{nullptr};
+    replacements[*info.selfMarker] = classTy;
+    Replacer replacer{NotNull{module->internalTypes.get()}, NotNull{&replacements}, NotNull{&packReplacements}};
+    return replacer.substitute(fieldTemplate->second);
+}
+
+void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
+{
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+    std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value);
+    const ExternType* classType = classTypeFun ? get<ExternType>(follow(classTypeFun->type)) : nullptr;
+    if (!classType)
+        return;
+
+    // every member the class is missing, grouped by the `implements` entry it's reported on, so a class missing several
+    // gets one error listing them rather than one error each
+    std::vector<MissingTraitMembers> missing;
+    // each function the class writes in place of a trait's, with every trait's version of it
+    std::map<Name, std::vector<OverriddenTraitFunction>> overridden;
+
+    for (TypeId trait : classType->implementedTraits)
+    {
+        const ExternType* traitType = get<ExternType>(follow(trait));
+        const ClassFieldUserData* traitFields = traitType ? dynamic_cast<const ClassFieldUserData*>(traitType->userData.get()) : nullptr;
+        bool isTrait = traitFields && traitType->traitInfo;
+        if (!isTrait)
+            continue;
+
+        checkTraitConstructorExpectation(stat, classType, traitType);
+
+        // A field the class overrides has to fit the trait's type, as an expected field does. One the class doesn't
+        // override has the trait's own type here, so comparing every trait field the class has finds the overrides. A
+        // name that is a function in the class was already reported as one.
+        const ClassFieldUserData* classFields = dynamic_cast<const ClassFieldUserData*>(classType->userData.get());
+
+        for (const Name& name : traitFields->fieldNames)
+        {
+            bool classHasField = classFields && classFields->fieldNames.count(name);
+            if (traitType->traitInfo->expectations.count(name) || !classHasField)
+                continue;
+
+            const Property* provided = findNominalMember(traitType, name);
+            const Property* found = findNominalMember(classType, name);
+            if (!provided || !found || !provided->readTy || !found->readTy)
+                continue;
+
+            // A field naming `Self` is this class's own type in the class (the trait's field has the trait for it). Not
+            // overridden, the class has it from the trait as written; overridden, it has to fit that.
+            TypeId providedTy = *provided->readTy;
+            std::optional<Location> declaredAt = classMemberLocation(stat, name);
+            if (std::optional<TypeId> selfField = selfFieldFor(traitType, classTypeFun->type, name))
+            {
+                if (!declaredAt)
+                    continue;
+                providedTy = *selfField;
+            }
+
+            Location location = declaredAt.value_or(traitRefLocation(scope, stat, traitType));
+            testIsSubtype(*found->readTy, providedTy, location);
+        }
+
+        // A function the class writes in place of the trait's (checked below, with every other trait's version of it).
+        // Its `Self` is this class. One the trait has from a trait it needs is that trait's.
+        for (const auto& [name, provided] : traitType->props())
+        {
+            bool written = !traitFields->fieldNames.count(name) && !traitType->traitInfo->expectations.count(name);
+            bool checkable = written && name != "__init" && !traitType->traitInfo->fromNeeds.count(name) && provided.readTy;
+            if (!checkable || containsErrorType(*provided.readTy) || !classMemberLocation(stat, name))
+                continue;
+
+            TypeId providedFunction = traitFunctionFor(traitType, classTypeFun->type, name, *provided.readTy);
+            if (get<FunctionType>(follow(providedFunction)))
+                overridden[name].push_back(OverriddenTraitFunction{traitType, providedFunction});
+        }
+
+        for (const auto& [name, optional] : traitType->traitInfo->expectations)
+        {
+            // an expected constructor is checked by checkTraitConstructorExpectation
+            if (name != "__init" && !findNominalMember(classType, name))
+                addMissingTraitMember(missing, stat, traitType, name, traitFields->fieldNames.count(name) > 0);
+
+            const Property* expected = findNominalMember(traitType, name);
+            const Property* found = findNominalMember(classType, name);
+            if (name == "__init" || !expected || !found || !expected->readTy || !found->readTy)
+                continue;
+
+            Location location = classMemberLocation(stat, name).value_or(traitRefLocation(scope, stat, traitType));
+
+            if (traitFields->fieldNames.count(name))
+            {
+                testIsSubtype(*found->readTy, *expected->readTy, location);
+                continue;
+            }
+
+            // An optional function the class leaves out has the trait's own `F?` type, and isn't a function. An expectation
+            // whose signature has an error (reported where it is written) isn't compared.
+            TypeId expectedFunction = expectedTraitFunction(*expected->readTy);
+            bool bothFunctions = get<FunctionType>(expectedFunction) && get<FunctionType>(follow(*found->readTy));
+            if (bothFunctions && !containsErrorType(expectedFunction))
+                testIsSubtype(withoutSelfParameter(*found->readTy), withoutSelfParameter(expectedFunction), location);
+        }
+    }
+
+    for (const MissingTraitMembers& group : missing)
+        reportMissingTraitMembers(classType, group);
+
+    for (const auto& [name, versions] : overridden)
+    {
+        const Property* found = findNominalMember(classType, name);
+        std::optional<Location> location = classMemberLocation(stat, name);
+        if (location && found && found->readTy && get<FunctionType>(follow(*found->readTy)))
+            checkTraitFunctionOverride(classType, name, *found->readTy, versions, *location);
+    }
+}
+
+// Luwu Traits (rfcs/classes/traits.md): whether `function` can be called as `as` is: it takes what `as` is passed (`self`
+// aside, and no more required arguments) and returns what `as` returns
+bool TypeChecker2::worksAsTraitFunction(TypeId function, TypeId as, NotNull<Scope> scope)
+{
+    if (requiredExtraParameter(function, as))
+        return false;
+    return subtyping->isSubtype(withoutSelfParameter(function), withoutSelfParameter(as), scope).isSubtype;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class's function in place of one or more traits' has to work as each of them,
+// since code holding any of those traits calls it as that trait's (an override that can't be called the same way would
+// get the wrong arguments at runtime). When the traits' versions can't be called each other's way, no one function
+// works as all of them: that is reported once, naming them, since only renaming one of them fixes it.
+void TypeChecker2::checkTraitFunctionOverride(
+    const ExternType* classType,
+    const Name& name,
+    TypeId override,
+    const std::vector<OverriddenTraitFunction>& versions,
+    Location location
+)
+{
+    NotNull<Scope> scope{findInnermostScope(location)};
+
+    std::vector<const OverriddenTraitFunction*> unfit;
+    for (const OverriddenTraitFunction& version : versions)
+    {
+        if (!worksAsTraitFunction(override, version.function, scope))
+            unfit.push_back(&version);
+    }
+    if (unfit.empty())
+        return;
+
+    bool conflicting = false;
+    for (size_t i = 0; i < versions.size() && !conflicting; ++i)
+    {
+        for (size_t j = i + 1; j < versions.size() && !conflicting; ++j)
+        {
+            bool eitherWorks = worksAsTraitFunction(versions[i].function, versions[j].function, scope) ||
+                               worksAsTraitFunction(versions[j].function, versions[i].function, scope);
+            conflicting = !eitherWorks;
+        }
+    }
+
+    if (conflicting)
+    {
+        std::vector<std::pair<std::string, std::string>> signatures;
+        for (const OverriddenTraitFunction& version : versions)
+            signatures.emplace_back(version.trait->name, toString(withoutSelfParameter(version.function)));
+        reportError(GenericError{conflictingTraitFunctionsMessage(classType->name, name, signatures)}, location);
+        return;
+    }
+
+    std::vector<TypeId> reported;
+    for (const OverriddenTraitFunction* version : unfit)
+    {
+        // Traits with the same signature (each works as the other) get one error between them
+        bool sameAsReported = std::any_of(
+            reported.begin(),
+            reported.end(),
+            [&](TypeId other)
+            {
+                return worksAsTraitFunction(other, version->function, scope) && worksAsTraitFunction(version->function, other, scope);
+            }
+        );
+        if (sameAsReported)
+            continue;
+        reported.push_back(version->function);
+
+        if (std::optional<std::string> extra = requiredExtraParameter(override, version->function))
+            reportError(GenericError{extraRequiredParameterMessage(name, *extra, version->trait->name)}, location);
+        else
+            testIsSubtype(withoutSelfParameter(override), withoutSelfParameter(version->function), location);
+    }
+}
+
+// Luwu Traits (rfcs/classes/traits.md): "'C' implements 'Base<string>', but 'Mut<number>' needs 'Base<number>'"
+static std::string neededTraitMismatchMessage(
+    const std::string& className,
+    TypeId implemented,
+    TypeId needing,
+    const std::string& neededName,
+    const std::vector<TypeId>& neededArguments
+)
+{
+    std::string needed = neededName + "<";
+    for (size_t i = 0; i < neededArguments.size(); ++i)
+        needed += (i > 0 ? ", " : "") + toString(neededArguments[i]);
+    needed += ">";
+
+    return format(
+        "'%s' implements '%s', but '%s' needs '%s'",
+        className.c_str(),
+        toString(implemented).c_str(),
+        toString(needing).c_str(),
+        needed.c_str()
+    );
+}
+
+void TypeChecker2::checkNeededTraitArguments(AstStatClass* stat)
+{
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+    std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value);
+    const ExternType* classType = classTypeFun ? get<ExternType>(follow(classTypeFun->type)) : nullptr;
+    if (!classType)
+        return;
+
+    // The class's instantiation of the generic trait `traitTemplate`, or nullptr when it implements none
+    auto implementedInstantiation = [&](TypeId traitTemplate) -> TypeId
+    {
+        for (TypeId trait : classType->implementedTraits)
+        {
+            const ExternType* traitType = get<ExternType>(follow(trait));
+            if (traitType && traitType->genericTemplate && traitTemplateOf(trait) == traitTemplate)
+                return follow(trait);
+        }
+
+        return nullptr;
+    };
+
+    for (TypeId trait : classType->implementedTraits)
+    {
+        trait = follow(trait);
+        const ExternType* traitType = get<ExternType>(trait);
+        if (!traitType || !traitType->traitInfo)
+            continue;
+
+        const ExternType* traitTemplate = get<ExternType>(traitTemplateOf(trait));
+        if (!traitTemplate)
+            continue;
+
+        for (const auto& [neededTrait, _] : traitType->traitInfo->neededTypeArguments)
+        {
+            TypeId needed = follow(neededTrait);
+            TypeId implemented = implementedInstantiation(needed);
+            const ExternType* implementedType = implemented ? get<ExternType>(implemented) : nullptr;
+            const ExternType* neededType = get<ExternType>(needed);
+            if (!implementedType || !neededType)
+                continue;
+
+            std::vector<TypeId> copiedReferences;
+            std::optional<std::vector<TypeId>> arguments = neededTraitTypeArguments(
+                module->internalTypes.get(), *traitTemplate, needed, traitType->instantiatedTypeParams, copiedReferences
+            );
+            if (!arguments || arguments->size() != implementedType->instantiatedTypeParams.size())
+                continue;
+
+            // a nominal's type parameters are invariant, so each argument has to be equivalent
+            bool matches = true;
+            for (size_t i = 0; i < arguments->size() && matches; ++i)
+            {
+                TypeId expected = (*arguments)[i];
+                TypeId found = implementedType->instantiatedTypeParams[i];
+                bool narrower = subtyping->isSubtype(expected, found, scope).isSubtype;
+                bool wider = subtyping->isSubtype(found, expected, scope).isSubtype;
+                matches = narrower && wider;
+            }
+
+            if (!matches)
+            {
+                std::string message = neededTraitMismatchMessage(stat->name->name.value, implemented, trait, neededType->name, *arguments);
+                reportError(GenericError{message}, traitRefLocation(scope, stat, traitType));
+            }
+        }
+    }
+}
+
+void TypeChecker2::checkTraitArguments(AstStatClass* stat)
+{
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+
+    for (const AstClassTraitRef& ref : stat->implements)
+    {
+        for (AstExpr* arg : ref.args)
+            visit(arg, ValueContext::RValue);
+
+        std::optional<TypeFun> traitFun = scope->lookupTraitRef(ref);
+        const ExternType* traitType = traitFun ? get<ExternType>(follow(traitFun->type)) : nullptr;
+
+        // a generic trait's parameter types mention its own generics (see ConstraintGenerator::checkTraitArguments)
+        bool isGeneric = traitFun && (!traitFun->typeParams.empty() || !traitFun->typePackParams.empty());
+        if (!traitType || !traitType->traitInfo || isGeneric)
+            continue;
+
+        const std::vector<ExternType::TraitInfo::Parameter>& params = traitType->traitInfo->parameters;
+
+        for (size_t i = 0; i < ref.args.size && i < params.size(); ++i)
+        {
+            auto field = traitType->props().find(params[i].name);
+            if (field != traitType->props().end() && field->second.readTy)
+                testIsSubtype(lookupType(ref.args.data[i]), *field->second.readTy, ref.args.data[i]->location);
+        }
+    }
+}
+
+// Luwu Traits (rfcs/classes/traits.md): what a value of type `ty` is, for "expected this to be a trait, but got '...'",
+// named like the runtime's luaR_describenontrait without its article: 'nil', 'none', 'true', 'table'. Nullopt when the
+// type doesn't say (`any`, a union, an extern type, ...).
+static std::optional<std::string> describeNonTraitValue(TypeId ty)
+{
+    ty = follow(ty);
+
+    if (const SingletonType* singleton = get<SingletonType>(ty))
+    {
+        if (const BooleanSingleton* boolean = get<BooleanSingleton>(singleton))
+            return boolean->value ? "true" : "false";
+        return "string";
+    }
+
+    if (get<TableType>(ty) || get<MetatableType>(ty))
+        return "table";
+    if (get<FunctionType>(ty))
+        return "function";
+
+    const PrimitiveType* primitive = get<PrimitiveType>(ty);
+    if (!primitive)
+        return std::nullopt;
+
+    switch (primitive->type)
+    {
+    case PrimitiveType::NilType:
+        return "nil";
+    case PrimitiveType::NoneType:
+        return "none";
+    case PrimitiveType::Boolean:
+        return "boolean";
+    case PrimitiveType::Number:
+        return "number";
+    case PrimitiveType::Integer:
+        return "integer";
+    case PrimitiveType::String:
+        return "string";
+    case PrimitiveType::Thread:
+        return "thread";
+    case PrimitiveType::Function:
+        return "function";
+    case PrimitiveType::Table:
+        return "table";
+    case PrimitiveType::Buffer:
+        return "buffer";
+    }
+
+    return std::nullopt;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): an entry of `implements` or `needs` that names no trait. Analysis skips such an
+// entry everywhere else, so without this the class or trait checks as if the entry weren't there; the runtime raises.
+void TypeChecker2::checkTraitRefs(AstStatClass* stat, const AstArray<AstClassTraitRef>& refs)
+{
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+
+    for (const AstClassTraitRef& ref : refs)
+    {
+        // A global's value decides first: `none` is also the name of a type, but `implements none` reads the value.
+        AstExprGlobal* global = ref.trait->as<AstExprGlobal>();
+        std::optional<TypeId> globalValue = global ? scope->lookup(global->name) : std::nullopt;
+
+        bool isClass = false;
+        // what the entry is instead, when it is neither a trait nor a class
+        std::optional<std::string> got;
+        // the entry names a trait whose type failed to check, e.g. one exported from a module that failed to export
+        bool isBrokenTrait = false;
+
+        const ExternType* valueType = globalValue ? get<ExternType>(follow(*globalValue)) : nullptr;
+        bool isTraitValue = valueType && valueType->root == builtinTypes->traitType;
+        bool isClassValue = valueType && valueType->root == builtinTypes->classType;
+
+        if (isTraitValue)
+            continue;
+        else if (isClassValue)
+            isClass = true;
+        else if (globalValue)
+            got = describeNonTraitValue(*globalValue);
+
+        bool undecided = !isClass && !got;
+        if (undecided)
+        {
+            if (std::optional<TypeFun> found = scope->lookupTraitRef(ref))
+            {
+                const ExternType* foundType = get<ExternType>(follow(found->type));
+                if (foundType && foundType->traitInfo)
+                    continue;
+
+                isBrokenTrait = get<ErrorType>(follow(found->type)) != nullptr;
+
+                isClass = foundType && foundType->relation && get_if<Klass>(&*foundType->relation);
+                // a type of that name with no value of it, which the runtime reads as nil
+                if (!isClass && global && !globalValue)
+                    got = "nil";
+            }
+            else if (global && !globalValue)
+                got = "nil";
+            else if (AstExprIndexName* index = ref.trait->as<AstExprIndexName>())
+            {
+                // `mod.Trait`, where `mod` is a required module that has no such type. Any other expression is only
+                // known at runtime.
+                AstExprLocal* moduleLocal = index->expr->as<AstExprLocal>();
+                bool isModule = false;
+                for (const Scope* s = scope.get(); moduleLocal && s && !isModule; s = s->parent.get())
+                    isModule = s->importedTypeBindings.count(moduleLocal->local->name.value) > 0;
+
+                if (isModule)
+                    got = "nil";
+            }
+        }
+
+        if (isBrokenTrait)
+        {
+            const char* kind = stat->isTrait ? "trait" : "class";
+            reportError(
+                GenericError{format(
+                    "This trait failed to typecheck, so %s '%s' gets none of its members; check the errors where it is defined",
+                    kind,
+                    stat->name->name.value
+                )},
+                ref.trait->location
+            );
+        }
+        else if (isClass && stat->isTrait)
+            reportError(GenericError{"This is a class, traits are not allowed to depend on classes (only other traits)"}, ref.trait->location);
+        else if (isClass)
+            reportError(GenericError{"This is a class, classes can only implement traits (not other classes)"}, ref.trait->location);
+        else if (got)
+            reportError(GenericError{format("Expected this to be a trait, but got '%s'", got->c_str())}, ref.trait->location);
+    }
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait's field or function overrides the member of the same name in a trait it
+// needs (directly or through others) for the classes implementing both. Checked where the override is written, so code
+// holding the needed trait is typed right whichever runs: a field overrides a field and a function a function, the
+// overridden member isn't `final`, access (and a field's constness) stays the same, and the type fits. The runtime
+// checks all but the type again (luaR_overridingtrait).
+void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
+{
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+    std::optional<TypeFun> traitFun = scope->lookupType(stat->name->name.value);
+    const ExternType* traitType = traitFun ? get<ExternType>(follow(traitFun->type)) : nullptr;
+    if (!traitType || !traitType->traitInfo)
+        return;
+
+    // every trait this one needs, once each however the `needs` graph branches
+    std::vector<const ExternType*> needed;
+    std::vector<TypeId> pending{traitType->implementedTraits.begin(), traitType->implementedTraits.end()};
+    DenseHashSet<const ExternType*> visited{nullptr};
+    while (!pending.empty())
+    {
+        const ExternType* current = get<ExternType>(follow(pending.back()));
+        // a trait needed with type arguments is listed as an instantiation (`Base<T>`), once per trait listing it
+        const ExternType* currentTrait = get<ExternType>(traitTemplateOf(pending.back()));
+        pending.pop_back();
+
+        if (!current || !current->traitInfo || visited.contains(currentTrait) || currentTrait == traitType)
+            continue;
+
+        visited.insert(currentTrait);
+        needed.push_back(current);
+        pending.insert(pending.end(), current->implementedTraits.begin(), current->implementedTraits.end());
+    }
+
+    // What this trait writes itself: its fields and functions, and its parameters, each of which declares a field. A
+    // trait's field always has a value (the parser refuses one without), so an overriding field does too.
+    struct Declared
+    {
+        Name name;
+        Location location;
+        bool isField;
+    };
+
+    std::vector<Declared> declared;
+    for (const AstClassMember& member : stat->members)
+    {
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && !prop->expectLocation)
+            declared.push_back({prop->name.value, prop->nameLocation, /* isField */ true});
+        else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && !method->expectLocation)
+            declared.push_back({method->functionName.value, method->nameLocation, /* isField */ false});
+    }
+
+    if (stat->primaryConstructor)
+    {
+        for (AstLocal* param : stat->primaryConstructor->args)
+        {
+            bool restated = std::any_of(
+                declared.begin(),
+                declared.end(),
+                [&](const Declared& d)
+                {
+                    return d.name == param->name.value;
+                }
+            );
+
+            if (!restated)
+                declared.push_back({param->name.value, param->location, /* isField */ true});
+        }
+    }
+
+    for (const Declared& mine : declared)
+    {
+        // each trait's `__implemented` hook is its own: a needing trait's doesn't override the needed trait's
+        if (mine.name == "__implemented")
+            continue;
+
+        const Property* myProp = findNominalMember(traitType, mine.name);
+
+        for (const ExternType* other : needed)
+        {
+            // only where the member is written: an expectation, or a member the other trait has from its own needs
+            const ExternType::TraitInfo& info = *other->traitInfo;
+            if (info.expectations.count(mine.name) || info.fromNeeds.count(mine.name))
+                continue;
+
+            const Property* theirs = findNominalMember(other, mine.name);
+            if (!theirs)
+                continue;
+
+            const ClassFieldUserData* otherFields = dynamic_cast<const ClassFieldUserData*>(other->userData.get());
+            bool theirsIsField = otherFields && otherFields->fieldNames.count(mine.name);
+
+            if (mine.isField != theirsIsField)
+                reportError(
+                    GenericError{format(
+                        "Trait '%s' can't redefine '%s' as a %s: it is a %s in trait '%s'",
+                        traitType->name.c_str(),
+                        mine.name.c_str(),
+                        mine.isField ? "field" : "function",
+                        theirsIsField ? "field" : "function",
+                        other->name.c_str()
+                    )},
+                    mine.location
+                );
+            else if (info.finals.count(mine.name))
+                reportError(
+                    GenericError{format("'%s' is final in trait '%s' and can't be overridden", mine.name.c_str(), other->name.c_str())}, mine.location
+                );
+            else if (myProp && myProp->isPrivate != theirs->isPrivate)
+                reportError(
+                    GenericError{format(
+                        "'%s' must be %s to override it from trait '%s'",
+                        mine.name.c_str(),
+                        theirs->isPrivate ? "private" : "public",
+                        other->name.c_str()
+                    )},
+                    mine.location
+                );
+            else if (mine.isField && myProp && myProp->isConst != theirs->isConst)
+                reportError(
+                    GenericError{format(
+                        "'%s' must be %s to override it from trait '%s'",
+                        mine.name.c_str(),
+                        theirs->isConst ? "const" : "non-const",
+                        other->name.c_str()
+                    )},
+                    mine.location
+                );
+            else if (mine.isField && myProp && myProp->readTy && theirs->readTy && !containsErrorType(*theirs->readTy))
+                testIsSubtype(*myProp->readTy, *theirs->readTy, mine.location);
+            else if (!mine.isField && myProp && myProp->readTy && theirs->readTy && !containsErrorType(*theirs->readTy))
+                testIsSubtype(withoutSelfParameter(*myProp->readTy), withoutSelfParameter(*theirs->readTy), mine.location);
+        }
+    }
+}
+
+void TypeChecker2::addMissingTraitMember(
+    std::vector<MissingTraitMembers>& missing,
+    AstStatClass* stat,
+    const ExternType* traitType,
+    const Name& name,
+    bool isField
+)
+{
+    NotNull<Scope> scope{findInnermostScope(stat->location)};
+    const AstClassTraitRef& ref = traitRefFor(scope, stat, traitType);
+
+    auto group = std::find_if(
+        missing.begin(),
+        missing.end(),
+        [&](const MissingTraitMembers& g)
+        {
+            return g.location == ref.trait->location;
+        }
+    );
+
+    if (group == missing.end())
+    {
+        // the trait the entry names, which a member reached through its `needs` isn't
+        std::optional<TypeFun> listed = scope->lookupTraitRef(ref);
+        const ExternType* listedType = listed ? get<ExternType>(follow(listed->type)) : nullptr;
+        missing.push_back({ref.trait->location, listedType ? listedType->name : traitType->name});
+        group = missing.end() - 1;
+    }
+
+    // the member as the trait declares it: `name: type` for a field, a signature for a function
+    const Property* expected = findNominalMember(traitType, name);
+    std::optional<TypeId> expectedTy = expected ? expected->readTy : std::nullopt;
+    const FunctionType* expectedFn = expectedTy ? get<FunctionType>(follow(*expectedTy)) : nullptr;
+
+    std::string member = name;
+    if (isField && expectedTy)
+        member += ": " + toString(*expectedTy);
+    else if (expectedFn)
+        member = "function " + toStringNamedFunction(name, *expectedFn);
+
+    // written as the class has to write it
+    if (expected && isField && expected->isConst)
+        member = "const " + member;
+    if (expected && traitType->traitInfo->hasAccessSpecifiers)
+        member = (expected->isPrivate ? "private " : "public ") + member;
+
+    std::string entry = "'" + member + "'";
+    if (traitType->name != group->traitName)
+        entry += " (from '" + traitType->name + "')";
+
+    group->members.push_back(std::move(entry));
+    (isField ? group->fields : group->functions)++;
+}
+
+// "'Flag' is missing 3 members to implement 'ArgInProgress':" and a bullet per member, like a table literal's missing
+// fields
+void TypeChecker2::reportMissingTraitMembers(const ExternType* classType, const MissingTraitMembers& group)
+{
+    size_t count = group.members.size();
+    const char* kind = group.functions == 0 ? "field" : group.fields == 0 ? "function" : "member";
+
+    std::string message = "'" + classType->name + "' is missing ";
+    message += count == 1 ? std::string("a ") + kind : std::to_string(count) + " " + kind + "s";
+    message += " to implement '" + group.traitName + "':";
+
+    for (const std::string& member : group.members)
+        message += "\n  • " + member;
+
+    reportError(GenericError{message}, group.location);
+}
+
 void TypeChecker2::visit(AstStatClass* stat)
 {
     LUAU_ASSERT(FFlag::LuwuClasses);
@@ -1758,7 +2631,8 @@ void TypeChecker2::visit(AstStatClass* stat)
         {
             const AstClassProperty* prop = member.get_if<AstClassProperty>();
 
-            if (!prop || prop->defaultValue || !prop->ty)
+            // Luwu Traits (rfcs/classes/traits.md): an expected field is the implementing class's to initialize
+            if (!prop || prop->defaultValue || !prop->ty || prop->expectLocation)
                 continue;
 
             size_t paramIndex = primaryConstructor->args.size;
@@ -1848,7 +2722,22 @@ void TypeChecker2::visit(AstStatClass* stat)
     if (fieldCount > 0 && !hasPublicField && !hasFunction)
     {
         NotNull<Scope> scope{findInnermostScope(stat->location)};
-        if (std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value))
+        std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value);
+
+        // Luwu Traits (rfcs/classes/traits.md): the traits a class implements add members too, whose code may use the
+        // class's private fields
+        const ExternType* objectType = classTypeFun ? get<ExternType>(follow(classTypeFun->type)) : nullptr;
+        bool traitsAddMembers = false;
+        if (objectType && !objectType->implementedTraits.empty())
+        {
+            for (const auto& [_, prop] : objectType->props())
+                traitsAddMembers |= !prop.isPrivate;
+
+            const TableType* metatable = objectType->metatable ? get<TableType>(follow(*objectType->metatable)) : nullptr;
+            traitsAddMembers |= metatable && !metatable->props.empty();
+        }
+
+        if (classTypeFun && !traitsAddMembers)
             reportError(UnusableClass{classTypeFun->type}, stat->name->location);
     }
 
@@ -1900,12 +2789,77 @@ void TypeChecker2::visit(AstStatClass* stat)
                 prop->defaultValue->visit(&finder);
         }
 
+        // Luwu Traits (rfcs/classes/traits.md): a trait that expects `__init` constructs its implementing classes through
+        // `class<Trait>` values, which no search can follow, so such a class may well be instantiated
+        if (!finder.found && stat->implements.size > 0)
+        {
+            std::optional<TypeFun> classTypeFun = findInnermostScope(stat->location)->lookupType(stat->name->name.value);
+            const ExternType* classType = classTypeFun ? get<ExternType>(follow(classTypeFun->type)) : nullptr;
+
+            for (TypeId trait : classType ? classType->implementedTraits : std::vector<TypeId>{})
+            {
+                const ExternType* traitType = get<ExternType>(follow(trait));
+                if (traitType && traitType->traitInfo && traitType->traitInfo->expectations.count("__init"))
+                    finder.found = true;
+            }
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): a trait the class implements may construct it from its own code -- its
+        // `__create` and its statics, the functions that run as the trait's rather than as a class's copy
+        if (!finder.found && stat->implements.size > 0 && sourceModule->root)
+        {
+            auto isImplemented = [&](AstName name)
+            {
+                for (const AstClassTraitRef& ref : stat->implements)
+                    if (AstExprGlobal* global = ref.trait->as<AstExprGlobal>(); global && global->name == name)
+                        return true;
+
+                return false;
+            };
+
+            for (AstStat* other : sourceModule->root->body)
+            {
+                AstStatClass* trait = other->as<AstStatClass>();
+                if (!trait || !trait->isTrait || !isImplemented(trait->name->name))
+                    continue;
+
+                for (const AstClassMember& member : trait->members)
+                {
+                    const AstClassMethod* method = member.get_if<AstClassMethod>();
+                    bool runsAsTrait = method && !method->expectLocation &&
+                                       (method->function->args.size == 0 || method->function->args.data[0]->name != "self");
+                    if (runsAsTrait)
+                        method->function->visit(&finder);
+                }
+            }
+        }
+
         if (!finder.found)
         {
             NotNull<Scope> scope{findInnermostScope(stat->location)};
             if (std::optional<TypeFun> classTypeFun = scope->lookupType(stat->name->name.value))
                 reportError(UninstantiableClass{classTypeFun->type}, stat->name->location);
         }
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): every `implements` and `needs` entry has to name a trait
+    if (FFlag::LuwuTraits)
+    {
+        checkTraitRefs(stat, stat->implements);
+        checkTraitRefs(stat, stat->needs);
+
+        if (stat->isTrait && stat->needs.size > 0)
+            checkTraitOverrides(stat);
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): a member a trait expects has to fit the type the trait's functions assume. A
+    // function's `self` differs by design (the trait's object type there, the class's here), so functions are compared
+    // without it (withoutSelfParameter).
+    if (stat->implements.size > 0)
+    {
+        checkTraitFieldExpectations(stat);
+        checkTraitArguments(stat);
+        checkNeededTraitArguments(stat);
     }
 
     for (const auto& member : stat->members)
@@ -1925,6 +2879,26 @@ void TypeChecker2::visit(AstStatClass* stat)
         }
         else if (const auto* method = member.get_if<AstClassMethod>())
         {
+            // Luwu Traits (rfcs/classes/traits.md): an expected function is a signature, with nothing to check in its body.
+            // Its annotations are still checked: a generic type without its arguments, an unknown name.
+            if (method->expectLocation)
+            {
+                const AstExprFunction* fn = method->function;
+                visitGenerics(fn->generics, fn->genericPacks);
+
+                for (AstLocal* arg : fn->args)
+                    if (arg->annotation)
+                        visit(arg->annotation);
+
+                if (fn->varargAnnotation)
+                    visit(fn->varargAnnotation);
+
+                if (fn->returnAnnotation)
+                    visit(fn->returnAnnotation);
+
+                continue;
+            }
+
             visit(method->function);
 
             if (method->functionName == "__tostring")
@@ -2005,7 +2979,14 @@ void TypeChecker2::visit(AstStatError* stat)
         visit(expr, ValueContext::RValue);
 
     for (AstStat* s : stat->statements)
+    {
+        // Luwu Classes (rfcs/classes): a class the parser refused (a second one with a name already taken) was never
+        // given a type, so its members have none to check; the parse error is what's wrong with it
+        if (s->is<AstStatClass>())
+            continue;
+
         visit(s);
+    }
 }
 
 void TypeChecker2::visit(AstExpr* expr, ValueContext context)
@@ -2272,6 +3253,14 @@ static std::optional<std::string> bindingName(AstExpr* expr)
             return *base + "." + index->index.value;
     }
     return std::nullopt;
+}
+
+// Luwu (helpful subtyping errors): whether `name` is a class or trait read by its own name (`Ink`, of type `class<Ink>`).
+// Calling the value 'Ink' only repeats the type printed next to it.
+static bool namesItsOwnDeclaration(const std::string& name, TypeId ty)
+{
+    const ExternType* etv = get<ExternType>(follow(ty));
+    return etv && nominalValueKind(*etv) && etv->name == name;
 }
 
 // Luwu (helpful subtyping errors): how to refer to the function being called in a diagnostic: a name as
@@ -2811,8 +3800,8 @@ void TypeChecker2::checkPrivatePropertyAccess(TypeId tableTy, const std::string&
     const ExternType* cls = get<ExternType>(follow(tableTy));
     while (cls)
     {
-        auto it = cls->props.find(prop);
-        if (it != cls->props.end())
+        auto it = cls->props().find(prop);
+        if (it != cls->props().end())
         {
             // a class's functions are its only read-only members; its fields are always read-write,
             // even `const` ones (see ConstraintGenerator)
@@ -2834,7 +3823,8 @@ bool TypeChecker2::checkConstructorReadByName(TypeId tableTy, const std::string&
         return false;
 
     const ExternType* cls = get<ExternType>(follow(tableTy));
-    const bool isClassOrObject = cls && (cls->root == builtinTypes->classType || cls->root == builtinTypes->objectType);
+    const bool isClassOrObject =
+        cls && (cls->root == builtinTypes->classType || cls->root == builtinTypes->objectType || cls->root == builtinTypes->traitType);
     if (!isClassOrObject)
         return false;
 
@@ -2956,10 +3946,12 @@ void TypeChecker2::checkConstPropertyAssignment(
     const ExternType* cls = get<ExternType>(follow(tableTy));
     while (cls)
     {
-        auto it = cls->props.find(prop);
-        if (it != cls->props.end())
+        auto it = cls->props().find(prop);
+        if (it != cls->props().end())
         {
-            if (it->second.isConst && !isInitWritingItsSelf(cls, objectExpr))
+            if (it->second.isFinal)
+                reportError(GenericError{format("'%s' is a final field of '%s' and can't be assigned", prop.c_str(), cls->name.c_str())}, location);
+            else if (it->second.isConst && !isInitWritingItsSelf(cls, objectExpr))
                 reportError(ConstPropertyAssignment{tableTy, prop, cls->name}, location);
             return;
         }
@@ -2985,11 +3977,24 @@ void TypeChecker2::checkPrivateConstructorAccess(TypeId classTy, const Location&
     if (!instanceCls)
         return;
 
-    auto it = instanceCls->props.find("__init");
-    if (it == instanceCls->props.end())
+    auto it = instanceCls->props().find("__init");
+    if (it == instanceCls->props().end())
         return;
 
-    if (it->second.isPrivate && !isInsideClassDeclaration(instanceCls, module->name, location))
+    // Luwu Traits (rfcs/classes/traits.md): the code of a trait the class implements may construct it too, which is what
+    // lets a factory trait's `__create` be the only way to make its classes
+    bool insideImplementedTrait = std::any_of(
+        instanceCls->implementedTraits.begin(),
+        instanceCls->implementedTraits.end(),
+        [&](TypeId trait)
+        {
+            const ExternType* traitCls = get<ExternType>(follow(trait));
+            return traitCls && isInsideClassDeclaration(traitCls, module->name, location);
+        }
+    );
+
+    bool mayConstruct = isInsideClassDeclaration(instanceCls, module->name, location) || insideImplementedTrait;
+    if (it->second.isPrivate && !mayConstruct)
         reportError(PrivateConstructorAccess{classTy}, location);
 }
 
@@ -3460,6 +4465,89 @@ static bool isComparisonOp(AstExprBinary::Op op)
            op == AstExprBinary::CompareLe || op == AstExprBinary::CompareLt;
 }
 
+struct TypeQuery
+{
+    std::string_view function; // "type" or "typeof"
+    AstExpr* argument;
+};
+
+// `type(x)` or `typeof(x)`, where `type`/`typeof` is the global
+static std::optional<TypeQuery> matchTypeQuery(AstExpr* expr)
+{
+    AstExprCall* call = expr->as<AstExprCall>();
+    if (!call || call->self || call->args.size != 1)
+        return std::nullopt;
+
+    AstExprGlobal* global = call->func->as<AstExprGlobal>();
+    if (!global)
+        return std::nullopt;
+
+    std::string_view name = global->name.value;
+    if (name != "type" && name != "typeof")
+        return std::nullopt;
+
+    return TypeQuery{name, call->args.data[0]};
+}
+
+// What to check instead, for a value of type `queriedTy` (an object, class or trait value): its class, or the trait its
+// declared type names.
+static std::optional<std::string> luwuNominalCheckHint(TypeId queriedTy)
+{
+    const ExternType* etv = get<ExternType>(follow(queriedTy));
+    if (!etv || !etv->relation)
+        return std::nullopt;
+
+    const Klass* klass = etv->relation->get_if<Klass>();
+    if (!klass)
+        return std::nullopt;
+
+    const char* declarationKind = luwuNominalKind(klass->ty);
+    bool isTrait = declarationKind && std::string_view(declarationKind) == "trait";
+    return luwuNominalCheckSuggestion(etv->name, isTrait);
+}
+
+static std::string luwuNominalTypeComparisonMessage(
+    std::string_view queryFunction,
+    std::string_view compared,
+    TypeId queriedTy,
+    const char* kind,
+    bool comparesEqual
+)
+{
+    std::string_view result = comparesEqual ? "false" : "true";
+    std::string message = "'" + std::string(queryFunction) + "' of " + describeLuwuNominalValue(queriedTy) + " is always \"" + kind +
+                          "\", so comparing it with \"" + std::string(compared) + "\" is always " + std::string(result);
+
+    if (std::optional<std::string> hint = luwuNominalCheckHint(queriedTy))
+        message += "; " + *hint;
+
+    return message;
+}
+
+void TypeChecker2::checkLuwuNominalTypeComparison(AstExprBinary* expr)
+{
+    std::optional<TypeQuery> query = matchTypeQuery(expr->left);
+    AstExpr* other = expr->right;
+    if (!query)
+    {
+        query = matchTypeQuery(expr->right);
+        other = expr->left;
+    }
+
+    AstExprConstantString* compared = other->as<AstExprConstantString>();
+    if (!query || !compared)
+        return;
+
+    TypeId queriedTy = lookupType(query->argument);
+    const char* kind = luwuNominalKind(queriedTy);
+    std::string_view comparedName{compared->value.data, compared->value.size};
+    if (!kind || comparedName == kind)
+        return;
+
+    bool comparesEqual = expr->op == AstExprBinary::Op::CompareEq;
+    reportError(GenericError{luwuNominalTypeComparisonMessage(query->function, comparedName, queriedTy, kind, comparesEqual)}, expr->location);
+}
+
 TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
 {
     std::optional<InConditionalContext> inContext;
@@ -3479,6 +4567,9 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
     bool isEquality = expr->op == AstExprBinary::Op::CompareEq || expr->op == AstExprBinary::Op::CompareNe;
     bool isComparison = isComparisonOp(expr->op);
     bool isLogical = expr->op == AstExprBinary::Op::And || expr->op == AstExprBinary::Op::Or;
+
+    if (isEquality)
+        checkLuwuNominalTypeComparison(expr);
 
     TypeId leftType = follow(lookupType(expr->left));
     TypeId rightType = follow(lookupType(expr->right));
@@ -3528,7 +4619,8 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
     {
         if (!isOkToCompare(normalizer, typesHaveIntersection, normLeft, normRight))
         {
-            reportError(CannotCompareUnrelatedTypes{leftType, rightType, expr->op}, expr->location);
+            CannotCompareUnrelatedTypes error{leftType, rightType, expr->op, bindingName(expr->left), bindingName(expr->right)};
+            reportError(std::move(error), expr->location);
             return builtinTypes->errorType;
         }
 
@@ -3872,9 +4964,15 @@ void TypeChecker2::visit(AstExprIfElse* expr)
 void TypeChecker2::visit(AstExprInstantiate* explicitTypeInstantiation)
 {
     visit(explicitTypeInstantiation->expr, ValueContext::RValue);
+
+    // Luwu Classes (rfcs/classes): `Box<<string>>` instantiates the constructor (a trait's `__create`)
+    TypeId instantiated = lookupType(explicitTypeInstantiation->expr);
+    if (FFlag::LuwuClasses)
+        instantiated = classValueCallType(builtinTypes, instantiated).value_or(instantiated);
+
     checkTypeInstantiation(
         explicitTypeInstantiation->expr,
-        lookupType(explicitTypeInstantiation->expr),
+        instantiated,
         explicitTypeInstantiation->location,
         explicitTypeInstantiation->typeArguments
     );
@@ -3979,10 +5077,12 @@ void TypeChecker2::visit(AstTypeReference* ty)
     if (FFlag::DebugLuauMagicTypes && (ty->name == kLuauPrint || ty->name == kLuauForceConstraintSolvingIncomplete || ty->name == kLuauBlockedType))
         return;
 
-    // `class<T>` is routed to a type function by ConstraintGenerator rather than resolved through
-    // the `class` alias, which is the zero-parameter top type; checking its arity against that
-    // alias would always report a spurious mismatch.
-    if (FFlag::LuwuClasses && !ty->prefix.has_value() && ty->name == "class" && ty->hasParameterList)
+    // `class<T>` and `object<C>` are routed to type functions by ConstraintGenerator rather than resolved through
+    // the `class` and `object` aliases, which are zero-parameter top types; checking their arity against those
+    // aliases would always report a spurious mismatch.
+    const bool namesClass = ty->name == "class";
+    const bool routedToTypeFunction = !ty->prefix.has_value() && ty->hasParameterList && (namesClass || ty->name == "object");
+    if (FFlag::LuwuClasses && routedToTypeFunction)
     {
         Scope* scope = findInnermostScope(ty->location);
         LUAU_ASSERT(scope);
@@ -3990,10 +5090,24 @@ void TypeChecker2::visit(AstTypeReference* ty)
         for (const AstTypeOrPack& param : ty->parameters)
         {
             // `class<List>` names a generic class without its type arguments on purpose: it is the generic class
-            bool namesGenericClass = scope && param.type && genericClassValueType(*scope, param.type);
+            bool namesGenericClass = namesClass && scope && param.type && genericClassValueType(*scope, param.type);
             if (namesGenericClass)
                 continue;
 
+            if (param.type)
+                visit(param.type);
+            else
+                visit(param.typePack);
+        }
+        return;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): `trait<T>` is resolved by ConstraintGenerator (resolveReferenceType), which
+    // reports a misuse; there is no `trait` alias to check it against
+    if (FFlag::LuwuTraits && !ty->prefix.has_value() && ty->name == "trait" && ty->hasParameterList)
+    {
+        for (const AstTypeOrPack& param : ty->parameters)
+        {
             if (param.type)
                 visit(param.type);
             else
@@ -4166,7 +5280,8 @@ static std::optional<std::string> spellNameExpr(const AstExpr* expr)
     return std::nullopt;
 }
 
-void TypeChecker2::reportClassTypeofSpelling(AstTypeTypeof* ty, const std::string& className, TypeId objectTy)
+// `valueKind` is "class", or "trait" for a trait's value
+void TypeChecker2::reportClassTypeofSpelling(AstTypeTypeof* ty, const std::string& className, TypeId objectTy, const char* valueKind)
 {
     // The suggestion names the class's type only where that name resolves to it: an imported class
     // or a shadowed name has no bare spelling here.
@@ -4175,9 +5290,12 @@ void TypeChecker2::reportClassTypeofSpelling(AstTypeTypeof* ty, const std::strin
     const bool nameable = named && follow(named->type) == follow(objectTy);
 
     const std::string typeofText = "'typeof(" + spellNameExpr(ty->expr).value_or("...") + ")'";
-    const std::string classText = nameable ? "'class<" + className + ">'" : "'class<T>', where T is the type of '" + className + "' objects,";
+    const std::string kind = valueKind;
+    const std::string classText =
+        nameable ? "'" + kind + "<" + className + ">'" : "'" + kind + "<T>', where T is the type of '" + className + "' objects,";
 
-    reportError(GenericError{"Use " + classText + " instead of " + typeofText + " to get the class of '" + className + "'"}, ty->location);
+    const std::string target = kind == "trait" ? "the trait '" + className + "'" : "the class of '" + className + "'";
+    reportError(GenericError{"Use " + classText + " instead of " + typeofText + " to get " + target}, ty->location);
 }
 
 void TypeChecker2::visit(AstTypeTypeof* ty)
@@ -4191,10 +5309,13 @@ void TypeChecker2::visit(AstTypeTypeof* ty)
     {
         if (auto resolved = module->astResolvedTypes.find(ty))
         {
-            if (auto klass = get<ExternType>(follow(*resolved)); klass && klass->root == builtinTypes->classType && klass->relation)
+            const ExternType* klass = get<ExternType>(follow(*resolved));
+            const bool isClassValue = klass && klass->root == builtinTypes->classType;
+            const bool isTraitValue = klass && klass->root == builtinTypes->traitType;
+            if ((isClassValue || isTraitValue) && klass->relation)
             {
                 if (const Obj* obj = klass->relation->get_if<Obj>())
-                    reportClassTypeofSpelling(ty, klass->name, obj->ty);
+                    reportClassTypeofSpelling(ty, klass->name, obj->ty, isTraitValue ? "trait" : "class");
             }
         }
     }
@@ -4344,6 +5465,13 @@ static TypePath::Path narrationPath(const TypePath::Path& path, std::optional<Ty
     return TypePath::Path{std::move(result)};
 }
 
+// Luwu Traits (rfcs/classes/traits.md): why `given` doesn't fit a trait function's `Self`
+static std::string traitSelfMismatchReason(const std::string& given)
+{
+    return "`Self` is the class this is called on, and a `" + given +
+           "` may be a different class, so this has to be `Self` too: `self`, or `class.of(self)(...)` for a new object of its class";
+}
+
 template<typename TID>
 Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location location, const SubtypingResult& r)
 {
@@ -4423,9 +5551,16 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
             }
         }
 
+        // Luwu Traits (rfcs/classes/traits.md): `Self` is the class of whatever the trait function is called on, which a
+        // value of the trait type (or any other class) may not be. Saying so beats "`X` is not a subtype of `Self`".
+        const GenericType* superGeneric = superLeafTy ? get<GenericType>(follow(*superLeafTy)) : nullptr;
+        const bool expectsTraitSelf = !optionalSubLeaf && superGeneric && superGeneric->traitSelf;
+
         std::stringstream baseReasonBuilder;
         if (optionalSubLeaf)
             baseReasonBuilder << "`" << subLeafAsString << "` could be `nil`";
+        else if (expectsTraitSelf)
+            baseReasonBuilder << traitSelfMismatchReason(subLeafAsString);
         else
             baseReasonBuilder << "`" << subLeafAsString << "` is not " << relation << " `" << superLeafAsString << "`";
         std::string baseReason = baseReasonBuilder.str();
@@ -4437,6 +5572,11 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         std::string superLeafAndSubNot = optionalSubLeaf
                                              ? ("`" + superLeafAsString + "`, and `" + subLeafAsString + "` could be `nil`")
                                              : ("`" + superLeafAsString + "`, and `" + subLeafAsString + "` is not " + relation + " it");
+        if (expectsTraitSelf)
+        {
+            subLeafNotSuper = "`" + subLeafAsString + "`, which may be a different class than `Self`";
+            superLeafAndSubNot = "`Self`, and `" + subLeafAsString + "` may be a different class";
+        }
 
         std::stringstream reason;
 
@@ -5347,6 +6487,8 @@ void TypeChecker2::explainError(
             if (AstExpr* expr = node->asExpr(); expr && expr->location == location)
             {
                 variable = bindingName(expr);
+                if (variable && namesItsOwnDeclaration(*variable, subTy))
+                    variable = std::nullopt;
                 mismatched = expr;
                 break;
             }
@@ -6180,7 +7322,11 @@ bool TypeChecker2::checkIndexTypeFromType(
                 reportError(NotATable{tableTy}, location);
             else if (auto et = get<ExternType>(tableTy))
             {
-                if (et->indexer)
+                // Luwu Classes (rfcs/classes): upstream calls a write to a missing property of an extern type
+                // "read-only", since an embedder's type can't grow new properties. For an object, class or trait
+                // that hides a misspelled field name, so report the field as not found.
+                bool reportAsUnknown = et->indexer || luwuNominalKind(tableTy);
+                if (reportAsUnknown)
                     reportMissingProperty(UnknownProperty{tableTy, prop}, tableTy, prop, receiver, location);
                 else
                     reportMissingProperty(PropertyAccessViolation{tableTy, prop, PropertyAccessViolation::CannotWrite}, tableTy, prop, receiver, location);
@@ -6476,15 +7622,37 @@ static void collectIndexableNames(TypeId ty, std::vector<std::string>& names, in
         indexOf(*primitive->metatable);
     else if (const ExternType* extern_ = get<ExternType>(ty))
     {
-        for (const auto& [name, _] : extern_->props)
+        for (const auto& [name, _] : extern_->props())
             names.push_back(name);
         if (extern_->parent)
             collectIndexableNames(*extern_->parent, names, depth + 1);
     }
 }
 
+// Luwu Classes (rfcs/classes): whether `tableTy` is a class value whose objects have a field named `prop` (`Paint.gloss`)
+static bool isFieldOfItsObjects(TypeId tableTy, const std::string& prop)
+{
+    const ExternType* classValue = get<ExternType>(follow(tableTy));
+    const char* kind = classValue ? nominalValueKind(*classValue) : nullptr;
+    if (!kind || std::string_view(kind) != "class")
+        return false;
+
+    const Obj* obj = classValue->relation->get_if<Obj>();
+    const ExternType* object = obj ? get<ExternType>(follow(obj->ty)) : nullptr;
+    return object && object->props().count(prop) > 0;
+}
+
 void TypeChecker2::reportMissingProperty(TypeErrorData error, TypeId tableTy, const std::string& prop, const std::string& receiver, const Location& location)
 {
+    // A field read off its class is spelled right, so it's never a typo
+    if (UnknownProperty* unknown = get_if<UnknownProperty>(&error); unknown && isFieldOfItsObjects(tableTy, prop))
+    {
+        unknown->fieldOfItsObjects = true;
+        unknown->showHelp = helpifier.enabled;
+        reportError(std::move(error), location);
+        return;
+    }
+
     std::optional<std::string> meant;
     if (FFlag::LuwuHelpfulSubtypingErrors)
     {
@@ -6536,7 +7704,7 @@ void TypeChecker2::diagnoseMissingTableKey(UnknownProperty* utk, TypeErrorData& 
     {
         while (etv)
         {
-            accumulate(etv->props);
+            accumulate(etv->props());
 
             if (!etv->parent)
                 break;

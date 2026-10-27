@@ -120,7 +120,7 @@ TEST_CASE_FIXTURE(GeneralizationFixture, "dont_traverse_into_class_types_when_ge
     auto genExternType = generalize(cursedExternType);
     REQUIRE(genExternType);
 
-    auto genPropTy = get<ExternType>(*genExternType)->props.at("oh_no").readTy;
+    auto genPropTy = get<ExternType>(*genExternType)->props().at("oh_no").readTy;
     CHECK(is<FreeType>(*genPropTy));
 }
 

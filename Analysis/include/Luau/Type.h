@@ -18,6 +18,7 @@
 #include <atomic>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -126,6 +127,10 @@ struct GenericType
     bool explicitName = false;
 
     Polarity polarity = Polarity::Unknown;
+
+    // Luwu Traits (rfcs/classes/traits.md): the `Self` a trait function is generic over. Printed as `Self`, without the
+    // `<Self>` the function would otherwise list it in, and `Self & Trait` (its `self`) as just `Self`.
+    bool traitSelf = false;
 };
 
 // When an equality constraint is found, it is then "bound" to that type,
@@ -315,6 +320,11 @@ struct MagicRefinementContext
     NotNull<Scope> scope;
     const class AstExprCall* callSite;
     std::vector<std::optional<TypeId>> discriminantTypes;
+
+    // Luwu: upstream's context has only the three above. A refinement that depends on another argument's type
+    // (`class.isinstance(x, C)` refines `x` by `C`) needs the arguments, and the solver for its builtin types.
+    NotNull<struct ConstraintSolver> solver;
+    TypePackId arguments;
 };
 
 struct MagicFunctionTypeCheckContext
@@ -407,6 +417,15 @@ struct FunctionType
     bool isNodiscard = false;
     std::string nodiscardReason;
 
+    // Luwu user-defined refinements: from `@[truthy(param, Type)]`. A call that returns a truthy value refines its
+    // argument for parameter `argIndex` (counting `self`) to `type`.
+    struct TruthyRefinement
+    {
+        size_t argIndex;
+        TypeId type;
+    };
+    std::optional<TruthyRefinement> truthyRefinement;
+
     // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
     std::optional<std::string> name;
     std::optional<std::string> syntheticName;
@@ -466,6 +485,10 @@ struct Property
     // Luwu Classes (rfcs/classes): true if this property was declared `const` on a class.
     // Const members may only be assigned to from within the class's own `__init` constructor.
     bool isConst = false;
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait's `final` field, which is also const. Only the trait sets it, from its
+    // default, so not even an implementing class's `__init` may assign it.
+    bool isFinal = false;
 
     // If this property was inferred from an expression, this field will be
     // populated with the source location of the corresponding table property.
@@ -590,6 +613,31 @@ struct Klass
 
 using NominalRelation = Variant<Obj, Klass>;
 
+struct SharedNominalArena;
+
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): what an instantiation of a generic class (`List<number>`) needs to build its members
+// from its template. Set while the members haven't been built. See ExternType::props.
+struct LazyNominalMembers
+{
+    // The instantiation the members belong to; the template maps onto it, so `self: List<T>` becomes `List<number>`
+    TypeId instantiation = nullptr;
+    // Where the members are allocated: the module's own arena while it is checked, or for an instantiation it exports,
+    // an arena all of them share, which the modules that import them build into from their own threads
+    TypeArena* arena = nullptr;
+    std::shared_ptr<SharedNominalArena> sharedArena;
+    // The members built so far. One the solver hasn't finished in the template is built on a later read.
+    std::set<Name> builtNames;
+    // Set after the first build, which puts every member in, pending ones as the template's
+    bool attempted = false;
+    // Set once every member is built, after which they never change. Modules that import an instantiation read it from
+    // different threads: the members are written under `mutex` and published by this.
+    std::atomic<bool> built{false};
+    std::mutex mutex;
+};
+
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): builds the members of an instantiation of a generic class (see ExternType::props)
+void buildNominalMembers(const ExternType& etv);
+
 /** The type of an external userdata exposed to Luau.
  *
  * Extern types behave like tables in many ways, but there are some important differences:
@@ -603,7 +651,46 @@ struct ExternType
     using Props = TableType::Props;
 
     Name name;
-    Props props;
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): the members. An instantiation of a generic class (`List<number>`) is its template and
+    // its type arguments; its members are substituted from the template's on first read and kept. Every `List<U>` in a
+    // signature (`map<U>(...): List<U>`) is an instantiation, so building them eagerly would copy all of List's members
+    // once per generic method: n instantiations of n members each, almost none of them ever read.
+    Props& props();
+    const Props& props() const;
+    // The members without building them: empty for an instantiation nothing has read yet. For code that walks types
+    // (visitors, substitution), which reach an instantiation's contents through its type arguments instead.
+    const Props& builtProps() const
+    {
+        return memberStorage;
+    }
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): set on an instantiation of a generic class, to the class's template
+    std::optional<TypeId> genericTemplate;
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): whether the members still have to be built (see props)
+    bool hasUnbuiltMembers() const
+    {
+        return lazyMembers && !lazyMembers->built.load(std::memory_order_acquire);
+    }
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): the template of a generic class or extern type (`Box`, written `Box<T>` in its own
+    // members), whose type arguments are its own generics
+    bool isGenericTemplate() const
+    {
+        return !genericTemplate && (!instantiatedTypeParams.empty() || !instantiatedTypePackParams.empty());
+    }
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation or a template, either of which changes
+    // through its type arguments when substituted into
+    bool isGenericNominal() const
+    {
+        return genericTemplate || isGenericTemplate();
+    }
+    // Written only while the instantiation is made or copied, before anything else can read it
+    std::shared_ptr<LazyNominalMembers> lazyMembers;
+    mutable Props memberStorage;
+
     std::optional<TypeId> parent;
 
     // The root of this type's nominal hierarchy: `userdata` for an embedder
@@ -642,6 +729,62 @@ struct ExternType
      */
     std::optional<NominalRelation> relation;
 
+    // Luwu Traits (rfcs/classes/traits.md): the object types of the traits a class implements (listed, and implied through
+    // `needs`), or of the traits a trait's `needs` list names. An object whose class implements a trait is a subtype
+    // of it (isSubclass follows these), which is what lets a trait's function take `self` of every implementing class.
+    std::vector<TypeId> implementedTraits;
+
+    // Luwu Traits (rfcs/classes/traits.md): set on the object type of a trait. A trait is modeled as a class whose object
+    // type implementing classes are subtypes of.
+    struct TraitInfo
+    {
+        // The members the trait expects implementing classes to declare, and whether each is an optional function.
+        std::map<Name, bool> expectations;
+        // Whether the trait takes parameters, which keeps `needs` from implying it.
+        bool hasParameters = false;
+        // Whether the trait's members are written with `public`/`private` (all or none of them are), so a message showing
+        // one of them as a class would write it says which.
+        bool hasAccessSpecifiers = false;
+        // The trait's parameters in order, and whether each has a default. Each is also a field of the trait, whose
+        // type is what an `implements` argument for it is checked against.
+        struct Parameter
+        {
+            Name name;
+            bool hasDefault = false;
+        };
+        std::vector<Parameter> parameters;
+        // The trait's `final` functions, which implementing classes can't define.
+        std::set<Name> finals;
+        // The members `props` has from the traits this one needs (directly or not): every implementing class implements
+        // those too, so a trait-typed value has their members. They stay those traits' members everywhere else.
+        std::set<Name> fromNeeds;
+        // The type arguments each `needs` entry gives its trait (`needs Base<T>`), written in this trait's own generics.
+        // A class implementing this trait with type arguments substitutes them in, to get the instantiation it implements.
+        std::vector<std::pair<TypeId, std::vector<TypeId>>> neededTypeArguments;
+        // `class<Trait>`: the class value of any class implementing the trait. Callable when the trait expects `__init`,
+        // and carrying the trait's functions, expected ones included. Implementing classes' values are subtypes of it.
+        std::optional<TypeId> implementorClass;
+        // `Self` in the trait's fields. The fields themselves (props) read `Self` as the trait. `selfFieldTemplates` has
+        // each field that names `Self` with `selfMarker` in its place, which an implementing class replaces with itself.
+        std::optional<TypeId> selfMarker;
+        std::map<Name, TypeId> selfFieldTemplates;
+        // The trait's functions that are generic over `Self`: that generic and their `self`'s type (`Self & Trait`). An
+        // implementing class's copy has the class for both, so it isn't generic.
+        struct SelfFunction
+        {
+            TypeId generic;
+            TypeId selfType;
+        };
+        std::map<Name, SelfFunction> selfFunctions;
+    };
+    std::optional<TraitInfo> traitInfo;
+
+    // Luwu Traits (rfcs/classes/traits.md): set on the type the normalizer makes for an intersection of traits (`A & B`), to its traits. One class
+    // can implement several traits, so unlike two unrelated classes, two traits intersect to something inhabited: the
+    // objects of classes implementing all of them. Such a type is a subtype of each trait (it lists them in
+    // `implementedTraits`), has all their members, and a type is a subtype of it when it is a subtype of every one.
+    std::vector<TypeId> traitIntersection;
+
     // True if this ExternType is a generic nominal type instantiation (see LuwuGenericNominals)
     // that still contains an unresolved generic somewhere inside it. Substitution visitors use
     // this to decide whether to descend into it looking for further generics to replace.
@@ -677,6 +820,10 @@ struct ExternType
         std::optional<TableIndexer> indexer
     );
 };
+
+// Luwu Classes (rfcs/classes): "class" or "trait" when `etv` is the type of a class or trait value (written `class<Name>`
+// or `trait<Name>`), and nullptr for anything else, including the objects' type
+const char* nominalValueKind(const ExternType& etv);
 
 // Data required to initialize a user-defined function and its environment
 struct UserDefinedFunctionData
@@ -1075,8 +1222,26 @@ struct BuiltinTypes
 
     // Every nominal-type root, for logic that reasons about the whole extern
     // lattice rather than one type (e.g. the normalizer's top/unknown checks).
-    // These are the parentless extern-type tops: userdata/class/object/vector.
-    std::array<TypeId, 4> nominalRoots() const;
+    // These are the parentless extern-type tops: userdata/class/object/vector, and trait with traits enabled.
+    struct NominalRoots
+    {
+        std::array<TypeId, 5> roots;
+        size_t count;
+
+        const TypeId* begin() const
+        {
+            return roots.data();
+        }
+        const TypeId* end() const
+        {
+            return roots.data() + count;
+        }
+        size_t size() const
+        {
+            return count;
+        }
+    };
+    NominalRoots nominalRoots() const;
 
     friend TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode);
     friend void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes);
@@ -1100,6 +1265,9 @@ public:
     const TypeId externType;
     const TypeId objectType;
     const TypeId classType;
+    // Luwu Traits (rfcs/classes/traits.md): the top of trait values (`trait Name` binds one). It is its own root, not a
+    // `class`: a trait can't be constructed or passed to `class.isinstance`.
+    const TypeId traitType;
     // `vector` is a language primitive that reuses the ExternType representation (fields x/y/z + a
     // metatable). It is its own nominal root (parent/root nullopt); its props/metatable are filled
     // in by makeVectorMetatable during global setup.
@@ -1140,6 +1308,14 @@ const Property* lookupExternTypeProp(const ExternType* cls, const Name& name);
 
 // Whether `cls` is a subclass of `parent`
 bool isSubclass(const ExternType* cls, const ExternType* parent);
+
+// Luwu Traits (rfcs/classes/traits.md): a trait, or an intersection of traits. Two of these may share instances even when neither is a subtype
+// of the other, unlike two classes, which are final.
+bool isTraitLike(const ExternType* ty);
+
+// Luwu Traits (rfcs/classes/traits.md): a member of a class or trait type: a field or function on the type itself, or a
+// function in its metatable
+const Property* findNominalMember(const ExternType* type, const Name& name);
 
 Type* asMutable(TypeId ty);
 

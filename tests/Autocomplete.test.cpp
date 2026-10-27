@@ -19,6 +19,7 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
@@ -1066,6 +1067,39 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_class_member_position_offers_qualifie
     CHECK_EQ(ac.entryMap.count("function"), 1);
     CHECK_EQ(ac.entryMap.count("if"), 0);
     CHECK_EQ(ac.entryMap.count("local"), 0);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_missing_trait_members")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    check(R"(
+        trait HelpInfo
+            expect public const name: string
+            expect private help: string
+        end
+        trait ArgInProgress needs HelpInfo
+            expect phrase: string
+            expect function parse(self, s: string, ...: number): boolean
+        end
+        class Flag implements ArgInProgress
+            phrase = "p"
+            @1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("phrase"), 0);
+    REQUIRE(ac.entryMap.count("parse"));
+    CHECK_EQ(ac.entryMap["parse"].insertText, "function parse(self, s: string, ...: number): boolean\nend");
+    REQUIRE(ac.entryMap.count("name"));
+    CHECK_EQ(ac.entryMap["name"].insertText, "public const name: string");
+    REQUIRE(ac.entryMap.count("help"));
+    CHECK_EQ(ac.entryMap["help"].insertText, "private help: string");
+    CHECK_EQ(ac.entryMap.count("public"), 1);
 }
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_offers_private_class_members_only_inside_their_class")
@@ -3241,6 +3275,47 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons")
     CHECK(ac.entryMap.count("cat"));
     CHECK(ac.entryMap.count("dog"));
     CHECK_EQ(ac.context, AutocompleteContext::String);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons_in_trait_arguments")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    check(R"(
+        trait Item(category: "Weapon" | "Tool" | "Currency", max = 10)
+        end
+        class Sword implements Item("@1")
+        end
+    )");
+
+    auto ac = autocomplete('1');
+
+    CHECK(ac.entryMap.count("Weapon"));
+    CHECK(ac.entryMap.count("Tool"));
+    CHECK(ac.entryMap.count("Currency"));
+    CHECK_EQ(ac.context, AutocompleteContext::String);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_implements_and_needs_on_the_declaration_line")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    check(R"(
+        trait T @1
+        end
+        class C(x: number) @2
+            @3
+        end
+    )");
+
+    CHECK_EQ(autocomplete('1').entryMap.count("needs"), 1);
+    CHECK_EQ(autocomplete('1').entryMap.count("implements"), 0);
+    CHECK_EQ(autocomplete('2').entryMap.count("implements"), 1);
+    CHECK_EQ(autocomplete('2').entryMap.count("needs"), 0);
+    // a member's position, on its own line
+    CHECK_EQ(autocomplete('3').entryMap.count("implements"), 0);
 }
 
 TEST_CASE_FIXTURE(ACFixture, "string_singleton_as_table_key_iso")
@@ -6013,4 +6088,5 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
     CHECK(ac.entryMap.count("Animator"));
 }
 
+// The value is a call, so its type is a pack (astTypePacks), not a single type
 TEST_SUITE_END();

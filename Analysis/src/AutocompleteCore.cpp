@@ -29,6 +29,7 @@
 LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteExport)
@@ -805,7 +806,7 @@ static void autocompleteProps(
     if (auto cls = get<ExternType>(ty))
     {
         containingExternType = containingExternType.value_or(cls);
-        fillProps(cls->props, cls);
+        fillProps(cls->props(), cls);
         if (cls->parent)
             autocompleteProps(module, typeArena, builtinTypes, rootTy, *cls->parent, indexType, nodes, result, seen, containingExternType);
     }
@@ -1697,6 +1698,20 @@ static bool isValidBreakContinueContext(const std::vector<AstNode*>& ancestry, P
     return false;
 }
 
+// Luwu Classes (rfcs/classes/classes.md): checks if we're in top level because
+// we want to only only offer class/trait keywords at top level of module.
+static bool isTopLevelStatementPosition(const std::vector<AstNode*>& ancestry)
+{
+    for (size_t i = 1; i < ancestry.size(); ++i)
+    {
+        AstNode* node = ancestry[i];
+        if (node->is<AstStatBlock>() || node->is<AstExprFunction>() || node->is<AstStatClass>() || node->is<AstStatDeclareClass>())
+            return false;
+    }
+
+    return true;
+}
+
 static AutocompleteEntryMap autocompleteStatement(
     const Module& module,
     const std::vector<AstNode*>& ancestry,
@@ -1768,6 +1783,15 @@ static AutocompleteEntryMap autocompleteStatement(
             if ((kw != "break" && kw != "continue") || shouldIncludeBreakAndContinue)
                 result.emplace(kw, AutocompleteEntry{AutocompleteEntryKind::Keyword});
         }
+    }
+
+    // classes and traits can only exist in top level code of a module so only
+    // suggest the class and trait keywords there
+    if (FFlag::LuwuClasses && isTopLevelStatementPosition(ancestry))
+    {
+        result.emplace("class", AutocompleteEntry{AutocompleteEntryKind::Keyword});
+        if (FFlag::LuwuTraits)
+            result.emplace("trait", AutocompleteEntry{AutocompleteEntryKind::Keyword});
     }
 
     for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
@@ -2160,6 +2184,97 @@ static std::optional<AutocompleteEntryMap> autocompleteStringParams(
     }
 
     return std::nullopt;
+}
+
+static std::string typeNameInScope(const ScopePtr& scope, TypeId ty)
+{
+    if (std::optional<Name> name = tryGetTypeNameInScope(scope, ty, true))
+        return *name;
+    return toString(ty);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait member as an implementing class writes it: `public name: string`, or
+// `function parse(self, s: string): boolean` and its `end`
+static std::string traitMemberDeclaration(const ScopePtr& scope, const ExternType* traitType, const Name& name, const Property& prop, bool isField)
+{
+    std::string result;
+    if (traitType->traitInfo->hasAccessSpecifiers)
+        result += prop.isPrivate ? "private " : "public ";
+
+    const FunctionType* fn = prop.readTy ? get<FunctionType>(expectedTraitFunction(*prop.readTy)) : nullptr;
+    if (isField || !fn)
+    {
+        if (prop.isConst)
+            result += "const ";
+        result += name;
+        if (prop.readTy)
+            result += ": " + typeNameInScope(scope, *prop.readTy);
+        return result;
+    }
+
+    result += "function " + name + "(";
+
+    auto [args, tail] = flatten(fn->argTypes);
+    for (size_t i = 0; i < args.size(); ++i)
+    {
+        if (i > 0)
+            result += ", ";
+
+        std::string argName = i < fn->argNames.size() && fn->argNames[i] ? fn->argNames[i]->name : "a" + std::to_string(i);
+
+        // `self` is the class's own, so it's left unannotated
+        if (i == 0 && argName == "self")
+            result += argName;
+        else
+            result += argName + ": " + typeNameInScope(scope, args[i]);
+    }
+
+    if (const VariadicTypePack* variadic = tail ? get<VariadicTypePack>(follow(*tail)) : nullptr)
+        result += std::string(args.empty() ? "" : ", ") + "...: " + typeNameInScope(scope, variadic->ty);
+
+    result += ")";
+
+    auto [rets, retTail] = flatten(fn->retTypes);
+    size_t returnCount = rets.size() + (retTail ? 1 : 0);
+    if (returnCount > 0)
+    {
+        std::optional<std::string> returnTypes = tryGetTypeNameInScope(scope, fn->retTypes, true);
+        std::string written = returnTypes ? *returnTypes : toString(fn->retTypes);
+        result += returnCount == 1 ? ": " + written : ": (" + written + ")";
+    }
+
+    result += "\nend";
+    return result;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): in a class body, each member its traits expect that it doesn't have yet, inserted
+// as its declaration
+static void autocompleteMissingTraitMembers(const ScopePtr& scope, AstStatClass* classStat, AutocompleteEntryMap& result)
+{
+    std::optional<TypeFun> classTypeFun = scope->lookupType(classStat->name->name.value);
+    const ExternType* classType = classTypeFun ? get<ExternType>(follow(classTypeFun->type)) : nullptr;
+    if (!classType)
+        return;
+
+    for (TypeId trait : classType->implementedTraits)
+    {
+        const ExternType* traitType = get<ExternType>(follow(trait));
+        const ClassFieldUserData* traitFields = traitType ? dynamic_cast<const ClassFieldUserData*>(traitType->userData.get()) : nullptr;
+        if (!traitFields || !traitType->traitInfo)
+            continue;
+
+        for (const auto& [name, optional] : traitType->traitInfo->expectations)
+        {
+            const Property* expected = findNominalMember(traitType, name);
+            if (name == "__init" || !expected || findNominalMember(classType, name) || result.count(name))
+                continue;
+
+            AutocompleteEntry entry{AutocompleteEntryKind::Property, expected->readTy};
+            entry.prop = expected;
+            entry.insertText = traitMemberDeclaration(scope, traitType, name, *expected, traitFields->fieldNames.count(name) > 0);
+            result[name] = std::move(entry);
+        }
+    }
 }
 
 static AutocompleteResult autocompleteWhileLoopKeywords(std::vector<AstNode*> ancestry)
@@ -2721,12 +2836,35 @@ AutocompleteResult autocomplete_(
     // sub-locations, which would have matched a more specific branch above): offer the
     // qualifiers and the `function` keyword, rather than the generic statement keyword list
     // (most of which -- if/local/for/etc -- aren't valid class members).
-    if (node->is<AstStatClass>())
+    if (AstStatClass* classStat = node->as<AstStatClass>())
     {
         AutocompleteEntryMap ret;
         ret["public"] = {AutocompleteEntryKind::Keyword};
         ret["private"] = {AutocompleteEntryKind::Keyword};
         ret["function"] = {AutocompleteEntryKind::Keyword};
+
+        // Luwu Traits (rfcs/classes/traits.md): a trait's members may be expected or final
+        if (classStat->isTrait)
+        {
+            ret["expect"] = {AutocompleteEntryKind::Keyword};
+            ret["final"] = {AutocompleteEntryKind::Keyword};
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): on the declaration's own line, before its first member, the next word may
+        // start its `implements` (a class) or `needs` (a trait) list
+        unsigned headerLine = classStat->name->location.end.line;
+        if (classStat->primaryConstructor)
+            headerLine = classStat->primaryConstructor->argLocation.end.line;
+
+        bool onHeaderLine = position.line == headerLine;
+        if (FFlag::LuwuTraits && onHeaderLine && classStat->isTrait && classStat->needs.size == 0)
+            ret["needs"] = {AutocompleteEntryKind::Keyword};
+        else if (FFlag::LuwuTraits && onHeaderLine && !classStat->isTrait && classStat->implements.size == 0)
+            ret["implements"] = {AutocompleteEntryKind::Keyword};
+
+        if (FFlag::LuwuTraits && !onHeaderLine && !classStat->isTrait)
+            autocompleteMissingTraitMembers(scopeAtPosition, classStat, ret);
+
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }
 

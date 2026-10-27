@@ -52,7 +52,9 @@ bool Replacer::ignoreChildren(TypeId ty)
 {
     if (const ExternType* etv = get<ExternType>(ty))
     {
-        if (FFlag::LuwuGenericNominals && etv->hasUnresolvedGenerics)
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation whose type arguments are generic (`List<U>`), or a template
+        // (`Box<T>`, returned by a constructor generic over `T`), is re-instantiated through its arguments
+        if (FFlag::LuwuGenericNominals && etv->isGenericNominal() && etv->hasUnresolvedGenerics)
             return false;
 
         return true;
@@ -99,7 +101,9 @@ bool Instantiation2_DEPRECATED::ignoreChildren(TypeId ty)
 {
     if (const ExternType* etv = get<ExternType>(ty))
     {
-        if (FFlag::LuwuGenericNominals && etv->hasUnresolvedGenerics)
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation whose type arguments are generic (`List<U>`), or a template
+        // (`Box<T>`, returned by a constructor generic over `T`), is re-instantiated through its arguments
+        if (FFlag::LuwuGenericNominals && etv->isGenericNominal() && etv->hasUnresolvedGenerics)
             return false;
 
         return true;

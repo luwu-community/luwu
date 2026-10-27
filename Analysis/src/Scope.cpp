@@ -148,6 +148,41 @@ std::optional<TypeFun> Scope::lookupType(const Name& name) const
     }
 }
 
+std::optional<TypeFun> Scope::lookupTraitRef(const AstClassTraitRef& ref) const
+{
+    if (AstExprGlobal* global = ref.trait->as<AstExprGlobal>())
+        return lookupType(global->name.value);
+
+    // Luwu Declare Statements (rfcs/declare-statements.md): a declared trait has no value, so a class implementing one names
+    // a local holding it, `local Greeter = ... :: trait<Greeter>` or `const G: trait<Greeter> = ...`. The annotation says
+    // which trait; without one, the local is taken to be named after it, as a global is.
+    if (AstExprLocal* local = ref.trait->as<AstExprLocal>())
+    {
+        AstTypeReference* traitValue = local->local->annotation ? local->local->annotation->as<AstTypeReference>() : nullptr;
+        bool annotated = traitValue && !traitValue->prefix && traitValue->name == "trait" && traitValue->parameters.size == 1;
+        AstType* argument = annotated ? traitValue->parameters.data[0].type : nullptr;
+        AstTypeReference* named = argument ? argument->as<AstTypeReference>() : nullptr;
+        if (!named)
+            return lookupType(local->local->name.value);
+
+        if (named->prefix)
+            return lookupImportedType(named->prefix->value, named->name.value);
+
+        return lookupType(named->name.value);
+    }
+
+    AstExprIndexName* index = ref.trait->as<AstExprIndexName>();
+    if (!index)
+        return std::nullopt;
+
+    if (AstExprLocal* moduleLocal = index->expr->as<AstExprLocal>())
+        return lookupImportedType(moduleLocal->local->name.value, index->index.value);
+    if (AstExprGlobal* moduleGlobal = index->expr->as<AstExprGlobal>())
+        return lookupImportedType(moduleGlobal->name.value, index->index.value);
+
+    return std::nullopt;
+}
+
 std::optional<TypeFun> Scope::lookupImportedType(const Name& moduleAlias, const Name& name) const
 {
     const Scope* scope = this;

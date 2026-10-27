@@ -35,6 +35,7 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 
@@ -11848,6 +11849,76 @@ end
     CHECK(notFused.find("[assert]") != std::string::npos);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): constructing a class whose traits are all declared in this file initializes the
+// trait fields inline, with no INITTRAITS, when their initializers mean the same at the construction site. One that names
+// a local (an upvalue of the trait's code, which the site can't name) keeps INITTRAITS.
+TEST_CASE("ClassTraitInitializersInline")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    const char* source = R"(
+local function nextId() return 1 end
+
+trait Listens
+    public listeners = {}
+end
+
+trait Scaled(public scale: number)
+    public doubled = scale * 2
+end
+
+trait Counted
+    public id = nextId()
+end
+
+class Inline(public x: number) implements Listens, Scaled(x + 1)
+end
+
+class Called(public x: number) implements Counted
+end
+
+function makeInline(x)
+    local o = Inline(x)
+    return o
+end
+
+function makeCalled(x)
+    local o = Called(x)
+    return o
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+
+    Luau::compileOrThrow(bcb, source, options);
+
+    std::string all = bcb.dumpEverything();
+
+    // the dump of the function named `name`, up to the next function's
+    auto functionCode = [&](const std::string& name)
+    {
+        size_t begin = all.find("(" + name + ")");
+        REQUIRE(begin != std::string::npos);
+        size_t end = all.find("Function ", begin);
+        return all.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+    };
+
+    std::string inlined = functionCode("makeInline");
+    INFO(inlined);
+    CHECK(inlined.find("ALLOC") != std::string::npos);
+    CHECK(inlined.find("INITTRAITS") == std::string::npos);
+    CHECK(inlined.find("NEWTABLE") != std::string::npos);
+
+    std::string called = functionCode("makeCalled");
+    INFO(called);
+    CHECK(called.find("INITTRAITS") != std::string::npos);
+}
+
 TEST_CASE("TrustDirectiveEnablesAnnotationTrust")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
@@ -14086,6 +14157,27 @@ TEST_CASE("LuwuSyntaxInALuauModuleDoesNotCompile")
 
     // the same source is fine as Luwu
     CHECK_NE(Luau::compile("local function f(x = 1) return x end")[0], 0);
+}
+
+TEST_CASE("DeclaredTraitsCompileToNothing")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    CHECK_EQ("\n" + compileFunction0Coverage(R"(
+declare trait type Greeter needs Named
+    expect name: string
+    function greet(self): string
+end
+print(Greeter)
+)", 2), "\n" + compileFunction0Coverage(R"(
+
+
+
+
+print(Greeter)
+)", 2));
 }
 
 TEST_SUITE_END();
