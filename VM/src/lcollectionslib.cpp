@@ -30,7 +30,8 @@ static void setfield(lua_State* L, LuauObject* object, int field, const TValue* 
     luaC_barrier(L, object, value);
 }
 
-// How a value reads inside a constructor call or an error: strings quoted, everything else as `tostring` gives it
+// How a value reads inside a constructor call or an error: strings quoted, everything else as `tostring` gives it.
+// Only for a buffer nothing sits above on the stack: growing one moves its storage to the top.
 static void addshown(luaL_Strbuf* b, int idx)
 {
     lua_State* L = b->L;
@@ -79,6 +80,16 @@ static const char* pushshown(lua_State* L, int idx)
     addshown(&b, idx);
     luaL_pushresult(&b);
     return lua_tostring(L, -1);
+}
+
+// Pops the value on top of the stack and adds it to `b` as addshown writes it. The value is turned into its text
+// first, so `b`'s storage is right below what's added.
+static void addshowntop(luaL_Strbuf* b)
+{
+    lua_State* L = b->L;
+    pushshown(L, -1);
+    lua_remove(L, -2);
+    luaL_addvalue(b);
 }
 
 // Whether `position` is a whole number from 1 to `last`
@@ -287,8 +298,7 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
         lua_pushvalue(L, 1);
         lua_pushnumber(L, i);
         lua_call(L, 2, 1);
-        addshown(&b, -1);
-        lua_pop(L, 1);
+        addshowntop(&b);
     }
     luaL_addstring(&b, "})");
     luaL_pushresult(&b);
@@ -338,8 +348,7 @@ static int tupletostring(lua_State* L)
         if (i > 0)
             luaL_addstring(&b, ", ");
         luaA_pushvalue(L, &tuple->members[i]);
-        addshown(&b, -1);
-        lua_pop(L, 1);
+        addshowntop(&b);
     }
     luaL_addchar(&b, ')');
     luaL_pushresult(&b);
@@ -1368,8 +1377,7 @@ static int payloadtostring(lua_State* L)
     luaL_addstring(&b, getstr(holder->lclass->name));
     luaL_addchar(&b, '(');
     luaA_pushvalue(L, &holder->members[kPayload]);
-    addshown(&b, -1);
-    lua_pop(L, 1);
+    addshowntop(&b);
     luaL_addchar(&b, ')');
     luaL_pushresult(&b);
     return 1;
