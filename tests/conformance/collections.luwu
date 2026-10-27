@@ -24,19 +24,19 @@ do
     assert(range == collections.pair(1, "x"))
     assert(range ~= collections.pair(1, "y"))
     assert(range ~= collections.triple(1, "x", nil))
-    assert(tostring(range) == `collections.pair(1, "x")`)
-    assert(tostring(collections.pair("a\"b", nil)) == `collections.pair("a\\"b", nil)`)
+    assert(tostring(range) == `pair(1, "x")`)
+    assert(tostring(collections.pair("a\"b", nil)) == `pair("a\\"b", nil)`)
 
     const color = collections.triple(255, 128, 0)
     assert(color.first == 255 and color.second == 128 and color.third == 0)
     assert(color == collections.triple(255, 128, 0))
-    assert(tostring(color) == "collections.triple(255, 128, 0)")
+    assert(tostring(color) == "triple(255, 128, 0)")
 
     const margins = collections.quad(1, 2, 3, 4)
     assert(margins.fourth == 4)
     assert(margins == collections.quad(1, 2, 3, 4))
     assert(margins ~= collections.quad(1, 2, 3, 5))
-    assert(tostring(margins) == "collections.quad(1, 2, 3, 4)")
+    assert(tostring(margins) == "quad(1, 2, 3, 4)")
 
     -- the elements compare with ==, so nested tuples compare by value too
     assert(collections.pair(range, 1) == collections.pair(collections.pair(1, "x"), 1))
@@ -335,6 +335,26 @@ do
     end, "this vec can only accept booleans, but you passed a number")
 end
 
+-- `from` fills a vec or vecdeque from a list, checking each value like `push` does, and printing one shows that call
+do
+    const list = collections.vec.from({ 1, 2, 3 })
+    assert(#list == 3 and list:at(1) == 1 and list:at(3) == 3)
+    assert(tostring(list) == "vec.from({1, 2, 3})")
+    assert(tostring(collections.vec()) == "vec()")
+
+    const queue = collections.vecdeque.from({ "a", "b" })
+    queue:pushfront("z")
+    assert(queue:front() == "z" and queue:back() == "b")
+    assert(tostring(queue) == `vecdeque.from(\{"z", "a", "b"})`)
+
+    raises(function()
+        collections.vec.from({ 1, "two" })
+    end, "this vec can only accept numbers, but you passed a string")
+    raises(function()
+        collections.vecdeque.from({ 1, nil, 3 })
+    end, "this vecdeque can only accept numbers, but you passed nil")
+end
+
 -- option: a `some` object, or `none` itself, which gets `get` and `expect` from collections
 do
     const option = collections.option
@@ -344,7 +364,7 @@ do
     assert(hit:get() == "ada" and hit:expect("missing") == "ada")
     assert(class.isinstance(hit, option.some) and class.name(hit) == "some")
     assert(hit == option.some("ada") and hit ~= option.some("bob"))
-    assert(tostring(hit) == `collections.option.some("ada")`)
+    assert(tostring(hit) == `option.some("ada")`)
 
     assert(none:get() == none)
     raises(function()
@@ -380,7 +400,7 @@ do
     const bad = result.err("not a number")
     assert(good:get() == 5 and good:expect("why") == 5 and good:err() == none)
     assert(bad:get() == none and bad:err() == "not a number")
-    assert(tostring(good) == "collections.result.ok(5)" and tostring(bad) == `collections.result.err("not a number")`)
+    assert(tostring(good) == "result.ok(5)" and tostring(bad) == `result.err("not a number")`)
     assert(good == result.ok(5) and bad ~= result.err("other") and good ~= result.err(5))
     assert(class.isinstance(bad, result.err) and not class.isinstance(bad, result.ok))
 

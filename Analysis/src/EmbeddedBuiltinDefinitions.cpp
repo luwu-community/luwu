@@ -430,6 +430,7 @@ end
 
 declare class type vec<T>
     public function __init(self)
+    public function from(items: {T}): vec<T>
     public function push(self, value: T)
     public function pop(self): T?
     public function at(self, position: number): T?
@@ -439,10 +440,12 @@ declare class type vec<T>
     public function clear(self)
     public function __len(self): number
     public function __iter(self): ((vec<T>, number?) -> (number?, T), vec<T>, nil)
+    public function __tostring(self): string
 end
 
 declare class type vecdeque<T>
     public function __init(self)
+    public function from(items: {T}): vecdeque<T>
     public function pushfront(self, value: T)
     public function pushback(self, value: T)
     public function popfront(self): T?
@@ -454,6 +457,7 @@ declare class type vecdeque<T>
     public function clear(self)
     public function __len(self): number
     public function __iter(self): ((vecdeque<T>, number?) -> (number?, T), vecdeque<T>, nil)
+    public function __tostring(self): string
 end
 
 declare class type some<T>
