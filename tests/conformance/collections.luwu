@@ -355,6 +355,43 @@ do
     end, "this vecdeque can only accept numbers, but you passed nil")
 end
 
+-- printing a large container grows its string buffer while values are shown, and an element's own __tostring may
+-- change the container it's printed from
+class Named
+    name: string
+    function __tostring(self)
+        return `Named({self.name})`
+    end
+end
+
+-- what a Clearing object clears when it's printed
+local printing: collections.vec<Clearing>? = nil
+
+class Clearing
+    function __tostring(self)
+        assert(printing):clear()
+        return "cleared"
+    end
+end
+
+do
+    const queue = collections.vecdeque()
+    for i = 1, 200 do
+        queue:pushback(Named { name = string.rep("x", i) })
+    end
+    const shown = tostring(queue)
+    assert(#shown > 20000 and string.find(shown, "Named(" .. string.rep("x", 200) .. ")", 1, true))
+
+    const long = string.rep("\"quoted\"\n", 500)
+    assert(#tostring(collections.vec.from({ long, long })) > 2 * #long)
+    assert(#tostring(collections.pair(long, long)) > 2 * #long)
+    assert(#tostring(collections.option.some(long)) > #long)
+
+    const list = collections.vec.from({ Clearing {}, Clearing {}, Clearing {} })
+    printing = list
+    assert(tostring(list) == "vec.from({cleared, nil, nil})")
+end
+
 -- option: a `some` object, or `none` itself, which gets `get` and `expect` from collections
 do
     const option = collections.option
