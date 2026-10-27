@@ -9,6 +9,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(LuwuBufferBatched)
 LUAU_FASTFLAG(LuwuTableDrop)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuDeclareStatements)
@@ -289,6 +290,28 @@ static constexpr const char* kBuiltinDefinitionBufferSrcIsFrozen = R"BUILTIN_SRC
     isfrozen: @checked (b: buffer) -> boolean,
 )BUILTIN_SRC";
 
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): `unpack*` returns `...number`, `pack*` takes the batch as
+// trailing `...number` arguments. The declared open pack is what a variable batch size gets; when the size is a
+// number literal, MagicUnpack (BuiltinDefinitions.cpp) narrows the return to exactly that many numbers.
+static constexpr const char* kBuiltinDefinitionBufferSrcBatched = R"BUILTIN_SRC(
+    unpacki8: @checked (b: buffer, offset: number, count: number) -> ...number,
+    unpacku8: @checked (b: buffer, offset: number, count: number) -> ...number,
+    unpacki16: @checked (b: buffer, offset: number, count: number) -> ...number,
+    unpacku16: @checked (b: buffer, offset: number, count: number) -> ...number,
+    unpacki32: @checked (b: buffer, offset: number, count: number) -> ...number,
+    unpacku32: @checked (b: buffer, offset: number, count: number) -> ...number,
+    unpackf32: @checked (b: buffer, offset: number, count: number) -> ...number,
+    unpackf64: @checked (b: buffer, offset: number, count: number) -> ...number,
+    packi8: @checked (b: buffer, offset: number, ...number) -> (),
+    packu8: @checked (b: buffer, offset: number, ...number) -> (),
+    packi16: @checked (b: buffer, offset: number, ...number) -> (),
+    packu16: @checked (b: buffer, offset: number, ...number) -> (),
+    packi32: @checked (b: buffer, offset: number, ...number) -> (),
+    packu32: @checked (b: buffer, offset: number, ...number) -> (),
+    packf32: @checked (b: buffer, offset: number, ...number) -> (),
+    packf64: @checked (b: buffer, offset: number, ...number) -> (),
+)BUILTIN_SRC";
+
 static constexpr const char* kBuiltinDefinitionBufferSrcClose = R"BUILTIN_SRC(
 }
 
@@ -536,6 +559,8 @@ std::string getBuiltinDefinitionSource()
         result += kBuiltinDefinitionBufferSrcInteger;
     if (FFlag::LuwuBufferIsFrozen)
         result += kBuiltinDefinitionBufferSrcIsFrozen;
+    if (FFlag::LuwuBufferBatched)
+        result += kBuiltinDefinitionBufferSrcBatched;
     result += kBuiltinDefinitionBufferSrcClose;
 
     result += kBuiltinDefinitionVectorSrc;

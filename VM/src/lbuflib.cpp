@@ -10,6 +10,7 @@
 
 LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAGVARIABLE(LuwuBufferIsFrozen)
+LUAU_FASTFLAGVARIABLE(LuwuBufferBatched)
 
 #include <string.h>
 
@@ -17,6 +18,12 @@ LUAU_FASTFLAGVARIABLE(LuwuBufferIsFrozen)
 // in the current implementation, length and offset are limited to 31 bits
 // because offset is limited to an integer, a single 64bit comparison can be used and will not overflow
 #define isoutofbounds(offset, len, accessize) (uint64_t(unsigned(offset)) + (accessize) > uint64_t(len))
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): a batch accesses `count` values of `accessize` bytes
+// each, starting at `offset` and stepping by `accessize` after every value; the same 31 bit limit on offset and
+// count keeps this 64bit comparison overflow free
+#define isoutofboundsbatch(offset, len, count, accessize) \
+    (uint64_t(unsigned(offset)) + uint64_t(unsigned(count)) * uint64_t(accessize) > uint64_t(len))
 
 static_assert(MAX_BUFFER_SIZE <= INT_MAX, "current implementation can't handle a larger limit");
 
@@ -194,6 +201,166 @@ static int buffer_writefp(lua_State* L)
 #else
     memcpy((char*)buf + offset, &val, sizeof(T));
 #endif
+
+    return 0;
+}
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): unpack* reads `count` values, returning them all as
+// return values; the whole batch is bounds checked before the first value is read so that a batch that runs off
+// the end of the buffer never returns partial data
+//
+// unpack reserves the stack space for every return value before pushing any of them, this both avoids growing the
+// stack per value and lets us fail before returning a partial batch
+static void buffer_reserveretvals(lua_State* L, int count)
+{
+    if (!lua_checkstack(L, count))
+        luaL_error(L, "too many values to unpack");
+}
+
+template<typename T>
+static int buffer_unpackinteger(lua_State* L)
+{
+    size_t len = 0;
+    void* buf = luaL_checkbuffer(L, 1, &len);
+    int offset = luaL_checkinteger(L, 2);
+    int count = luaL_checkinteger(L, 3);
+
+    luaL_argcheck(L, count >= 1, 3, "count");
+
+    if (isoutofboundsbatch(offset, len, count, sizeof(T)))
+        luaL_error(L, "buffer access out of bounds");
+
+    buffer_reserveretvals(L, count);
+
+    char* data = (char*)buf + offset;
+
+    for (int i = 0; i < count; i++)
+    {
+        T val;
+        memcpy(&val, data + size_t(i) * sizeof(T), sizeof(T));
+
+#if defined(LUAU_BIG_ENDIAN)
+        val = buffer_swapbe(val);
+#endif
+
+        lua_pushnumber(L, double(val));
+    }
+
+    return count;
+}
+
+template<typename T, typename StorageType>
+static int buffer_unpackfp(lua_State* L)
+{
+    size_t len = 0;
+    void* buf = luaL_checkbuffer(L, 1, &len);
+    int offset = luaL_checkinteger(L, 2);
+    int count = luaL_checkinteger(L, 3);
+
+    luaL_argcheck(L, count >= 1, 3, "count");
+
+    if (isoutofboundsbatch(offset, len, count, sizeof(T)))
+        luaL_error(L, "buffer access out of bounds");
+
+    buffer_reserveretvals(L, count);
+
+    char* data = (char*)buf + offset;
+
+    for (int i = 0; i < count; i++)
+    {
+        T val;
+
+#if defined(LUAU_BIG_ENDIAN)
+        static_assert(sizeof(T) == sizeof(StorageType), "type size must match to reinterpret data");
+        StorageType tmp;
+        memcpy(&tmp, data + size_t(i) * sizeof(T), sizeof(tmp));
+        tmp = buffer_swapbe(tmp);
+
+        memcpy(&val, &tmp, sizeof(tmp));
+#else
+        memcpy(&val, data + size_t(i) * sizeof(T), sizeof(T));
+#endif
+
+        lua_pushnumber(L, double(val));
+    }
+
+    return count;
+}
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): pack* takes the values to write as trailing arguments,
+// so the batch size is implied by the argument count (zero values is a valid empty batch); just like with unpack,
+// nothing is written unless the whole batch fits
+//
+// note: every value is type checked before the first write happens, this way an argument that isn't a number -
+// which would raise an error halfway through the batch - can't leave a partially packed buffer behind either, and
+// a frozen (externally managed, immutable) buffer is rejected before anything is written
+template<typename T>
+static int buffer_packinteger(lua_State* L)
+{
+    size_t len = 0;
+    void* buf = luaL_checkbuffermutable(L, 1, &len);
+    int offset = luaL_checkinteger(L, 2);
+    // the batch size is implied by the trailing values, which start at argument #3
+    int count = lua_gettop(L) - 2;
+
+    if (isoutofboundsbatch(offset, len, count, sizeof(T)))
+        luaL_error(L, "buffer access out of bounds");
+
+    for (int i = 0; i < count; i++)
+    {
+        luaL_checkunsigned(L, 3 + i);
+    }
+
+    char* data = (char*)buf + offset;
+
+    for (int i = 0; i < count; i++)
+    {
+        T val = T(luaL_checkunsigned(L, 3 + i));
+
+#if defined(LUAU_BIG_ENDIAN)
+        val = buffer_swapbe(val);
+#endif
+
+        memcpy(data + size_t(i) * sizeof(T), &val, sizeof(T));
+    }
+
+    return 0;
+}
+
+template<typename T, typename StorageType>
+static int buffer_packfp(lua_State* L)
+{
+    size_t len = 0;
+    void* buf = luaL_checkbuffermutable(L, 1, &len);
+    int offset = luaL_checkinteger(L, 2);
+    // the batch size is implied by the trailing values, which start at argument #3
+    int count = lua_gettop(L) - 2;
+
+    if (isoutofboundsbatch(offset, len, count, sizeof(T)))
+        luaL_error(L, "buffer access out of bounds");
+
+    for (int i = 0; i < count; i++)
+    {
+        luaL_checknumber(L, 3 + i);
+    }
+
+    char* data = (char*)buf + offset;
+
+    for (int i = 0; i < count; i++)
+    {
+        T val = T(luaL_checknumber(L, 3 + i));
+
+#if defined(LUAU_BIG_ENDIAN)
+        static_assert(sizeof(T) == sizeof(StorageType), "type size must match to reinterpret data");
+        StorageType tmp;
+        memcpy(&tmp, &val, sizeof(tmp));
+        tmp = buffer_swapbe(tmp);
+
+        memcpy(data + size_t(i) * sizeof(T), &tmp, sizeof(tmp));
+#else
+        memcpy(data + size_t(i) * sizeof(T), &val, sizeof(T));
+#endif
+    }
 
     return 0;
 }
@@ -410,6 +577,29 @@ static const luaL_Reg bufferlib[] = {
     {NULL, NULL},
 };
 
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): registered separately because the whole feature lives
+// behind LuwuBufferBatched; the suffix says how many bytes each value occupies (u8/i8=1, u16/i16=2, u32/i32/f32=4,
+// f64=8), which is also the step taken between consecutive values of the batch
+static const luaL_Reg bufferlib_batched[] = {
+    {"unpacki8", buffer_unpackinteger<int8_t>},
+    {"unpacku8", buffer_unpackinteger<uint8_t>},
+    {"unpacki16", buffer_unpackinteger<int16_t>},
+    {"unpacku16", buffer_unpackinteger<uint16_t>},
+    {"unpacki32", buffer_unpackinteger<int32_t>},
+    {"unpacku32", buffer_unpackinteger<uint32_t>},
+    {"unpackf32", buffer_unpackfp<float, uint32_t>},
+    {"unpackf64", buffer_unpackfp<double, uint64_t>},
+    {"packi8", buffer_packinteger<int8_t>},
+    {"packu8", buffer_packinteger<uint8_t>},
+    {"packi16", buffer_packinteger<int16_t>},
+    {"packu16", buffer_packinteger<uint16_t>},
+    {"packi32", buffer_packinteger<int32_t>},
+    {"packu32", buffer_packinteger<uint32_t>},
+    {"packf32", buffer_packfp<float, uint32_t>},
+    {"packf64", buffer_packfp<double, uint64_t>},
+    {NULL, NULL},
+};
+
 static const luaL_Reg bufferlib_NOINTEGER[] = {
     {"create", buffer_create},
     {"fromstring", buffer_fromstring},
@@ -446,6 +636,9 @@ int luaopen_buffer(lua_State* L)
         luaL_register(L, LUA_BUFFERLIBNAME, bufferlib);
     else
         luaL_register(L, LUA_BUFFERLIBNAME, bufferlib_NOINTEGER);
+
+    if (FFlag::LuwuBufferBatched)
+        luaL_register(L, NULL, bufferlib_batched);
 
     if (FFlag::LuwuBufferIsFrozen)
     {
