@@ -82,6 +82,9 @@ TypeId Instantiation::clean(TypeId ty)
     result = reusableReplaceGenerics.substitute(result).value_or(result);
 
     asMutable(result)->documentationSymbol = ty->documentationSymbol;
+    // Luwu: see Substitution::clone
+    if (ty->metadata)
+        asMutable(result)->metadata = ty->metadata;
     return result;
 }
 
