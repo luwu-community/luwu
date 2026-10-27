@@ -1766,7 +1766,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
         bindModuleAliases(scope, statLocal);
 
         if (FFlag::LuwuClasses)
-            bindImportedClassTypes(scope, statLocal);
+            bindImportedTypes(scope, statLocal);
     }
 
     return ControlFlow::None;
@@ -1869,6 +1869,9 @@ std::optional<Name> ConstraintGenerator::importedModulePath(const ScopePtr& scop
     std::optional<Name> path;
     if (const AstExprLocal* local = expr->as<AstExprLocal>())
         path = Name{local->local->name.value};
+    // a builtin library, whose types the global scope files like a required module's
+    else if (const AstExprGlobal* global = expr->as<AstExprGlobal>())
+        path = Name{global->name.value};
     else if (const AstExprIndexName* index = expr->as<AstExprIndexName>())
     {
         if (std::optional<Name> base = importedModulePath(scope, index->expr))
@@ -1892,11 +1895,13 @@ std::optional<ModuleName> ConstraintGenerator::findImportedModule(const ScopePtr
     return std::nullopt;
 }
 
-// Luwu Destructuring (rfcs/destructuring.md): a local bound to a class a required module exports, `local Point =
-// geometry.Point`, `local Point = require(...).Point` or a destructured `const geometry.{Point} = require(...)`, brings
-// the class's type along, as if `type Point = geometry.Point` were written next to it. An exported local exports the
-// type too. A type the scope already declares under that name wins.
-void ConstraintGenerator::bindImportedClassTypes(const ScopePtr& scope, AstStatLocal* statLocal)
+// Luwu Destructuring (rfcs/destructuring.md): a local bound to a field of a module that exports a type of the same name,
+// `local Point = geometry.Point`, `local Point = require(...).Point` or a destructured `const geometry.{Point} =
+// require(...)`, brings that type along, as if `type Point = geometry.Point` were written next to it. The type is a
+// class's for a class, and any type the module exports under the field's name otherwise. A builtin library's types come
+// the same way (`const .{ option } = collections`). An exported local exports the type too. A type the scope already
+// declares under that name wins.
+void ConstraintGenerator::bindImportedTypes(const ScopePtr& scope, AstStatLocal* statLocal)
 {
     for (size_t i = 0; i < statLocal->values.size && i < statLocal->vars.size; ++i)
     {
@@ -1904,7 +1909,7 @@ void ConstraintGenerator::bindImportedClassTypes(const ScopePtr& scope, AstStatL
         if (!index)
             continue;
 
-        std::optional<TypeFun> imported = importedClassType(scope, index);
+        std::optional<TypeFun> imported = importedFieldType(scope, index);
         if (!imported)
             continue;
 
@@ -1918,13 +1923,14 @@ void ConstraintGenerator::bindImportedClassTypes(const ScopePtr& scope, AstStatL
         else
             scope->privateTypeBindings[name] = *imported;
 
-        importedClassLocals.insert(local);
+        importedTypeLocals.insert(local);
     }
 }
 
-// The class type a required module exports under `index`'s field name, read through a local holding the module
-// (`geometry.Point`), a module it exports (`hub.t.Point`) or straight off the require (`require(...).Point`)
-std::optional<TypeFun> ConstraintGenerator::importedClassType(const ScopePtr& scope, const AstExprIndexName* index)
+// The type a required module exports under `index`'s field name, read through a local holding the module
+// (`geometry.Point`), a module it exports (`hub.t.Point`), a builtin library (`collections.option`) or straight off the
+// require (`require(...).Point`)
+std::optional<TypeFun> ConstraintGenerator::importedFieldType(const ScopePtr& scope, const AstExprIndexName* index)
 {
     const Name field{index->index.value};
     std::optional<TypeFun> imported;
@@ -1949,14 +1955,6 @@ std::optional<TypeFun> ConstraintGenerator::importedClassType(const ScopePtr& sc
         if (auto it = required->exportedTypeBindings.find(field); it != required->exportedTypeBindings.end())
             imported = it->second;
     }
-
-    if (!imported)
-        return std::nullopt;
-
-    // An imported class's type is its object type, which knows its class
-    const ExternType* object = get<ExternType>(follow(imported->type));
-    if (!object || !object->relation || !object->relation->get_if<Klass>())
-        return std::nullopt;
 
     return imported;
 }
@@ -1994,7 +1992,7 @@ void ConstraintGenerator::exportReturnedTypes(const ScopePtr& scope, AstStatRetu
         std::optional<AstName> className;
         if (const AstExprGlobal* global = item.value->as<AstExprGlobal>(); global && classGlobalNames.contains(global->name))
             className = global->name;
-        else if (const AstExprLocal* local = item.value->as<AstExprLocal>(); local && importedClassLocals.contains(local->local))
+        else if (const AstExprLocal* local = item.value->as<AstExprLocal>(); local && importedTypeLocals.contains(local->local))
             className = local->local->name;
 
         if (!className)
