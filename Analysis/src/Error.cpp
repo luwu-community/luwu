@@ -1883,6 +1883,11 @@ struct ErrorConverter
         return message;
     }
 
+    std::string operator()(const DocSyntaxError& e) const
+    {
+        return e.message;
+    }
+
     std::string operator()(const ConstructorReadByName& e) const
     {
         return "Cannot read '__init' of class '" + e.className + "'; constructing the class with '" + e.className +
@@ -2342,6 +2347,11 @@ bool UnreachableCodeUse::operator==(const UnreachableCodeUse& rhs) const
 bool NoTypeUse::operator==(const NoTypeUse& rhs) const
 {
     return use == rhs.use && name == rhs.name && origin == rhs.origin && showHelp == rhs.showHelp;
+}
+
+bool DocSyntaxError::operator==(const DocSyntaxError& rhs) const
+{
+    return message == rhs.message;
 }
 
 bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
@@ -2937,6 +2947,9 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     else if constexpr (std::is_same_v<T, ConstructorReadByName>)
         e.table = clone(e.table);
     else if constexpr (std::is_same_v<T, Typo> || std::is_same_v<T, UnreachableCodeUse> || std::is_same_v<T, NoTypeUse>)
+    {
+    }
+    else if constexpr (std::is_same_v<T, DocSyntaxError>)
     {
     }
     else if constexpr (std::is_same_v<T, UninitializableClassField>)
