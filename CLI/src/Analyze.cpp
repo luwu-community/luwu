@@ -72,6 +72,13 @@ static void reportError(const Luau::Frontend& frontend, ReportFormat format, con
 {
     std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(error.moduleName);
 
+    // Luwu doc references: errors in doc comments are labeled apart, so they don't read as broken code
+    const char* kind = "TypeError";
+    if (Luau::get_if<Luau::DocSyntaxError>(&error.data))
+        kind = "DocSyntaxError";
+    else if (error.inDocComment)
+        kind = "DocTypeError";
+
     if (const Luau::SyntaxError* syntaxError = Luau::get_if<Luau::SyntaxError>(&error.data))
         report(format, humanReadableName.c_str(), error.location, "SyntaxError", syntaxError->message.c_str());
     else
@@ -79,7 +86,7 @@ static void reportError(const Luau::Frontend& frontend, ReportFormat format, con
             format,
             humanReadableName.c_str(),
             error.location,
-            "TypeError",
+            kind,
             Luau::toString(error, Luau::TypeErrorToStringOptions{frontend.fileResolver}).c_str()
         );
 }
