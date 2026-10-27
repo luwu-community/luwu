@@ -1629,10 +1629,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "every_common_way_to_export_a_class_brings_it
     )";
     fileResolver.source["game/Hub"] = R"(
         const animals = require(game.Keyword)
-        export const Cat = animals.Cat
+        export Cat = animals.Cat
     )";
     fileResolver.source["game/DestructuringHub"] = R"(
-        export const .{Cat} = require(game.Table)
+        export .{Cat} = require(game.Table)
     )";
     fileResolver.source["game/ImpliedConstHub"] = R"(
         export .{Cat} = require(game.DotTable)
@@ -1691,11 +1691,11 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "modules_exported_as_fields_keep_their_types"
         export class Cat(age: Age) end
     )";
     fileResolver.source["game/Hub"] = R"(
-        export const t = require(game.T)
+        export t = require(game.T)
     )";
     fileResolver.source["game/AliasHub"] = R"(
         const t_module = require(game.T)
-        export const t = t_module
+        export t = t_module
     )";
     fileResolver.source["game/TableHub"] = R"(
         const t = require(game.T)
@@ -1703,7 +1703,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "modules_exported_as_fields_keep_their_types"
     )";
     // Two levels: `outer.inner.t`
     fileResolver.source["game/Outer"] = R"(
-        export const inner = require(game.Hub)
+        export inner = require(game.Hub)
     )";
 
     const std::vector<std::pair<std::string, std::string>> hubs = {
@@ -1753,12 +1753,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "modules_exported_under_many_paths_import_a_b
     };
 
     const int levels = 8;
-    fileResolver.source[format("game/L%d", levels)] = "export type Age = number\nexport const value = 1\n";
+    fileResolver.source[format("game/L%d", levels)] = "export type Age = number\nexport value = 1\n";
     for (int i = levels - 1; i >= 1; --i)
     {
         fileResolver.source[format("game/L%d", i)] = format(
             "export type Age = number\nconst next = require(game.L%d)\n"
-            "export const a = next\nexport const b = next\nexport const c = next\nexport const d = next\n",
+            "export a = next\nexport b = next\nexport c = next\nexport d = next\n",
             i + 1
         );
     }

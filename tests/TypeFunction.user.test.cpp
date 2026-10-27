@@ -1220,6 +1220,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cross_type_function_type_check")
         end
 
         type function rec(ty: type): type
+            if not ty:is("union") then
+                return ty
+            end
             local parts: { type } = {}
             for _, part in ty:components() do
                 table.insert(parts, rec(part))
@@ -3639,8 +3642,8 @@ A.with_rows({ { x = "a" } })
 A.with_rows({ { y = "a" } })
     )");
 
-    // The mismatch is reported twice, in one module as well: both errors are the same one
-    REQUIRE_EQ(result.errors.size(), 2);
+    // One error for the argument, however many of its members fail
+    REQUIRE_EQ(result.errors.size(), 1);
     for (const TypeError& error : result.errors)
     {
         CHECK_EQ(error.location.begin.line, 3);

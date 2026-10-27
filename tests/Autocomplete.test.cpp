@@ -19,17 +19,16 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
-LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
-LUAU_FASTFLAG(LuwuLiteralTypes)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(LuwuLiteralTypes)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -6411,6 +6410,40 @@ TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_in_loop_bindings_complete_the_e
     CHECK_EQ(ac.context, AutocompleteContext::Property);
     CHECK(ac.entryMap.count("x"));
     CHECK(!ac.entryMap.count("name"));
+}
+
+// The value is a call, so its type is a pack (astTypePacks), not a single type
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "destructuring_keys_complete_a_required_modules_exports")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["Module/A"] = R"(
+export trait Path end
+export class FilePath implements Path end
+export const PathSeparator = "/"
+)";
+    getFrontend().check("Module/A");
+
+    fileResolver.source["Module/B"] = R"(
+local .{Pa} = require(script.Parent.A)
+local .{} = require(script.Parent.A)
+)";
+
+    // after `Pa`, and in the empty pattern
+    for (Position position : {Position{1, 10}, Position{2, 8}})
+    {
+        AutocompleteResult ac = autocomplete("Module/B", position);
+        CHECK_EQ(ac.context, AutocompleteContext::Property);
+        CHECK(ac.entryMap.count("Path"));
+        CHECK(ac.entryMap.count("FilePath"));
+        CHECK(ac.entryMap.count("PathSeparator"));
+    }
 }
 
 TEST_CASE_FIXTURE(ACFixture, "type_destructuring_keys_complete_the_modules_exported_types")

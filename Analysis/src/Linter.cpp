@@ -4718,7 +4718,9 @@ private:
     {
         for (const AstIfClause& clause : clauses)
         {
-            if (clause.declaration)
+            // a destructuring clause's value is the destructured source, never a condition
+            bool plainBinding = clause.declaration && !clause.declaration->destructure && !clause.declaration->isDesugaredField();
+            if (plainBinding)
                 checkBinding(clause.local, clause.expr);
         }
     }
@@ -8677,8 +8679,8 @@ private:
 
     bool visit(AstStatLocal* node) override
     {
-        // A local without a value can't be `const`
-        bool candidate = !node->isConst && node->values.size > 0;
+        // A destructuring declaration desugars to several locals, and one without a value can't be `const`
+        bool candidate = !node->isConst && node->values.size > 0 && !node->destructure && !node->isDesugaredField();
         if (!candidate)
             return true;
 

@@ -73,10 +73,6 @@ class AstTypePack;
 class AstAttr;
 class AstExprTable;
 
-// Luwu Destructuring (rfcs/destructuring.md): the name of the hidden local an unnamed pattern (`local .{x} = v`)
-// binds its value to. Code can't spell it, so nothing can refer to it.
-constexpr const char* kDestructuredLocalName = "(destructured)";
-
 template<typename T>
 struct AstArray
 {
@@ -103,6 +99,10 @@ struct AstArray
         return std::make_reverse_iterator(begin());
     }
 };
+
+// Luwu Destructuring (rfcs/destructuring.md): the name of the hidden local an unnamed pattern (`local .{x} = v`)
+// binds its value to. Code can't spell it, so nothing can refer to it.
+constexpr const char* kDestructuredLocalName = "(destructured)";
 
 struct AstLocal
 {
@@ -1234,14 +1234,14 @@ public:
     // Location of the leading 'for' keyword token only.
     Location forLocation;
 
+    // Luwu If Local (rfcs/if-local.md): see AstStatFor::whenGuard. With destructured bindings, `body` starts with
+    // their fields and the guard follows them.
+    AstStatIf* whenGuard = nullptr;
+
     // Luwu Destructuring (rfcs/destructuring.md): the pattern of each binding written as one (`for _, p.{x, y} in ps`),
     // null for a plain name; empty when no binding is a pattern. The loop variable is the pattern's local (hidden for
     // `.{x, y}`), and `body` starts with one `local` per bound name (AstStatLocal::destructuredFromLoop).
     AstArray<AstDestructurePattern*> destructure{nullptr, 0};
-
-    // Luwu If Local (rfcs/if-local.md): see AstStatFor::whenGuard. With destructured bindings, `body` starts with
-    // their fields and the guard follows them.
-    AstStatIf* whenGuard = nullptr;
 };
 
 class AstStatAssign : public AstStat

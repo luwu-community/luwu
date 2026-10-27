@@ -39,6 +39,7 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
@@ -10641,6 +10642,25 @@ TEST_CASE("StringMethodsOnProvenStringsCompileAsFunctions")
         CHECK_MESSAGE(compileFunction0(source).find("NAMECALL") != std::string::npos, source);
 }
 
+TEST_CASE("StringMethodsProvenByOrLeave")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+    ScopedFastFlag doExpressions{FFlag::LuwuDoExpr, true};
+
+    // `type(s) == "string" or return` proves `s` for the rest of the block, as a statement, a declaration's value or an
+    // assignment's value
+    const std::pair<const char*, const char*> kSameAsFunctionForm[] = {
+        {R"(local s = ... typeof(s) == "string" or return 0 return s:len())", R"(local s = ... typeof(s) == "string" or return 0 return string.len(s))"},
+        {R"(local s = ... local ok = type(s) == "string" or return 0 return s:upper())",
+         R"(local s = ... local ok = type(s) == "string" or return 0 return string.upper(s))"},
+        {R"(local s, ok = ... ok = type(s) == "string" or return 0 return s:upper())",
+         R"(local s, ok = ... ok = type(s) == "string" or return 0 return string.upper(s))"},
+    };
+
+    for (const auto& [method, function] : kSameAsFunctionForm)
+        CHECK_MESSAGE(compileFunction0(method) == compileFunction0(function), method);
+}
+
 TEST_CASE("StringMethodsOnTrustedStringAnnotations")
 {
     ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
@@ -14707,7 +14727,7 @@ TEST_CASE("ExportDestructuringStoresTheNamesItBinds")
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuwuDestructuring, true}};
 
     CHECK_EQ(
-        "\n" + compileFunction0("export const .{x, y} = ..."),
+        "\n" + compileFunction0("export .{x, y} = ..."),
         R"(
 GETVARARGS R0 1
 GETTABLEKS R1 R0 K0 ['x']
@@ -14976,6 +14996,87 @@ TEST_CASE("LuwuSyntaxInALuauModuleDoesNotCompile")
 
     // the same source is fine as Luwu
     CHECK_NE(Luau::compile("local function f(x = 1) return x end")[0], 0);
+}
+
+// Luwu collections: destructuring a tuple the code builds creates no object; its bindings are the argument registers
+TEST_CASE("CollectionsTupleDestructuringCreatesNoObject")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::DebugLuwuCollections, true},
+    };
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(a, b)
+    const .{ first, second } = collections.pair(a + 1, b)
+    return first + second
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+ADDK R2 R0 K0 [1]
+MOVE R3 R1
+ADD R4 R2 R3
+RETURN R4 1
+)"
+    );
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function g(x)
+    const .{ first, second } = do
+        if x then
+            give collections.pair(x, 1)
+        end
+        give collections.pair(2, 3)
+    return first + second
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+JUMPIFNOT R0 L0
+MOVE R1 R0
+LOADN R2 1
+JUMP L1
+L0: LOADN R1 2
+LOADN R2 3
+L1: ADD R3 R1 R2
+RETURN R3 1
+)"
+    );
+
+    // a module that assigns `collections` keeps the call
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+collections = nil
+local function f(a, b)
+    const .{ first } = collections.pair(a, b)
+    return first
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+GETGLOBAL R2 K0 ['collections']
+GETTABLEKS R2 R2 K1 ['pair']
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 1
+GETTABLEKS R3 R2 K2 ['first']
+RETURN R3 1
+)"
+    );
 }
 
 TEST_SUITE_END();

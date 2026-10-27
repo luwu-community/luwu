@@ -11,17 +11,19 @@
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(LuwuBufferBatched)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(LuwuBufferMemcmp)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
-LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
@@ -3058,28 +3060,30 @@ print(a)
     CHECK_EQ(shadow[0].text, "Variable 'a' shadows previous declaration at line 3");
 }
 
-TEST_CASE_FIXTURE(Fixture, "LintsSeeLoopWhenChains")
+TEST_CASE_FIXTURE(Fixture, "LintsSeeLoopWhenChainsAndDestructuredLoopBindings")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
     };
 
     LintResult result = lint(R"(
 local function f(): number? return 1 end
 local people = {}
 
-for _, name in people when name do print(name) end
+for _, .{name, unused} in people when name do print(name) end
 while local x = f() do print(x) end
 while local y = f() do end
 for i = 1, 3 when i > 1 do print(i) end
 )");
 
-    // the `when` chain is written in the loop's header, not as a statement of its body
+    // the fields and the `when` chain are written in the loop's header, not as statements of its body
     CHECK(warningsWithCode(result, LintWarning::Code_SameLineStatement).empty());
 
     std::vector<LintWarning> unused = warningsWithCode(result, LintWarning::Code_LocalUnused);
-    REQUIRE_EQ(unused.size(), 1);
-    CHECK_EQ(unused[0].text, "Variable 'y' is never used; prefix with '_' to silence");
+    REQUIRE_EQ(unused.size(), 2);
+    CHECK_EQ(unused[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
+    CHECK_EQ(unused[1].text, "Variable 'y' is never used; prefix with '_' to silence");
 
     // a `while local` loop ends when its binding is falsy
     CHECK(warningsWithCode(result, LintWarning::Code_ForeverLoop).empty());
@@ -3512,6 +3516,7 @@ TEST_CASE_FIXTURE(Fixture, "BindingSwallowsCondition")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
     };
 
     LintResult result = lint(R"(
@@ -3537,6 +3542,7 @@ if local user = find(1) and find(2) then print(user) end
 if local field = t.inner and t.inner.field then print(field) end
 if local fallback = t.value or 0 then print(fallback) end
 if local grouped = (find(1) and t.flag == 1) then print(grouped) end
+if local .{name} = find(1) then print(name) end
 )");
 
     std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_BindingSwallowsCondition);
@@ -3867,6 +3873,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "KeywordShadowAndBuiltinShadow")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
     };
 
     LintResult result = lint(R"(
@@ -3878,7 +3885,7 @@ for _, type in {} do end
 local function f(typeof, ok) return typeof, ok end
 local print = print
 if local table = {} then end
-local string = "s"
+local .{string} = { string = "s" }
 local export = 1
 local function g(const) return const end
 
@@ -4878,6 +4885,27 @@ return a, b, c, d
     CHECK_EQ(found[2].location.begin.line, 6);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsBatchedBufferInLuauFiles")
+{
+    ScopedFastFlag sff{FFlag::LuwuBufferBatched, true};
+
+    fileResolver.source["game/a"] = R"(
+local b = buffer.create(8)
+buffer.packu8(b, 0, 1, 2)
+return buffer.unpacku8(b, 0, 2)
+)";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : lintModule("game/a").warnings)
+        if (warning.code == LintWarning::Code_LuwuOnlyApi)
+            found.push_back(warning);
+
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].text, "'buffer.packu8' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+    CHECK_EQ(found[1].text, "'buffer.unpacku8' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")
 {
     const std::string source = R"(
@@ -5233,6 +5261,24 @@ return map, shadowed, maybe
     CHECK_EQ(found[0].text, "'collections' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
     CHECK_EQ(found[0].location, Location({1, 12}, {1, 23}));
     CHECK_EQ(found[1].text, "'collections.option' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsBufferMemcmpInLuauFiles")
+{
+    ScopedFastFlag sff{FFlag::LuwuBufferMemcmp, true};
+
+    fileResolver.source["game/a"] = R"(
+return buffer.memcmp(buffer.create(1), buffer.create(1))
+)";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : lintModule("game/a").warnings)
+        if (warning.code == LintWarning::Code_LuwuOnlyApi)
+            found.push_back(warning);
+
+    REQUIRE_EQ(found.size(), 1);
+    CHECK_EQ(found[0].text, "'buffer.memcmp' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")

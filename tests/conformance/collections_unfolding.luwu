@@ -1,0 +1,73 @@
+--!nocheck
+-- Luwu collections: destructuring a tuple the code constructs creates no object at -O1 and -O2. Every level must give
+-- the same results, the fallbacks included.
+
+local function direct(a: number, b: number): number
+    const .{ first, second } = collections.pair(a + 1, b * 2)
+    return first + second
+end
+assert(direct(1, 2) == 6)
+
+-- every `give` builds a pair, so the `do` expression unfolds; arguments still run in order
+local function branches(x: number): (number, number)
+    const .{ first as lo, second as hi } = do
+        if x < 0 then
+            give collections.pair(x, 0)
+        end
+        const doubled = x * 2
+        give collections.pair(0, doubled)
+    return lo, hi
+end
+local lo, hi = branches(-3)
+assert(lo == -3 and hi == 0)
+lo, hi = branches(4)
+assert(lo == 0 and hi == 8)
+
+local order = {}
+local function note(value: number): number
+    table.insert(order, value)
+    return value
+end
+const .{ third } = collections.triple(note(1), note(2), note(3))
+assert(third == 3 and #order == 3 and order[1] == 1 and order[3] == 3)
+
+-- a written binding gets its own register, so another binding of the same element keeps its value
+do
+    local .{ first, first as again } = collections.pair(1, 2)
+    first += 10
+    assert(first == 11 and again == 1)
+end
+
+-- closures capture the bindings like any locals
+do
+    const .{ first, fourth } = collections.quad("a", "b", "c", "d")
+    local function both(): string
+        return first .. fourth
+    end
+    assert(both() == "ad")
+end
+
+-- a nested pattern reads an element that is itself an object
+do
+    const .{ first as .{ second as inner } } = collections.pair(collections.pair(1, 2), 3)
+    assert(inner == 2)
+end
+
+-- these keep the object: a mixed `give`, tuples of different sizes, and a field that isn't an element
+local function mixed(flag: boolean)
+    const .{ first } = do
+        if flag then
+            give collections.pair(1, 2)
+        end
+        give collections.triple(3, 4, 5)
+    return first
+end
+assert(mixed(true) == 1 and mixed(false) == 3)
+
+local ok, err = pcall(function()
+    const .{ first, fifth } = collections.quad(1, 2, 3, 4)
+    return first, fifth
+end)
+assert(not ok and string.find(err, "fifth", 1, true))
+
+return "OK"

@@ -15,9 +15,8 @@ LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
-LUAU_FASTFLAG(LuwuTableFunctionFields)
-LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(DebugLuwuPoperators)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -2338,10 +2337,25 @@ TEST_CASE("prettyPrint_attributes_beyond_functions")
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
+TEST_CASE("prettyPrint_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // Printed from the source form the parser keeps, not from the statements it desugars to
+    std::string code = R"(
+local .{x, y, z} = v
+const fs.{readfile as rf, path}: FsLib = require("@std/fs")
+const archive.{zip, tar as .{gz as targz}, lib.{a}} = require("@std/archive"); print(zip)
+local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole = t
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
 TEST_CASE("prettyPrint_if_local")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
     };
 
     std::string code = R"(
@@ -2349,7 +2363,7 @@ if local a = f() when a > 1 when const b: number = g(a) then
     print(a, b)
 elseif ready when local  c = h() then
     print(c)
-elseif const x = p when x then
+elseif const .{x, y as py} = p when x then
 else
 end
 local v = if const a = f() then a elseif local b = g() when b then b else nil
@@ -2357,10 +2371,11 @@ local v = if const a = f() then a elseif local b = g() when b then b else nil
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
-TEST_CASE("prettyPrint_loop_when_chains")
+TEST_CASE("prettyPrint_loop_when_chains_and_destructuring")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
         {FFlag::LuwuTableComprehensions, true},
         {FFlag::LuwuDoExpr, true},
     };
@@ -2372,15 +2387,16 @@ for i = 1,  10 when i % 2 == 0 do
     print(i)
 end
 for _, v in  xs when local  w = v.inner when w > 1 do print(w) end
-for _ , person: Person in people when person.age > 18 do
+for _ , .{name, age as years}: Person in people when years > 18 do
     print(name)
 end
+for k, entry.{kind}, x in iter do end
 while local line = read() when line ~= "" do
     print(line)
 end
 while  ready when const job = queue:pop() do end
 while running do end
-local a = { for _, p in points when p.x > 0 give p.x + p.y }
+local a = { for _, p.{x, y} in points when x > 0 give x + y }
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
@@ -2411,6 +2427,23 @@ end
 }
 
 // Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+TEST_CASE("prettyPrint_push_and_pop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    std::string code = R"(
+const t = {}
+t <+ 1
+t  <+ 1 ,  f()
+self.items<+x
+local x = <-t
+local y = <-  t.items + #t
+local z = a<-b
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+    CHECK_EQ(code, prettyPrint(code).code);
+}
+
 TEST_CASE("prettyPrint_table_comprehensions")
 {
     ScopedFastFlag sffs[] = {
@@ -2610,27 +2643,13 @@ end
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
-TEST_CASE("prettyPrint_destructuring")
-{
-    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
-
-    // Printed from the source form the parser keeps, not from the statements it desugars to
-    std::string code = R"(
-local .{x, y, z} = v
-const fs.{readfile as rf, path}: FsLib = require("@std/fs")
-const archive.{zip, tar as .{gz as targz}, lib.{a}} = require("@std/archive"); print(zip)
-local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole = t
-    )";
-    CHECK_EQ(code, prettyPrint(code, {}, true).code);
-}
-
 TEST_CASE("prettyPrint_exported_destructuring")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuwuDestructuring, true}, {FFlag::LuauExportValueSyntax, true}};
 
     std::string code = R"(
-export const .{x, y} = v
-export   local m.{z} = v
+export .{x, y} = v
+export   m.{z} = v
 export .{w} = v
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
@@ -2670,23 +2689,6 @@ type .{Metadata, Entry as FileEntry} = fs
 export type  .{ Box }  =  fs; type Other = number
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
-}
-
-TEST_CASE("prettyPrint_push_and_pop")
-{
-    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
-
-    std::string code = R"(
-const t = {}
-t <+ 1
-t  <+ 1 ,  f()
-self.items<+x
-local x = <-t
-local y = <-  t.items + #t
-local z = a<-b
-    )";
-    CHECK_EQ(code, prettyPrint(code, {}, true).code);
-    CHECK_EQ(code, prettyPrint(code).code);
 }
 
 TEST_CASE("prettyPrint_function_attributes")

@@ -44,6 +44,7 @@ LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuStringExtensions)
+LUAU_FASTFLAG(DebugLuwuCollections)
 
 // May a file use the `--!trust` directive, which lets the compiler act on type annotations it cannot
 // verify (Compiler::trustsTypeAnnotations)? The flag only permits the directive; it never enables trust
@@ -5506,10 +5507,45 @@ struct Compiler
         return le->local;
     }
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): the check in `type(x) == "string" or return` (or `break`, `continue`)
+    // written as a statement, a declaration's value or an assignment's value, which only completes when the check passes
+    static AstExpr* orLeaveCheck(AstStat* stat)
+    {
+        if (AstStatExpr* statExpr = stat->as<AstStatExpr>())
+        {
+            AstExprBinary* orLeave = asOrLeave(statExpr->expr);
+            return orLeave ? orLeave->left : nullptr;
+        }
+
+        const AstArray<AstExpr*>* values = nullptr;
+        if (AstStatLocal* local = stat->as<AstStatLocal>())
+            values = &local->values;
+        else if (AstStatAssign* assign = stat->as<AstStatAssign>())
+            values = &assign->values;
+
+        for (size_t i = 0; values && i < values->size; ++i)
+        {
+            if (AstExprBinary* orLeave = asOrLeave(values->data[i]))
+                return orLeave->left;
+        }
+
+        return nullptr;
+    }
+
     // `assert(type(x) == "string")` as a statement, for the rest of the block. `assert` is the builtin, which raises when
-    // the check fails, under the same assumption every builtin fastcall makes.
+    // the check fails, under the same assumption every builtin fastcall makes. `type(x) == "string" or return` proves the
+    // same (see orLeaveCheck).
     AstLocal* matchAssertStringProof(AstStat* stat, const AstArray<AstStat*>& body, size_t index)
     {
+        if (AstExpr* check = orLeaveCheck(stat))
+        {
+            AstLocal* local = matchTypeStringCheck(check);
+            if (!local || bodyWritesLocal(body, index + 1, local))
+                return nullptr;
+
+            return local;
+        }
+
         AstStatExpr* statExpr = stat->as<AstStatExpr>();
         AstExprCall* call = statExpr ? statExpr->expr->as<AstExprCall>() : nullptr;
         const int* bfid = call ? builtins.find(call) : nullptr;
@@ -6396,11 +6432,11 @@ struct Compiler
     // `target`, closes the block's captured locals and jumps to the end, the way an inlined function's `return` does
     // (compileInlineReturn). `return`, `break` and `continue` leave through their usual paths: they close upvalues
     // from the local stack, which already holds the block's locals.
-    void compileExprDo(AstExprDo* expr, uint8_t target, bool targetTemp)
+    void compileExprDo(AstExprDo* expr, uint8_t target, bool targetTemp, unsigned tupleSize = 0)
     {
         RegScope rs(this);
 
-        giveFrames.push_back({target, targetTemp, localStack.size(), {}});
+        giveFrames.push_back({target, targetTemp, localStack.size(), {}, tupleSize});
 
         // The block always ends in a `give`, `return`, `break` or `continue`, so nothing falls through it
         LUAU_ASSERT(alwaysTerminates(expr->body));
@@ -6802,7 +6838,10 @@ struct Compiler
         {
             RegScope rs(this);
             GiveFrame& frame = giveFrames.back();
-            compileExpr(stat->value, frame.target, frame.targetTemp);
+            if (frame.tupleSize > 0)
+                compileTupleElements(stat->value->as<AstExprCall>(), frame.target);
+            else
+                compileExpr(stat->value, frame.target, frame.targetTemp);
         }
 
         closeLocals(giveFrames.back().localOffset);
@@ -7195,6 +7234,20 @@ struct Compiler
     void compileExprIndexName(AstExprIndexName* expr, uint8_t target, bool targetTemp = false)
     {
         setDebugLine(expr); // normally compileExpr sets up line info, but compileExprIndexName can be called directly
+
+        // Luwu collections: a destructured tuple's element is already in a register
+        if (AstExprLocal* local = expr->expr->as<AstExprLocal>())
+        {
+            if (const UnfoldedTuple* tuple = unfoldedTuples.find(local->local))
+            {
+                int element = tupleElementIndex(expr->index, tuple->size);
+                LUAU_ASSERT(element >= 0);
+                uint8_t source = uint8_t(tuple->reg + element);
+                if (target != source)
+                    bytecode.emitABC(LOP_MOVE, target, source, 0);
+                return;
+            }
+        }
 
         // Optimization: index chains that start from global variables can be compiled into GETIMPORT statement
         AstExprGlobal* importRoot = 0;
@@ -8453,10 +8506,164 @@ struct Compiler
         return true;
     }
 
+    // Luwu collections: the position of the tuple element `name` (`first` to `fourth`) in a tuple of `size`, or -1
+    static int tupleElementIndex(AstName name, unsigned size)
+    {
+        static const char* const kElements[] = {"first", "second", "third", "fourth"};
+        for (unsigned i = 0; i < size; i++)
+        {
+            if (name == kElements[i])
+                return int(i);
+        }
+        return -1;
+    }
+
+    // Luwu collections: the size of the tuple `expr` constructs, a `collections.pair`, `triple` or `quad` call with one
+    // argument per element, or 0 for anything else
+    unsigned tupleConstructionSize(AstExpr* expr)
+    {
+        AstExprCall* call = expr->as<AstExprCall>();
+        if (!FFlag::DebugLuwuCollections || !call || call->self)
+            return 0;
+
+        Builtin builtin = getBuiltin(call->func, globals, variables);
+        unsigned size = 0;
+        if (builtin.isMethod("collections", "pair"))
+            size = 2;
+        else if (builtin.isMethod("collections", "triple"))
+            size = 3;
+        else if (builtin.isMethod("collections", "quad"))
+            size = 4;
+
+        return call->args.size == size ? size : 0;
+    }
+
+    // Luwu collections: the size of the tuple every `give` of `expr` constructs, or 0 when one gives anything else or
+    // the sizes differ. Gives of nested `do` expressions belong to those.
+    unsigned tupleSizeOfGives(AstExprDo* expr)
+    {
+        struct GiveVisitor : AstVisitor
+        {
+            AstExprDo* root;
+            std::vector<AstStatGive*> gives;
+
+            bool visit(AstExprDo* node) override
+            {
+                return node == root;
+            }
+
+            bool visit(AstExprFunction* node) override
+            {
+                return false;
+            }
+
+            bool visit(AstStatGive* node) override
+            {
+                gives.push_back(node);
+                return false;
+            }
+        };
+
+        GiveVisitor visitor;
+        visitor.root = expr;
+        expr->visit(&visitor);
+
+        unsigned size = 0;
+        for (AstStatGive* give : visitor.gives)
+        {
+            unsigned giveSize = tupleConstructionSize(give->value);
+            if (giveSize == 0 || (size != 0 && giveSize != size))
+                return 0;
+            size = giveSize;
+        }
+        return size;
+    }
+
+    // Luwu collections: the arguments of a tuple construction into consecutive registers from `target`, in order
+    void compileTupleElements(AstExprCall* call, uint8_t target)
+    {
+        LUAU_ASSERT(call);
+        for (size_t i = 0; i < call->args.size; i++)
+        {
+            RegScope rs(this);
+            compileExpr(call->args.data[i], uint8_t(target + i), /* targetTemp= */ true);
+        }
+    }
+
+    // Luwu collections: `const .{ first, second } = collections.pair(a, b)` creates no object. The hidden local a
+    // destructuring desugars to gets one register per element, and its field reads become those registers (see
+    // compileExprIndexName). A `do` expression unfolds the same way when every `give` builds the same kind of tuple.
+    // Like a fastcall, this assumes `collections` is the builtin library when the module never assigns it; anything the
+    // pattern reads that isn't an element of the tuple keeps the object.
+    bool tryCompileUnfoldedTuple(AstStatLocal* stat)
+    {
+        AstDestructurePattern* pattern = stat->destructure;
+        if (!pattern || stat->vars.size != 1 || stat->values.size != 1 || stat->vars.data[0] != pattern->local)
+            return false;
+
+        AstLocal* local = pattern->local;
+        if (strcmp(local->name.value, kDestructuredLocalName) != 0)
+            return false;
+
+        AstExpr* value = stat->values.data[0];
+        while (AstExprGroup* group = value->as<AstExprGroup>())
+            value = group->expr;
+
+        AstExprDo* doExpr = value->as<AstExprDo>();
+        unsigned size = doExpr ? tupleSizeOfGives(doExpr) : tupleConstructionSize(value);
+        if (size == 0)
+            return false;
+
+        for (const AstDestructureField& field : pattern->fields)
+        {
+            if (tupleElementIndex(field.key, size) < 0)
+                return false;
+        }
+
+        uint8_t reg = allocReg(stat, size);
+        uint32_t allocpc = bytecode.getDebugPC();
+
+        if (doExpr)
+            compileExprDo(doExpr, reg, /* targetTemp= */ true, size);
+        else
+            compileTupleElements(value->as<AstExprCall>(), reg);
+
+        pushLocal(local, reg, allocpc);
+        unfoldedTuples[local] = {reg, size};
+        return true;
+    }
+
+    // Luwu collections: a local bound to an unfolded tuple's element (`local first = (destructured).first`) uses the
+    // element's register, the way `local a = b` reuses `b`'s. Only when nothing writes it, since two bindings can
+    // share an element.
+    bool tryBindTupleElement(AstStatLocal* stat)
+    {
+        if (stat->vars.size != 1 || stat->values.size != 1 || stat->vars.data[0]->isExported)
+            return false;
+
+        AstExprIndexName* index = stat->values.data[0]->as<AstExprIndexName>();
+        AstExprLocal* tupleLocal = index ? index->expr->as<AstExprLocal>() : nullptr;
+        const UnfoldedTuple* tuple = tupleLocal ? unfoldedTuples.find(tupleLocal->local) : nullptr;
+        if (!tuple)
+            return false;
+
+        Variable* lv = variables.find(stat->vars.data[0]);
+        if (lv && lv->written)
+            return false;
+
+        int element = tupleElementIndex(index->index, tuple->size);
+        LUAU_ASSERT(element >= 0);
+        pushLocal(stat->vars.data[0], uint8_t(tuple->reg + element), kDefaultAllocPc);
+        return true;
+    }
+
     void compileStatLocal(AstStatLocal* stat)
     {
         // Optimization: we don't need to allocate and assign const locals, since their uses will be constant-folded
         if (options.optimizationLevel >= 1 && options.debugLevel <= 1 && areLocalsRedundant(stat))
+            return;
+
+        if (options.optimizationLevel >= 1 && (tryCompileUnfoldedTuple(stat) || tryBindTupleElement(stat)))
             return;
 
         // Optimization: for 1-1 local assignments, we can reuse the register *if* neither local is mutated
@@ -10773,8 +10980,19 @@ struct Compiler
         bool targetTemp;
         size_t localOffset;
         std::vector<size_t> jumps;
+        // Luwu collections: when nonzero, every `give` constructs a tuple this size, and its elements go to
+        // `target` onward instead (see tryCompileUnfoldedTuple)
+        unsigned tupleSize = 0;
     };
     std::vector<GiveFrame> giveFrames;
+
+    // Luwu collections: a destructured tuple's elements, held in consecutive registers instead of an object
+    struct UnfoldedTuple
+    {
+        uint8_t reg;
+        unsigned size;
+    };
+    DenseHashMap<AstLocal*, UnfoldedTuple> unfoldedTuples{nullptr};
 
     // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the comprehensions being compiled, innermost last
     struct ComprehensionFrame
