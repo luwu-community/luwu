@@ -31,6 +31,8 @@ LUAU_FASTFLAG(LuwuNonePrimitive)
 namespace Luau
 {
 
+static bool lintEnabledIn(const LintMask& mask, LintWarning::Code code);
+
 struct LintContext
 {
     struct Global
@@ -67,9 +69,21 @@ struct LintContext
     {
     }
 
+    // Luwu: a part of a lint group is on only where its group is on too (see lintGroupOf)
     bool warningEnabled(LintWarning::Code code)
     {
-        return options.warningMask.test(code);
+        return lintEnabledIn(options.warningMask, code);
+    }
+
+    // Luwu: whether a pass that reports several codes has any of them to report
+    bool anyWarningEnabled(std::initializer_list<LintWarning::Code> codes)
+    {
+        for (LintWarning::Code code : codes)
+        {
+            if (warningEnabled(code))
+                return true;
+        }
+        return false;
     }
 
     std::optional<TypeId> getType(AstExpr* expr)
@@ -4586,11 +4600,14 @@ private:
 class LintOptimizationHint : AstVisitor
 {
 public:
-    LUAU_NOINLINE static void process(LintContext& context, bool classHints)
+    LUAU_NOINLINE static void process(LintContext& context, const std::vector<HotComment>& hotcomments)
     {
         LintOptimizationHint pass;
         pass.context = &context;
 
+        // Luwu Classes (rfcs/classes): a trusted file (the flag on and `--!trust`) already acts on the annotations
+        bool trustsAnnotations = FFlag::DebugLuwuCompilerTrustsTypeAnnotations && hasHeaderCommentDirective(hotcomments, "trust");
+        bool classHints = FFlag::LuwuClasses && !trustsAnnotations && context.warningEnabled(LintWarning::Code_MethodsNotInlined);
         if (classHints)
         {
             ClassCollector collector{&pass.classes};
@@ -5029,13 +5046,13 @@ static std::string describe(AstExpr* expr, const char* fallback)
 class LintLoopHints : AstVisitor
 {
 public:
-    LUAU_NOINLINE static void process(LintContext& context, bool concat, bool tableInsert, bool tableRemove)
+    LUAU_NOINLINE static void process(LintContext& context)
     {
         LintLoopHints pass;
         pass.context = &context;
-        pass.concat = concat;
-        pass.tableInsert = tableInsert;
-        pass.tableRemove = tableRemove;
+        pass.concat = context.warningEnabled(LintWarning::Code_LoopConcat);
+        pass.tableInsert = context.warningEnabled(LintWarning::Code_InefficientTableInsert);
+        pass.tableRemove = context.warningEnabled(LintWarning::Code_InefficientTableRemove);
 
         context.root->visit(&pass);
     }
@@ -5642,6 +5659,24 @@ private:
 class LintLoopMistakes : AstVisitor
 {
 public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintLoopMistakes pass;
+        pass.context = &context;
+        pass.enabled.removeWhileIterating = context.warningEnabled(LintWarning::Code_RemoveWhileIterating);
+        pass.enabled.loopVariableWrite = context.warningEnabled(LintWarning::Code_LoopVariableWrite);
+        pass.enabled.iteratedTableWrite = context.warningEnabled(LintWarning::Code_IteratedTableWrite);
+        pass.enabled.foreverLoop = context.warningEnabled(LintWarning::Code_ForeverLoop);
+        pass.enabled.uselessLoop = context.warningEnabled(LintWarning::Code_UselessLoop);
+        pass.enabled.stringIndexZero = context.warningEnabled(LintWarning::Code_StringIndexZero);
+
+        CaptureCollector captures{&pass.captured, &pass.capturedWrites};
+        context.root->visit(&captures);
+
+        context.root->visit(&pass);
+    }
+
+private:
     struct Enabled
     {
         bool removeWhileIterating = false;
@@ -5652,19 +5687,6 @@ public:
         bool stringIndexZero = false;
     };
 
-    LUAU_NOINLINE static void process(LintContext& context, Enabled enabled)
-    {
-        LintLoopMistakes pass;
-        pass.context = &context;
-        pass.enabled = enabled;
-
-        CaptureCollector captures{&pass.captured, &pass.capturedWrites};
-        context.root->visit(&captures);
-
-        context.root->visit(&pass);
-    }
-
-private:
     LintContext* context;
     Enabled enabled;
 
@@ -6446,20 +6468,15 @@ private:
 class LintValueMistakes : AstVisitor
 {
 public:
-    struct Enabled
-    {
-        bool newValueComparison = false;
-        bool tableTruthiness = false;
-        bool discardedResult = false;
-    };
-
-    LUAU_NOINLINE static void process(LintContext& context, Enabled enabled)
+    LUAU_NOINLINE static void process(LintContext& context)
     {
         LintValueMistakes pass;
         pass.context = &context;
-        pass.enabled = enabled;
+        pass.enabled.newValueComparison = context.warningEnabled(LintWarning::Code_NewValueComparison);
+        pass.enabled.tableTruthiness = context.warningEnabled(LintWarning::Code_TableTruthiness);
+        pass.enabled.discardedResult = context.warningEnabled(LintWarning::Code_DiscardedResult);
 
-        if (enabled.tableTruthiness)
+        if (pass.enabled.tableTruthiness)
         {
             ContainerLocalCollector collector{&pass.containerLocals, &pass.assignedLocals};
             context.root->visit(&collector);
@@ -6469,6 +6486,13 @@ public:
     }
 
 private:
+    struct Enabled
+    {
+        bool newValueComparison = false;
+        bool tableTruthiness = false;
+        bool discardedResult = false;
+    };
+
     LintContext* context;
     Enabled enabled;
 
@@ -6915,6 +6939,9 @@ class LintAny : AstVisitor
 public:
     LUAU_NOINLINE static void process(LintContext& context, const std::vector<Comment>* comments)
     {
+        if (!context.module || context.module->mode != Mode::Strict)
+            return;
+
         LintAny pass;
         pass.context = &context;
         pass.comments = comments;
@@ -7792,6 +7819,37 @@ static bool isBareNolint(const HotComment& hc)
     return hc.header && hc.content.compare(0, 6, "nolint") == 0 && hc.content.find_first_not_of(" \t", 6) == std::string::npos;
 }
 
+// Luwu: a bare `--!nolint` turns off every lint but this one (see LintWarning::parseMask)
+static void lintBareNolint(LintContext& context, const std::vector<HotComment>& hotcomments)
+{
+    for (const HotComment& hc : hotcomments)
+    {
+        if (isBareNolint(hc))
+            emitWarning(
+                context,
+                LintWarning::Code_BareNolint,
+                hc.location,
+                "'--!nolint' without lint names turns off every lint; did you forget to specify lints? Name them "
+                "('--!nolint LocalUnused'), or write '--!nolint All' to turn them all off on purpose"
+            );
+    }
+}
+
+// Luwu: AnyCast and AnyAnnotation are on by default in Luwu modules only. A Luau module has to ask for them, with
+// `--!lint` or `@[lint]`.
+static void turnOffUnaskedLuwuDefaults(LintContext& context, const std::vector<HotComment>& hotcomments)
+{
+    if (!context.module || context.module->language == Language::Luwu)
+        return;
+
+    LintMask asked = LintWarning::parseEnableMask(hotcomments);
+    for (LintWarning::Code part : {LintWarning::Code_AnyCast, LintWarning::Code_AnyAnnotation})
+    {
+        if (!asked.test(part))
+            context.options.warningMask.reset(part);
+    }
+}
+
 // Luwu: the group a lint is part of, or Code_Unknown. A part follows its group: it's on only where the group is on too,
 // so turning the group off turns all its parts off, and each part can still be turned off alone.
 static LintWarning::Code lintGroupOf(LintWarning::Code code)
@@ -8210,33 +8268,10 @@ std::vector<LintWarning> lint(
 
     fillBuiltinGlobals(context, names, env);
 
-    // Luwu: a bare `--!nolint` turns off every lint but this one (see LintWarning::parseMask)
     if (context.warningEnabled(LintWarning::Code_BareNolint))
-    {
-        for (const HotComment& hc : hotcomments)
-        {
-            if (isBareNolint(hc))
-                emitWarning(
-                    context,
-                    LintWarning::Code_BareNolint,
-                    hc.location,
-                    "'--!nolint' without lint names turns off every lint; did you forget to specify lints? Name them "
-                    "('--!nolint LocalUnused'), or write '--!nolint All' to turn them all off on purpose"
-                );
-        }
-    }
+        lintBareNolint(context, hotcomments);
 
-    // Luwu: AnyCast and AnyAnnotation are on by default in Luwu modules only. A Luau module has to ask for them, with
-    // `--!lint` or `@[lint]`.
-    if (module && module->language != Language::Luwu)
-    {
-        LintMask asked = LintWarning::parseEnableMask(hotcomments);
-        for (LintWarning::Code part : {LintWarning::Code_AnyCast, LintWarning::Code_AnyAnnotation})
-        {
-            if (!asked.test(part))
-                context.options.warningMask.reset(part);
-        }
-    }
+    turnOffUnaskedLuwuDefaults(context, hotcomments);
     const LintMask moduleMask = context.options.warningMask;
 
     // Luwu: a lint a scope turns on has to run even where the module turns it off; filterByLintScopes then drops what
@@ -8321,20 +8356,13 @@ std::vector<LintWarning> lint(
     if (FFlag::LuwuNonePrimitive && context.warningEnabled(LintWarning::Code_NilNoneComparison))
         LintNilNoneComparison::process(context);
 
-    // Luwu: deliberately unflagged. A cast truncating a call's values is a footgun in plain Luau code too.
+    // Luwu: deliberately unflagged. A cast truncating a call's values is a footgun in Luau code too.
     if (context.warningEnabled(LintWarning::Code_VarargCast))
         LintVarargCast::process(context);
 
     if (context.warningEnabled(LintWarning::Code_DeclareMismatch))
         LintDeclareMismatch::process(context);
 
-    LintLoopMistakes::Enabled loopMistakes;
-    loopMistakes.removeWhileIterating = context.warningEnabled(LintWarning::Code_RemoveWhileIterating);
-    loopMistakes.loopVariableWrite = context.warningEnabled(LintWarning::Code_LoopVariableWrite);
-    loopMistakes.iteratedTableWrite = context.warningEnabled(LintWarning::Code_IteratedTableWrite);
-    loopMistakes.foreverLoop = context.warningEnabled(LintWarning::Code_ForeverLoop);
-    loopMistakes.uselessLoop = context.warningEnabled(LintWarning::Code_UselessLoop);
-    loopMistakes.stringIndexZero = context.warningEnabled(LintWarning::Code_StringIndexZero);
     if (context.warningEnabled(LintWarning::Code_ConstLocal))
         LintConstLocal::process(context);
 
@@ -8344,17 +8372,13 @@ std::vector<LintWarning> lint(
     if (context.warningEnabled(LintWarning::Code_DiscardedValues))
         LintDiscardedValues::process(context);
 
-    bool anyLints = context.warningEnabled(LintWarning::Code_Any) || context.warningEnabled(LintWarning::Code_AnyCast) ||
-                    context.warningEnabled(LintWarning::Code_AnyAnnotation);
-    if (anyLints && context.module && context.module->mode == Mode::Strict)
+    if (context.anyWarningEnabled({LintWarning::Code_Any, LintWarning::Code_AnyCast, LintWarning::Code_AnyAnnotation}))
         LintAny::process(context, comments);
 
     if (context.warningEnabled(LintWarning::Code_LuwuOnlyApi))
         LintLuwuOnlyApi::process(context);
 
-    // Luwu: turning LuaIterators off turns off its parts
-    if (context.warningEnabled(LintWarning::Code_LuaIterators) &&
-        (context.warningEnabled(LintWarning::Code_Pairs) || context.warningEnabled(LintWarning::Code_Ipairs)))
+    if (context.warningEnabled(LintWarning::Code_Pairs) || context.warningEnabled(LintWarning::Code_Ipairs))
         LintLuaIterators::process(context);
 
     if (context.warningEnabled(LintWarning::Code_SelfAssignment))
@@ -8363,34 +8387,37 @@ std::vector<LintWarning> lint(
     if (context.warningEnabled(LintWarning::Code_DeadStore))
         LintDeadStore::process(context);
 
-    LintValueMistakes::Enabled valueMistakes;
-    valueMistakes.newValueComparison = context.warningEnabled(LintWarning::Code_NewValueComparison);
-    valueMistakes.tableTruthiness = context.warningEnabled(LintWarning::Code_TableTruthiness);
-    valueMistakes.discardedResult = context.warningEnabled(LintWarning::Code_DiscardedResult);
-    if (valueMistakes.newValueComparison || valueMistakes.tableTruthiness || valueMistakes.discardedResult)
-        LintValueMistakes::process(context, valueMistakes);
-
-    bool anyLoopMistake = loopMistakes.removeWhileIterating || loopMistakes.loopVariableWrite || loopMistakes.iteratedTableWrite ||
-                          loopMistakes.foreverLoop || loopMistakes.uselessLoop || loopMistakes.stringIndexZero;
-    if (anyLoopMistake)
-        LintLoopMistakes::process(context, loopMistakes);
-
-    // Luwu: turning OptimizationHint off also turns off its parts, which have codes of their own so each can be turned
-    // off alone
-    if (context.warningEnabled(LintWarning::Code_OptimizationHint))
+    if (context.anyWarningEnabled(
+            {LintWarning::Code_NewValueComparison, LintWarning::Code_TableTruthiness, LintWarning::Code_DiscardedResult}
+        ))
     {
-        // Luwu Classes (rfcs/classes): a trusted file (the flag on and `--!trust`) already acts on the annotations
-        bool trustsAnnotations = FFlag::DebugLuwuCompilerTrustsTypeAnnotations && hasHeaderCommentDirective(hotcomments, "trust");
-        bool methodsNotInlined = context.warningEnabled(LintWarning::Code_MethodsNotInlined);
-        if (methodsNotInlined || context.warningEnabled(LintWarning::Code_FloorDivision) ||
-            context.warningEnabled(LintWarning::Code_FenvDeoptimization))
-            LintOptimizationHint::process(context, methodsNotInlined && FFlag::LuwuClasses && !trustsAnnotations);
+        LintValueMistakes::process(context);
+    }
 
-        bool concat = context.warningEnabled(LintWarning::Code_LoopConcat);
-        bool tableInsert = context.warningEnabled(LintWarning::Code_InefficientTableInsert);
-        bool tableRemove = context.warningEnabled(LintWarning::Code_InefficientTableRemove);
-        if (concat || tableInsert || tableRemove)
-            LintLoopHints::process(context, concat, tableInsert, tableRemove);
+    if (context.anyWarningEnabled(
+            {LintWarning::Code_RemoveWhileIterating,
+             LintWarning::Code_LoopVariableWrite,
+             LintWarning::Code_IteratedTableWrite,
+             LintWarning::Code_ForeverLoop,
+             LintWarning::Code_UselessLoop,
+             LintWarning::Code_StringIndexZero}
+        ))
+    {
+        LintLoopMistakes::process(context);
+    }
+
+    if (context.anyWarningEnabled(
+            {LintWarning::Code_MethodsNotInlined, LintWarning::Code_FloorDivision, LintWarning::Code_FenvDeoptimization}
+        ))
+    {
+        LintOptimizationHint::process(context, hotcomments);
+    }
+
+    if (context.anyWarningEnabled(
+            {LintWarning::Code_LoopConcat, LintWarning::Code_InefficientTableInsert, LintWarning::Code_InefficientTableRemove}
+        ))
+    {
+        LintLoopHints::process(context);
     }
 
     if (context.warningEnabled(LintWarning::Code_RedundantNativeAttribute))
