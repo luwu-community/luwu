@@ -17,6 +17,7 @@ LUAU_FASTFLAG(LuauTypeFunctionSupportsFrozen)
 // Luwu: how long one evaluation of a user type function may run, in milliseconds; 0 for no limit
 LUAU_FASTINTVARIABLE(LuwuTypeFunctionTimeLimitMs, 2000)
 LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
+LUAU_FASTFLAG(LuauUdtfReuseTypeUserdatas)
 
 namespace Luau
 {
@@ -201,7 +202,11 @@ static int evaluateTypeAliasCall(lua_State* L)
         freezer.run(serializedTy);
     }
 
-    allocTypeUserDataCopy(L, serializedTy, /* frozen */ true);
+    if (FFlag::LuauUdtfReuseTypeUserdatas)
+        pushType(L, serializedTy);
+    else
+        allocTypeUserDataCopy(L, serializedTy, /* frozen */ true);
+
     return 1;
 }
 
@@ -407,7 +412,11 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
                             freezer.run(serializedTy);
                         }
 
-                        allocTypeUserDataCopy(L, serializedTy, /* frozen */ true);
+                        if (FFlag::LuauUdtfReuseTypeUserdatas)
+                            pushType(L, serializedTy);
+                        else
+                            allocTypeUserDataCopy(L, serializedTy, /* frozen */ true);
+
                         lua_setfield(L, -2, name.c_str());
                     }
                 }
@@ -460,7 +469,10 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
         if (!serializedTy)
             return {std::nullopt, Reduction::Erroneous, {}, {}, "Complexity limit reached when passing a type to a type function"};
 
-        allocTypeUserDataCopy(L, serializedTy);
+        if (FFlag::LuauUdtfReuseTypeUserdatas)
+            pushType(L, serializedTy);
+        else
+            allocTypeUserDataCopy(L, serializedTy);
     }
 
     // Set up an interrupt handler for type functions to respect type checking limits and LSP cancellation requests.
