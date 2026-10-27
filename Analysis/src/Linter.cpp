@@ -7115,6 +7115,14 @@ private:
             report(node->location, node->name.value);
         return true;
     }
+
+    // A Luwu-only library's types (`collections.option<T>`, or `type .{ option } = collections`, which desugars to it)
+    bool visit(AstTypeReference* node) override
+    {
+        if (node->prefix && isLuwuOnlyGlobal(node->prefix->value))
+            report(node->location, std::string(node->prefix->value) + "." + node->name.value);
+        return true;
+    }
 };
 
 class LintDiscardedValues : AstVisitor

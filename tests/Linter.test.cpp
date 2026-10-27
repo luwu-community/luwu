@@ -3877,7 +3877,8 @@ local map = collections.orderedmap()
 local function shadowed(collections: { pair: () -> () })
     collections.pair()
 end
-return map, shadowed
+local maybe: collections.option<number> = none
+return map, shadowed, maybe
 )";
     configResolver.configFiles["game/a"].language = Language::Luau;
 
@@ -3886,9 +3887,10 @@ return map, shadowed
         if (warning.code == LintWarning::Code_LuwuOnlyApi)
             found.push_back(warning);
 
-    REQUIRE_EQ(found.size(), 1);
+    REQUIRE_EQ(found.size(), 2);
     CHECK_EQ(found[0].text, "'collections' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
     CHECK_EQ(found[0].location, Location({1, 12}, {1, 23}));
+    CHECK_EQ(found[1].text, "'collections.option' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")

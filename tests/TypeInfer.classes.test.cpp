@@ -5945,11 +5945,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
         local bad = collections.result.err(42)
         local code = bad:err()
         local missing = bad:get()
-        local typed: option<number> = collections.option.none
-        local typedhit: option<number> = hit
+        local typed: collections.option<number> = collections.option.none
+        local typedhit: collections.option<number> = hit
+        local notglobal: option<number> = hit
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
+    // the library's types are its exports, not global type names
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
     CHECK_EQ(toString(requireType("empty")), "none");
     CHECK_EQ(toString(requireType("value")), "number");
     CHECK_EQ(toString(requireType("text")), "string");

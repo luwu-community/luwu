@@ -393,6 +393,7 @@ declare class: {
 
 // Luwu collections: the `collections` library's classes. The VM builds them in C++ (lcollectionslib.cpp); these are
 // their public members, which the Conformance test `CollectionsDeclarationsMatchTheVm` checks against the VM's classes.
+// The types are the library's exports, not globals (registerBuiltinGlobals).
 static const char* kBuiltinDefinitionCollectionsSrc = R"BUILTIN_SRC(
 declare class type pair<A, B>(public const first: A, public const second: B)
     public function __eq(self, other: pair<A, B>): boolean
@@ -537,12 +538,17 @@ std::string getBuiltinDefinitionSource()
         result += FFlag::LuwuTraits ? kBuiltinDefinitionClassTraitsSrc : kBuiltinDefinitionClassSrc;
     }
 
-    // the same flags as the library itself (luaL_openlibs), and the declarations are `declare class type`, which
-    // LuwuDeclareStatements parses
-    if (FFlag::LuwuClasses && FFlag::DebugLuwuCollections && FFlag::LuwuNonePrimitive && FFlag::LuwuDeclareStatements)
-        result += kBuiltinDefinitionCollectionsSrc;
-
     return result;
+}
+
+bool collectionsLibraryEnabled()
+{
+    return FFlag::LuwuClasses && FFlag::DebugLuwuCollections && FFlag::LuwuNonePrimitive && FFlag::LuwuDeclareStatements;
+}
+
+std::string getCollectionsDefinitionSource()
+{
+    return kBuiltinDefinitionCollectionsSrc;
 }
 
 // TODO: split into separate tagged unions when the new solver can appropriately handle that.
