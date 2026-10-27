@@ -151,9 +151,13 @@ static const AstExprDo* findAlwaysLeavingDo(const AstExpr* expr)
         if (const AstExprDo* found = findAlwaysLeavingDo(binary->left))
             return found;
 
-        // `x and continue or break` leaves either way: its left side is never truthy, so the right side always runs
+        // `x and continue or break` leaves either way: its left side is never truthy, so the right side always runs. The
+        // right side is checked first: looking into the left again for every `or` of a long chain is exponential.
         if (binary->op == AstExprBinary::Or)
-            return findTruthyOnlyAfterDo(binary->left) ? findAlwaysLeavingDo(binary->right) : nullptr;
+        {
+            const AstExprDo* right = findAlwaysLeavingDo(binary->right);
+            return right && findTruthyOnlyAfterDo(binary->left) ? right : nullptr;
+        }
 
         return binary->op == AstExprBinary::And ? nullptr : findAlwaysLeavingDo(binary->right);
     }
