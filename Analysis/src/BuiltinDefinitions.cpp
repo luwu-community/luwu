@@ -32,6 +32,7 @@
 
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
+LUAU_FASTFLAG(LuwuBufferBatched)
 
 namespace Luau
 {
@@ -157,6 +158,37 @@ struct MagicPcall final : MagicFunction
         WithPredicate<TypePackId>
     ) override;
     bool infer(const MagicFunctionCallContext& ctx) override;
+};
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): `buffer.unpack*(b, offset, count)` returns `count`
+// values, but only the call site knows how many. When the count is a whole number literal we bind the call to a
+// pack of exactly that many numbers rather than the open `...number` pack the API declares: builtin signatures
+// refuse an open pack where they expect arguments, which is what keeps
+// `vector.create(buffer.unpackf32(b, i, 3))` from typechecking even though the count is written as a literal, and
+// no caller can tell how many values an open pack carries. Counts we cannot give an exact pack for - a variable or
+// expression, zero, a non integral value, an `integer` literal such as `3i` which the runtime rejects because the
+// batch is specified in numbers, or a count above kMaxLiteralCount - keep the declared open pack, which still flows
+// into variadic contexts.
+struct MagicUnpack final : MagicFunction
+{
+    // A ceiling on the pack we are willing to materialize, purely to bound the work: the analyzer builds one type
+    // per value and then re-walks that pack while resolving the enclosing call, and measured cost per call grows
+    // roughly linearly to about 16k values (13ms) before turning superlinear and tripping the checker's own
+    // complexity limit at 32k. 4096 keeps a wide margin under that knee and is orders of magnitude past the widest
+    // all-number signature the standard library declares (5 parameters); batches named by a literal this large are
+    // not a real workload, and they keep the open pack instead of costing analysis time.
+    static constexpr int kMaxLiteralCount = 4096;
+
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+
+    // Returns the batch size when this call names one we can give an exact return pack for
+    static std::optional<int> preciseCount(const AstExprCall& callSite);
 };
 
 TypeId makeUnion(TypeArena& arena, std::vector<TypeId>&& types)
@@ -504,6 +536,32 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
 
     attachMagicFunction(getGlobalBinding(globals, "setmetatable"), std::make_shared<MagicSetMetatable>());
     attachMagicFunction(getGlobalBinding(globals, "select"), std::make_shared<MagicSelect>());
+
+    // Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): every `unpack*` shares one magic, since the batch
+    // size is read off the call site rather than off the element type being unpacked
+    if (FFlag::LuwuBufferBatched)
+    {
+        if (TableType* btv = getMutable<TableType>(getGlobalBinding(globals, "buffer")))
+        {
+            static const char* const kUnpackNames[] = {
+                "unpacki8",
+                "unpacku8",
+                "unpacki16",
+                "unpacku16",
+                "unpacki32",
+                "unpacku32",
+                "unpackf32",
+                "unpackf64",
+            };
+
+            for (const char* name : kUnpackNames)
+            {
+                auto it = btv->props.find(name);
+                if (it != btv->props.end())
+                    attachMagicFunction(*it->second.readTy, std::make_shared<MagicUnpack>());
+            }
+        }
+    }
 
     if (TableType* ttv = getMutable<TableType>(getGlobalBinding(globals, "table")))
     {
@@ -2057,6 +2115,53 @@ bool MagicRequire::infer(const MagicFunctionCallContext& context)
     }
 
     return false;
+}
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): the old solver is not on Luwu's supported path for this
+// feature, so a literal batch size simply keeps the declared `...number` there
+std::optional<WithPredicate<TypePackId>> MagicUnpack::handleOldSolver(
+    TypeChecker&,
+    const std::shared_ptr<Scope>&,
+    const AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+std::optional<int> MagicUnpack::preciseCount(const AstExprCall& callSite)
+{
+    // the count is the third argument; if it is missing, ordinary argument checking reports that
+    if (callSite.args.size < 3)
+        return std::nullopt;
+
+    const AstExprConstantNumber* count = callSite.args.data[2]->as<AstExprConstantNumber>();
+    if (!count)
+        return std::nullopt;
+
+    // ordered so that the value is only truncated to an int once it is known to be in range, and so that a
+    // value that is not a number at all (NaN, an integer literal) cannot get through
+    if (!(count->value >= 1) || count->value > double(kMaxLiteralCount))
+        return std::nullopt;
+
+    // 3 and 3.0 name a batch size, 2.5 does not
+    if (count->value != double(int(count->value)))
+        return std::nullopt;
+
+    return int(count->value);
+}
+
+bool MagicUnpack::infer(const MagicFunctionCallContext& context)
+{
+    std::optional<int> count = preciseCount(*context.callSite);
+    if (!count)
+        return false;
+
+    std::vector<TypeId> rets(size_t(*count), context.solver->builtinTypes->numberType);
+    TypePackId retPack = context.solver->arena->addTypePack({std::move(rets), std::nullopt});
+
+    asMutable(context.result)->ty.emplace<BoundTypePack>(retPack);
+    return true;
 }
 
 bool matchSetMetatable(const AstExprCall& call)

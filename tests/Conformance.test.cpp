@@ -96,6 +96,7 @@ LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(LuwuBufferBatched)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
 
@@ -1272,6 +1273,58 @@ TEST_CASE("Buffers")
             setupNativeHelpers(L);
         }
     );
+}
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md)
+TEST_CASE("BufferBatched")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    runConformance(
+        "buffer_batched.luwu",
+        [](lua_State* L)
+        {
+            setupNativeHelpers(L);
+        }
+    );
+}
+
+// the whole library addition disappears with the flag off, so an embedder that turns it off gets upstream shapes
+TEST_CASE("BufferBatchedFlagDisabled")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, false};
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    static const char* const kBatchedFunctions[] = {
+        "unpacki8",
+        "unpacku8",
+        "unpacki16",
+        "unpacku16",
+        "unpacki32",
+        "unpacku32",
+        "unpackf32",
+        "unpackf64",
+        "packi8",
+        "packu8",
+        "packi16",
+        "packu16",
+        "packi32",
+        "packu32",
+        "packf32",
+        "packf64",
+    };
+
+    lua_getglobal(L, "buffer");
+
+    for (const char* name : kBatchedFunctions)
+    {
+        lua_getfield(L, -1, name);
+        CHECK_MESSAGE(lua_isnil(L, -1), name);
+        lua_pop(L, 1);
+    }
 }
 
 TEST_CASE("Math")
