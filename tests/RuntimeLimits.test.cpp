@@ -15,6 +15,7 @@
 #include "doctest.h"
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 
 using namespace Luau;
@@ -657,28 +658,49 @@ TEST_CASE_FIXTURE(Fixture, "comparison_to_nil_when_normalization_fails_should_no
 // Blocking the outer call's function_check on the inner call forces a constraint per statement, and each forced one
 // restarts the solver's scan of every unsolved constraint: 8000 such statements take about 20 seconds. Upstream 0.732
 // stops blocking there (LuauRelaxConstraintOrderingForFunctionCheck).
-TEST_CASE_FIXTURE(BuiltinsFixture, "nested_calls_in_table_literal_arguments_check_in_linear_time" * doctest::timeout(15.0))
+// The test compares how the time grows instead of using a time limit, since CI's Debug builds are over ten times slower
+// than an optimized one. Four times the statements take about 4.6 times as long with the fix, and about 16.6 times as
+// long without it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "nested_calls_in_table_literal_arguments_check_in_linear_time")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::LuauRelaxConstraintOrderingForFunctionCheck, true},
     };
 
-    std::string src = R"(
-        type Token = { name: string }
-        type Style = { margin: string?, color: Token?, display: ("flex" | "block")? }
-        local function token(name: "text" | "bg"): Token
-            return { name = name }
-        end
-        local function rule(_selector: string, _style: Style): number
-            return 1
-        end
-    )";
-    for (int i = 0; i < 8000; ++i)
-        src += "rule(\"a\", { margin = \"0\", color = token(\"text\"), display = \"flex\" })\n";
+    static constexpr int kSmallStatements = 1000;
+    static constexpr int kLargeStatements = 4 * kSmallStatements;
+    // Between the growth with the fix (about 4.6x) and without it (about 16.6x), with room for timing noise
+    static constexpr double kMaxGrowth = 10.0;
 
-    CheckResult result = check(src);
-    LUAU_REQUIRE_NO_ERRORS(result);
+    auto secondsToCheck = [&](int statements)
+    {
+        std::string src = R"(
+            type Token = { name: string }
+            type Style = { margin: string?, color: Token?, display: ("flex" | "block")? }
+            local function token(name: "text" | "bg"): Token
+                return { name = name }
+            end
+            local function rule(_selector: string, _style: Style): number
+                return 1
+            end
+        )";
+        for (int i = 0; i < statements; ++i)
+            src += "rule(\"a\", { margin = \"0\", color = token(\"text\"), display = \"flex\" })\n";
+
+        auto start = std::chrono::steady_clock::now();
+        CheckResult result = check(src);
+        std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - start;
+        LUAU_REQUIRE_NO_ERRORS(result);
+        return elapsed.count();
+    };
+
+    // The first check also pays for setting up the builtins, so it isn't timed
+    secondsToCheck(kSmallStatements);
+    double small = secondsToCheck(kSmallStatements);
+    double large = secondsToCheck(kLargeStatements);
+    INFO("checking " << kSmallStatements << " statements took " << small << "s, and " << kLargeStatements << " took " << large << "s");
+    CHECK(large < kMaxGrowth * small);
 }
 
 TEST_SUITE_END();
