@@ -429,8 +429,7 @@ declare class type orderedmap<K, V>
 end
 
 declare class type vec<T>
-    public function __init(self)
-    public function from(items: {T}): vec<T>
+    public function __init(self, items: {T}?)
     public function push(self, value: T)
     public function pop(self): T?
     public function at(self, position: number): T?
@@ -444,8 +443,7 @@ declare class type vec<T>
 end
 
 declare class type vecdeque<T>
-    public function __init(self)
-    public function from(items: {T}): vecdeque<T>
+    public function __init(self, items: {T}?)
     public function pushfront(self, value: T)
     public function pushback(self, value: T)
     public function popfront(self): T?

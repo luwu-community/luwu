@@ -253,29 +253,36 @@ static void checkelement(lua_State* L, LuauObject* container, int typefield, int
     luaL_error(L, "%s", lua_tostring(L, -1));
 }
 
-// `from`: a new `kind` holding entries 1 to #items of a table, each added by `push` so it's checked like any other
-static int containerfrom(lua_State* L, LuwuBuiltinClass kind, lua_CFunction push, const char* pushname)
+// The constructor's optional list: an `__init` adds entries 1 to #items of a table in its argument 2, each with `push`
+// so it's checked like any other value
+static void containerfill(lua_State* L, LuauObject* container, lua_CFunction push, const char* pushname)
 {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    int count = lua_objlen(L, 1);
+    if (lua_isnoneornil(L, 2))
+        return;
 
-    TValue classvalue;
-    setclassvalue(L, &classvalue, builtinclass(L, kind));
-    luaA_pushvalue(L, &classvalue);
-    lua_call(L, 0, 1);
+    if (!lua_istable(L, 2))
+    {
+        luaL_Strbuf b;
+        luaL_buffinit(L, &b);
+        luaL_addstring(&b, getstr(container->lclass->name));
+        luaL_addstring(&b, "() takes a list of values, but you passed ");
+        addvaluetype(&b, L->base + 1);
+        luaL_pushresult(&b);
+        luaL_error(L, "%s", lua_tostring(L, -1));
+    }
 
+    int count = lua_objlen(L, 2);
     for (int i = 1; i <= count; i++)
     {
         lua_pushcfunction(L, push, pushname);
-        lua_pushvalue(L, -2);
-        lua_rawgeti(L, 1, i);
+        lua_pushvalue(L, 1);
+        lua_rawgeti(L, 2, i);
         lua_call(L, 2, 0);
     }
-    return 1;
 }
 
-// `__tostring`: the call that builds an equal container, `vec.from({1, 2})`, or `vec()` when it's empty. `at` reads
-// an entry by position.
+// `__tostring`: the call that builds an equal container, `vec({1, 2})`, or `vec()` when it's empty. `at` reads an
+// entry by position.
 static int containertostring(lua_State* L, LuauObject* container, uint32_t count, lua_CFunction at)
 {
     const char* name = getstr(container->lclass->name);
@@ -289,7 +296,7 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
         return 1;
     }
 
-    luaL_addstring(&b, ".from({");
+    luaL_addstring(&b, "({");
     for (uint32_t i = 1; i <= count; i++)
     {
         if (i > 1)
@@ -922,14 +929,6 @@ static void vdstore(lua_State* L, LuauObject* dq, int slot, const TValue* value)
     luaC_barriert(L, ring, value);
 }
 
-static int vecdequeinit(lua_State* L)
-{
-    LuauObject* dq = objectvalue(L->base);
-    vdsetnumber(dq, VD_COUNT, 0);
-    vdresize(L, dq, kInitialSlots);
-    return 0;
-}
-
 static int vecdequepushback(lua_State* L)
 {
     LuauObject* dq = checkdeque(L, "pushback");
@@ -1070,9 +1069,13 @@ static int vecdequeiter(lua_State* L)
     return 3;
 }
 
-static int vecdequefrom(lua_State* L)
+static int vecdequeinit(lua_State* L)
 {
-    return containerfrom(L, LUWU_BUILTIN_VECDEQUE, vecdequepushback, "pushback");
+    LuauObject* dq = objectvalue(L->base);
+    vdsetnumber(dq, VD_COUNT, 0);
+    vdresize(L, dq, kInitialSlots);
+    containerfill(L, dq, vecdequepushback, "pushback");
+    return 0;
 }
 
 static int vecdequetostring(lua_State* L)
@@ -1096,7 +1099,6 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     {"at", vecdequeat, 0},
     {"set", vecdequeset, 0},
     {"clear", vecdequeclear, 0},
-    {"from", vecdequefrom, 0},
     {"__len", vecdequelen, 0},
     {"__iter", vecdequeiter, 0},
     {"__tostring", vecdequetostring, 0},
@@ -1155,12 +1157,6 @@ static void vecreset(lua_State* L, LuauObject* vec)
     sethvalue(L, &items, luaH_new(L, 0, 0));
     setfield(L, vec, VEC_ITEMS, &items);
     vecsetcount(vec, 0);
-}
-
-static int vecinit(lua_State* L)
-{
-    vecreset(L, objectvalue(L->base));
-    return 0;
 }
 
 static int vecpush(lua_State* L)
@@ -1276,9 +1272,12 @@ static int veciter(lua_State* L)
     return 3;
 }
 
-static int vecfrom(lua_State* L)
+static int vecinit(lua_State* L)
 {
-    return containerfrom(L, LUWU_BUILTIN_VEC, vecpush, "push");
+    LuauObject* vec = objectvalue(L->base);
+    vecreset(L, vec);
+    containerfill(L, vec, vecpush, "push");
+    return 0;
 }
 
 static int vectostring(lua_State* L)
@@ -1298,7 +1297,6 @@ static const luaR_NativeMember kVecMembers[] = {
     {"insert", vecinsert, 0},
     {"remove", vecremove, 0},
     {"clear", vecclear, 0},
-    {"from", vecfrom, 0},
     {"__len", veclen, 0},
     {"__iter", veciter, 0},
     {"__tostring", vectostring, 0},

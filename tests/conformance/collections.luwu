@@ -335,24 +335,27 @@ do
     end, "this vec can only accept booleans, but you passed a number")
 end
 
--- `from` fills a vec or vecdeque from a list, checking each value like `push` does, and printing one shows that call
+-- vec and vecdeque take an optional list, checked value by value like `push` does, and print as that call
 do
-    const list = collections.vec.from({ 1, 2, 3 })
+    const list = collections.vec({ 1, 2, 3 })
     assert(#list == 3 and list:at(1) == 1 and list:at(3) == 3)
-    assert(tostring(list) == "vec.from({1, 2, 3})")
+    assert(tostring(list) == "vec({1, 2, 3})")
     assert(tostring(collections.vec()) == "vec()")
 
-    const queue = collections.vecdeque.from({ "a", "b" })
+    const queue = collections.vecdeque({ "a", "b" })
     queue:pushfront("z")
     assert(queue:front() == "z" and queue:back() == "b")
-    assert(tostring(queue) == `vecdeque.from(\{"z", "a", "b"})`)
+    assert(tostring(queue) == `vecdeque(\{"z", "a", "b"})`)
 
     raises(function()
-        collections.vec.from({ 1, "two" })
+        collections.vec({ 1, "two" })
     end, "this vec can only accept numbers, but you passed a string")
     raises(function()
-        collections.vecdeque.from({ 1, nil, 3 })
+        collections.vecdeque({ 1, nil, 3 })
     end, "this vecdeque can only accept numbers, but you passed nil")
+    raises(function()
+        collections.vec(5)
+    end, "vec() takes a list of values, but you passed a number")
 end
 
 -- printing a large container grows its string buffer while values are shown, and an element's own __tostring may
@@ -383,13 +386,13 @@ do
     assert(#shown > 20000 and string.find(shown, "Named(" .. string.rep("x", 200) .. ")", 1, true))
 
     const long = string.rep("\"quoted\"\n", 500)
-    assert(#tostring(collections.vec.from({ long, long })) > 2 * #long)
+    assert(#tostring(collections.vec({ long, long })) > 2 * #long)
     assert(#tostring(collections.pair(long, long)) > 2 * #long)
     assert(#tostring(collections.option.some(long)) > #long)
 
-    const list = collections.vec.from({ Clearing {}, Clearing {}, Clearing {} })
+    const list = collections.vec({ Clearing {}, Clearing {}, Clearing {} })
     printing = list
-    assert(tostring(list) == "vec.from({cleared, nil, nil})")
+    assert(tostring(list) == "vec({cleared, nil, nil})")
 end
 
 -- option: a `some` object, or `none` itself, which gets `get` and `expect` from collections
