@@ -40,6 +40,12 @@ LUAU_FASTFLAG(LuwuClasses)
 namespace Luau
 {
 
+static int errorText(lua_State* L)
+{
+    luaL_tolstring(L, 1, nullptr);
+    return 1;
+}
+
 // Calls what the caller was given (a class, an `args` function) on the stack. A Lua error becomes `error` instead of
 // unwinding through C++ frames that hold the stack.
 static bool callProtected(lua_State* L, int nargs, int nresults, std::optional<std::string>& error)
@@ -47,8 +53,21 @@ static bool callProtected(lua_State* L, int nargs, int nresults, std::optional<s
     if (lua_pcall(L, nargs, nresults, 0) == LUA_OK)
         return true;
 
-    const char* message = lua_tostring(L, -1);
-    error = message ? message : "an error that isn't a string";
+    // A runtime's error objects (seal's) say what they are through `__tostring`, which may raise too
+    if (!lua_isstring(L, -1))
+    {
+        lua_pushcfunction(L, errorText, "errortext");
+        lua_insert(L, -2);
+        if (lua_pcall(L, 1, 1, 0) != LUA_OK || !lua_isstring(L, -1))
+        {
+            lua_pop(L, 1);
+            lua_pushliteral(L, "an error whose __tostring failed");
+        }
+    }
+
+    size_t length = 0;
+    const char* message = lua_tolstring(L, -1, &length);
+    error = std::string(message, length);
     lua_pop(L, 1);
     return false;
 }
