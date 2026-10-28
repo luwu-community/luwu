@@ -2193,6 +2193,8 @@ static std::string typeNameInScope(const ScopePtr& scope, TypeId ty)
     return toString(ty);
 }
 
+static std::string functionSignature(const ScopePtr& scope, const FunctionType* fn);
+
 // Luwu Traits (rfcs/classes/traits.md): a trait member as an implementing class writes it: `public name: string`, or
 // `function parse(self, s: string): boolean` and its `end`
 static std::string traitMemberDeclaration(const ScopePtr& scope, const ExternType* traitType, const Name& name, const Property& prop, bool isField)
@@ -2212,7 +2214,14 @@ static std::string traitMemberDeclaration(const ScopePtr& scope, const ExternTyp
         return result;
     }
 
-    result += "function " + name + "(";
+    return result + "function " + name + functionSignature(scope, fn) + "\nend";
+}
+
+// Luwu Classes (rfcs/classes): a function's parameters and returns as its declaration writes them, `(self, s: string): boolean`.
+// `self` is the class's own, so it's left unannotated.
+static std::string functionSignature(const ScopePtr& scope, const FunctionType* fn)
+{
+    std::string result = "(";
 
     auto [args, tail] = flatten(fn->argTypes);
     for (size_t i = 0; i < args.size(); ++i)
@@ -2222,14 +2231,13 @@ static std::string traitMemberDeclaration(const ScopePtr& scope, const ExternTyp
 
         std::string argName = i < fn->argNames.size() && fn->argNames[i] ? fn->argNames[i]->name : "a" + std::to_string(i);
 
-        // `self` is the class's own, so it's left unannotated
         if (i == 0 && argName == "self")
             result += argName;
         else
             result += argName + ": " + typeNameInScope(scope, args[i]);
     }
 
-    if (const VariadicTypePack* variadic = tail ? get<VariadicTypePack>(follow(*tail)) : nullptr)
+    if (const VariadicTypePack* variadic = tail ? get<VariadicTypePack>(follow(*tail)) : nullptr; variadic && !variadic->hidden)
         result += std::string(args.empty() ? "" : ", ") + "...: " + typeNameInScope(scope, variadic->ty);
 
     result += ")";
@@ -2243,7 +2251,6 @@ static std::string traitMemberDeclaration(const ScopePtr& scope, const ExternTyp
         result += returnCount == 1 ? ": " + written : ": (" + written + ")";
     }
 
-    result += "\nend";
     return result;
 }
 
@@ -2275,6 +2282,147 @@ static void autocompleteMissingTraitMembers(const ScopePtr& scope, AstStatClass*
             result[name] = std::move(entry);
         }
     }
+}
+
+// Luwu Classes (rfcs/classes): the metamethods a class or trait may define, with the parameters and returns they're
+// usually written with
+static const char* const kMetamethodSignatures[][2] = {
+    {"__tostring", "(self): string"},
+    {"__eq", "(self, other): boolean"},
+    {"__lt", "(self, other): boolean"},
+    {"__le", "(self, other): boolean"},
+    {"__len", "(self): number"},
+    {"__add", "(self, other)"},
+    {"__sub", "(self, other)"},
+    {"__mul", "(self, other)"},
+    {"__div", "(self, other)"},
+    {"__idiv", "(self, other)"},
+    {"__mod", "(self, other)"},
+    {"__pow", "(self, other)"},
+    {"__unm", "(self)"},
+    {"__concat", "(self, other)"},
+    {"__call", "(self, ...)"},
+    {"__iter", "(self)"},
+};
+
+// Luwu Classes (rfcs/classes): whether a member or primary constructor parameter is written with `public` or `private`, which
+// means every one needs one
+static bool usesAccessSpecifiers(const AstStatClass* classStat)
+{
+    if (classStat->primaryConstructor)
+    {
+        for (const AstClassPrimaryConstructorParamQualifiers& qualifiers : classStat->primaryConstructor->argsQualifiers)
+        {
+            if (qualifiers.qualifierLocation)
+                return true;
+        }
+    }
+
+    for (const auto& member : classStat->members)
+    {
+        if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method->qualifierLocation)
+            return true;
+        if (const AstClassProperty* field = member.get_if<AstClassProperty>(); field && field->qualifierLocation)
+            return true;
+    }
+
+    return false;
+}
+
+// Luwu Classes (rfcs/classes) and Luwu Traits (rfcs/classes/traits.md): the functions a class or trait body could define next
+// and doesn't yet. They're the ones its traits expect or let it override, and when `name` starts with `_`, the metamethods and
+// special functions. `typing` is the function whose name is being written after `function`, and each entry is then the rest
+// of its declaration; without it, each is the whole declaration.
+static void autocompleteMissingFunctions(
+    const ScopePtr& scope,
+    AstStatClass* classStat,
+    const AstClassMethod* typing,
+    std::string_view name,
+    AutocompleteEntryMap& result
+)
+{
+    std::unordered_set<std::string> defined;
+    for (const auto& member : classStat->members)
+    {
+        if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method != typing)
+            defined.insert(method->functionName.value);
+        else if (const AstClassProperty* field = member.get_if<AstClassProperty>(); field && field->name.value != name)
+            defined.insert(field->name.value);
+    }
+
+    std::string access = !typing && usesAccessSpecifiers(classStat) ? "public " : "";
+    auto add = [&](const std::string& entryName, const std::string& signature, const Property* prop, const char* keyword)
+    {
+        if (defined.count(entryName) || result.count(entryName))
+            return;
+
+        AutocompleteEntry entry{AutocompleteEntryKind::Property, prop ? prop->readTy : std::nullopt};
+        entry.prop = prop;
+        entry.insertText = (typing ? "" : access + keyword) + entryName + signature + "\nend";
+        result[entryName] = std::move(entry);
+    };
+
+    // A class's traits' functions: the expected ones and the ones it may override
+    std::optional<TypeFun> classTypeFun = classStat->isTrait ? std::nullopt : scope->lookupType(classStat->name->name.value);
+    const ExternType* classType = classTypeFun ? get<ExternType>(follow(classTypeFun->type)) : nullptr;
+    for (TypeId trait : classType ? classType->implementedTraits : std::vector<TypeId>{})
+    {
+        const ExternType* traitType = get<ExternType>(follow(trait));
+        const ClassFieldUserData* traitFields = traitType ? dynamic_cast<const ClassFieldUserData*>(traitType->userData.get()) : nullptr;
+        if (!traitFields || !traitType->traitInfo)
+            continue;
+
+        for (const auto& [memberName, prop] : traitType->props())
+        {
+            if (memberName == "__init" || traitFields->fieldNames.count(memberName) || traitType->traitInfo->finals.count(memberName))
+                continue;
+
+            const FunctionType* fn = prop.readTy ? get<FunctionType>(expectedTraitFunction(*prop.readTy)) : nullptr;
+            if (fn)
+                add(memberName, functionSignature(scope, fn), &prop, "function ");
+        }
+    }
+
+    if (name.empty() || name[0] != '_')
+        return;
+
+    bool final = typing && typing->finalLocation;
+    if (!final)
+    {
+        for (const auto& [metamethod, signature] : kMetamethodSignatures)
+            add(metamethod, signature, nullptr, "function ");
+    }
+
+    if (!classStat->isTrait && !classStat->primaryConstructor)
+        add("__init", "(self)", nullptr, "function ");
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait's factory, and its hook for each implementing class, which is always final
+    if (classStat->isTrait && !classStat->primaryConstructor && !final)
+        add("__create", "(...)", nullptr, "function ");
+    if (classStat->isTrait && (!typing || final))
+        add("__implemented", "(cls)", nullptr, "final function ");
+}
+
+// Luwu Classes (rfcs/classes): the class (or trait) and the method being named, when the cursor is after a member's
+// `function` and before its parameter list
+static std::pair<AstStatClass*, const AstClassMethod*> findMethodBeingNamed(const std::vector<AstNode*>& ancestry, Position position)
+{
+    for (size_t i = 0; i + 1 < ancestry.size(); ++i)
+    {
+        AstStatClass* classStat = ancestry[i]->as<AstStatClass>();
+        AstExprFunction* function = classStat ? ancestry[i + 1]->as<AstExprFunction>() : nullptr;
+        if (!function || function->argLocation)
+            continue;
+
+        for (const auto& member : classStat->members)
+        {
+            const AstClassMethod* method = member.get_if<AstClassMethod>();
+            if (method && method->function == function && method->keywordLocation.end <= position)
+                return {classStat, method};
+        }
+    }
+
+    return {nullptr, nullptr};
 }
 
 static AutocompleteResult autocompleteWhileLoopKeywords(std::vector<AstNode*> ancestry)
@@ -2517,6 +2665,15 @@ AutocompleteResult autocomplete_(
                 ret[info.name] = {AutocompleteEntryKind::Keyword};
         }
 
+        return {std::move(ret), ancestry, AutocompleteContext::Keyword};
+    }
+
+    // Luwu Classes (rfcs/classes): after a member's `function`, the functions it could be: the rest of their declarations
+    if (auto [classStat, method] = findMethodBeingNamed(ancestry, position); method)
+    {
+        AutocompleteEntryMap ret;
+        std::string_view typed = method->nameLocation.containsClosed(position) ? method->functionName.value : "";
+        autocompleteMissingFunctions(scopeAtPosition, classStat, method, typed, ret);
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }
 
@@ -2864,6 +3021,16 @@ AutocompleteResult autocomplete_(
 
         if (FFlag::LuwuTraits && !onHeaderLine && !classStat->isTrait)
             autocompleteMissingTraitMembers(scopeAtPosition, classStat, ret);
+
+        // The word being typed reads as a field: `__` is offered the metamethods
+        std::string_view typed;
+        for (const auto& member : classStat->members)
+        {
+            if (const AstClassProperty* field = member.get_if<AstClassProperty>(); field && field->nameLocation.containsClosed(position))
+                typed = field->name.value;
+        }
+        if (!onHeaderLine)
+            autocompleteMissingFunctions(scopeAtPosition, classStat, nullptr, typed, ret);
 
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }

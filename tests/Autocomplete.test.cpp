@@ -1102,6 +1102,123 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_missing_trait_members")
     CHECK_EQ(ac.entryMap.count("public"), 1);
 }
 
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_missing_functions_after_function")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    const std::string traits = R"(
+        trait Named
+            expect function name(self): string
+            function greet(self): string
+                return "hi"
+            end
+            final function id(self): number
+                return 1
+            end
+        end
+    )";
+
+    // A trait's expected and overridable functions, as the rest of their declarations
+    check(traits + R"(
+        class Cat(public n: string) implements Named
+            public function __tostring(self)
+                return self.n
+            end
+            public function @1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("name"));
+    CHECK_EQ(ac.entryMap["name"].insertText, "name(self): string\nend");
+    REQUIRE(ac.entryMap.count("greet"));
+    CHECK_EQ(ac.entryMap["greet"].insertText, "greet(self): string\nend");
+    CHECK_EQ(ac.entryMap.count("id"), 0);
+    CHECK_EQ(ac.entryMap.count("__eq"), 0);
+
+    // `__` adds the metamethods it doesn't define yet
+    check(traits + R"(
+        class Cat(public n: string) implements Named
+            public function __tostring(self)
+                return self.n
+            end
+            public function __@1
+        end
+    )");
+
+    ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__eq"));
+    CHECK_EQ(ac.entryMap["__eq"].insertText, "__eq(self, other): boolean\nend");
+    CHECK_EQ(ac.entryMap.count("__tostring"), 0);
+    CHECK_EQ(ac.entryMap.count("__init"), 0);
+    CHECK(ac.entryMap.count("name"));
+
+    // `__init` when the class has no constructor yet
+    check(R"(
+        class Point
+            x: number
+            function __@1
+        end
+    )");
+
+    ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__init"));
+    CHECK_EQ(ac.entryMap["__init"].insertText, "__init(self)\nend");
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_metamethods_where_a_member_starts")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // The whole declaration, with `public` when the class writes its access
+    check(R"(
+        class Cat(public n: string)
+            __@1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__len"));
+    CHECK_EQ(ac.entryMap["__len"].insertText, "public function __len(self): number\nend");
+    CHECK(ac.entryMap.count("public"));
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_a_traits_special_functions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    check(R"(
+        trait Shape
+            function __@1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__create"));
+    CHECK_EQ(ac.entryMap["__create"].insertText, "__create(...)\nend");
+    CHECK_EQ(ac.entryMap.count("__implemented"), 0);
+    CHECK_EQ(ac.entryMap.count("__init"), 0);
+
+    // `__implemented` is always final
+    check(R"(
+        trait Shape
+            final function __@1
+        end
+    )");
+
+    ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__implemented"));
+    CHECK_EQ(ac.entryMap["__implemented"].insertText, "__implemented(cls)\nend");
+    CHECK_EQ(ac.entryMap.count("__create"), 0);
+    CHECK_EQ(ac.entryMap.count("__tostring"), 0);
+}
+
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_offers_private_class_members_only_inside_their_class")
 {
     ScopedFastFlag sffs[] = {
@@ -6090,3 +6207,4 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
 
 // The value is a call, so its type is a pack (astTypePacks), not a single type
 TEST_SUITE_END();
+
