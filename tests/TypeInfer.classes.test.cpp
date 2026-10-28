@@ -2983,6 +2983,38 @@ TEST_CASE_FIXTURE(ClassesFixture, "declare_trait_declares_the_trait_value")
     CHECK(result.errors[0].location.begin.line == 11);
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "export_declare_trait_exports_the_trait_and_its_type")
+{
+    ScopedFastFlag flags[] = {
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        export declare trait Named
+            expect name: string
+        end
+
+        export trait type Titled
+            expect title: string
+        end
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local traits = require(game.A)
+        local named: trait<traits.Named> = traits.Named
+        local titled = traits.Titled
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(result.errors[0].location.begin.line == 4);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "class_type_declares_no_value")
 {
     ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};

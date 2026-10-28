@@ -8425,7 +8425,7 @@ TEST_CASE_FIXTURE(Fixture, "export_declare_is_for_types_only")
         REQUIRE_EQ(result.errors.size(), 1);
         CHECK_EQ(
             result.errors[0].getMessage(),
-            "'export declare' exports classes and types only; to declare a global for several files, use a definitions file"
+            "'export declare' exports classes, traits and types only; to declare a global for several files, use a definitions file"
         );
         REQUIRE_EQ(result.root->body.size, 1);
         bool declaresValue = result.root->body.data[0]->is<AstStatDeclareGlobal>() || result.root->body.data[0]->is<AstStatDeclareFunction>();

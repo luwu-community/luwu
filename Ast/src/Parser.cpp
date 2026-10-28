@@ -78,7 +78,7 @@ const char* const kDeclaredDefaultIsATypeError = "In a declaration, a default is
 // Luwu Declare Statements (rfcs/declare-statements.md): a declared value belongs to its file; values shared by
 // several files come from a definitions file. A declared class is the exception: exporting it exports the class.
 const char* const kDeclareExportValueError =
-    "'export declare' exports classes and types only; to declare a global for several files, use a definitions file";
+    "'export declare' exports classes, traits and types only; to declare a global for several files, use a definitions file";
 // Luwu Declare Statements (rfcs/declare-statements.md): an exported declared class is an exported value, and those are
 // top-level statements.
 const char* const kDeclareExportNestedError =
