@@ -76,9 +76,13 @@ const char* const kDeclarationPlacementError =
 // its defaults (class fields, primary constructor and function parameters) are written as types.
 const char* const kDeclaredDefaultIsATypeError = "In a declaration, a default is written as its type: 'name = T'";
 // Luwu Declare Statements (rfcs/declare-statements.md): a declared value belongs to its file; values shared by
-// several files come from a definitions file.
+// several files come from a definitions file. A declared class is the exception: exporting it exports the class.
 const char* const kDeclareExportValueError =
-    "Only types can be exported with 'export declare'; to declare a global for several files, use a definitions file";
+    "'export declare' exports classes and types only; to declare a global for several files, use a definitions file";
+// Luwu Declare Statements (rfcs/declare-statements.md): an exported declared class is an exported value, and those are
+// top-level statements.
+const char* const kDeclareExportNestedError =
+    "'export declare %s' exports a value, which only a top-level statement can do; move it out of the 'do' block";
 // Luwu: upstream's legacy `declare class` declares an extern type; in Luwu it is a class or nothing.
 const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead";
 const char* const kDeclareClassTypeError =
@@ -3545,8 +3549,8 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
 
     // Luwu Declare Statements (rfcs/declare-statements.md): `export declare extern type` and `export declare class`.
     // `export` leads, as in `export type` and `export class`; `declare export` is reported and parsed as meant. That
-    // keeps `declare export: T`, a global named `export`, unambiguous. Only types can be exported: a declared value is
-    // visible to its own file, and one that every file sees belongs in a definitions file.
+    // keeps `declare export: T`, a global named `export`, unambiguous. Only types and declared classes can be exported:
+    // a declared value is visible to its own file, and one that every file sees belongs in a definitions file.
     std::optional<Location> exportLocation = exportKeywordLocation;
     bool misplacedExport = FFlag::LuwuDeclareStatements && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "export" &&
                            lexer.lookahead().type != ':';
@@ -4008,7 +4012,8 @@ AstStat* Parser::parseClassType(const Location& start, const Location& classKeyw
     return allocator.alloc<AstStatDeclareClass>(shape->location, shape, std::nullopt);
 }
 // Luwu Declare Statements (rfcs/declare-statements.md): the global a `declare class` (or `declare trait`) brings into
-// scope, `declare Name: class<Name>`, queued to follow the declaration. `valueType` is `class` or `trait`.
+// scope, `declare Name: class<Name>`, queued to follow the declaration. `valueType` is `class` or `trait`. An exported
+// one is also exported as a value, `export Name = Name`, so a requirer gets the class along with its type.
 void Parser::declareClassValue(AstStatClass* shape, AstName valueType, const Location& declareLocation)
 {
     Name name{shape->name->name, shape->name->location};
@@ -4021,6 +4026,31 @@ void Parser::declareClassValue(AstStatClass* shape, AstName valueType, const Loc
     );
 
     pendingStatements.push_back(allocator.alloc<AstStatDeclareGlobal>(shape->location, name.name, name.location, type, declareLocation));
+
+    if (!shape->exported || !FFlag::LuauExportValueSyntax)
+        return;
+
+    if (functionStack.size() != 1 || recursionCounter != 1)
+    {
+        report(shape->location, kDeclareExportNestedError, valueType.value);
+        return;
+    }
+
+    if (hasModuleReturn)
+        report(shape->location, "Exporting values is not compatible with top-level return (export/return conflict)");
+
+    if (declaredExportBindings.find(name.name))
+        report(name.location, "Duplicate exported identifier '%s'", name.name.value);
+    else
+        declaredExportBindings[name.name] = name.location;
+
+    AstExpr* global = allocator.alloc<AstExprGlobal>(name.location, name.name);
+    AstLocal* local = pushLocal(Binding(name, nullptr, {0, 0}, /* isConst= */ true));
+    local->isExported = true;
+
+    AstStatLocal* exported = allocator.alloc<AstStatLocal>(shape->location, copy(&local, 1), copy(&global, 1), std::nullopt, /* isConst= */ true);
+    exported->isExported = true;
+    pendingStatements.push_back(exported);
 }
 // Upstream's legacy `declare class Name`, an extern type, where it isn't a Luwu class
 bool Parser::legacyDeclareClass()
