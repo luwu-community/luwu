@@ -27,7 +27,6 @@ LUAU_FASTFLAG(LuauCodegenVmExitSyncMultiUse)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuauCallFeedback)
 LUAU_FASTFLAG(LuauCodegenA64ExitUseCheck)
-LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
@@ -3439,7 +3438,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LoadAndMoveTypePropagation")
 {
-    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
 
     CHECK_EQ(
         "\n" + getCodegenAssembly(
@@ -3905,7 +3903,6 @@ TEST_CASE_FIXTURE(LoweringFixture, "ForInManualAnnotation")
 
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
-    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
 
     CHECK_EQ(
         "\n" + getCodegenAssembly(
@@ -5384,7 +5381,6 @@ TEST_CASE_FIXTURE(LoweringFixture, "BufferRelatedIndicesPositiveLoopRangeBase")
 {
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
-    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
 
     // TODO: opportunity 1 - buffer.len is not a fastcall, but under safe env we can treat it like one and read buffer len field
     // TODO: opportunity 2 - range of 'i' is known, we can check it in loop header
@@ -7253,7 +7249,6 @@ bb_bytecode_0:
 
 TEST_CASE_FIXTURE(LoweringFixture, "UpvalueAccessLoadStore4")
 {
-    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
 
     CHECK_EQ(
         "\n" + getCodegenAssembly(R"(
@@ -7685,7 +7680,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LoopStepDetection1")
 {
-    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
 
     assemblyOptions.includeRegFlowInfo = Luau::CodeGen::IncludeRegFlowInfo::Yes;
 
@@ -7750,7 +7744,6 @@ bb_bytecode_3:
 
 TEST_CASE_FIXTURE(LoweringFixture, "LoopStepDetection2")
 {
-    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
 
     CHECK_EQ(
         "\n" + getCodegenAssembly(

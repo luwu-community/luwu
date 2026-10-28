@@ -143,7 +143,7 @@ Rows without notes are marked `**Status**: Implemented` in luau-lang/rfcs as of 
 | [Type ascriptions](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-type-ascription.md) | 2021-05-03 | |
 | [Typed variadics](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-typed-variadics.md) | 2021-05-03 | |
 
-## Backported from upstream (5)
+## Backported from upstream (6)
 
 Upstream changes from after 0.730 that Luwu ported ahead of a sync, mostly performance fixes with no RFC. "Luwu FFlag" is
 the flag that gates the port here: upstream's name where it was kept, or none where the port is always on. Ports Luwu
@@ -156,3 +156,4 @@ runs without a flag still name upstream's flag, so a later sync can find what it
 | Unread subtyping reasonings skipped | [#2992](https://github.com/luau-lang/luau/pull/2992) | `LuauSubtypingSkipUnreadReasoning` | `LuauSubtypingSkipUnreadReasoning` | The same case as the row above. |
 | Tag propagation through fallback blocks | 0.734, fixed in 0.742 | `LuauCodegenPropagateFallbackTags` | none | Native code forgot every register's tag where a fallback block rejoined the fast path and checked them again. Guards that exit to the VM in a loop-heavy benchmark went from 61 to 31. 0.742's fix is for constant propagation limits, which Luwu doesn't have yet. |
 | Move elision around inlined calls | 0.736, fixed in 0.742 | `LuauCompileMoveElision`, `LuauCompileMoveElisionFix` | none | An inlined call copied its result into the call's target, and copied a reassigned argument into a fresh register. Interpreted color math ran 35% slower than upstream. Under native code, each copy's 16-byte load can't be forwarded from the two smaller stores before it, which costs about 9 cycles per copy on Zen 3. |
+| GC check on loop back-edges made permanent | 0.731, flag removed in 0.743 | `LuauBackedgeHeapCheck` | none | Upstream checks for a GC step on every loop back-edge and dropped the flag in 0.743. Luwu still tested the flag in the interpreter on every back-edge, which made a loop-heavy benchmark run 1.2% more instructions than upstream for identical bytecode. |
