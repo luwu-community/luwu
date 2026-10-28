@@ -163,6 +163,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::LOAD_DOUBLE:
         return IrValueKind::Double;
     case IrCmd::LOAD_INT:
+    case IrCmd::LOAD_STORAGE_INT:
         return IrValueKind::Int;
     case IrCmd::LOAD_FLOAT:
         return IrValueKind::Float;
@@ -176,6 +177,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::LOAD_OWNER_CLASS:
     case IrCmd::TRY_OBJECT_MEMBER_ADDR:
     case IrCmd::OBJECT_MEMBER_ADDR:
+    case IrCmd::LOAD_STORAGE:
+    case IrCmd::GET_STORAGE_ENTRY_ADDR:
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         return IrValueKind::Pointer;
@@ -353,6 +356,9 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
     case IrCmd::CHECK_OBJECT_CLASS:
+    case IrCmd::CHECK_STORAGE:
+    case IrCmd::CHECK_STORAGE_ELEMENT:
+    case IrCmd::STORE_STORAGE_INT:
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
     case IrCmd::CHECK_CLASS_ALLOCATABLE:
     case IrCmd::CHECK_BUFFER_LEN:

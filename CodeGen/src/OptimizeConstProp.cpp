@@ -2780,6 +2780,12 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::GET_HASH_NODE_ADDR:
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
         break;
+    case IrCmd::LOAD_STORAGE:
+    case IrCmd::LOAD_STORAGE_INT:
+    case IrCmd::STORE_STORAGE_INT:
+    case IrCmd::GET_STORAGE_ENTRY_ADDR:
+        // Luwu collections: a storage block changes under calls and its own stores, so nothing is cached
+        break;
     case IrCmd::LOAD_OWNER_CLASS:
         // Proto::ownerclass is fixed for the executing closure; there is nothing to propagate
         break;
@@ -3479,6 +3485,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
     case IrCmd::CHECK_OBJECT_CLASS:
         // TODO(rfcs/classes): no redundant-check elimination yet, unlike CHECK_SLOT_MATCH above
+        break;
+    case IrCmd::CHECK_STORAGE:
+    case IrCmd::CHECK_STORAGE_ELEMENT:
         break;
 
     case IrCmd::ADD_VEC:

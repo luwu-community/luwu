@@ -147,66 +147,50 @@ static BuiltinEnum enumof(lua_State* L, const TValue* value)
     return NOT_AN_ENUM;
 }
 
-// Sets `type` to the element type of `value`: its builtin enum (a number past the type tags), its class, or its type
-// tag
-static void elementtypeof(lua_State* L, TValue* type, const TValue* value)
+// Fixes the element type of `storage` to the type of `value`: its builtin enum, its class, or its type tag
+static void setelementtype(lua_State* L, LuauStorage* storage, const TValue* value)
 {
     BuiltinEnum builtinenum = enumof(L, value);
-    if (builtinenum != NOT_AN_ENUM)
-    {
-        setnvalue(type, double(LUA_T_COUNT + builtinenum));
-    }
-    else if (ttisobject(value))
-    {
-        setclassvalue(L, type, objectvalue(value)->lclass);
-    }
-    else
-    {
-        setnvalue(type, double(ttype(value)));
-    }
+    storage->elementtag = builtinenum != NOT_AN_ENUM ? LUAR_STORAGE_ENUM : uint8_t(ttype(value));
+    storage->elementenum = uint8_t(builtinenum);
+    storage->elementclass = builtinenum == NOT_AN_ENUM && ttisobject(value) ? objectvalue(value)->lclass : NULL;
 }
 
-// Whether `value` is of the element type `elementtype`, which is set. It takes one compare unless the type is a builtin
-// enum: a primitive element type is never LUA_TOBJECT or LUA_TSYMNONE, since objects get their class or their enum and
-// `none` is an option, so a matching tag is enough. A class element type is never an enum's variant, for the same
-// reason.
-static bool hastype(lua_State* L, const TValue* elementtype, const TValue* value)
+// Whether `value` is of the element type of `storage`. It takes one compare unless the type is an object's class or a
+// builtin enum. An enum's variants never match a class or a primitive element type, since setelementtype gives their
+// values the enum and `none` is an option.
+static bool hastype(lua_State* L, const LuauStorage* storage, const TValue* value)
 {
-    if (ttisclass(elementtype))
-        return ttisobject(value) && objectvalue(value)->lclass == classvalue(elementtype);
-
-    int type = int(nvalue(elementtype));
-    if (type < LUA_T_COUNT)
-        return ttype(value) == type;
-    return enumof(L, value) == BuiltinEnum(type - LUA_T_COUNT);
+    if (storage->elementtag == LUAR_STORAGE_ENUM)
+        return enumof(L, value) == BuiltinEnum(storage->elementenum);
+    return ttype(value) == storage->elementtag && (storage->elementtag != LUA_TOBJECT || objectvalue(value)->lclass == storage->elementclass);
 }
 
 // Whether a fast method can put `value` in a container with `storage`: it has the element type. Everything else goes
 // through checkelement in the C method, the first value included.
 static bool fitselement(lua_State* L, const LuauStorage* storage, const TValue* value)
 {
-    return storage && hastype(L, &storage->elementtype, value);
+    return storage && hastype(L, storage, value);
 }
 
-// Writes how an error names the values of type `elementtype`: "strings", "'Player' objects", "options"
-static void addtypeplural(luaL_Strbuf* b, const TValue* elementtype)
+// Writes how an error names the values of the element type of `storage`: "strings", "'Player' objects", "options"
+static void addtypeplural(luaL_Strbuf* b, const LuauStorage* storage)
 {
-    if (ttisclass(elementtype))
+    if (storage->elementclass)
     {
         luaL_addchar(b, '\'');
-        luaL_addstring(b, getstr(classvalue(elementtype)->name));
+        luaL_addstring(b, getstr(storage->elementclass->name));
         luaL_addstring(b, "' objects");
         return;
     }
 
-    int type = int(nvalue(elementtype));
-    if (type >= LUA_T_COUNT)
+    if (storage->elementtag == LUAR_STORAGE_ENUM)
     {
-        luaL_addstring(b, kEnumPlurals[type - LUA_T_COUNT]);
+        luaL_addstring(b, kEnumPlurals[storage->elementenum]);
         return;
     }
 
-    const char* name = getstr(b->L->global->ttname[type]);
+    const char* name = getstr(b->L->global->ttname[storage->elementtag]);
     luaL_addstring(b, name);
     if (strcmp(name, "userdata") == 0)
         luaL_addstring(b, " values");
@@ -242,11 +226,11 @@ static void checkfirstelement(lua_State* L, LuauObject* container, int idx)
         luaL_error(L, "this %s can't accept nil", getstr(container->lclass->name));
 }
 
-// Checks the value at stack `idx` can go in `container`, whose values are of type `elementtype`
-static void checkelement(lua_State* L, LuauObject* container, const TValue* elementtype, int idx)
+// Checks the value at stack `idx` can go in `container`, whose block is `storage`
+static void checkelement(lua_State* L, LuauObject* container, const LuauStorage* storage, int idx)
 {
     const TValue* value = L->base + idx - 1;
-    if (hastype(L, elementtype, value))
+    if (hastype(L, storage, value))
         return;
 
     const char* containername = getstr(container->lclass->name);
@@ -256,7 +240,7 @@ static void checkelement(lua_State* L, LuauObject* container, const TValue* elem
     luaL_addstring(&b, "this ");
     luaL_addstring(&b, containername);
     luaL_addstring(&b, " can only accept ");
-    addtypeplural(&b, elementtype);
+    addtypeplural(&b, storage);
     luaL_addstring(&b, ", but you passed ");
     addvaluetype(&b, value);
     luaL_pushresult(&b);
@@ -980,7 +964,7 @@ static void setstorage(LuauObject* container, LuauStorage* storage)
 // `__init`'s first step: a container of `kind` without a block
 static void initstorage(LuauObject* container, LuwuStorageKind kind)
 {
-    setstorage(container, NULL);
+    setnilvalue(&luaR_members(container)[LUAR_STORAGE_MEMBER]);
     container->storagekind = uint8_t(kind);
 }
 
@@ -988,17 +972,16 @@ static void initstorage(LuauObject* container, LuwuStorageKind kind)
 static LuauStorage* newstorage(lua_State* L, LuauObject* container, int idx)
 {
     checkfirstelement(L, container, idx);
-    TValue elementtype;
-    elementtypeof(L, &elementtype, L->base + idx - 1);
 
     LuauStorage* storage = static_cast<LuauStorage*>(luaM_new_(L, luaR_storagesize(kInitialSlots), container->memcat));
     storage->count = 0;
     storage->capacity = kInitialSlots;
     storage->head = 0;
     storage->padding = 0;
-    setobj(L, &storage->elementtype, &elementtype);
+    setelementtype(L, storage, L->base + idx - 1);
     setstorage(container, storage);
-    luaC_barrier(L, container, &elementtype);
+    if (storage->elementclass)
+        luaC_objbarrier(L, container, storage->elementclass);
     return storage;
 }
 
@@ -1044,7 +1027,7 @@ static LuauStorage* storageforone(lua_State* L, LuauObject* container, int idx)
     if (!storage)
         return newstorage(L, container, idx);
 
-    checkelement(L, container, &storage->elementtype, idx);
+    checkelement(L, container, storage, idx);
     return reservestorage(L, container, storage->count + 1);
 }
 
@@ -1203,7 +1186,7 @@ static int vecdequeset(lua_State* L)
     luaL_checkany(L, 3);
     uint32_t position = checkposition(L, 2, countof(dq));
     LuauStorage* storage = luaR_storage(dq);
-    checkelement(L, dq, &storage->elementtype, 3);
+    checkelement(L, dq, storage, 3);
     storeentry(L, dq, luaR_storageentry(storage, position - 1), L->base + 2);
     return 0;
 }
@@ -1380,7 +1363,7 @@ static int vecset(lua_State* L)
     luaL_checkany(L, 3);
     uint32_t position = checkposition(L, 2, countof(vec));
     LuauStorage* storage = luaR_storage(vec);
-    checkelement(L, vec, &storage->elementtype, 3);
+    checkelement(L, vec, storage, 3);
     storeentry(L, vec, &storage->items[position - 1], L->base + 2);
     return 0;
 }

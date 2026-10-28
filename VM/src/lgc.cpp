@@ -497,7 +497,8 @@ static void traverseobject(global_State* g, LuauObject* object)
     // Luwu collections: a `vec`'s or `vecdeque`'s entries, in one or two runs of the ring
     if (LuauStorage* storage = luaR_storage(object))
     {
-        markvalue(g, &storage->elementtype);
+        if (storage->elementclass)
+            markobject(g, storage->elementclass);
         uint32_t first = storage->count < storage->capacity - storage->head ? storage->count : storage->capacity - storage->head;
         for (uint32_t i = 0; i < first; i++)
             markvalue(g, &storage->items[storage->head + i]);

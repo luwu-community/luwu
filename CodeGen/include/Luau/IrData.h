@@ -740,6 +740,38 @@ enum class IrCmd : uint8_t
     // B: unsigned int (member offset)
     OBJECT_MEMBER_ADDR,
 
+    // Luwu collections: guard against an object not being a `vec` or `vecdeque` with a storage block (LuauStorage)
+    // A: pointer (LuauObject)
+    // B: int (LuwuStorageKind, or LUAR_STORAGE_NONE for either)
+    // C: block/vmexit/undef
+    // When undef is specified instead of a block, execution is aborted on check failure
+    CHECK_STORAGE,
+
+    // Luwu collections: load the storage block of an object CHECK_STORAGE accepted
+    // A: pointer (LuauObject)
+    LOAD_STORAGE,
+
+    // Luwu collections: load or store a uint32 field of a storage block
+    // A: pointer (LuauStorage)
+    // B: int (offset of the field)
+    // C: int (STORE_STORAGE_INT: the value)
+    LOAD_STORAGE_INT,
+    STORE_STORAGE_INT,
+
+    // Luwu collections: the address of the slot `B` places from the front of a storage block,
+    // items[(head + B) & (capacity - 1)]
+    // A: pointer (LuauStorage)
+    // B: int
+    GET_STORAGE_ENTRY_ADDR,
+
+    // Luwu collections: guard against a value not having the element type of a storage block
+    // A: pointer (LuauStorage)
+    // B: tag (the value's)
+    // C: pointer (the value's GC object, read when the tag is LUA_TOBJECT)
+    // D: block/vmexit/undef
+    // When undef is specified instead of a block, execution is aborted on check failure
+    CHECK_STORAGE_ELEMENT,
+
     // Luwu Classes (rfcs/classes): guard that NEWOBJECT's FIELDS form can construct this class
     // natively, as a plain member-by-member copy. The compiler guarantees the class's shape (see
     // VM_CASE(LOP_NEWOBJECT)). Two things are left to check at runtime:

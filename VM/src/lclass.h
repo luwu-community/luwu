@@ -224,12 +224,14 @@ LUAI_FUNC bool luaR_collectionprep(lua_State* L, StkId ra);
 LUAI_FUNC bool luaR_collectionnext(lua_State* L, StkId ra);
 
 // Luwu collections: the storage block of a `vec` or `vecdeque`, or NULL before its first value. Its `__init` sets the
-// object's storage kind, with a NULL pointer in the storage member.
+// object's storage kind and leaves the storage member nil. Native code reads light userdata there as a block.
 LUAU_FORCEINLINE LuauStorage* luaR_storage(LuauObject* object)
 {
     if (object->storagekind == LUAR_STORAGE_NONE)
         return NULL;
-    return static_cast<LuauStorage*>(pvalue(&luaR_members(object)[LUAR_STORAGE_MEMBER]));
+
+    const TValue* member = &luaR_members(object)[LUAR_STORAGE_MEMBER];
+    return ttislightuserdata(member) ? static_cast<LuauStorage*>(pvalue(member)) : NULL;
 }
 
 LUAU_FORCEINLINE const LuauStorage* luaR_storage(const LuauObject* object)

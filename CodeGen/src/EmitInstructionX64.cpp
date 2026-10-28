@@ -455,16 +455,12 @@ void emitInstForGLoopStorage(IrRegAllocX64& regs, AssemblyBuilderX64& build, int
     build.cmp(luauRegValueInt(ra), 0);
     build.jcc(ConditionX64::Equal, notStorage);
 
-    // The storage member holds light userdata after `__init`; without it the C step decides
+    // The storage member is nil until the first value and light userdata pointing to the block after it
     const int member = int(LUAR_OBJECT_MEMBERS_OFFSET + LUAR_STORAGE_MEMBER * sizeof(TValue));
     build.mov(storage.reg, luauRegValue(ra + 1));
-    build.cmp(dword[storage.reg + member + offsetof(TValue, tt)], LUA_TLIGHTUSERDATA);
-    build.jcc(ConditionX64::NotEqual, notStorage);
+    build.cmp(dword[storage.reg + member + offsetof(TValue, tt)], LUA_TNIL);
+    build.jcc(ConditionX64::Equal, loopExit);
     build.mov(storage.reg, qword[storage.reg + member + offsetof(TValue, value)]);
-
-    // An empty container has no block
-    build.test(storage.reg, storage.reg);
-    build.jcc(ConditionX64::Zero, loopExit);
 
     build.mov(dwordReg(visited.reg), luauRegValueInt(ra + 2));
     build.cmp(dwordReg(visited.reg), dword[storage.reg + offsetof(LuauStorage, count)]);
