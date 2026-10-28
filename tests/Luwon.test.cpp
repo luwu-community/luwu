@@ -14,6 +14,7 @@
 #include <vector>
 
 LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(LuwuClasses)
 
 using namespace Luau;
 
@@ -479,6 +480,37 @@ local text: string = luwon.encode<<Config>>(config)
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK(result.errors[0].location.begin.line == 5);
+}
+
+// `luwon.reader`'s check is attached when the builtins are registered, so classes are on before the fixture is built
+struct LuwonClassesFlags
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+};
+
+struct LuwonClassesFixture
+    : LuwonClassesFlags
+    , BuiltinsFixture
+{
+};
+
+TEST_CASE_FIXTURE(LuwonClassesFixture, "luwon_reader_names_each_class_once")
+{
+    CheckResult result = check(R"LUA(
+class Point(public x: number, public y: number)
+end
+local Other = Point
+
+local reader = luwon.reader({ Point, Other })
+local point: Point = reader:decode<<Point>>("return Point(1, 2)")
+)LUA");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(result.errors[0].location.begin.line == 5);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "Two classes in this reader are named 'Point' (the first is on line 6), so a data file couldn't tell them apart"
+    );
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "luwon_typewriting")

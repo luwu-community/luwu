@@ -265,7 +265,8 @@ class Size
     public height: number
 end
 
-local spawn = luwon.decode("return { origin = Point(1, 2), size = Size { width = 3, height = 4 } }", { Point = Point, Size = Size })
+local reader = luwon.reader({ Point, Size })
+local spawn = reader:decode("return { origin = Point(1, 2), size = Size { width = 3, height = 4 } }")
 assert(class.isinstance(spawn.origin, Point) and spawn.origin.y == 2)
 assert(class.isinstance(spawn.size, Size) and spawn.size.height == 4)
 
@@ -274,7 +275,7 @@ spawn.size = Size { width = 5, height = 6 }
 return luwon.encode(spawn)
 )LUA") == "return { origin = Point(3, 4), size = Size { width = 5, height = 6 } }");
 
-    // A class with methods can't be built from data, even when it's passed
+    // A class with methods can't be in a reader
     CHECK(run(state.get(), R"LUA(
 class Counter(public count: number)
     public function bump(self)
@@ -282,16 +283,46 @@ class Counter(public count: number)
     end
 end
 
-return luwon.decode("return Counter(1)", { Counter = Counter })
+return luwon.reader({ Counter })
 )LUA").find("'Counter' has methods, so a data file can't construct it unless it implements luwon.data") != std::string::npos);
 
-    // An `args` function still decides how an object is written
+    // luwon.decode builds no classes
     CHECK(run(state.get(), R"LUA(
 class Point(public x: number, public y: number)
 end
 
-return luwon.encode(Point(1, 2), { Point = { class = Point, args = function(p) return p.y, p.x end } })
-)LUA") == "return Point(2, 1)\n");
+return tostring(class.isinstance(luwon.decode("return Point(1, 2)"), luwon.tagged))
+)LUA") == "true");
+}
+
+TEST_CASE("luwon_readers_tell_classes_apart_by_name")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state = newState();
+
+    // Two classes with one name, from two chunks, can live in two readers but not in one
+    CHECK(run(state.get(), "class Tag(public name: string) end first = Tag return 'ok'") == "ok");
+    CHECK(run(state.get(), R"LUA(
+class Tag(public label: string)
+end
+
+local a = luwon.reader({ first }):decode("return Tag('a')")
+local b = luwon.reader({ Tag }):decode("return Tag('b')")
+assert(class.isinstance(a, first) and class.isinstance(b, Tag))
+return luwon.reader({ first, Tag })
+)LUA").find("luwon.reader: two classes are named 'Tag', so a data file couldn't tell them apart") != std::string::npos);
+
+    // A reader can't be changed after it's made
+    CHECK(run(state.get(), R"LUA(
+class Point(public x: number, public y: number)
+end
+
+local reader = luwon.reader({ Point })
+return tostring(pcall(function()
+    reader.classes.Other = Point
+end))
+)LUA") == "false");
 }
 
 TEST_SUITE_END();

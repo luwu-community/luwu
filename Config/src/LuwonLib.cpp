@@ -103,16 +103,6 @@ static void pushKey(lua_State* L, const LuwonValue& key)
         lua_pushboolean(L, key.boolean);
 }
 
-// A class's entry in the `classes` table `luwon.decode` and `luwon.encode` take: the class itself, or
-// `{ class = Point, args = function(point) return point.x, point.y end }` to write instances too.
-static void pushEntryClass(lua_State* L, int entry)
-{
-    if (lua_istable(L, entry))
-        lua_getfield(L, entry, "class");
-    else
-        lua_pushvalue(L, entry);
-}
-
 // The builtin class a data file names `library.name`, if there is one.
 static std::optional<LuwonBuiltinClass> builtinNamed(const std::string& name)
 {
@@ -140,31 +130,38 @@ static void pushBuiltinClass(lua_State* L, const LuwonBuiltinClass& builtin)
     lua_remove(L, -2);
 }
 
-// The registry keys of the classes that implement `luwon.data` by name, which the trait's `__implemented` hook fills, and of
-// the class `luwon.tagged`.
-static const char* kRegisteredClassesKey = "luwon_registeredclasses";
+// The registry keys of the set of classes that implement `luwon.data`, which the trait's `__implemented` hook fills, of
+// the class `luwon.tagged`, and of the metatable readers share.
+static const char* kDataClassesKey = "luwon_dataclasses";
 static const char* kTaggedClassKey = "luwon_tagged";
+static const char* kReaderMetatableKey = "luwon_reader";
 
-// Pushes the table of classes that implement `luwon.data`, creating it the first time.
-static void pushRegisteredClasses(lua_State* L)
+// Pushes the set of classes that implement `luwon.data`, creating it the first time. It's keyed by the class itself and
+// holds it weakly, so it never decides what a name means.
+static void pushDataClasses(lua_State* L)
 {
-    lua_getfield(L, LUA_REGISTRYINDEX, kRegisteredClassesKey);
+    lua_getfield(L, LUA_REGISTRYINDEX, kDataClassesKey);
     if (lua_istable(L, -1))
         return;
 
     lua_pop(L, 1);
     lua_newtable(L);
+    lua_createtable(L, 0, 1);
+    lua_pushliteral(L, "k");
+    lua_setfield(L, -2, "__mode");
+    lua_setmetatable(L, -2);
     lua_pushvalue(L, -1);
-    lua_setfield(L, LUA_REGISTRYINDEX, kRegisteredClassesKey);
+    lua_setfield(L, LUA_REGISTRYINDEX, kDataClassesKey);
 }
 
 // Whether the class at `idx` implements `luwon.data`, which lets a data file construct it whatever it holds.
 static bool implementsData(lua_State* L, int idx)
 {
     idx = lua_absindex(L, idx);
-    pushRegisteredClasses(L);
-    lua_getfield(L, -1, lua_getclassname(L, idx));
-    bool implements = lua_rawequal(L, -1, idx);
+    pushDataClasses(L);
+    lua_pushvalue(L, idx);
+    lua_rawget(L, -2);
+    bool implements = lua_toboolean(L, -1) != 0;
     lua_pop(L, 2);
     return implements;
 }
@@ -247,7 +244,7 @@ struct LuwonOrigin
 class LuwonPusher
 {
 public:
-    // `classes` is the stack index of the table naming the classes the file may construct, or 0 for none. With `origin`,
+    // `classes` is the stack index of a reader's table of the classes the file may construct by name, or 0 for none. With `origin`,
     // tables read from the file get metatables holding their comments and locations.
     LuwonPusher(lua_State* L, int classes, const LuwonOrigin* origin)
         : L(L)
@@ -533,26 +530,13 @@ private:
         return true;
     }
 
-    // Pushes the class a data file names, from `classes` or else the classes that implement `luwon.data`, and returns true.
-    // Returns false with nothing pushed when neither has it.
+    // Pushes the class the reader has for a name and returns true, or returns false with nothing pushed
     bool pushNamedClass(const std::string& name)
     {
-        if (classes != 0)
-        {
-            lua_getfield(L, classes, name.c_str());
-            if (!lua_isnil(L, -1))
-            {
-                pushEntryClass(L, lua_gettop(L));
-                lua_remove(L, -2);
-                if (lua_type(L, -1) == LUA_TCLASS)
-                    return true;
-            }
-            lua_pop(L, 1);
-        }
+        if (classes == 0)
+            return false;
 
-        pushRegisteredClasses(L);
-        lua_getfield(L, -1, name.c_str());
-        lua_remove(L, -2);
+        lua_rawgetfield(L, classes, name.c_str());
         if (lua_type(L, -1) == LUA_TCLASS)
             return true;
 
@@ -578,7 +562,7 @@ private:
 
         lua_getfield(L, LUA_REGISTRYINDEX, kTaggedClassKey);
         if (lua_type(L, -1) != LUA_TCLASS)
-            return fail(format("'%s' isn't a class this file may construct; pass it to luwon.decode, or make it implement luwon.data", object.bytes.c_str()));
+            return fail(format("'%s' isn't a class this file may construct; read it with a luwon.reader that has it", object.bytes.c_str()));
 
         lua_pushlstring(L, object.bytes.data(), object.bytes.size());
         lua_createtable(L, int(object.args.size()), 0);
@@ -708,9 +692,8 @@ bool readInfo(lua_State* L, int idx, LuwonComments& out)
 class LuwonFromLua
 {
 public:
-    LuwonFromLua(lua_State* L, int classes)
+    explicit LuwonFromLua(lua_State* L)
         : L(L)
-        , classes(classes)
     {
     }
 
@@ -778,7 +761,6 @@ public:
 
 private:
     lua_State* L;
-    int classes = 0;
     size_t depth = 0;
     // Tables being converted (one met again is a cycle), and tables already converted (one met again stays shared).
     std::vector<const void*> inProgress;
@@ -970,8 +952,8 @@ private:
         return key.boolean ? "[true]" : "[false]";
     }
 
-    // An object as its constructor call. A builtin class's and a `luwon.tagged`'s are written as they were read, an object
-    // `classes` has an `args` function for with what it returns, and any other one a data file may construct from its fields.
+    // An object as its constructor call. A builtin class's and a `luwon.tagged`'s are written as they were read, and any
+    // other one a data file may construct from what its `__todata` returns or else from its fields.
     bool convertObject(int idx, LuwonValue& out, const std::string& path)
     {
         if (std::optional<bool> converted = convertBuiltinObject(idx, out, path))
@@ -979,32 +961,10 @@ private:
         if (std::optional<bool> converted = convertTagged(idx, out, path))
             return *converted;
 
-        std::optional<std::string> name = findClassEntry(idx);
-        if (error)
-            return false;
-        if (!name)
-            return convertByFields(idx, out, path);
-
-        // The entry is on the stack. A class on its own is written from its fields.
-        bool hasArgs = false;
-        if (lua_istable(L, -1))
-        {
-            lua_getfield(L, -1, "args");
-            hasArgs = lua_isfunction(L, -1);
-            lua_remove(L, -2);
-        }
-
-        if (!hasArgs)
-        {
-            lua_pop(L, 1);
-            return convertByFields(idx, out, path);
-        }
-
-        return convertCall(idx, *name, out, path);
+        return convertByFields(idx, out, path);
     }
 
-    // The object at `idx` as a call to `name` with the values the function on top of the stack returns for it: an `args`
-    // function, or the class's `__todata`.
+    // The object at `idx` as a call to `name` with the values its `__todata`, on top of the stack, returns for it.
     bool convertCall(int idx, const std::string& name, LuwonValue& out, const std::string& path)
     {
         int top = lua_gettop(L) - 1;
@@ -1117,8 +1077,8 @@ private:
         {
             lua_settop(L, top);
             return fail(format(
-                "'%s' has a constructor that takes something other than its fields; give it an 'args' function in luwon.encode's "
-                "classes, at %s",
+                "'%s' has a constructor that takes something other than its fields; give it a '__todata' that says what its "
+                "call holds, at %s",
                 className,
                 path.c_str()
             ));
@@ -1219,36 +1179,6 @@ private:
         return true;
     }
 
-    // Finds the entry of `classes` for the object's class, and leaves it on the stack. Returns its name, or nullopt with
-    // nothing pushed.
-    std::optional<std::string> findClassEntry(int object)
-    {
-        if (classes == 0 || !pushClassOf(object))
-            return std::nullopt;
-
-        int objectClass = lua_gettop(L);
-        lua_pushnil(L);
-        while (lua_next(L, classes))
-        {
-            pushEntryClass(L, lua_gettop(L));
-            bool matches = lua_rawequal(L, -1, objectClass) && lua_type(L, -3) == LUA_TSTRING;
-            lua_pop(L, 1);
-
-            if (matches)
-            {
-                std::string name = lua_tostring(L, -2);
-                lua_remove(L, -2);
-                lua_remove(L, objectClass);
-                return name;
-            }
-
-            lua_pop(L, 1);
-        }
-
-        lua_pop(L, 1);
-        return std::nullopt;
-    }
-
     bool pushClassOf(int object)
     {
         return Luau::pushClassOf(L, object, error);
@@ -1261,16 +1191,6 @@ std::string displayName(const char* chunkname)
     if (chunkname[0] == '@' || chunkname[0] == '=')
         return chunkname + 1;
     return chunkname;
-}
-
-// `classes`, the optional table of classes, as a stack index, or 0 when it's absent.
-int classesArgument(lua_State* L, int idx)
-{
-    if (lua_isnoneornil(L, idx))
-        return 0;
-
-    luaL_checktype(L, idx, LUA_TTABLE);
-    return idx;
 }
 
 // Reads `source` and pushes its value, with metatables carrying its comments and locations. Returns false with `error`
@@ -1303,12 +1223,11 @@ bool readAndPush(lua_State* L, std::string_view source, int classes, std::option
     return true;
 }
 
-// luwon.decode(text, classes?): the value a data file returns
-int luwonDecode(lua_State* L)
+// Decodes the text at `textIdx` with the classes table at `classes` (0 for none), raising errors as `caller`'s
+int decodeWith(lua_State* L, int textIdx, int classes, const char* caller)
 {
     size_t length = 0;
-    const char* text = luaL_checklstring(L, 1, &length);
-    int classes = classesArgument(L, 2);
+    const char* text = luaL_checklstring(L, textIdx, &length);
     int top = lua_gettop(L);
 
     std::optional<std::string> error;
@@ -1321,19 +1240,94 @@ int luwonDecode(lua_State* L)
     if (error)
     {
         lua_settop(L, top);
-        luaL_error(L, "luwon.decode: %s", error->c_str());
+        luaL_error(L, "%s: %s", caller, error->c_str());
     }
 
     return 1;
 }
 
-// luwon.encode(value, classes?): the text of a data file. A table a file returned is written back into that file's
+// luwon.decode(text): the value a data file returns. Every constructor call in it reads as a `luwon.tagged`.
+int luwonDecode(lua_State* L)
+{
+    return decodeWith(L, 1, 0, "luwon.decode");
+}
+
+// reader:decode(text): the value a data file returns, building the classes the reader has
+int luwonReaderDecode(lua_State* L)
+{
+    lua_getfield(L, LUA_REGISTRYINDEX, kReaderMetatableKey);
+    bool isReader = lua_istable(L, 1) && lua_getmetatable(L, 1) && lua_rawequal(L, -1, -2);
+    if (!isReader)
+        luaL_typeerror(L, 1, "luwon.reader");
+    lua_settop(L, 2);
+
+    lua_rawgetfield(L, 1, "classes");
+    return decodeWith(L, 2, lua_gettop(L), "reader:decode");
+}
+
+// luwon.reader(classes): a reader whose `decode` builds the given classes from the calls that name them. A data file
+// names a class by its name, so two classes with one name can't be in one reader.
+int luwonReader(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_newtable(L);
+    int byName = lua_gettop(L);
+
+    for (int i = 1;; i++)
+    {
+        lua_rawgeti(L, 1, i);
+        if (lua_isnil(L, -1))
+        {
+            lua_pop(L, 1);
+            break;
+        }
+
+        if (lua_type(L, -1) != LUA_TCLASS)
+            luaL_error(L, "luwon.reader: item %d is a %s, not a class", i, luaL_typename(L, -1));
+        if (std::optional<std::string> refusal = refusalOf(L, -1))
+            luaL_error(L, "luwon.reader: %s", refusal->c_str());
+
+        const char* name = lua_getclassname(L, -1);
+        lua_rawgetfield(L, byName, name);
+        if (!lua_isnil(L, -1))
+            luaL_error(L, "luwon.reader: two classes are named '%s', so a data file couldn't tell them apart", name);
+        lua_pop(L, 1);
+
+        lua_rawsetfield(L, byName, name);
+    }
+    lua_setreadonly(L, byName, true);
+
+    lua_createtable(L, 0, 1);
+    lua_pushvalue(L, byName);
+    lua_rawsetfield(L, -2, "classes");
+
+    lua_getfield(L, LUA_REGISTRYINDEX, kReaderMetatableKey);
+    if (!lua_istable(L, -1))
+    {
+        lua_pop(L, 1);
+        lua_createtable(L, 0, 2);
+        lua_createtable(L, 0, 1);
+        lua_pushcfunction(L, luwonReaderDecode, "decode");
+        lua_rawsetfield(L, -2, "decode");
+        lua_setreadonly(L, -1, true);
+        lua_rawsetfield(L, -2, "__index");
+        lua_pushliteral(L, "luwon.reader");
+        lua_rawsetfield(L, -2, "__type");
+        lua_setreadonly(L, -1, true);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, kReaderMetatableKey);
+    }
+    lua_setmetatable(L, -2);
+    lua_setreadonly(L, -1, true);
+    return 1;
+}
+
+// luwon.encode(value): the text of a data file. A table a file returned is written back into that file's
 // source, keeping its comments, consts, types and layout; anything else is written anew. Comments tables carry are
 // written either way.
 int luwonEncode(lua_State* L)
 {
     luaL_checkany(L, 1);
-    int classes = classesArgument(L, 2);
 
     // The source a returned table was read from
     std::optional<std::string> source;
@@ -1352,7 +1346,7 @@ int luwonEncode(lua_State* L)
 
     std::optional<std::string> error;
     {
-        LuwonFromLua converter(L, classes);
+        LuwonFromLua converter(L);
         LuwonValue value;
         if (!converter.convert(1, value, "value"))
             error = converter.error;
@@ -1559,7 +1553,7 @@ int describeTagged(lua_State* L)
 {
     std::optional<std::string> error;
     {
-        LuwonFromLua converter(L, 0);
+        LuwonFromLua converter(L);
         LuwonValue value;
         if (converter.convert(1, value, "value"))
         {
@@ -1592,6 +1586,7 @@ return tagged
 
 const luaL_Reg kLuwonLib[] = {
     {"decode", luwonDecode},
+    {"reader", luwonReader},
     {"encode", luwonEncode},
     {"comments", luwonComments},
     {"setcomments", luwonSetComments},

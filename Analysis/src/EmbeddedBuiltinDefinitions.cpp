@@ -368,13 +368,17 @@ declare integer: {
 
 // Luwu object notation: the `luwon` library. Tables a file returns carry their comments and locations in a metatable
 // luwon owns; `comments` and `setcomments` read and replace them. `decode<<T>>` gives the value the type the caller
-// expects, the way a JSON decoder does: the file itself isn't checked against it. `classes` maps the names a file may
-// construct to classes, or to `{ class = C, args = function(object) ... end }` to write them too.
+// expects, the way a JSON decoder does: the file itself isn't checked against it. `reader` takes the classes a file may
+// construct; `decode` builds none.
 static const char* const kBuiltinDefinitionLuwonSrc = R"BUILTIN_SRC(
 
 declare luwon: {
-    decode: @checked <T>(text: string, classes: { [string]: unknown }?) -> T,
-    encode: @checked <T>(value: T, classes: { [string]: unknown }?) -> string,
+    decode: @checked <T>(text: string) -> T,
+    reader: @checked (classes: { unknown }) -> {
+        read classes: { [string]: unknown },
+        decode: <T>(self: unknown, text: string) -> T,
+    },
+    encode: @checked <T>(value: T) -> string,
     comments: ((t: {}, key: string | number | boolean) -> {
         above: { { text: string, location: { begin: vector, ["end"]: vector }? } },
         after: { text: string, location: { begin: vector, ["end"]: vector }? }?,
@@ -439,6 +443,14 @@ std::string getBuiltinDefinitionSource()
         size_t sourcePos = luwonSrc.find(sourceEntry);
         if (sourcePos != std::string::npos)
             luwonSrc.insert(sourcePos + sourceEntry.size(), "    tagged: class,\n");
+
+        // A reader holds classes
+        const std::string readerEntry = "    reader: @checked (classes: { unknown }) -> {\n        read classes: { [string]: unknown },";
+        size_t readerPos = luwonSrc.find(readerEntry);
+        if (readerPos != std::string::npos)
+            luwonSrc.replace(
+                readerPos, readerEntry.size(), "    reader: @checked (classes: { class }) -> {\n        read classes: { [string]: class },"
+            );
     }
     result += luwonSrc;
 
