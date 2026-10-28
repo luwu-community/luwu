@@ -675,12 +675,8 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         inst(IrCmd::FALLBACK_DUPCLOSURE, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmConst(LUAU_INSN_D(*pc)));
         break;
     case LOP_FORGPREP:
-    {
-        IrOp loopStart = blockAtInst(i + 1 + LUAU_INSN_D(*pc));
-
-        inst(IrCmd::FALLBACK_FORGPREP, constUint(i), vmReg(LUAU_INSN_A(*pc)), loopStart);
+        translateInstForGPrep(*this, pc, i);
         break;
-    }
     // Class declaration and non-native construction have no machine code lowering. They still can't be
     // a bare `JUMP vmExit`. Such a jump carries no VM register operands, so nothing downstream knows
     // which registers the interpreter will read next, and stores it still needs get eliminated. For
