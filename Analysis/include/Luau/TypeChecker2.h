@@ -183,6 +183,8 @@ struct TypeChecker2
     // The first error reported in `local`'s declaration, which explains what is wrong with its type
     std::optional<Location> declarationError(const AstLocal* local);
     std::optional<Location> firstErrorIn(const Location& range);
+    // The first line of the message of the syntax or type error firstErrorIn found at `location`
+    std::string errorMessageAt(const Location& location);
     // The first error in an annotation, or in the declaration of an alias it names (`type Result = Nope`)
     std::optional<Location> annotationError(AstNode* annotation);
     // Why a local has no type: the error in its declaration, or the one behind another local with no type that its

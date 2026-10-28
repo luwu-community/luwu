@@ -472,9 +472,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "using_a_local_with_no_type_points_at_the_err
     CHECK(get<UnknownSymbol>(result.errors[0]));
     CHECK_EQ(Location{{2, 8}, {2, 9}}, result.errors[1].location);
     CHECK_EQ(
-        "Attempt to use 'w', which has no type because of the error on line 2\n\n"
+        "'w' has no type here due to error on line 2\n\n"
         "Help (no type):\n"
-        "  • Fix the error on line 2 first; until then, uses of 'w' aren't checked",
+        "  • Fix the error on line 2 first: Did you mean 'none' instead of 'nope'?",
         toString(result.errors[1])
     );
 
@@ -482,9 +482,28 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "using_a_local_with_no_type_points_at_the_err
     REQUIRE_EQ(2, module->notes.size());
     CHECK_EQ(Location{{3, 8}, {3, 9}}, module->notes[0].location);
     CHECK_EQ(Location{{4, 21}, {4, 22}}, module->notes[1].location);
-    CHECK_EQ("'w' has no type because of the error on line 2", module->notes[0].message);
+    CHECK_EQ("'w' has no type here; fix error on line 2 first to use it safely", module->notes[0].message);
     REQUIRE(module->notes[0].origin);
     CHECK_EQ(result.errors[0].location, *module->notes[0].origin);
+}
+
+// Luwu: the help quotes the cause's message on one line, cut to fit
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_local_with_no_type_quotes_its_cause_on_one_line")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local w = a_value_nobody_declared_with_a_name_long_enough_to_need_cutting
+        w.call()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    const std::string message = toString(result.errors[1]);
+    const std::string bullet = message.substr(message.rfind("  • ") + std::string("  • ").size());
+    CHECK_MESSAGE(bullet.find('\n') == std::string::npos, message);
+    CHECK_MESSAGE(bullet.rfind("Fix the error on line 2 first: Unknown variable", 0) == 0, message);
+    CHECK_MESSAGE(bullet.size() == 100, message);
+    CHECK_MESSAGE(bullet.substr(bullet.size() - 3) == "...", message);
 }
 
 // Luwu: a syntax error in the declaration is the error behind the missing type too
@@ -507,15 +526,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_local_with_no_type_points_at_a_syntax_erro
     }
     REQUIRE(use);
     CHECK_EQ(
-        "Attempt to use 'w', which has no type because of the error on line 2\n\n"
+        "'w' has no type here due to error on line 2\n\n"
         "Help (no type):\n"
-        "  • Fix the error on line 2 first; until then, uses of 'w' aren't checked",
+        "  • Fix the error on line 2 first: Expected identifier when parsing expression, got ')'",
         toString(*use)
     );
 
     ModulePtr module = getMainModule();
     REQUIRE_EQ(1, module->notes.size());
-    CHECK_EQ("'w' has no type because of the error on line 2", module->notes[0].message);
+    CHECK_EQ("'w' has no type here; fix error on line 2 first to use it safely", module->notes[0].message);
 }
 
 // Luwu: a cast gives the value a type, so a use that's cast gets no note, and a local whose missing type has no error
@@ -559,7 +578,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "locals_with_no_type_from_the_same_one_get_on
     ModulePtr module = getMainModule();
     REQUIRE_EQ(2, module->notes.size());
     CHECK_EQ(Location{{4, 8}, {4, 9}}, module->notes[1].location);
-    CHECK_EQ("'w' has no type because of the error on line 2", module->notes[1].message);
+    CHECK_EQ("'w' has no type here; fix error on line 2 first to use it safely", module->notes[1].message);
 }
 
 // Luwu: an error type that isn't a local's comes from an error in the same expression, which is the only error

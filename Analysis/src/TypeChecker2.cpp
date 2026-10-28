@@ -6562,7 +6562,8 @@ bool TypeChecker2::reportImproperUse(AstExpr* subject, TypeId subjectType, Impro
     noTypeRootsReported.insert(cause.root);
 
     noTypeUsesReported.insert(local);
-    reportError(NoTypeUse{use, local->local->name.value, cause.origin, helpifier.enabled}, local->location);
+    std::string originMessage = cause.origin ? errorMessageAt(*cause.origin) : "";
+    reportError(NoTypeUse{use, local->local->name.value, cause.origin, std::move(originMessage), helpifier.enabled}, local->location);
     return true;
 }
 
@@ -6662,6 +6663,28 @@ std::optional<Location> TypeChecker2::firstErrorIn(const Location& range)
             consider(error.location);
     }
     return first;
+}
+
+static std::string firstLine(const std::string& message)
+{
+    return message.substr(0, message.find('\n'));
+}
+
+std::string TypeChecker2::errorMessageAt(const Location& location)
+{
+    for (const ParseError& error : sourceModule->parseErrors)
+    {
+        if (error.getLocation() == location)
+            return firstLine(error.getMessage());
+    }
+
+    for (const TypeError& error : module->errors)
+    {
+        bool isUse = get<NoTypeUse>(error) || get<UnreachableCodeUse>(error);
+        if (!isUse && error.moduleName == module->name && error.location == location)
+            return firstLine(toString(error));
+    }
+    return "";
 }
 
 // How many aliases deep an annotation's error is looked for (`type A = B`, `type B = Nope`)

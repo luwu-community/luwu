@@ -281,17 +281,11 @@ static std::string improperUseVerb(ImproperUse use)
     return use == ImproperUse::Call ? "call" : "use";
 }
 
-// Luwu: why a local has no type, as the end of a sentence about it
-static std::string noTypeClause(std::optional<Location> origin)
-{
-    if (origin)
-        return "has no type because of the error on line " + std::to_string(origin->begin.line + 1);
-    return "has no type";
-}
-
 std::string noTypeNote(const std::string& name, std::optional<Location> origin)
 {
-    return "'" + name + "' " + noTypeClause(origin);
+    if (origin)
+        return "'" + name + "' has no type here; fix error on line " + std::to_string(origin->begin.line + 1) + " first to use it safely";
+    return "'" + name + "' has no type";
 }
 
 // Luwu: how to tell the members of a union of table types apart by a field some of them lack; nullopt when a member
@@ -1532,22 +1526,33 @@ struct ErrorConverter
 
     std::string operator()(const NoTypeUse& e) const
     {
-        std::string message = "Attempt to " + improperUseVerb(e.use) + " '" + e.name + "', which " + noTypeClause(e.origin);
-
         Helpifier helpifier{e.showHelp};
         if (e.origin)
         {
             std::string line = std::to_string(e.origin->begin.line + 1);
-            helpifier.appendTo(message, "no type", {"Fix the error on line " + line + " first; until then, uses of '" + e.name + "' aren't checked"});
+            std::string message = "'" + e.name + "' has no type here due to error on line " + line;
+
+            // The cause's message is quoted on the bullet's one line, cut to fit
+            std::string fix = "Fix the error on line " + line + " first";
+            if (!e.originMessage.empty())
+                fix += ": " + e.originMessage;
+            if (fix.size() > MismatchWording::kLineWidth)
+                fix = fix.substr(0, MismatchWording::kLineWidth - 3) + "...";
+
+            helpifier.appendTo(message, "no type", {fix});
+            return message;
         }
-        else
-        {
-            helpifier.appendTo(
-                message,
-                "no type",
-                {"Luwu couldn't work out a type for '" + e.name + "', so its uses aren't checked", "Annotating '" + e.name + "' gives it a type"}
-            );
-        }
+
+        std::string message = noTypeNote(e.name, e.origin);
+        helpifier.appendTo(
+            message,
+            "no type",
+            // continuation lines are indented to line up under the bullet's text
+            {"Oh no! Luwu can't figure out a type for '" + e.name +
+                 "'.\n    This is because the error behind it is in another module, or Luwu's type checker lost track of it.\n"
+                 "    If this seems like a bug, please report it to " + kIssuesUrl,
+             "Annotating '" + e.name + "' gives it a type"}
+        );
         return message;
     }
 
@@ -1981,7 +1986,7 @@ bool UnreachableCodeUse::operator==(const UnreachableCodeUse& rhs) const
 
 bool NoTypeUse::operator==(const NoTypeUse& rhs) const
 {
-    return use == rhs.use && name == rhs.name && origin == rhs.origin && showHelp == rhs.showHelp;
+    return use == rhs.use && name == rhs.name && origin == rhs.origin && originMessage == rhs.originMessage && showHelp == rhs.showHelp;
 }
 
 bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
