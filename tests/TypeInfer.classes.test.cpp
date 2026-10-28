@@ -2985,6 +2985,38 @@ TEST_CASE_FIXTURE(ClassesFixture, "declare_trait_declares_the_trait_value")
     CHECK(result.errors[0].location.begin.line == 11);
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "export_declare_trait_exports_the_trait_and_its_type")
+{
+    ScopedFastFlag flags[] = {
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        export declare trait Named
+            expect name: string
+        end
+
+        export trait type Titled
+            expect title: string
+        end
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local traits = require(game.A)
+        local named: trait<traits.Named> = traits.Named
+        local titled = traits.Titled
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(result.errors[0].location.begin.line == 4);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "class_type_declares_no_value")
 {
     ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
@@ -3004,6 +3036,40 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_type_declares_no_value")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK(get<UnknownSymbol>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "export_declare_class_exports_the_class_and_its_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        export declare class Semver(public const major: number, public const minor: number)
+        end
+
+        export class type Path(public raw: string)
+        end
+    )";
+
+    // `export declare class` exports the class and its type; `export class type` only the type
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local versions = require(game.A)
+        local version: versions.Semver = versions.Semver(1, 2)
+        local major: number = version.major
+        local path: versions.Path? = nil
+        local wrong = versions.Semver("a", 2)
+        local missing = versions.Path
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(result.errors[0].location.begin.line == 6);
+    CHECK(result.errors[1].location.begin.line == 7);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "declaring_classes_is_typed_without_cascades")
