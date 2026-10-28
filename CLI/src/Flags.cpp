@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void setLuauFlag(std::string_view name, bool state)
@@ -28,6 +29,20 @@ static void setLuauFlag(std::string_view name, bool state)
     }
 
     fprintf(stderr, "Warning: unrecognized flag '%.*s'.\n", int(name.length()), name.data());
+}
+
+// Luwu: sets an integer flag (`LuauCompileInlineThreshold=40`); false when no integer flag has that name
+static bool setLuauIntFlag(std::string_view name, int value)
+{
+    for (Luau::FValue<int>* flag = Luau::FValue<int>::list; flag; flag = flag->next)
+    {
+        if (name == flag->name)
+        {
+            flag->value = value;
+            return true;
+        }
+    }
+    return false;
 }
 
 static void setLuauFlags(bool state)
@@ -63,9 +78,24 @@ void setLuauFlags(const char* list)
             else if (value == "false" || value == "False")
                 setLuauFlag(key, false);
             else
-                fprintf(
-                    stderr, "Warning: unrecognized value '%.*s' for flag '%.*s'.\n", int(value.length()), value.data(), int(key.length()), key.data()
-                );
+            {
+                // Luwu: an integer value sets an integer flag
+                std::string number(value);
+                char* numberEnd = nullptr;
+                long parsed = strtol(number.c_str(), &numberEnd, 10);
+                bool isInteger = !number.empty() && *numberEnd == '\0';
+                bool set = isInteger && setLuauIntFlag(key, int(parsed));
+
+                if (!set)
+                    fprintf(
+                        stderr,
+                        "Warning: unrecognized value '%.*s' for flag '%.*s'.\n",
+                        int(value.length()),
+                        value.data(),
+                        int(key.length()),
+                        key.data()
+                    );
+            }
         }
         else
         {

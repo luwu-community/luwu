@@ -31,6 +31,21 @@ LUAU_FASTINTVARIABLE(LuauCompileLoopUnrollThresholdMaxBoost, 300)
 LUAU_FASTINTVARIABLE(LuauCompileInlineThreshold, 25)
 LUAU_FASTINTVARIABLE(LuauCompileInlineThresholdMaxBoost, 300)
 LUAU_FASTINTVARIABLE(LuauCompileInlineDepth, 5)
+// Luwu: what the inliner's cost model counts a call as, the saving an inline weighs against the body's cost. Upstream
+// uses 3.
+LUAU_FASTINTVARIABLE(LuwuCompileInlineCallCost, 3)
+// Luwu: the call cost for a function compiled for native code (`--!native` or `@native`), where a call costs more next to
+// the code around it
+LUAU_FASTINTVARIABLE(LuwuCompileInlineNativeCallCost, 16)
+// Luwu: a loop-free function with fewer direct call sites than this gets a higher inlining threshold, scaled by this over
+// its call sites (2 call sites with 4 here: twice the threshold). Inlining adds a copy of the body per call site, so
+// fewer sites can afford a bigger body. 1 turns it off.
+LUAU_FASTINTVARIABLE(LuwuCompileInlineFewCallSites, 6)
+// Luwu: the most instructions inlining may add to one function, however the thresholds and the only-call-site rule are
+// set. It keeps bytecode size bounded: a module grows by at most this much per function. The cost model can't do that
+// on its own because it saturates at 127 and doesn't measure real size. The benchmarks, the classes benches, seal and
+// chimera never spend more than 2048.
+LUAU_FASTINTVARIABLE(LuwuCompileInlineBudget, 4096)
 
 LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -502,6 +517,7 @@ struct Compiler
 
         LUAU_ASSERT(!functions.contains(func));
         LUAU_ASSERT(regTop == 0 && stackSize == 0 && localStack.empty() && upvals.empty());
+        inlinedInstructions = 0;
         if (FFlag::LuauExportValueSyntax)
             currentFunction = func;
 
@@ -694,11 +710,14 @@ struct Compiler
             costModel = modelCost(func->body, func->args.data, func->args.size, builtins, constants);
         }
 
+        uint32_t instructionCount = uint32_t(bytecode.getInstructionCount());
         bytecode.endFunction(uint8_t(stackSize), uint8_t(upvals.size()), protoflags, costModel);
 
         Function& f = functions[func];
         f.id = fid;
         f.upvals = upvals;
+        f.instructionCount = instructionCount;
+        f.hasLoops = hasLoops;
 
         // record information for inlining
         if (options.optimizationLevel >= 2 && !func->vararg && !func->self && !getfenvUsed && !setfenvUsed)
@@ -1100,16 +1119,30 @@ struct Compiler
 
         // we use a dynamic cost threshold that's based on the fixed limit boosted by the cost advantage we gain due to inlining
         int inlinedCost = computeCost(callCostModel, varc, std::min(int(func->args.size), 8));
-        int baselineCost = computeCost(fi->costModel, nullptr, 0) + 3;
+        bool compilingNative = nativeModule || (currentFunction && currentFunction->hasNativeAttribute());
+        int callCost = compilingNative ? FInt::LuwuCompileInlineNativeCallCost : FInt::LuwuCompileInlineCallCost;
+        int baselineCost = computeCost(fi->costModel, nullptr, 0) + callCost;
         int inlineProfit = (inlinedCost == 0) ? thresholdMaxBoost : std::min(thresholdMaxBoost, 100 * baselineCost / inlinedCost);
 
         int threshold = thresholdBase * inlineProfit / 100;
+
+        // Luwu: fewer call sites raise the threshold of a loop-free function (LuwuCompileInlineFewCallSites). A loop in
+        // the body does enough work per call that the call itself costs little next to it, and a call that runs once
+        // saves nothing worth a bigger body.
+        const unsigned* callSites = directCallSites.find(func);
+        bool fewCallSites = callSites && *callSites > 0 && int(*callSites) < FInt::LuwuCompileInlineFewCallSites;
+        if (fewCallSites && !fi->hasLoops && !callRunsOnce())
+            threshold = threshold * FInt::LuwuCompileInlineFewCallSites / int(*callSites);
+
+        // Luwu: a function with one call site inlines whatever it costs (isOnlyCallSite). Upstream inlines past the cost
+        // only an immediately called function expression.
+        bool onlyCallSite = isOnlyCallSite(func);
 
         if (FFlag::LuauCompileIifeInline)
         {
             bool isIife = unwrapExprOfType<AstExprFunction>(expr->func) != nullptr;
 
-            if (inlinedCost > threshold && !isIife)
+            if (inlinedCost > threshold && !isIife && !onlyCallSite)
             {
                 reportInlineTooExpensive(func, inlinedCost, inlineProfit);
                 return false;
@@ -1117,7 +1150,7 @@ struct Compiler
         }
         else
         {
-            if (inlinedCost > threshold)
+            if (inlinedCost > threshold && !onlyCallSite)
             {
                 reportInlineTooExpensive(func, inlinedCost, inlineProfit);
                 return false;
@@ -1126,6 +1159,25 @@ struct Compiler
 
         const char* inlinedOwner = nullptr;
         const char* inlinedName = describeInlineTarget(func, inlinedOwner);
+
+        // Luwu: the instructions inlining has added to this function so far, counting an inline still being compiled
+        uint32_t spent = inlinedInstructions;
+        if (!inlineFrames.empty())
+            spent += bytecode.getDebugPC() - outermostInlineStartPc;
+
+        if (spent + fi->instructionCount > uint32_t(FInt::LuwuCompileInlineBudget))
+        {
+            bytecode.addDebugRemark(
+                "inlining failed: %s would pass the function's inlining budget (%u of %d instructions spent)",
+                inlinedName,
+                spent,
+                FInt::LuwuCompileInlineBudget.value
+            );
+            return false;
+        }
+
+        if (onlyCallSite && inlinedCost > threshold)
+            bytecode.addDebugRemark("inlining past the cost model: the only call site of a function (cost %d)", inlinedCost);
 
         if (inlinedOwner)
             bytecode.addDebugRemark(
@@ -1145,9 +1197,86 @@ struct Compiler
                 int(inlineFrames.size())
             );
 
-        compileInlinedCall(expr, func, target, targetCount, selfExpr);
+        bool outermost = inlineFrames.empty();
+        if (outermost)
+            outermostInlineStartPc = bytecode.getDebugPC();
+
+        compileInlinedCall(expr, func, target, targetCount, selfExpr, onlyCallSite);
+
+        if (outermost)
+            inlinedInstructions += bytecode.getDebugPC() - outermostInlineStartPc;
         return true;
     }
+
+    // Luwu: whether this call is the only time `func`'s body gets compiled into a caller. The function has one direct
+    // call in the module, and that call isn't compiled more than once: not in an unrolled loop and not in a body
+    // inlined at several call sites. A class field's default that calls a function getFunctionExpr finds names a local
+    // besides the constructor's parameters. Such a default stays in `__init` instead of every construction site.
+    // A `@native` function called from code that isn't is left to the cost model: inlining would run its body
+    // interpreted. So is a call in top-level code outside any loop. That call runs once and saves no meaningful call
+    // overhead. A loop-free chunk also runs interpreted (LPF_NATIVE_COLD).
+    bool isOnlyCallSite(AstExprFunction* func)
+    {
+        const unsigned* calls = directCallSites.find(func);
+        if (!calls || *calls != 1 || repeatedCompileDepth > 0)
+            return false;
+
+        if (callRunsOnce())
+            return false;
+
+        bool leavesNativeCode = func->hasNativeAttribute() && currentFunction && !currentFunction->hasNativeAttribute();
+        if (leavesNativeCode)
+            return false;
+
+        for (const InlineFrame& frame : inlineFrames)
+        {
+            if (!frame.onlyCallSite)
+                return false;
+        }
+        return true;
+    }
+
+    // Luwu: the call being compiled is in top-level code outside any loop, so it runs once
+    bool callRunsOnce() const
+    {
+        return currentFunction && currentFunction->functionDepth == 0 && loops.empty();
+    }
+
+    // Luwu: counts the direct calls to each function (see isOnlyCallSite), after the passes getFunctionExpr reads
+    struct CallSiteVisitor : AstVisitor
+    {
+        Compiler* self;
+
+        explicit CallSiteVisitor(Compiler* self)
+            : self(self)
+        {
+        }
+
+        bool visit(AstExprCall* node) override
+        {
+            if (AstExprFunction* func = node->self ? nullptr : self->getFunctionExpr(node->func))
+                self->directCallSites[func]++;
+            return true;
+        }
+    };
+
+    // Luwu: marks code compiled more than once (an unrolled loop's body) while it's compiled. isOnlyCallSite never
+    // takes a call there for its function's only call site.
+    struct RepeatedCompile
+    {
+        Compiler* self;
+
+        explicit RepeatedCompile(Compiler* self)
+            : self(self)
+        {
+            self->repeatedCompileDepth++;
+        }
+
+        ~RepeatedCompile()
+        {
+            self->repeatedCompileDepth--;
+        }
+    };
 
     uint64_t costModelInlinedCall(AstExprCall* expr, AstExprFunction* func, AstExpr* selfExpr = nullptr)
     {
@@ -1963,7 +2092,14 @@ struct Compiler
         bytecode.emitAux(methodNameCid);
     }
 
-    void compileInlinedCall(AstExprCall* expr, AstExprFunction* func, uint8_t target, uint8_t targetCount, AstExpr* selfExpr = nullptr)
+    void compileInlinedCall(
+        AstExprCall* expr,
+        AstExprFunction* func,
+        uint8_t target,
+        uint8_t targetCount,
+        AstExpr* selfExpr = nullptr,
+        bool onlyCallSite = false
+    )
     {
         RegScope rs(this);
 
@@ -2167,6 +2303,7 @@ struct Compiler
 
         // the inline frame will be used to compile return statements as well as to reject recursive inlining attempts
         inlineFrames.push_back({func, oldLocals, target, targetCount});
+        inlineFrames.back().onlyCallSite = onlyCallSite;
 
         if (selfProvenClass)
         {
@@ -3000,6 +3137,7 @@ struct Compiler
         uint8_t classReg = compileClassOperand(callee, rs);
 
         FieldsExpansion expansion(this, decl);
+
 
         for (size_t i = 0; i < primaryConstructor->args.size; ++i)
         {
@@ -6529,6 +6667,9 @@ struct Compiler
         exprChanges.clear();
         localChanges.clear();
 
+        // Luwu: the body is compiled once per iteration
+        RepeatedCompile repeated(this);
+
         for (int iv = 0; iv < tripCount; ++iv)
         {
             // we need to re-fold constants in the loop body with the new value; this reuses computed constant values elsewhere in the tree
@@ -8188,6 +8329,10 @@ struct Compiler
         uint64_t costModel = 0;
         unsigned int stackSize = 0;
         bool canInline = false;
+        // Luwu: the size of the function's own body, what inlining it adds to a caller (LuwuCompileInlineBudget)
+        uint32_t instructionCount = 0;
+        // Luwu: the body has a loop that wasn't unrolled (LuwuCompileInlineFewCallSites)
+        bool hasLoops = false;
         bool returnsOne = false;
     };
 
@@ -8247,6 +8392,9 @@ struct Compiler
         AstLocal* provenSelf = nullptr;
         AstStatClass* provenSelfClass = nullptr;
         AstExprFunction* caller = nullptr;
+
+        // Luwu: this body is compiled at its function's only call site (isOnlyCallSite)
+        bool onlyCallSite = false;
     };
 
     struct Capture
@@ -8376,6 +8524,19 @@ struct Compiler
     std::vector<LoopJump> loopJumps;
     std::vector<Loop> loops;
     std::vector<InlineFrame> inlineFrames;
+
+    // Luwu: how many direct calls each function has in the module (CallSiteVisitor), and how deep the compiler is in
+    // code it compiles more than once (RepeatedCompile)
+    DenseHashMap<AstExprFunction*, unsigned> directCallSites{nullptr};
+    unsigned repeatedCompileDepth = 0;
+
+    // Luwu: the instructions inlining has added to the function being compiled (LuwuCompileInlineBudget), and where the
+    // outermost inline being compiled began
+    uint32_t inlinedInstructions = 0;
+    uint32_t outermostInlineStartPc = 0;
+
+    // Luwu: the module says `--!native` (LuwuCompileInlineNativeCallCost)
+    bool nativeModule = false;
     // Luwu Classes (rfcs/classes): classes whose initializers are being compiled at a construction site
     // (tryCompileNewObjectFieldParameters), innermost last
     std::vector<AstStatClass*> fieldsExpansionStack;
@@ -8431,6 +8592,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
 
     Compiler compiler(bytecode, options, names);
     compiler.trustTypeAnnotations = trustTypeAnnotations;
+    compiler.nativeModule = (mainFlags & LPF_NATIVE_MODULE) != 0;
 
     // Backing storage for AstExprFunction/AstStatBlock/AstStatReturn/AstStatAssign nodes synthesized
     // by ClassInitDefaultsVisitor (POD classes' `__defaults` functions, and the `__init` a primary
@@ -8531,6 +8693,13 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
 
         // this pass analyzes table assignments to estimate table shapes for initially empty tables
         predictTableShapes(compiler.tableShapes, root);
+    }
+
+    // Luwu: counts each function's direct calls for inlining (Compiler::isOnlyCallSite)
+    if (options.optimizationLevel >= 2)
+    {
+        Compiler::CallSiteVisitor callSiteVisitor(&compiler);
+        root->visit(&callSiteVisitor);
     }
 
     if (const char* const* ptr = options.userdataTypes)
