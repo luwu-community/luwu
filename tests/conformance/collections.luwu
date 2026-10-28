@@ -49,6 +49,125 @@ do
     end, "third")
 end
 
+-- iterating a tuple gives every slot in order, nil included, and starting a loop allocates nothing
+do
+    const seen = {}
+    for i, v in collections.pair("a", nil) do
+        seen[i] = if v == nil then "nil" else v
+    end
+    assert(seen[1] == "a" and seen[2] == "nil" and #seen == 2)
+
+    local weighted = 0
+    for i, v in collections.quad(1, 2, 3, 4) do
+        weighted += i * v
+    end
+    assert(weighted == 1 + 4 + 9 + 16)
+
+    const color = collections.triple(255, 128, 0)
+    local total = 0
+    for _, channel in color do
+        for _, again in color do
+            total += channel * 0 + again
+        end
+    end
+    assert(total == 3 * (255 + 128))
+
+    local before = gcinfo()
+    for _ = 1, 10000 do
+        for _, channel in color do
+            total += channel
+        end
+    end
+    assert(gcinfo() - before < 4)
+end
+
+-- a loop over a tuple or a small table literal in its header builds neither, and runs like iterating one
+do
+    const order = {}
+    local function note(value: string?): string?
+        table.insert(order, value or "nil")
+        return value
+    end
+
+    -- every item is evaluated before the body runs; a table skips its nil items and keeps the positions
+    for i, v in { note("a"), note(nil), note("c") } do
+        table.insert(order, `{i}={v}`)
+    end
+    assert(table.concat(order, " ") == "a nil c 1=a 3=c")
+
+    -- a tuple yields every slot
+    table.clear(order)
+    for i, v in collections.triple(note("a"), note(nil), note("c")) do
+        table.insert(order, `{i}={v}`)
+    end
+    assert(table.concat(order, " ") == "a nil c 1=a 2=nil 3=c")
+
+    -- break and continue
+    table.clear(order)
+    for i, v in { 10, 20, 30, 40 } do
+        if v == 20 then
+            continue
+        end
+        if v == 40 then
+            break
+        end
+        table.insert(order, tostring(i))
+    end
+    assert(table.concat(order, " ") == "1 3")
+
+    -- each pass's value is its own, for closures and for writes
+    const readers = {}
+    for _, v in collections.pair("x", "y") do
+        table.insert(readers, function()
+            return v
+        end)
+        v = "changed"
+    end
+    assert(readers[1]() == "changed" and readers[2]() == "changed")
+    const first, second = "x", "y"
+    table.clear(readers)
+    for _, v in { first, second } do
+        table.insert(readers, function()
+            return v
+        end)
+    end
+    assert(readers[1]() == "x" and readers[2]() == "y" and first == "x")
+
+    -- only the position, and a variable past the value
+    local positions = 0
+    for i in { "a", "b" } do
+        positions += i
+    end
+    assert(positions == 3)
+    for _, _, extra in { 1 } do
+        assert(extra == nil)
+    end
+
+    -- nested, and a trailing call that still builds the table
+    local cells = 0
+    for _, row in { 1, 2 } do
+        for _, column in collections.pair(10, 20) do
+            cells += row * column
+        end
+    end
+    assert(cells == 90)
+
+    -- a list of tuples, the last one included, is unfolded too
+    local sum = 0
+    for _, entry in { collections.pair(1, 2), collections.pair(3, 4) } do
+        sum += entry.first * entry.second
+    end
+    assert(sum == 14)
+    local function two()
+        return "p", "q"
+    end
+    table.clear(order)
+    for _, v in { "o", two() } do
+        table.insert(order, v)
+    end
+    assert(table.concat(order) == "opq")
+end
+
 -- a new key goes at the end; an existing key keeps its place
 do
     const map = collections.orderedmap()

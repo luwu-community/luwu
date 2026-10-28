@@ -397,16 +397,19 @@ declare class: {
 static const char* kBuiltinDefinitionCollectionsSrc = R"BUILTIN_SRC(
 class type pair<A, B>(public const first: A, public const second: B)
     public function __eq(self, other: pair<A, B>): boolean
+    public function __iter(self): ((pair<A, B>, number?) -> (number?, A | B), pair<A, B>, nil)
     public function __tostring(self): string
 end
 
 class type triple<A, B, C>(public const first: A, public const second: B, public const third: C)
     public function __eq(self, other: triple<A, B, C>): boolean
+    public function __iter(self): ((triple<A, B, C>, number?) -> (number?, A | B | C), triple<A, B, C>, nil)
     public function __tostring(self): string
 end
 
 class type quad<A, B, C, D>(public const first: A, public const second: B, public const third: C, public const fourth: D)
     public function __eq(self, other: quad<A, B, C, D>): boolean
+    public function __iter(self): ((quad<A, B, C, D>, number?) -> (number?, A | B | C | D), quad<A, B, C, D>, nil)
     public function __tostring(self): string
 end
 

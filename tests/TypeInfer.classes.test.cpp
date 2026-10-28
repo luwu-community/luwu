@@ -6103,6 +6103,40 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
     CHECK_EQ(toString(requireType("front")), "string?");
 }
 
+// Luwu collections: a tuple iterates over its slots, so the value is any of its element types
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_tuples_iterate_over_their_elements")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        for position, value in collections.pair(1, "x") do
+            local p: number = position
+            local v: number | string = value
+        end
+        local color = collections.triple(255, true, "red")
+        for _, channel in color do
+            local c: number | boolean | string = channel
+        end
+        for _, side in collections.quad(1, 2, 3, 4) do
+            local s: number = side
+        end
+        for _, value in collections.pair(1, "x") do
+            local wrong: number = value
+        end
+    )");
+
+    // only the last loop is wrong: its value can be a string
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 14);
+}
+
 // Luwu collections: an empty option is `none`, which gets `get` and `expect` while the library exists
 TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
 {

@@ -364,6 +364,31 @@ static int tupletostring(lua_State* L)
     return 1;
 }
 
+// Every slot in order, `nil` included: a tuple's size is fixed. Starting a loop allocates nothing because `__iter` is
+// also the iterator it returns. The VM calls `__iter` with the tuple alone, and the iterator with the tuple and the
+// previous position.
+template<LuwuBuiltinClass Kind>
+static int tupleiter(lua_State* L)
+{
+    LuauObject* tuple = checktuple<Kind>(L, "__iter");
+    if (lua_gettop(L) == 1)
+    {
+        luaA_pushvalue(L, L->ci->func);
+        lua_pushvalue(L, 1);
+        lua_pushnil(L);
+        return 3;
+    }
+
+    double position = lua_isnil(L, 2) ? 1 : luaL_checknumber(L, 2) + 1;
+    int index = int(position);
+    if (index != position || index < 1 || uint32_t(index) > tuple->numberofmembers)
+        return 0;
+
+    lua_pushnumber(L, position);
+    luaA_pushvalue(L, &tuple->members[index - 1]);
+    return 2;
+}
+
 static const uint8_t kTupleField = LBC_CLASSMEMBER_CONST;
 static const uint8_t kPrivateField = LBC_CLASSMEMBER_PRIVATE;
 
@@ -371,6 +396,7 @@ static const luaR_NativeMember kPairMembers[] = {
     {"first", NULL, kTupleField},
     {"second", NULL, kTupleField},
     {"__eq", tupleeq<LUWU_BUILTIN_PAIR>, 0},
+    {"__iter", tupleiter<LUWU_BUILTIN_PAIR>, 0},
     {"__tostring", tupletostring<LUWU_BUILTIN_PAIR>, 0},
 };
 
@@ -379,6 +405,7 @@ static const luaR_NativeMember kTripleMembers[] = {
     {"second", NULL, kTupleField},
     {"third", NULL, kTupleField},
     {"__eq", tupleeq<LUWU_BUILTIN_TRIPLE>, 0},
+    {"__iter", tupleiter<LUWU_BUILTIN_TRIPLE>, 0},
     {"__tostring", tupletostring<LUWU_BUILTIN_TRIPLE>, 0},
 };
 
@@ -388,6 +415,7 @@ static const luaR_NativeMember kQuadMembers[] = {
     {"third", NULL, kTupleField},
     {"fourth", NULL, kTupleField},
     {"__eq", tupleeq<LUWU_BUILTIN_QUAD>, 0},
+    {"__iter", tupleiter<LUWU_BUILTIN_QUAD>, 0},
     {"__tostring", tupletostring<LUWU_BUILTIN_QUAD>, 0},
 };
 
