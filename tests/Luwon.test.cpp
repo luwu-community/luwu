@@ -15,6 +15,8 @@
 
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuauExportValueTypecheck)
 
 using namespace Luau;
 
@@ -507,9 +509,25 @@ local point: Point = reader:decode<<Point>>("return Point(1, 2)")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK(result.errors[0].location.begin.line == 5);
+    CHECK_EQ(toString(result.errors[0]), "'Point' is in this reader twice; remove this one");
+}
+
+TEST_CASE_FIXTURE(LuwonClassesFixture, "luwon_reader_tells_classes_apart_by_name")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["game/A"] = "export class Tag(public name: string)\nend\n";
+    fileResolver.source["game/B"] = "export class Tag(public label: string)\nend\n";
+    fileResolver.source["game/C"] = "local reader = luwon.reader({ require(game.A).Tag, require(game.B).Tag })\n";
+
+    CheckResult result = getFrontend().check("game/C");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(
         toString(result.errors[0]),
-        "Two classes in this reader are named 'Point' (the first is on line 6), so a data file couldn't tell them apart"
+        "Two classes in this reader are named 'Tag' (the first is on line 1), so a data file couldn't tell them apart"
     );
 }
 

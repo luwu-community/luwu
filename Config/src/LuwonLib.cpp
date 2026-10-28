@@ -1289,6 +1289,8 @@ int luwonReader(lua_State* L)
 
         const char* name = lua_getclassname(L, -1);
         lua_rawgetfield(L, byName, name);
+        if (lua_rawequal(L, -1, -2))
+            luaL_error(L, "luwon.reader: '%s' is in the list twice", name);
         if (!lua_isnil(L, -1))
             luaL_error(L, "luwon.reader: two classes are named '%s', so a data file couldn't tell them apart", name);
         lua_pop(L, 1);

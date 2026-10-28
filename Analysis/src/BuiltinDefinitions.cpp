@@ -1969,7 +1969,12 @@ bool MagicLuwonReader::typeCheck(const MagicFunctionTypeCheckContext& ctx)
     if (!classes)
         return false;
 
-    DenseHashMap<Name, Location> seen{""};
+    struct Seen
+    {
+        TypeId cls;
+        Location location;
+    };
+    DenseHashMap<Name, Seen> seen{""};
     for (const AstExprTable::Item& item : classes->items)
     {
         if (item.kind != AstExprTable::Item::Kind::List)
@@ -1980,17 +1985,22 @@ bool MagicLuwonReader::typeCheck(const MagicFunctionTypeCheckContext& ctx)
         if (!cls || !cls->root || *cls->root != ctx.builtinTypes->classType)
             continue;
 
-        if (const Location* first = seen.find(cls->name))
+        const Seen* first = seen.find(cls->name);
+        if (!first)
+            seen[cls->name] = Seen{follow(*itemTy), item.value->location};
+        else if (first->cls == follow(*itemTy))
+            ctx.typechecker->reportError(
+                GenericError{format("'%s' is in this reader twice; remove this one", cls->name.c_str())}, item.value->location
+            );
+        else
             ctx.typechecker->reportError(
                 GenericError{format(
                     "Two classes in this reader are named '%s' (the first is on line %d), so a data file couldn't tell them apart",
                     cls->name.c_str(),
-                    first->begin.line + 1
+                    first->location.begin.line + 1
                 )},
                 item.value->location
             );
-        else
-            seen[cls->name] = item.value->location;
     }
 
     return false;
