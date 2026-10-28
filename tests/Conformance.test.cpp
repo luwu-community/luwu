@@ -4856,6 +4856,18 @@ TEST_CASE("Collections")
     runConformance("collections.luwu");
 }
 
+TEST_CASE("CollectionsFastPaths")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    runConformance("collections_fastpaths.luwu");
+}
+
 TEST_CASE("ClassesExportHoistingRepro")
 {
     ScopedFastFlag sffs[] = {

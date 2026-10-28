@@ -599,6 +599,12 @@ typedef struct LuaTable
 } LuaTable;
 // clang-format on
 
+// Luwu collections: a frameless version of a builtin class's method, which the interpreter runs at the NAMECALL
+// instead of calling the C method. It reads `self` and the `nargs` arguments at `args`, writes its results from `res`
+// and returns how many, or returns -1 to leave the call to the C method. It never allocates, raises or calls Lua, so
+// every error still comes from the C method.
+typedef int (*luaR_FastMethod)(lua_State* L, struct LuauObject* self, StkId res, StkId args, int nargs);
+
 typedef struct LuauClass
 {
     CommonHeader;
@@ -743,7 +749,17 @@ typedef struct LuauClass
     // those functions. Only set while the class statement runs: implementing drops it. Marked in traverseclass.
     struct LuaTable* compiledtraitcopies;
 
+    // Luwu collections: the number field `#` reads for a builtin container (vec, vecdeque, orderedmap) instead of
+    // calling its `__len`, which returns the same number. LUAR_NO_LENGTH_FIELD for every other class.
+    uint32_t lengthfield;
+
+    // Luwu collections: a builtin class's fast methods by member offset, with NULL for the members that have none. NULL
+    // for every other class. Owned by this class.
+    luaR_FastMethod* fastmethods;
+
 } LuauClass;
+
+#define LUAR_NO_LENGTH_FIELD UINT32_MAX
 
 typedef struct LuauObject
 {

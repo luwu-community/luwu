@@ -1072,6 +1072,26 @@ reentry:
                     {
                         if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers))
                             luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
+
+                        // Luwu collections: a builtin class's fast method runs here instead of the call that follows
+                        if (LUAU_UNLIKELY(inst->lclass->fastmethods != NULL) && inst->lclass->fastmethods[slot])
+                        {
+                            Instruction call = *pc;
+                            LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_CALLFB);
+                            // B counts `self` and is 0 when the arguments end in a multret call
+                            int nargs = LUAU_INSN_B(call) - 2;
+                            int nresults = LUAU_INSN_C(call) - 1;
+                            int n = nargs >= 0 ? inst->lclass->fastmethods[slot](L, inst, ra, ra + 2, nargs) : -1;
+                            if (n >= 0)
+                            {
+                                for (int i = n; i < nresults; i++)
+                                    setnilvalue(ra + i);
+                                L->top = (nresults == LUA_MULTRET) ? ra + n : L->ci->top;
+                                pc += (LUAU_INSN_OP(call) == LOP_CALLFB) ? 2 : 1;
+                                VM_NEXT();
+                            }
+                        }
+
                         // note: order of copies allows rb to alias ra+1 or ra
                         setobj2s(L, ra + 1, rb);
                         setobj2s(L, ra, luaR_lookupmemberatoffset(inst, slot));
@@ -2548,6 +2568,12 @@ reentry:
                 {
                     TString* ts = tsvalue(rb);
                     setnvalue(ra, cast_num(ts->len));
+                    VM_NEXT();
+                }
+                // Luwu collections: builtin containers keep their length in a field
+                else if (const TValue* length = ttisobject(rb) ? luaR_objectlength(objectvalue(rb)) : NULL)
+                {
+                    setobj2s(L, ra, length);
                     VM_NEXT();
                 }
                 else

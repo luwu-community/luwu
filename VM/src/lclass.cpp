@@ -72,6 +72,8 @@ LuauClass* luaR_newclass(
     classdef->numoverriddenconsts = 0;
     classdef->traitdefaults = NULL;
     classdef->compiledtraitcopies = NULL;
+    classdef->lengthfield = LUAR_NO_LENGTH_FIELD;
+    classdef->fastmethods = NULL;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -187,9 +189,11 @@ size_t luaR_classsize(const LuauClass* classdef)
            (classdef->numberofallmembers * (sizeof(TString*) + sizeof(uint8_t))) +
            // ... plus the constant field defaults, when the class carries them ...
            (classdef->memberdefaults ? classdef->numberofinstancemembers * sizeof(TValue) : 0) +
-           // ... plus what it keeps about the traits it implements.
+           // ... plus what it keeps about the traits it implements ...
            (classdef->numtraits * sizeof(LuauClass*)) + (classdef->numtraitinits * (sizeof(TValue) + 2 * sizeof(uint32_t))) +
-           (classdef->numoverriddenconsts * sizeof(uint32_t));
+           (classdef->numoverriddenconsts * sizeof(uint32_t)) +
+           // ... plus a builtin class's fast methods.
+           (classdef->fastmethods ? classdef->numberofallmembers * sizeof(luaR_FastMethod) : 0);
 }
 
 bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
@@ -953,6 +957,8 @@ void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
         luaM_freearray(L, classdef->memberflags, classdef->numberofallmembers, uint8_t, classdef->memcat);
     if (classdef->memberdefaults)
         luaM_freearray(L, classdef->memberdefaults, classdef->numberofinstancemembers, TValue, classdef->memcat);
+    if (classdef->fastmethods)
+        luaM_freearray(L, classdef->fastmethods, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
     luaM_freegco(L, classdef, sizeof(LuauClass), classdef->memcat, page);
 }
 
@@ -2496,7 +2502,19 @@ LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_Native
     luaR_sealclassshape(L, classdef);
 
     for (uint32_t idx = numfields; idx < uint32_t(count); idx++)
+    {
         luaR_addnativemethod(L, classdef, members[idx].name, members[idx].method);
+        if (!members[idx].fast)
+            continue;
+
+        if (!classdef->fastmethods)
+        {
+            classdef->fastmethods = luaM_newarray(L, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
+            for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+                classdef->fastmethods[i] = NULL;
+        }
+        classdef->fastmethods[idx] = members[idx].fast;
+    }
 
     if (init)
         luaR_addnativemethod(L, classdef, "__init", init);

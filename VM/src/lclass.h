@@ -188,6 +188,8 @@ struct luaR_NativeMember
     const char* name;
     lua_CFunction method;
     uint8_t flags;
+    // A method's frameless version for the interpreter, or NULL
+    luaR_FastMethod fast;
 };
 
 /**
@@ -210,6 +212,14 @@ LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classd
  * iteration visits the same positions and values `__iter` would, with no call per step.
  */
 LUAI_FUNC LuaTable* luaR_collectionitems(lua_State* L, LuauObject* object);
+
+// Luwu collections: the length `#` gives `object`, read from its class's length field without calling `__len`, or NULL
+// when the class has none (see LuauClass::lengthfield)
+LUAU_FORCEINLINE const TValue* luaR_objectlength(const LuauObject* object)
+{
+    uint32_t field = object->lclass->lengthfield;
+    return field == LUAR_NO_LENGTH_FIELD ? NULL : &object->members[field];
+}
 
 /**
  * Callback for creating objects. This is written as a Lua API function and expects the stack to be:
