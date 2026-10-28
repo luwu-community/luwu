@@ -555,11 +555,11 @@ void luaR_applyobjectfields(lua_State* L, LuauClass* classdef, LuauObject* objec
         const TValue* value = luaH_getstr(arg, classdef->offsettomember[idx]);
 
         // A field absent from the table (or explicitly nil) keeps whatever's already in
-        // object->members[idx] -- nil, or that field's default.
+        // luaR_members(object)[idx] -- nil, or that field's default.
         if (!ttisnil(value))
         {
             luaR_checknotfinal(L, classdef, idx);
-            setobj(L, &object->members[idx], value);
+            setobj(L, &luaR_members(object)[idx], value);
         }
     }
 }
@@ -592,7 +592,7 @@ static void luaR_applyobjectfieldsas(lua_State* L, LuauClass* classdef, LuauObje
         if (!ttisnil(value))
         {
             luaR_checknotfinal(L, classdef, idx);
-            setobj(L, &object->members[idx], value);
+            setobj(L, &luaR_members(object)[idx], value);
             // An __index call can run the collector, so `object` may already be black. Once the next
             // field's lookup overwrites the stack slot, this member is the value's only reference, so
             // it needs the barrier.
@@ -631,7 +631,7 @@ static l_noret luaR_podargumentcounterror(lua_State* L, const LuauClass* classde
 static void luaR_storepoddefaults(lua_State* L, const LuauClass* classdef, LuauObject* object, StkId results)
 {
     for (uint32_t idx = 0; idx < classdef->numberofownmembers; idx++)
-        setobj(L, &object->members[idx], &results[idx]);
+        setobj(L, &luaR_members(object)[idx], &results[idx]);
 
     // `object` can be black by now, and the argument's __index calls after this can run the collector
     luaC_barrierfast(L, object);
@@ -794,7 +794,6 @@ LuauObject* luaR_newobjectuninit(lua_State* L, LuauClass* classdef)
     luaC_init(L, object, LUA_TOBJECT);
     object->lclass = classdef;
     object->numberofmembers = nummembers;
-    object->members = cast_to(TValue*, object + 1);
 
     return object;
 }
@@ -803,14 +802,13 @@ LuauObject* luaR_newobject(lua_State* L, LuauClass* classdef)
 {
     // The members live in the same allocation as the object itself (see luaR_objectsize): one GC
     // object per instance instead of two, which halves both the allocator traffic and the sweep cost
-    // of constructing objects. The interpreter reads them through `members`; native code addresses
-    // them from the object pointer (LUAR_OBJECT_MEMBERS_OFFSET).
+    // of constructing objects. Both the interpreter (luaR_members) and native code
+    // (LUAR_OBJECT_MEMBERS_OFFSET) address them from the object pointer.
     uint32_t nummembers = classdef->numberofinstancemembers;
     LuauObject* object = luaM_newgco(L, LuauObject, luaR_objectsize(nummembers), L->activememcat);
     luaC_init(L, object, LUA_TOBJECT);
     object->lclass = classdef;
     object->numberofmembers = nummembers;
-    object->members = cast_to(TValue*, object + 1);
 
     // Initialize every member before anything can trigger a GC step, since traverseobject reads them
     // all. Constant defaults go straight in here, so the common case writes each member exactly once
@@ -818,12 +816,12 @@ LuauObject* luaR_newobject(lua_State* L, LuauClass* classdef)
     if (classdef->memberdefaults)
     {
         for (uint32_t idx = 0; idx < nummembers; idx++)
-            setobj(L, &object->members[idx], &classdef->memberdefaults[idx]);
+            setobj(L, &luaR_members(object)[idx], &classdef->memberdefaults[idx]);
     }
     else
     {
         for (uint32_t idx = 0; idx < nummembers; idx++)
-            setnilvalue(&object->members[idx]);
+            setnilvalue(&luaR_members(object)[idx]);
     }
 
     return object;
@@ -2413,7 +2411,7 @@ static int luaR_traitinitstep(lua_State* L, int status)
     for (uint32_t i = 0; i < classdef->numoverriddenconsts; i++)
     {
         uint32_t off = classdef->overriddenconsts[i];
-        setobj(L, &object->members[off], &classdef->memberdefaults[off]);
+        setobj(L, &luaR_members(object)[off], &classdef->memberdefaults[off]);
     }
 
     // the constants were already reachable from the class, but the object may have been blackened by a call above

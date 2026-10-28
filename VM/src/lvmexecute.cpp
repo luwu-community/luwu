@@ -815,7 +815,7 @@ reentry:
                                 if (inst->lclass->hasconstmembers)
                                     luaR_checkconstassignfast(L, kv, inst, cl, slot);
                             }
-                            setobj2class(L, &inst->members[slot], ra);
+                            setobj2class(L, &luaR_members(inst)[slot], ra);
                             luaC_barrier(L, inst, ra);
                             VM_NEXT();
                         }
@@ -835,7 +835,7 @@ reentry:
                                 if (inst->lclass->hasconstmembers)
                                     luaR_checkconstassignfast(L, kv, inst, cl, offsetnum);
                             }
-                            setobj2class(L, &inst->members[offsetnum], ra);
+                            setobj2class(L, &luaR_members(inst)[offsetnum], ra);
                             luaC_barrier(L, inst, ra);
                             VM_PATCH_MEMBER_SLOT(pc - 2, offsetnum);
                             VM_NEXT();
@@ -3989,7 +3989,7 @@ reentry:
                     LuauObject* object = luaR_newobjectuninit(L, classdef);
 
                     for (uint32_t idx = 0; idx < aux; idx++)
-                        setobj(L, &object->members[idx], ra + 1 + idx);
+                        setobj(L, &luaR_members(object)[idx], ra + 1 + idx);
 
                     setobjectvalue(L, ra, object);
 
@@ -4022,7 +4022,7 @@ reentry:
                         StkId value = ra + 1 + idx;
 
                         if (!ttisnil(value))
-                            setobj(L, &object->members[idx], value);
+                            setobj(L, &luaR_members(object)[idx], value);
                     }
                 }
                 else if (aux == 1)
@@ -4069,7 +4069,7 @@ reentry:
 
                 LUAU_ASSERT(ttisobject(rb) && aux < objectvalue(rb)->numberofmembers);
 
-                setobj2s(L, ra, &objectvalue(rb)->members[aux]);
+                setobj2s(L, ra, &luaR_members(objectvalue(rb))[aux]);
                 VM_NEXT();
             }
 
@@ -4085,7 +4085,7 @@ reentry:
                 LUAU_ASSERT(ttisobject(rb) && aux < objectvalue(rb)->numberofmembers);
 
                 LuauObject* inst = objectvalue(rb);
-                setobj2class(L, &inst->members[aux], ra);
+                setobj2class(L, &luaR_members(inst)[aux], ra);
                 luaC_barrier(L, inst, ra);
                 VM_NEXT();
             }

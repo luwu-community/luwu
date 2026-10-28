@@ -761,30 +761,41 @@ typedef struct LuauClass
 
 #define LUAR_NO_LENGTH_FIELD UINT32_MAX
 
+// Luwu Classes (rfcs/classes): the header is 24 bytes on 64-bit platforms, where upstream's is 40. Upstream also
+// stores a `members` pointer, which always points just past the header. Luwu computes it instead (luaR_members) and
+// keeps `numberofmembers` in the padding after CommonHeader, which saves 16 bytes per object.
 typedef struct LuauObject
 {
     CommonHeader;
-
-    GCObject* gclist;
-
-    // The class object that this value is an instance of.
-    LuauClass* lclass;
 
     // The number of members that this instance contains. We need this in order
     // to free ourselves if we got swept in the same GC cycle as our class
     // pointer.
     uint32_t numberofmembers;
 
-    // The fields of this instance.
-    TValue* members;
+    GCObject* gclist;
+
+    // The class object that this value is an instance of.
+    LuauClass* lclass;
 
 } LuauObject;
 
 // Luwu Classes (rfcs/classes): an object's members are allocated inline, immediately after its
-// header (luaR_objectsize, luaR_newobject, luaR_newobjectuninit), so `members` always equals
-// `(TValue*)(object + 1)`. Native code addresses members from the object pointer with this offset
-// instead of loading `members`; anything that ever allocates members out of line must change both.
+// header (luaR_objectsize, luaR_newobject, luaR_newobjectuninit). Native code addresses them from the
+// object pointer with this offset; anything that ever allocates members out of line must change it
+// and luaR_members.
 #define LUAR_OBJECT_MEMBERS_OFFSET sizeof(LuauObject)
+
+// Luwu Classes (rfcs/classes): the fields of `object`, which follow its header
+LUAU_FORCEINLINE TValue* luaR_members(LuauObject* object)
+{
+    return reinterpret_cast<TValue*>(object + 1);
+}
+
+LUAU_FORCEINLINE const TValue* luaR_members(const LuauObject* object)
+{
+    return reinterpret_cast<const TValue*>(object + 1);
+}
 
 /*
 ** `module' operation for hashing (size is always a power of 2)

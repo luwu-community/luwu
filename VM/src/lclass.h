@@ -227,7 +227,7 @@ LUAI_FUNC bool luaR_collectionnext(lua_State* L, StkId ra);
 LUAU_FORCEINLINE const TValue* luaR_objectlength(const LuauObject* object)
 {
     uint32_t field = object->lclass->lengthfield;
-    return field == LUAR_NO_LENGTH_FIELD ? NULL : &object->members[field];
+    return field == LUAR_NO_LENGTH_FIELD ? NULL : &luaR_members(object)[field];
 }
 
 /**
@@ -299,5 +299,5 @@ LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait
 
 #define luaR_lookupmemberatoffset(object, offset) \
     (LUAU_ASSERT(luaR_checkoffsetinbounds(object, offset)), \
-     offset < (object)->lclass->numberofinstancemembers ? &(object)->members[offset] \
+     offset < (object)->lclass->numberofinstancemembers ? &luaR_members(object)[offset] \
                                                       : &(object)->lclass->staticmembers[offset - object->lclass->numberofinstancemembers])

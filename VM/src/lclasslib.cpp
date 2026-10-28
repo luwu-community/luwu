@@ -86,7 +86,7 @@ static int class_fields(lua_State* L)
 
         lua_pushstring(L, getstr(lclass->offsettomember[offset]));
 
-        const TValue* value = object ? &object->members[offset] : NULL;
+        const TValue* value = object ? &luaR_members(object)[offset] : NULL;
         if (value && !ttisnil(value))
             luaA_pushvalue(L, value);
         else if (FFlag::LuwuNonePrimitive)

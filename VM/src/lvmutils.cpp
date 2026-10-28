@@ -235,7 +235,7 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
                 if (inst->lclass->hasconstmembers)
                     luaR_checkconstassignfast(L, key, inst, cl, offsetnum);
             }
-            setobj2class(L, &inst->members[offsetnum], val);
+            setobj2class(L, &luaR_members(inst)[offsetnum], val);
             luaC_barrier(L, inst, val);
             return;
         }

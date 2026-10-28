@@ -492,7 +492,7 @@ static void traverseobject(global_State* g, LuauObject* object)
 {
     markobject(g, object->lclass);
     for (uint32_t i = 0; i < object->numberofmembers; i++)
-        markvalue(g, &object->members[i]);
+        markvalue(g, &luaR_members(object)[i]);
 }
 
 static void clearstack(lua_State* l)

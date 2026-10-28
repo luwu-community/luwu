@@ -172,7 +172,7 @@ static void validateobject(global_State* g, LuauObject* inst)
     GCObject* obj = obj2gco(inst);
     validateobjref(g, obj, obj2gco(inst->lclass));
     for (uint32_t i = 0; i < inst->numberofmembers; i++)
-        validateref(g, obj, &inst->members[i]);
+        validateref(g, obj, &luaR_members(inst)[i]);
 }
 
 static void validateobj(global_State* g, GCObject* o)
@@ -664,7 +664,7 @@ static void dumpobject(FILE* f, LuauObject* inst)
     fprintf(f, R"(,"class":)");
     dumpref(f, obj2gco(inst->lclass));
     fprintf(f, R"(,"members":[)");
-    dumprefs(f, inst->members, inst->numberofmembers);
+    dumprefs(f, luaR_members(inst), inst->numberofmembers);
     fprintf(f, "]}");
 }
 
@@ -1074,12 +1074,12 @@ static void enumobject(EnumContext* ctx, LuauObject* inst)
     {
         // It's a bit strange that if we have a non-collectable static member,
         // we'll just not note it as an edge.
-        if (!iscollectable(&inst->members[i]))
+        if (!iscollectable(&luaR_members(inst)[i]))
             continue;
 
         char membername[32];
         snprintf(membername, sizeof(membername), "%s", getstr(inst->lclass->offsettomember[i]));
-        enumedge(ctx, obj, gcvalue(&inst->members[i]), membername);
+        enumedge(ctx, obj, gcvalue(&luaR_members(inst)[i]), membername);
     }
 }
 

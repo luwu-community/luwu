@@ -745,7 +745,7 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                 luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
                 if (LUAU_UNLIKELY(inst->lclass->hasconstmembers))
                     luaR_checkconstassignfast(L, kv, inst, cl, slot);
-                setobj2class(L, &inst->members[slot], ra);
+                setobj2class(L, &luaR_members(inst)[slot], ra);
                 luaC_barrier(L, inst, ra);
                 return pc;
             }
@@ -760,7 +760,7 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                 luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
                 if (LUAU_UNLIKELY(inst->lclass->hasconstmembers))
                     luaR_checkconstassignfast(L, kv, inst, cl, offsetnum);
-                setobj2class(L, &inst->members[offsetnum], ra);
+                setobj2class(L, &luaR_members(inst)[offsetnum], ra);
                 luaC_barrier(L, inst, ra);
                 patchCachedMemberSlot(pc - 2, offsetnum);
                 return pc;
@@ -1068,7 +1068,7 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
         LuauObject* object = luaR_newobjectuninit(L, classdef);
 
         for (uint32_t idx = 0; idx < aux; idx++)
-            setobj(L, &object->members[idx], ra + 1 + idx);
+            setobj(L, &luaR_members(object)[idx], ra + 1 + idx);
 
         setobjectvalue(L, ra, object);
 
@@ -1099,7 +1099,7 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
             StkId value = ra + 1 + idx;
 
             if (!ttisnil(value))
-                setobj(L, &object->members[idx], value);
+                setobj(L, &luaR_members(object)[idx], value);
         }
     }
     else if (aux == 1)

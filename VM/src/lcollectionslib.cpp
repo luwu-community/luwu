@@ -29,7 +29,7 @@ static LuauClass* builtinclass(lua_State* L, LuwuBuiltinClass kind)
 
 static void setfield(lua_State* L, LuauObject* object, int field, const TValue* value)
 {
-    setobj(L, &object->members[field], value);
+    setobj(L, &luaR_members(object)[field], value);
     luaC_barrier(L, object, value);
 }
 
@@ -185,7 +185,7 @@ static bool hastype(lua_State* L, const TValue* elementtype, const TValue* value
 // `value` has it. Everything else goes through checkelement in the C method.
 static bool fitselement(lua_State* L, LuauObject* container, int typefield, const TValue* value)
 {
-    const TValue* elementtype = &container->members[typefield];
+    const TValue* elementtype = &luaR_members(container)[typefield];
     return !ttisnil(elementtype) && hastype(L, elementtype, value);
 }
 
@@ -241,7 +241,7 @@ static void addvaluetype(luaL_Strbuf* b, const TValue* value)
 static void checkelement(lua_State* L, LuauObject* container, int typefield, int idx)
 {
     const TValue* value = L->base + idx - 1;
-    const TValue* elementtype = &container->members[typefield];
+    const TValue* elementtype = &luaR_members(container)[typefield];
     const char* containername = getstr(container->lclass->name);
 
     if (ttisnil(elementtype))
@@ -354,7 +354,7 @@ static int tupleeq(lua_State* L)
     const TValue* other = L->base + 1;
     bool equal = ttisobject(other) && objectvalue(other)->lclass == tuple->lclass;
     for (uint32_t i = 0; equal && i < tuple->numberofmembers; i++)
-        equal = equalobj(L, &tuple->members[i], &objectvalue(other)->members[i]);
+        equal = equalobj(L, &luaR_members(tuple)[i], &luaR_members(objectvalue(other))[i]);
     lua_pushboolean(L, equal);
     return 1;
 }
@@ -371,7 +371,7 @@ static int tupletostring(lua_State* L)
     {
         if (i > 0)
             luaL_addstring(&b, ", ");
-        luaA_pushvalue(L, &tuple->members[i]);
+        luaA_pushvalue(L, &luaR_members(tuple)[i]);
         addshowntop(&b);
     }
     luaL_addchar(&b, ')');
@@ -400,7 +400,7 @@ static int tupleiter(lua_State* L)
         return 0;
 
     lua_pushnumber(L, position);
-    luaA_pushvalue(L, &tuple->members[index - 1]);
+    luaA_pushvalue(L, &luaR_members(tuple)[index - 1]);
     return 2;
 }
 
@@ -456,22 +456,22 @@ static const uint32_t kInitialIds = 8;
 
 static LuaTable* omtable(LuauObject* map, OrderedMapField field)
 {
-    return hvalue(&map->members[field]);
+    return hvalue(&luaR_members(map)[field]);
 }
 
 static uint32_t* omids(LuauObject* map, OrderedMapField field)
 {
-    return reinterpret_cast<uint32_t*>(bufvalue(&map->members[field])->data);
+    return reinterpret_cast<uint32_t*>(bufvalue(&luaR_members(map)[field])->data);
 }
 
 static uint32_t omnumber(LuauObject* map, OrderedMapField field)
 {
-    return uint32_t(nvalue(&map->members[field]));
+    return uint32_t(nvalue(&luaR_members(map)[field]));
 }
 
 static void omsetnumber(LuauObject* map, OrderedMapField field, uint32_t value)
 {
-    setnvalue(&map->members[field], double(value));
+    setnvalue(&luaR_members(map)[field], double(value));
 }
 
 static void omsettable(lua_State* L, LuauObject* map, OrderedMapField field)
@@ -491,7 +491,7 @@ static void omsetbuffer(lua_State* L, LuauObject* map, OrderedMapField field, ui
 // The id buffer `field`, grown to hold at least `ids` ids
 static uint32_t* omreserve(lua_State* L, LuauObject* map, OrderedMapField field, uint32_t ids)
 {
-    Buffer* buffer = bufvalue(&map->members[field]);
+    Buffer* buffer = bufvalue(&luaR_members(map)[field]);
     uint32_t capacity = buffer->len / sizeof(uint32_t);
     if (ids <= capacity)
         return reinterpret_cast<uint32_t*>(buffer->data);
@@ -973,12 +973,12 @@ static const uint32_t kInitialSlots = 8;
 
 static uint32_t vdnumber(LuauObject* dq, VecDequeField field)
 {
-    return uint32_t(nvalue(&dq->members[field]));
+    return uint32_t(nvalue(&luaR_members(dq)[field]));
 }
 
 static void vdsetnumber(LuauObject* dq, VecDequeField field, uint32_t value)
 {
-    setnvalue(&dq->members[field], double(value));
+    setnvalue(&luaR_members(dq)[field], double(value));
 }
 
 static LuauObject* checkdeque(lua_State* L, const char* method)
@@ -1004,9 +1004,9 @@ static int vdslot(LuauObject* dq, uint32_t offset)
 static void vdresize(lua_State* L, LuauObject* dq, uint32_t capacity)
 {
     LuaTable* ring = luaH_new(L, int(capacity), 0);
-    if (ttistable(&dq->members[VD_ITEMS]))
+    if (ttistable(&luaR_members(dq)[VD_ITEMS]))
     {
-        LuaTable* old = hvalue(&dq->members[VD_ITEMS]);
+        LuaTable* old = hvalue(&luaR_members(dq)[VD_ITEMS]);
         for (uint32_t i = 0; i < vdnumber(dq, VD_COUNT); i++)
             setobj2t(L, luaH_setnum(L, ring, int(i + 1)), luaH_getnum(old, vdslot(dq, i)));
     }
@@ -1027,7 +1027,7 @@ static void vdreserveone(lua_State* L, LuauObject* dq)
 
 static void vdstore(lua_State* L, LuauObject* dq, int slot, const TValue* value)
 {
-    LuaTable* ring = hvalue(&dq->members[VD_ITEMS]);
+    LuaTable* ring = hvalue(&luaR_members(dq)[VD_ITEMS]);
     setobj2t(L, luaH_setnum(L, ring, slot), value);
     luaC_barriert(L, ring, value);
 }
@@ -1060,7 +1060,7 @@ static int vecdequepushfront(lua_State* L)
 // Pushes the entry `offset` places from the front and clears its slot
 static void vdtake(lua_State* L, LuauObject* dq, uint32_t offset)
 {
-    TValue* slot = luaH_setnum(L, hvalue(&dq->members[VD_ITEMS]), vdslot(dq, offset));
+    TValue* slot = luaH_setnum(L, hvalue(&luaR_members(dq)[VD_ITEMS]), vdslot(dq, offset));
     luaA_pushvalue(L, slot);
     setnilvalue(slot);
 }
@@ -1105,7 +1105,7 @@ static int vdpushat(lua_State* L, LuauObject* dq, double position)
         return 1;
     }
 
-    luaA_pushvalue(L, luaH_getnum(hvalue(&dq->members[VD_ITEMS]), vdslot(dq, uint32_t(position) - 1)));
+    luaA_pushvalue(L, luaH_getnum(hvalue(&luaR_members(dq)[VD_ITEMS]), vdslot(dq, uint32_t(position) - 1)));
     return 1;
 }
 
@@ -1193,7 +1193,7 @@ static int vecdequetostring(lua_State* L)
 // The entry `offset` places from the front, in the ring's array part
 static TValue* vdentry(LuauObject* dq, uint32_t offset)
 {
-    LuaTable* ring = hvalue(&dq->members[VD_ITEMS]);
+    LuaTable* ring = hvalue(&luaR_members(dq)[VD_ITEMS]);
     int slot = vdslot(dq, offset);
     LUAU_ASSERT(slot >= 1 && slot <= ring->sizearray);
     return &ring->array[slot - 1];
@@ -1202,7 +1202,7 @@ static TValue* vdentry(LuauObject* dq, uint32_t offset)
 static void vdstorefast(lua_State* L, LuauObject* dq, uint32_t offset, const TValue* value)
 {
     setobj2t(L, vdentry(dq, offset), value);
-    luaC_barriert(L, hvalue(&dq->members[VD_ITEMS]), value);
+    luaC_barriert(L, hvalue(&luaR_members(dq)[VD_ITEMS]), value);
 }
 
 // Whether a fast method can add `value` at one end: it has the element type, and there's room without growing
@@ -1349,17 +1349,17 @@ static LuauObject* checkvec(lua_State* L, const char* method)
 
 static LuaTable* vecitems(LuauObject* vec)
 {
-    return hvalue(&vec->members[VEC_ITEMS]);
+    return hvalue(&luaR_members(vec)[VEC_ITEMS]);
 }
 
 static uint32_t veccount(LuauObject* vec)
 {
-    return uint32_t(nvalue(&vec->members[VEC_COUNT]));
+    return uint32_t(nvalue(&luaR_members(vec)[VEC_COUNT]));
 }
 
 static void vecsetcount(LuauObject* vec, uint32_t count)
 {
-    setnvalue(&vec->members[VEC_COUNT], double(count));
+    setnvalue(&luaR_members(vec)[VEC_COUNT], double(count));
 }
 
 // Makes room for entries 1 to `size` in the items' array part, doubling it as it grows
@@ -1651,7 +1651,7 @@ static int someinit(lua_State* L)
 template<LuwuBuiltinClass Kind>
 static int payloadget(lua_State* L)
 {
-    luaA_pushvalue(L, &checkpayload<Kind>(L, "get")->members[kPayload]);
+    luaA_pushvalue(L, &luaR_members(checkpayload<Kind>(L, "get"))[kPayload]);
     return 1;
 }
 
@@ -1660,7 +1660,7 @@ static int payloadexpect(lua_State* L)
 {
     LuauObject* holder = checkpayload<Kind>(L, "expect");
     luaL_optstring(L, 2, NULL);
-    luaA_pushvalue(L, &holder->members[kPayload]);
+    luaA_pushvalue(L, &luaR_members(holder)[kPayload]);
     return 1;
 }
 
@@ -1670,7 +1670,7 @@ static int payloadeq(lua_State* L)
     LuauObject* holder = checkpayload<Kind>(L, "__eq");
     const TValue* other = L->base + 1;
     bool equal = ttisobject(other) && objectvalue(other)->lclass == holder->lclass &&
-                 equalobj(L, &holder->members[kPayload], &objectvalue(other)->members[kPayload]);
+                 equalobj(L, &luaR_members(holder)[kPayload], &luaR_members(objectvalue(other))[kPayload]);
     lua_pushboolean(L, equal);
     return 1;
 }
@@ -1685,7 +1685,7 @@ static int payloadtostring(lua_State* L)
     luaL_addstring(&b, Kind == LUWU_BUILTIN_SOME ? "option." : "result.");
     luaL_addstring(&b, getstr(holder->lclass->name));
     luaL_addchar(&b, '(');
-    luaA_pushvalue(L, &holder->members[kPayload]);
+    luaA_pushvalue(L, &luaR_members(holder)[kPayload]);
     addshowntop(&b);
     luaL_addchar(&b, ')');
     luaL_pushresult(&b);
@@ -1710,7 +1710,7 @@ static int errget(lua_State* L)
 
 static int errerr(lua_State* L)
 {
-    luaA_pushvalue(L, &checkpayload<LUWU_BUILTIN_ERR>(L, "err")->members[kPayload]);
+    luaA_pushvalue(L, &luaR_members(checkpayload<LUWU_BUILTIN_ERR>(L, "err"))[kPayload]);
     return 1;
 }
 
@@ -1720,7 +1720,7 @@ static int errexpect(lua_State* L)
 {
     LuauObject* failed = checkpayload<LUWU_BUILTIN_ERR>(L, "expect");
     const char* message = luaL_optstring(L, 2, NULL);
-    luaA_pushvalue(L, &failed->members[kPayload]);
+    luaA_pushvalue(L, &luaR_members(failed)[kPayload]);
     if (!message)
         lua_error(L);
 
@@ -1731,7 +1731,7 @@ static int errexpect(lua_State* L)
 
 static int payloadgetfast(lua_State* L, LuauObject* holder, StkId res, StkId args, int nargs)
 {
-    setobj2s(L, res, &holder->members[kPayload]);
+    setobj2s(L, res, &luaR_members(holder)[kPayload]);
     return 1;
 }
 
@@ -1834,7 +1834,7 @@ static LuaTable* collectionitems(lua_State* L, LuauObject* object)
         return NULL;
 
     // A ring starting past slot 1 is rotated to start there, which keeps every entry's position
-    LuaTable* ring = hvalue(&object->members[VD_ITEMS]);
+    LuaTable* ring = hvalue(&luaR_members(object)[VD_ITEMS]);
     uint32_t head = vdnumber(object, VD_HEAD);
     if (head != 0)
     {
