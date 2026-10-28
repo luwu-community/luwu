@@ -53,6 +53,26 @@ static bool callProtected(lua_State* L, int nargs, int nresults, std::optional<s
     return false;
 }
 
+// Pushes the object's class through `class.of`, read from the registry so a global named `class` can't change it. Returns
+// false with nothing pushed when the class library isn't open, or when `class.of` raised, which sets `error`.
+static bool pushClassOf(lua_State* L, int object, std::optional<std::string>& error)
+{
+    object = lua_absindex(L, object);
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED");
+    lua_getfield(L, -1, "class");
+    lua_remove(L, -2);
+    if (!lua_istable(L, -1))
+    {
+        lua_pop(L, 1);
+        return false;
+    }
+
+    lua_getfield(L, -1, "of");
+    lua_remove(L, -2);
+    lua_pushvalue(L, object);
+    return callProtected(L, 1, 1, error);
+}
+
 // Pushes a table key, which is a string, number or boolean.
 static void pushKey(lua_State* L, const LuwonValue& key)
 {
@@ -454,6 +474,46 @@ private:
         return callProtected(L, int(object.args.size()), 1, error);
     }
 
+    // Builds an object with the `__fromdata` of the class on top of the stack, which replaces it, and checks it built one
+    // of that class
+    bool pushFromData(const LuwonValue& object)
+    {
+        int cls = lua_gettop(L);
+        lua_getfield(L, cls, "__fromdata");
+        for (const LuwonValue& arg : object.args)
+        {
+            if (!push(arg))
+                return false;
+        }
+
+        if (!callProtected(L, int(object.args.size()), 1, error))
+            return false;
+
+        bool built = false;
+        if (lua_isobject(L, -1))
+        {
+            // Without the class library there's nothing to check the class with
+            if (pushClassOf(L, -1, error))
+            {
+                built = lua_rawequal(L, -1, cls);
+                lua_pop(L, 1);
+            }
+            else if (error)
+                return false;
+            else
+                built = true;
+        }
+
+        if (!built)
+        {
+            const char* got = lua_isobject(L, -1) ? lua_getclassname(L, -1) : luaL_typename(L, -1);
+            return fail(format("'%s.__fromdata' must return a %s, but returned a %s", object.bytes.c_str(), object.bytes.c_str(), got));
+        }
+
+        lua_remove(L, cls);
+        return true;
+    }
+
     // Pushes the class a data file names, from `classes` or else the classes that implement `luwon.data`, and returns true.
     // Returns false with nothing pushed when neither has it.
     bool pushNamedClass(const std::string& name)
@@ -492,6 +552,8 @@ private:
         {
             if (std::optional<std::string> refusal = refusalOf(L, -1))
                 return fail(*refusal);
+            if (implementsData(L, -1) && lua_getmemberaccess(L, -1, "__fromdata") != LUA_MEMBERMISSING)
+                return pushFromData(object);
             return pushArgsAndCall(object);
         }
 
@@ -919,13 +981,20 @@ private:
             return convertByFields(idx, out, path);
         }
 
+        return convertCall(idx, *name, out, path);
+    }
+
+    // The object at `idx` as a call to `name` with the values the function on top of the stack returns for it: an `args`
+    // function, or the class's `__todata`.
+    bool convertCall(int idx, const std::string& name, LuwonValue& out, const std::string& path)
+    {
         int top = lua_gettop(L) - 1;
         lua_pushvalue(L, idx);
         if (!callProtected(L, 1, LUA_MULTRET, error))
             return false;
 
         out = LuwonValue{LuwonValue::Kind::Object};
-        out.bytes = *name;
+        out.bytes = name;
         depth++;
         for (int i = top + 1; i <= lua_gettop(L); i++)
         {
@@ -1012,6 +1081,15 @@ private:
         {
             lua_settop(L, top);
             return fail(format("%s, at %s", refusal->c_str(), path.c_str()));
+        }
+
+        // A class that implements `luwon.data` may say what its call holds
+        if (implementsData(L, cls) && lua_getmemberaccess(L, cls, "__todata") != LUA_MEMBERMISSING)
+        {
+            lua_getfield(L, idx, "__todata");
+            bool converted = convertCall(idx, className, out, path);
+            lua_settop(L, top);
+            return converted;
         }
 
         int hasmethods = 0;
@@ -1152,22 +1230,9 @@ private:
         return std::nullopt;
     }
 
-    // Pushes the object's class through `class.of`, read from the registry so a global named `class` can't change it.
     bool pushClassOf(int object)
     {
-        lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED");
-        lua_getfield(L, -1, "class");
-        lua_remove(L, -2);
-        if (!lua_istable(L, -1))
-        {
-            lua_pop(L, 1);
-            return false;
-        }
-
-        lua_getfield(L, -1, "of");
-        lua_remove(L, -2);
-        lua_pushvalue(L, object);
-        return callProtected(L, 1, 1, error);
+        return Luau::pushClassOf(L, object, error);
     }
 };
 
