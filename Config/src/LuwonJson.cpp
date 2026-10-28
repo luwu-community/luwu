@@ -9,11 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Luwu object notation: data files as JSON, for tools that read JSON but not the notation, and JSON as data files.
+// Luwu object notation: converts a data file's value to JSON and back, so tools that only read JSON can use data files.
 //
-// Plain JSON writes what JSON has a type for and approximates the rest: a vector is an array, a class call its arguments,
-// `none`, NaN and infinities `null`, and a key that isn't a string its text. Lossless JSON writes the rest as objects with
-// one `$` key, which reading JSON turns back into the values they stand for:
+// There are two ways to write JSON. Plain JSON approximates the values JSON has no type for: a vector becomes an array, a
+// class call its arguments, `none`, NaN and infinities `null`, and a key that isn't a string its text. Lossless JSON
+// writes each of those as an object with a `$` key instead, and reading JSON turns these back into the values:
 //
 //     { "$vector": [1, 2, 3] }                   { "$class": "Point", "$args": [1, 2] }
 //     { "$buffer": "<base64>" }                  { "$string": "<base64>" }    -- a string that isn't UTF-8
