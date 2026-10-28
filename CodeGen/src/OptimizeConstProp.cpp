@@ -1298,7 +1298,8 @@ struct ConstPropState
         else
         {
             // GET_CLOSURE_UPVAL_ADDR writes aren't cached anywhere else in this pass, nothing to invalidate
-            CODEGEN_ASSERT(targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR);
+            // Luwu collections: neither are GET_STORAGE_ENTRY_ADDR writes
+            CODEGEN_ASSERT(targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR || targetAddr.cmd == IrCmd::GET_STORAGE_ENTRY_ADDR);
         }
     }
 
@@ -1323,7 +1324,11 @@ struct ConstPropState
         }
         else
         {
-            CODEGEN_ASSERT(targetAddr.cmd == IrCmd::TABLE_SETNUM || targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR);
+            // Luwu collections: loads from a GET_STORAGE_ENTRY_ADDR aren't cached, so nothing reads a forwarded store
+            CODEGEN_ASSERT(
+                targetAddr.cmd == IrCmd::TABLE_SETNUM || targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR ||
+                targetAddr.cmd == IrCmd::GET_STORAGE_ENTRY_ADDR
+            );
         }
     }
 
