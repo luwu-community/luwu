@@ -8241,12 +8241,40 @@ TEST_CASE_FIXTURE(Fixture, "export_declare_is_for_types_only")
         REQUIRE_EQ(result.errors.size(), 1);
         CHECK_EQ(
             result.errors[0].getMessage(),
-            "Only types can be exported with 'export declare'; to declare a global for several files, use a definitions file"
+            "'export declare' exports classes and types only; to declare a global for several files, use a definitions file"
         );
         REQUIRE_EQ(result.root->body.size, 1);
         bool declaresValue = result.root->body.data[0]->is<AstStatDeclareGlobal>() || result.root->body.data[0]->is<AstStatDeclareFunction>();
         CHECK(declaresValue);
     }
+}
+
+TEST_CASE_FIXTURE(Fixture, "export_declare_class_exports_the_class_value")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuauExportValueSyntax, true},
+    };
+
+    // The declaration, its global, then `export Semver = Semver`
+    AstStatBlock* block = parse("export declare class Semver(public major: number)\nend");
+    REQUIRE_EQ(block->body.size, 3);
+    CHECK(block->body.data[0]->is<AstStatDeclareClass>());
+    CHECK(block->body.data[1]->is<AstStatDeclareGlobal>());
+    AstStatLocal* exported = block->body.data[2]->as<AstStatLocal>();
+    REQUIRE(exported);
+    CHECK(exported->isExported);
+    CHECK(exported->vars.data[0]->isExported);
+    CHECK(exported->vars.data[0]->isConst);
+    CHECK(exported->values.data[0]->is<AstExprGlobal>());
+
+    // Exported values are top-level statements
+    ParseResult nested = tryParse("do\n    export declare class Semver(public major: number)\n    end\nend");
+    REQUIRE_EQ(nested.errors.size(), 1);
+    CHECK_EQ(
+        nested.errors[0].getMessage(),
+        "'export declare class' exports a value, which only a top-level statement can do; move it out of the 'do' block"
+    );
 }
 
 TEST_CASE_FIXTURE(Fixture, "declare_extern_type_property_named_with")
