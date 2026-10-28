@@ -199,6 +199,7 @@ typedef struct global_State
     GCObject* gray;      // list of gray objects
     GCObject* grayagain; // list of objects to be traversed atomically
     GCObject* weak;      // list of weak tables (to be cleared)
+    struct Proto* sitedprotos; // Luwu table presizing: protos with table sites marked this cycle, whose dead sites to clear
 
     size_t GCthreshold;                       // when totalbytes >= GCthreshold, run GC step
     size_t totalbytes;                        // number of bytes currently allocated

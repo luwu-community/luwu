@@ -2567,7 +2567,10 @@ reentry:
 
                 VM_PROTECT_PC(); // luaH_new may fail due to OOM
 
-                sethvalue(L, ra, luaH_new(L, aux, b == 0 ? 0 : (1 << (b - 1))));
+                // Luwu table presizing: the table starts as long as the last one made here got
+                Proto* p = FFlag::LuauCIProto ? L->ci->p : cl->l.p;
+                uint32_t site = uint32_t(pc - 2 - p->code);
+                sethvalue(L, ra, luaH_newatsite(L, p, site, aux, b == 0 ? 0 : (1 << (b - 1))));
                 VM_PROTECT(luaC_checkGC(L));
                 VM_NEXT();
             }
