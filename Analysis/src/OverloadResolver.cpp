@@ -130,7 +130,7 @@ static bool reasoningIsReturnTypes(const Path& path)
 
 static void ignoreReasoningForReturnType(SubtypingResult& sr)
 {
-    SubtypingReasonings result{kEmptyReasoning};
+    SubtypingReasonings result;
 
     for (const SubtypingReasoning& reasoning : sr.reasoning)
     {
