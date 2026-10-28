@@ -7874,16 +7874,29 @@ bool Parser::matchExpressionsAvailable()
 const LuwuFeature kMatchFeature{"'match' expressions", /* plural= */ true, "DebugLuwuMatchExpressions"};
 const LuwuFeature kTypeTestFeature{"'is' and 'implements' type tests", /* plural= */ true, "DebugLuwuMatchExpressions"};
 
-// Luwu match expressions: `is` or `implements` after an operand, followed by a name, `not`, `function` or `nil`. Anything else
-// after it (`is = 1`, `is(f)`, `is.x`, `is "s"`) is a statement using a variable named `is`, which Luau code may have
-// on the same line, so it's never a type test.
+// Luwu match expressions: whether a literal a pattern compares with starts here: a string, a number, `true` or `false`
+bool Parser::literalPatternFollows()
+{
+    const Lexeme& current = lexer.current();
+    return current.type == Lexeme::QuotedString || current.type == Lexeme::RawString || current.type == Lexeme::Number ||
+           current.type == Lexeme::ReservedTrue || current.type == Lexeme::ReservedFalse ||
+           (current.type == '-' && lexer.lookahead().type == Lexeme::Number);
+}
+
+// Luwu match expressions: `is` or `implements` after an operand, followed by a name, `not`, `function`, `nil` or a
+// literal. Anything else after it (`is = 1`, `is(f)`, `is.x`) is a statement using a variable named `is`, which Luau
+// code may have on the same line, so it's never a type test. Only Luwu files have type tests, so `x is "s"` is one there
+// even though `is "s"` would call a function named `is` in Luau.
 bool Parser::typeTestFollows()
 {
     if (!matchExpressionsAvailable() || !isTypeTestKeyword(lexer.current()))
         return false;
 
-    Lexeme::Type next = lexer.lookahead().type;
-    return next == Lexeme::Name || next == Lexeme::ReservedNot || next == Lexeme::ReservedFunction || next == Lexeme::ReservedNil;
+    const Lexeme& next = lexer.lookahead();
+    bool literal = next.type == Lexeme::QuotedString || next.type == Lexeme::RawString || next.type == Lexeme::Number ||
+                   next.type == Lexeme::ReservedTrue || next.type == Lexeme::ReservedFalse || next.type == '-';
+    return literal || next.type == Lexeme::Name || next.type == Lexeme::ReservedNot || next.type == Lexeme::ReservedFunction ||
+           next.type == Lexeme::ReservedNil;
 }
 
 // Luwu match expressions: `library.function(args)` on the global `library`, never a local that shadows it
@@ -7920,43 +7933,138 @@ std::optional<AstExpr*> Parser::parseNothingValue()
     return std::nullopt;
 }
 
-// Luwu match expressions: the rest of `value is string`, `value is [not] Class` or `value implements Trait`, from the
-// keyword. They mean `type(value) == "string"`, `class.isinstance(value, Class)` and `class.implements(value, Trait)`,
-// and are parsed as those calls, so narrowing and the compiler's fused class checks apply as they do to the calls.
+// Luwu match expressions: points `test`'s reads of `from` at `to` instead. `test` is one the type test parser built,
+// so the value is only ever an operand of a comparison, a call or a `not`.
+static void retargetTestedValue(AstExpr* test, AstExpr* from, AstExpr* to)
+{
+    if (AstExprBinary* binary = test->as<AstExprBinary>())
+    {
+        if (binary->left == from)
+            binary->left = to;
+        else
+            retargetTestedValue(binary->left, from, to);
+    }
+    else if (AstExprCall* call = test->as<AstExprCall>())
+    {
+        for (size_t i = 0; i < call->args.size; ++i)
+        {
+            if (call->args.data[i] == from)
+                call->args.data[i] = to;
+        }
+    }
+    else if (AstExprUnary* unary = test->as<AstExprUnary>())
+    {
+        retargetTestedValue(unary->expr, from, to);
+    }
+}
+
+// Luwu match expressions: the rest of `value is <pattern>`, `value is not <pattern>` or `value implements Trait`, from the
+// keyword. A pattern is alternatives joined by `|`: `nil`, `none`, a literal, a primitive tag or a class
+// (`n is 1 | 2 | 3`, `x is string | Point`). They mean `value == 1`, `type(value) == "string"` and
+// `class.isinstance(value, Point)`, joined by `or`, and are parsed as those, so narrowing and the compiler's fused class
+// checks apply as they do to the written-out tests. `is not` negates each alternative and joins them with `and`.
 AstExpr* Parser::parseTypeTest(AstExpr* value, const Location& start)
 {
     checkLuwuFeature(lexer.current().location, kTypeTestFeature, FFlag::DebugLuwuMatchExpressions);
     bool implements = AstName(lexer.current().name) == "implements";
     nextLexeme(); // is / implements
 
+    if (implements)
+    {
+        AstExpr* trait = parseExpr(binaryPriority[AstExprBinary::CompareEq].right);
+        return makeGlobalCall(nameClass, nameImplements, Location(start, trait->location), {value, trait});
+    }
+
     bool negated = false;
-    if (!implements && lexer.current().type == Lexeme::ReservedNot)
+    if (lexer.current().type == Lexeme::ReservedNot)
     {
         negated = true;
         nextLexeme();
     }
 
-    // `x is nil` and `x is none` compare with the value; type() can't tell `none` from other symbols
-    if (std::optional<AstExpr*> nothing = implements ? std::nullopt : parseNothingValue())
+    AstExpr* test = parseTypeTestAlternative(value, start, negated);
+
+    // `case is A | is B` joins two patterns, which the `case` parser does
+    auto alternativeFollows = [&]()
     {
-        AstExprBinary::Op op = negated ? AstExprBinary::CompareNe : AstExprBinary::CompareEq;
-        return allocator.alloc<AstExprBinary>(Location(start, (*nothing)->location), op, value, *nothing);
+        return lexer.current().type == '|' && !isTypeTestKeyword(lexer.lookahead());
+    };
+    if (!alternativeFollows())
+        return test;
+
+    // Each alternative reads the value, so anything but a local or a constant is read once into a hidden local
+    bool readOnce = value->is<AstExprLocal>() || value->is<AstExprConstantString>() || value->is<AstExprConstantNumber>() ||
+                    value->is<AstExprConstantBool>() || value->is<AstExprConstantNil>();
+    unsigned int localsBegin = saveLocals();
+    AstStatLocal* declaration = nullptr;
+    AstExpr* tested = value;
+    if (!readOnce)
+    {
+        Binding binding(Name(nameMatched, value->location));
+        binding.isConst = true;
+        AstLocal* hidden = pushLocal(binding);
+        declaration = allocator.alloc<AstStatLocal>(value->location, copy({hidden}), copy({value}), std::nullopt, true);
+        tested = allocator.alloc<AstExprLocal>(value->location, hidden, /* upvalue= */ false);
+        retargetTestedValue(test, value, tested);
     }
 
-    if (std::optional<std::string> tag = implements ? std::nullopt : primitiveTagAt(lexer.current()))
+    AstExprBinary::Op join = negated ? AstExprBinary::And : AstExprBinary::Or;
+    while (alternativeFollows())
+    {
+        nextLexeme(); // |
+
+        // `n is 1 |` with nothing after it yet: the next line's statement isn't an alternative
+        if (valueEnds(lexer.current()) || nextLineStartsStatement(cantFollowValueName))
+        {
+            report(lexer.previousLocation(), "Expected a pattern after '|'");
+            break;
+        }
+
+        Location alternativeStart = lexer.current().location;
+        AstExpr* next = parseTypeTestAlternative(tested, alternativeStart, negated);
+        test = allocator.alloc<AstExprBinary>(Location(test->location, next->location), join, test, next);
+    }
+
+    restoreLocals(localsBegin);
+    if (!declaration)
+        return test;
+
+    Location location(start, test->location);
+    AstStatGive* give = allocator.alloc<AstStatGive>(test->location, test);
+    AstExprDo* node = allocator.alloc<AstExprDo>(location, allocator.alloc<AstStatBlock>(location, copy<AstStat*>({declaration, give})));
+    node->luwuOnly = true;
+    node->fromMatch = true;
+    return node;
+}
+
+// Luwu match expressions: one alternative of the pattern after `is`, testing `value`, negated for `is not`
+AstExpr* Parser::parseTypeTestAlternative(AstExpr* value, const Location& start, bool negated)
+{
+    AstExprBinary::Op compare = negated ? AstExprBinary::CompareNe : AstExprBinary::CompareEq;
+
+    // `x is nil` and `x is none` compare with the value; type() can't tell `none` from other symbols
+    if (std::optional<AstExpr*> nothing = parseNothingValue())
+        return allocator.alloc<AstExprBinary>(Location(start, (*nothing)->location), compare, value, *nothing);
+
+    if (literalPatternFollows())
+    {
+        AstExpr* literal = parseExpr(binaryPriority[AstExprBinary::CompareEq].right);
+        return allocator.alloc<AstExprBinary>(Location(start, literal->location), compare, value, literal);
+    }
+
+    if (std::optional<std::string> tag = primitiveTagAt(lexer.current()))
     {
         Location tagLocation = lexer.current().location;
         nextLexeme();
 
         Location location(start, tagLocation);
         AstExpr* typeName = allocator.alloc<AstExprConstantString>(tagLocation, copy(*tag), AstExprConstantString::QuoteStyle::Unquoted);
-        AstExprBinary::Op op = negated ? AstExprBinary::CompareNe : AstExprBinary::CompareEq;
-        return allocator.alloc<AstExprBinary>(location, op, makeGlobalCall(nameType, std::nullopt, location, {value}), typeName);
+        return allocator.alloc<AstExprBinary>(location, compare, makeGlobalCall(nameType, std::nullopt, location, {value}), typeName);
     }
 
     AstExpr* type = parseExpr(binaryPriority[AstExprBinary::CompareEq].right);
     Location location(start, type->location);
-    AstExpr* test = makeGlobalCall(nameClass, implements ? nameImplements : nameIsinstance, location, {value, type});
+    AstExpr* test = makeGlobalCall(nameClass, nameIsinstance, location, {value, type});
 
     return negated ? allocator.alloc<AstExprUnary>(location, AstExprUnary::Op::Not, test) : test;
 }
@@ -8245,14 +8353,10 @@ AstExpr* Parser::parseMatchAlternative(AstLocal* subject)
     if (isTypeTestKeyword(lexer.current()))
         return parseTypeTest(subjectValue, start);
 
-    const Lexeme& current = lexer.current();
     if (std::optional<AstExpr*> nothing = parseNothingValue())
         return allocator.alloc<AstExprBinary>(Location(start, (*nothing)->location), AstExprBinary::CompareEq, subjectValue, *nothing);
 
-    bool literal = current.type == Lexeme::QuotedString || current.type == Lexeme::RawString || current.type == Lexeme::Number ||
-                   current.type == Lexeme::ReservedTrue || current.type == Lexeme::ReservedFalse ||
-                   (current.type == '-' && lexer.lookahead().type == Lexeme::Number);
-    if (literal)
+    if (literalPatternFollows())
     {
         AstExpr* value = parseExpr(binaryPriority[AstExprBinary::CompareEq].right);
         return allocator.alloc<AstExprBinary>(Location(start, value->location), AstExprBinary::CompareEq, subjectValue, value);

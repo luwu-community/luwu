@@ -488,6 +488,8 @@ private:
     bool matchExpressionsAvailable();
     bool typeTestFollows();
     AstExpr* parseTypeTest(AstExpr* value, const Location& start);
+    AstExpr* parseTypeTestAlternative(AstExpr* value, const Location& start, bool negated);
+    bool literalPatternFollows();
     std::optional<AstExpr*> parseNothingValue();
     bool matchExpressionFollows();
     AstExpr* parseMatchExpr(bool inStatement = false);

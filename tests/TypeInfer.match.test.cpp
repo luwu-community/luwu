@@ -214,6 +214,38 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_match_expressions")
         kTypewriterAfter
     );
     checkTypewriting(*this, kTypewriterBefore, "local n = maybe()\nlocal ok = n is number", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "local n = maybe()\nlocal ok = n is 1 | 2 | nil", kTypewriterAfter);
+}
+
+// `is` with alternatives narrows like the `or` of its tests, and `is not` like the `and` of their negations
+TEST_CASE_FIXTURE(BuiltinsFixture, "is_with_alternatives_narrows_the_value")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        class Point(public x: number)
+        end
+        class Circle(public radius: number)
+        end
+        local function f(v: Point | Circle | string, kind: "join" | "leave" | "kick")
+            if v is Point | Circle then
+                local shape: Point | Circle = v
+            end
+            if v is not Point | Circle then
+                local text: string = v
+            end
+            if kind is "join" | "leave" then
+                local k: "join" | "leave" = kind
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 TEST_SUITE_END();

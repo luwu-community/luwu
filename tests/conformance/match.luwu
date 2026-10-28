@@ -85,6 +85,38 @@ assert(nothing_is(none) == "none")
 assert(nothing_is("x") == "something")
 assert(none is none and none is not nil and nil is nil and 1 is not none)
 
+-- `is` takes a pattern: alternatives joined by `|`, negated together by `is not`
+local function small(n: number): boolean
+    return n is 1 | 2 | 3
+end
+assert(small(1) and small(3) and not small(4))
+assert(4 is not 1 | 2 | 3)
+assert(not (2 is not 1 | 2 | 3))
+assert("leave" is "join" | "leave")
+assert(-1 is -1 | 1 and true is false | true)
+assert(p is Circle | Point and p is not Circle | string)
+assert(nil is number | nil and 1 is string | number)
+
+-- a value that isn't a local is read once, however many alternatives test it
+local reads = 0
+local message = setmetatable({}, {
+    __index = function(_, key)
+        reads += 1
+        return "leave"
+    end,
+})
+assert(message.kind is "join" | "leave" | "kick")
+assert(reads == 1)
+
+-- `case is A | is B` is still two patterns, and a pattern after `is` can have alternatives of its own
+local function shape(v: unknown): string
+    return match v
+        case is Circle | is Point then "shape"
+        case is 1 | 2 then "small"
+        else "other"
+end
+assert(shape(p) == "shape" and shape(Circle(1)) == "shape" and shape(2) == "small" and shape("x") == "other")
+
 -- a local named like the globals the operators call doesn't capture them
 do
     local type = function() return "nope" end
