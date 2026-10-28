@@ -8437,6 +8437,7 @@ TEST_CASE_FIXTURE(Fixture, "export_declare_class_exports_the_class_value")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuClasses, true},
         {FFlag::LuauExportValueSyntax, true},
     };
 
