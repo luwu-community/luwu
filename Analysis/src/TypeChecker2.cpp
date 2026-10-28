@@ -4764,6 +4764,48 @@ struct ReadWriteMismatch
     TypePath::Path parameterHelpPath;
 };
 
+// Luwu (helpful subtyping errors): an indexer's element or a read property at the end of `path`.
+static bool endsInReadableSlot(const TypePath::Path& path)
+{
+    if (path.empty())
+        return false;
+    const TypePath::Component& last = path.components.back();
+    const TypePath::Property* property = get_if<TypePath::Property>(&last);
+    const TypePath::TypeField* typeField = get_if<TypePath::TypeField>(&last);
+    return (typeField && *typeField == TypePath::TypeField::IndexResult) || (property && property->isRead);
+}
+
+// Luwu (helpful subtyping errors): the outermost slot along `path` whose read half passes, which is where
+// `read` helps. Subtyping reports the deepest failure: `{ {string} }` against `{ {read unknown} }` fails
+// inside the inner arrays, but the fix is marking the outer array's elements `read`.
+static std::optional<TypePath::Path> outermostReadableSlot(
+    TypeId subTy,
+    TypeId superTy,
+    const TypePath::Path& path,
+    NotNull<Subtyping> subtyping,
+    NotNull<Scope> scope,
+    NotNull<BuiltinTypes> builtinTypes,
+    NotNull<TypeArena> arena
+)
+{
+    if (path.empty())
+        return std::nullopt;
+
+    for (auto end = path.components.begin() + 1; end <= path.components.end(); ++end)
+    {
+        TypePath::Path prefix{std::vector<TypePath::Component>(path.components.begin(), end)};
+        if (!endsInReadableSlot(prefix))
+            continue;
+
+        std::optional<std::pair<TypeId, TypeId>> leaves = typesAtPaths(subTy, prefix, superTy, prefix, builtinTypes, arena);
+        if (!leaves)
+            return std::nullopt;
+        if (subtyping->isSubtype(leaves->first, leaves->second, scope).isSubtype)
+            return prefix;
+    }
+    return std::nullopt;
+}
+
 // Luwu (helpful subtyping errors): a property or indexer that is read *and* written has to match exactly, so
 // a perfectly good subtype is rejected wherever one is expected -- passing a `{Button}` to a `{Widget}`
 // parameter, say. Upstream reports this as "`Button` is not exactly `Widget`", which a reader can't act
@@ -4783,20 +4825,48 @@ static std::optional<ReadWriteMismatch> findReadWriteMismatch(
     NotNull<TypeArena> arena
 )
 {
-    const SubtypingReasoning* reasoning = soleReasoning(result);
-    if (!reasoning || reasoning->variance != SubtypingVariance::Invariant || reasoning->isAccessModifierViolation)
+    // Every failure has to be under the same slot for the message to be able to point at one. A nested
+    // failure can come with several reasonings: `{ {string} }` against `{ {read unknown} }` also reports
+    // the inner arrays' access modifiers, from the half of the invariance check that runs backwards.
+    std::optional<TypePath::Path> slot;
+    const SubtypingReasoning* reasoning = nullptr;
+    for (const SubtypingReasoning& candidate : result.reasoning)
+    {
+        if (candidate.variance != SubtypingVariance::Invariant)
+            return std::nullopt;
+
+        // Inside a function's arguments the roles are reversed, and `read` belongs on whichever side the
+        // reader didn't write. The wording assumes the ordinary direction, so leave those alone.
+        for (const TypePath::Component& component : candidate.subPath.components)
+        {
+            if (const TypePath::PackField* pf = get_if<TypePath::PackField>(&component); pf && *pf == TypePath::PackField::Arguments)
+                return std::nullopt;
+        }
+
+        // Reading is the half that works somewhere along the path, or `read` has nothing to offer here.
+        std::optional<TypePath::Path> candidateSlot = outermostReadableSlot(subTy, superTy, candidate.subPath, subtyping, scope, builtinTypes, arena);
+        if (!candidateSlot || (slot && *slot != *candidateSlot))
+            return std::nullopt;
+
+        // A read-only element given where a read-write one is expected is the access modifier error's to explain.
+        if (candidate.isAccessModifierViolation && *candidateSlot == candidate.subPath)
+            return std::nullopt;
+
+        slot = std::move(candidateSlot);
+        reasoning = &candidate;
+    }
+    if (!slot || !reasoning)
         return std::nullopt;
 
-    // Both sides have to fail in the same place for the message to be able to point at one. When the
-    // expected side is wider -- `{string}` against `{string?}`, the single most common way to meet
-    // this error -- subtyping fails against one member of that union and the super path carries a
-    // trailing index into it. Compare against the whole union instead, or the message ends up
-    // reading "`string` is not exactly `nil`", which means nothing to anybody.
-    const TypePath::Path& path = reasoning->subPath;
-    if (path.empty())
-        return std::nullopt;
+    const TypePath::Path& path = *slot;
 
-    const bool superPathIsWider = path != reasoning->superPath;
+    // When the failure is at the slot itself, both sides have to fail in the same place for the message to be
+    // able to point at one. When the expected side is wider -- `{string}` against `{string?}`, the single most
+    // common way to meet this error -- subtyping fails against one member of that union and the super path
+    // carries a trailing index into it. The slot compares against the whole union instead, or the message ends
+    // up reading "`string` is not exactly `nil`", which means nothing to anybody.
+    const bool failsAtSlot = result.reasoning.size() == 1 && path == reasoning->subPath;
+    const bool superPathIsWider = failsAtSlot && path != reasoning->superPath;
     if (superPathIsWider)
     {
         const std::vector<TypePath::Component>& superComponents = reasoning->superPath.components;
@@ -4811,32 +4881,16 @@ static std::optional<ReadWriteMismatch> findReadWriteMismatch(
             return std::nullopt;
     }
 
-    // Inside a function's arguments the roles are reversed, and `read` belongs on whichever side the
-    // reader didn't write. The wording assumes the ordinary direction, so leave those alone.
-    for (const TypePath::Component& component : path.components)
-    {
-        if (const TypePath::PackField* pf = get_if<TypePath::PackField>(&component); pf && *pf == TypePath::PackField::Arguments)
-            return std::nullopt;
-    }
-
     const TypePath::Component& last = path.components.back();
-
     const TypePath::Property* property = get_if<TypePath::Property>(&last);
     const TypePath::TypeField* typeField = get_if<TypePath::TypeField>(&last);
     const bool isIndexer = typeField && *typeField == TypePath::TypeField::IndexResult;
-
-    if (!isIndexer && !(property && property->isRead))
-        return std::nullopt;
 
     std::optional<std::pair<TypeId, TypeId>> leaves = typesAtPaths(subTy, path, superTy, path, builtinTypes, arena);
     if (!leaves)
         return std::nullopt;
 
     const auto [subLeafTy, superLeafTy] = *leaves;
-
-    // Reading is the half that works, or `read` has nothing to offer here.
-    if (!subtyping->isSubtype(subLeafTy, superLeafTy, scope).isSubtype)
-        return std::nullopt;
 
     // The container that actually holds the read-write slot, which for an argument passed straight
     // to a parameter is the whole type, and for a nested one is the inner table that owns it.
@@ -4887,7 +4941,7 @@ static std::optional<ReadWriteMismatch> findReadWriteMismatch(
         }
     }
 
-    mismatch.parameterHelpPath = reasoning->superPath;
+    mismatch.parameterHelpPath = failsAtSlot ? reasoning->superPath : path;
     return mismatch;
 }
 

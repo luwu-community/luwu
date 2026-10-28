@@ -15,6 +15,7 @@
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
+LUAU_FASTFLAG(LuauIndexerModifierMismatchErrors)
 
 using namespace Luau;
 
@@ -512,6 +513,35 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "whole_value_is_an_array_of_the_expected_type
         "\n"
         "'cat' is a single value where an array is expected: pass '{ cat }' instead."
     );
+}
+
+// An array of arrays is nested right even when its elements only fit read-only ones: wrapping it would make
+// it wrong. The outer array being writable is the mismatch, so `read` goes on its elements, not the inner ones.
+TEST_CASE_FIXTURE(BuiltinsFixture, "array_of_arrays_given_for_read_only_elements_is_not_a_nesting_mistake")
+{
+    for (bool indexerModifierErrors : {false, true})
+    {
+        ScopedFastFlag sffs[] = {
+            {FFlag::LuwuHelpfulSubtypingErrors, true},
+            {FFlag::LuauIndexerModifierMismatchErrors, indexerModifierErrors},
+        };
+
+        CheckResult result = check(R"(
+            local function take(columns: { { read unknown } }) end
+            local strings: { { string } } = { { "a" }, { "b" } }
+            take(strings)
+        )");
+
+        LUAU_REQUIRE_ERROR_COUNT(2, result);
+        std::string message = toString(result.errors[0]);
+        INFO(message);
+        CHECK(message.find("single value") == std::string::npos);
+        CHECK(message.find("read/write mismatch") != std::string::npos);
+        CHECK(message.find("annotate the parameter as '{ read {read unknown} }'") != std::string::npos);
+
+        // The suggestion to mark the parameter `read` points at the outer array's element type.
+        CHECK_EQ(Location{{1, 43}, {1, 59}}, result.errors[1].location);
+    }
 }
 
 // A function slot gets the same sentence, after the argument it's about.
