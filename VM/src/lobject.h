@@ -520,6 +520,9 @@ typedef struct Closure
             const char* debugname;
             void (*dtor)(struct lua_State* L, void* data, size_t sz);
             size_t size;
+            // Luwu: the function lua_pushdatacfunctionk was given, which `f` (luaF_calldatacfunction) calls; NULL for other
+            // fat closures
+            int (*df)(struct lua_State* L, void* data, int nargs);
             alignas(8) char data[1];
         } fatc;
 
