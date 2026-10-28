@@ -416,4 +416,81 @@ do
     assert(vecs.at(stack, 2) == 2 and vecs.at(collections.vec({ 7 }), 1) == 7 and vecs.at(stack, 3) == 3)
 end
 
+-- orderedmap loops run without calling `__iter`, and visit what it would
+local function entries(map): string
+    local text = ""
+    for key, value in map do
+        text ..= `{key}={value} `
+    end
+    return text
+end
+
+class FalseIterator(public x: number)
+    public function __iter(self)
+        return false, self, nil
+    end
+end
+
+do
+    const map = collections.orderedmap()
+    assert(entries(map) == "")
+    for i = 1, 5 do
+        map:set(`k{i}`, i)
+    end
+    map:move("k5", 1)
+    map:swap("k1", "k2")
+    assert(entries(map) == "k5=5 k2=2 k1=1 k3=3 k4=4 ")
+    map:sort(function(a, b)
+        return a > b
+    end)
+    assert(entries(map) == "k5=5 k4=4 k3=3 k2=2 k1=1 ")
+
+    -- extra loop variables are nil, and a loop can stop early or nest
+    for key, value, extra in map do
+        assert(extra == nil)
+    end
+    local pairs = 0
+    for outer in map do
+        for inner in map do
+            pairs += 1
+            if inner == outer then
+                break
+            end
+        end
+    end
+    assert(pairs == 1 + 2 + 3 + 4 + 5)
+
+    -- a later entry removed during a loop isn't visited; the current key's removal raises
+    const seen = {}
+    for key in map do
+        table.insert(seen, key)
+        if key == "k4" then
+            map:remove("k3")
+        end
+    end
+    assert(table.concat(seen, " ") == "k5 k4 k2 k1")
+    const ok, err = pcall(function()
+        for key in map do
+            map:remove(key)
+        end
+    end)
+    assert(not ok and string.find(tostring(err), `orderedmap lost key "k5" while it was being iterated`, 1, true))
+
+    -- a loop can yield
+    const looper = coroutine.wrap(function()
+        for key, value in map do
+            coroutine.yield(key)
+        end
+        return "done"
+    end)
+    assert(looper() == "k4" and looper() == "k2" and looper() == "k1" and looper() == "done")
+
+    -- false is the loop's marker for an orderedmap, so an `__iter` giving false raises before the first step
+    const fok, ferr = pcall(function()
+        for x in FalseIterator(1) do
+        end
+    end)
+    assert(not fok and string.find(tostring(ferr), "attempt to call a boolean value", 1, true))
+end
+
 return "OK"

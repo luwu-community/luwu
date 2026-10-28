@@ -2714,26 +2714,24 @@ reentry:
                     {
                         LuaTable* mt = ttistable(ra) ? hvalue(ra)->metatable : ttisuserdata(ra) ? uvalue(ra)->metatable : cast_to(LuaTable*, NULL);
                         const TValue* fn = fasttm(L, mt, TM_ITER);
-                        // Luwu collections: a vec or vecdeque runs on the table iteration below over its storage
-                        LuaTable* items = NULL;
+                        // Luwu collections: a builtin container's loop needs no `__iter` (luaR_collectionprep)
+                        bool collection = false;
 
                         if (LUAU_UNLIKELY(fn == NULL && ttisobject(ra)))
                         {
-                            items = luaR_collectionitems(L, objectvalue(ra));
-                            fn = items ? NULL : luaT_gettmbyobj(L, ra, TM_ITER);
+                            collection = luaR_collectionprep(L, ra);
+                            fn = collection ? NULL : luaT_gettmbyobj(L, ra, TM_ITER);
                             // if the metamethod is not present, error.
-                            if (!items && ttisnil(fn))
+                            if (!collection && ttisnil(fn))
                             {
                                 VM_PROTECT_PC();
                                 luaG_typeerror(L, ra, "iterate over");
                             }
                         }
 
-                        if (items)
+                        if (collection)
                         {
-                            sethvalue(L, ra + 1, items);
-                            setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(0)), LU_TAG_ITERATOR);
-                            setnilvalue(ra);
+                            // luaR_collectionprep set up the registers
                         }
                         else if (fn)
                         {
@@ -2750,7 +2748,9 @@ reentry:
                             ra = VM_REG(LUAU_INSN_A(insn));
 
                             // protect against __iter returning nil, since nil is used as a marker for builtin iteration in FORGLOOP
-                            if (ttisnil(ra))
+                            // Luwu collections: false too, which marks an orderedmap's loop (luaR_collectionprep). It raises the
+                            // same error before the first step that calling it in FORGLOOP would.
+                            if (l_isfalse(ra))
                             {
                                 VM_PROTECT_PC(); // next call always errors
                                 luaG_typeerror(L, ra, "call");
@@ -2906,6 +2906,26 @@ reentry:
 
                     // fallthrough to exit
                     pc++;
+                    VM_NEXT();
+                }
+                // Luwu collections: an orderedmap's loop (luaR_collectionprep), stepped without a call
+                else if (LUAU_UNLIKELY(ttisboolean(ra)))
+                {
+                    bool more;
+                    VM_PROTECT(more = luaR_collectionnext(L, ra));
+
+                    if (!more)
+                    {
+                        pc++;
+                        VM_NEXT();
+                    }
+
+                    ra = VM_REG(LUAU_INSN_A(insn));
+                    for (int i = 2; i < int(aux); ++i)
+                        setnilvalue(ra + 3 + i);
+
+                    pc += LUAU_INSN_D(insn);
+                    VM_ASSERT_PC(pc);
                     VM_NEXT();
                 }
                 else

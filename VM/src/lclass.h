@@ -207,11 +207,20 @@ LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const l
 LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method);
 
 /**
- * Luwu collections: the table a generic for loop over `object` runs on, or NULL when `object` isn't a `vec` or
- * `vecdeque`. Its array part holds positions 1 to the count in order with nil after them, so the VM's own table
- * iteration visits the same positions and values `__iter` would, with no call per step.
+ * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns
+ * false otherwise. Neither way calls `__iter` or makes a call per step:
+ *  - a `vec` or `vecdeque` runs on the VM's table iteration over its storage table, whose array part holds positions
+ *    1 to the count in order with nil after them;
+ *  - an `orderedmap` gets `ra` = false, which FORGLOOP hands to luaR_collectionnext.
  */
-LUAI_FUNC LuaTable* luaR_collectionitems(lua_State* L, LuauObject* object);
+LUAI_FUNC bool luaR_collectionprep(lua_State* L, StkId ra);
+
+/**
+ * Luwu collections: one step of a loop luaR_collectionprep set up with `ra` = false, `ra + 1` = the container and
+ * `ra + 2` = the previous key (nil at the start). Writes the next key and value to `ra + 3` and `ra + 4` and keeps the
+ * key in `ra + 2`, or returns false at the end. It visits what `__iter` would, and raises the same errors.
+ */
+LUAI_FUNC bool luaR_collectionnext(lua_State* L, StkId ra);
 
 // Luwu collections: the length `#` gives `object`, read from its class's length field without calling `__len`, or NULL
 // when the class has none (see LuauClass::lengthfield)

@@ -144,10 +144,25 @@ bool forgLoopNodeIter(lua_State* L, LuaTable* h, int index, TValue* ra)
     return false;
 }
 
+// One step of a loop over a builtin container: 1 to repeat, 0 at the end
+static int forgLoopCollection(lua_State* L, TValue* ra, int aux)
+{
+    if (!luaR_collectionnext(L, ra))
+        return 0;
+
+    for (int i = 2; i < aux; ++i)
+        setnilvalue(ra + 3 + i);
+    return 1;
+}
+
 int forgLoopNonTableFallback(lua_State* L, int insnA, int aux)
 {
     TValue* base = L->base;
     TValue* ra = VM_REG(insnA);
+
+    // Luwu collections: an orderedmap's loop (luaR_collectionprep), stepped without a call
+    if (LUAU_UNLIKELY(ttisboolean(ra)))
+        return forgLoopCollection(L, ra, aux);
 
     // note: it's safe to push arguments past top for complicated reasons (see lvmexecute.cpp)
     setobj2s(L, ra + 3 + 2, ra + 2);
@@ -176,6 +191,10 @@ bool forgLoopNonTableFallback_DEPRECATED(lua_State* L, int insnA, int aux)
 {
     TValue* base = L->base;
     TValue* ra = VM_REG(insnA);
+
+    // Luwu collections: an orderedmap's loop (luaR_collectionprep), stepped without a call
+    if (LUAU_UNLIKELY(ttisboolean(ra)))
+        return forgLoopCollection(L, ra, aux);
 
     // note: it's safe to push arguments past top for complicated reasons (see lvmexecute.cpp)
     setobj2s(L, ra + 3 + 2, ra + 2);
@@ -924,24 +943,23 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
         // Luwu Classes (rfcs/classes): an object's __iter lives on its class's instance metatable. Native code
         // runs every generic for loop's prep through here, so this has to match VM_CASE(LOP_FORGPREP) in
         // lvmexecute.cpp.
-        LuaTable* items = NULL;
+        // Luwu collections: a builtin container's loop needs no `__iter` (luaR_collectionprep)
+        bool collection = false;
         if (FFlag::LuwuClasses && LUAU_UNLIKELY(fn == NULL && ttisobject(ra)))
         {
-            items = luaR_collectionitems(L, objectvalue(ra));
-            fn = items ? NULL : luaT_gettmbyobj(L, ra, TM_ITER);
+            collection = luaR_collectionprep(L, ra);
+            fn = collection ? NULL : luaT_gettmbyobj(L, ra, TM_ITER);
             // if the metamethod is not present, error.
-            if (!items && ttisnil(fn))
+            if (!collection && ttisnil(fn))
             {
                 VM_PROTECT_PC();
                 luaG_typeerror(L, ra, "iterate over");
             }
         }
 
-        if (items)
+        if (collection)
         {
-            sethvalue(L, ra + 1, items);
-            setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(0)), LU_TAG_ITERATOR);
-            setnilvalue(ra);
+            // luaR_collectionprep set up the registers
         }
         else if (fn)
         {
@@ -958,7 +976,9 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
             ra = VM_REG(LUAU_INSN_A(insn));
 
             // protect against __iter returning nil, since nil is used as a marker for builtin iteration in FORGLOOP
-            if (ttisnil(ra))
+            // Luwu collections: false too, which marks an orderedmap's loop (luaR_collectionprep). It raises the same
+            // error before the first step that calling it in FORGLOOP would.
+            if (l_isfalse(ra))
             {
                 VM_PROTECT_PC(); // next call always errors
                 luaG_typeerror(L, ra, "call");

@@ -6,6 +6,7 @@
 #include "lclass.h"
 #include "ldebug.h"
 #include "ldo.h"
+#include "lfunc.h"
 #include "lgc.h"
 #include "lobject.h"
 #include "lstate.h"
@@ -827,16 +828,22 @@ static int orderedmapindex(lua_State* L)
 }
 
 // Pushes the key and value at `position`, or two nils when there's no entry there
+// The id of the entry at `position`, or 0 when there's none
+static uint32_t omidat(LuauObject* map, double position)
+{
+    return isposition(position, omnumber(map, OM_COUNT)) ? omids(map, OM_ORDER)[uint32_t(position) - 1] : 0;
+}
+
 static int ompushentry(lua_State* L, LuauObject* map, double position)
 {
-    if (!isposition(position, omnumber(map, OM_COUNT)))
+    uint32_t id = omidat(map, position);
+    if (id == 0)
     {
         lua_pushnil(L);
         lua_pushnil(L);
         return 2;
     }
 
-    uint32_t id = omids(map, OM_ORDER)[uint32_t(position) - 1];
     luaA_pushvalue(L, luaH_getnum(omtable(map, OM_KEYS), int(id)));
     luaA_pushvalue(L, luaH_getnum(omtable(map, OM_VALUES), int(id)));
     return 2;
@@ -855,18 +862,21 @@ static int orderedmaplen(lua_State* L)
     return 1;
 }
 
-// The iterator `__iter` returns: given the previous key, the next key and value in order
+// The position after the key at stack `idx`, which a loop gave last; raises when the map no longer has it
+static uint32_t omnextposition(lua_State* L, LuauObject* map, int idx)
+{
+    uint32_t id = omidof(map, L->base + idx - 1);
+    if (id == 0)
+        luaL_error(L, "orderedmap lost key %s while it was being iterated", pushshown(L, idx));
+    return omids(map, OM_POSITIONS)[id - 1] + 1;
+}
+
+// The iterator `__iter` returns: given the previous key, the next key and value in order. A generic for loop doesn't
+// call it: it runs luaR_collectionnext instead.
 static int orderedmapnext(lua_State* L)
 {
     LuauObject* map = checkmap(L, "__iter");
-    uint32_t position = 1;
-    if (!lua_isnoneornil(L, 2))
-    {
-        uint32_t id = omidof(map, L->base + 1);
-        if (id == 0)
-            luaL_error(L, "orderedmap lost key %s while it was being iterated", pushshown(L, 2));
-        position = omids(map, OM_POSITIONS)[id - 1] + 1;
-    }
+    uint32_t position = lua_isnoneornil(L, 2) ? 1 : omnextposition(L, map, 2);
     return ompushentry(L, map, double(position));
 }
 
@@ -1323,7 +1333,7 @@ static const luaR_NativeMember kVecDequeMembers[] = {
 };
 
 // vec: a growable array, entries 1 to count of a table's array part. The vec grows the array part itself, so no
-// entry is ever in the hash part, which a generic for loop relies on (luaR_collectionitems).
+// entry is ever in the hash part, which a generic for loop relies on (luaR_collectionprep).
 
 enum VecField
 {
@@ -1813,7 +1823,8 @@ static void setnonemetatable(lua_State* L)
     lua_pop(L, 1);
 }
 
-LuaTable* luaR_collectionitems(lua_State* L, LuauObject* object)
+// The table a loop over `object` runs on, or NULL when it isn't a `vec` or `vecdeque`
+static LuaTable* collectionitems(lua_State* L, LuauObject* object)
 {
     LuauClass** builtins = L->global->builtinclasses;
     if (object->lclass == builtins[LUWU_BUILTIN_VEC])
@@ -1831,6 +1842,69 @@ LuaTable* luaR_collectionitems(lua_State* L, LuauObject* object)
         vdsetnumber(object, VD_HEAD, 0);
     }
     return ring;
+}
+
+bool luaR_collectionprep(lua_State* L, StkId ra)
+{
+    LuauObject* object = objectvalue(ra);
+    if (object->lclass == builtinclass(L, LUWU_BUILTIN_ORDEREDMAP))
+    {
+        setobj2s(L, ra + 1, ra);
+        setnilvalue(ra + 2);
+        setbvalue(ra, false);
+        return true;
+    }
+
+    LuaTable* items = collectionitems(L, object);
+    if (!items)
+        return false;
+
+    sethvalue(L, ra + 1, items);
+    setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(0)), LU_TAG_ITERATOR);
+    setnilvalue(ra);
+    return true;
+}
+
+// Raises the error a loop's step gets when the map lost the key it gave last. The step runs in the loop's Lua frame,
+// where nothing can be pushed, so the C iterator raises it from a frame of its own, as when a loop called it.
+static l_noret omlostkey(lua_State* L, StkId ra)
+{
+    Closure* iterator = luaF_newCclosure(L, 0, L->gt);
+    iterator->c.f = orderedmapnext;
+    iterator->c.debugname = "next";
+
+    // note: like FORGLOOP's call, this writes past top, which the stack always has room for
+    setclvalue(L, ra + 3, iterator);
+    setobj2s(L, ra + 4, ra + 1);
+    setobj2s(L, ra + 5, ra + 2);
+    L->top = ra + 6;
+    luaD_call(L, ra + 3, 0);
+    LUAU_ASSERT(!"orderedmapnext raises for a lost key");
+    LUAU_UNREACHABLE();
+}
+
+bool luaR_collectionnext(lua_State* L, StkId ra)
+{
+    LuauObject* map = objectvalue(ra + 1);
+    LUAU_ASSERT(map->lclass == builtinclass(L, LUWU_BUILTIN_ORDEREDMAP));
+
+    uint32_t position = 1;
+    if (!ttisnil(ra + 2))
+    {
+        uint32_t previous = omidof(map, ra + 2);
+        if (previous == 0)
+            omlostkey(L, ra);
+        position = omids(map, OM_POSITIONS)[previous - 1] + 1;
+    }
+
+    uint32_t id = omidat(map, double(position));
+    if (id == 0)
+        return false;
+
+    setobj2s(L, ra + 3, luaH_getnum(omtable(map, OM_KEYS), int(id)));
+    setobj2s(L, ra + 4, luaH_getnum(omtable(map, OM_VALUES), int(id)));
+    setobj2s(L, ra + 2, ra + 3);
+    return true;
 }
 
 // Builds a class, records it as builtin `kind` and stores it in the library table on top of the stack. A container
