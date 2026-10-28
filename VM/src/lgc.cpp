@@ -493,6 +493,17 @@ static void traverseobject(global_State* g, LuauObject* object)
     markobject(g, object->lclass);
     for (uint32_t i = 0; i < object->numberofmembers; i++)
         markvalue(g, &luaR_members(object)[i]);
+
+    // Luwu collections: a `vec`'s or `vecdeque`'s entries, in one or two runs of the ring
+    if (LuauStorage* storage = luaR_storage(object))
+    {
+        markvalue(g, &storage->elementtype);
+        uint32_t first = storage->count < storage->capacity - storage->head ? storage->count : storage->capacity - storage->head;
+        for (uint32_t i = 0; i < first; i++)
+            markvalue(g, &storage->items[storage->head + i]);
+        for (uint32_t i = 0; i < storage->count - first; i++)
+            markvalue(g, &storage->items[i]);
+    }
 }
 
 static void clearstack(lua_State* l)
@@ -624,8 +635,8 @@ static size_t propagatemark(global_State* g)
         g->gray = object->gclist;
         traverseobject(g, object);
         // We've traversed the instance, header plus its inline fields (one allocation, see
-        // luaR_objectsize).
-        return luaR_objectsize(object->numberofmembers);
+        // luaR_objectsize), and its storage block if it has one.
+        return luaR_objectmemory(object);
     }
     default:
         LUAU_ASSERT(0);

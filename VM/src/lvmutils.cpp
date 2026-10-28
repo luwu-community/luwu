@@ -662,10 +662,11 @@ void luaV_dolen(lua_State* L, StkId ra, const TValue* rb)
     }
     case LUA_TOBJECT:
     {
-        // Luwu collections: builtin containers keep their length in a field
-        if (const TValue* length = luaR_objectlength(objectvalue(rb)))
+        // Luwu collections: builtin containers know their length without `__len`
+        double length = luaR_objectlength(objectvalue(rb));
+        if (length >= 0)
         {
-            setobj(L, ra, length);
+            setnvalue(ra, length);
             return;
         }
         tm = luaT_gettmbyobj(L, rb, TM_LEN);

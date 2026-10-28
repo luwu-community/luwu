@@ -240,7 +240,7 @@ do
     assert(#list == 0 and vecs.pop(list) == nil and vecs.at(list, 1) == nil)
 end
 
--- vecdeque: entries keep their order while the ring wraps, grows and is rotated by a loop
+-- vecdeque: entries keep their order while the ring wraps and grows
 do
     const queue = collections.vecdeque()
     for i = 1, 6 do
@@ -249,7 +249,7 @@ do
     for _ = 1, 4 do
         assert(deques.popfront(queue) ~= nil)
     end
-    -- the ring of 8 now wraps: 5, 6, then 7 to 12
+    -- the ring of 8 now wraps: 5, 6, then 7 to 12. The push at the front grows it while it wraps.
     for i = 7, 12 do
         deques.pushback(queue, i)
     end
@@ -261,7 +261,6 @@ do
     deques.set(queue, 9, 120)
     assert(deques.back(queue) == 120)
 
-    -- a loop rotates the ring to start at slot 1; the fast methods must read the new head
     local sum = 0
     for _, value in queue do
         sum += value
@@ -294,7 +293,7 @@ do
     const queuemodel = {}
     const garbage = {}
     for step = 1, 20000 do
-        const op = random(9)
+        const op = random(11)
         const value = { step }
         if op <= 2 then
             vecs.push(list, value)
@@ -318,7 +317,14 @@ do
             const position = random(#queuemodel)
             deques.set(queue, position, value)
             queuemodel[position] = value
-        elseif op == 9 then
+        elseif op == 9 and #listmodel > 0 then
+            const position = random(#listmodel + 1)
+            list:insert(position, value)
+            table.insert(listmodel, position, value)
+        elseif op == 10 and #listmodel > 0 then
+            const position = random(#listmodel)
+            assert(list:remove(position) == table.remove(listmodel, position))
+        elseif op == 11 then
             -- garbage keeps the incremental collector running, so stores into black tables need their barriers
             table.insert(garbage, table.create(64, step))
             if #garbage > 64 then
@@ -342,6 +348,93 @@ do
     for position, value in queuemodel do
         assert(deques.at(queue, position) == value and value[1] > 0)
     end
+end
+
+-- vec and vecdeque loops run without calling `__iter`, and visit what it would
+local function visit(container): string
+    local text = ""
+    for position, value in container do
+        text ..= `{position}={value} `
+    end
+    return text
+end
+
+class TrueIterator(public x: number)
+    public function __iter(self)
+        return true, self, nil
+    end
+end
+
+do
+    assert(visit(collections.vec()) == "" and visit(collections.vecdeque()) == "")
+    assert(visit(collections.vec({ "a", "b" })) == "1=a 2=b ")
+
+    -- a ring that wraps around its end
+    const queue = collections.vecdeque({ 3, 4 })
+    queue:pushfront(2)
+    queue:pushfront(1)
+    queue:popback()
+    queue:pushback(9)
+    assert(visit(queue) == "1=1 2=2 3=3 4=9 ")
+
+    -- an entry added during a loop is visited, and a removed one isn't
+    const list = collections.vec({ 1, 2, 3 })
+    local seen = {}
+    for position, value in list do
+        table.insert(seen, value)
+        if value == 1 then
+            list:push(4)
+        elseif value == 2 then
+            list:pop()
+        end
+    end
+    assert(table.concat(seen, " ") == "1 2 3")
+
+    -- a loop can yield
+    const looper = coroutine.wrap(function()
+        for _, value in queue do
+            coroutine.yield(value)
+        end
+        return "done"
+    end)
+    assert(looper() == 1 and looper() == 2 and looper() == 3 and looper() == 9 and looper() == "done")
+
+    -- true is the loop's marker for a vec or vecdeque, so an `__iter` giving true raises before the first step
+    raises(function()
+        for x in TrueIterator(1) do
+        end
+    end, "attempt to call a boolean value")
+end
+
+-- the element type stays when the entries go: a class nothing else holds stays alive, and `clear` keeps it too
+do
+    const list = collections.vec()
+    -- the class only lives in the chunk that makes the one object
+    vecs.push(list, loadstring("class Gone(public x: number) end return Gone(1)")())
+    vecs.pop(list)
+    collectgarbage()
+    raises(function()
+        vecs.push(list, 1)
+    end, "this vec can only accept 'Gone' objects, but you passed a number")
+
+    const queue = collections.vecdeque()
+    for i = 1, 100 do
+        deques.pushback(queue, i)
+    end
+    queue:clear()
+    assert(#queue == 0 and deques.popfront(queue) == nil)
+    raises(function()
+        deques.pushback(queue, "x")
+    end, "this vecdeque can only accept numbers, but you passed a string")
+    deques.pushfront(queue, 7)
+    assert(visit(queue) == "1=7 ")
+
+    raises(function()
+        collections.vec():push(nil)
+    end, "this vec can't accept nil")
+    raises(function()
+        collections.vecdeque():pushfront(nil)
+    end, "this vecdeque can't accept nil")
 end
 
 -- orderedmap: `get`, `has` and `set` of a key it has

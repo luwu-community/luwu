@@ -208,26 +208,84 @@ LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classd
 
 /**
  * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns
- * false otherwise. Neither way calls `__iter` or makes a call per step:
- *  - a `vec` or `vecdeque` runs on the VM's table iteration over its storage table, whose array part holds positions
- *    1 to the count in order with nil after them;
- *  - an `orderedmap` gets `ra` = false, which FORGLOOP hands to luaR_collectionnext.
+ * false otherwise. The loop calls neither `__iter` nor anything per step: `ra` becomes a boolean, which FORGLOOP hands
+ * to luaR_collectionnext, and `ra + 1` the container. `ra + 2` is the loop's state:
+ *  - a `vec` or `vecdeque` gets `ra` = true and the number of entries visited, as light userdata like a table loop's
+ *    index (luaR_storagenext);
+ *  - an `orderedmap` gets `ra` = false and the previous key, nil at the start.
  */
 LUAI_FUNC bool luaR_collectionprep(lua_State* L, StkId ra);
 
 /**
- * Luwu collections: one step of a loop luaR_collectionprep set up with `ra` = false, `ra + 1` = the container and
- * `ra + 2` = the previous key (nil at the start). Writes the next key and value to `ra + 3` and `ra + 4` and keeps the
- * key in `ra + 2`, or returns false at the end. It visits what `__iter` would, and raises the same errors.
+ * Luwu collections: one step of a loop luaR_collectionprep set up. Writes the next key and value to `ra + 3` and
+ * `ra + 4` and updates the state in `ra + 2`, or returns false at the end. It visits what `__iter` would, and raises the
+ * same errors.
  */
 LUAI_FUNC bool luaR_collectionnext(lua_State* L, StkId ra);
 
-// Luwu collections: the length `#` gives `object`, read from its class's length field without calling `__len`, or NULL
-// when the class has none (see LuauClass::lengthfield)
-LUAU_FORCEINLINE const TValue* luaR_objectlength(const LuauObject* object)
+// Luwu collections: the storage block of a `vec` or `vecdeque`, or NULL before its first value. Its `__init` sets the
+// object's storage kind, with a NULL pointer in the storage member.
+LUAU_FORCEINLINE LuauStorage* luaR_storage(LuauObject* object)
 {
+    if (object->storagekind == LUAR_STORAGE_NONE)
+        return NULL;
+    return static_cast<LuauStorage*>(pvalue(&luaR_members(object)[LUAR_STORAGE_MEMBER]));
+}
+
+LUAU_FORCEINLINE const LuauStorage* luaR_storage(const LuauObject* object)
+{
+    return luaR_storage(const_cast<LuauObject*>(object));
+}
+
+// Luwu collections: the size of a storage block with `capacity` slots
+LUAU_FORCEINLINE size_t luaR_storagesize(uint32_t capacity)
+{
+    return offsetof(LuauStorage, items) + size_t(capacity) * sizeof(TValue);
+}
+
+// The memory `object` holds: its allocation and its storage block (luaR_storage), if it has one
+LUAU_FORCEINLINE size_t luaR_objectmemory(const LuauObject* object)
+{
+    const LuauStorage* storage = luaR_storage(object);
+    return luaR_objectsize(object->numberofmembers) + (storage ? luaR_storagesize(storage->capacity) : 0);
+}
+
+// Luwu collections: the slot of the entry `offset` places from the front of a `vec` or `vecdeque`
+LUAU_FORCEINLINE TValue* luaR_storageentry(LuauStorage* storage, uint32_t offset)
+{
+    LUAU_ASSERT(offset < storage->count);
+    return &storage->items[(storage->head + offset) & (storage->capacity - 1)];
+}
+
+// Luwu collections: one step of a loop over a `vec` or `vecdeque`, the case of luaR_collectionnext that FORGLOOP runs
+// inline
+LUAU_FORCEINLINE bool luaR_storagenext(lua_State* L, LuauObject* container, StkId ra)
+{
+    LuauStorage* storage = luaR_storage(container);
+    uint32_t visited = uint32_t(reinterpret_cast<uintptr_t>(pvalue(ra + 2)));
+    if (!storage || visited >= storage->count)
+        return false;
+
+    // Like a table loop's index, so native code can update only the low 32 bits
+    setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(visited + 1)), LU_TAG_ITERATOR);
+    setnvalue(ra + 3, double(visited + 1));
+    // note: a plain copy, since setobj2s needs lgc.h
+    *(ra + 4) = *luaR_storageentry(storage, visited);
+    return true;
+}
+
+// Luwu collections: the length `#` gives `object` without calling `__len`, or -1 when its class has no such length. A
+// `vec` and a `vecdeque` read their storage block, an `orderedmap` its length field (LuauClass::lengthfield).
+LUAU_FORCEINLINE double luaR_objectlength(const LuauObject* object)
+{
+    if (object->storagekind != LUAR_STORAGE_NONE)
+    {
+        const LuauStorage* storage = luaR_storage(object);
+        return storage ? double(storage->count) : 0;
+    }
+
     uint32_t field = object->lclass->lengthfield;
-    return field == LUAR_NO_LENGTH_FIELD ? NULL : &luaR_members(object)[field];
+    return field == LUAR_NO_LENGTH_FIELD ? -1 : nvalue(&luaR_members(object)[field]);
 }
 
 /**

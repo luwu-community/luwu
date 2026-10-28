@@ -792,6 +792,7 @@ LuauObject* luaR_newobjectuninit(lua_State* L, LuauClass* classdef)
     uint32_t nummembers = classdef->numberofinstancemembers;
     LuauObject* object = luaM_newgco(L, LuauObject, luaR_objectsize(nummembers), L->activememcat);
     luaC_init(L, object, LUA_TOBJECT);
+    object->storagekind = LUAR_STORAGE_NONE;
     object->lclass = classdef;
     object->numberofmembers = nummembers;
 
@@ -807,6 +808,7 @@ LuauObject* luaR_newobject(lua_State* L, LuauClass* classdef)
     uint32_t nummembers = classdef->numberofinstancemembers;
     LuauObject* object = luaM_newgco(L, LuauObject, luaR_objectsize(nummembers), L->activememcat);
     luaC_init(L, object, LUA_TOBJECT);
+    object->storagekind = LUAR_STORAGE_NONE;
     object->lclass = classdef;
     object->numberofmembers = nummembers;
 
@@ -962,6 +964,8 @@ void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
 
 void luaR_freeobject(lua_State* L, LuauObject* object, lua_Page* page)
 {
+    if (LuauStorage* storage = luaR_storage(object))
+        luaM_free_(L, storage, luaR_storagesize(storage->capacity), object->memcat);
     luaM_freegco(L, object, luaR_objectsize(object->numberofmembers), object->memcat, page);
 }
 

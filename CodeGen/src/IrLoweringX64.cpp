@@ -21,6 +21,7 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCIProto)
 LUAU_FASTFLAG(LuauCodegenSharedLog)
+LUAU_FASTFLAG(LuwuClasses)
 
 namespace Luau
 {
@@ -3085,6 +3086,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     case IrCmd::FORGLOOP_FALLBACK:
     {
+        // Luwu collections: a `vec` or `vecdeque` steps inline
+        if (FFlag::LuwuClasses)
+            emitInstForGLoopStorage(regs, build, vmRegOp(OP_A(inst)), intOp(OP_B(inst)), labelOp(OP_C(inst)), labelOp(OP_D(inst)));
+
         IrCallWrapperX64 callWrap(regs, build, index);
         callWrap.addArgument(SizeX64::qword, rState);
         callWrap.addArgument(SizeX64::dword, vmRegOp(OP_A(inst)));

@@ -160,7 +160,7 @@ int forgLoopNonTableFallback(lua_State* L, int insnA, int aux)
     TValue* base = L->base;
     TValue* ra = VM_REG(insnA);
 
-    // Luwu collections: an orderedmap's loop (luaR_collectionprep), stepped without a call
+    // Luwu collections: a builtin container's loop (luaR_collectionprep), stepped without a call
     if (LUAU_UNLIKELY(ttisboolean(ra)))
         return forgLoopCollection(L, ra, aux);
 
@@ -192,7 +192,7 @@ bool forgLoopNonTableFallback_DEPRECATED(lua_State* L, int insnA, int aux)
     TValue* base = L->base;
     TValue* ra = VM_REG(insnA);
 
-    // Luwu collections: an orderedmap's loop (luaR_collectionprep), stepped without a call
+    // Luwu collections: a builtin container's loop (luaR_collectionprep), stepped without a call
     if (LUAU_UNLIKELY(ttisboolean(ra)))
         return forgLoopCollection(L, ra, aux);
 
@@ -976,9 +976,9 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
             ra = VM_REG(LUAU_INSN_A(insn));
 
             // protect against __iter returning nil, since nil is used as a marker for builtin iteration in FORGLOOP
-            // Luwu collections: false too, which marks an orderedmap's loop (luaR_collectionprep). It raises the same
-            // error before the first step that calling it in FORGLOOP would.
-            if (l_isfalse(ra))
+            // Luwu collections: booleans too, which mark a builtin container's loop (luaR_collectionprep). It raises the
+            // same error before the first step that calling it in FORGLOOP would.
+            if (ttisnil(ra) || ttisboolean(ra))
             {
                 VM_PROTECT_PC(); // next call always errors
                 luaG_typeerror(L, ra, "call");

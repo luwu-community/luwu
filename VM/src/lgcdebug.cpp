@@ -660,7 +660,7 @@ static void dumpclass(FILE* f, LuauClass* lco)
 
 static void dumpobject(FILE* f, LuauObject* inst)
 {
-    fprintf(f, R"({"type":"object","cat":%d,"size":%d)", inst->memcat, int(luaR_objectsize(inst->numberofmembers)));
+    fprintf(f, R"({"type":"object","cat":%d,"size":%d)", inst->memcat, int(luaR_objectmemory(inst)));
     fprintf(f, R"(,"class":)");
     dumpref(f, obj2gco(inst->lclass));
     fprintf(f, R"(,"members":[)");
@@ -1069,7 +1069,7 @@ static void enumobject(EnumContext* ctx, LuauObject* inst)
     char buf[LUA_IDSIZE];
     GCObject* obj = obj2gco(inst);
     snprintf(buf, sizeof(buf), "object %s", getstr(inst->lclass->name));
-    enumnode(ctx, obj, luaR_objectsize(inst->numberofmembers), buf);
+    enumnode(ctx, obj, luaR_objectmemory(inst), buf);
     for (uint32_t i = 0; i < inst->lclass->numberofinstancemembers; i++)
     {
         // It's a bit strange that if we have a non-collectable static member,
@@ -1080,6 +1080,15 @@ static void enumobject(EnumContext* ctx, LuauObject* inst)
         char membername[32];
         snprintf(membername, sizeof(membername), "%s", getstr(inst->lclass->offsettomember[i]));
         enumedge(ctx, obj, gcvalue(&luaR_members(inst)[i]), membername);
+    }
+
+    // Luwu collections: a `vec`'s or `vecdeque`'s entries
+    LuauStorage* storage = luaR_storage(inst);
+    for (uint32_t i = 0; storage && i < storage->count; i++)
+    {
+        const TValue* entry = luaR_storageentry(storage, i);
+        if (iscollectable(entry))
+            enumedge(ctx, obj, gcvalue(entry), "entry");
     }
 }
 

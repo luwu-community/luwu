@@ -438,6 +438,65 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
     build.jcc(ConditionX64::NotZero, loopRepeat);
 }
 
+// Luwu collections: one step of a loop over a `vec` or `vecdeque` (luaR_storagenext), for FORGLOOP_FALLBACK to run
+// before its call. Anything else falls through.
+void emitInstForGLoopStorage(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, int aux, Label& loopRepeat, Label& loopExit)
+{
+    Label notStorage;
+    ScopedRegX64 storage{regs, SizeX64::qword};
+    ScopedRegX64 visited{regs, SizeX64::qword};
+    ScopedRegX64 slot{regs, SizeX64::qword};
+    ScopedRegX64 mask{regs, SizeX64::dword};
+    ScopedRegX64 fp{regs, SizeX64::xmmword};
+
+    // `ra` is true (luaR_collectionprep)
+    build.cmp(luauRegTag(ra), LUA_TBOOLEAN);
+    build.jcc(ConditionX64::NotEqual, notStorage);
+    build.cmp(luauRegValueInt(ra), 0);
+    build.jcc(ConditionX64::Equal, notStorage);
+
+    // The storage member holds light userdata after `__init`; without it the C step decides
+    const int member = int(LUAR_OBJECT_MEMBERS_OFFSET + LUAR_STORAGE_MEMBER * sizeof(TValue));
+    build.mov(storage.reg, luauRegValue(ra + 1));
+    build.cmp(dword[storage.reg + member + offsetof(TValue, tt)], LUA_TLIGHTUSERDATA);
+    build.jcc(ConditionX64::NotEqual, notStorage);
+    build.mov(storage.reg, qword[storage.reg + member + offsetof(TValue, value)]);
+
+    // An empty container has no block
+    build.test(storage.reg, storage.reg);
+    build.jcc(ConditionX64::Zero, loopExit);
+
+    build.mov(dwordReg(visited.reg), luauRegValueInt(ra + 2));
+    build.cmp(dwordReg(visited.reg), dword[storage.reg + offsetof(LuauStorage, count)]);
+    build.jcc(ConditionX64::NotBelow, loopExit);
+
+    // slot = (head + visited) & (capacity - 1)
+    build.mov(dwordReg(slot.reg), dword[storage.reg + offsetof(LuauStorage, head)]);
+    build.add(dwordReg(slot.reg), dwordReg(visited.reg));
+    build.mov(mask.reg, dword[storage.reg + offsetof(LuauStorage, capacity)]);
+    build.dec(mask.reg);
+    build.and_(dwordReg(slot.reg), mask.reg);
+    build.shl(slot.reg, kTValueSizeLog2);
+    build.add(slot.reg, storage.reg);
+
+    // The low 32 bits of the light userdata in `ra + 2` count the entries visited
+    build.inc(dwordReg(visited.reg));
+    build.mov(luauRegValueInt(ra + 2), dwordReg(visited.reg));
+
+    build.vcvtsi2sd(fp.reg, fp.reg, dwordReg(visited.reg));
+    build.vmovsd(luauRegValue(ra + 3), fp.reg);
+    build.mov(luauRegTag(ra + 3), LUA_TNUMBER);
+
+    setLuauReg(build, fp.reg, ra + 4, xmmword[slot.reg + offsetof(LuauStorage, items)]);
+
+    for (int i = 2; i < aux; ++i)
+        build.mov(luauRegTag(ra + 3 + i), LUA_TNIL);
+
+    build.jmp(loopRepeat);
+
+    build.setLabel(notStorage);
+}
+
 } // namespace X64
 } // namespace CodeGen
 } // namespace Luau

@@ -2570,10 +2570,10 @@ reentry:
                     setnvalue(ra, cast_num(ts->len));
                     VM_NEXT();
                 }
-                // Luwu collections: builtin containers keep their length in a field
-                else if (const TValue* length = ttisobject(rb) ? luaR_objectlength(objectvalue(rb)) : NULL)
+                // Luwu collections: builtin containers know their length without `__len`
+                else if (ttisobject(rb) && luaR_objectlength(objectvalue(rb)) >= 0)
                 {
-                    setobj2s(L, ra, length);
+                    setnvalue(ra, luaR_objectlength(objectvalue(rb)));
                     VM_NEXT();
                 }
                 else
@@ -2748,9 +2748,9 @@ reentry:
                             ra = VM_REG(LUAU_INSN_A(insn));
 
                             // protect against __iter returning nil, since nil is used as a marker for builtin iteration in FORGLOOP
-                            // Luwu collections: false too, which marks an orderedmap's loop (luaR_collectionprep). It raises the
-                            // same error before the first step that calling it in FORGLOOP would.
-                            if (l_isfalse(ra))
+                            // Luwu collections: booleans too, which mark a builtin container's loop (luaR_collectionprep). It
+                            // raises the same error before the first step that calling it in FORGLOOP would.
+                            if (ttisnil(ra) || ttisboolean(ra))
                             {
                                 VM_PROTECT_PC(); // next call always errors
                                 luaG_typeerror(L, ra, "call");
@@ -2801,7 +2801,8 @@ reentry:
                             ra = VM_REG(LUAU_INSN_A(insn));
 
                             // protect against __iter returning nil, since nil is used as a marker for builtin iteration in FORGLOOP
-                            if (ttisnil(ra))
+                            // Luwu collections: booleans too (see above)
+                            if (ttisnil(ra) || ttisboolean(ra))
                             {
                                 VM_PROTECT_PC(); // next call always errors
                                 luaG_typeerror(L, ra, "call");
@@ -2908,11 +2909,15 @@ reentry:
                     pc++;
                     VM_NEXT();
                 }
-                // Luwu collections: an orderedmap's loop (luaR_collectionprep), stepped without a call
+                // Luwu collections: a builtin container's loop (luaR_collectionprep), stepped without a call. A `vec` or
+                // `vecdeque` (true) steps inline and can't raise.
                 else if (LUAU_UNLIKELY(ttisboolean(ra)))
                 {
                     bool more;
-                    VM_PROTECT(more = luaR_collectionnext(L, ra));
+                    if (bvalue(ra))
+                        more = luaR_storagenext(L, objectvalue(ra + 1), ra);
+                    else
+                        VM_PROTECT(more = luaR_collectionnext(L, ra));
 
                     if (!more)
                     {
