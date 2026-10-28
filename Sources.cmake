@@ -109,6 +109,7 @@ target_sources(Luwu.Config PRIVATE
     Config/src/LinterConfig.cpp
     Config/src/LuauConfig.cpp
     Config/src/Luwon.cpp
+    Config/src/LuwonJson.cpp
     Config/src/LuwonLib.cpp
     Config/src/LuwonWrite.cpp
 )
@@ -461,10 +462,12 @@ target_sources(isocline PRIVATE
 target_sources(Luwu.CLI.lib PRIVATE
     CLI/include/Luau/FileUtils.h
     CLI/include/Luau/Flags.h
+    CLI/include/Luau/LuwonJsonCommand.h
     CLI/include/Luau/VfsNavigator.h
 
     CLI/src/FileUtils.cpp
     CLI/src/Flags.cpp
+    CLI/src/LuwonJsonCommand.cpp
     CLI/src/VfsNavigator.cpp
 )
 

@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // Luwu object notation: `.luwon` data files, read by the syntax check, the evaluator and the type checker.
 #include "Luau/Luwon.h"
+#include "Luau/StringUtils.h"
 
 #include "Fixture.h"
 #include "ScopedFlags.h"
@@ -377,6 +378,78 @@ static std::string manifestWith(const std::string& name, const std::string& vers
 {
     return "return { language = \"luwu\", name = " + name + ", version = " + version + ", dependencies = " + dependencies +
            ", metadata = { url = " + url + " } }";
+}
+
+TEST_CASE("luwon_lossless_json_reads_back_to_the_same_value")
+{
+    LuwonValue value = evaluate(R"LUWON(
+return {
+    name = "chimera",
+    version = Semver(0, 2, 0),
+    window = Rect { width = 640, height = 480 },
+    origin = vector.create(1, 2, 3),
+    blob = buffer.fromstring("\0\1\255"),
+    raw = "\255\254",
+    holes = { 1, nil, 3 },
+    mixed = { "a", key = "b", [true] = 1 },
+    tagged = { ["$vector"] = 1 },
+    limits = { 1 / 0, -1 / 0, 0 / 0 },
+    nothing = none,
+}
+)LUWON");
+
+    LuwonWriteResult json = writeLuwonJson(value, /* lossless= */ true);
+    REQUIRE(!json.error);
+
+    LuwonDocument back = readLuwonJson(json.text);
+    REQUIRE_MESSAGE(back.errors.empty(), back.errors.front().message);
+    CHECK(luwonEquals(*back.value, value));
+}
+
+TEST_CASE("luwon_plain_json_approximates_what_json_has_no_type_for")
+{
+    LuwonValue value = evaluate(R"LUWON(
+return {
+    version = Semver(0, 2, 0),
+    window = Rect { width = 640 },
+    origin = vector.create(1, 2, 3),
+    nothing = none,
+    ratio = 1 / 0,
+    [2] = "two",
+}
+)LUWON");
+
+    CHECK_EQ(writeLuwonJson(value, /* lossless= */ false).text, R"({
+    "version": [0, 2, 0],
+    "window": {
+        "width": 640
+    },
+    "origin": [1, 2, 3],
+    "nothing": null,
+    "ratio": null,
+    "2": "two"
+}
+)");
+}
+
+TEST_CASE("luwon_reads_json")
+{
+    LuwonDocument document = readLuwonJson(R"({"a": [1, 2.5, "é😀"], "b": null, "c": {"$class": "Point", "$args": [1, 2]}, "d": true})");
+    REQUIRE(document.errors.empty());
+    CHECK_EQ(writeLuwon(*document.value).text, "return { a = { 1, 2.5, \"\xc3\xa9\xf0\x9f\x98\x80\" }, b = none, c = Point(1, 2), d = true }\n");
+
+    auto firstJsonError = [](const char* json)
+    {
+        LuwonDocument document = readLuwonJson(json);
+        REQUIRE(!document.errors.empty());
+        const LuwonError& error = document.errors.front();
+        return format("%d:%d: %s", error.location.begin.line + 1, error.location.begin.column + 1, error.message.c_str());
+    };
+
+    CHECK_EQ(firstJsonError("{\"a\": [1, 2,}"), "1:13: unexpected '}'");
+    CHECK_EQ(firstJsonError("{\"a\": 1, \"a\": 2}"), "1:1: the key 'a' is in this object twice");
+    CHECK_EQ(firstJsonError("[1]\n2"), "2:1: expected the end of the file after the value");
+    CHECK_EQ(firstJsonError("{\"$vector\": [1, \"x\", 3]}"), "1:1: '$vector' needs 3 or 4 numbers");
 }
 
 TEST_CASE("luwon_edits_never_inline_a_const")

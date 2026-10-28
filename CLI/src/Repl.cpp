@@ -16,6 +16,7 @@
 #include "Luau/FileUtils.h"
 #include "Luau/Flags.h"
 #include "Luau/JitInliner.h"
+#include "Luau/LuwonJsonCommand.h"
 #include "Luau/Profiler.h"
 #include "Luau/ReplRequirer.h"
 #include "Luau/Require.h"
@@ -705,6 +706,9 @@ static void displayHelp(const char* argv0)
     printf("  --program-args,-a: declare start of arguments to be passed to the Luau program\n");
     printf("  --fflags=<flags>: comma-separated list of fast flags to enable/disable (--fflags=true,false,LuauFlag1=true,LuauFlag2=false).\n");
     printf("  --jit-inliner: enable JIT bytecode inliner\n");
+    printf("  --luwon-to-json <file>: write a .luwon data file as JSON, approximating what JSON has no type for\n");
+    printf("  --luwon-to-json=lossless <file>: write it as JSON that --json-to-luwon reads back to the same data\n");
+    printf("  --json-to-luwon <file>: write a JSON file as a .luwon data file ('-' reads stdin for all three)\n");
 }
 
 static int assertionHandler(const char* expr, const char* file, int line, const char* function)
@@ -720,6 +724,9 @@ int replMain(int argc, char** argv)
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
+
+    if (std::optional<int> converted = runLuwonJsonCommand(argc, argv))
+        return *converted;
 
     int profile = 0;
     bool coverage = false;

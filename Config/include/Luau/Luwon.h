@@ -178,6 +178,14 @@ std::string writeLuwonLiteral(const LuwonValue& value);
 // comments, consts, types and layout stay as they were. `source` must read without errors.
 LuwonWriteResult editLuwon(std::string_view source, const LuwonValue& value);
 
+// A value as JSON, for tools that read JSON but not data files. Plain JSON approximates what JSON has no type for (a vector
+// is an array); lossless JSON writes it as an object with one `$` key, which `readLuwonJson` turns back into the value.
+// `LuwonJson.cpp` lists the forms.
+LuwonWriteResult writeLuwonJson(const LuwonValue& value, bool lossless);
+
+// JSON as a data file's value, the `$` objects of lossless JSON included. `null` is `none`.
+LuwonDocument readLuwonJson(std::string_view json);
+
 // Formats a number the way Luwu's `tostring` does, so string building in a data file gives the runtime's text.
 std::string formatLuwonNumber(double number);
 
