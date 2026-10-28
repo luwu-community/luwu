@@ -2670,6 +2670,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::INVOKE_FASTCALL:
         handleBuiltinEffects(state, LuauBuiltinFunction(function.uintOp(OP_A(inst))), vmRegOp(OP_B(inst)), function.intOp(OP_G(inst)));
         break;
+    case IrCmd::INVOKE_FAST_METHOD:
+        // Luwu collections: a fast method writes its container's tables and its results, and never calls Lua
+        state.invalidateHeap();
+        state.invalidateRegistersFrom(vmRegOp(OP_C(inst)));
+        break;
 
         // These instructions don't have an effect on register/memory state we are tracking
     case IrCmd::NOP:

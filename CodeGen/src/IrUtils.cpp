@@ -334,6 +334,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FASTCALL:
         return IrValueKind::None;
     case IrCmd::INVOKE_FASTCALL:
+    case IrCmd::INVOKE_FAST_METHOD:
         return IrValueKind::Int;
     case IrCmd::CHECK_FASTCALL_RES:
     case IrCmd::DO_ARITH:

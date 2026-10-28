@@ -2286,6 +2286,19 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // Skipping high register bits clear, only consumer is CHECK_FASTCALL_RES which doesn't read them
         break;
     }
+    case IrCmd::INVOKE_FAST_METHOD:
+    {
+        IrCallWrapperX64 callWrap(regs, build, index);
+        callWrap.addArgument(SizeX64::qword, rState);
+        callWrap.addArgument(SizeX64::qword, regOp(OP_A(inst)), OP_A(inst));
+        callWrap.addArgument(SizeX64::dword, uintOp(OP_B(inst)));
+        callWrap.addArgument(SizeX64::dword, vmRegOp(OP_C(inst)));
+        callWrap.addArgument(SizeX64::dword, intOp(OP_D(inst)));
+        callWrap.addArgument(SizeX64::dword, intOp(OP_E(inst)));
+        callWrap.call(qword[rNativeContext + offsetof(NativeContext, invokeFastMethod)]);
+        inst.regX64 = regs.takeReg(eax, index);
+        break;
+    }
     case IrCmd::CHECK_FASTCALL_RES:
     {
         RegisterX64 res = regOp(OP_A(inst));

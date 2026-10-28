@@ -212,7 +212,8 @@ LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classd
  * to luaR_collectionnext, and `ra + 1` the container. `ra + 2` is the loop's state:
  *  - a `vec` or `vecdeque` gets `ra` = true and the number of entries visited, as light userdata like a table loop's
  *    index (luaR_storagenext);
- *  - an `orderedmap` gets `ra` = false and the previous key, nil at the start.
+ *  - an `orderedmap` gets `ra` = false and the previous key, nil at the start. `ra`'s extra field keeps that key's
+ *    position, so a step only looks the key up when the entry there changed.
  */
 LUAI_FUNC bool luaR_collectionprep(lua_State* L, StkId ra);
 

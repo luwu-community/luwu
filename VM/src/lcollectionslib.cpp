@@ -1680,6 +1680,7 @@ bool luaR_collectionprep(lua_State* L, StkId ra)
         setobj2s(L, ra + 1, ra);
         setnilvalue(ra + 2);
         setbvalue(ra, false);
+        ra->extra[0] = 0;
         return true;
     }
 
@@ -1718,15 +1719,23 @@ bool luaR_collectionnext(lua_State* L, StkId ra)
     LuauObject* map = objectvalue(ra + 1);
     LUAU_ASSERT(map->lclass == builtinclass(L, LUWU_BUILTIN_ORDEREDMAP));
 
-    uint32_t position = 1;
+    // The previous key's position, which the last step kept in the loop marker's extra field. When the entry there is
+    // still that key, nothing moved it and the hash lookup isn't needed.
+    uint32_t previous = 0;
     if (!ttisnil(ra + 2))
     {
-        uint32_t previous = omidof(map, ra + 2);
-        if (previous == 0)
-            omlostkey(L, ra);
-        position = omids(map, OM_POSITIONS)[previous - 1] + 1;
+        previous = uint32_t(ra->extra[0]);
+        uint32_t id = omidat(map, double(previous));
+        if (id == 0 || !luaO_rawequalObj(luaH_getnum(omtable(map, OM_KEYS), int(id)), ra + 2))
+        {
+            id = omidof(map, ra + 2);
+            if (id == 0)
+                omlostkey(L, ra);
+            previous = omids(map, OM_POSITIONS)[id - 1];
+        }
     }
 
+    uint32_t position = previous + 1;
     uint32_t id = omidat(map, double(position));
     if (id == 0)
         return false;
@@ -1734,6 +1743,7 @@ bool luaR_collectionnext(lua_State* L, StkId ra)
     setobj2s(L, ra + 3, luaH_getnum(omtable(map, OM_KEYS), int(id)));
     setobj2s(L, ra + 4, luaH_getnum(omtable(map, OM_VALUES), int(id)));
     setobj2s(L, ra + 2, ra + 3);
+    ra->extra[0] = int(position);
     return true;
 }
 

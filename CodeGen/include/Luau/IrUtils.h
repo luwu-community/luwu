@@ -131,7 +131,7 @@ inline bool isPseudo(IrCmd cmd)
 
 inline bool hasSideEffects(IrCmd cmd)
 {
-    if (cmd == IrCmd::INVOKE_FASTCALL)
+    if (cmd == IrCmd::INVOKE_FASTCALL || cmd == IrCmd::INVOKE_FAST_METHOD)
         return true;
 
     if (isPseudo(cmd))
@@ -144,7 +144,7 @@ inline bool hasSideEffects(IrCmd cmd)
 
 inline bool producesDirtyHighRegisterBits(IrCmd cmd)
 {
-    return cmd == IrCmd::NUM_TO_UINT || cmd == IrCmd::INVOKE_FASTCALL || cmd == IrCmd::CMP_ANY;
+    return cmd == IrCmd::NUM_TO_UINT || cmd == IrCmd::INVOKE_FASTCALL || cmd == IrCmd::INVOKE_FAST_METHOD || cmd == IrCmd::CMP_ANY;
 }
 
 // Returns a condition that for 'a op b' will result in '!(a op b)'

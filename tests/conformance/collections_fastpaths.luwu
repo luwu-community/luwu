@@ -509,6 +509,31 @@ do
     assert(vecs.at(stack, 2) == 2 and vecs.at(collections.vec({ 7 }), 1) == 7 and vecs.at(stack, 3) == 3)
 end
 
+-- names with a builtin fast method on a user class, and on a builtin one, at the same call sites
+class Box(public value: number)
+    public function get(self): number
+        return self.value
+    end
+    public function set(self, key: string, value: number)
+        self.value = value
+    end
+    public function has(self, key: string): boolean
+        return key == "a"
+    end
+end
+
+do
+    const box = Box(1)
+    const map = collections.orderedmap()
+    map:set("a", 10)
+    for i = 1, 50 do
+        const receiver = if i % 2 == 0 then box else map
+        maps.set(receiver, "a", i)
+        assert(maps.has(receiver, "a") == true)
+    end
+    assert(box.value == 50 and maps.get(map, "a") == 49 and box:get() == 50)
+end
+
 -- orderedmap loops run without calling `__iter`, and visit what it would
 local function entries(map): string
     local text = ""
@@ -537,6 +562,20 @@ do
         return a > b
     end)
     assert(entries(map) == "k5=5 k4=4 k3=3 k2=2 k1=1 ")
+
+    -- an entry added before the current one moves it, and the loop still continues after it
+    const shifted = collections.orderedmap()
+    for i = 1, 4 do
+        shifted:set(`s{i}`, i)
+    end
+    local order = {}
+    for key in shifted do
+        table.insert(order, key)
+        if key == "s2" then
+            shifted:insert(1, "s0", 0)
+        end
+    end
+    assert(table.concat(order, " ") == "s1 s2 s3 s4")
 
     -- extra loop variables are nil, and a loop can stop early or nest
     for key, value, extra in map do

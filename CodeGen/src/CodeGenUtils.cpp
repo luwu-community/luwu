@@ -155,6 +155,37 @@ static int forgLoopCollection(lua_State* L, TValue* ra, int aux)
     return 1;
 }
 
+/*
+ * Luwu collections: runs the fast method (luaR_FastMethod) of the NAMECALL at `pcpos` on `object`, for INVOKE_FAST_METHOD.
+ * The arguments start at `ra + 2` and the results go to `ra`; missing ones up to `nresults` become nil. Returns how many
+ * the method gave, or -1 when the NAMECALL's cached member has no fast method or the method bails. Then native code
+ * makes the call, and the fallback it misses into caches the member for the next time.
+ */
+int invokeFastMethod(lua_State* L, LuauObject* object, uint32_t pcpos, int ra, int nargs, int nresults)
+{
+    const LuauClass* classdef = object->lclass;
+    if (!classdef->fastmethods)
+        return -1;
+
+    const Proto* proto = clvalue(L->ci->func)->l.p;
+    const Instruction* pc = proto->code + pcpos;
+    LUAU_ASSERT(LUAU_INSN_OP(*pc) == LOP_NAMECALL);
+    uint8_t slot = LUAU_INSN_C(*pc);
+    uint32_t nameconstant = pc[1];
+    bool cached = slot < classdef->numberofallmembers && classdef->offsettomember[slot] == tsvalue(&proto->k[nameconstant]);
+    if (!cached || !classdef->fastmethods[slot])
+        return -1;
+
+    StkId res = L->base + ra;
+    int n = classdef->fastmethods[slot](L, object, res, res + 2, nargs);
+    if (n < 0)
+        return -1;
+
+    for (int i = n; i < nresults; i++)
+        setnilvalue(res + i);
+    return n;
+}
+
 int forgLoopNonTableFallback(lua_State* L, int insnA, int aux)
 {
     TValue* base = L->base;

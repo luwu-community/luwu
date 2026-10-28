@@ -764,6 +764,15 @@ enum class IrCmd : uint8_t
     // B: int
     GET_STORAGE_ENTRY_ADDR,
 
+    // Luwu collections: run a builtin class's fast method for a NAMECALL and its CALL (invokeFastMethod). Gives the number of
+    // results, or -1 when there is none to run and the call has to be made.
+    // A: pointer (LuauObject, the receiver)
+    // B: unsigned int (pcpos of the NAMECALL)
+    // C: Rn (result start; the arguments start two registers later)
+    // D: int (argument count, `self` not included)
+    // E: int (result count or -1 to leave the stack top to ADJUST_STACK_TO_REG)
+    INVOKE_FAST_METHOD,
+
     // Luwu collections: guard against a value not having the element type of a storage block
     // A: pointer (LuauStorage)
     // B: tag (the value's)

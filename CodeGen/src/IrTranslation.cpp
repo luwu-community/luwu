@@ -2221,6 +2221,19 @@ static StorageMethodInfo storageMethodOf(const TString* name)
     return {};
 }
 
+// Luwu collections: whether a builtin class has a fast method (luaR_FastMethod) named `name` that isn't translated to IR,
+// which INVOKE_FAST_METHOD runs
+static bool isFastMethodName(const TString* name)
+{
+    static const char* const kNames[] = {"get", "has", "set", "expect", "err"};
+    for (const char* fastName : kNames)
+    {
+        if (strcmp(getstr(name), fastName) == 0)
+            return true;
+    }
+    return false;
+}
+
 // Writes a call's `nresults` results from `callra` on: when `storage` is given, the entry `offset` places from its
 // front first, then nils. A call taking every result (LUA_MULTRET) gets the entry, or nothing, and the stack top after
 // it. Nothing is loaded for a call that takes no results: the IR keeps instructions nothing uses.
@@ -2514,16 +2527,22 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
     // The builder skips a CALLFB's second word only with call feedback on, and a FASTCALL's fallback needs the CALL it
     // translates
     bool callIsSkippable = LUAU_INSN_OP(call) == LOP_CALL || FFlag::LuauCallFeedback;
+    bool invokesFastMethod = false;
     if (objectSpeculation && callIsSkippable && !build.activeFastcallFallback)
     {
         CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALLFB || LUAU_INSN_OP(call) == LOP_CALL);
-        StorageMethodInfo candidate = storageMethodOf(tsvalue(&build.function.proto->k[aux]));
+        const TString* name = tsvalue(&build.function.proto->k[aux]);
+        StorageMethodInfo candidate = storageMethodOf(name);
         // The call passes `self` and the arguments, and may take any number of results
         if (candidate.params == LUAU_INSN_B(call) - 2)
             storageMethod = candidate;
+
+        // A fast method needs a known argument count, and the NAMECALL's own member cache (not NAMECALLUDATA's)
+        invokesFastMethod = isFastMethodName(name) && LUAU_INSN_B(call) >= 2 && LUAU_INSN_OP(*pc) == LOP_NAMECALL;
     }
     bool lowersStorageMethod = storageMethod.method != StorageMethod::None;
-    IrOp afterCall = lowersStorageMethod ? build.blockAtInst(callpc + getOpLength(LuauOpcode(LUAU_INSN_OP(call)))) : IrOp{};
+    bool skipsCall = lowersStorageMethod || invokesFastMethod;
+    IrOp afterCall = skipsCall ? build.blockAtInst(callpc + getOpLength(LuauOpcode(LUAU_INSN_OP(call)))) : IrOp{};
 
     IrOp firstFastPathSuccess = build.block(IrBlockKind::Internal);
     IrOp secondFastPath = build.block(IrBlockKind::Internal);
@@ -2574,14 +2593,41 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
         build.beginBlock(objBlock);
         build.loadAndCheckTag(build.vmReg(rb), LUA_TOBJECT, fallback);
 
-        if (lowersStorageMethod)
+        if (skipsCall)
         {
             // Objects of other classes take the generic path, a fallback block like this one
             IrOp otherObject = build.fallbackBlock(pcpos);
-            IrOp object = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
-            build.inst(IrCmd::CHECK_STORAGE, object, build.constInt(storageMethod.kind), otherObject);
-            translateStorageMethod(build, storageMethod.method, object, pcpos, LUAU_INSN_A(call), LUAU_INSN_C(call) - 1, fallback);
-            build.inst(IrCmd::JUMP, afterCall);
+            int callra = LUAU_INSN_A(call);
+            int nresults = LUAU_INSN_C(call) - 1;
+
+            if (lowersStorageMethod)
+            {
+                IrOp notStorage = invokesFastMethod ? build.fallbackBlock(pcpos) : otherObject;
+                IrOp object = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+                build.inst(IrCmd::CHECK_STORAGE, object, build.constInt(storageMethod.kind), notStorage);
+                translateStorageMethod(build, storageMethod.method, object, pcpos, callra, nresults, fallback);
+                build.inst(IrCmd::JUMP, afterCall);
+
+                if (invokesFastMethod)
+                    build.beginBlock(notStorage);
+            }
+
+            if (invokesFastMethod)
+            {
+                IrOp object = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+                IrOp count = build.inst(
+                    IrCmd::INVOKE_FAST_METHOD,
+                    object,
+                    build.constUint(pcpos),
+                    build.vmReg(callra),
+                    build.constInt(LUAU_INSN_B(call) - 2),
+                    build.constInt(nresults)
+                );
+                build.inst(IrCmd::CHECK_CMP_INT, count, build.constInt(0), build.cond(IrCondition::GreaterEqual), otherObject);
+                if (nresults == LUA_MULTRET)
+                    build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(callra), count);
+                build.inst(IrCmd::JUMP, afterCall);
+            }
 
             build.beginBlock(otherObject);
         }
@@ -2595,7 +2641,7 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
 
     build.beginBlock(next);
 
-    if (!lowersStorageMethod)
+    if (!skipsCall)
         return false;
 
     // The CALL as the builder translates it, which every path but the inline method reaches

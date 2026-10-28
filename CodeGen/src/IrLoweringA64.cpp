@@ -2891,6 +2891,21 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             emitAbort(build, abort);
         break;
     }
+    case IrCmd::INVOKE_FAST_METHOD:
+    {
+        RegisterA64 object = regOp(OP_A(inst)); // note: we need to call regOp before spill so that we don't do redundant reloads
+        regs.spill(index, {object});
+        build.mov(x1, object);
+        build.mov(x0, rState);
+        build.mov(w2, uintOp(OP_B(inst)));
+        build.mov(w3, vmRegOp(OP_C(inst)));
+        build.mov(w4, intOp(OP_D(inst)));
+        build.mov(w5, intOp(OP_E(inst)));
+        build.ldr(x6, mem(rNativeContext, offsetof(NativeContext, invokeFastMethod)));
+        build.blr(x6);
+        inst.regA64 = regs.takeReg(w0, index);
+        break;
+    }
     case IrCmd::CHECK_STORAGE:
     {
         // Luwu collections: see the X64 lowering

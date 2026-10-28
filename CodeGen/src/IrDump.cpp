@@ -409,6 +409,8 @@ const char* getCmdName(IrCmd cmd)
         return "GET_STORAGE_ENTRY_ADDR";
     case IrCmd::CHECK_STORAGE_ELEMENT:
         return "CHECK_STORAGE_ELEMENT";
+    case IrCmd::INVOKE_FAST_METHOD:
+        return "INVOKE_FAST_METHOD";
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
         return "CHECK_CLASS_FIELDS_CONSTRUCTIBLE";
     case IrCmd::CHECK_CLASS_ALLOCATABLE:
