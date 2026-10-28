@@ -676,6 +676,8 @@ struct NoTypeUse
     std::string name;
     // The error that left the local without a type, when one was reported
     std::optional<Location> origin;
+    // The first line of that error's message, quoted in the help
+    std::string originMessage;
     bool showHelp = true;
 
     bool operator==(const NoTypeUse& rhs) const;
@@ -691,7 +693,7 @@ struct DiagnosticNote
     std::optional<Location> origin;
 };
 
-// The note on a use of the local `name`, which has no type because of the error at `origin`.
+// What the error and the note on a use of the local `name` say when it has no type. `origin` is the error behind it.
 std::string noTypeNote(const std::string& name, std::optional<Location> origin);
 
 struct PropertyAccessViolation
