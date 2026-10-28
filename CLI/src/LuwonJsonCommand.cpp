@@ -16,11 +16,11 @@ enum class LuwonJsonConversion
 
 static std::optional<LuwonJsonConversion> conversionOf(const char* arg)
 {
-    if (strcmp(arg, "--luwon-to-json") == 0)
+    if (strcmp(arg, "--json") == 0 || strcmp(arg, "--luwon-to-json") == 0)
         return LuwonJsonConversion::ToJson;
-    if (strcmp(arg, "--luwon-to-json=lossless") == 0)
+    if (strcmp(arg, "--json=lossless") == 0 || strcmp(arg, "--luwon-to-json=lossless") == 0)
         return LuwonJsonConversion::ToLosslessJson;
-    if (strcmp(arg, "--json-to-luwon") == 0)
+    if (strcmp(arg, "--luwon") == 0 || strcmp(arg, "--json-to-luwon") == 0)
         return LuwonJsonConversion::ToLuwon;
     return std::nullopt;
 }

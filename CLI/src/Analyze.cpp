@@ -137,9 +137,9 @@ static void displayHelp(const char* argv0)
     printf("Available modes:\n");
     printf("  omitted: typecheck and lint input files\n");
     printf("  --annotate: typecheck input files and output source with type annotations\n");
-    printf("  --luwon-to-json <file>: write a .luwon data file as JSON, approximating what JSON has no type for\n");
-    printf("  --luwon-to-json=lossless <file>: write it as JSON that --json-to-luwon reads back to the same data\n");
-    printf("  --json-to-luwon <file>: write a JSON file as a .luwon data file ('-' reads stdin for all three)\n");
+    printf("  --json <file>: write a .luwon data file as JSON, approximating what JSON has no type for (or --luwon-to-json)\n");
+    printf("  --json=lossless <file>: write it as JSON that --luwon reads back to the same data\n");
+    printf("  --luwon <file>: write a JSON file as a .luwon data file (or --json-to-luwon; '-' reads stdin for all three)\n");
     printf("\n");
     printf("Available options:\n");
     printf("  --formatter=plain: report analysis errors in Luacheck-compatible format\n");

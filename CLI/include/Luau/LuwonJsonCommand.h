@@ -3,8 +3,8 @@
 
 #include <optional>
 
-// Luwu object notation: `--luwon-to-json[=lossless] <file>` writes a data file as JSON, and `--json-to-luwon <file>` writes
-// JSON as a data file, both to stdout. `-` reads stdin.
+// Luwu object notation: `--json[=lossless] <file>` writes a data file as JSON, and `--luwon <file>` writes JSON as a data
+// file, both to stdout. `-` reads stdin. `--luwon-to-json` and `--json-to-luwon` are the long spellings.
 
 // Runs the conversion `argv` asks for and returns the exit code, or nullopt when it asks for none
 std::optional<int> runLuwonJsonCommand(int argc, char** argv);

@@ -706,9 +706,9 @@ static void displayHelp(const char* argv0)
     printf("  --program-args,-a: declare start of arguments to be passed to the Luau program\n");
     printf("  --fflags=<flags>: comma-separated list of fast flags to enable/disable (--fflags=true,false,LuauFlag1=true,LuauFlag2=false).\n");
     printf("  --jit-inliner: enable JIT bytecode inliner\n");
-    printf("  --luwon-to-json <file>: write a .luwon data file as JSON, approximating what JSON has no type for\n");
-    printf("  --luwon-to-json=lossless <file>: write it as JSON that --json-to-luwon reads back to the same data\n");
-    printf("  --json-to-luwon <file>: write a JSON file as a .luwon data file ('-' reads stdin for all three)\n");
+    printf("  --json <file>: write a .luwon data file as JSON, approximating what JSON has no type for (or --luwon-to-json)\n");
+    printf("  --json=lossless <file>: write it as JSON that --luwon reads back to the same data\n");
+    printf("  --luwon <file>: write a JSON file as a .luwon data file (or --json-to-luwon; '-' reads stdin for all three)\n");
 }
 
 static int assertionHandler(const char* expr, const char* file, int line, const char* function)
