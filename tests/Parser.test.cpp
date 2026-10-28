@@ -8457,7 +8457,7 @@ TEST_CASE_FIXTURE(Fixture, "export_declare_class_exports_the_class_value")
     REQUIRE_EQ(nested.errors.size(), 1);
     CHECK_EQ(
         nested.errors[0].getMessage(),
-        "'export declare class' exports a value, which only a top-level statement can do; move it out of the 'do' block"
+        "Move this 'export declare class' statement outside the 'do' block into the module's top level"
     );
 }
 

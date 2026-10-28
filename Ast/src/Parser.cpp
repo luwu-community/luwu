@@ -82,7 +82,7 @@ const char* const kDeclareExportValueError =
 // Luwu Declare Statements (rfcs/declare-statements.md): an exported declared class is an exported value, and those are
 // top-level statements.
 const char* const kDeclareExportNestedError =
-    "'export declare %s' exports a value, which only a top-level statement can do; move it out of the 'do' block";
+    "Move this 'export declare %s' statement outside the 'do' block into the module's top level";
 // Luwu: upstream's legacy `declare class` declares an extern type; in Luwu it is a class or nothing.
 const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead";
 const char* const kDeclareClassTypeError =
