@@ -511,7 +511,9 @@ struct Differ
 
     // `sub` is an array of what `super` expects, or one element of the array `super` expects: the
     // reader passed a list where one value goes, or the reverse. Nullopt for anything else, and for an
-    // `any` or `unknown` element, which fits everything and so says nothing about intent.
+    // `any` or `unknown` element, which fits everything and so says nothing about intent. Nullopt too
+    // when both are arrays of fitting elements: `{ {string} }` given for `{ {read unknown} }` is nested
+    // right and only fails because the outer array can be written.
     std::optional<std::pair<Difference::Kind, TypeId>> arrayNesting(TypeId sub, TypeId super)
     {
         auto isTop = [](TypeId ty)
@@ -519,6 +521,11 @@ struct Differ
             ty = follow(ty);
             return get<AnyType>(ty) || get<UnknownType>(ty);
         };
+
+        std::optional<TypeId> subElement = arrayElement(sub);
+        std::optional<TypeId> superElement = arrayElement(super);
+        if (subElement && superElement && fits(*subElement, *superElement))
+            return std::nullopt;
 
         if (std::optional<TypeId> element = arrayElement(sub); element && !isTop(*element) && fits(*element, super))
             return std::make_pair(Difference::Kind::ArrayOfExpected, *element);
