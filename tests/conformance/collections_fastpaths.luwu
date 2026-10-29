@@ -124,9 +124,12 @@ function maps.set(map, key, value)
     map:set(key, value)
 end
 
--- `some`, `ok` and `err` have `get`, `expect` and `err` at the same offsets, so one call site serves all three
+-- `some`, `ok` and `err` keep `expect` at the same offset, so one call site serves all three
 function holders.get(holder)
     return holder:get()
+end
+function holders.ok(holder)
+    return holder:ok()
 end
 function holders.expect(holder, message)
     return holder:expect(message)
@@ -471,7 +474,7 @@ do
     end, "missing argument #3")
 end
 
--- option and result: `get`, `expect` and `err`
+-- option and result: `get`, `ok`, `expect` and `err`
 do
     const some = collections.option.some({ 1 })
     const good = collections.result.ok(nil)
@@ -479,9 +482,9 @@ do
     for _ = 1, 3 do
         assert(holders.get(some)[1] == 1 and holders.expect(some)[1] == 1 and holders.expect(some, "why")[1] == 1)
         assert(holders.expect(some, 5)[1] == 1)
-        assert(holders.get(good) == nil and holders.err(good) == none and holders.expect(good) == nil)
-        assert(holders.get(bad) == none and holders.err(bad) == "e")
-        assert(select("#", holders.get(good)) == 1)
+        assert(holders.ok(good) == nil and holders.err(good) == none and holders.expect(good) == nil)
+        assert(holders.ok(bad) == none and holders.err(bad) == "e")
+        assert(select("#", holders.ok(good)) == 1)
     end
     raises(function()
         holders.expect(some, {})

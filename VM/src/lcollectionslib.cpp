@@ -1495,11 +1495,12 @@ static int someinit(lua_State* L)
     return payloadinit(L);
 }
 
-// `get` and `expect` of a `some` or an `ok`: the value
+// `get` of a `some` and `ok` of an `ok`: the value
 template<LuwuBuiltinClass Kind>
 static int payloadget(lua_State* L)
 {
-    luaA_pushvalue(L, &luaR_members(checkpayload<Kind>(L, "get"))[kPayload]);
+    const char* method = Kind == LUWU_BUILTIN_SOME ? "get" : "ok";
+    luaA_pushvalue(L, &luaR_members(checkpayload<Kind>(L, method))[kPayload]);
     return 1;
 }
 
@@ -1548,10 +1549,10 @@ static int okerr(lua_State* L)
     return 1;
 }
 
-// `get` of an `err`: there's no value
-static int errget(lua_State* L)
+// `ok` of an `err`: there's no value
+static int errok(lua_State* L)
 {
-    checkpayload<LUWU_BUILTIN_ERR>(L, "get");
+    checkpayload<LUWU_BUILTIN_ERR>(L, "ok");
     lua_pushsymnone(L);
     return 1;
 }
@@ -1607,7 +1608,7 @@ static const luaR_NativeMember kSomeMembers[] = {
 
 static const luaR_NativeMember kOkMembers[] = {
     {"value", NULL, kPrivateField},
-    {"get", payloadget<LUWU_BUILTIN_OK>, 0, payloadgetfast},
+    {"ok", payloadget<LUWU_BUILTIN_OK>, 0, payloadgetfast},
     {"expect", payloadexpect<LUWU_BUILTIN_OK>, 0, payloadexpectfast},
     {"err", okerr, 0, nonefast},
     {"__eq", payloadeq<LUWU_BUILTIN_OK>, 0},
@@ -1616,7 +1617,7 @@ static const luaR_NativeMember kOkMembers[] = {
 
 static const luaR_NativeMember kErrMembers[] = {
     {"error", NULL, kPrivateField},
-    {"get", errget, 0, nonefast},
+    {"ok", errok, 0, nonefast},
     {"expect", errexpect, 0},
     {"err", errerr, 0, payloadgetfast},
     {"__eq", payloadeq<LUWU_BUILTIN_ERR>, 0},

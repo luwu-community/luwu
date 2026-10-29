@@ -471,7 +471,7 @@ end
 
 class type ok<T>
     public function __init(self, value: T)
-    public function get(self): T
+    public function ok(self): T
     public function expect(self, message: string?): T
     public function err(self): none
     public function __eq(self, other: ok<T>): boolean
@@ -480,7 +480,7 @@ end
 
 class type err<E>
     public function __init(self, error: E)
-    public function get(self): none
+    public function ok(self): none
     public function expect(self, message: string?): never
     public function err(self): E
     public function __eq(self, other: err<E>): boolean

@@ -2225,7 +2225,7 @@ static StorageMethodInfo storageMethodOf(const TString* name)
 // which INVOKE_FAST_METHOD runs
 static bool isFastMethodName(const TString* name)
 {
-    static const char* const kNames[] = {"get", "has", "set", "expect", "err"};
+    static const char* const kNames[] = {"get", "has", "set", "expect", "ok", "err"};
     for (const char* fastName : kNames)
     {
         if (strcmp(getstr(name), fastName) == 0)

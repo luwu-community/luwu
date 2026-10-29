@@ -611,14 +611,14 @@ do
     const result = collections.result
     const good = result.ok(5)
     const bad = result.err("not a number")
-    assert(good:get() == 5 and good:expect("why") == 5 and good:err() == none)
-    assert(bad:get() == none and bad:err() == "not a number")
+    assert(good:ok() == 5 and good:expect("why") == 5 and good:err() == none)
+    assert(bad:ok() == none and bad:err() == "not a number")
     assert(tostring(good) == "result.ok(5)" and tostring(bad) == `result.err("not a number")`)
     assert(good == result.ok(5) and bad ~= result.err("other") and good ~= result.err(5))
     assert(class.isinstance(bad, result.err) and not class.isinstance(bad, result.ok))
 
     -- `ok` holds any value, `nil` included
-    assert(result.ok(nil):get() == nil)
+    assert(result.ok(nil):ok() == nil)
 
     raises(function()
         bad:expect("parsing failed")
@@ -649,7 +649,7 @@ do
     const results = collections.vecdeque()
     results:pushback(collections.result.ok(1))
     results:pushfront(collections.result.err("no"))
-    assert(results:front():err() == "no" and results:back():get() == 1)
+    assert(results:front():err() == "no" and results:back():ok() == 1)
     raises(function()
         results:pushback(none)
     end, "this vecdeque can only accept results, but you passed none")

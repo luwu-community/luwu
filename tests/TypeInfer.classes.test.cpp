@@ -6160,7 +6160,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
         local text = good:expect()
         local bad = collections.result.err(42)
         local code = bad:err()
-        local missing = bad:get()
+        local missing = bad:ok()
         local typed: collections.option<number> = collections.option.none
         local typedhit: collections.option<number> = hit
         local notglobal: option<number> = hit
