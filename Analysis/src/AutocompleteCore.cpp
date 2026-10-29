@@ -730,10 +730,18 @@ static void autocompleteProps(
         }
     };
 
+    // Luwu Traits (rfcs/classes/traits.md): `__create` and `__implemented` run on the trait itself (`Trait(...)`, and
+    // when a class implements it). A value typed by the trait is an object, which has neither.
+    const char* rootKind = luwuNominalKind(rootTy);
+    bool onObject = rootKind && std::string_view(rootKind) == "object";
+
     auto fillProps = [&](const ExternType::Props& props, const ExternType* owner)
     {
         for (const auto& [name, prop] : props)
         {
+            if (onObject && (name == "__create" || name == "__implemented"))
+                continue;
+
             // We are walking up the class hierarchy, so if we encounter a property that we have
             // already populated, it takes precedence over the property we found just now.
             // `__init` is callable (see classes.md's `reset` example) but deliberately hidden from

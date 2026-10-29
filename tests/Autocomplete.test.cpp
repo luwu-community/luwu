@@ -1220,6 +1220,42 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_a_traits_special_functions")
     CHECK_EQ(ac.entryMap.count("__tostring"), 0);
 }
 
+// `__create` and `__implemented` belong to the trait, called through `Trait(...)` and when a class implements it. An
+// object has neither.
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_hides_a_traits_special_functions_on_objects")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    check(R"(
+        trait Path
+            function __create(p: string)
+                return Plain()
+            end
+            final function __implemented(cls) end
+            function join(self) end
+        end
+        class Plain() implements Path end
+        local plain = Plain()
+        local path: Path = plain
+        local a = plain:@1
+        local b = plain.@2
+        local c = path:@3
+        local d = path.@4
+    )");
+
+    for (char marker : {'1', '2', '3', '4'})
+    {
+        INFO(marker);
+        auto ac = autocomplete(marker);
+        CHECK(ac.entryMap.count("join"));
+        CHECK_EQ(ac.entryMap.count("__create"), 0);
+        CHECK_EQ(ac.entryMap.count("__implemented"), 0);
+    }
+}
+
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_offers_private_class_members_only_inside_their_class")
 {
     ScopedFastFlag sffs[] = {
