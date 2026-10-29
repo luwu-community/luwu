@@ -1482,17 +1482,54 @@ static int payloadinit(lua_State* L)
     return 0;
 }
 
+static void formatsomemissing(lua_State* L, char (&message)[LUA_BUFFERSIZE], int type)
+{
+    snprintf(message, sizeof(message), "option.some needs a value, but you passed %s", getstr(L->global->ttname[type]));
+}
+
 // `__init` runs under the class's C constructor, so its error is raised at the Lua code constructing
 static int someinit(lua_State* L)
 {
     if (lua_gettop(L) < 2 || isnovalue(L->base + 1))
     {
         char message[LUA_BUFFERSIZE];
-        int type = lua_gettop(L) < 2 ? LUA_TNIL : ttype(L->base + 1);
-        snprintf(message, sizeof(message), "option.some needs a value, but you passed %s", getstr(L->global->ttname[type]));
+        formatsomemissing(L, message, lua_gettop(L) < 2 ? LUA_TNIL : ttype(L->base + 1));
         luaG_runerroratlua(L, message);
     }
     return payloadinit(L);
+}
+
+LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value)
+{
+    LuauClass* classdef = builtinclass(L, kind);
+    if (!classdef)
+        luaG_runerror(L, "open the collections library before building an option or result");
+
+    if (kind == LUWU_BUILTIN_SOME && isnovalue(value))
+    {
+        char message[LUA_BUFFERSIZE];
+        formatsomemissing(L, message, ttype(value));
+        luaG_runerror(L, "%s", message);
+    }
+
+    // A new object is white, so storing into it needs no barrier
+    LuauObject* object = luaR_newobjectuninit(L, classdef);
+    TValue* members = luaR_members(object);
+    setobj(L, &members[kPayload], value);
+    for (int i = kPayload + 1; i < int(object->numberofmembers); i++)
+        setnilvalue(&members[i]);
+    return object;
+}
+
+const TValue* luaR_payload(lua_State* L, const TValue* value)
+{
+    if (!ttisobject(value))
+        return NULL;
+
+    LuauObject* object = objectvalue(value);
+    bool holdsPayload = object->lclass == builtinclass(L, LUWU_BUILTIN_SOME) || object->lclass == builtinclass(L, LUWU_BUILTIN_OK) ||
+                        object->lclass == builtinclass(L, LUWU_BUILTIN_ERR);
+    return holdsPayload ? &luaR_members(object)[kPayload] : NULL;
 }
 
 // `get` of a `some` and `ok` of an `ok`: the value

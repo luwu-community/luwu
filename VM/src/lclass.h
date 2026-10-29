@@ -4,6 +4,7 @@
 
 #include "lmem.h"
 #include "lobject.h"
+#include "lstate.h"
 #include "lbytecode.h"
 
 // An instance's members are allocated inline, immediately after the LuauObject header, so a
@@ -223,6 +224,13 @@ LUAI_FUNC bool luaR_collectionprep(lua_State* L, StkId ra);
  * same errors.
  */
 LUAI_FUNC bool luaR_collectionnext(lua_State* L, StkId ra);
+
+// Luwu collections: a new `some`, `ok` or `err` (`kind`) holding `value`, for the C API. Raises if the library isn't open
+// or a `some` gets nil or none.
+LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value);
+
+// Luwu collections: the value a `some`, `ok` or `err` holds, or NULL for any other value
+LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
 
 // Luwu collections: the storage block of a `vec` or `vecdeque`, or NULL before its first value. Its `__init` sets the
 // object's storage kind and leaves the storage member nil. Native code reads light userdata there as a block.
