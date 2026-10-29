@@ -536,8 +536,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "array_of_arrays_given_for_read_only_elements
         std::string message = toString(result.errors[0]);
         INFO(message);
         CHECK(message.find("single value") == std::string::npos);
-        CHECK(message.find("read/write mismatch") != std::string::npos);
-        CHECK(message.find("annotate the parameter as '{ read {read unknown} }'") != std::string::npos);
+        CHECK(message.find("(read works, write doesn't)") != std::string::npos);
+        CHECK(message.find("into 'strings'") != std::string::npos);
+        CHECK(message.find("expect '{ read {read unknown} }'") != std::string::npos);
 
         // The suggestion to mark the parameter `read` points at the outer array's element type.
         CHECK_EQ(Location{{1, 43}, {1, 59}}, result.errors[1].location);
