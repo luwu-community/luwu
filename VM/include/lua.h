@@ -547,9 +547,12 @@ LUA_API void lua_newobject(lua_State* L, int idx);
 LUA_API int lua_getmemberaccess(lua_State* L, int idx, const char* membername);
 LUA_API int lua_ismemberconst(lua_State* L, int idx, const char* membername);
 LUA_API const char* lua_getclassname(lua_State* L, int idx);
-// Luwu Classes (rfcs/classes): pushes the class of the object at `idx`, or the class itself, and returns 1. Returns 0
-// and pushes nothing for any other value. Compare the result with lua_rawequal to check an object's class.
-LUA_API int lua_getclass(lua_State* L, int idx);
+// Luwu Classes (rfcs/classes): `class.of` for embedders. Pushes the class of the object at `idx` and returns 1. Returns 0
+// and pushes nothing for any other value, a class included.
+LUA_API int lua_classof(lua_State* L, int idx);
+// Luwu Classes (rfcs/classes): `class.is` for embedders. Returns 1 if the value at `idx` is an object of exactly the class
+// at `classidx`, 0 otherwise. Raises if the value at `classidx` isn't a class.
+LUA_API int lua_classis(lua_State* L, int idx, int classidx);
 
 LUA_API int lua_getbuffermode(lua_State* L, int idx);
 LUA_API void* lua_getbufferuserdata(lua_State* L, int idx);

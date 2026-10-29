@@ -1808,16 +1808,26 @@ const char* lua_getclassname(lua_State* L, int idx)
     return classdef ? getstr(classdef->name) : NULL;
 }
 
-int lua_getclass(lua_State* L, int idx)
+int lua_classof(lua_State* L, int idx)
 {
-    LuauClass* classdef = classofvalue(index2addr(L, idx));
-    if (!classdef)
+    const TValue* o = index2addr(L, idx);
+    if (!ttisobject(o))
         return 0;
 
     luaC_threadbarrier(L);
-    setclassvalue(L, L->top, classdef);
+    setclassvalue(L, L->top, objectvalue(o)->lclass);
     api_incr_top(L);
     return 1;
+}
+
+int lua_classis(lua_State* L, int idx, int classidx)
+{
+    const TValue* cls = index2addr(L, classidx);
+    if (!ttisclass(cls))
+        luaG_runerror(L, "expected a class, got %s", luaT_objtypename(L, cls));
+
+    const TValue* o = index2addr(L, idx);
+    return ttisobject(o) && objectvalue(o)->lclass == classvalue(cls);
 }
 
 static const char* aux_upvalue(StkId fi, int n, TValue** val)

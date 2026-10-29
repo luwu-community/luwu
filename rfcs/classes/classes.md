@@ -1002,9 +1002,13 @@ Returns the constness of `membername` on the `class` or `object` at `idx`. Retur
 
 Returns the class name (the name of the identifier the class binding was declared with) of the class or object at `idx`. If the value at `idx` is an `object`, follows the class pointer to find the class that object is an instance of. The returned string is valid for the lifetime of the class--users should clone it immediately if they plan on keeping it around for a while.
 
-### `int lua_getclass(lua_State* L, int idx);`
+### `int lua_classof(lua_State* L, int idx);`
 
-Pushes the class of the `object` at `idx`, or the `class` itself if the value at `idx` is a class, and returns 1. Returns 0 and pushes nothing for any other value. Class names aren't unique, so compare the pushed class with `lua_rawequal` to check whether an object is an instance of a specific class.
+The C API's `class.of`. Pushes the class of the `object` at `idx` and returns 1. Returns 0 and pushes nothing for any other value, including a `class`.
+
+### `int lua_classis(lua_State* L, int idx, int classidx);`
+
+The C API's `class.is`. Returns 1 if the value at `idx` is an `object` of exactly the `class` at `classidx`, and 0 otherwise. Raises an error if the value at `classidx` is not a class. Class names aren't unique, so use this rather than comparing `lua_getclassname` results to check an object's class.
 
 ## Compatibility
 
