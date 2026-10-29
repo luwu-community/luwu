@@ -4944,6 +4944,98 @@ std::string classesCApiProtected(lua_State* L, std::function<void(lua_State*)> f
 
 } // namespace
 
+// Luwu Traits (rfcs/classes/traits.md): the traits C API, from an embedder context with no Lua frame
+TEST_CASE("TraitsCApi")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    const char* source = R"(
+trait Component
+    final function id(self)
+        return 1
+    end
+
+    function describe(self)
+        return "component"
+    end
+end
+
+trait Card needs Component end
+
+class Ace() implements Card end
+
+class Plain() end
+
+return Component, Card, Ace(), Plain(), Ace
+)";
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    int loadResult = luau_load(L, "=TraitsCApi", bytecode, bytecodeSize, 0);
+    free(bytecode);
+    REQUIRE(loadResult == 0);
+    REQUIRE(lua_pcall(L, 0, 5, 0) == LUA_OK);
+    // stack: Component, Card, an Ace, a Plain, Ace
+
+    SUBCASE("lua_istrait")
+    {
+        CHECK(lua_istrait(L, 1) == 1);
+        CHECK(lua_istrait(L, 2) == 1);
+        CHECK(lua_istrait(L, 5) == 0);
+        CHECK(lua_istrait(L, 3) == 0);
+    }
+
+    SUBCASE("lua_classimplements")
+    {
+        CHECK(lua_classimplements(L, 3, 2) == 1);
+        CHECK(lua_classimplements(L, 3, 1) == 1); // through `Card needs Component`
+        CHECK(lua_classimplements(L, 4, 1) == 0);
+        CHECK(lua_classimplements(L, 5, 1) == 0); // a class isn't an object
+        CHECK(lua_classimplements(L, 10, 1) == 0); // an unused stack slot
+
+        std::string err = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_pushnumber(L, 1);
+                lua_pushnumber(L, 2);
+                lua_classimplements(L, 1, 2);
+            }
+        );
+        CHECK(err == "expected a trait, got number");
+    }
+
+    SUBCASE("lua_ismemberfinal")
+    {
+        CHECK(lua_ismemberfinal(L, 1, "id") == 1);
+        CHECK(lua_ismemberfinal(L, 1, "describe") == 0);
+        CHECK(lua_ismemberfinal(L, 1, "nope") == 0);
+        CHECK(lua_ismemberfinal(L, 3, "id") == 1); // an implementing class keeps the trait's final member
+        CHECK(lua_ismemberfinal(L, 5, "describe") == 0);
+
+        std::string err = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_pushliteral(L, "hi");
+                lua_ismemberfinal(L, 1, "x");
+            }
+        );
+        CHECK(err == "expected a class or object, got string");
+    }
+
+    CHECK(lua_gettop(L) == 5);
+}
+
 TEST_CASE("ClassesCApi")
 {
     ScopedFastFlag sffs[] = {
