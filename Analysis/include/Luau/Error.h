@@ -105,6 +105,8 @@ struct TypeMismatch
     // The name the given value has in the code: the variable it was read from, or where a literal is being put. The
     // message calls the value by it (`Expected 'settings' to be`), and the reason's paths start at it.
     std::optional<std::string> givenVariable;
+    // Luwu (helpful subtyping errors): a short note printed after the given type, like `(read works, write doesn't)`.
+    std::optional<std::string> givenNote;
     // Luwu (helpful subtyping errors): the `where` block under the two types. When it isn't empty,
     // `wantedName` and `givenName` hold the two types printed with these names.
     std::vector<NamedTypeDeclaration> whereDeclarations;
