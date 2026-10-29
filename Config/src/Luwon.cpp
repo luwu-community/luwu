@@ -404,8 +404,10 @@ private:
         for (size_t i = 0; i < local->vars.size; i++)
         {
             consts[local->vars.data[i]] = i < values.size() ? values[i] : LuwonValue{};
-            // `const a = b` gives `a` the place `b` is written, so an edit through `a` changes `b`'s value
-            if (i < local->values.size)
+            // `const a = b` gives `a` the place `b` is written, so an edit through `a` changes `b`'s value.
+            // Luwu Destructuring (rfcs/destructuring.md): a destructured name reads a field of a hidden local, which isn't
+            // a place an edit can write a value
+            if (i < local->values.size && !local->isDesugaredField())
                 bindings[local->vars.data[i]] = bindingOf(local->values.data[i]).value_or(innermost(local->values.data[i])->location);
         }
     }
@@ -462,6 +464,8 @@ private:
             return evaluateCall(call);
         if (AstExprIndexName* index = expr->as<AstExprIndexName>())
             return readField(index->expr, makeString(std::string(index->index.value)), index->location);
+        if (AstExprIndexExpr* index = expr->as<AstExprIndexExpr>(); index && index->positional)
+            return readElement(index->expr, evaluate(index->index), index->location);
         if (AstExprIndexExpr* index = expr->as<AstExprIndexExpr>())
             return readField(index->expr, evaluate(index->index), index->location);
         if (AstExprUnary* unary = expr->as<AstExprUnary>())
@@ -630,8 +634,11 @@ private:
 
     LuwonValue readField(AstExpr* objectExpr, const LuwonValue& key, const Location& location)
     {
-        LuwonValue object = evaluate(objectExpr);
+        return readFieldOf(evaluate(objectExpr), key, location);
+    }
 
+    LuwonValue readFieldOf(const LuwonValue& object, const LuwonValue& key, const Location& location)
+    {
         if (object.kind == LuwonValue::Kind::Vector)
             return readVectorComponent(object, key, location);
 
@@ -640,6 +647,20 @@ private:
 
         const LuwonValue* value = object.table->find(key);
         return value ? *value : LuwonValue{};
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern `.(a, b)`. An object gives the
+    // argument its call wrote at that position: the reader knows no classes, so it can't tell a primary constructor's
+    // parameters from the table the default constructor takes.
+    LuwonValue readElement(AstExpr* objectExpr, const LuwonValue& position, const Location& location)
+    {
+        LuwonValue object = evaluate(objectExpr);
+        if (object.kind != LuwonValue::Kind::Object)
+            return readFieldOf(object, position, location);
+
+        LUAU_ASSERT(position.kind == LuwonValue::Kind::Number && position.number >= 1);
+        size_t index = size_t(position.number) - 1;
+        return index < object.args.size() ? object.args[index] : LuwonValue{};
     }
 
     LuwonValue readVectorComponent(const LuwonValue& vector, const LuwonValue& key, const Location& location)

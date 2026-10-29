@@ -1825,16 +1825,6 @@ static bool classhasmethods(const LuauClass* classdef)
     return false;
 }
 
-// The number of parameters a primary constructor takes, not counting `self`
-static int primaryparameters(const LuauClass* classdef)
-{
-    const TValue* init = &classdef->staticmembers[classdef->initoffset - classdef->numberofinstancemembers];
-    if (!ttisfunction(init) || clvalue(init)->isC)
-        return -1;
-
-    return clvalue(init)->l.p->numparams - 1;
-}
-
 int lua_getclassdatashape(lua_State* L, int idx, int* hasmethods)
 {
     const LuauClass* classdef = classofvalue(index2addr(L, idx));
@@ -1842,10 +1832,12 @@ int lua_getclassdatashape(lua_State* L, int idx, int* hasmethods)
 
     *hasmethods = classhasmethods(classdef);
 
+    // Luwu Destructuring (rfcs/destructuring.md): a primary constructor's parameters are the class's positional members,
+    // which a data file writes in parameter order (LuauClass::positionalmembers)
     int shape = LUA_CLASSDATA_TABLE;
-    if (classdef->hasprimaryinit)
+    if (classdef->numberofpositional >= 0)
     {
-        bool coversfields = primaryparameters(classdef) == int(classdef->numberofinstancemembers);
+        bool coversfields = uint32_t(classdef->numberofpositional) == classdef->numberofinstancemembers;
         shape = coversfields ? LUA_CLASSDATA_POSITIONAL : LUA_CLASSDATA_NONE;
     }
     else if (classdef->hascustominit)
@@ -1855,12 +1847,13 @@ int lua_getclassdatashape(lua_State* L, int idx, int* hasmethods)
         return shape;
 
     lua_createtable(L, int(classdef->numberofinstancemembers), 0);
-    for (uint32_t offset = 0; offset < classdef->numberofinstancemembers; offset++)
+    for (uint32_t i = 0; i < classdef->numberofinstancemembers; i++)
     {
+        uint32_t offset = shape == LUA_CLASSDATA_POSITIONAL ? classdef->positionalmembers[i] : i;
         ensure_stack(L, 1);
         setsvalue(L, L->top, classdef->offsettomember[offset]);
         api_incr_top(L);
-        lua_rawseti(L, -2, int(offset + 1));
+        lua_rawseti(L, -2, int(i + 1));
     }
 
     return shape;

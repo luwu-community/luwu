@@ -127,6 +127,43 @@ return {
     CHECK(field(value, "empty").kind == LuwonValue::Kind::None);
 }
 
+LUAU_FASTFLAG(LuwuDestructuring)
+
+TEST_CASE("luwon_destructuring")
+{
+    ScopedFastFlag destructuring{FFlag::LuwuDestructuring, true};
+
+    LuwonValue value = evaluate(R"(
+const root = "./src"
+const .{ cache, logs as log_dir } = { cache = `{root}/.cache`, logs = root .. "/logs" }
+return { cache = cache, logs = log_dir }
+)");
+
+    CHECK(field(value, "cache").bytes == "./src/.cache");
+    CHECK(field(value, "logs").bytes == "./src/logs");
+
+    LuwonDocument result = readLuwon("local .{ a, b } = { a = 1, b = 2 }\nreturn a");
+    REQUIRE(result.errors.size() == 1);
+    CHECK(result.errors[0].message == "Destructure with 'const': data files have no 'local' bindings");
+}
+
+TEST_CASE("luwon_positional_destructuring")
+{
+    ScopedFastFlag destructuring{FFlag::LuwuDestructuring, true};
+
+    // A table gives its items; a constructor call gives the arguments it wrote
+    LuwonValue value = evaluate(R"(
+const .(first, second) = { "a", "b" }
+const .(x, y) = Point(1, 2)
+return { first = first, second = second, x = x, y = y }
+)");
+
+    CHECK(field(value, "first").bytes == "a");
+    CHECK(field(value, "second").bytes == "b");
+    CHECK(field(value, "x").number == 1);
+    CHECK(field(value, "y").number == 2);
+}
+
 TEST_CASE("luwon_nil_fields_are_absent")
 {
     LuwonValue value = evaluate("return { a = nil, b = 1 }");
@@ -481,6 +518,49 @@ TEST_CASE("luwon_edits_never_inline_a_const")
     CHECK(split.find("const name = \"chimera\"\n") != std::string::npos);
     CHECK(split.find("    name = \"hydra\",\n") != std::string::npos);
     CHECK(split.find("    url = registry_url,\n") != std::string::npos);
+}
+
+TEST_CASE("luwon_edits_keep_dot_table_shorthand")
+{
+    ScopedFastFlag destructuring{FFlag::LuwuDestructuring, true};
+
+    const std::string source = R"(const name = "chimera"
+const version = vector.create(0, 1, 0)
+const url = `https://example.com/{name}`
+const .{ license } = { license = "MIT" }
+
+return .{ name, version, url, license }
+)";
+
+    // A new version changes the const; the shorthand stays
+    CHECK(editTo(source, R"(return { name = "chimera", version = vector.create(0, 2, 0), url = "https://example.com/chimera", license = "MIT" })") ==
+          R"(const name = "chimera"
+const version = vector.create(0, 2, 0)
+const url = `https://example.com/{name}`
+const .{ license } = { license = "MIT" }
+
+return .{ name, version, url, license }
+)");
+
+    // A name the url doesn't follow is spelled out at its field, and a new field joins the shorthand
+    CHECK(editTo(source, R"(return { name = "hydra", version = vector.create(0, 1, 0), url = "https://example.com/chimera", license = "MIT", private = true })") ==
+          R"(const name = "chimera"
+const version = vector.create(0, 1, 0)
+const url = `https://example.com/{name}`
+const .{ license } = { license = "MIT" }
+
+return .{ name = "hydra", version, url, license, private = true }
+)");
+
+    // A destructured name gets a literal where it's used: the pattern isn't a place to write a value
+    CHECK(editTo(source, R"(return { name = "chimera", version = vector.create(0, 1, 0), url = "https://example.com/chimera", license = "BSD" })") ==
+          R"(const name = "chimera"
+const version = vector.create(0, 1, 0)
+const url = `https://example.com/{name}`
+const .{ license } = { license = "MIT" }
+
+return .{ name, version, url, license = "BSD" }
+)");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "luwon_requires_get_the_type_the_file_declares")

@@ -286,6 +286,19 @@ end
 return luwon.reader({ Counter })
 )LUA").find("'Counter' has methods, so a data file can't construct it unless it implements luwon.data") != std::string::npos);
 
+    // A body that restates the parameters in another order doesn't change the order they're written in
+    CHECK(run(state.get(), R"LUA(
+class Frame(name, position)
+    public position: number
+    public name: string
+end
+
+local reader = luwon.reader({ Frame })
+local frame = reader:decode("return Frame(\"f\", 3)")
+assert(frame.name == "f" and frame.position == 3)
+return luwon.encode(frame)
+)LUA") == "return Frame(\"f\", 3)\n");
+
     // luwon.decode builds no classes
     CHECK(run(state.get(), R"LUA(
 class Point(public x: number, public y: number)

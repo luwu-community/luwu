@@ -210,7 +210,14 @@ struct LuwonSyntaxChecker
 
     void checkLocal(AstStatLocal* local)
     {
-        if (!local->isConst)
+        // Luwu Destructuring (rfcs/destructuring.md): a pattern's fields read the hidden local the statement holding the
+        // pattern declares, and that statement is checked
+        if (local->isDesugaredField())
+            return;
+
+        if (!local->isConst && local->destructure)
+            report(local->location, "Destructure with 'const': data files have no 'local' bindings");
+        else if (!local->isConst)
         {
             const char* name = local->vars.size > 0 ? local->vars.data[0]->name.value : "it";
             report(local->location, std::string("Declare '") + name + "' with 'const': data files have no 'local' bindings");
