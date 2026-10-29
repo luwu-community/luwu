@@ -71,6 +71,7 @@
 //   Luwu Classes: CHECKSELFCLASS, JUMPXISA, NEWOBJECT, GETOBJECTMEMBER and SETOBJECTMEMBER, per-member flags
 //   and constant field defaults in LBC_CONSTANT_CLASS_SHAPE, LBC_TYPE_CLASS/LBC_TYPE_OBJECT and
 //   LBF_CLASS_ISINSTANCE.
+//   Luwu Destructuring: GETPOSITIONAL, and LBC_CLASSMEMBER_POSITIONAL with its position in LBC_CONSTANT_CLASS_SHAPE.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -552,6 +553,15 @@ enum LuauOpcode
     // AUX: member offset
     LOP_SETOBJECTMEMBER,
 
+    // GETPOSITIONAL: Luwu Destructuring (rfcs/destructuring.md): the element at position C + 1 of a positional pattern
+    // `.(a, b)`. For an object, the member at that position of its class (LuauClass::positionalmembers), read with the
+    // same private-access check as reading it by name; a class without a primary constructor, or a position past its
+    // last parameter, raises. For any other value, B[C + 1], like GETTABLEN.
+    // A: target register
+    // B: register holding the value
+    // C: position - 1 (0..255)
+    LOP_GETPOSITIONAL,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };
@@ -672,6 +682,11 @@ enum LuwuBytecodeTag
 // instance positionally (LOP_NEWOBJECT's FIELDS form) instead of calling it: the VM checks this bit
 // before honoring that form on a class that has a custom `__init`.
 #define LBC_CLASSMEMBER_PRIMARYINIT (1 << 4)
+// Luwu Destructuring (rfcs/destructuring.md): set on an instance member that a primary constructor parameter declares.
+// Its position, 0 for the first parameter, follows the flags byte (after the constant default's index, when it has
+// one). A positional pattern `.(a, b)` reads members in that order (LOP_GETPOSITIONAL). Shares its bit with
+// LBC_CLASSMEMBER_PRIMARYINIT, which only `__init` carries: a position is only ever read for a field.
+#define LBC_CLASSMEMBER_POSITIONAL (1 << 4)
 // Never serialized: the VM sets this on every class's `__init` when it builds the class. Reading `__init`
 // as a member raises, since calling it on a constructed object would re-run construction, which may
 // reassign its `const` fields. Construction never reads `__init` by name, so it is unaffected. Lives

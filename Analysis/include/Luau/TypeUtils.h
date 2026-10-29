@@ -465,4 +465,10 @@ std::optional<std::string> describeOptionalOperands(TypeId left, std::optional<T
  */
 bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleName, const Location& location);
 
+/**
+ * Luwu Classes (rfcs/classes): what Analysis knows about a class beyond its props, when `ty` is the type of its
+ * objects. Null for any other type, extern types included.
+ */
+const ClassFieldUserData* getClassFieldUserData(TypeId ty);
+
 } // namespace Luau

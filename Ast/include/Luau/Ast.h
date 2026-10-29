@@ -520,6 +520,11 @@ public:
 
     AstExpr* expr;
     AstExpr* index;
+
+    // Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern `.(a, b)`, read from `expr` at the
+    // constant position `index`. For an object, that's the member its class's primary constructor takes at that position
+    // (LOP_GETPOSITIONAL); for anything else it's `expr[index]`.
+    bool positional = false;
 };
 
 class AstExprFunction : public AstExpr
@@ -906,11 +911,14 @@ struct AstDestructurePattern
     // False when the `}` is missing, as it is while a pattern is being written: `location` then ends where the
     // pattern stopped, and a cursor there is still inside it.
     bool closed = true;
+    // `.(a, b)`: the fields are elements read by position, in order, and have no keys.
+    bool positional = false;
     AstArray<AstDestructureField> fields{nullptr, 0};
 };
 
 struct AstDestructureField
 {
+    // Empty for an element of a positional pattern, whose `keyLocation` is where the element starts.
     AstName key;
     Location keyLocation;
     // The `as` keyword, when the field is bound under another name or only destructured.

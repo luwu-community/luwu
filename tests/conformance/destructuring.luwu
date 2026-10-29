@@ -204,4 +204,103 @@ do
     assert(wrapped.p == p and wrapped.inner.x == 3)
 end
 
+-- `.(a, b)` reads by position: a class's primary constructor parameters, or a table's array items
+class Tabby(name: string, age: number)
+    mood = "happy"
+end
+
+-- the body restates the parameters in the other order, so member order isn't parameter order
+class Frame(name, position)
+    public position
+    public name
+end
+
+class Pod
+    x: number
+end
+
+class Custom
+    x: number
+    function __init(self, x)
+        self.x = x
+    end
+end
+
+class Key(public label: string, private secret: string)
+    public function both(self)
+        const .(l, s) = self
+        return l .. s
+    end
+end
+
+do
+    const .(name, age) = Tabby("Taz", 12)
+    assert(name == "Taz" and age == 12)
+
+    const f.(fname, fposition) = Frame("frame", 3)
+    assert(fname == "frame" and fposition == 3 and f.position == 3)
+
+    -- tables read like array unpacking, missing items are nil
+    const .(a, b, c) = { "Hi", "there" }
+    assert(a == "Hi" and b == "there" and c == nil)
+
+    -- nesting with field patterns, both ways
+    const .(x, .(y, z), w.{mood}) = { 1, { 2, 3 }, Tabby("Meow", 2) }
+    assert(x == 1 and y == 2 and z == 3 and mood == "happy" and w.name == "Meow")
+    const .{pair as .(p1, p2)} = { pair = { "l", "r" } }
+    assert(p1 == "l" and p2 == "r")
+
+    local total = 0
+    for _, .(word, count) in { { "a", 1 }, { "b", 2 } } do
+        assert(type(word) == "string")
+        total += count
+    end
+    assert(total == 3)
+
+    -- a proven class reads its fields by name, an unproven one by position: both give the same values
+    local function both(v)
+        local unproven = table.pack((function()
+            const .(n2, a2) = v
+            return n2, a2
+        end)())
+        if class.isinstance(v, Frame) then
+            const .(n3, a3) = v
+            assert(n3 == unproven[1] and a3 == unproven[2])
+        end
+        return unproven[1], unproven[2]
+    end
+    assert(both(Frame("g", 4)) == "g")
+
+    -- private fields are read with the class's own access rights
+    assert(Key("a", "b"):both() == "ab")
+end
+
+do
+    local function fails(f, message)
+        local ok, err = pcall(f)
+        assert(not ok and string.find(err, message, 1, true), err)
+    end
+
+    fails(function()
+        const .(q) = Pod { x = 1 }
+        return q
+    end, "can't destructure an object of class 'Pod' positionally: 'Pod' has no primary constructor")
+    fails(function()
+        const .(q) = Custom(1)
+        return q
+    end, "'Custom' has no primary constructor")
+    fails(function()
+        const .(n, a, extra) = Tabby("Taz", 12)
+        return extra
+    end, "can't destructure an object of class 'Tabby' at position 3: its primary constructor has 2 parameters")
+    fails(function()
+        const .(l, s) = Key("a", "b")
+        return s
+    end, "'secret' is a private member of 'Key'")
+    fails(function()
+        const .(n) = 5
+        return n
+    end, "attempt to index number")
+end
+
 return "OK"

@@ -2279,6 +2279,19 @@ local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
+TEST_CASE("prettyPrint_positional_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    std::string code = R"(
+const .(name, age) = Cat("Taz", 12)
+local pair.( a: number, .(b, c), entry.{kind}): Pair = t
+local .{pos as .(x, y)} = u
+for _, .(k, v) in list do end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
 TEST_CASE("prettyPrint_exported_destructuring")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuwuDestructuring, true}, {FFlag::LuauExportValueSyntax, true}};

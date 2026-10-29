@@ -134,6 +134,7 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
         break;
     case IrCmd::FALLBACK_GETGLOBAL:
     case IrCmd::FALLBACK_GETTABLEKS:
+    case IrCmd::FALLBACK_GETPOSITIONAL:
         invalidateRestoreOp(OP_B(inst), /*skipValueInvalidation*/ false);
         break;
     case IrCmd::FALLBACK_NAMECALL:

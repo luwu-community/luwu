@@ -1209,6 +1209,14 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
             auto classFieldUserData = std::make_shared<ClassFieldUserData>();
             classFieldUserData->fieldNames = std::move(instanceFieldNames);
 
+            if (classDecl->primaryConstructor)
+            {
+                std::vector<Name> positionalFields;
+                for (AstLocal* param : classDecl->primaryConstructor->args)
+                    positionalFields.emplace_back(param->name.value);
+                classFieldUserData->positionalFields = std::move(positionalFields);
+            }
+
             TypeId classInstanceTy = arena->addType(
                 ExternType{
                     declName,
@@ -4121,7 +4129,17 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprIndexExpr* in
         updateRValueRefinements(scope, key->def, result);
     }
 
-    auto c = addConstraint(scope, indexExpr->expr->location, HasIndexerConstraint{result, obj, indexType});
+    std::optional<size_t> position;
+    if (indexExpr->positional)
+    {
+        // Luwu Destructuring (rfcs/destructuring.md): the parser writes the position as a constant
+        const AstExprConstantNumber* number = indexExpr->index->as<AstExprConstantNumber>();
+        LUAU_ASSERT(number && number->value >= 1);
+        if (number)
+            position = size_t(number->value) - 1;
+    }
+
+    auto c = addConstraint(scope, indexExpr->expr->location, HasIndexerConstraint{result, obj, indexType, position});
     getMutable<BlockedType>(result)->setOwner(c);
 
     if (key)

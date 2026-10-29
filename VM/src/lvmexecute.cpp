@@ -142,7 +142,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
-        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER),
+        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_GETPOSITIONAL),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -3999,6 +3999,30 @@ reentry:
                 LuauObject* inst = objectvalue(rb);
                 setobj2class(L, &inst->members[aux], ra);
                 luaC_barrier(L, inst, ra);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_GETPOSITIONAL)
+            {
+                // Luwu Destructuring (rfcs/destructuring.md): one element of a positional pattern `.(a, b)`
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                int c = LUAU_INSN_C(insn);
+
+                // fast path: an array element of a table without a metatable, like GETTABLEN's
+                if (ttistable(rb))
+                {
+                    LuaTable* h = hvalue(rb);
+
+                    if (LUAU_LIKELY(unsigned(c) < unsigned(h->sizearray) && !h->metatable))
+                    {
+                        setobj2s(L, ra, &h->array[c]);
+                        VM_NEXT();
+                    }
+                }
+
+                VM_PROTECT(luaV_getpositional(L, rb, c, ra));
                 VM_NEXT();
             }
 

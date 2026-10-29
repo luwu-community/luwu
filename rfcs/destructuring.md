@@ -95,6 +95,73 @@ table with `t`'s `x` and `y`".
 
 <!-- /WIP -->
 
+<!-- WIP: agent-written draft of positional patterns. Audit the wording before it leaves WIP. -->
+
+### Positional patterns with `.(...)`
+
+`.(a, b)` destructures by position instead of by name. An object of a class that can be made as `Cat(name, age)` can be
+destructured in the same shape:
+
+```luwu
+class Cat(name: string, age: number) end
+
+const .(taz_name, taz_age) = Cat("Taz", 12)
+```
+
+A positional pattern on an object reads the fields its class's primary constructor takes, in the constructor's order.
+That holds even when the class body restates the parameters in another order. Fewer names than parameters is fine. A
+class without a primary constructor (a POD class, or one with `__init`) can't be destructured positionally, and neither
+can a position past the constructor's last parameter: both raise at runtime, the way reading a field an object doesn't
+have does, and both are type errors. A private field is read with the same rules as reading it by name.
+
+Anything else is destructured like unpacking an array: element `i` is `value[i]`, so a missing one is `nil`.
+
+```luwu
+const .(a, b, c) = { "Hi", "there" } -- a = "Hi", b = "there", c = nil
+```
+
+Positional patterns go anywhere `.{...}` patterns do, nest in each other, and take a name and annotations the same way:
+`local pair.(first: number, .(x, y), entry.{kind}) = t`, `const .{pos as .(x, y)} = u`,
+`for _, .(key, value) in entries do`. An element is a binding already, so there's no `as`.
+
+In a type test, a positional pattern binds the values for the branch the test guards, like `.{...}` does:
+
+```luwu
+const .{result.{ok}} = collections
+
+if fs.read(p) is ok.(content) then
+    print(content)
+end
+
+const data = match fs.read(p)
+    case is ok.(content) then do
+        print(content)
+        give content
+    case is result.err.(err) then error(err)
+    else error("unreachable")
+```
+
+The `.` isn't needed to tell a pattern apart in this position, but we require it for consistency with every other
+pattern, and so `ok.(content)` can't be read as calling `ok`. A type test written as a call whose arguments are all
+names nothing in scope has (`is ok(content)`) is a syntax error that suggests the `.`.
+
+#### Building pairs, triples and quads with `.(...)`
+
+Where a value goes, `.(a, b)` builds a `collections.pair`, the way `.{x, y}` builds a table. Three values make a
+`collections.triple` and four a `quad`. More than four is a syntax error that suggests a table or a function returning
+multiple values instead.
+
+```luwu
+const .(name, age) = do
+    -- ... a bunch of logic
+    give .(got_name, got_age) -- a collections.pair
+```
+
+A pair that's destructured right where it's built, like this one, is never created. The compiler keeps each value in a
+register of its own, and it costs nothing at runtime.
+
+<!-- /WIP -->
+
 ## Compatibility
 
 This is not compatible with Luau 0.730, but may be partially compatible with upstream Luau because it's based on VIG's RFC.

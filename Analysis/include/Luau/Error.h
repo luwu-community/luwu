@@ -472,6 +472,19 @@ struct ConstructorReadByName
     bool operator==(const ConstructorReadByName& rhs) const;
 };
 
+// Luwu Destructuring (rfcs/destructuring.md): a positional pattern `.(a, b)` on an object of a class without a primary
+// constructor, or past the constructor's last parameter. Both raise at runtime.
+struct PositionalDestructuring
+{
+    Name className;
+    // The position read, 0 for the first
+    size_t position = 0;
+    // The primary constructor's parameters, unset when the class has none
+    std::optional<std::vector<Name>> parameters;
+
+    bool operator==(const PositionalDestructuring& rhs) const;
+};
+
 struct PropertyAccessViolation
 {
     TypeId table;
@@ -753,7 +766,8 @@ using TypeErrorData = Variant<
     TypeInstantiationCountMismatch,
     AmbiguousFunctionCall,
     UninstantiableClass,
-    ConstructorReadByName>;
+    ConstructorReadByName,
+    PositionalDestructuring>;
 
 struct TypeErrorSummary
 {

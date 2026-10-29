@@ -685,6 +685,13 @@ typedef struct LuauClass
     // class object; freed in luaR_freeclass and marked in traverseclass.
     TValue* memberdefaults;
 
+    // Luwu Destructuring (rfcs/destructuring.md): what a positional pattern `.(a, b)` reads from an object of this class.
+    // `positionalmembers[i]` is the offset of the member at position i: a primary constructor's parameters, in order.
+    // `numberofpositional` is -1 for a class whose objects can't be destructured positionally (no primary constructor),
+    // and `positionalmembers` is NULL while it's 0 or less. Owned by this class object; freed in luaR_freeclass.
+    uint32_t* positionalmembers;
+    int numberofpositional;
+
 } LuauClass;
 
 typedef struct LuauObject

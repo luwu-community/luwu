@@ -12058,6 +12058,47 @@ end
     CHECK(compileFunction(source, 0, 1).find("FIELDS") != std::string::npos);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern is GETPOSITIONAL, unless the value's class
+// is proven, when it's the field the class's primary constructor takes at that position
+TEST_CASE("PositionalDestructuringReadsProvenClassesByField")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+
+    const char* source = R"(
+class Cat(name: string, age: number) end
+local function f(x)
+    const .(n, a) = Cat("Taz", 12)
+    const .(p, q) = x
+    if class.isinstance(x, Cat) then
+        const .(r) = x
+        return r
+    end
+    return n, a, p, q
+end
+return f
+)";
+
+    CHECK_EQ(
+        "\n" + compileFunction(source, 0, 2),
+        R"(
+LOADK R3 K0 ['Taz']
+LOADN R4 12
+GETUPVAL R5 0
+NEWOBJECT R2 R5 2 FIELDS
+MOVE R1 R2
+GETTABLEKS R2 R1 K1 ['name']
+GETTABLEKS R3 R1 K2 ['age']
+GETPOSITIONAL R4 R0 0 [1]
+GETPOSITIONAL R5 R0 1 [2]
+GETUPVAL R6 0
+JUMPXISA R0 R6 L0 NOT
+GETOBJECTMEMBER R6 R0 0
+RETURN R6 1
+L0: RETURN R2 4
+)"
+    );
+}
+
 TEST_CASE("ClassPrimaryConstructorFieldsFormInsideAnotherClass")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};

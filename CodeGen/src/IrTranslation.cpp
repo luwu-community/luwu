@@ -1534,6 +1534,36 @@ void translateInstGetTableN(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::JUMP, next);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): an array element of a table without a metatable is read inline, like
+// GETTABLEN. Anything else, objects included, goes through the interpreter's implementation.
+void translateInstGetPositional(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    int rb = LUAU_INSN_B(*pc);
+    int c = LUAU_INSN_C(*pc);
+
+    IrOp fallback = build.fallbackBlock(pcpos);
+
+    IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::CHECK_TAG, tb, build.constTag(LUA_TTABLE), fallback);
+
+    IrOp vb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+
+    build.inst(IrCmd::CHECK_ARRAY_SIZE, vb, build.constInt(c), fallback);
+    build.inst(IrCmd::CHECK_NO_METATABLE, vb, fallback);
+
+    IrOp arrEl = build.inst(IrCmd::GET_ARR_ADDR, vb, build.constInt(0));
+
+    IrOp arrElTval = build.inst(IrCmd::LOAD_TVALUE, arrEl, build.constInt(c * sizeof(TValue)));
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), arrElTval);
+
+    IrOp next = build.blockAtInst(pcpos + 1);
+    FallbackStreamScope scope(build, fallback, next);
+
+    build.inst(IrCmd::FALLBACK_GETPOSITIONAL, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb));
+    build.inst(IrCmd::JUMP, next);
+}
+
 void translateInstSetTableN(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);

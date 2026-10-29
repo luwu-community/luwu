@@ -7,3 +7,7 @@
 // Luwu Classes (rfcs/classes): enables classes. While it is on, the compiler emits WIP bytecode (version 200),
 // whose format can still change.
 LUAU_FASTFLAGVARIABLE(LuwuClasses)
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{x, y}` and `.(x, y)` patterns. The parser gates the syntax, and while it
+// is on the compiler emits WIP bytecode (version 200), which positional patterns need for LOP_GETPOSITIONAL.
+LUAU_FASTFLAGVARIABLE(LuwuDestructuring)

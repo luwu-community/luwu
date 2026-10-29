@@ -800,18 +800,29 @@ static int loadsafe(
                 bool hasCustomInit = false;
                 size_t peekOffset = offset;
                 bool hasConstDefaults = false;
+                bool hasPrimaryInit = false;
+                int numPositional = 0;
 
                 for (uint32_t idx = 0; idx < numMembers; idx++)
                 {
                     uint32_t mid = readVarInt(data, size, peekOffset);
                     uint32_t flags = readVarInt(data, size, peekOffset);
-                    hasCustomInit |= tsvalue(&p->k[mid]) == initName;
+                    bool isInit = tsvalue(&p->k[mid]) == initName;
+                    hasCustomInit |= isInit;
+                    hasPrimaryInit |= isInit && (flags & LBC_CLASSMEMBER_PRIMARYINIT) != 0;
 
                     // a constant default is stored inline right after its member's flags
                     if (flags & LBC_CLASSMEMBER_CONSTDEFAULT)
                     {
                         readVarInt(data, size, peekOffset);
                         hasConstDefaults = true;
+                    }
+
+                    // so is a primary constructor parameter's position
+                    if (idx < numProperties && (flags & LBC_CLASSMEMBER_POSITIONAL))
+                    {
+                        readVarInt(data, size, peekOffset);
+                        numPositional++;
                     }
                 }
 
@@ -821,6 +832,11 @@ static int loadsafe(
 
                 // The class owns its shape buffers from here on, so nothing leaks if a later allocation fails.
                 LuauClass* lco = luaR_newclass(L, tsvalue(classname), numProperties, numStaticWithInit, hasConstDefaults);
+
+                // Luwu Destructuring (rfcs/destructuring.md): only a primary constructor's parameters have positions
+                LUAU_ASSERT(hasPrimaryInit || numPositional == 0);
+                if (hasPrimaryInit)
+                    luaR_newpositionalmembers(L, lco, numPositional);
 
                 // Members are written properties-first, so index idx here is exactly the member's runtime
                 // offset.
@@ -839,6 +855,13 @@ static int loadsafe(
                         // a constant field default; its own constant is written before the shape, so it's
                         // already loaded
                         setobj(L, &lco->memberdefaults[idx], &p->k[did]);
+                    }
+
+                    if (idx < numProperties && (lco->memberflags[idx] & LBC_CLASSMEMBER_POSITIONAL))
+                    {
+                        uint32_t position = readVarInt(data, size, offset);
+                        LUAU_ASSERT(int(position) < lco->numberofpositional);
+                        lco->positionalmembers[position] = idx;
                     }
 
                     TValue* val = luaH_setstr(L, lco->memberstooffset, tsvalue(memberName));

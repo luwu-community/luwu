@@ -364,6 +364,24 @@ l_noret luaG_methoderror(lua_State* L, const TValue* p1, const TString* p2)
     luaG_runerror(L, "attempt to call missing method '%s' of %s", getstr(p2), t1);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): a positional pattern `.(a, b)` on an object without that position
+l_noret luaG_positionalerror(lua_State* L, const LuauClass* classdef, int position)
+{
+    const char* className = getstr(classdef->name);
+
+    if (classdef->numberofpositional < 0)
+        luaG_runerrorL(L, "can't destructure an object of class '%s' positionally: '%s' has no primary constructor", className, className);
+
+    luaG_runerrorL(
+        L,
+        "can't destructure an object of class '%s' at position %d: its primary constructor has %d parameter%s",
+        className,
+        position + 1,
+        classdef->numberofpositional,
+        classdef->numberofpositional == 1 ? "" : "s"
+    );
+}
+
 l_noret luaG_readonlyerror(lua_State* L)
 {
     luaG_runerror(L, "attempt to modify a readonly table");

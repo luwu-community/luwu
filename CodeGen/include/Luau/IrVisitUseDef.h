@@ -207,6 +207,10 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         visitor.use(OP_B(inst));
         visitor.use(OP_C(inst));
         break;
+    case IrCmd::FALLBACK_GETPOSITIONAL:
+        visitor.use(OP_C(inst));
+        visitor.def(OP_B(inst));
+        break;
     case IrCmd::FALLBACK_NEWOBJECT:
     {
         // See IrData.h for the operand shapes. The class is read in place, and the registers above

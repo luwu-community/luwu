@@ -201,15 +201,21 @@ private:
     );
 
     // Luwu Destructuring (rfcs/destructuring.md):
-    // destructuring ::= (`local' | `const') [Name] `.' `{' fieldlist `}' [`:' Type] `=' exp
+    // destructuring ::= (`local' | `const') target `=' exp
+    // pattern ::= `.' `{' fieldlist `}' | `.' `(' elementlist `)'
     // fieldlist ::= field {`,' field} [`,']
-    // field ::= Name [`.' `{' fieldlist `}'] [`:' Type] | Name `as' target
-    // target ::= Name [`.' `{' fieldlist `}'] [`:' Type] | `.' `{' fieldlist `}' [`:' Type]
+    // field ::= Name [pattern] [`:' Type] | Name `as' target
+    // elementlist ::= target {`,' target} [`,']
+    // target ::= Name [pattern] [`:' Type] | pattern [`:' Type]
     // An annotation follows the binding it types; after a pattern, it types the value the pattern destructures.
     struct DestructureTarget;
 
     bool destructuringFollows();
     bool destructurePatternFollows();
+    bool positionalPatternFollows();
+    bool dotTableFollows();
+    void parseDestructureElements(DestructureTarget& target);
+    void parseDestructureTarget(DestructureTarget& target);
     bool destructuringAssignmentFollows();
     bool dotTableMissingBraceFollows();
     bool destructuringAvailable();
@@ -652,6 +658,8 @@ private:
         // `: Type` after the binding, typing the local it binds.
         AstType* annotation = nullptr;
         bool closed = true;
+        // `.(a, b)`: `fields` are elements read by position, with empty keys
+        bool positional = false;
         std::vector<DestructureField> fields;
     };
     struct DestructureField

@@ -3634,6 +3634,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.invalidateUserCall();
         break;
     case IrCmd::FALLBACK_GETTABLEKS:
+    case IrCmd::FALLBACK_GETPOSITIONAL:
         state.invalidate(OP_B(inst));
         state.invalidateUserCall();
         break;

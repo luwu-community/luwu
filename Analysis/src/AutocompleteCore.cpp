@@ -2057,7 +2057,7 @@ struct DestructureCursor
     {
         // Where a field's key goes: complete the properties of the value at `level`
         Key,
-        // The name after `as`, which declares a new local: nothing to complete
+        // The name after `as`, or an element of a positional pattern, which declares a new local: nothing to complete
         BindingName,
     };
 
@@ -2098,6 +2098,10 @@ static std::optional<DestructureCursor> findDestructureCursorInPattern(const Ast
         if (namedAfterAs && target.local->location.containsClosed(position))
             return DestructureCursor{DestructureCursor::BindingName, &pattern};
     }
+
+    // Every element of a positional pattern `.(a, b)` declares a local
+    if (pattern.positional)
+        return DestructureCursor{DestructureCursor::BindingName, &pattern};
 
     return DestructureCursor{DestructureCursor::Key, &pattern};
 }

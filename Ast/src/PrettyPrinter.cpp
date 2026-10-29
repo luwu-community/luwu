@@ -328,8 +328,8 @@ struct Printer
             writer.write(s);
     }
 
-    // Luwu Destructuring (rfcs/destructuring.md): `[name].{field: T, key as name: T, key as [name].{...}: T}: T`,
-    // from the source form the parser kept.
+    // Luwu Destructuring (rfcs/destructuring.md): `[name].{field: T, key as name: T, key as [name].{...}: T}: T` or
+    // `[name].(name: T, [name].{...}: T)`, from the source form the parser kept.
     void visualizeDestructuring(const AstDestructurePattern& pattern)
     {
         if (pattern.local->name != kDestructuredLocalName)
@@ -360,6 +360,23 @@ struct Printer
 
         advance(pattern.location->begin);
         writer.symbol(".");
+
+        if (pattern.positional)
+        {
+            writer.symbol("(");
+
+            CommaSeparatorInserter elementComma(writer, nullptr);
+            for (const AstDestructureField& element : pattern.fields)
+            {
+                elementComma();
+                visualizeDestructuring(element.target);
+            }
+
+            advanceBefore(pattern.location->end, 1);
+            writer.symbol(")");
+            return;
+        }
+
         writer.symbol("{");
 
         CommaSeparatorInserter comma(writer, nullptr);

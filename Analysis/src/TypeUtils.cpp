@@ -1146,4 +1146,12 @@ bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleNam
     return cls->definitionLocation && cls->definitionModuleName == moduleName && cls->definitionLocation->encloses(location);
 }
 
+const ClassFieldUserData* getClassFieldUserData(TypeId ty)
+{
+    if (const ExternType* etv = get<ExternType>(follow(ty)))
+        return dynamic_cast<const ClassFieldUserData*>(etv->userData.get());
+
+    return nullptr;
+}
+
 } // namespace Luau

@@ -8213,6 +8213,105 @@ TEST_CASE_FIXTURE(Fixture, "type_destructuring_mistakes_get_one_error_that_names
     matchOnlyDestructuringError(*this, "type .{} = fs", "A destructuring pattern needs at least one field");
 }
 
+// `local` of `name` whose value is element `position` of a positional pattern on the first var of `from`
+static void checkElementRead(AstStatLocal* local, const char* name, AstStatLocal* from, double position)
+{
+    CHECK_EQ(std::string(local->vars.data[0]->name.value), name);
+    AstExprIndexExpr* read = local->values.data[0]->as<AstExprIndexExpr>();
+    REQUIRE(read);
+    CHECK(read->positional);
+    AstExprConstantNumber* index = read->index->as<AstExprConstantNumber>();
+    REQUIRE(index);
+    CHECK_EQ(index->value, position);
+    AstExprLocal* object = read->expr->as<AstExprLocal>();
+    REQUIRE(object);
+    CHECK_EQ(object->local, from->vars.data[0]);
+}
+
+TEST_CASE_FIXTURE(Fixture, "positional_destructuring_reads_each_element_by_position")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const cat.(name, age) = Cat("Taz", 12)
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+    AstStatLocal* cat = destructuredLocal(block, 0);
+    CHECK_EQ(std::string(cat->vars.data[0]->name.value), "cat");
+    REQUIRE(cat->destructure);
+    CHECK(cat->destructure->positional);
+    checkElementRead(destructuredLocal(block, 1), "name", cat, 1);
+    checkElementRead(destructuredLocal(block, 2), "age", cat, 2);
+}
+
+TEST_CASE_FIXTURE(Fixture, "positional_and_field_patterns_nest_in_each_other")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        local .(first, .(x, y), entry.{kind}) = t
+        local .{pos as .(px, py)} = u
+    )");
+
+    REQUIRE_EQ(block->body.size, 11);
+    AstStatLocal* value = destructuredLocal(block, 0);
+    checkElementRead(destructuredLocal(block, 1), "first", value, 1);
+    AstStatLocal* pair = destructuredLocal(block, 2);
+    checkElementRead(pair, kDestructuredLocalName, value, 2);
+    checkElementRead(destructuredLocal(block, 3), "x", pair, 1);
+    checkElementRead(destructuredLocal(block, 4), "y", pair, 2);
+    AstStatLocal* entry = destructuredLocal(block, 5);
+    checkElementRead(entry, "entry", value, 3);
+    checkFieldRead(destructuredLocal(block, 6), "kind", entry, "kind");
+
+    AstStatLocal* pos = destructuredLocal(block, 8);
+    checkFieldRead(pos, kDestructuredLocalName, destructuredLocal(block, 7), "pos");
+    checkElementRead(destructuredLocal(block, 9), "px", pos, 1);
+    checkElementRead(destructuredLocal(block, 10), "py", pos, 2);
+}
+
+TEST_CASE_FIXTURE(Fixture, "positional_destructuring_in_loop_bindings")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        for _, .(key, value) in pairs_list do end
+    )");
+
+    REQUIRE_EQ(block->body.size, 1);
+    AstStatForIn* loop = block->body.data[0]->as<AstStatForIn>();
+    REQUIRE(loop);
+    REQUIRE_EQ(loop->destructure.size, 2);
+    REQUIRE(loop->destructure.data[1]);
+    CHECK(loop->destructure.data[1]->positional);
+    REQUIRE_EQ(loop->body->body.size, 2);
+}
+
+TEST_CASE_FIXTURE(Fixture, "positional_destructuring_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(*this, "local .() = t", "A positional pattern needs at least one element");
+    matchOnlyDestructuringError(
+        *this, "local .(a as b) = t", "Positional elements are bound to the name written in their place; 'as' only renames fields of '.{...}'"
+    );
+    matchOnlyDestructuringError(
+        *this, "local .(a = 1, b) = t", "Destructured elements can't have default values; a missing element reads as whatever indexing the value gives"
+    );
+    matchOnlyDestructuringError(
+        *this, "local .(a, ...) = t", "Destructuring has no rest pattern; bind the value with a name to keep the rest: 'local t.(x) = ...'"
+    );
+    matchOnlyDestructuringError(*this, "local .(1) = t", "Expected a name or a pattern in the positional pattern, got '1'");
+    matchOnlyDestructuringError(*this, "local .(a b) = t", "Expected ',' or ')' after a positional element, got 'b'");
+    matchOnlyDestructuringError(*this, ".(x) = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "pair.(a, b) = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "local a, .(b) = t", "A destructuring pattern has to be the only binding in its declaration");
+    matchOnlyDestructuringError(
+        *this, "local function f(.(x)) end", "Destructuring isn't supported in function parameters; destructure the parameter in the body"
+    );
+}
+
 TEST_CASE_FIXTURE(Fixture, "destructuring_is_luwu_only")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};

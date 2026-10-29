@@ -252,6 +252,7 @@ private:
     void reportClassTypeofSpelling(AstTypeTypeof* ty, const std::string& className, TypeId objectTy);
     // Luwu Classes (rfcs/classes): reports reading `__init` from a class or object; true if it did.
     bool checkConstructorReadByName(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location);
+    bool checkPositionalElement(AstExprIndexExpr* indexExpr);
     PropertyType hasIndexTypeFromType(
         TypeId ty,
         const std::string& prop,

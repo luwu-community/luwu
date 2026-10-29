@@ -186,6 +186,9 @@ std::optional<CompTimeBcFunction> fromFunctionBytecode(std::string bytecode, std
                 shape.propertyDefaults.push_back(
                     (shape.propertyFlags.back() & LBC_CLASSMEMBER_CONSTDEFAULT) ? int32_t(readVarInt(data, offset)) : -1
                 );
+                shape.propertyPositions.push_back(
+                    (shape.propertyFlags.back() & LBC_CLASSMEMBER_POSITIONAL) ? int32_t(readVarInt(data, offset)) : -1
+                );
             }
 
             for (uint32_t j = 0; j < methodCount; ++j)

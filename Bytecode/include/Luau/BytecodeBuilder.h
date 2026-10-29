@@ -60,6 +60,9 @@ public:
         // Parallel to propertyNames: for a member flagged LBC_CLASSMEMBER_CONSTDEFAULT, the proto
         // constant index of its default value; -1 for every other member.
         std::vector<int32_t> propertyDefaults;
+        // Luwu Destructuring (rfcs/destructuring.md): parallel to propertyNames: for a member flagged
+        // LBC_CLASSMEMBER_POSITIONAL, its position among the primary constructor's parameters; -1 for every other member.
+        std::vector<int32_t> propertyPositions;
     };
 
     BytecodeBuilder(BytecodeEncoder* encoder = 0);

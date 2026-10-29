@@ -240,6 +240,8 @@ static void errorToString(std::ostream& stream, const T& err)
         stream << "UnusableClass { classTy = " << toString(err.classTy) << " }";
     else if constexpr (std::is_same_v<T, ConstructorReadByName>)
         stream << "ConstructorReadByName { table = " << toString(err.table) << ", className = " << err.className << " }";
+    else if constexpr (std::is_same_v<T, PositionalDestructuring>)
+        stream << "PositionalDestructuring { className = " << err.className << ", position = " << err.position << " }";
     else if constexpr (std::is_same_v<T, UninstantiableClass>)
         stream << "UninstantiableClass { classTy = " << toString(err.classTy) << " }";
     else if constexpr (std::is_same_v<T, CheckedFunctionIncorrectArgs>)
