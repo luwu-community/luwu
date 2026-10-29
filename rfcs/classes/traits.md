@@ -367,13 +367,13 @@ traits, etc.
 
 Returns 1 if the value at stack index `idx` is a trait or 0 otherwise.
 
-### `int lua_implements(lua_State* L, int idx);`
+### `int lua_classimplements(lua_State* L, int idx, int traitidx);`
 
-Returns 1 if the value at stack index `idx` implements the trait on stack top (index `-1`). Follows same semantics as `class.implements` in user code.
+The C API's `class.implements`. Returns 1 if the value at stack index `idx` is an object whose class implements the trait at `traitidx`, directly or through `needs`, and 0 otherwise. Raises an error if the value at `traitidx` is not a trait.
 
 ### `int lua_ismemberfinal(lua_State* L, int idx, const char* membername);`
 
-Returns 1 of `membername` on the `trait` or `class` or `object` at `idx`. Returns 0 if the member does not exist or is not `final`.
+Returns 1 if `membername` on the `trait` or `class` or `object` at `idx` is `final`, including a member a class gets from a trait that declares it `final`. Returns 0 if the member does not exist or is not `final`.
 Raises an error if the value at `idx` is neither a trait nor a class nor an object. Use `lua_getmemberaccess` to check if a member exists.
 
 ## Compatibility
