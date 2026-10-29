@@ -5268,6 +5268,29 @@ Yielder_ = Yielder
         CHECK(lua_gettop(L) == 3);
     }
 
+    SUBCASE("lua_getclass")
+    {
+        lua_getglobal(L, "Hidden_");
+        lua_getglobal(L, "Hidden_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "a");
+        lua_newobject(L, 2);
+        lua_pushnumber(L, 5);
+        lua_getglobal(L, "Plain_");
+
+        // an object gives its class, and a class gives itself
+        CHECK(lua_getclass(L, 2) == 1);
+        CHECK(lua_rawequal(L, -1, 1));
+        CHECK(lua_getclass(L, 1) == 1);
+        CHECK(lua_rawequal(L, -1, 1));
+        CHECK(!lua_rawequal(L, -1, 4));
+
+        // anything else pushes nothing
+        CHECK(lua_getclass(L, 3) == 0);
+        CHECK(lua_getclass(L, 10) == 0); // an unused stack slot
+        CHECK(lua_gettop(L) == 6);
+    }
+
     SUBCASE("lua_newobject on a POD class reads an object argument's private fields as the embedder")
     {
         lua_getglobal(L, "Plain_");

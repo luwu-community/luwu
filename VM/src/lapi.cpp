@@ -1808,6 +1808,18 @@ const char* lua_getclassname(lua_State* L, int idx)
     return classdef ? getstr(classdef->name) : NULL;
 }
 
+int lua_getclass(lua_State* L, int idx)
+{
+    LuauClass* classdef = classofvalue(index2addr(L, idx));
+    if (!classdef)
+        return 0;
+
+    luaC_threadbarrier(L);
+    setclassvalue(L, L->top, classdef);
+    api_incr_top(L);
+    return 1;
+}
+
 static const char* aux_upvalue(StkId fi, int n, TValue** val)
 {
     Closure* f;
