@@ -519,6 +519,51 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_function_fields_type_like_assigned_fun
     CHECK_EQ("string", toString(requireType("b")));
 }
 
+// Luwu: a metamethod's first parameter is the table it's set on. One annotated as something the table isn't was meant for
+// the first argument and is missing `self` before it.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_metamethod_whose_first_parameter_cannot_hold_the_table")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableFunctionFields, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+    };
+
+    CheckResult result = check(R"(
+        local paths = setmetatable({ count = 0 }, {
+            function __call(path: string): string
+                return path
+            end,
+            __tostring = function(self: string): string
+                return self
+            end,
+        })
+        local fine = setmetatable({ count = 0 }, {
+            function __call(self, path: string): string
+                return path
+            end,
+            __index = function(self: { count: number }, key: string)
+                return self.count
+            end,
+            __len = function(t)
+                return 0
+            end,
+        })
+        -- a table that gets its fields later
+        local later = setmetatable({}, {
+            __call = function(self: { count: number }): number
+                return self.count
+            end,
+        })
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK(get<GenericError>(result.errors[0]));
+    CHECK_EQ(result.errors[0].location.begin.line, 2);
+    CHECK_NE(toString(result.errors[0]).find("Add 'self' before 'path'"), std::string::npos);
+    CHECK(get<GenericError>(result.errors[1]));
+    CHECK_EQ(result.errors[1].location.begin.line, 5);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_param_width_subtyping_2")
 {
     CheckResult result = check(R"(
@@ -3453,7 +3498,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "access_index_metamethod_that_returns_variadi
         local foo = t.bar
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
+    // Luwu: `x` gets `t` itself, which isn't a string, so the metamethod is missing `self` before it
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<GenericError>(result.errors[0]));
 
     ToStringOptions o;
     o.exhaustive = true;

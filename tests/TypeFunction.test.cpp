@@ -1117,7 +1117,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "index_type_function_works_on_function_metame
         type Bar = index<typeof(t), "bar">
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
+    // Luwu: `x` gets `t` itself, which isn't a string, so the metamethod is missing `self` before it
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<GenericError>(result.errors[0]));
 
 
     CHECK_EQ(toString(requireTypeAlias("Bar"), {true}), "{ x: string }");
@@ -1140,7 +1142,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "index_type_function_works_on_function_metame
         type Bar = index<typeof(t), number>
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    // Luwu: the second error is `x` getting `t` itself, which isn't a string: the metamethod is missing `self` before it
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<GenericError>(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "index_type_function_errors_w_var_indexer")
