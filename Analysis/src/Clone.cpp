@@ -412,7 +412,8 @@ private:
             for (auto& [_, function] : t->traitInfo->selfFunctions)
             {
                 function.generic = shallowClone(function.generic);
-                function.selfType = shallowClone(function.selfType);
+                if (function.selfType)
+                    function.selfType = shallowClone(function.selfType);
             }
         }
 

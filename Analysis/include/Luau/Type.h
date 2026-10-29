@@ -769,11 +769,12 @@ struct ExternType
         std::optional<TypeId> selfMarker;
         std::map<Name, TypeId> selfFieldTemplates;
         // The trait's functions that are generic over `Self`: that generic and their `self`'s type (`Self & Trait`). An
-        // implementing class's copy has the class for both, so it isn't generic.
+        // implementing class's copy has the class for both, so it isn't generic. A function without `self` that names
+        // `Self`, like `__create(p: Self)`, has no `selfType`.
         struct SelfFunction
         {
             TypeId generic;
-            TypeId selfType;
+            TypeId selfType = nullptr;
         };
         std::map<Name, SelfFunction> selfFunctions;
     };
