@@ -461,16 +461,14 @@ class type vecdeque<T>
     public function __tostring(self): string
 end
 
-class type some<T>
-    public function __init(self, value: T)
+class type some<T>(public const value: T)
     public function get(self): T
     public function expect(self, message: string?): T
     public function __eq(self, other: some<T>): boolean
     public function __tostring(self): string
 end
 
-class type ok<T>
-    public function __init(self, value: T)
+class type ok<T>(public const value: T)
     public function ok(self): T
     public function expect(self, message: string?): T
     public function err(self): none
@@ -478,8 +476,7 @@ class type ok<T>
     public function __tostring(self): string
 end
 
-class type err<E>
-    public function __init(self, error: E)
+class type err<E>(public const error: E)
     public function ok(self): none
     public function expect(self, message: string?): never
     public function err(self): E

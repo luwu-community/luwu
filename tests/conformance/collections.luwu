@@ -601,9 +601,10 @@ do
     raises(function()
         option.some(none)
     end, "option.some needs a value, but you passed none")
+    assert(hit.value == "ada")
     raises(function()
         hit.value = 1
-    end, "'value' is a private member of 'some'")
+    end, "'value' is a const member of 'some'")
 end
 
 -- result: an `ok` or an `err` object

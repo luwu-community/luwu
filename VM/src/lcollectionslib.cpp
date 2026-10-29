@@ -383,6 +383,8 @@ static int tupleiter(lua_State* L)
 
 static const uint8_t kTupleField = LBC_CLASSMEMBER_CONST;
 static const uint8_t kPrivateField = LBC_CLASSMEMBER_PRIVATE;
+// An option's or result's payload, readable as `value` (`error` for `err`) like a tuple's elements
+static const uint8_t kPayloadField = LBC_CLASSMEMBER_CONST;
 
 static const luaR_NativeMember kPairMembers[] = {
     {"first", NULL, kTupleField},
@@ -1636,7 +1638,7 @@ static int nonefast(lua_State* L, LuauObject* holder, StkId res, StkId args, int
 }
 
 static const luaR_NativeMember kSomeMembers[] = {
-    {"value", NULL, kPrivateField},
+    {"value", NULL, kPayloadField},
     {"get", payloadget<LUWU_BUILTIN_SOME>, 0, payloadgetfast},
     {"expect", payloadexpect<LUWU_BUILTIN_SOME>, 0, payloadexpectfast},
     {"__eq", payloadeq<LUWU_BUILTIN_SOME>, 0},
@@ -1644,7 +1646,7 @@ static const luaR_NativeMember kSomeMembers[] = {
 };
 
 static const luaR_NativeMember kOkMembers[] = {
-    {"value", NULL, kPrivateField},
+    {"value", NULL, kPayloadField},
     {"ok", payloadget<LUWU_BUILTIN_OK>, 0, payloadgetfast},
     {"expect", payloadexpect<LUWU_BUILTIN_OK>, 0, payloadexpectfast},
     {"err", okerr, 0, nonefast},
@@ -1653,7 +1655,7 @@ static const luaR_NativeMember kOkMembers[] = {
 };
 
 static const luaR_NativeMember kErrMembers[] = {
-    {"error", NULL, kPrivateField},
+    {"error", NULL, kPayloadField},
     {"ok", errok, 0, nonefast},
     {"expect", errexpect, 0},
     {"err", errerr, 0, payloadgetfast},
