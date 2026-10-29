@@ -577,12 +577,14 @@ local b: B = a
     if (!FFlag::DebugLuauForceOldSolver)
     {
         CHECK_EQ(
-            "Expected property 'x' to allow reading and writing as 'BaseClass', but in 'A' it is a 'ChildClass', which can only "
-            "be read as 'BaseClass'. Because 'x' can be read and written, it could silently be replaced with a value of a "
-            "smaller type, causing data loss.\n\n"
+            "Expected 'a' to be 'B', but was given 'A' (read works, write doesn't)\n"
+            "\n"
+            "Because a read/write table is expected here, 'a.x' could be set to any 'BaseClass' (which must stay "
+            "a 'ChildClass').\n"
+            "\n"
             "Help (read/write mismatch):\n"
-            "  • If nothing writes to 'x', mark it as 'read x: BaseClass' in 'B'\n"
-            "  • If it reads and writes, make a 'BaseClass' version of your data or mark the additional properties as optional",
+            "  • If nothing writes to it, mark 'x' as 'read x: BaseClass' in 'B'\n"
+            "  • If something writes to it, use a 'B' instead of 'a'",
             toString(result.errors.at(0))
         );
     }
