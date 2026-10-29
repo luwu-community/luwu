@@ -917,6 +917,12 @@ struct TypeMapVisitor : AstVisitor
             case LBF_BUFFER_WRITEF32:
             case LBF_BUFFER_WRITEF64:
             case LBF_BUFFER_WRITEINTEGER:
+            case LBF_COLLECTIONS_PAIR:
+            case LBF_COLLECTIONS_TRIPLE:
+            case LBF_COLLECTIONS_QUAD:
+            case LBF_COLLECTIONS_OPTION_SOME:
+            case LBF_COLLECTIONS_RESULT_OK:
+            case LBF_COLLECTIONS_RESULT_ERR:
                 break;
             case LBF_MATH_ABS:
             case LBF_MATH_ACOS:

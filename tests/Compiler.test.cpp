@@ -14418,6 +14418,40 @@ L1: RETURN R2 1
     }
 }
 
+// Luwu collections: calling a builtin class's constructor directly or through a local compiles to a fastcall, including
+// the constructors of `collections.result` and `collections.option`, which are three names deep
+TEST_CASE("CollectionsConstructorsCompileToFastcalls")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+
+    const char* fastcalls[] = {
+        "local function f(x) local v = collections.pair(x, x) return v end",
+        "local function f(x) local v = collections.option.some(x) return v end",
+        "local function f(x) local v = collections.result.ok(x) return v end",
+        "local ok = collections.result.ok local function f(x) local v = ok(x) return v end",
+        "local result = collections.result local function f(x) local v = result.err(x) return v end",
+    };
+    for (const char* source : fastcalls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("FASTCALL") != std::string::npos);
+    }
+
+    const char* calls[] = {
+        "local collections = {} local function f(x) local v = collections.result.ok(x) return v end",
+        "local function f(x) local v = string.result.ok(x) return v end",
+        "local function f(x) local v = collections.result.other(x) return v end",
+    };
+    for (const char* source : calls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("FASTCALL") == std::string::npos);
+    }
+
+    ScopedFastFlag off{FFlag::DebugLuwuCollections, false};
+    CHECK(compileFunction(fastcalls[2], 0, 1).find("FASTCALL") == std::string::npos);
+}
+
 // Luwu collections: `for i, v in collections.pair(a, b)` constructs no pair. The position is only loaded when the body
 // reads it.
 TEST_CASE("LoopOverTupleConstructionBuildsNoTuple")

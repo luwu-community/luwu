@@ -399,6 +399,15 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
         types.result = LBC_TYPE_BOOLEAN;
         types.b = LBC_TYPE_CLASS;
         break;
+    case LBF_COLLECTIONS_PAIR:
+    case LBF_COLLECTIONS_TRIPLE:
+    case LBF_COLLECTIONS_QUAD:
+    case LBF_COLLECTIONS_OPTION_SOME:
+    case LBF_COLLECTIONS_RESULT_OK:
+    case LBF_COLLECTIONS_RESULT_ERR:
+        // Luwu collections: an object when the builtin runs, but FASTCALL's fallback calls whatever `collections` holds
+        types.result = LBC_TYPE_ANY;
+        break;
     case LBF_TABLE_UNPACK:
         types.result = LBC_TYPE_ANY;
         types.a = LBC_TYPE_TABLE;

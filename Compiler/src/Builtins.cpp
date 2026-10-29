@@ -11,11 +11,22 @@ LUAU_FASTFLAGVARIABLE(LuauIntegerFastcalls)
 LUAU_FASTFLAGVARIABLE(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(DebugLuwuCollections)
 
 namespace Luau
 {
 namespace Compile
 {
+
+// Luwu collections: `name` in a library that is a member of a builtin global, as `collections.result.ok`
+static Builtin getNestedBuiltin(AstExprIndexName* library, AstName name, const DenseHashMap<AstName, Global>& globals)
+{
+    AstExprGlobal* object = library->expr->as<AstExprGlobal>();
+    if (!object || getGlobalState(globals, object->name) != Global::Default)
+        return Builtin();
+
+    return Builtin{object->name, library->index, name};
+}
 
 Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, const DenseHashMap<AstLocal*, Variable>& variables)
 {
@@ -47,8 +58,15 @@ Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, 
 
                 if (object)
                     return getGlobalState(globals, object->name) == Global::Default ? Builtin{object->name, expr->index} : Builtin();
+
+                // Luwu collections: 'local result = collections.result'
+                if (AstExprIndexName* library = v->init->as<AstExprIndexName>())
+                    return getNestedBuiltin(library, expr->index, globals);
             }
         }
+
+        if (AstExprIndexName* library = expr->expr->as<AstExprIndexName>())
+            return getNestedBuiltin(library, expr->index, globals);
 
         if (AstExprGlobal* object = expr->expr->as<AstExprGlobal>())
         {
@@ -69,8 +87,34 @@ Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, 
     }
 }
 
+// Luwu collections: constructors of the builtin classes. FASTCALL's safe-env guard falls back to the real call when
+// `collections` might have been replaced.
+static int getCollectionsFunctionId(const Builtin& builtin)
+{
+    if (builtin.isMethod("collections", "pair"))
+        return LBF_COLLECTIONS_PAIR;
+    if (builtin.isMethod("collections", "triple"))
+        return LBF_COLLECTIONS_TRIPLE;
+    if (builtin.isMethod("collections", "quad"))
+        return LBF_COLLECTIONS_QUAD;
+    if (builtin.isNestedMethod("collections", "option", "some"))
+        return LBF_COLLECTIONS_OPTION_SOME;
+    if (builtin.isNestedMethod("collections", "result", "ok"))
+        return LBF_COLLECTIONS_RESULT_OK;
+    if (builtin.isNestedMethod("collections", "result", "err"))
+        return LBF_COLLECTIONS_RESULT_ERR;
+
+    return -1;
+}
+
 static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& options)
 {
+    if (FFlag::DebugLuwuCollections && builtin.object == "collections")
+        return getCollectionsFunctionId(builtin);
+
+    if (builtin.nestedMethod.value)
+        return -1;
+
     if (builtin.isGlobal("assert"))
         return LBF_ASSERT;
 
@@ -611,6 +655,17 @@ BuiltinInfo getBuiltinInfo(int bfid)
 
     case LBF_CLASS_ISINSTANCE:
         return {2, 1};
+
+    case LBF_COLLECTIONS_PAIR:
+        return {2, 1};
+    case LBF_COLLECTIONS_TRIPLE:
+        return {3, 1};
+    case LBF_COLLECTIONS_QUAD:
+        return {4, 1};
+    case LBF_COLLECTIONS_OPTION_SOME:
+    case LBF_COLLECTIONS_RESULT_OK:
+    case LBF_COLLECTIONS_RESULT_ERR:
+        return {1, 1};
 
     case LBF_TABLE_INSERT:
         return {-1, 0}; // 2 or 3 parameters

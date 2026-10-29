@@ -632,6 +632,45 @@ do
     assert(not ok and raised.code == 7)
 end
 
+-- constructors called directly compile to fastcalls, which build what the constructor does
+do
+    const ok = collections.result.ok
+    const result = collections.result
+
+    const one = collections.pair(1)
+    assert(one.first == 1 and one.second == nil and class.isinstance(one, collections.pair))
+    const three = collections.triple(1, 2, 3, 4)
+    assert(three.first == 1 and three.third == 3 and tostring(three) == "triple(1, 2, 3)")
+    const four = collections.quad(1, 2, 3, 4)
+    assert(four.second == 2 and four.fourth == 4)
+    const hit = collections.option.some(false)
+    assert(hit:get() == false and class.isinstance(hit, collections.option.some))
+    const good = ok(nil)
+    assert(good:ok() == nil and good:err() == none and class.isinstance(good, result.ok))
+    const bad = result.err("e")
+    assert(bad:err() == "e" and bad:ok() == none and tostring(bad) == `result.err("e")`)
+
+    -- `some` of nothing falls back to the constructor, which raises
+    raises(function()
+        collections.option.some(nil)
+    end, "option.some needs a value, but you passed nil")
+
+    -- enough allocation to run the collector between constructions
+    const kept = {}
+    for i = 1, 20000 do
+        kept[i % 100 + 1] = ok({ i })
+    end
+    collectgarbage()
+    for i = 1, 100 do
+        assert(kept[i]:ok()[1] % 100 + 1 == i)
+    end
+
+    -- with `collections` replaced in the environment, the call reaches the replacement
+    const replaced = loadstring("local value = collections.result.ok(1) return value")
+    setfenv(replaced, { collections = { result = { ok = function(value) return `replaced {value}` end } } })
+    assert(replaced() == "replaced 1")
+end
+
 -- a container of an option or a result takes all of its variants: `none` goes in as the empty option
 do
     const options = collections.vec()
