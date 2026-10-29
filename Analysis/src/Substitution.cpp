@@ -325,7 +325,8 @@ void Tarjan::visitChildren(TypeId ty, int index)
             for (const auto& [_, function] : etv->traitInfo->selfFunctions)
             {
                 visitChild(function.generic);
-                visitChild(function.selfType);
+                if (function.selfType)
+                    visitChild(function.selfType);
             }
         }
 
@@ -989,7 +990,8 @@ void Substitution::replaceChildren(TypeId ty)
             for (auto& [_, function] : etv->traitInfo->selfFunctions)
             {
                 function.generic = replace(function.generic);
-                function.selfType = replace(function.selfType);
+                if (function.selfType)
+                    function.selfType = replace(function.selfType);
             }
         }
 

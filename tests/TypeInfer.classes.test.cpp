@@ -6097,4 +6097,41 @@ local function wrong(_x: Input = { padding = 1 }) end
     CHECK_EQ(result.errors[0].location.begin.line, 6);
 }
 
+TEST_CASE_FIXTURE(ClassesFixture, "trait_function_naming_self_without_a_self_parameter")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+    ScopedFastFlag luwuGenericNominals{FFlag::LuwuGenericNominals, true};
+
+    // `__create` names `Self` but has no `self`, so a class's copy has no `self` type to replace. Copying the trait into
+    // the module's interface for the error on it must handle that missing type.
+    CheckResult result = check(R"(
+trait Path
+    function __create(p: Self): number
+    end
+end
+
+class FilePath implements Path
+end
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<FunctionExitsWithoutReturning>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "trait_expecting_a_private_init_is_not_uninstantiable")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    // the trait's `__init` is the constructor its classes must have, not one of its own
+    CheckResult result = check(R"(
+trait Path
+    expect private function __init(self, components: { string })
+end
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_SUITE_END();

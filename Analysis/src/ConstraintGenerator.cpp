@@ -2217,8 +2217,11 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
 
         instantiation.params.push_back(function.generic);
         instantiation.args.push_back(record->ty);
-        instantiation.params.push_back(function.selfType);
-        instantiation.args.push_back(record->ty);
+        if (function.selfType)
+        {
+            instantiation.params.push_back(function.selfType);
+            instantiation.args.push_back(record->ty);
+        }
 
         return instantiateTraitProperty(scope, location, trait, instantiation, prop);
     };
