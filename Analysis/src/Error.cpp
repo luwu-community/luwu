@@ -600,9 +600,19 @@ struct ErrorConverter
             bool blockTypes = givenType.find('\n') != std::string::npos || wantedType.find('\n') != std::string::npos;
             bool hasTables = givenType.find('{') != std::string::npos || wantedType.find('{') != std::string::npos;
             bool printedByLuwu = tm.wantedName || tm.givenName || explained;
-            bool stacked = blockTypes || (printedByLuwu && hasTables);
+            // A mismatch with a note (read/write) has nothing to compare field by field: two short types share the line,
+            // with the note at its end.
+            bool bothShort = givenType.length() <= luauIndentTypeMismatchMaxTypeLength && wantedType.length() <= luauIndentTypeMismatchMaxTypeLength;
+            bool tablesStack = printedByLuwu && hasTables && !(tm.givenNote && bothShort);
+            bool stacked = blockTypes || tablesStack;
             bool givenIsShort = !stacked && givenType.length() <= luauIndentTypeMismatchMaxTypeLength;
             bool eitherIsShort = givenIsShort || (!stacked && wantedType.length() <= luauIndentTypeMismatchMaxTypeLength);
+
+            // The given type's note follows it on one line, and follows "but was given" when the type is on a line
+            // of its own.
+            const std::string note = tm.givenNote ? " " + *tm.givenNote : std::string();
+            const std::string givenInline = given + note;
+            const std::string butGotAbove = butGot + note;
 
             // An aliased union is printed as its declaration, `type Drop = A | B`, so its members are
             // there to count; a long one goes on the line below its name.
@@ -613,26 +623,26 @@ struct ErrorConverter
                     wanted = typeDeclaration(wantedType, *tm.explained->wantedExpansion);
                 if (tm.explained->givenExpansion)
                     given = typeDeclaration(givenType, *tm.explained->givenExpansion);
-                return preamble + "\n    " + wanted + "\n" + butGot + "\n    " + given;
+                return preamble + "\n    " + wanted + "\n" + butGotAbove + "\n    " + given;
             }
 
             if (get<NeverType>(follow(tm.wantedType)))
             {
                 if (givenIsShort)
-                    return "Expected " + subject + " to be unreachable, " + butGot + " " + given;
-                return "Expected " + subject + " to be unreachable, " + butGot + "\n    " + given;
+                    return "Expected " + subject + " to be unreachable, " + butGot + " " + givenInline;
+                return "Expected " + subject + " to be unreachable, " + butGotAbove + "\n    " + given;
             }
 
             if (tm.context == TypeMismatch::InvariantContext)
             {
                 if (eitherIsShort)
-                    return "Expected " + subject + " to be exactly " + wanted + ", " + butGot + " " + given;
-                return "Expected " + subject + " to be exactly\n    " + wanted + "\n" + butGot + "\n    " + given;
+                    return "Expected " + subject + " to be exactly " + wanted + ", " + butGot + " " + givenInline;
+                return "Expected " + subject + " to be exactly\n    " + wanted + "\n" + butGotAbove + "\n    " + given;
             }
 
             if (eitherIsShort)
-                return preamble + " " + wanted + ", " + butGot + " " + given;
-            return preamble + "\n    " + wanted + "\n" + butGot + "\n    " + given;
+                return preamble + " " + wanted + ", " + butGot + " " + givenInline;
+            return preamble + "\n    " + wanted + "\n" + butGotAbove + "\n    " + given;
         };
 
         // Two types that stringify identically need something appended to tell them apart. Only
@@ -1866,7 +1876,7 @@ bool TypeMismatch::operator==(const TypeMismatch& rhs) const
     const bool sameContext =
         contextVerb == rhs.contextVerb && contextWantedDisplay == rhs.contextWantedDisplay && contextGivenDisplay == rhs.contextGivenDisplay;
     const bool sameNames = wantedName == rhs.wantedName && givenName == rhs.givenName && givenVariable == rhs.givenVariable &&
-                           whereDeclarations == rhs.whereDeclarations;
+                           givenNote == rhs.givenNote && whereDeclarations == rhs.whereDeclarations;
     const bool sameLuwuRendering = sameContext && sameNames && overrideMessage == rhs.overrideMessage && lhsExplained == rhsExplained;
 
     return *wantedType == *rhs.wantedType && *givenType == *rhs.givenType && reason == rhs.reason && context == rhs.context &&
