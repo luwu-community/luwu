@@ -4014,7 +4014,7 @@ void TypeChecker2::visitExprName(
     std::string receiver;
     if (std::optional<std::string> name = separator ? bindingName(expr) : std::nullopt)
         receiver = *name + separator;
-    if (checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy, receiver))
+    if (checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy, receiver, separator == ':'))
     {
         reportUnreachableUse(expr, ImproperUse::Index);
         return;
@@ -5725,6 +5725,12 @@ Reasonings TypeChecker2::explainReasonings(TypePackId subTp, TypePackId superTp,
     return explainReasonings_(subTp, superTp, location, r);
 }
 
+// Luwu: the message for an optional value used where its `none` isn't allowed
+static std::string mayBeNoneMessage(TypeId valueTy)
+{
+    return "this '" + toString(valueTy) + "' value is optional and may be 'none', use an if condition to check";
+}
+
 // True when the *only* reason `subTy` fails to be a subtype of `superTy` is that `subTy` is (or contains, as a
 // union member) `none` and `superTy` doesn't account for it. This happens when an optional value (`T | none`)
 // is used somewhere that expects a plain `T` without first being narrowed/checked.
@@ -6526,10 +6532,7 @@ void TypeChecker2::explainError(
 
     if (isUncheckedNoneMismatch(subTy, superTy, result, builtinTypes, subtyping->arena))
     {
-        reportError(
-            GenericError{"this '" + toString(superTy) + "' value is optional and may be 'none', use an if condition to check"},
-            location
-        );
+        reportError(GenericError{mayBeNoneMessage(superTy)}, location);
         return;
     }
 
@@ -7320,6 +7323,8 @@ PropertyTypes TypeChecker2::lookupProp(
     if (normValid)
         fetch(norm->nils);
     if (normValid)
+        fetch(norm->nones);
+    if (normValid)
         fetch(norm->numbers);
     if (normValid && !norm->strings.isNever())
         fetch(builtinTypes->stringType);
@@ -7408,13 +7413,35 @@ static std::optional<MissingUnionProperty> missingFromIntersectedUnion(TypeId ty
     return MissingUnionProperty{ty, std::move(missing), prop, showHelp};
 }
 
+// Luwu: `T` for an optional `T | none` whose `none` is the only member missing a key
+static std::optional<TypeId> withoutMissingNone(TypeId tableTy, const std::vector<TypeId>& missing, TypeArena& arena)
+{
+    const UnionType* options = get<UnionType>(follow(tableTy));
+    if (!options || !std::all_of(missing.begin(), missing.end(), isNone))
+        return std::nullopt;
+
+    std::vector<TypeId> rest;
+    for (TypeId option : options)
+    {
+        if (!isNone(option))
+            rest.push_back(option);
+    }
+
+    if (rest.empty())
+        return std::nullopt;
+    if (rest.size() == 1)
+        return rest[0];
+    return arena.addType(UnionType{std::move(rest)});
+}
+
 bool TypeChecker2::checkIndexTypeFromType(
     TypeId tableTy,
     const std::string& prop,
     ValueContext context,
     const Location& location,
     TypeId astIndexExprType,
-    const std::string& receiver
+    const std::string& receiver,
+    bool methodCall
 )
 {
     std::shared_ptr<const NormalizedType> norm = normalizer.normalize(tableTy);
@@ -7438,7 +7465,14 @@ bool TypeChecker2::checkIndexTypeFromType(
 
     if (propTypes.foundMissingProp())
     {
-        if (propTypes.foundOneProp())
+        std::optional<TypeId> withoutNone = withoutMissingNone(tableTy, propTypes.missingProp, *module->internalTypes);
+        if (propTypes.foundOneProp() && withoutNone)
+        {
+            // A method call's self argument reports the same mistake
+            if (!methodCall)
+                reportError(GenericError{mayBeNoneMessage(*withoutNone)}, location);
+        }
+        else if (propTypes.foundOneProp())
         {
             std::optional<MissingUnionProperty> fromUnion = missingFromIntersectedUnion(tableTy, prop, helpifier.enabled);
             MissingUnionProperty error = fromUnion.value_or(MissingUnionProperty{tableTy, propTypes.missingProp, prop, helpifier.enabled});
@@ -7495,6 +7529,24 @@ bool TypeChecker2::checkIndexTypeFromType(
     return false;
 }
 
+// Luwu collections: the table of methods `none` has while the library exists (`get` and `expect`, from makeNoneMetatable)
+static std::optional<TypeId> noneMethods(TypeId ty)
+{
+    const PrimitiveType* none = get<PrimitiveType>(ty);
+    if (!none || none->type != PrimitiveType::NoneType || !none->metatable)
+        return std::nullopt;
+
+    const TableType* metatable = get<TableType>(follow(*none->metatable));
+    if (!metatable)
+        return std::nullopt;
+
+    auto index = metatable->props.find("__index");
+    if (index == metatable->props.end() || !index->second.readTy)
+        return std::nullopt;
+
+    return follow(*index->second.readTy);
+}
+
 PropertyType TypeChecker2::hasIndexTypeFromType(
     TypeId ty,
     const std::string& prop,
@@ -7521,6 +7573,8 @@ PropertyType TypeChecker2::hasIndexTypeFromType(
         LUAU_ASSERT(mtIndex);
         ty = *mtIndex;
     }
+    else if (std::optional<TypeId> methods = noneMethods(ty); methods && context == ValueContext::RValue)
+        ty = *methods;
 
     if (auto tt = getTableType(ty))
     {

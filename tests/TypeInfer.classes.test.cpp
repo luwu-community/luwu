@@ -6176,4 +6176,59 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
     CHECK_EQ(toString(requireType("missing")), "none");
 }
 
+// Luwu collections: `none` has only the methods the library gives it, so any other key is missing
+TEST_CASE_FIXTURE(BuiltinsFixture, "indexing_none_by_an_unknown_key_is_an_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local empty = none:get()
+        local a = none.foo
+        local b = none["bar"]
+        local function f(x: number | none)
+            return x.baz
+        end
+        none.get = none.get
+        local function g(s: string | none)
+            return s.len
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 3);
+    CHECK_EQ(result.errors[1].location.begin.line, 4);
+    CHECK_EQ(result.errors[2].location.begin.line, 6);
+    CHECK_EQ(result.errors[3].location.begin.line, 8);
+    CHECK(get<PropertyAccessViolation>(result.errors[3]));
+    // only `none` lacks `len`
+    CHECK_EQ(toString(result.errors[4]), "this 'string' value is optional and may be 'none', use an if condition to check");
+    CHECK_EQ(toString(requireType("empty")), "none");
+}
+
+// Luwu: without the collections library `none` has no methods at all
+TEST_CASE_FIXTURE(BuiltinsFixture, "none_has_no_keys_without_collections")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuCollections, false},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local a = none.foo
+        local b = none:get()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 2);
+    CHECK_EQ(result.errors[1].location.begin.line, 3);
+}
+
 TEST_SUITE_END();
