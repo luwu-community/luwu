@@ -2357,7 +2357,9 @@ static void autocompleteMissingFunctions(
             return;
 
         AutocompleteEntry entry{AutocompleteEntryKind::Property, prop ? prop->readTy : std::nullopt};
-        entry.prop = prop;
+        // a metamethod has no property, and an entry's `prop` holding nullptr would read as one
+        if (prop)
+            entry.prop = prop;
         entry.insertText = (typing ? "" : access + keyword) + entryName + signature + "\nend";
         result[entryName] = std::move(entry);
     };
