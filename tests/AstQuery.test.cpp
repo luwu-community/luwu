@@ -256,6 +256,46 @@ local .{alpha, beta as b} = value
     CHECK_EQ(std::string("b"), onName.getLocal()->name.value);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern is the local it declares, never the
+// position it reads
+TEST_CASE_FIXTURE(Fixture, "expr_or_local_in_a_positional_pattern")
+{
+    ScopedFastFlag destructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+local value = { 1, 2 }
+local .(first, second) = value
+    )");
+
+    for (Position position : {Position(2, 8), Position(2, 12), Position(2, 15), Position(2, 20)})
+    {
+        INFO(position.column);
+        ExprOrLocal found = findExprOrLocalAtPosition(*getMainSourceModule(), position);
+        REQUIRE(found.getLocal());
+        CHECK_EQ(std::string(position.column < 15 ? "first" : "second"), std::string(found.getLocal()->name.value));
+    }
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): right after a binding, like right after a plain local's name, nothing is found;
+// the pattern's hidden local, which spans the pattern, never is
+TEST_CASE_FIXTURE(Fixture, "expr_or_local_right_after_a_binding_is_never_the_hidden_local")
+{
+    ScopedFastFlag destructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+local value = { first = 1, second = 2 }
+local .{first, second} = value
+    )");
+
+    for (Position position : {Position(2, 13), Position(2, 21)})
+    {
+        INFO(position.column);
+        ExprOrLocal found = findExprOrLocalAtPosition(*getMainSourceModule(), position);
+        CHECK(!found.getLocal());
+        CHECK(!found.getExpr());
+    }
+}
+
 // Luwu Destructuring (rfcs/destructuring.md): a field bound in a loop's header is found there, as the local it declares,
 // with its type in the scope at that position (what the editor's hover reads)
 TEST_CASE_FIXTURE(Fixture, "local_and_scope_of_a_field_destructured_in_a_loop_header")

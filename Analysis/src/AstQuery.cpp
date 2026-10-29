@@ -436,6 +436,11 @@ struct FindExprOrLocal : public AstVisitor
 
     bool visitLocal(AstLocal* local)
     {
+        // Luwu Destructuring (rfcs/destructuring.md): a pattern's hidden local spans the pattern, so a cursor at the end of a
+        // binding in it (`.{name|}`) would find the whole value
+        if (local->name == kDestructuredLocalName)
+            return false;
+
         if (isCloserMatch(local->location))
         {
             result.setLocal(local);

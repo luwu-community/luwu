@@ -5833,6 +5833,36 @@ TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_complete_the_properties_of_the_
     CHECK_EQ(ac.context, AutocompleteContext::Property);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): every element of a positional pattern declares a local, and a field pattern
+// nested in one completes the element it destructures
+TEST_CASE_FIXTURE(ACFixture, "positional_patterns_complete_only_nested_keys")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local points = { { x = 1, y = 2 } }
+        local .(@1) = points
+        local .(first, @2) = points
+        local .(p.{@3}) = points
+        local .{inner as .(@4)} = { inner = points }
+        for _, .(@5) in { points } do end
+    )");
+
+    for (char marker : {'1', '2', '4', '5'})
+    {
+        INFO(marker);
+        AutocompleteResult ac = autocomplete(marker);
+        CHECK(ac.entryMap.empty());
+        CHECK_EQ(ac.context, AutocompleteContext::Unknown);
+    }
+
+    AutocompleteResult ac = autocomplete('3');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(ac.entryMap.count("y"));
+    CHECK(!ac.entryMap.count("points"));
+}
+
 TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_in_loop_bindings_complete_the_elements_properties")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
