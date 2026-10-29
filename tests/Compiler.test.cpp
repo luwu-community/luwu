@@ -14454,7 +14454,7 @@ TEST_CASE("CollectionsConstructorsCompileToFastcalls")
 
 // Luwu collections: `for i, v in collections.pair(a, b)` constructs no pair. The position is only loaded when the body
 // reads it.
-TEST_CASE("LoopOverTupleConstructionBuildsNoTuple")
+TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
 {
     ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
 

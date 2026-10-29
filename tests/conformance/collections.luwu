@@ -38,7 +38,7 @@ do
     assert(margins ~= collections.quad(1, 2, 3, 5))
     assert(tostring(margins) == "quad(1, 2, 3, 4)")
 
-    -- the elements compare with ==, so nested tuples compare by value too
+    -- the elements compare with ==, so nested bundles compare by value too
     assert(collections.pair(range, 1) == collections.pair(collections.pair(1, "x"), 1))
 
     raises(function()
@@ -49,7 +49,7 @@ do
     end, "third")
 end
 
--- iterating a tuple gives every slot in order, nil included, and starting a loop allocates nothing
+-- iterating a bundle gives every slot in order, nil included, and starting a loop allocates nothing
 do
     const seen = {}
     for i, v in collections.pair("a", nil) do
@@ -81,7 +81,7 @@ do
     assert(gcinfo() - before < 4)
 end
 
--- a loop over a tuple or a small table literal in its header builds neither, and runs like iterating one
+-- a loop over a bundle or a small table literal in its header builds neither, and runs like iterating one
 do
     const order = {}
     local function note(value: string?): string?
@@ -95,7 +95,7 @@ do
     end
     assert(table.concat(order, " ") == "a nil c 1=a 3=c")
 
-    -- a tuple yields every slot
+    -- a bundle yields every slot
     table.clear(order)
     for i, v in collections.triple(note("a"), note(nil), note("c")) do
         table.insert(order, `{i}={v}`)
@@ -152,7 +152,7 @@ do
     end
     assert(cells == 90)
 
-    -- a list of tuples, the last one included, is unfolded too
+    -- a list of bundles, the last one included, is unfolded too
     local sum = 0
     for _, entry in { collections.pair(1, 2), collections.pair(3, 4) } do
         sum += entry.first * entry.second
@@ -438,13 +438,13 @@ do
         queue:pushback(none)
     end, "this vecdeque can only accept strings, but you passed none")
 
-    const tuples = collections.vec()
-    tuples:push(collections.pair(1, 2))
+    const bundles = collections.vec()
+    bundles:push(collections.pair(1, 2))
     raises(function()
-        tuples:push(collections.orderedmap())
+        bundles:push(collections.orderedmap())
     end, "this vec can only accept 'pair' objects, but you passed an 'orderedmap' object")
     raises(function()
-        tuples:insert(1, collections.triple(1, 2, 3))
+        bundles:insert(1, collections.triple(1, 2, 3))
     end, "this vec can only accept 'pair' objects, but you passed a 'triple' object")
 
     const flags = collections.vec()

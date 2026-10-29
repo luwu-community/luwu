@@ -6103,8 +6103,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
     CHECK_EQ(toString(requireType("front")), "string?");
 }
 
-// Luwu collections: a tuple iterates over its slots, so the value is any of its element types
-TEST_CASE_FIXTURE(BuiltinsFixture, "collections_tuples_iterate_over_their_elements")
+// Luwu collections: a bundle iterates over its slots, so the value is any of its element types
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_elements")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},

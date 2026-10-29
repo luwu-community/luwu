@@ -7593,9 +7593,9 @@ struct Compiler
         loops.pop_back();
     }
 
-    // Luwu collections: the size of the tuple `expr` constructs, a `collections.pair`, `triple` or `quad` call with one
+    // Luwu collections: the size of the bundle `expr` constructs, a `collections.pair`, `triple` or `quad` call with one
     // argument per element, or 0 for anything else
-    unsigned tupleConstructionSize(AstExpr* expr)
+    unsigned bundleConstructionSize(AstExpr* expr)
     {
         AstExprCall* call = expr->as<AstExprCall>();
         if (!FFlag::DebugLuwuCollections || !call || call->self)
@@ -7621,14 +7621,14 @@ struct Compiler
     struct UnfoldedLoopValue
     {
         std::vector<AstExpr*> elements;
-        // A table skips its `nil` items when iterated; a tuple yields every slot
+        // A table skips its `nil` items when iterated; a bundle yields every slot
         bool skipsNil = false;
     };
 
     UnfoldedLoopValue unfoldedLoopValue(AstExpr* value)
     {
         UnfoldedLoopValue unfolded;
-        if (tupleConstructionSize(value) > 0)
+        if (bundleConstructionSize(value) > 0)
         {
             AstExprCall* call = value->as<AstExprCall>();
             unfolded.elements.assign(call->args.begin(), call->args.end());
@@ -7645,9 +7645,9 @@ struct Compiler
                 return {};
         }
 
-        // a call or `...` as the last item adds as many items as it returns; a tuple's construction returns one
+        // a call or `...` as the last item adds as many items as it returns; a bundle's construction returns one
         AstExpr* last = table->items.data[table->items.size - 1].value;
-        if (isExprMultRet(last) && tupleConstructionSize(last) == 0)
+        if (isExprMultRet(last) && bundleConstructionSize(last) == 0)
             return unfolded;
 
         for (const AstExprTable::Item& item : table->items)
@@ -7678,7 +7678,7 @@ struct Compiler
     }
 
     // Luwu collections: `for i, v in collections.pair(a, b)`, and `for i, v in { a, b }` with up to four plain items,
-    // build no tuple or table. Each element goes into a register and the body is compiled once per element. Each copy
+    // build no bundle or table. Each element goes into a register and the body is compiled once per element. Each copy
     // binds `v` to its element's register and `i` to its position, and a closure in one copy captures that copy's `v`.
     // A table literal's `nil` items are skipped the way iterating the table skips them. Like a fastcall, this assumes
     // `collections` is the builtin library when the module never assigns it.
@@ -7778,7 +7778,7 @@ struct Compiler
 
     void compileStatForIn(AstStatForIn* stat)
     {
-        // Luwu collections: a tuple or small table literal in the loop header is never built (tryCompileUnfoldedForIn)
+        // Luwu collections: a bundle or small table literal in the loop header is never built (tryCompileUnfoldedForIn)
         if (options.optimizationLevel >= 1 && tryCompileUnfoldedForIn(stat))
             return;
 

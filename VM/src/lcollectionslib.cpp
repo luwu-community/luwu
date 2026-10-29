@@ -309,46 +309,46 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
 // pair, triple and quad: `first` to `fourth`, public and const
 
 template<LuwuBuiltinClass Kind>
-static LuauObject* checktuple(lua_State* L, const char* method)
+static LuauObject* checkbundle(lua_State* L, const char* method)
 {
     return luaR_checknativeself(L, builtinclass(L, Kind), method);
 }
 
 // `__init` is only ever called by construction, with a new object of the class: it can't be read as a member
-static int tupleinit(lua_State* L)
+static int bundleinit(lua_State* L)
 {
-    LuauObject* tuple = objectvalue(L->base);
+    LuauObject* bundle = objectvalue(L->base);
     int nargs = lua_gettop(L) - 1;
-    for (uint32_t i = 0; i < tuple->numberofmembers && int(i) < nargs; i++)
-        setfield(L, tuple, i, L->base + 1 + i);
+    for (uint32_t i = 0; i < bundle->numberofmembers && int(i) < nargs; i++)
+        setfield(L, bundle, i, L->base + 1 + i);
     return 0;
 }
 
 template<LuwuBuiltinClass Kind>
-static int tupleeq(lua_State* L)
+static int bundleeq(lua_State* L)
 {
-    LuauObject* tuple = checktuple<Kind>(L, "__eq");
+    LuauObject* bundle = checkbundle<Kind>(L, "__eq");
     const TValue* other = L->base + 1;
-    bool equal = ttisobject(other) && objectvalue(other)->lclass == tuple->lclass;
-    for (uint32_t i = 0; equal && i < tuple->numberofmembers; i++)
-        equal = equalobj(L, &luaR_members(tuple)[i], &luaR_members(objectvalue(other))[i]);
+    bool equal = ttisobject(other) && objectvalue(other)->lclass == bundle->lclass;
+    for (uint32_t i = 0; equal && i < bundle->numberofmembers; i++)
+        equal = equalobj(L, &luaR_members(bundle)[i], &luaR_members(objectvalue(other))[i]);
     lua_pushboolean(L, equal);
     return 1;
 }
 
 template<LuwuBuiltinClass Kind>
-static int tupletostring(lua_State* L)
+static int bundletostring(lua_State* L)
 {
-    LuauObject* tuple = checktuple<Kind>(L, "__tostring");
+    LuauObject* bundle = checkbundle<Kind>(L, "__tostring");
     luaL_Strbuf b;
     luaL_buffinit(L, &b);
-    luaL_addstring(&b, getstr(tuple->lclass->name));
+    luaL_addstring(&b, getstr(bundle->lclass->name));
     luaL_addchar(&b, '(');
-    for (uint32_t i = 0; i < tuple->numberofmembers; i++)
+    for (uint32_t i = 0; i < bundle->numberofmembers; i++)
     {
         if (i > 0)
             luaL_addstring(&b, ", ");
-        luaA_pushvalue(L, &luaR_members(tuple)[i]);
+        luaA_pushvalue(L, &luaR_members(bundle)[i]);
         addshowntop(&b);
     }
     luaL_addchar(&b, ')');
@@ -356,13 +356,13 @@ static int tupletostring(lua_State* L)
     return 1;
 }
 
-// Every slot in order, `nil` included: a tuple's size is fixed. Starting a loop allocates nothing because `__iter` is
-// also the iterator it returns. The VM calls `__iter` with the tuple alone, and the iterator with the tuple and the
+// Every slot in order, `nil` included: a bundle's size is fixed. Starting a loop allocates nothing because `__iter` is
+// also the iterator it returns. The VM calls `__iter` with the bundle alone, and the iterator with the bundle and the
 // previous position.
 template<LuwuBuiltinClass Kind>
-static int tupleiter(lua_State* L)
+static int bundleiter(lua_State* L)
 {
-    LuauObject* tuple = checktuple<Kind>(L, "__iter");
+    LuauObject* bundle = checkbundle<Kind>(L, "__iter");
     if (lua_gettop(L) == 1)
     {
         luaA_pushvalue(L, L->ci->func);
@@ -373,44 +373,44 @@ static int tupleiter(lua_State* L)
 
     double position = lua_isnil(L, 2) ? 1 : luaL_checknumber(L, 2) + 1;
     int index = int(position);
-    if (index != position || index < 1 || uint32_t(index) > tuple->numberofmembers)
+    if (index != position || index < 1 || uint32_t(index) > bundle->numberofmembers)
         return 0;
 
     lua_pushnumber(L, position);
-    luaA_pushvalue(L, &luaR_members(tuple)[index - 1]);
+    luaA_pushvalue(L, &luaR_members(bundle)[index - 1]);
     return 2;
 }
 
-static const uint8_t kTupleField = LBC_CLASSMEMBER_CONST;
+static const uint8_t kBundleField = LBC_CLASSMEMBER_CONST;
 static const uint8_t kPrivateField = LBC_CLASSMEMBER_PRIVATE;
-// An option's or result's payload, readable as `value` (`error` for `err`) like a tuple's elements
+// An option's or result's payload, readable as `value` (`error` for `err`) like a bundle's elements
 static const uint8_t kPayloadField = LBC_CLASSMEMBER_CONST;
 
 static const luaR_NativeMember kPairMembers[] = {
-    {"first", NULL, kTupleField},
-    {"second", NULL, kTupleField},
-    {"__eq", tupleeq<LUWU_BUILTIN_PAIR>, 0},
-    {"__iter", tupleiter<LUWU_BUILTIN_PAIR>, 0},
-    {"__tostring", tupletostring<LUWU_BUILTIN_PAIR>, 0},
+    {"first", NULL, kBundleField},
+    {"second", NULL, kBundleField},
+    {"__eq", bundleeq<LUWU_BUILTIN_PAIR>, 0},
+    {"__iter", bundleiter<LUWU_BUILTIN_PAIR>, 0},
+    {"__tostring", bundletostring<LUWU_BUILTIN_PAIR>, 0},
 };
 
 static const luaR_NativeMember kTripleMembers[] = {
-    {"first", NULL, kTupleField},
-    {"second", NULL, kTupleField},
-    {"third", NULL, kTupleField},
-    {"__eq", tupleeq<LUWU_BUILTIN_TRIPLE>, 0},
-    {"__iter", tupleiter<LUWU_BUILTIN_TRIPLE>, 0},
-    {"__tostring", tupletostring<LUWU_BUILTIN_TRIPLE>, 0},
+    {"first", NULL, kBundleField},
+    {"second", NULL, kBundleField},
+    {"third", NULL, kBundleField},
+    {"__eq", bundleeq<LUWU_BUILTIN_TRIPLE>, 0},
+    {"__iter", bundleiter<LUWU_BUILTIN_TRIPLE>, 0},
+    {"__tostring", bundletostring<LUWU_BUILTIN_TRIPLE>, 0},
 };
 
 static const luaR_NativeMember kQuadMembers[] = {
-    {"first", NULL, kTupleField},
-    {"second", NULL, kTupleField},
-    {"third", NULL, kTupleField},
-    {"fourth", NULL, kTupleField},
-    {"__eq", tupleeq<LUWU_BUILTIN_QUAD>, 0},
-    {"__iter", tupleiter<LUWU_BUILTIN_QUAD>, 0},
-    {"__tostring", tupletostring<LUWU_BUILTIN_QUAD>, 0},
+    {"first", NULL, kBundleField},
+    {"second", NULL, kBundleField},
+    {"third", NULL, kBundleField},
+    {"fourth", NULL, kBundleField},
+    {"__eq", bundleeq<LUWU_BUILTIN_QUAD>, 0},
+    {"__iter", bundleiter<LUWU_BUILTIN_QUAD>, 0},
+    {"__tostring", bundletostring<LUWU_BUILTIN_QUAD>, 0},
 };
 
 // orderedmap: a map in an order the user decides. Every entry has an id that stays the same while it exists, the
@@ -1808,9 +1808,9 @@ static void addclass(
 int luaopen_collections(lua_State* L)
 {
     lua_createtable(L, 0, 8);
-    addclass(L, LUWU_BUILTIN_PAIR, "pair", kPairMembers, tupleinit);
-    addclass(L, LUWU_BUILTIN_TRIPLE, "triple", kTripleMembers, tupleinit);
-    addclass(L, LUWU_BUILTIN_QUAD, "quad", kQuadMembers, tupleinit);
+    addclass(L, LUWU_BUILTIN_PAIR, "pair", kPairMembers, bundleinit);
+    addclass(L, LUWU_BUILTIN_TRIPLE, "triple", kTripleMembers, bundleinit);
+    addclass(L, LUWU_BUILTIN_QUAD, "quad", kQuadMembers, bundleinit);
     addclass(L, LUWU_BUILTIN_ORDEREDMAP, "orderedmap", kOrderedMapMembers, orderedmapinit, OM_COUNT);
     addclass(L, LUWU_BUILTIN_VEC, "vec", kVecMembers, vecinit);
     addclass(L, LUWU_BUILTIN_VECDEQUE, "vecdeque", kVecDequeMembers, vecdequeinit);

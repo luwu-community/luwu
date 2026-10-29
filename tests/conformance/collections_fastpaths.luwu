@@ -162,17 +162,17 @@ do
         vecs.push(empty, nil)
     end, "this vec can't accept nil")
 
-    const tuples = collections.vecdeque()
-    deques.pushback(tuples, collections.pair(1, 2))
-    deques.pushback(tuples, collections.pair(3, 4))
+    const bundles = collections.vecdeque()
+    deques.pushback(bundles, collections.pair(1, 2))
+    deques.pushback(bundles, collections.pair(3, 4))
     raises(function()
-        deques.pushback(tuples, collections.triple(1, 2, 3))
+        deques.pushback(bundles, collections.triple(1, 2, 3))
     end, "this vecdeque can only accept 'pair' objects, but you passed a 'triple' object")
     raises(function()
-        deques.pushfront(tuples, { 1, 2 })
+        deques.pushfront(bundles, { 1, 2 })
     end, "this vecdeque can only accept 'pair' objects, but you passed a table")
     raises(function()
-        deques.set(tuples, 1, collections.option.some(1))
+        deques.set(bundles, 1, collections.option.some(1))
     end, "this vecdeque can only accept 'pair' objects, but you passed a 'some' object")
 
     -- an enum takes all of its variants, and only those
