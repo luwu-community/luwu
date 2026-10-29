@@ -6072,6 +6072,34 @@ TEST_CASE_FIXTURE(Fixture, "an_unindented_continuation_that_parses_is_left_alone
     }
 }
 
+// Inside a table, call or parentheses, a function missing its `end`, or its parameters and body, stops at the closing
+// bracket. The code after the bracket parses on its own.
+TEST_CASE_FIXTURE(Fixture, "a_function_missing_its_end_stops_at_the_enclosing_bracket")
+{
+    for (const char* source : {
+             "local t = setmetatable({\n    join = function(s)\n        if s then\n    end\n}, {})\nlocal after = 1\n",
+             "local t = {\n    function\n}\nlocal after = 1\n",
+             "local t = setmetatable({\n    function\n}, {})\nlocal after = 1\n",
+             "print(function()\n    if x then\n)\nlocal after = 1\n",
+             "local t = (function()\n    if x then\n)\nlocal after = 1\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        CHECK_EQ(result.errors.size(), 1);
+        REQUIRE_EQ(result.root->body.size, 2);
+        CHECK(result.root->body.data[1]->is<AstStatLocal>());
+    }
+}
+
+// Outside any table, call or parentheses, a closing bracket is still a stray token: it doesn't end the chunk
+TEST_CASE_FIXTURE(Fixture, "a_stray_closing_bracket_at_the_top_level_does_not_end_the_chunk")
+{
+    ParseResult result = tryParse("local x = 1\n}\nlocal after = 1\n");
+    CHECK_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.root->body.data[result.root->body.size - 1]->location.begin.line, 2);
+}
+
 // The next line's type alias is a declaration of its own, not a global `type` then a statement. The one error is the
 // missing value or name, reported at the declaration as for `const`.
 TEST_CASE_FIXTURE(Fixture, "a_missing_value_above_a_type_alias_is_one_error")

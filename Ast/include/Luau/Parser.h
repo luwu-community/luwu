@@ -516,6 +516,7 @@ private:
     bool orContinueFollows();
     void resolveOrContinues();
     AstExpr* parseOrLeave(const char* introducer = "or");
+    bool closesOpenBracket(const Lexeme& l);
     bool doExprBodyFollow(const Lexeme& l);
     bool valueEnds(const Lexeme& l);
     void checkDoExprKeywordAsName(const Name& name);
@@ -739,6 +740,26 @@ private:
     // Luwu Do Expressions (rfcs/do-expressions.md): where the expression directly inside the innermost `(` being parsed
     // starts, so a `do` expression can tell it is parenthesized.
     std::optional<Position> parenthesizedExprStart;
+
+    // Luwu: how many table constructors, call argument lists and parentheses enclose the position being parsed. While
+    // one is open, a block ends at a closing bracket, so a function missing its `end` leaves the bracket to them.
+    unsigned int openBracketDepth = 0;
+
+    struct OpenBracket
+    {
+        explicit OpenBracket(unsigned int& depth)
+            : depth(depth)
+        {
+            depth++;
+        }
+
+        ~OpenBracket()
+        {
+            depth--;
+        }
+
+        unsigned int& depth;
+    };
 
     // Luwu Do Expressions (rfcs/do-expressions.md): the statement being parsed is directly in a `do` expression's block, not
     // in a block nested in it. A `give` there ends the expression, so a `,` after its value belongs to the list around it.

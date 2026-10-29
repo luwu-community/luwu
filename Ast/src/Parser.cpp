@@ -783,7 +783,7 @@ AstStatBlock* Parser::parseBlockNoScope(bool doExprBody)
     // there too.
     bool inDoExpr = doExprBody || functionStack.back().doExprDepth > 0;
 
-    while (!blockFollow(lexer.current()) && !(inDoExpr && doExprBodyFollow(lexer.current())))
+    while (!blockFollow(lexer.current()) && !(inDoExpr && doExprBodyFollow(lexer.current())) && !closesOpenBracket(lexer.current()))
     {
         unsigned int oldRecursionCount = recursionCounter;
 
@@ -5100,6 +5100,12 @@ std::tuple<AstLocal*, AstArray<AstLocal*>, AstArray<AstExpr*>> Parser::prepareFu
     return {self, copy(vars), copy(varsDefaults)};
 }
 
+// Whether `type` ends the list, call or table an expression sits in. None of these can start a statement.
+static bool closesEnclosingExpression(Lexeme::Type type)
+{
+    return type == '}' || type == ')' || type == ']' || type == ',' || type == ';';
+}
+
 // funcbody ::= `(' [parlist] `)' [`:' ReturnType] block end
 // parlist ::= bindinglist [`,' `...'] | `...'
 std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
@@ -5138,8 +5144,12 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
 
     // Luwu: `function` ending its line above code that isn't its parameter list (`local f = function` above
     // `total += 1`): one error, on its own line, and no parameters, instead of reading the next line as them
-    bool paramsMissing = lexer.current().type != '(' && !continuesOnSameLine();
-    if (paramsMissing && !statementReportedError())
+    bool paramsAtLineEnd = lexer.current().type != '(' && !continuesOnSameLine();
+    // Luwu: a `function` right before the token that closes what holds it (`{ function }`, `f(function)`) has no
+    // parameters and no body. A body parsed there would take the closing token and the rest of the file with it.
+    bool bodyMissing = lexer.current().type != '(' && closesEnclosingExpression(lexer.current().type);
+    bool paramsMissing = paramsAtLineEnd || bodyMissing;
+    if (paramsAtLineEnd && !statementReportedError())
         report(lexer.previousLocation(), "Expected '(' when parsing function");
     else
         expectAndConsume('(', "function");
@@ -5228,15 +5238,15 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
 
     AstStatBlock* body = nullptr;
     Location end;
-    if (signatureOnly)
+    if (signatureOnly || bodyMissing)
     {
         // Like `declare function`, a signature with no return type returns nothing.
-        if (!typelist)
+        if (signatureOnly && !typelist)
             typelist = allocator.alloc<AstTypePackExplicit>(lexer.previousLocation(), AstTypeList{copy<AstType*>(nullptr, 0), nullptr});
 
         end = lexer.previousLocation();
         body = allocator.alloc<AstStatBlock>(Location(end.end, end.end), AstArray<AstStat*>{nullptr, 0});
-        body->hasEnd = true;
+        body->hasEnd = signatureOnly;
 
         functionStack.pop_back();
         restoreLocals(localsBegin);
@@ -6772,6 +6782,7 @@ AstExpr* Parser::parsePrefixExpr()
 
         MatchLexeme matchParen = lexer.current();
         nextLexeme();
+        OpenBracket openBracket{openBracketDepth};
 
         std::optional<Position> outerParenthesizedExprStart = parenthesizedExprStart;
         parenthesizedExprStart = lexer.current().location.begin;
@@ -7238,6 +7249,7 @@ std::tuple<AstArray<AstExpr*>, Location, Location> Parser::parseCallList(TempVec
 
         MatchLexeme matchParen = lexer.current();
         nextLexeme();
+        OpenBracket openBracket{openBracketDepth};
 
         TempVector<AstExpr*> args(scratchExpr);
 
@@ -7280,6 +7292,7 @@ AstExpr* Parser::parseFunctionArgs(AstExpr* func, bool self)
 
         MatchLexeme matchParen = lexer.current();
         nextLexeme();
+        OpenBracket openBracket{openBracketDepth};
 
         TempVector<AstExpr*> args(scratchExpr);
         TempVector<Position> commaPositions(scratchPosition);
@@ -7383,6 +7396,7 @@ AstExpr* Parser::parseTableConstructor()
 
     MatchLexeme matchBrace = lexer.current();
     expectAndConsume('{', "table literal");
+    OpenBracket openBracket{openBracketDepth};
     // Clip with LuauTableEntriesDontNeedToMatchIndent
     unsigned lastElementIndent_DEPRECATED = 0;
 
@@ -8956,6 +8970,14 @@ AstStat* Parser::parseGive()
 
 // Luwu Do Expressions (rfcs/do-expressions.md): tokens that end the expression a `do` expression is part of, so its
 // block can't continue past them. Reaching one before the block's last statement is an error.
+// Luwu: no statement starts with a closing bracket, so inside a table, call or parentheses one belongs to them. A block
+// missing its `end` stops there instead of reading the rest of the file.
+bool Parser::closesOpenBracket(const Lexeme& l)
+{
+    bool closingBracket = l.type == ')' || l.type == ']' || l.type == '}';
+    return openBracketDepth > 0 && closingBracket;
+}
+
 bool Parser::doExprBodyFollow(const Lexeme& l)
 {
     return l.type == ')' || l.type == ']' || l.type == '}' || l.type == ',' || l.type == Lexeme::ReservedThen;
