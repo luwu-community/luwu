@@ -2632,12 +2632,14 @@ local y: number = tmp.p.y
         // The code writes `a.p` on the next line, so the first help doesn't apply; each help names the
         // condition it depends on.
         CHECK_EQ(
-            "Expected property 'p' to allow reading and writing as 'Super', but in 'tmp' it is a '{ x: number, y: number }', "
-            "which can only be read as 'Super'. Because 'p' can be read and written, it could silently be replaced with a "
-            "value of a smaller type, causing data loss.\n\n"
+            "Expected this to be 'HasSuper', but was given 'tmp' (read works, write doesn't)\n"
+            "\n"
+            "Because a read/write table is expected here, 'tmp.p' could be set to any 'Super' (which must stay a "
+            "'{ x: number, y: number }').\n"
+            "\n"
             "Help (read/write mismatch):\n"
-            "  • If nothing writes to 'p', mark it as 'read p: Super' in 'HasSuper'\n"
-            "  • If it reads and writes, make a 'Super' version of your data or mark the additional properties as optional",
+            "  • If nothing writes to it, mark 'p' as 'read p: Super' in 'HasSuper'\n"
+            "  • If something writes to it, use a 'HasSuper' instead of 'tmp'",
             toString(result.errors[0])
         );
     }
@@ -7479,13 +7481,14 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_indexer")
     LUAU_REQUIRE_ERROR_COUNT(2, result);
 
     CHECK_EQ(
-        "Expected this to be '{Scoped}', an array that can read and write 'Scoped', but got '{Vcn}', an array that is only "
-        "allowed to read 'Scoped' through its 'Vcn' elements. Because the function 'process' can read and write to your array, "
-        "it can silently replace its elements with those of a smaller type, causing data loss.\n\n"
+        "Expected 'vcns' to be '{Scoped}', but was given '{Vcn}' (read works, write doesn't)\n"
+        "\n"
+        "Because 'process' expects a read/write array, it could write any 'Scoped' into 'vcns' (which must "
+        "only hold 'Vcn').\n"
+        "\n"
         "Help (read/write mismatch):\n"
-        "  • If the function doesn't actually write to the array, annotate the parameter as '{ read Scoped }'\n"
-        "  • If it reads and writes, make 'Scoped' versions of your data to pass to the function or mark the additional "
-        "properties as optional",
+        "  • If 'process' only reads 'rows', expect '{ read Scoped }'\n"
+        "  • If it also writes, pass it a '{Scoped}' instead of 'vcns'",
         toString(result.errors[0])
     );
 
@@ -7517,13 +7520,17 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_map_uses_map_nouns_
     LUAU_REQUIRE_ERROR_COUNT(2, result);
 
     CHECK_EQ(
-        "Expected this to be '{ [string]: Scoped }', a map that can read and write 'Scoped', but got '{ [string]: Vcn }', a "
-        "map that is only allowed to read 'Scoped' through its 'Vcn' values. Because the function 'byKey' can read and write "
-        "to your map, it can silently replace its values with those of a smaller type, causing data loss.\n\n"
+        "Expected 'map' to be\n"
+        "    '{ [string]: Scoped }'\n"
+        "but was given (read works, write doesn't)\n"
+        "    '{ [string]: Vcn }'\n"
+        "\n"
+        "Because 'byKey' expects a read/write map, it could write any 'Scoped' into 'map' (which must only "
+        "hold 'Vcn').\n"
+        "\n"
         "Help (read/write mismatch):\n"
-        "  • If the function doesn't actually write to the map, annotate the parameter as '{ read [string]: Scoped }'\n"
-        "  • If it reads and writes, make 'Scoped' versions of your data to pass to the function or mark the additional "
-        "properties as optional",
+        "  • If 'byKey' only reads 'lookup', expect '{ read [string]: Scoped }'\n"
+        "  • If it also writes, pass it a '{ [string]: Scoped }' instead of 'map'",
         toString(result.errors[0])
     );
     CHECK_EQ("Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'byKey' only reads from the map", toString(result.errors[1]));
@@ -7680,12 +7687,14 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_without_a_call_names_no_function"
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
     CHECK_EQ(
-        "Expected this to be '{Scoped}', an array that can read and write 'Scoped', but got '{Vcn}', an array that is only "
-        "allowed to read 'Scoped' through its 'Vcn' elements. Because '{Scoped}' can be read and written, it can silently "
-        "replace its elements with those of a smaller type, causing data loss.\n\n"
+        "Expected 'vcns' to be '{Scoped}', but was given '{Vcn}' (read works, write doesn't)\n"
+        "\n"
+        "Because a read/write array is expected here, any 'Scoped' could be written into 'vcns' (which must "
+        "only hold 'Vcn').\n"
+        "\n"
         "Help (read/write mismatch):\n"
-        "  • If nothing writes to the array, annotate it as '{ read Scoped }'\n"
-        "  • If it reads and writes, make 'Scoped' versions of your data or mark the additional properties as optional",
+        "  • If nothing writes to it, annotate it as '{ read Scoped }'\n"
+        "  • If something writes to it, use a '{Scoped}' instead of 'vcns'",
         toString(result.errors[0])
     );
 }
@@ -7710,13 +7719,14 @@ TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_property_names_the_
     LUAU_REQUIRE_ERROR_COUNT(2, result);
 
     CHECK_EQ(
-        "Expected property 'value' to allow reading and writing as 'Scoped', but in 'Box<Vcn>' it is a 'Vcn', which can only "
-        "be read as 'Scoped'. Because the function 'takesBox' can read and write to 'value', it could silently replace it "
-        "with a value of a smaller type, causing data loss.\n\n"
+        "Expected this to be 'Box<Scoped>', but was given 'Box<Vcn>' (read works, write doesn't)\n"
+        "\n"
+        "Because 'takesBox' expects a read/write table, it could set 'value' to any 'Scoped' (which must "
+        "stay a 'Vcn').\n"
+        "\n"
         "Help (read/write mismatch):\n"
-        "  • If the function doesn't actually write to 'value', mark it as 'read value: Scoped' in 'Box<Scoped>'\n"
-        "  • If it reads and writes, make a 'Scoped' version of your data to pass to the function or mark the additional "
-        "properties as optional",
+        "  • If 'takesBox' only reads 'b', mark 'value' as 'read value: Scoped' in 'Box<Scoped>'\n"
+        "  • If it also writes, pass it a 'Box<Scoped>' instead",
         toString(result.errors[0])
     );
 

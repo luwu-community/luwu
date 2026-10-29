@@ -4618,6 +4618,10 @@ struct ReadWriteExplanation
     // The failing path on the expected side, which is the parameter's own type, so it lines up with what
     // the user wrote there: `annotatedMemberLocation` follows it to the indexer or property to mark `read`.
     TypePath::Path parameterHelpPath;
+
+    // `message` is the whole message. Otherwise it is the reason under the usual "Expected 'x' to be" header, which
+    // gets `kReadWriteNote` after the given type.
+    bool standalone = true;
 };
 
 // Luwu (helpful subtyping errors): both sides' types at the end of their paths, when both paths lead to a
@@ -4750,6 +4754,11 @@ struct ReadWriteMismatch
     std::string givenLeaf;
     std::string wantedContainer;
     std::string givenContainer;
+    // The whole expected type.
+    std::string wanted;
+
+    // The path from the given value to the container that holds the slot. Empty when it is the value itself.
+    TypePath::Path containerPath;
 
     // The member of an expected union that the given side lacks, when that is the whole difference.
     std::optional<std::string> widenedMember;
@@ -4759,10 +4768,59 @@ struct ReadWriteMismatch
 
     // The callee, when the value is an argument and the callee has a name.
     std::string functionName;
+    // The parameter the value is passed to, when it has a name.
+    std::optional<std::string> parameterName;
+    // The given value's name in the code, when it has one.
+    std::optional<std::string> givenName;
 
     // See ReadWriteExplanation::parameterHelpPath.
     TypePath::Path parameterHelpPath;
 };
+
+// Luwu (helpful subtyping errors): the longest type a read/write mismatch prints in its sentences.
+static constexpr size_t kMaxReadWriteTypeLength = 40;
+
+// Luwu (helpful subtyping errors): an indexer's element or a read property at the end of `path`.
+static bool endsInReadableSlot(const TypePath::Path& path)
+{
+    if (path.empty())
+        return false;
+    const TypePath::Component& last = path.components.back();
+    const TypePath::Property* property = get_if<TypePath::Property>(&last);
+    const TypePath::TypeField* typeField = get_if<TypePath::TypeField>(&last);
+    return (typeField && *typeField == TypePath::TypeField::IndexResult) || (property && property->isRead);
+}
+
+// Luwu (helpful subtyping errors): the outermost slot along `path` whose read half passes, which is where
+// `read` helps. Subtyping reports the deepest failure: `{ {string} }` against `{ {read unknown} }` fails
+// inside the inner arrays, but the fix is marking the outer array's elements `read`.
+static std::optional<TypePath::Path> outermostReadableSlot(
+    TypeId subTy,
+    TypeId superTy,
+    const TypePath::Path& path,
+    NotNull<Subtyping> subtyping,
+    NotNull<Scope> scope,
+    NotNull<BuiltinTypes> builtinTypes,
+    NotNull<TypeArena> arena
+)
+{
+    if (path.empty())
+        return std::nullopt;
+
+    for (auto end = path.components.begin() + 1; end <= path.components.end(); ++end)
+    {
+        TypePath::Path prefix{std::vector<TypePath::Component>(path.components.begin(), end)};
+        if (!endsInReadableSlot(prefix))
+            continue;
+
+        std::optional<std::pair<TypeId, TypeId>> leaves = typesAtPaths(subTy, prefix, superTy, prefix, builtinTypes, arena);
+        if (!leaves)
+            return std::nullopt;
+        if (subtyping->isSubtype(leaves->first, leaves->second, scope).isSubtype)
+            return prefix;
+    }
+    return std::nullopt;
+}
 
 // Luwu (helpful subtyping errors): a property or indexer that is read *and* written has to match exactly, so
 // a perfectly good subtype is rejected wherever one is expected -- passing a `{Button}` to a `{Widget}`
@@ -4783,20 +4841,48 @@ static std::optional<ReadWriteMismatch> findReadWriteMismatch(
     NotNull<TypeArena> arena
 )
 {
-    const SubtypingReasoning* reasoning = soleReasoning(result);
-    if (!reasoning || reasoning->variance != SubtypingVariance::Invariant || reasoning->isAccessModifierViolation)
+    // Every failure has to be under the same slot for the message to be able to point at one. A nested
+    // failure can come with several reasonings: `{ {string} }` against `{ {read unknown} }` also reports
+    // the inner arrays' access modifiers, from the half of the invariance check that runs backwards.
+    std::optional<TypePath::Path> slot;
+    const SubtypingReasoning* reasoning = nullptr;
+    for (const SubtypingReasoning& candidate : result.reasoning)
+    {
+        if (candidate.variance != SubtypingVariance::Invariant)
+            return std::nullopt;
+
+        // Inside a function's arguments the roles are reversed, and `read` belongs on whichever side the
+        // reader didn't write. The wording assumes the ordinary direction, so leave those alone.
+        for (const TypePath::Component& component : candidate.subPath.components)
+        {
+            if (const TypePath::PackField* pf = get_if<TypePath::PackField>(&component); pf && *pf == TypePath::PackField::Arguments)
+                return std::nullopt;
+        }
+
+        // Reading is the half that works somewhere along the path, or `read` has nothing to offer here.
+        std::optional<TypePath::Path> candidateSlot = outermostReadableSlot(subTy, superTy, candidate.subPath, subtyping, scope, builtinTypes, arena);
+        if (!candidateSlot || (slot && *slot != *candidateSlot))
+            return std::nullopt;
+
+        // A read-only element given where a read-write one is expected is the access modifier error's to explain.
+        if (candidate.isAccessModifierViolation && *candidateSlot == candidate.subPath)
+            return std::nullopt;
+
+        slot = std::move(candidateSlot);
+        reasoning = &candidate;
+    }
+    if (!slot || !reasoning)
         return std::nullopt;
 
-    // Both sides have to fail in the same place for the message to be able to point at one. When the
-    // expected side is wider -- `{string}` against `{string?}`, the single most common way to meet
-    // this error -- subtyping fails against one member of that union and the super path carries a
-    // trailing index into it. Compare against the whole union instead, or the message ends up
-    // reading "`string` is not exactly `nil`", which means nothing to anybody.
-    const TypePath::Path& path = reasoning->subPath;
-    if (path.empty())
-        return std::nullopt;
+    const TypePath::Path& path = *slot;
 
-    const bool superPathIsWider = path != reasoning->superPath;
+    // When the failure is at the slot itself, both sides have to fail in the same place for the message to be
+    // able to point at one. When the expected side is wider -- `{string}` against `{string?}`, the single most
+    // common way to meet this error -- subtyping fails against one member of that union and the super path
+    // carries a trailing index into it. The slot compares against the whole union instead, or the message ends
+    // up reading "`string` is not exactly `nil`", which means nothing to anybody.
+    const bool failsAtSlot = result.reasoning.size() == 1 && path == reasoning->subPath;
+    const bool superPathIsWider = failsAtSlot && path != reasoning->superPath;
     if (superPathIsWider)
     {
         const std::vector<TypePath::Component>& superComponents = reasoning->superPath.components;
@@ -4811,32 +4897,16 @@ static std::optional<ReadWriteMismatch> findReadWriteMismatch(
             return std::nullopt;
     }
 
-    // Inside a function's arguments the roles are reversed, and `read` belongs on whichever side the
-    // reader didn't write. The wording assumes the ordinary direction, so leave those alone.
-    for (const TypePath::Component& component : path.components)
-    {
-        if (const TypePath::PackField* pf = get_if<TypePath::PackField>(&component); pf && *pf == TypePath::PackField::Arguments)
-            return std::nullopt;
-    }
-
     const TypePath::Component& last = path.components.back();
-
     const TypePath::Property* property = get_if<TypePath::Property>(&last);
     const TypePath::TypeField* typeField = get_if<TypePath::TypeField>(&last);
     const bool isIndexer = typeField && *typeField == TypePath::TypeField::IndexResult;
-
-    if (!isIndexer && !(property && property->isRead))
-        return std::nullopt;
 
     std::optional<std::pair<TypeId, TypeId>> leaves = typesAtPaths(subTy, path, superTy, path, builtinTypes, arena);
     if (!leaves)
         return std::nullopt;
 
     const auto [subLeafTy, superLeafTy] = *leaves;
-
-    // Reading is the half that works, or `read` has nothing to offer here.
-    if (!subtyping->isSubtype(subLeafTy, superLeafTy, scope).isSubtype)
-        return std::nullopt;
 
     // The container that actually holds the read-write slot, which for an argument passed straight
     // to a parameter is the whole type, and for a nested one is the inner table that owns it.
@@ -4852,10 +4922,9 @@ static std::optional<ReadWriteMismatch> findReadWriteMismatch(
     mismatch.wantedLeaf = toString(superLeafTy);
     mismatch.givenLeaf = toString(subLeafTy);
 
-    // Both leaf types are printed three or four times over, so a long expansion turns the whole
+    // Both leaf types are printed several times over, so a long expansion turns the whole
     // explanation into a wall. Fall back to the terse form rather than print that.
-    constexpr size_t maxLeafLength = 40;
-    if (mismatch.wantedLeaf.length() > maxLeafLength || mismatch.givenLeaf.length() > maxLeafLength)
+    if (mismatch.wantedLeaf.length() > kMaxReadWriteTypeLength || mismatch.givenLeaf.length() > kMaxReadWriteTypeLength)
         return std::nullopt;
 
     if (isIndexer)
@@ -4873,6 +4942,8 @@ static std::optional<ReadWriteMismatch> findReadWriteMismatch(
 
     mismatch.wantedContainer = toString(superContainerTy);
     mismatch.givenContainer = toString(subContainerTy);
+    mismatch.wanted = toString(superTy);
+    mismatch.containerPath = containerPath;
 
     // The member of an expected union that the given side lacks names the difference concretely.
     if (superPathIsWider)
@@ -4887,8 +4958,29 @@ static std::optional<ReadWriteMismatch> findReadWriteMismatch(
         }
     }
 
-    mismatch.parameterHelpPath = reasoning->superPath;
+    mismatch.parameterHelpPath = failsAtSlot ? reasoning->superPath : path;
     return mismatch;
+}
+
+// Luwu (helpful subtyping errors): printed after the given type of a read/write mismatch. `read` is the keyword.
+static constexpr const char* kReadWriteNote = "(read works, write doesn't)";
+
+// Luwu (helpful subtyping errors): where a writer would put a value in the given value, `config.columns`. Only a name
+// followed by property reads is something a reader can find.
+static std::optional<std::string> writtenPlace(const ReadWriteMismatch& mismatch)
+{
+    if (!mismatch.givenName)
+        return std::nullopt;
+
+    std::string place = *mismatch.givenName;
+    for (const TypePath::Component& component : mismatch.containerPath.components)
+    {
+        const TypePath::Property* property = get_if<TypePath::Property>(&component);
+        if (!property || !property->isRead)
+            return std::nullopt;
+        place += "." + property->name;
+    }
+    return place;
 }
 
 static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& mismatch, const Helpifier& helpifier)
@@ -4959,50 +5051,70 @@ static ReadWriteExplanation wordReadWriteMismatch(const ReadWriteMismatch& misma
         return ReadWriteExplanation{std::move(message), std::move(parameterHelp), mismatch.parameterHelpPath};
     }
 
-    // Only a wider *shape* reaches here -- storing one really does drop fields. The sentences differ only in
-    // whether there is a function to name as the one doing the writing.
-    const std::string target = isProperty ? property : "the " + noun;
-    const std::string nothingWrites = hasFunction ? "the function doesn't actually write to " + target : "nothing writes to " + target;
-    const std::string passTail = hasFunction ? " to pass to the function" : "";
+    // Only a wider *shape* reaches here: reading works and writing doesn't. The header says so, and the reason
+    // names what the writer could put in, at the place in the given value it would go.
+    const std::string container = isProperty ? "table" : noun;
+    const std::optional<std::string> place = writtenPlace(mismatch);
 
     std::string message;
     if (isProperty)
     {
-        const std::string annotation = quote("read " + mismatch.propertyName + ": " + mismatch.wantedLeaf);
-        const std::string canReadWrite = hasFunction ? function + " can read and write to " + property : property + " can be read and written";
-        const std::string replaced = hasFunction ? "it could silently replace it with" : "it could silently be replaced with";
-
-        message = "Expected property " + property + " to allow reading and writing as " + wanted + ", but in " + givenContainer + " it is a " +
-                  given + ", which can only be read as " + wanted + ". Because " + canReadWrite + ", " + replaced +
-                  " a value of a smaller type, causing data loss.";
-        helpifier.appendTo(
-            message,
-            "read/write mismatch",
-            {"If " + nothingWrites + ", mark it as " + annotation + " in " + wantedContainer,
-             "If it reads and writes, make a " + wanted + " version of your data" + passTail + " or mark the additional properties as optional"}
-        );
+        const std::string slot = place ? quote(*place + "." + mismatch.propertyName) : property;
+        const std::string mustHold = " (which must stay a " + given + ").";
+        if (hasFunction)
+            message = "Because " + quote(mismatch.functionName) + " expects a read/write " + container + ", it could set " + slot + " to any " +
+                      wanted + mustHold;
+        else
+            message = "Because a read/write " + container + " is expected here, " + slot + " could be set to any " + wanted + mustHold;
     }
+    else
+    {
+        const std::string into = place ? quote(*place) : "the given " + noun;
+        const std::string mustHold = " (which must only hold " + given + ").";
+        if (hasFunction)
+            message = "Because " + quote(mismatch.functionName) + " expects a read/write " + container + ", it could write any " + wanted + " into " +
+                      into + mustHold;
+        else
+            message = "Because a read/write " + container + " is expected here, any " + wanted + " could be written into " + into + mustHold;
+    }
+
+    // `read` on the slot is the fix when nothing writes. At the parameter itself the whole annotation is short;
+    // deeper in, the container that changes is named instead.
+    std::string readFix;
+    if (isProperty)
+        readFix = "mark " + property + " as " + quote("read " + mismatch.propertyName + ": " + mismatch.wantedLeaf) + " in " + wantedContainer;
     else
     {
         const std::string annotation =
             isMap ? quote("{ read [" + mismatch.keyType + "]: " + mismatch.wantedLeaf + " }") : quote("{ read " + mismatch.wantedLeaf + " }");
-        const std::string article = isMap ? "a " : "an ";
-        const std::string canReadWrite = hasFunction ? function + " can read and write to your " + noun : wantedContainer + " can be read and written";
-        const std::string annotated = hasFunction ? "the parameter" : "it";
-
-        message = "Expected this to be " + wantedContainer + ", " + article + noun + " that can read and write " + wanted + ", but got " +
-                  givenContainer + ", " + article + noun + " that is only allowed to read " + wanted + " through its " + given + " " + plural +
-                  ". Because " + canReadWrite + ", it can silently replace its " + plural +
-                  " with those of a smaller type, causing data loss.";
-        helpifier.appendTo(
-            message,
-            "read/write mismatch",
-            {"If " + nothingWrites + ", annotate " + annotated + " as " + annotation,
-             "If it reads and writes, make " + wanted + " versions of your data" + passTail + " or mark the additional properties as optional"}
-        );
+        if (mismatch.containerPath.empty())
+            readFix = hasFunction ? "expect " + annotation : "annotate it as " + annotation;
+        else
+            readFix = "write " + annotation + " in place of " + wantedContainer;
     }
 
-    return ReadWriteExplanation{std::move(message), std::move(parameterHelp), mismatch.parameterHelpPath};
+    const std::string replacement = mismatch.wanted.length() <= kMaxReadWriteTypeLength ? "a " + quote(mismatch.wanted) : "a value of the expected type";
+    const std::string insteadOf = mismatch.givenName ? " instead of " + quote(*mismatch.givenName) : " instead";
+
+    std::string onlyReads;
+    std::string writesToo;
+    if (hasFunction)
+    {
+        const std::string reads = mismatch.parameterName ? quote(*mismatch.parameterName) : "it";
+        onlyReads = "If " + quote(mismatch.functionName) + " only reads " + reads + ", " + readFix;
+        writesToo = "If it also writes, pass it " + replacement + insteadOf;
+    }
+    else
+    {
+        onlyReads = "If nothing writes to it, " + readFix;
+        writesToo = "If something writes to it, use " + replacement + insteadOf;
+    }
+    helpifier.appendTo(message, "read/write mismatch", {onlyReads, writesToo});
+
+    // A reason starting on a new line is a paragraph under the header rather than a continuation of it.
+    ReadWriteExplanation explanation{"\n\n" + message, std::move(parameterHelp), mismatch.parameterHelpPath};
+    explanation.standalone = false;
+    return explanation;
 }
 
 static std::optional<ReadWriteExplanation> explainReadOnlyWouldSatisfy(
@@ -5015,6 +5127,8 @@ static std::optional<ReadWriteExplanation> explainReadOnlyWouldSatisfy(
     NotNull<TypeArena> arena,
     bool isArgument,
     const std::string& functionName,
+    const std::optional<std::string>& parameterName,
+    const std::optional<std::string>& givenName,
     const Helpifier& helpifier
 )
 {
@@ -5024,6 +5138,8 @@ static std::optional<ReadWriteExplanation> explainReadOnlyWouldSatisfy(
 
     mismatch->isArgument = isArgument;
     mismatch->functionName = functionName;
+    mismatch->parameterName = parameterName;
+    mismatch->givenName = givenName;
     return wordReadWriteMismatch(*mismatch, helpifier);
 }
 
@@ -5235,11 +5351,59 @@ void TypeChecker2::explainError(
     NotNull<Scope> scope{findInnermostScope(location)};
     const std::string calleeName = argumentContext ? calleeDisplayName(argumentContext->callee) : std::string{};
 
+    // The value's own name, when the mismatched expression is a variable or a chain of plain
+    // property reads off one (`registry.recipes`), so paths read `leaving.kind`, not `given.kind`.
+    // The expression spanning exactly the error: the innermost one at its start (`req` of
+    // `req.user`) is usually a piece of it.
+    std::optional<std::string> variable;
+    // The mismatched expression, when it spans exactly the error.
+    const AstExpr* mismatched = nullptr;
+    for (AstNode* node : findAstAncestryOfPosition(*sourceModule, location.begin))
+    {
+        if (AstExpr* expr = node->asExpr(); expr && expr->location == location)
+        {
+            variable = bindingName(expr);
+            mismatched = expr;
+            break;
+        }
+    }
+    // A read/write mismatch names where a writer would put a value, which is in the given value, not where it goes.
+    const std::optional<std::string> givenBinding = variable;
+    if (!variable)
+        variable = destinationName(*sourceModule, location);
+
+    std::optional<std::string> parameterName;
+    if (argumentContext && argumentContext->calleeType && argumentContext->parameterIndex < argumentContext->calleeType->argNames.size())
+    {
+        if (const std::optional<FunctionArgument>& argument = argumentContext->calleeType->argNames[argumentContext->parameterIndex])
+            parameterName = argument->name;
+    }
+
     if (std::optional<ReadWriteExplanation> readWrite = explainReadOnlyWouldSatisfy(
-            subTy, superTy, result, subtyping, scope, builtinTypes, subtyping->arena, argumentContext.has_value(), calleeName, helpifier
+            subTy,
+            superTy,
+            result,
+            subtyping,
+            scope,
+            builtinTypes,
+            subtyping->arena,
+            argumentContext.has_value(),
+            calleeName,
+            parameterName,
+            givenBinding,
+            helpifier
         ))
     {
-        reportWithMessage(std::move(readWrite->message));
+        if (readWrite->standalone)
+            reportWithMessage(std::move(readWrite->message));
+        else
+        {
+            TypeMismatch tm{superTy, subTy, std::move(readWrite->message)};
+            tm.givenVariable = variable;
+            tm.givenNote = kReadWriteNote;
+            tm.explained = TypeMismatch::Explained{};
+            reportError(std::move(tm), location);
+        }
 
         // The value is at the call, but the annotation to change is at the parameter, which can be pages
         // away. Say so where the edit actually happens, or nowhere if that place can't be found or help is off.
@@ -5274,31 +5438,12 @@ void TypeChecker2::explainError(
     // disagree, instead of a sentence per subtyping reasoning. It declines types it can't take apart,
     // which then fall through to the reasonings below.
     std::optional<MismatchExplanation> explanation;
-    std::optional<std::string> variable;
-    // The mismatched expression, when it spans exactly the error.
-    const AstExpr* mismatched = nullptr;
     if (FFlag::LuwuHelpfulSubtypingErrors)
     {
         std::optional<std::string> callee;
         if (!calleeName.empty())
             callee = calleeName;
         const char* arrival = argumentContext ? "passed" : checkingReturnStatement ? "returned" : "given";
-
-        // The value's own name, when the mismatched expression is a variable or a chain of plain
-        // property reads off one (`registry.recipes`), so paths read `leaving.kind`, not `given.kind`.
-        // The expression spanning exactly the error: the innermost one at its start (`req` of
-        // `req.user`) is usually a piece of it.
-        for (AstNode* node : findAstAncestryOfPosition(*sourceModule, location.begin))
-        {
-            if (AstExpr* expr = node->asExpr(); expr && expr->location == location)
-            {
-                variable = bindingName(expr);
-                mismatched = expr;
-                break;
-            }
-        }
-        if (!variable)
-            variable = destinationName(*sourceModule, location);
 
         TypeId given = mismatched ? withWrittenStrings(subTy, mismatched, superTy, *module->internalTypes) : subTy;
         explanation = explainMismatch(given, superTy, subtyping, scope, builtinTypes, callee, arrival, variable, helpifier);
@@ -5349,7 +5494,8 @@ void TypeChecker2::explainError(
     if (!reasonings.suppressed)
     {
         TypeMismatch tm{superTy, subTy, reasonings.toString()};
-        tm.givenVariable = variable;
+        if (FFlag::LuwuHelpfulSubtypingErrors)
+            tm.givenVariable = variable;
         tm.contextVerb = reasonings.contextVerb ? reasonings.contextVerb : contextVerb;
         tm.contextWantedDisplay = reasonings.contextWantedDisplay;
         tm.contextGivenDisplay = reasonings.contextGivenDisplay;
