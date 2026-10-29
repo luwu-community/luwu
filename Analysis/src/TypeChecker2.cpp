@@ -2131,7 +2131,8 @@ TypeId TypeChecker2::traitFunctionFor(const ExternType* traitType, TypeId classT
     // As the class's copy of the trait function gets it (InstantiateNominalPropConstraint)
     ApplyTypeFunction substitution{module->internalTypes.get()};
     substitution.typeArguments[self->second.generic] = classTy;
-    substitution.typeArguments[self->second.selfType] = classTy;
+    if (self->second.selfType)
+        substitution.typeArguments[self->second.selfType] = classTy;
     std::optional<TypeId> substituted = substitution.substitute(function);
     if (!substituted)
         return function;
@@ -2943,7 +2944,8 @@ void TypeChecker2::visit(AstStatClass* stat)
 
     // A class with a private constructor can only be instantiated from its own body. If nothing there calls it
     // (`Name(...)` or `Name { ... }`, in a method, a closure nested in one, or a field default), no instance can
-    // ever exist (rfcs/classes).
+    // ever exist (rfcs/classes). A trait is never instantiated itself: its `expect private function __init` is the
+    // constructor its implementing classes must have (rfcs/classes/traits.md).
     bool privateConstructor = stat->primaryConstructor && stat->primaryConstructor->visibility == AstClassMemberVisibility::Private;
 
     for (const AstClassMember& member : stat->members)
@@ -2952,6 +2954,9 @@ void TypeChecker2::visit(AstStatClass* stat)
         if (method && method->functionName == "__init" && method->visibility == AstClassMemberVisibility::Private)
             privateConstructor = true;
     }
+
+    if (stat->isTrait)
+        privateConstructor = false;
 
     if (privateConstructor)
     {
