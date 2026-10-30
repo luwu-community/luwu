@@ -307,6 +307,13 @@ const std::vector<std::string>& UnknownVariableExplainer::globalsOf(const Scope&
     return globals;
 }
 
+// Words Luwu uses or reserves as keywords. A stray one is unfinished syntax, not a misspelling: `match x` isn't `math`.
+static bool isLuwuKeyword(const std::string& name)
+{
+    static const char* const keywords[] = {"match", "case", "class", "trait", "implements", "needs", "give", "when"};
+    return std::find(std::begin(keywords), std::end(keywords), name) != std::end(keywords);
+}
+
 // The name in scope that `written` is probably a misspelling of. Typos keep the first letter: `number` isn't `tonumber`.
 static std::optional<std::string> closestName(
     const std::vector<Declaration>& declarations,
@@ -315,6 +322,9 @@ static std::optional<std::string> closestName(
     const std::vector<std::string>& globals
 )
 {
+    if (isLuwuKeyword(written))
+        return std::nullopt;
+
     std::optional<std::string> closest;
     size_t closestDistance = std::numeric_limits<size_t>::max();
     auto consider = [&](const std::string& candidate)

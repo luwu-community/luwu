@@ -3116,6 +3116,18 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_typo_of_a_local_global_or_l
     CHECK(!isTypo(result.errors[3]));
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_named_like_a_luwu_keyword_is_not_a_typo")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        local result = match
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(!isTypo(result.errors[0]));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_variable_used_before_its_definition")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
