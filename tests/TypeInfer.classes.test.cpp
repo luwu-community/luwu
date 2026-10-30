@@ -6176,6 +6176,35 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
     CHECK_EQ(toString(requireType("missing")), "none");
 }
 
+// Luwu collections: an `err` can say where its error was raised, with optional fields after the error
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_err_has_optional_position_fields")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local bare = collections.result.err("boom")
+        local placed = collections.result.err("boom", "main.luau", 12, "trace")
+        local module = placed.module
+        local line = placed.line
+        local traceback = placed.traceback
+        local wrong = collections.result.err("boom", 12)
+    )");
+
+    // the module has to be a string
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+    CHECK_EQ(toString(requireType("module")), "string?");
+    CHECK_EQ(toString(requireType("line")), "number?");
+    CHECK_EQ(toString(requireType("traceback")), "string?");
+}
+
 // Luwu collections: `none` has only the methods the library gives it, so any other key is missing
 TEST_CASE_FIXTURE(BuiltinsFixture, "indexing_none_by_an_unknown_key_is_an_error")
 {

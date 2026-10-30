@@ -314,7 +314,8 @@ static LuauObject* checkbundle(lua_State* L, const char* method)
     return luaR_checknativeself(L, builtinclass(L, Kind), method);
 }
 
-// `__init` is only ever called by construction, with a new object of the class: it can't be read as a member
+// `__init` is only ever called by construction, with a new object of the class: it can't be read as a member. Also
+// `err`'s, which fills its error and position fields in order.
 static int bundleinit(lua_State* L)
 {
     LuauObject* bundle = objectvalue(L->base);
@@ -1466,10 +1467,15 @@ static const luaR_NativeMember kVecMembers[] = {
 // option and result. A full option is a `some` object and an empty one is the `none` primitive itself, so an empty
 // option allocates nothing. `none` gets `get` and `expect` through its type's metatable, whose `__index` only runs when
 // code indexes `none`, which is otherwise an error: nothing else `none` does gets slower. A result is an `ok` or an
-// `err` object. Each holds its value in its one field.
+// `err` object. Each holds its value in its first field. An `err` also has where its error was raised, which a `try`
+// expression fills in.
 
-// The one field of a `some`, `ok` or `err`
+// The first field of a `some`, `ok` or `err`
 static const int kPayload = 0;
+// `err`'s position fields, after its error
+static const int kErrModule = 1;
+static const int kErrLine = 2;
+static const int kErrTraceback = 3;
 
 template<LuwuBuiltinClass Kind>
 static LuauObject* checkpayload(lua_State* L, const char* method)
@@ -1477,7 +1483,7 @@ static LuauObject* checkpayload(lua_State* L, const char* method)
     return luaR_checknativeself(L, builtinclass(L, Kind), method);
 }
 
-// `__init` for `ok` and `err`, which hold any value
+// `__init` for `ok`, which holds any value
 static int payloadinit(lua_State* L)
 {
     setfield(L, objectvalue(L->base), kPayload, L->base + 1);
@@ -1563,7 +1569,8 @@ static int payloadeq(lua_State* L)
     return 1;
 }
 
-// `__tostring`: the constructor call, `option.some(1)`
+// `__tostring`: the constructor call, `option.some(1)`. An `err` adds where its error was raised when it knows, and
+// the traceback on the lines after.
 template<LuwuBuiltinClass Kind>
 static int payloadtostring(lua_State* L)
 {
@@ -1576,6 +1583,28 @@ static int payloadtostring(lua_State* L)
     luaA_pushvalue(L, &luaR_members(holder)[kPayload]);
     addshowntop(&b);
     luaL_addchar(&b, ')');
+
+    if (Kind == LUWU_BUILTIN_ERR)
+    {
+        const TValue* members = luaR_members(holder);
+        if (ttisstring(&members[kErrModule]))
+        {
+            luaL_addstring(&b, " at ");
+            luaL_addstring(&b, svalue(&members[kErrModule]));
+            if (ttisnumber(&members[kErrLine]))
+            {
+                char line[32];
+                snprintf(line, sizeof(line), ":%d", int(nvalue(&members[kErrLine])));
+                luaL_addstring(&b, line);
+            }
+        }
+        if (ttisstring(&members[kErrTraceback]))
+        {
+            luaL_addchar(&b, '\n');
+            luaL_addstring(&b, svalue(&members[kErrTraceback]));
+        }
+    }
+
     luaL_pushresult(&b);
     return 1;
 }
@@ -1656,6 +1685,9 @@ static const luaR_NativeMember kOkMembers[] = {
 
 static const luaR_NativeMember kErrMembers[] = {
     {"error", NULL, kPayloadField},
+    {"module", NULL, kPayloadField},
+    {"line", NULL, kPayloadField},
+    {"traceback", NULL, kPayloadField},
     {"ok", errok, 0, nonefast},
     {"expect", errexpect, 0},
     {"err", errerr, 0, payloadgetfast},
@@ -1823,7 +1855,7 @@ int luaopen_collections(lua_State* L)
 
     lua_createtable(L, 0, 2);
     addclass(L, LUWU_BUILTIN_OK, "ok", kOkMembers, payloadinit);
-    addclass(L, LUWU_BUILTIN_ERR, "err", kErrMembers, payloadinit);
+    addclass(L, LUWU_BUILTIN_ERR, "err", kErrMembers, bundleinit);
     lua_setfield(L, -2, "result");
 
     setnonemetatable(L);

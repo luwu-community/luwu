@@ -633,6 +633,24 @@ do
     assert(not ok and raised.code == 7)
 end
 
+-- an `err` can say where its error was raised, which `try` fills in. Four arguments go through the constructor and
+-- fewer through the fastcall: both fill the same fields.
+do
+    const result = collections.result
+    const placed = result.err("boom", "main.luau", 12, "main.luau:12 function f")
+    assert(placed.error == "boom" and placed.module == "main.luau" and placed.line == 12)
+    assert(placed.traceback == "main.luau:12 function f")
+    assert(tostring(placed) == `result.err("boom") at main.luau:12\nmain.luau:12 function f`)
+
+    const bare = result.err("boom")
+    assert(bare.module == nil and bare.line == nil and bare.traceback == nil)
+    assert(tostring(bare) == `result.err("boom")`)
+
+    const unplaced = result.err("boom", "main.luau")
+    assert(unplaced.module == "main.luau" and unplaced.line == nil)
+    assert(tostring(unplaced) == `result.err("boom") at main.luau`)
+end
+
 -- constructors called directly compile to fastcalls, which build what the constructor does
 do
     const ok = collections.result.ok

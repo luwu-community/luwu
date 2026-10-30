@@ -664,8 +664,9 @@ BuiltinInfo getBuiltinInfo(int bfid)
         return {4, 1};
     case LBF_COLLECTIONS_OPTION_SOME:
     case LBF_COLLECTIONS_RESULT_OK:
-    case LBF_COLLECTIONS_RESULT_ERR:
         return {1, 1};
+    case LBF_COLLECTIONS_RESULT_ERR:
+        return {-1, 1}; // the error, then optionally where it was raised
 
     case LBF_TABLE_INSERT:
         return {-1, 0}; // 2 or 3 parameters

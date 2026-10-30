@@ -476,7 +476,13 @@ class type ok<T>(public const value: T)
     public function __tostring(self): string
 end
 
-class type err<E>(public const error: E)
+-- `module`, `line` and `traceback` say where the error was raised. A `try` expression fills them in.
+class type err<E>(
+    public const error: E,
+    public const module: string?,
+    public const line: number?,
+    public const traceback: string?
+)
     public function ok(self): none
     public function expect(self, message: string?): never
     public function err(self): E
