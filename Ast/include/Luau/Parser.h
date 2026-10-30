@@ -463,6 +463,10 @@ private:
     // TODO: Add grammar rules here?
     AstExpr* parseIfElseExpr();
 
+    // Luwu try expressions
+    bool tryExpressionFollows();
+    AstExpr* parseTryExpr();
+
     // stringinterp ::= <INTERP_BEGIN> exp {<INTERP_MID> exp} <INTERP_END>
     AstExpr* parseInterpString();
 

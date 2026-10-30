@@ -825,6 +825,11 @@ struct Printer
             writer.keyword("if");
             visualizeElseIfExpr(*a);
         }
+        else if (const auto& a = expr.as<AstExprTry>())
+        {
+            writer.keyword("try");
+            visualize(*a->expr);
+        }
         else if (const auto& a = expr.as<AstExprInterpString>())
         {
             const auto* cstNode = lookupCstNode<CstExprInterpString>(a);

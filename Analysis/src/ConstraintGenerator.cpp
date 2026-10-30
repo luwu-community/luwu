@@ -5271,6 +5271,8 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
         result = check(scope, interpString);
     else if (auto explicitTypeInstantiation = expr->as<AstExprInstantiate>())
         result = check(scope, explicitTypeInstantiation);
+    else if (auto tryExpr = expr->as<AstExprTry>())
+        result = check(scope, tryExpr);
     else if (auto err = expr->as<AstExprError>())
     {
         // Open question: Should we traverse into this?
@@ -5732,6 +5734,25 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprInterpString*
         check(scope, expr);
 
     return Inference{builtinTypes->stringType};
+}
+
+// Luwu try expressions: `try expr` is `collections.result<T, unknown>`, with T expr's type. It's expanded like that
+// annotation, but looked up in the global scope, so a module's own `collections` import can't change it.
+Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTry* tryExpr)
+{
+    TypeId valueTy = check(scope, tryExpr->expr).ty;
+
+    const AstName library{"collections"};
+    const AstName result{"result"};
+    if (!globalScope->lookupImportedType(library.value, result.value))
+    {
+        reportError(tryExpr->tryLocation, GenericError{"'try' gives a collections.result, so it needs the collections library"});
+        return Inference{builtinTypes->errorType};
+    }
+
+    TypeId resultTy = arena->addType(PendingExpansionType{library, result, {valueTy, builtinTypes->unknownType}, {}});
+    addConstraint(globalScope, tryExpr->location, TypeAliasExpansionConstraint{/* target */ resultTy});
+    return Inference{resultTy};
 }
 
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprInstantiate* explicitTypeInstantiation)

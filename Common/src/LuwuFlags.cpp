@@ -15,3 +15,7 @@ LUAU_FASTFLAGVARIABLE(LuwuTraits)
 // and in Analysis's builtin definitions. A prototype whose API can still change. Needs LuwuClasses and
 // LuwuNonePrimitive (`none` is the empty option).
 LUAU_FASTFLAGVARIABLE(DebugLuwuCollections)
+
+// Luwu try expressions: `try expr` gives a `collections.result` (in progress). The parser gates the syntax, and while it
+// is on the compiler emits WIP bytecode (version 200), which holds the protected ranges. Needs DebugLuwuCollections.
+LUAU_FASTFLAGVARIABLE(LuwuTryExpressions)

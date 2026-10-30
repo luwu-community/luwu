@@ -3041,6 +3041,8 @@ void TypeChecker2::visit(AstExpr* expr, ValueContext context)
         return visit(e);
     else if (auto e = expr->as<AstExprInterpString>())
         return visit(e);
+    else if (auto e = expr->as<AstExprTry>())
+        return visit(e->expr, ValueContext::RValue);
     else if (auto e = expr->as<AstExprError>())
         return visit(e);
     else

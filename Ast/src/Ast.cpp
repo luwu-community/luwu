@@ -617,6 +617,19 @@ void AstExprInterpString::visit(AstVisitor* visitor)
     }
 }
 
+AstExprTry::AstExprTry(const Location& location, const Location& tryLocation, AstExpr* expr)
+    : AstExpr(ClassIndex(), location)
+    , tryLocation(tryLocation)
+    , expr(expr)
+{
+}
+
+void AstExprTry::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        expr->visit(visitor);
+}
+
 AstExprInstantiate::AstExprInstantiate(const Location& location, AstExpr* expr, AstArray<AstTypeOrPack> types)
     : AstExpr(ClassIndex(), location)
     , expr(expr)

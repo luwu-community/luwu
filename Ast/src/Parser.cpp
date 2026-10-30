@@ -24,6 +24,7 @@ LUAU_FASTFLAGVARIABLE(LuauSolverV2)
 LUAU_DYNAMIC_FASTFLAGVARIABLE(DebugLuauReportReturnTypeVariadicWithTypeSuffix, false)
 LUAU_FASTFLAGVARIABLE(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuwuTryExpressions)
 LUAU_FLAGVERSION(LuauExportValueSyntax, 3)
 
 // Luwu @noinline (rfcs/noinline-attribute.md): gates parsing `@noinline`, and the compiler honoring it (no
@@ -68,6 +69,7 @@ const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ tr
 // them behind LuauExportValueSyntax, which its library and Roblox leave off, so they're Luwu's. `export type` is ordinary
 // Luau.
 const LuwuFeature kExportsFeature{"exported values", /* plural= */ true, "LuauExportValueSyntax"};
+const LuwuFeature kTryExpressionsFeature{"'try' expressions", /* plural= */ true, "LuwuTryExpressions"};
 // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, `declare` is only allowed where it
 // visibly applies to the whole file.
 const char* const kDeclarationPlacementError =
@@ -6511,10 +6513,60 @@ AstExpr* Parser::parseSimpleExpr()
     {
         return parseIfElseExpr();
     }
+    else if (tryExpressionFollows())
+    {
+        return parseTryExpr();
+    }
     else
     {
         return parsePrimaryExpr(/* asStatement= */ false);
     }
+}
+
+// Luwu try expressions: `try` is a contextual keyword, since `try` is a common function name. It starts a `try`
+// expression only when the next token starts an expression and can't continue one that names `try`: `try(x)`, `try.x`
+// and `try - x` stay uses of the name. A token that can also start a statement has to be on the same line, because
+// `local f = try` above `x = 1` is two statements.
+bool Parser::tryExpressionFollows()
+{
+    if (lexer.current().type != Lexeme::Name || AstName(lexer.current().name) != "try")
+        return false;
+
+    Lexeme next = lexer.lookahead();
+    bool sameLine = next.location.begin.line == lexer.current().location.end.line;
+
+    // An int, since '#' is a character rather than a named token
+    switch (int(next.type))
+    {
+    case Lexeme::Number:
+    case Lexeme::ReservedNil:
+    case Lexeme::ReservedTrue:
+    case Lexeme::ReservedFalse:
+    case Lexeme::ReservedNot:
+    case '#':
+    case Lexeme::Dot3:
+    case Lexeme::InterpStringBegin:
+    case Lexeme::InterpStringSimple:
+        return true;
+    case Lexeme::Name:
+    case Lexeme::ReservedFunction:
+    case Lexeme::ReservedIf:
+    case Lexeme::ReservedDo:
+        return sameLine;
+    default:
+        return false;
+    }
+}
+
+// Luwu try expressions: `try` takes the whole expression after it, so `try a + b` protects both operands
+AstExpr* Parser::parseTryExpr()
+{
+    Location tryLocation = lexer.current().location;
+    checkLuwuFeature(tryLocation, kTryExpressionsFeature, FFlag::LuwuTryExpressions);
+    nextLexeme();
+
+    AstExpr* expr = parseExpr();
+    return allocator.alloc<AstExprTry>(Location(tryLocation, expr->location), tryLocation, expr);
 }
 
 std::tuple<AstArray<AstExpr*>, Location, Location> Parser::parseCallList(TempVector<Position>* commaPositions, Position* closeParenPosition)

@@ -827,6 +827,21 @@ public:
     AstArray<AstExpr*> expressions;
 };
 
+// Luwu try expressions: `try expr`, a `collections.result` holding expr's value, or the error evaluating it raised
+class AstExprTry : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprTry)
+
+    AstExprTry(const Location& location, const Location& tryLocation, AstExpr* expr);
+
+    void visit(AstVisitor* visitor) override;
+
+    // The `try` keyword
+    Location tryLocation;
+    AstExpr* expr;
+};
+
 // f<<T>>
 class AstExprInstantiate : public AstExpr
 {
@@ -1948,6 +1963,10 @@ public:
         return visit(static_cast<AstExpr*>(node));
     }
     virtual bool visit(class AstExprInstantiate* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
+    virtual bool visit(class AstExprTry* node)
     {
         return visit(static_cast<AstExpr*>(node));
     }

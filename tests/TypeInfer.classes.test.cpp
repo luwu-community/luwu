@@ -30,6 +30,7 @@ LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(LuwuTryExpressions)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 
 
@@ -6174,6 +6175,67 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
     CHECK_EQ(toString(requireType("text")), "string");
     CHECK_EQ(toString(requireType("code")), "number");
     CHECK_EQ(toString(requireType("missing")), "none");
+}
+
+// Luwu try expressions: `try expr` is a collections.result of expr's type, with an unknown error
+TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function read(path: string): string
+            return path
+        end
+        local text = try read("x")
+        local sum = try 1 + 2
+        local typed: collections.result<string, unknown> = try read("y")
+        local wrong: number = try 1
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+    CHECK_EQ(toString(requireType("text")), toString(requireType("typed")));
+    CHECK(toString(requireType("sum")).find("ok<number>") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "try_needs_the_collections_library")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuCollections, false},
+        {FFlag::LuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        local r = try tostring(1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location, Location{{1, 18}, {1, 21}});
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_try_expressions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuTryExpressions, true},
+    };
+    const char* before = "local function read(path: string): string\n    return path\nend\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+
+    checkTypewriting(*this, before, "local text = try read(\"x\")", after);
+    checkTypewriting(*this, before, "local sum = try #\"ab\" + 1", after);
 }
 
 // Luwu collections: an `err` can say where its error was raised, with optional fields after the error

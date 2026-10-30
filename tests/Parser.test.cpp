@@ -28,6 +28,7 @@ LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuTryExpressions)
 LUAU_FASTFLAG(LuwuExternTypeGenericMethods)
 LUAU_FASTFLAG(LuwuGenericNominals)
 
@@ -2283,6 +2284,94 @@ TEST_CASE_FIXTURE(Fixture, "disabled_luwu_features_say_which_fflag_enables_them"
     result = tryParse("class Point end");
     REQUIRE(!result.errors.empty());
     CHECK_EQ(result.errors[0].getMessage(), "attempt to use disabled Luwu feature classes; enable via FFlag 'LuwuClasses'");
+}
+
+// Luwu try expressions: the whole value of a local, if it's a `try` expression
+static AstExprTry* tryExprOf(AstStatBlock* block, size_t index)
+{
+    if (!block || index >= block->body.size)
+        return nullptr;
+    AstStatLocal* local = block->body.data[index]->as<AstStatLocal>();
+    if (!local || local->values.size != 1)
+        return nullptr;
+    return local->values.data[0]->as<AstExprTry>();
+}
+
+TEST_CASE_FIXTURE(Fixture, "try_takes_the_whole_expression_after_it")
+{
+    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+
+    AstStatBlock* block = parse(R"(
+        local function f(...)
+            local a = try g(x)
+            local b = try x + y * z
+            local c = try not x
+            local d = try #t
+            local e = try ...
+            local f = try 1
+            local g = try nil
+            local h = try `x{y}`
+            local i = try none
+        end
+    )");
+    REQUIRE(block);
+    AstStatLocalFunction* f = block->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(f);
+    AstStatBlock* body = f->func->body;
+    REQUIRE_EQ(body->body.size, 9);
+
+    for (size_t i = 0; i < body->body.size; i++)
+        CHECK_MESSAGE(tryExprOf(body, i), "local " << i << " isn't a try expression");
+
+    AstExprTry* sum = tryExprOf(body, 1);
+    REQUIRE(sum);
+    CHECK(sum->expr->is<AstExprBinary>());
+    CHECK_EQ(sum->tryLocation, Location{{3, 22}, {3, 25}});
+}
+
+// Luwu try expressions: wherever Luau reads `try` as a name, so does Luwu
+TEST_CASE_FIXTURE(Fixture, "try_stays_a_name_where_luau_reads_one")
+{
+    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = try(x)
+        local b = try.x
+        local c = try:m()
+        local d = try - 1
+        local e = try "s"
+        local f = try { 1 }
+        local g = try[1]
+        local h = try
+        local i = 1
+        local j = try
+        x = 1
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 11);
+
+    for (size_t i = 0; i < block->body.size; i++)
+        CHECK_MESSAGE(!tryExprOf(block, i), "statement " << i << " parsed as a try expression");
+}
+
+TEST_CASE_FIXTURE(Fixture, "try_expressions_are_gated_and_luwu_only")
+{
+    {
+        ScopedFastFlag sff{FFlag::LuwuTryExpressions, false};
+        matchParseError("local r = try f()", "attempt to use disabled Luwu feature 'try' expressions; enable via FFlag 'LuwuTryExpressions'");
+    }
+
+    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    ParseResult result = tryParse("local r = try f()", luau);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'try' expressions");
+
+    // a Luau module's `try` function still works
+    result = tryParse("local r = try(f) - try.x", luau);
+    CHECK(result.errors.empty());
 }
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_luwu_only")

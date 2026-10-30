@@ -1944,6 +1944,12 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
         result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInstantiate>())
         result = checkExpr(scope, *a);
+    else if (auto a = expr.as<AstExprTry>())
+    {
+        // Luwu try expressions: only the new solver types them
+        checkExpr(scope, *a->expr);
+        result = WithPredicate{anyType};
+    }
     else
         ice("Unhandled AstExpr?");
 
