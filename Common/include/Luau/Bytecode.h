@@ -74,7 +74,7 @@
 //   Luwu Traits (rfcs/classes/traits.md): the shape flags varint in LBC_CONSTANT_CLASS_SHAPE (LBC_CLASSSHAPE_TRAIT,
 //   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, and NEWCLASSMEMBER's IMPLEMENTS form.
 //   Luwu collections: LBF_COLLECTIONS_PAIR to LBF_COLLECTIONS_RESULT_ERR.
-//   Luwu try expressions: WRAPRESULT, and each function's protected ranges after its inlining cost: a varint count,
+//   Luwu try expressions: WRAPRESULT, RESULTGET, and each function's protected ranges after its inlining cost: a varint count,
 //   then per range the varints start pc, end pc (exclusive) and handler pc, and a byte for the target register.
 
 // # Bytecode type information history
@@ -589,6 +589,13 @@ enum LuauOpcode
     // B: LBC_WRAPRESULT_OK or LBC_WRAPRESULT_ERR
     LOP_WRAPRESULT,
 
+    // RESULTGET: Luwu try expressions: `r:ok()` or `r:err()` of a `try` result the compiler keeps in registers instead of
+    // an object: its value or error at B, and at B + LBC_TRYRESULT_OKFLAG whether it's an `ok`
+    // A: target register
+    // B: the result's first register
+    // C: LBC_RESULTGET_OK (the value of an ok, else none) or LBC_RESULTGET_ERR (the error of an err, else none)
+    LOP_RESULTGET,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };
@@ -632,6 +639,17 @@ enum LuauWrapResultForm
     // The error in A, then its module, line and traceback in A + 1 to A + 3
     LBC_WRAPRESULT_ERR = 1,
 };
+
+// Luwu try expressions: operand C of LOP_RESULTGET
+enum LuauResultGetForm
+{
+    LBC_RESULTGET_OK = 0,
+    LBC_RESULTGET_ERR = 1,
+};
+
+// Luwu try expressions: a result kept in registers holds its value or error, the three registers LOP_WRAPRESULT's `err`
+// form reads, then whether it's an `ok`
+#define LBC_TRYRESULT_OKFLAG 4
 
 // Luwu Classes (rfcs/classes): JUMPXISA aux flags (see LOP_JUMPXISA)
 // Jump when the value is an instance of the class, rather than when it is not

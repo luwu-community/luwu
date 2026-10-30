@@ -143,7 +143,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
-        VM_DISPATCH_OP(LOP_WRAPRESULT),
+        VM_DISPATCH_OP(LOP_WRAPRESULT), VM_DISPATCH_OP(LOP_RESULTGET),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -4137,6 +4137,26 @@ reentry:
 
                 setobjectvalue(L, ra, result);
                 VM_PROTECT(luaC_checkGC(L));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_RESULTGET)
+            {
+                // Luwu try expressions: `r:ok()` or `r:err()` of a result kept in registers
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                bool isOk = !l_isfalse(rb + LBC_TRYRESULT_OKFLAG);
+                bool wantsOk = LUAU_INSN_C(insn) == LBC_RESULTGET_OK;
+                if (isOk == wantsOk)
+                {
+                    setobj2s(L, ra, rb);
+                }
+                else
+                {
+                    setsymnonevalue(ra);
+                }
                 VM_NEXT();
             }
 

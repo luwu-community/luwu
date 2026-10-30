@@ -588,6 +588,7 @@ struct BytecodeGraphSerializer
             break;
 
         case LOP_WRAPRESULT:
+        case LOP_RESULTGET:
             // Luwu try expressions: the parser refuses functions with protected ranges
             LUAU_UNREACHABLE();
 

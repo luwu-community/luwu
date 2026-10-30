@@ -796,6 +796,10 @@ struct Compiler
         if (!expr)
             return node->is<AstExprVarargs>();
 
+        // Luwu try expressions: compiled to one value (compileTryResultMethod)
+        if (isTryResultMethodCall(expr))
+            return false;
+
         // conservative version, optimized for compilation throughput
         if (options.optimizationLevel <= 1)
             return true;
@@ -836,6 +840,13 @@ struct Compiler
     {
         if (AstExprCall* expr = node->as<AstExprCall>())
         {
+            // Luwu try expressions: compiled to one value (compileTryResultMethod)
+            if (isTryResultMethodCall(expr))
+            {
+                compileExprTemp(node, target);
+                return false;
+            }
+
             // Optimization: convert multret calls that always return one value to fixedret calls; this facilitates inlining/constant folding
             if (options.optimizationLevel >= 2 && !isExprMultRet(node))
             {
@@ -3468,6 +3479,21 @@ struct Compiler
 
         setDebugLine(expr); // normally compileExpr sets up line info, but compileExprCall can be called directly
 
+        // Luwu try expressions: a result kept in registers answers its own `ok`, `err` and `expect`, always with one value
+        AstExprLocal* resultLocal = nullptr;
+        AstExprIndexName* resultMethod = tryResultMethodCall(expr, resultLocal);
+        if (resultMethod && tryResultLocals.contains(resultLocal->local))
+        {
+            LUAU_ASSERT(!multRet);
+            RegScope rs(this);
+
+            uint8_t value = targetCount > 0 ? target : allocReg(expr, 1u);
+            compileTryResultMethod(expr, resultMethod, getLocalReg(resultLocal->local), value);
+            for (unsigned i = 1; i < targetCount; ++i)
+                bytecode.emitABC(LOP_LOADNIL, uint8_t(target + i), 0, 0);
+            return;
+        }
+
         // try inlining the function
         if (options.optimizationLevel >= 2 && !expr->self)
         {
@@ -5891,7 +5917,7 @@ struct Compiler
     // Luwu try expressions: a result kept in registers (see tryResultLocals) holds its value or error at the first, where
     // an error was raised in the next three, and in the last whether it's an `ok`
     static constexpr unsigned kTryResultRegisters = 5;
-    static constexpr uint8_t kTryResultOkFlag = 4;
+    static constexpr uint8_t kTryResultOkFlag = LBC_TRYRESULT_OKFLAG;
 
     // Luwu try expressions: evaluates expr into reg in a protected range. An error raised there resumes at the handler,
     // with the error in reg and where it was raised in the three registers after it. The result is a `collections.result`
@@ -5964,6 +5990,77 @@ struct Compiler
         if (name == "traceback")
             return 3;
         return -1;
+    }
+
+    // Luwu try expressions: `r:ok()`, `r:err()`, and `r:expect()` with no message or a constant one: the methods a result
+    // kept in registers answers itself. Gives the method and sets `local` to r.
+    static AstExprIndexName* tryResultMethodCall(AstExprCall* call, AstExprLocal*& local)
+    {
+        AstExprIndexName* method = call->self ? call->func->as<AstExprIndexName>() : nullptr;
+        local = method ? method->expr->as<AstExprLocal>() : nullptr;
+        if (!local || local->upvalue)
+            return nullptr;
+
+        if (method->index == "ok" || method->index == "err")
+            return call->args.size == 0 ? method : nullptr;
+
+        // skipping the message on an ok can't skip anything it does
+        bool constantMessage = call->args.size == 1 && call->args.data[0]->is<AstExprConstantString>();
+        if (method->index == "expect" && (call->args.size == 0 || constantMessage))
+            return method;
+
+        return nullptr;
+    }
+
+    bool isTryResultMethodCall(AstExprCall* call)
+    {
+        AstExprLocal* local = nullptr;
+        return tryResultMethodCall(call, local) && tryResultLocals.contains(local->local);
+    }
+
+    // Luwu try expressions: a method of a try result kept in registers. `ok` and `err` are a RESULTGET. `expect` gives an
+    // ok's value, and on an err builds the object and calls its `expect`, which raises.
+    void compileTryResultMethod(AstExprCall* call, AstExprIndexName* method, uint8_t reg, uint8_t target)
+    {
+        if (method->index != "expect")
+        {
+            bytecode.emitABC(LOP_RESULTGET, target, reg, method->index == "ok" ? LBC_RESULTGET_OK : LBC_RESULTGET_ERR);
+            return;
+        }
+
+        size_t errJump = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMPIFNOT, uint8_t(reg + kTryResultOkFlag), 0);
+        bytecode.emitABC(LOP_MOVE, target, reg, 0);
+        size_t doneJump = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMP, 0, 0);
+
+        size_t errLabel = bytecode.emitLabel();
+        {
+            RegScope rs(this);
+
+            uint8_t object = allocReg(call, 4u);
+            for (uint8_t i = 0; i < 4; ++i)
+                bytecode.emitABC(LOP_MOVE, uint8_t(object + i), uint8_t(reg + i), 0);
+            bytecode.emitABC(LOP_WRAPRESULT, object, LBC_WRAPRESULT_ERR, 0);
+
+            uint8_t func = allocReg(call, unsigned(2 + call->args.size));
+            BytecodeBuilder::StringRef name = sref(method->index);
+            int32_t cid = bytecode.addConstantString(name);
+            if (cid < 0)
+                CompileError::raise(call->location, "Exceeded constant limit; simplify the code to compile");
+
+            // the CALL has to follow NAMECALL directly, so the message goes first
+            if (call->args.size == 1)
+                compileExprTemp(call->args.data[0], uint8_t(func + 2));
+            bytecode.emitABC(LOP_NAMECALL, func, object, uint8_t(BytecodeBuilder::getStringHash(name)));
+            bytecode.emitAux(cid);
+            bytecode.emitABC(LOP_CALL, func, uint8_t(call->args.size + 2), 2);
+            bytecode.emitABC(LOP_MOVE, target, func, 0);
+        }
+
+        size_t doneLabel = bytecode.emitLabel();
+        patchJump(call, errJump, errLabel);
+        patchJump(call, doneJump, doneLabel);
     }
 
     // Luwu try expressions: a field of a try result kept in registers. The other variant's fields don't exist on it, so
@@ -8792,7 +8889,8 @@ struct Compiler
     };
 
     // Luwu try expressions: finds the locals holding a `try` result that are only ever read as `r.value`, `r.error`,
-    // `r.module`, `r.line` or `r.traceback`. Such a result needs no object: its registers hold all of it. Any other use
+    // `r.module`, `r.line` or `r.traceback`, or used as `r:ok()`, `r:err()` or `r:expect()` (tryResultMethodCall). Such a
+    // result needs no object: its registers hold all of it. Any other use
     // of the local (passing it, a method call, writing through it, a closure capturing it) needs the object.
     struct TryResultLocalsVisitor : AstVisitor
     {
@@ -8814,6 +8912,18 @@ struct Compiler
 
             // the local itself isn't visited, so it doesn't count as escaping
             return !fieldRead;
+        }
+
+        bool visit(AstExprCall* node) override
+        {
+            AstExprLocal* local = nullptr;
+            if (!tryResultMethodCall(node, local))
+                return true;
+
+            // the local itself isn't visited, so it doesn't count as escaping
+            for (AstExpr* arg : node->args)
+                arg->visit(this);
+            return false;
         }
 
         bool visit(AstExprLocal* node) override

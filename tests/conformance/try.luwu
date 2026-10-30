@@ -175,6 +175,21 @@ do
     assert(wrongvalue.error == `{string.match(wrongvalue.error, "^[^:]*:%d+: ")}objects of class 'err' do not have a field named 'value'`)
     const wronglines = try good.line
     assert(string.find(wronglines.error, "objects of class 'ok' do not have a field named 'line'", 1, true))
+
+    -- `ok`, `err` and `expect` answer like the object's methods
+    const okvalue = good:ok()
+    const okerror = good:err()
+    const okexpected = good:expect("never")
+    assert(okvalue == 3 and okerror == none and okexpected == 3)
+
+    const badvalue = bad:ok()
+    const baderror = bad:err()
+    assert(badvalue == none and string.find(baderror, "kept", 1, true))
+
+    const expected = try bad:expect("needed it")
+    assert(string.find(expected.error, "needed it: ", 1, true) and string.find(expected.error, "kept", 1, true))
+    const bare = try bad:expect()
+    assert(string.find(bare.error, "kept", 1, true))
 end
 
 -- a Luau-style `try` function is still a function

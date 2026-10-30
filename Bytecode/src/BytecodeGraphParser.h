@@ -1086,6 +1086,7 @@ struct BytecodeGraphParser
                 break;
 
             case LOP_WRAPRESULT:
+            case LOP_RESULTGET:
                 // Luwu try expressions: a function with protected ranges isn't rebuilt, since the graph has nowhere to
                 // keep them
                 return false;

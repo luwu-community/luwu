@@ -14253,6 +14253,15 @@ L1: ADDK R5 R6 K2 [1]
 RETURN R5 1
 )");
 
+    // `ok` and `err` are one instruction each, and never need the object
+    std::string methods = compileFunction0(R"(
+local r = try f()
+return r:ok(), r:err()
+)");
+    CHECK(methods.find(" R0 OK\n") != std::string::npos);
+    CHECK(methods.find(" R0 ERR\n") != std::string::npos);
+    CHECK(methods.find("WRAPRESULT") == std::string::npos);
+
     // passing the result anywhere needs the object
     std::string escaping = compileFunction0(R"(
 local r = try f()

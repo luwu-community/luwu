@@ -2061,6 +2061,12 @@ void BytecodeBuilder::validateInstructions() const
             VREG(LUAU_INSN_A(insn) + (LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR ? 3 : 0));
             break;
 
+        case LOP_RESULTGET:
+            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_RESULTGET_ERR);
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn) + LBC_TRYRESULT_OKFLAG);
+            break;
+
         default:
             LUAU_ASSERT(!"Unsupported opcode");
         }
@@ -2895,6 +2901,12 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_WRAPRESULT:
         formatAppend(result, "WRAPRESULT R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR ? "ERR" : "OK");
+        break;
+
+    case LOP_RESULTGET:
+        formatAppend(
+            result, "RESULTGET R%d R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn) == LBC_RESULTGET_ERR ? "ERR" : "OK"
+        );
         break;
 
     default:
