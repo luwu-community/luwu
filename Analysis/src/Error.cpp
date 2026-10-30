@@ -817,7 +817,8 @@ struct ErrorConverter
 
     std::string operator()(const Luau::FunctionDoesNotTakeSelf&) const
     {
-        return std::string("This function does not take self. Did you mean to use a dot instead of a colon?");
+        // Luwu: upstream says "This function does not take self. Did you mean to use a dot instead of a colon?"
+        return "Call this function with a '.' instead of ':'";
     }
 
     std::string operator()(const Luau::FunctionRequiresSelf& e) const
