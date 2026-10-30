@@ -321,6 +321,8 @@ private:
     void visit(AstExprLocal* expr);
     void visit(AstExprGlobal* expr);
     void visit(AstExprVarargs* expr);
+    // The types of `call`'s arguments as written, without `self`.
+    void appendArgumentTypes(TypePack& args, AstExprCall* call);
     void visitCall(AstExprCall* call);
     void checkUnionMethodSelves(AstExprIndexName* indexExpr);
     // Luwu literal types: a value already checked where it was given (a literal parameter or local, a literal field read),
