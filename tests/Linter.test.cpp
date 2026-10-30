@@ -4983,6 +4983,9 @@ local function check(path: string)
     assert(#path > 0)
     return path
 end
+local function run(f: () -> string)
+    return f()
+end
 
 @[lint(UncaughtErrors)]
 local function load(path: string)
@@ -4990,9 +4993,9 @@ local function load(path: string)
     local b = check(path)
     local c = try read(path)
     local d = guess(path)
-    local e = try (function()
+    local e = try run(function()
         return read(path)
-    end)()
+    end)
     return a, b, c, d, e
 end
 
@@ -5003,9 +5006,10 @@ return load, outside
     std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UncaughtErrors);
     REQUIRE_EQ(found.size(), 3);
     CHECK_EQ(found[0].text, "'read' can raise NotFound; write 'try' before the call to handle it");
-    CHECK_EQ(found[0].location.begin.line, 15);
+    CHECK_EQ(found[0].location.begin.line, 18);
     CHECK_EQ(found[1].text, "'check' can raise string; write 'try' before the call to handle it");
-    CHECK_EQ(found[2].location.begin.line, 20);
+    // a `try` around the call that creates a function doesn't cover the function's body
+    CHECK_EQ(found[2].location.begin.line, 23);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "DiscardedResult")

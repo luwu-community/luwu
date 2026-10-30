@@ -5752,10 +5752,7 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTry* tryExpr)
     TypeId valueTy = check(scope, tryExpr->expr).ty;
 
     TypeId errorTy = builtinTypes->weakUnknownType;
-    AstExpr* inner = tryExpr->expr;
-    while (AstExprGroup* group = inner->as<AstExprGroup>())
-        inner = group->expr;
-    if (AstExprCall* call = inner->as<AstExprCall>())
+    if (AstExprCall* call = tryExpr->expr->as<AstExprCall>())
     {
         if (TypeId* callee = module->astOriginalCallTypes.find(call->func))
             errorTy = createTypeFunctionInstance(builtinTypes->typeFunctions->raisesFunc, {*callee}, {}, scope, tryExpr->location);
