@@ -6238,6 +6238,153 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_try_expressions")
     checkTypewriting(*this, before, "local sum = try #\"ab\" + 1", after);
 }
 
+// Luwu try expressions: the error of `try f()` is f's hints and weakunknown, printed `unknown`
+TEST_CASE_FIXTURE(BuiltinsFixture, "try_types_its_error_from_the_callees_hint")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type NotFound = { kind: "NotFound" }
+        local function read(path: string): string ! NotFound
+            return path
+        end
+        local function meow(): ! string
+            error("unreachable")
+        end
+        local function parse(s: string)
+            if s == "" then
+                error({ line = 1 })
+            end
+            assert(#s < 10)
+            if s == "x" then
+                error("meow" :: "meow")
+            end
+            return s
+        end
+        local r = try read("x")
+        local m = try meow()
+        local p = try parse("x")
+        local s = try 1 + 1
+        local function wrap(): string
+            return "x"
+        end
+        local w = try wrap()
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("read")), "(string) -> string ! NotFound");
+    CHECK_EQ(toString(requireType("wrap")), "() -> string");
+
+    // the last statement's `error` doesn't count
+    std::string meow = toString(requireType("meow"));
+    CHECK_MESSAGE(meow.find("! string") != std::string::npos, meow);
+    CHECK_MESSAGE(meow.find("unreachable") == std::string::npos, meow);
+
+    // `error(v)` raises v's type as a local would hold it, and `assert` a string
+    std::string parse = toString(requireType("parse"));
+    CHECK_MESSAGE(parse.find("{ line: number }") != std::string::npos, parse);
+    CHECK_MESSAGE(parse.find("\"meow\"") != std::string::npos, parse);
+    CHECK_MESSAGE(parse.find("| string") != std::string::npos, parse);
+
+    CHECK_EQ(toString(requireType("r")), "err<NotFound | unknown> | ok<string>");
+    CHECK_EQ(toString(requireType("s")), "err<unknown> | ok<number>");
+    CHECK_EQ(toString(requireType("w")), "err<unknown> | ok<string>");
+}
+
+// Luwu try expressions: `raises<F>` and `types.raises(f)` give what `try f()` would hold as its error
+TEST_CASE_FIXTURE(BuiltinsFixture, "raises_gives_a_functions_error_hints")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type NotFound = { kind: "NotFound" }
+        type Reader = (string) -> string ! NotFound
+        type Plain = (string) -> string
+        type function errorsof(fn)
+            return types.raises(fn)
+        end
+        local a: raises<Reader> = { kind = "NotFound" }
+        local b: raises<Plain> = 1
+        local c: errorsof<Reader> = { kind = "NotFound" }
+        local d: errorsof<Plain> = "x"
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("a")), "NotFound | unknown");
+    CHECK_EQ(toString(requireType("b")), "unknown");
+    std::string c = toString(requireType("c"));
+    CHECK_MESSAGE(c.find("NotFound") != std::string::npos, c);
+    CHECK_MESSAGE(c.find("unknown") != std::string::npos, c);
+    CHECK_EQ(toString(requireType("d")), "unknown");
+}
+
+// Luwu try expressions: `X | unknown` keeps X's members. The unknown part is weakunknown, which accepts anything but
+// doesn't absorb X.
+TEST_CASE_FIXTURE(BuiltinsFixture, "weakunknown_keeps_the_rest_of_its_union")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        type NotFound = { kind: "NotFound", path: string }
+        local function handle(e: NotFound | unknown)
+            local kind = e.kind
+            local path: string = e.path
+            return kind
+        end
+        local anything: NotFound | unknown = 1
+        local plain: unknown = 1
+        local optional: unknown? = 1
+        local k = handle(2)
+        local function pick(c: boolean, e: NotFound | unknown)
+            return if c then e else 1
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("handle")), "(NotFound | unknown) -> \"NotFound\"");
+    CHECK_EQ(toString(requireType("k")), "\"NotFound\"");
+    CHECK_EQ(toString(requireType("plain")), "unknown");
+
+    // a join keeps NotFound
+    std::string pick = toString(requireType("pick"));
+    CHECK_MESSAGE(pick.find("-> NotFound | ") != std::string::npos, pick);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_error_hints")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+    const char* before = "type NotFound = { kind: \"NotFound\" }\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+
+    checkTypewriting(*this, before, "local function read(path: string): string ! NotFound | string\n    return path\nend", after);
+    checkTypewriting(*this, before, "local function meow(): ! NotFound\n    return 1\nend", after);
+    checkTypewriting(*this, before, "local function apply(read: (string) -> string ! NotFound)\n    return read(\"x\")\nend", after);
+}
+
 // Luwu collections: an `err` can say where its error was raised, with optional fields after the error
 TEST_CASE_FIXTURE(BuiltinsFixture, "collections_err_has_optional_position_fields")
 {

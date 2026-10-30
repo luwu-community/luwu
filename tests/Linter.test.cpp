@@ -7,6 +7,9 @@
 
 #include "doctest.h"
 
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -4044,6 +4047,28 @@ return removed, frozen, shadowed, owner, check
     CHECK_EQ(inLua[0].text, "'table.drop' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
 }
 
+// Luwu try expressions: `types.raises` in a type function
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsTypesRaisesInLuauFiles")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    fileResolver.source["game/a"] = R"(
+type function errors(fn)
+    return types.raises(fn)
+end
+return nil
+)";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : lintModule("game/a").warnings)
+        if (warning.code == LintWarning::Code_LuwuOnlyApi)
+            found.push_back(warning);
+
+    REQUIRE_EQ(found.size(), 1);
+    CHECK_EQ(found[0].location, Location({2, 11}, {2, 23}));
+}
+
 // Luwu: `--@[nolint(...)]` is the attribute as a comment, for Luau and Lua files, which upstream couldn't parse with
 // `@[nolint]` in them. It covers the statement after it.
 TEST_CASE_FIXTURE(BuiltinsFixture, "LintAttributeComments")
@@ -4932,6 +4957,55 @@ return f
     );
     CHECK_EQ(found[1].text, "'not m' is always false: a table is truthy even when it's empty; to check whether 'm' is empty, use 'next(m) == nil'");
     CHECK_EQ(7, found[2].location.begin.line);
+}
+
+// Luwu try expressions: hinted calls outside a `try`, where `@[lint(UncaughtErrors)]` turns the lint on
+TEST_CASE_FIXTURE(BuiltinsFixture, "UncaughtErrors")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    LintResult result = lint(R"(
+type NotFound = { kind: "NotFound" }
+local function read(path: string): string ! NotFound
+    return path
+end
+local function guess(path: string): string ! unknown
+    return path
+end
+local function check(path: string)
+    assert(#path > 0)
+    return path
+end
+
+@[lint(UncaughtErrors)]
+local function load(path: string)
+    local a = read(path)
+    local b = check(path)
+    local c = try read(path)
+    local d = guess(path)
+    local e = try (function()
+        return read(path)
+    end)()
+    return a, b, c, d, e
+end
+
+local outside = read("x")
+return load, outside
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UncaughtErrors);
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(found[0].text, "'read' can raise NotFound; write 'try' before the call to handle it");
+    CHECK_EQ(found[0].location.begin.line, 15);
+    CHECK_EQ(found[1].text, "'check' can raise string; write 'try' before the call to handle it");
+    CHECK_EQ(found[2].location.begin.line, 20);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "DiscardedResult")

@@ -380,6 +380,8 @@ private:
 
     AstTypePack* parseOptionalReturnType(Position* returnSpecifierPosition = nullptr);
     AstTypePack* parseReturnType();
+    // Luwu try expressions: `! E` after a return type, or nullptr
+    AstType* parseOptionalErrorHint(Position* bangPosition = nullptr);
 
     struct TableIndexerResult
     {
@@ -399,7 +401,8 @@ private:
         AstArray<AstGenericTypePack*> genericPacks,
         AstArray<AstType*> params,
         AstArray<std::optional<AstArgumentName>> paramNames,
-        AstTypePack* varargAnnotation
+        AstTypePack* varargAnnotation,
+        Position* errorHintPosition = nullptr
     );
 
     AstType* parseTableType(bool inDeclarationContext = false);

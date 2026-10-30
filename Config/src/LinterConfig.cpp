@@ -14,6 +14,8 @@ void LintOptions::setDefaults()
     // Luwu: except the ones a module or codebase has to ask for (`--!lint Name`, or the config), because they're about
     // style and would flag most existing code
     warningMask.reset(LintWarning::Code_ConstLocal);
+    // Luwu try expressions: `@[lint(UncaughtErrors)]` turns it on for the code that should handle every hinted error
+    warningMask.reset(LintWarning::Code_UncaughtErrors);
     // Luwu: the group's own check, for every `any` its parts don't report; the parts are on
     warningMask.reset(LintWarning::Code_Any);
 }

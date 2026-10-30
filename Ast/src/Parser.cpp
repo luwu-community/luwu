@@ -70,6 +70,7 @@ const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ tr
 // Luau.
 const LuwuFeature kExportsFeature{"exported values", /* plural= */ true, "LuauExportValueSyntax"};
 const LuwuFeature kTryExpressionsFeature{"'try' expressions", /* plural= */ true, "DebugLuwuTryExpressions"};
+const LuwuFeature kErrorHintsFeature{"error hints", /* plural= */ true, "DebugLuwuTryExpressions"};
 // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, `declare` is only allowed where it
 // visibly applies to the whole file.
 const char* const kDeclarationPlacementError =
@@ -3640,6 +3641,7 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         retTypes = parseOptionalReturnType();
         if (!retTypes)
             retTypes = allocator.alloc<AstTypePackExplicit>(lexer.current().location, AstTypeList{copy<AstType*>(nullptr, 0), nullptr});
+        AstType* errorHint = parseOptionalErrorHint();
         // Luwu: upstream ends the declaration at the token after it, so whatever follows a `declare function` looks
         // like it's on the same line (the SameLineStatement lint reports it, once declarations can be in source).
         Location end = lexer.previousLocation();
@@ -3674,7 +3676,7 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
 
         checkDuplicateDeclaration(globalName);
 
-        return allocator.alloc<AstStatDeclareFunction>(
+        AstStatDeclareFunction* declaration = allocator.alloc<AstStatDeclareFunction>(
             Location(start, end),
             attributes,
             globalName.name,
@@ -3689,6 +3691,8 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
             start,
             functionLocation
         );
+        declaration->errorHint = errorHint;
+        return declaration;
     }
     // When FFlag::LuauAllowGlobalDeclarationToBeCalledClass is set, `declare class : T` is parsed as a
     // global variable declaration whose name is `class`, not as a malformed class declaration. This allows
@@ -4628,6 +4632,7 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
     matchRecoveryStopOnToken[')']--;
 
     AstTypePack* typelist = parseOptionalReturnType(cstNode ? &cstNode->returnSpecifierPosition : nullptr);
+    AstType* errorHint = parseOptionalErrorHint(cstNode ? &cstNode->errorHintPosition : nullptr);
 
     AstLocal* funLocal = nullptr;
 
@@ -4697,6 +4702,7 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
         varargAnnotation,
         argLocation
     );
+    node->errorHint = errorHint;
     if (options.storeCstData)
     {
         cstNode->functionKeywordPosition = matchFunction.location.begin;
@@ -4931,6 +4937,10 @@ AstTypePack* Parser::parseOptionalReturnType(Position* returnSpecifierPosition)
             *returnSpecifierPosition = lexer.current().location.begin;
         nextLexeme();
 
+        // Luwu try expressions: `function f(): ! E` infers the return type and only gives the error hint
+        if (lexer.current().type == '!')
+            return nullptr;
+
         unsigned int oldRecursionCount = recursionCounter;
 
         auto result = parseReturnType();
@@ -4951,6 +4961,20 @@ AstTypePack* Parser::parseOptionalReturnType(Position* returnSpecifierPosition)
     }
 
     return nullptr;
+}
+
+// Luwu try expressions: ErrorHint ::= `!' Type. `!' binds looser than `|', so `! A | B' is one union.
+AstType* Parser::parseOptionalErrorHint(Position* bangPosition)
+{
+    if (lexer.current().type != '!')
+        return nullptr;
+
+    checkLuwuFeature(lexer.current().location, kErrorHintsFeature, FFlag::DebugLuwuTryExpressions);
+    if (bangPosition)
+        *bangPosition = lexer.current().location.begin;
+    nextLexeme();
+
+    return parseType();
 }
 
 // ReturnType ::= Type | `(' TypeList `)'
@@ -5043,11 +5067,12 @@ AstTypePack* Parser::parseReturnType()
     }
 
     Position returnArrowPosition = lexer.current().location.begin;
-    AstType* tail = parseFunctionTypeTail(begin, {nullptr, 0}, {}, {}, copy(result), copy(resultNames), varargAnnotation);
+    Position errorHintPosition = Position::missing();
+    AstType* tail = parseFunctionTypeTail(begin, {nullptr, 0}, {}, {}, copy(result), copy(resultNames), varargAnnotation, &errorHintPosition);
 
     if (options.storeCstData && tail->is<AstTypeFunction>())
     {
-        cstNodeMap[tail] = allocator.alloc<CstTypeFunction>(
+        CstTypeFunction* cst = allocator.alloc<CstTypeFunction>(
             Position::missing(),
             AstArray<Position>{},
             Position::missing(),
@@ -5057,6 +5082,8 @@ AstTypePack* Parser::parseReturnType()
             closeParenthesesPosition,
             returnArrowPosition
         );
+        cst->errorHintPosition = errorHintPosition;
+        cstNodeMap[tail] = cst;
     }
 
     AstTypePackExplicit* node = allocator.alloc<AstTypePackExplicit>(Location{location, tail->location}, AstTypeList{copy(&tail, 1), nullptr});
@@ -5399,10 +5426,11 @@ AstTypeOrPack Parser::parseFunctionType(bool allowPack, const AstArray<AstAttr*>
     AstArray<std::optional<AstArgumentName>> paramNames = copy(names);
 
     Position returnArrowPosition = lexer.current().location.begin;
-    AstType* node = parseFunctionTypeTail(begin, attributes, generics, genericPacks, paramTypes, paramNames, varargAnnotation);
+    Position errorHintPosition = Position::missing();
+    AstType* node = parseFunctionTypeTail(begin, attributes, generics, genericPacks, paramTypes, paramNames, varargAnnotation, &errorHintPosition);
     if (options.storeCstData && node->is<AstTypeFunction>())
     {
-        cstNodeMap[node] = allocator.alloc<CstTypeFunction>(
+        CstTypeFunction* cst = allocator.alloc<CstTypeFunction>(
             genericsOpenPosition,
             genericsCommaPositions,
             genericsClosePosition,
@@ -5412,6 +5440,8 @@ AstTypeOrPack Parser::parseFunctionType(bool allowPack, const AstArray<AstAttr*>
             closeArgsFound ? closeArgsLocation.begin : Position::missing(),
             returnArrowPosition
         );
+        cst->errorHintPosition = errorHintPosition;
+        cstNodeMap[node] = cst;
     }
     return {node, {}};
 }
@@ -5423,7 +5453,8 @@ AstType* Parser::parseFunctionTypeTail(
     AstArray<AstGenericTypePack*> genericPacks,
     AstArray<AstType*> params,
     AstArray<std::optional<AstArgumentName>> paramNames,
-    AstTypePack* varargAnnotation
+    AstTypePack* varargAnnotation,
+    Position* errorHintPosition
 )
 {
     incrementRecursionCounter("type annotation");
@@ -5447,11 +5478,14 @@ AstType* Parser::parseFunctionTypeTail(
 
     auto returnType = parseReturnType();
     LUAU_ASSERT(returnType);
+    AstType* errorHint = parseOptionalErrorHint(errorHintPosition);
+    Location end = errorHint ? errorHint->location : returnType->location;
 
     AstTypeList paramTypes = AstTypeList{params, varargAnnotation};
-    return allocator.alloc<AstTypeFunction>(
-        Location(begin.location, returnType->location), attributes, generics, genericPacks, paramTypes, paramNames, returnType
-    );
+    AstTypeFunction* node =
+        allocator.alloc<AstTypeFunction>(Location(begin.location, end), attributes, generics, genericPacks, paramTypes, paramNames, returnType);
+    node->errorHint = errorHint;
+    return node;
 }
 
 static bool isTypeFollow(Lexeme::Type c)

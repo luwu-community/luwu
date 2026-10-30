@@ -322,6 +322,7 @@ private:
     void visit(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);
+    TypeId stripWeakUnknown(TypeId ty) const;
     // `separator` is the `.` or `:` of `expr.propName`, and 0 for `expr["propName"]`.
     void visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy, char separator);
     void visit(AstExprIndexName* indexName, ValueContext context);

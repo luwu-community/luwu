@@ -18,6 +18,9 @@ inline bool isLuwuOnlyMember(std::string_view library, std::string_view member)
         return member == "drop";
     if (library == "buffer")
         return member == "isfrozen";
+    // Luwu try expressions
+    if (library == "types")
+        return member == "raises";
     return false;
 }
 

@@ -656,6 +656,8 @@ public:
     AstArray<AstLocal*> args;
     AstArray<AstExpr*> argsDefaults;
     AstTypePack* returnAnnotation = nullptr;
+    // Luwu try expressions: the errors `! E` says the function raises, or nullptr
+    AstType* errorHint = nullptr;
     bool vararg = false;
     Location varargLocation;
     AstTypePack* varargAnnotation;
@@ -1312,6 +1314,8 @@ public:
     bool vararg = false;
     Location varargLocation;
     AstTypePack* retTypes;
+    // Luwu try expressions: the errors `! E` says the function raises, or nullptr
+    AstType* errorHint = nullptr;
 
     // Location of the leading 'declare' keyword token only.
     Location declareLocation;
@@ -1681,6 +1685,8 @@ public:
     AstTypeList argTypes;
     AstArray<std::optional<AstArgumentName>> argNames;
     AstTypePack* returnTypes;
+    // Luwu try expressions: the errors `! E` says the function raises, or nullptr
+    AstType* errorHint = nullptr;
 };
 
 class AstTypeTypeof : public AstType

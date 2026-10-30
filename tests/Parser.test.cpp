@@ -2397,6 +2397,75 @@ TEST_CASE_FIXTURE(Fixture, "try_expressions_are_gated_and_luwu_only")
     CHECK(result.errors.empty());
 }
 
+// Luwu try expressions: `! E` after a return type, alone, in a function type and in a declaration
+TEST_CASE_FIXTURE(Fixture, "error_hints_follow_the_return_type")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseResult result = tryParse(R"(
+        local function read(path: string): string ! NotFound | Denied
+            return path
+        end
+        local function meow(): ! string
+            error("meow")
+        end
+        type Reader = (string) -> string ! NotFound
+        type Returner = (string) -> ((string) -> number) ! NotFound
+        declare function open(path: string): number ! NotFound
+    )");
+    CHECK(result.errors.empty());
+    AstStatBlock* block = result.root;
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 5);
+
+    AstStatLocalFunction* read = block->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(read);
+    REQUIRE(read->func->returnAnnotation);
+    REQUIRE(read->func->errorHint);
+    CHECK(read->func->errorHint->is<AstTypeUnion>());
+
+    AstStatLocalFunction* meow = block->body.data[1]->as<AstStatLocalFunction>();
+    REQUIRE(meow);
+    CHECK(!meow->func->returnAnnotation);
+    CHECK(meow->func->errorHint);
+
+    AstStatTypeAlias* reader = block->body.data[2]->as<AstStatTypeAlias>();
+    REQUIRE(reader);
+    AstTypeFunction* readerType = reader->type->as<AstTypeFunction>();
+    REQUIRE(readerType);
+    CHECK(readerType->errorHint);
+
+    // the hint belongs to the outer function: the inner one is parenthesized
+    AstStatTypeAlias* returner = block->body.data[3]->as<AstStatTypeAlias>();
+    REQUIRE(returner);
+    AstTypeFunction* returnerType = returner->type->as<AstTypeFunction>();
+    REQUIRE(returnerType);
+    CHECK(returnerType->errorHint);
+
+    AstStatDeclareFunction* open = block->body.data[4]->as<AstStatDeclareFunction>();
+    REQUIRE(open);
+    CHECK(open->errorHint);
+}
+
+TEST_CASE_FIXTURE(Fixture, "error_hints_are_gated_and_luwu_only")
+{
+    {
+        ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, false};
+        matchParseError(
+            "local function f(): string ! number return '' end",
+            "attempt to use disabled Luwu feature error hints; enable via FFlag 'DebugLuwuTryExpressions'"
+        );
+    }
+
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    ParseResult result = tryParse("local function f(): string ! number return '' end", luau);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: error hints");
+}
+
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_luwu_only")
 {
     ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};

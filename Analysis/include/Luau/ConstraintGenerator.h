@@ -135,6 +135,16 @@ struct ConstraintGenerator
     // Map a function's signature scope back to its signature type.
     DenseHashMap<Scope*, TypeId> scopeToFunction{nullptr};
 
+    // Luwu try expressions: what the functions being checked raise with `error` and `assert`, innermost last.
+    // checkFunctionBody joins a function's onto its error hint.
+    struct RaisedErrors
+    {
+        // `error(...)` as the body's last statement: reaching it is a bug, not an error the function raises
+        AstExprCall* unreachableError = nullptr;
+        std::vector<TypeId> types;
+    };
+    std::vector<RaisedErrors> raisedErrors;
+
     // The private scope of type aliases for which the type parameters belong to.
     DenseHashMap<const AstStatTypeAlias*, ScopePtr> astTypeAliasDefiningScopes{nullptr};
 
@@ -540,6 +550,8 @@ private:
      * @param fn the function expression to check.
      */
     void checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn);
+    void recordRaisedError(AstExprCall* call, const std::vector<TypeId>& args);
+    void weakenUnknownMembers(AstTypeUnion* annotation, std::vector<TypeId>& members);
     std::optional<FunctionType::TruthyRefinement> resolveTruthyRefinement(const ScopePtr& signatureScope, AstExprFunction* fn);
 
     // Specializations of 'resolveType' below

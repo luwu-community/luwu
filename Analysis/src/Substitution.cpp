@@ -102,6 +102,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.nodiscardReason = a.nodiscardReason;
             // Luwu user-defined refinements
             clone.truthyRefinement = a.truthyRefinement;
+            // Luwu try expressions
+            clone.errorHint = a.errorHint;
             clone.name = a.name;
             clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
@@ -227,6 +229,10 @@ void Tarjan::visitChildren(TypeId ty, int index)
 
         visitChild(ftv->argTypes);
         visitChild(ftv->retTypes);
+
+        // Luwu try expressions
+        if (ftv->errorHint)
+            visitChild(*ftv->errorHint);
     }
     else if (const TableType* ttv = get<TableType>(ty))
     {
@@ -893,6 +899,10 @@ void Substitution::replaceChildren(TypeId ty)
         // Luwu user-defined refinements: a generic target is instantiated with the call
         if (ftv->truthyRefinement)
             ftv->truthyRefinement->type = replace(ftv->truthyRefinement->type);
+
+        // Luwu try expressions: a hint can name the function's generics
+        if (ftv->errorHint)
+            ftv->errorHint = replace(*ftv->errorHint);
     }
     else if (TableType* ttv = getMutable<TableType>(ty))
     {

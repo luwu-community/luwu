@@ -346,6 +346,10 @@ private:
         t->argTypes = shallowClone(t->argTypes);
         t->retTypes = shallowClone(t->retTypes);
 
+        // Luwu try expressions
+        if (t->errorHint)
+            t->errorHint = shallowClone(*t->errorHint);
+
         // Luwu user-defined refinements
         if (t->truthyRefinement)
             t->truthyRefinement->type = shallowClone(t->truthyRefinement->type);

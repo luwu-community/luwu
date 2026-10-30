@@ -62,6 +62,10 @@ struct TypeSimplifier
 
     TypeId union_(TypeId left, TypeId right);
 
+    // Luwu try expressions
+    TypeId withoutWeakUnknown(TypeId ty, bool& hadWeakUnknown);
+    std::optional<TypeId> unionKeepingWeakUnknown(TypeId left, TypeId right);
+
     TypeId simplify(TypeId ty);
 
     TypeId simplify(TypeId ty, DenseHashSet<TypeId>& seen);
@@ -1523,12 +1527,72 @@ TypeId TypeSimplifier::intersect(TypeId left, TypeId right)
         return arena->addType(IntersectionType{{left, right}});
 }
 
+// Luwu try expressions: `ty` with its weakunknown taken out, `never` if that's all it was
+TypeId TypeSimplifier::withoutWeakUnknown(TypeId ty, bool& hadWeakUnknown)
+{
+    ty = follow(ty);
+    if (ty == builtinTypes->weakUnknownType)
+    {
+        hadWeakUnknown = true;
+        return builtinTypes->neverType;
+    }
+
+    const UnionType* ut = get<UnionType>(ty);
+    if (!ut)
+        return ty;
+
+    std::vector<TypeId> rest;
+    for (TypeId option : ut)
+    {
+        if (follow(option) == builtinTypes->weakUnknownType)
+            hadWeakUnknown = true;
+        else
+            rest.push_back(option);
+    }
+
+    if (rest.size() == ut->options.size())
+        return ty;
+    if (rest.empty())
+        return builtinTypes->neverType;
+    if (rest.size() == 1)
+        return rest[0];
+    return arena->addType(UnionType{std::move(rest)});
+}
+
+// Luwu try expressions: weakunknown doesn't absorb the rest of a union. The other members are joined as usual, and
+// weakunknown is added back unless they joined into a top type.
+std::optional<TypeId> TypeSimplifier::unionKeepingWeakUnknown(TypeId left, TypeId right)
+{
+    bool hadWeakUnknown = false;
+    TypeId leftRest = withoutWeakUnknown(left, hadWeakUnknown);
+    TypeId rightRest = withoutWeakUnknown(right, hadWeakUnknown);
+    if (!hadWeakUnknown)
+        return std::nullopt;
+
+    TypeId rest = follow(union_(leftRest, rightRest));
+    if (get<NeverType>(rest))
+        return builtinTypes->weakUnknownType;
+    if (is<UnknownType, AnyType, ErrorType>(rest))
+        return rest;
+
+    std::vector<TypeId> options;
+    if (const UnionType* ut = get<UnionType>(rest))
+        options.assign(ut->options.begin(), ut->options.end());
+    else
+        options.push_back(rest);
+    options.push_back(builtinTypes->weakUnknownType);
+    return arena->addType(UnionType{std::move(options)});
+}
+
 TypeId TypeSimplifier::union_(TypeId left, TypeId right)
 {
     RecursionLimiter rl("TypeSimplifier::union", &recursionDepth, 15);
 
     left = simplify(left);
     right = simplify(right);
+
+    if (std::optional<TypeId> kept = unionKeepingWeakUnknown(left, right))
+        return *kept;
 
     if (get<NeverType>(left))
         return right;

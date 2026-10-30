@@ -23,6 +23,7 @@ LUAU_DYNAMIC_FASTINTVARIABLE(LuauStepRefineRecursionLimit, 64)
 LUAU_FASTFLAGVARIABLE(LuauConcatDoesntAlwaysReturnString)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuauRemoveExtraSubtypingInstances)
 
 namespace Luau
@@ -2777,6 +2778,61 @@ TypeFunctionReductionResult<TypeId> unlessneverTypeFunction(
     return {refined, Reduction::MaybeOk, {}, {}};
 }
 
+// Luwu try expressions: the error hints of each function `fnTy` can be (an overload set's, a union's), or nullopt while
+// `fnTy` is still pending
+static std::optional<std::vector<TypeId>> errorHintsOf(TypeId fnTy, NotNull<TypeFunctionContext> ctx)
+{
+    std::vector<TypeId> parts;
+    if (const IntersectionType* overloads = get<IntersectionType>(fnTy))
+        parts.assign(overloads->parts.begin(), overloads->parts.end());
+    else if (const UnionType* options = get<UnionType>(fnTy))
+        parts.assign(options->options.begin(), options->options.end());
+    else
+        parts.push_back(fnTy);
+
+    std::vector<TypeId> hints;
+    for (TypeId part : parts)
+    {
+        part = follow(part);
+        if (isPending(part, ctx->solver))
+            return std::nullopt;
+
+        const FunctionType* function = get<FunctionType>(part);
+        if (function && function->errorHint)
+            hints.push_back(*function->errorHint);
+    }
+    return hints;
+}
+
+TypeFunctionReductionResult<TypeId> raisesTypeFunction(
+    TypeId instance,
+    const std::vector<TypeId>& typeParams,
+    const std::vector<TypePackId>& packParams,
+    NotNull<TypeFunctionContext> ctx
+)
+{
+    if (typeParams.size() != 1 || !packParams.empty())
+    {
+        ctx->ice->ice("raises type function: encountered a type function instance without the required argument structure");
+        LUAU_ASSERT(false);
+    }
+
+    TypeId fnTy = follow(typeParams[0]);
+    if (isPending(fnTy, ctx->solver))
+        return {std::nullopt, Reduction::MaybeOk, {fnTy}, {}};
+
+    std::optional<std::vector<TypeId>> hints = errorHintsOf(fnTy, ctx);
+    if (!hints)
+        return {std::nullopt, Reduction::MaybeOk, {fnTy}, {}};
+
+    // A union built directly: simplifying it would let an `unknown` in a hint absorb the other members
+    std::vector<TypeId> options = std::move(*hints);
+    options.push_back(ctx->builtins->weakUnknownType);
+    if (options.size() == 1)
+        return {options[0], Reduction::MaybeOk, {}, {}};
+    return {ctx->arena->addType(UnionType{std::move(options)}), Reduction::MaybeOk, {}, {}};
+}
+
 BuiltinTypeFunctions::BuiltinTypeFunctions()
     : userFunc{"user", userDefinedTypeFunction}
     , notFunc{"not", notTypeFunction}
@@ -2808,6 +2864,7 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , classFunc{"class", classTypeFunction}
     , weakoptionalFunc{"weakoptional", weakoptionalTypeFunc}
     , unlessneverFunc{"unlessnever", unlessneverTypeFunction}
+    , raisesFunc{"raises", raisesTypeFunction}
 {
 }
 
@@ -2866,6 +2923,9 @@ void BuiltinTypeFunctions::addToScope(NotNull<TypeArena> arena, NotNull<Scope> s
 
     scope->exportedTypeBindings[setmetatableFunc.name] = mkBinaryTypeFunction(&setmetatableFunc);
     scope->exportedTypeBindings[getmetatableFunc.name] = mkUnaryTypeFunction(&getmetatableFunc);
+
+    if (FFlag::DebugLuwuTryExpressions)
+        scope->exportedTypeBindings[raisesFunc.name] = mkUnaryTypeFunction(&raisesFunc);
 }
 
 } // namespace Luau

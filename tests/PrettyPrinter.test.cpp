@@ -2446,6 +2446,18 @@ TEST_CASE("prettyPrint_try_expressions")
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
+TEST_CASE("prettyPrint_error_hints")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    std::string code = R"(
+        local function read(path: string): string  !  NotFound | Denied return path end
+        local function meow():! string error("meow") end
+        type Reader = (string) -> string ! NotFound
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
 TEST_CASE("prettyPrint_bare_attribute_arguments_are_kept")
 {
     ScopedFastFlag fflags[] = {{FFlag::LuauCstAttr, true}, {FFlag::LuwuAttributesEverywhere, true}};

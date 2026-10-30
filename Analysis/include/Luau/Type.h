@@ -426,6 +426,10 @@ struct FunctionType
     };
     std::optional<TruthyRefinement> truthyRefinement;
 
+    // Luwu try expressions: the errors the function says it raises (`! E`), joined with the ones inferred from its body.
+    // A hint types a `try` around a call; nothing checks it against what the function really raises.
+    std::optional<TypeId> errorHint;
+
     // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
     std::optional<std::string> name;
     std::optional<std::string> syntheticName;
@@ -1280,6 +1284,9 @@ public:
     const TypeId falseType;
     const TypeId anyType;
     const TypeId unknownType;
+    // Luwu try expressions: `unknown` that doesn't absorb the rest of a union, printed as `unknown`. `FileIoError |
+    // weakunknown` keeps FileIoError's members for autocomplete and indexing. An annotation `X | unknown` means this.
+    const TypeId weakUnknownType;
     const TypeId neverType;
     const TypeId errorType;
     const TypeId noRefineType;
