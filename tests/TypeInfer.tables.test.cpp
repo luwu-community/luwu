@@ -418,6 +418,49 @@ TEST_CASE_FIXTURE(Fixture, "used_colon_instead_of_dot")
     REQUIRE(it != result.errors.end());
 }
 
+TEST_CASE_FIXTURE(Fixture, "colon_call_suggests_a_dot_when_the_dot_call_type_checks")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Process = { shell: (command: string) -> number }
+        local process: Process = { shell = function(command: string) return #command end }
+        local function f(x: number, y: number?) end
+        local function g(name: string, age: number?) end
+        local t = { f = f, g = g }
+
+        local count = process:shell("ls")
+        t:g("tom")
+        t:f("not a number")
+    )");
+
+    // The last call is wrong either way, so it keeps its two argument errors.
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    REQUIRE(get<FunctionDoesNotTakeSelf>(result.errors[0]));
+    CHECK_EQ(Location{{7, 22}, {7, 35}}, result.errors[0].location);
+    CHECK_EQ("Call this function with a '.' instead of ':'", toString(result.errors[0]));
+    // `"tom"` was checked against `age` and failed; only the suggestion is reported.
+    REQUIRE(get<FunctionDoesNotTakeSelf>(result.errors[1]));
+    CHECK(get<TypeMismatch>(result.errors[2]));
+    CHECK(get<TypeMismatch>(result.errors[3]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "colon_call_on_a_method_gets_no_dot_suggestion")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local T = {}
+        function T:method(x: number) end
+        T:method("one")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(!get<FunctionDoesNotTakeSelf>(result.errors[0]));
+}
+
 TEST_CASE_FIXTURE(Fixture, "open_table_unification_2")
 {
     // CLI-114792 We don't report MissingProperties in many places where the old solver does.
