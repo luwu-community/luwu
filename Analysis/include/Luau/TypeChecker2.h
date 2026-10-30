@@ -177,6 +177,7 @@ struct TypeChecker2
     // Returns whether `subjectType` is one; only types that are so without normalizing are recognized.
     bool reportImproperUse(AstExpr* subject, TypeId subjectType, ImproperUse use);
     void reportUnreachableUse(AstExpr* subject, ImproperUse use);
+    void checkImpossibleTypeTest(AstExprCall* call);
     // Why the local read at `use` is `never`, when something the reader wrote says so; nullopt when it may be a type
     // checker bug
     std::optional<UnreachableCodeUse::Reason> unreachableReason(const AstExprLocal* use);

@@ -17,6 +17,7 @@
 #include "Luau/RepeatedTypeNames.h"
 #include "Luau/Metamethods.h"
 #include "Luau/Normalize.h"
+#include "Luau/BuiltinTypeFunctions.h"
 #include "Luau/OverloadResolver.h"
 #include "Luau/Subtyping.h"
 #include "Luau/TimeTrace.h"
@@ -3828,7 +3829,52 @@ void TypeChecker2::visit(AstExprCall* call)
             visit(arg, ValueContext::RValue);
     }
 
+    if (call->fromTypeTest)
+        checkImpossibleTypeTest(call);
+
     visitCall(call);
+}
+
+// Luwu match expressions: a type test's operand for a message. A value `is` read into a hidden local (`(matched)`,
+// `(destructured)`) has no name a user wrote.
+static std::string typeTestOperandName(std::optional<std::string> name, const char* fallback)
+{
+    if (!name || name->empty() || (*name)[0] == '(')
+        return fallback;
+    return "'" + *name + "'";
+}
+
+// Luwu match expressions: `x is C`, where no value of x's type can be a C. The test is always false, so the code it
+// guards never runs. That's reported here once, and the tested local counts as reported (improperlyUsedLocals), so
+// the reads it guards don't add a "'x' is 'never' here" each.
+void TypeChecker2::checkImpossibleTypeTest(AstExprCall* call)
+{
+    AstExprIndexName* callee = call->func->as<AstExprIndexName>();
+    if (!callee || callee->index != "isinstance" || call->args.size != 2)
+        return;
+
+    TypeId valueTy = follow(lookupType(call->args.data[0]));
+    if (is<AnyType, UnknownType, ErrorType, NeverType, FreeType, BlockedType, GenericType>(valueTy))
+        return;
+
+    std::optional<TypeId> objectTy = objectTypeOfClassValue(builtinTypes, lookupType(call->args.data[1]));
+    if (!objectTy || normalizer.isIntersectionInhabited(valueTy, *objectTy) != NormalizationResult::False)
+        return;
+
+    std::string value = typeTestOperandName(bindingName(call->args.data[0]), "This value");
+    std::string type = typeTestOperandName(bindingName(call->args.data[1]), "this class");
+    std::string message = value + " can never be " + type + ": it's '" + toString(valueTy) + "'";
+
+    // `x is ok` on a value that isn't a result is usually a call missing its `try`
+    const ExternType* objectClass = get<ExternType>(follow(*objectTy));
+    bool resultVariant = objectClass && (objectClass->name == "ok" || objectClass->name == "err");
+    if (resultVariant)
+        message += ". Write 'try' before the call to test its result";
+
+    reportError(GenericError{std::move(message)}, call->location);
+
+    if (const AstExprLocal* tested = call->args.data[0]->as<AstExprLocal>())
+        improperlyUsedLocals.insert(tested->local);
 }
 
 std::optional<TypeId> TypeChecker2::tryStripUnionFromNil(TypeId ty) const

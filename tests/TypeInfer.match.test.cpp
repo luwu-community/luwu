@@ -100,6 +100,47 @@ TEST_CASE_FIXTURE(ClassesFixture, "is_and_implements_narrow_like_the_class_libra
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+// Luwu match expressions: a type test no value can pass is reported once, at the test, and the code it guards adds
+// nothing about the tested value being 'never'
+TEST_CASE_FIXTURE(ClassesFixture, "a_type_test_that_never_passes_is_one_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        class Point(public const x: number, public const y: number)
+        end
+        local function name(): string
+            return "x"
+        end
+        local s = name()
+        if s is Point then
+            print(s.x)
+        end
+        local n = match name()
+            case is Point then 1
+            else 2
+        local maybe: string | Point = s
+        if maybe is Point then
+            print(maybe.x)
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    for (const TypeError& error : result.errors)
+    {
+        INFO(toString(error));
+        const GenericError* never = get<GenericError>(error);
+        REQUIRE(never);
+        CHECK(never->message.find("can never be 'Point'") != std::string::npos);
+    }
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+    CHECK_EQ(result.errors[1].location.begin.line, 11);
+}
+
 TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
 {
     ScopedFastFlag sffs[] = {
