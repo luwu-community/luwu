@@ -16,6 +16,7 @@ LUAU_FASTFLAGVARIABLE(LuwuTraits)
 // LuwuNonePrimitive (`none` is the empty option).
 LUAU_FASTFLAGVARIABLE(DebugLuwuCollections)
 
-// Luwu try expressions: `try expr` gives a `collections.result` (in progress). The parser gates the syntax, and while it
-// is on the compiler emits WIP bytecode (version 200), which holds the protected ranges. Needs DebugLuwuCollections.
-LUAU_FASTFLAGVARIABLE(LuwuTryExpressions)
+// Luwu try expressions: `try expr` gives a `collections.result`. A Debug flag while it's in progress, and because it needs
+// DebugLuwuCollections, which a default-on flag can't depend on. The parser gates the syntax, and while it is on the
+// compiler emits WIP bytecode (version 200), which holds the protected ranges.
+LUAU_FASTFLAGVARIABLE(DebugLuwuTryExpressions)

@@ -100,7 +100,7 @@ LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(DebugLuwuCollections)
-LUAU_FASTFLAG(LuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuauDirectFieldGet)
@@ -4864,7 +4864,7 @@ TEST_CASE("TryExpressions")
         {FFlag::DebugLuwuCollections, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
-        {FFlag::LuwuTryExpressions, true},
+        {FFlag::DebugLuwuTryExpressions, true},
     };
 
     runConformance("try.luwu");

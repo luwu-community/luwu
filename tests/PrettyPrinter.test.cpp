@@ -15,7 +15,7 @@ LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuDefaultArguments)
-LUAU_FASTFLAG(LuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
@@ -2436,7 +2436,7 @@ end
 
 TEST_CASE("prettyPrint_try_expressions")
 {
-    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
 
     std::string code = R"(
         local r = try  read( path )

@@ -35,7 +35,7 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuDefaultArguments)
-LUAU_FASTFLAG(LuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuGenericNominals)
@@ -14186,7 +14186,7 @@ print(Greeter)
 // range's handler, which only the VM jumps to, wraps the caught error in an `err`.
 TEST_CASE("TryExpressionCompilesToAProtectedRange")
 {
-    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
 
     CHECK_EQ("\n" + compileFunction0(R"(
 local a = 1
@@ -14229,7 +14229,7 @@ return r
 // variant it is, so a `try` that doesn't raise allocates nothing. The other variant's field builds the object to raise.
 TEST_CASE("TryResultReadThroughFieldsStaysInRegisters")
 {
-    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
 
     CHECK_EQ("\n" + compileFunction0(R"(
 local r = try f()

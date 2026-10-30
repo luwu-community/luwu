@@ -30,7 +30,7 @@ LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(DebugLuwuCollections)
-LUAU_FASTFLAG(LuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 
 
@@ -6186,7 +6186,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
         {FFlag::DebugLuwuCollections, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
-        {FFlag::LuwuTryExpressions, true},
+        {FFlag::DebugLuwuTryExpressions, true},
     };
 
     CheckResult result = check(R"(
@@ -6210,7 +6210,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "try_needs_the_collections_library")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuwuCollections, false},
-        {FFlag::LuwuTryExpressions, true},
+        {FFlag::DebugLuwuTryExpressions, true},
     };
 
     CheckResult result = check(R"(
@@ -6229,7 +6229,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_try_expressions")
         {FFlag::DebugLuwuCollections, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
-        {FFlag::LuwuTryExpressions, true},
+        {FFlag::DebugLuwuTryExpressions, true},
     };
     const char* before = "local function read(path: string): string\n    return path\nend\n";
     const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";

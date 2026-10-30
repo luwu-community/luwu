@@ -28,7 +28,7 @@ LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuwuDefaultArguments)
-LUAU_FASTFLAG(LuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuExternTypeGenericMethods)
 LUAU_FASTFLAG(LuwuGenericNominals)
 
@@ -2299,7 +2299,7 @@ static AstExprTry* tryExprOf(AstStatBlock* block, size_t index)
 
 TEST_CASE_FIXTURE(Fixture, "try_takes_the_whole_expression_after_it")
 {
-    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
 
     AstStatBlock* block = parse(R"(
         local function f(...)
@@ -2332,7 +2332,7 @@ TEST_CASE_FIXTURE(Fixture, "try_takes_the_whole_expression_after_it")
 // Luwu try expressions: wherever Luau reads `try` as a name, so does Luwu
 TEST_CASE_FIXTURE(Fixture, "try_stays_a_name_where_luau_reads_one")
 {
-    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
 
     AstStatBlock* block = parse(R"(
         local a = try(x)
@@ -2365,7 +2365,7 @@ TEST_CASE_FIXTURE(Fixture, "try_stays_a_name_where_luau_reads_one")
 // that statement, as in Luau, on the same line or the next
 TEST_CASE_FIXTURE(Fixture, "try_before_a_statement_stays_a_name_in_a_luau_module")
 {
-    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
 
     ParseOptions luau;
     luau.language = Language::Luau;
@@ -2379,11 +2379,11 @@ TEST_CASE_FIXTURE(Fixture, "try_before_a_statement_stays_a_name_in_a_luau_module
 TEST_CASE_FIXTURE(Fixture, "try_expressions_are_gated_and_luwu_only")
 {
     {
-        ScopedFastFlag sff{FFlag::LuwuTryExpressions, false};
-        matchParseError("local r = try f()", "attempt to use disabled Luwu feature 'try' expressions; enable via FFlag 'LuwuTryExpressions'");
+        ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, false};
+        matchParseError("local r = try f()", "attempt to use disabled Luwu feature 'try' expressions; enable via FFlag 'DebugLuwuTryExpressions'");
     }
 
-    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
 
     // `try not` can't be Luau, so it's a `try` expression a Luau module can't have
     ParseOptions luau;

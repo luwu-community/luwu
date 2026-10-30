@@ -24,7 +24,7 @@ LUAU_FASTFLAGVARIABLE(LuauSolverV2)
 LUAU_DYNAMIC_FASTFLAGVARIABLE(DebugLuauReportReturnTypeVariadicWithTypeSuffix, false)
 LUAU_FASTFLAGVARIABLE(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauExportValueSyntax)
-LUAU_FASTFLAG(LuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FLAGVERSION(LuauExportValueSyntax, 3)
 
 // Luwu @noinline (rfcs/noinline-attribute.md): gates parsing `@noinline`, and the compiler honoring it (no
@@ -69,7 +69,7 @@ const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ tr
 // them behind LuauExportValueSyntax, which its library and Roblox leave off, so they're Luwu's. `export type` is ordinary
 // Luau.
 const LuwuFeature kExportsFeature{"exported values", /* plural= */ true, "LuauExportValueSyntax"};
-const LuwuFeature kTryExpressionsFeature{"'try' expressions", /* plural= */ true, "LuwuTryExpressions"};
+const LuwuFeature kTryExpressionsFeature{"'try' expressions", /* plural= */ true, "DebugLuwuTryExpressions"};
 // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, `declare` is only allowed where it
 // visibly applies to the whole file.
 const char* const kDeclarationPlacementError =
@@ -6563,7 +6563,7 @@ bool Parser::tryExpressionFollows()
 AstExpr* Parser::parseTryExpr()
 {
     Location tryLocation = lexer.current().location;
-    checkLuwuFeature(tryLocation, kTryExpressionsFeature, FFlag::LuwuTryExpressions);
+    checkLuwuFeature(tryLocation, kTryExpressionsFeature, FFlag::DebugLuwuTryExpressions);
     nextLexeme();
 
     AstExpr* expr = parseExpr();

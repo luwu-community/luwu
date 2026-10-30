@@ -36,7 +36,7 @@ LUAU_FASTINTVARIABLE(LuauCompileInlineDepth, 5)
 
 LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauExportValueSyntax)
-LUAU_FASTFLAG(LuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
@@ -10164,7 +10164,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
         compiler.buildTraitFunctionCopies(root, classSynthesisAllocator, functions);
 
     // Luwu try expressions: needs `variables`, from trackValues
-    if (FFlag::LuwuTryExpressions && options.optimizationLevel >= 1)
+    if (FFlag::DebugLuwuTryExpressions && options.optimizationLevel >= 1)
     {
         Compiler::TryResultLocalsVisitor visitor;
         root->visit(&visitor);

@@ -10,7 +10,7 @@
 
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
-LUAU_FASTFLAG(LuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
 
@@ -1524,7 +1524,7 @@ std::string BytecodeBuilder::getError(const std::string& message)
 uint8_t BytecodeBuilder::getVersion()
 {
     // Luwu Classes (rfcs/classes) and Luwu try expressions: work-in-progress formats
-    if (FFlag::LuwuClasses || FFlag::LuwuTryExpressions)
+    if (FFlag::LuwuClasses || FFlag::DebugLuwuTryExpressions)
         return LWBC_VERSION_WIP;
 
     return LWBC_VERSION_TARGET;
