@@ -6525,15 +6525,16 @@ AstExpr* Parser::parseSimpleExpr()
 
 // Luwu try expressions: `try` is a contextual keyword, since `try` is a common function name. It starts a `try`
 // expression only when the next token starts an expression and can't continue one that names `try`: `try(x)`, `try.x`
-// and `try - x` stay uses of the name. A token that can also start a statement has to be on the same line, because
-// `local f = try` above `x = 1` is two statements.
+// and `try - x` stay uses of the name. In a Luwu file the tokens decide, whatever line they're on, and the
+// AmbiguousContinuation lint asks for a ';' where the expression reads like a new statement. In a Luau module `try`
+// before a token that can start a statement stays a name: `local f = try x()` is two statements there.
 bool Parser::tryExpressionFollows()
 {
     if (lexer.current().type != Lexeme::Name || AstName(lexer.current().name) != "try")
         return false;
 
     Lexeme next = lexer.lookahead();
-    bool sameLine = next.location.begin.line == lexer.current().location.end.line;
+    bool luwuFile = options.language == Language::Luwu;
 
     // An int, since '#' is a character rather than a named token
     switch (int(next.type))
@@ -6552,7 +6553,7 @@ bool Parser::tryExpressionFollows()
     case Lexeme::ReservedFunction:
     case Lexeme::ReservedIf:
     case Lexeme::ReservedDo:
-        return sameLine;
+        return luwuFile;
     default:
         return false;
     }

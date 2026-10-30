@@ -2344,14 +2344,36 @@ TEST_CASE_FIXTURE(Fixture, "try_stays_a_name_where_luau_reads_one")
         local g = try[1]
         local h = try
         local i = 1
-        local j = try
-        x = 1
     )");
     REQUIRE(block);
-    REQUIRE_EQ(block->body.size, 11);
+    REQUIRE_EQ(block->body.size, 9);
 
     for (size_t i = 0; i < block->body.size; i++)
         CHECK_MESSAGE(!tryExprOf(block, i), "statement " << i << " parsed as a try expression");
+
+    // In a Luwu file the tokens decide, not the lines: this is `local j = try f()`
+    block = parse(R"(
+        local j = try
+            f()
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 1);
+    CHECK(tryExprOf(block, 0));
+}
+
+// Luwu try expressions: in a Luau module, `try` before something that can start a statement is a variable followed by
+// that statement, as in Luau, on the same line or the next
+TEST_CASE_FIXTURE(Fixture, "try_before_a_statement_stays_a_name_in_a_luau_module")
+{
+    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    ParseResult result = tryParse("local a = try x()\nlocal b = try\nf()\nlocal c = try do end", luau);
+    CHECK(result.errors.empty());
+    REQUIRE(result.root);
+    REQUIRE_EQ(result.root->body.size, 6);
+    CHECK(!tryExprOf(result.root, 0));
 }
 
 TEST_CASE_FIXTURE(Fixture, "try_expressions_are_gated_and_luwu_only")
@@ -2363,9 +2385,10 @@ TEST_CASE_FIXTURE(Fixture, "try_expressions_are_gated_and_luwu_only")
 
     ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
 
+    // `try not` can't be Luau, so it's a `try` expression a Luau module can't have
     ParseOptions luau;
     luau.language = Language::Luau;
-    ParseResult result = tryParse("local r = try f()", luau);
+    ParseResult result = tryParse("local r = try not f()", luau);
     REQUIRE_EQ(result.errors.size(), 1);
     CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'try' expressions");
 
