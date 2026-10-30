@@ -2660,6 +2660,57 @@ TypeFunctionReductionResult<TypeId> weakoptionalTypeFunc(
     return {targetTy, Reduction::MaybeOk, {}, {}};
 }
 
+// Luwu: whether `ty` has no values; nullopt while that can't be told yet
+static std::optional<bool> uninhabited(TypeId ty, NotNull<TypeFunctionContext> ctx)
+{
+    std::shared_ptr<const NormalizedType> norm = ctx->normalizer->normalize(ty);
+    if (!norm)
+        return std::nullopt;
+    return ctx->normalizer->isInhabited(norm.get()) == NormalizationResult::False;
+}
+
+TypeFunctionReductionResult<TypeId> unlessneverTypeFunction(
+    TypeId instance,
+    const std::vector<TypeId>& typeParams,
+    const std::vector<TypePackId>& packParams,
+    NotNull<TypeFunctionContext> ctx
+)
+{
+    if (typeParams.size() < 3 || !packParams.empty())
+    {
+        ctx->ice->ice("unlessnever type function: encountered a type function instance without the required argument structure");
+        LUAU_ASSERT(false);
+    }
+
+    TypeId refined = follow(typeParams[0]);
+    TypeId fallback = follow(typeParams[1]);
+    if (isPending(refined, ctx->solver))
+        return {std::nullopt, Reduction::MaybeOk, {refined}, {}};
+
+    std::optional<bool> refinedIsEmpty = uninhabited(refined, ctx);
+    if (!refinedIsEmpty)
+        return {std::nullopt, Reduction::MaybeOk, {}, {}};
+    if (!*refinedIsEmpty)
+        return {refined, Reduction::MaybeOk, {}, {}};
+
+    for (size_t i = 2; i < typeParams.size(); ++i)
+    {
+        TypeId tests = follow(typeParams[i]);
+        if (isPending(tests, ctx->solver))
+            return {std::nullopt, Reduction::MaybeOk, {tests}, {}};
+        std::optional<bool> contradicts = uninhabited(tests, ctx);
+        if (!contradicts)
+            return {std::nullopt, Reduction::MaybeOk, {}, {}};
+        if (*contradicts)
+        {
+            if (isPending(fallback, ctx->solver))
+                return {std::nullopt, Reduction::MaybeOk, {fallback}, {}};
+            return {fallback, Reduction::MaybeOk, {}, {}};
+        }
+    }
+    return {refined, Reduction::MaybeOk, {}, {}};
+}
+
 BuiltinTypeFunctions::BuiltinTypeFunctions()
     : userFunc{"user", userDefinedTypeFunction}
     , notFunc{"not", notTypeFunction}
@@ -2690,6 +2741,7 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , objectofFunc{"objectof", objectofTypeFunction}
     , classFunc{"class", classTypeFunction}
     , weakoptionalFunc{"weakoptional", weakoptionalTypeFunc}
+    , unlessneverFunc{"unlessnever", unlessneverTypeFunction}
 {
 }
 

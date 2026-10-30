@@ -16,6 +16,8 @@
 #include "Luau/TypeArena.h"
 #include "Luau/TypeFunction.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/Typos.h"
+#include "Luau/UnknownVariable.h"
 
 #include <iterator>
 
@@ -24,6 +26,7 @@ LUAU_FASTFLAG(DebugLuauMagicTypes)
 LUAU_FASTINTVARIABLE(LuauNonStrictTypeCheckerRecursionLimit, 300)
 LUAU_FASTFLAGVARIABLE(LuauAddRecursionCounterToNonStrictTypeChecker)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 namespace Luau
 {
@@ -165,6 +168,9 @@ struct NonStrictTypeChecker
     const NotNull<InternalErrorReporter> ice;
     NotNull<TypeArena> arena;
     Module* module;
+    // Luwu: the module's root, for explaining unknown variables
+    AstStatBlock* root = nullptr;
+    std::unique_ptr<UnknownVariableExplainer> unknownVariables;
     Normalizer normalizer;
     Subtyping subtyping;
     NotNull<const DataFlowGraph> dfg;
@@ -626,16 +632,28 @@ struct NonStrictTypeChecker
 
     NonStrictContext visit(AstExprGlobal* global, ValueContext context)
     {
-        // We don't file unknown symbols for LValues.
-        if (context == ValueContext::LValue)
+        NotNull<Scope> scope = stack.back();
+        const bool unbound = !scope->lookup(global->name);
+        const bool onlyAssignedHere = !unbound && scope->shouldWarnGlobal(global->name.value);
+        if (!unbound && !onlyAssignedHere)
             return {};
 
-        NotNull<Scope> scope = stack.back();
-        if (!scope->lookup(global->name))
+        if (!unknownVariables)
+            unknownVariables = std::make_unique<UnknownVariableExplainer>(root);
+
+        // Luwu: a global spelled like a local in scope is a typo, read or written. Assigning to it creates a global
+        // instead of setting the local, which nonstrict code otherwise does silently.
+        if (std::optional<UnknownSymbol> typo = misspelledLocalError(*unknownVariables, global))
         {
-            reportError(UnknownSymbol{global->name.value, UnknownSymbol::Binding}, global->location);
+            reportError(std::move(*typo), global->location);
+            return {};
         }
 
+        // We don't file unknown symbols for LValues.
+        if (context == ValueContext::LValue || !unbound)
+            return {};
+
+        reportError(unknownVariableError(*unknownVariables, global, *scope, module->notes), global->location);
         return {};
     }
 
@@ -815,6 +833,13 @@ struct NonStrictTypeChecker
             if (key)
                 visit(key, ValueContext::RValue);
             visit(value, ValueContext::RValue);
+        }
+
+        // Luwu: a misspelled property is a mistake in nonstrict code too
+        if (const TypeId* expected = FFlag::LuwuHelpfulSubtypingErrors ? module->astExpectedTypes.find(table) : nullptr)
+        {
+            for (auto& [location, typo] : literalPropertyTypos(table, *expected))
+                reportError(std::move(typo), location);
         }
 
         return {};
@@ -1042,15 +1067,7 @@ struct NonStrictTypeChecker
             }
             else
             {
-                std::string symbol = "";
-                if (ty->prefix)
-                {
-                    symbol += (*(ty->prefix)).value;
-                    symbol += ".";
-                }
-                symbol += ty->name.value;
-
-                reportError(UnknownSymbol{std::move(symbol), UnknownSymbol::Context::Type}, ty->location);
+                reportError(unknownTypeReference(*scope, *ty), ty->location);
             }
         }
     }
@@ -1289,6 +1306,7 @@ void checkNonStrict(
     LUAU_TIMETRACE_SCOPE("checkNonStrict", "Typechecking");
 
     NonStrictTypeChecker typeChecker{NotNull{module->internalTypes.get()}, builtinTypes, typeFunctionRuntime, ice, unifierState, dfg, limits, module};
+    typeChecker.root = sourceModule.root;
     typeChecker.visit(sourceModule.root);
     unfreeze(module->interfaceTypes);
     copyErrors(module->errors, module->interfaceTypes, builtinTypes);

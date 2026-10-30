@@ -11,6 +11,7 @@
 #include "Luau/Unifiable.h"
 
 #include <unordered_map>
+#include <unordered_set>
 #include <optional>
 #include <memory>
 
@@ -53,6 +54,8 @@ struct Scope
     std::unordered_map<Name, Location> typeAliasNameLocations;
     std::unordered_map<Name, ModuleName> importedModules; // Mapping from the name in the require statement to the internal moduleName.
     std::unordered_map<Name, std::unordered_map<Name, TypeFun>> importedTypeBindings;
+    // Luwu: locals bound to a `require` whose module couldn't be found or checked, so they have no importedTypeBindings
+    std::unordered_set<Name> unresolvedRequires;
 
     DenseHashSet<Name> builtinTypeNames{""};
     void addBuiltinTypeBinding(const Name& name, const TypeFun& tyFun);
@@ -84,6 +87,17 @@ struct Scope
     // inferred type through control flow statements.  We retain those refined
     // types here.
     DenseHashMap<const Def*, TypeId> rvalueRefinements{nullptr};
+
+    // Luwu: what tests on properties (`not h.enc`) have refined so far, so that a test contradicting an earlier one can
+    // be told apart from a union running out of members (ConstraintGenerator::refineUnlessContradicted).
+    // `propertyTests` holds, for each def a test refined, the discriminants each property path below it was tested
+    // with on the way to this scope (`enc` for `h`, the empty path for `h.enc` itself). `propertyRefinementBases` holds
+    // the type each def had before the first of those tests refined it.
+    using PropertyTests = std::unordered_map<std::string, std::vector<TypeId>>;
+    DenseHashMap<const Def*, PropertyTests> propertyTests{nullptr};
+    DenseHashMap<const Def*, TypeId> propertyRefinementBases{nullptr};
+    const PropertyTests* lookupPropertyTests(DefId def) const;
+    std::optional<TypeId> lookupPropertyRefinementBase(DefId def) const;
 
     void inheritAssignments(const ScopePtr& childScope);
     void inheritRefinements(const ScopePtr& childScope);

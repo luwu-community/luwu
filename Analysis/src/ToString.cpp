@@ -16,6 +16,7 @@
 #include "Luau/TypeOrPack.h"
 
 #include <algorithm>
+#include <array>
 #include <string>
 
 LUAU_FASTFLAG(LuauSolverV2)
@@ -114,6 +115,19 @@ struct FindCyclicTypes final : TypeVisitor
         return true;
     }
 
+    // Luwu: a named union prints as its name, like a named table, so a cycle through it is never seen and needs no `t1`.
+    // Upstream walks into it and names the cycle: `Content | nil` prints as `t1 where t1 = (string | {read t1})?`.
+    bool visit(TypeId ty, const UnionType& utv) override
+    {
+        if (!visited.insert(ty))
+            return false;
+
+        if (utv.name || utv.syntheticName)
+            return exhaustive;
+
+        return true;
+    }
+
     bool visit(TypeId ty, const ExternType&) override
     {
         return false;
@@ -181,6 +195,9 @@ struct StringifierState
     // reasons.
     DenseHashSet<std::string> usedNames{"$$$"};
     size_t indentation = 0;
+    // Luwu (helpful subtyping errors): whether `newline` breaks the line where it is being called:
+    // `opts.useLineBreaks`, except inside a small table under `opts.breakOnlyLargeTables`.
+    bool lineBreaks = false;
 
     bool exhaustive;
     bool ignoreSyntheticName = false;
@@ -220,6 +237,7 @@ struct StringifierState
         , exhaustive(opts.exhaustive)
     {
         ignoreSyntheticName = opts.ignoreSyntheticName;
+        lineBreaks = opts.useLineBreaks;
 
         for (const auto& [_, v] : opts.nameMap.types)
             usedNames.insert(v);
@@ -243,6 +261,12 @@ struct StringifierState
 
         if (seen.contains(ttv))
             seen.erase(ttv);
+    }
+
+    // Luwu: whether `tv` is being printed further up, without marking it the way hasSeen does.
+    bool isBeingPrinted(const void* tv) const
+    {
+        return seen.contains(const_cast<void*>(tv));
     }
 
     std::string getName(TypeId ty)
@@ -385,7 +409,7 @@ struct StringifierState
 
     void newline()
     {
-        if (!opts.useLineBreaks)
+        if (!lineBreaks)
             return emit(" ");
 
         emit("\n");
@@ -395,7 +419,7 @@ struct StringifierState
 private:
     void emitIndentation()
     {
-        if (!opts.useLineBreaks)
+        if (!lineBreaks)
             return;
 
         emit(std::string(indentation, ' '));
@@ -556,6 +580,17 @@ struct TypeStringifier
             state.result.error = true;
             state.emit("* VALUELESS BY EXCEPTION *");
             return;
+        }
+
+        if (state.opts.repeatedTypeNames)
+        {
+            TypeId followed = follow(tv);
+            bool expandingRoot = state.opts.alwaysExpandRootAlias && state.suppressNameFor == followed;
+            if (const std::string* name = state.opts.repeatedTypeNames->find(followed); name && !expandingRoot)
+            {
+                state.emit(*name);
+                return;
+            }
         }
 
         if (auto p = state.cycleNames.find(tv))
@@ -1090,6 +1125,10 @@ struct TypeStringifier
             return;
         }
 
+        bool outerLineBreaks = state.lineBreaks;
+        if (state.lineBreaks && state.opts.breakOnlyLargeTables)
+            state.lineBreaks = isLargeTable(ttv);
+
         state.emit(openbrace);
         state.indent();
 
@@ -1108,7 +1147,9 @@ struct TypeStringifier
 
         size_t index = 0;
         size_t oldLength = state.result.name.length();
-        for (const auto& [name, prop] : ttv.props)
+        bool truncated = false;
+        // false once the table is too long to print more
+        auto emitProperty = [&](const std::string& name, const Property& prop)
         {
             if (comma)
             {
@@ -1122,32 +1163,45 @@ struct TypeStringifier
 
             if (state.opts.maxTableLength > 0 && (length - 2 * index) >= state.opts.maxTableLength)
             {
-                size_t remaining = ttv.props.size() - index;
-                if (state.opts.useLineBreaks)
-                {
-                    // One property per line, so the elision can be a comment of its own -- `...
-                    // N more ...` there reads as a malformed property and throws off highlighting
-                    // wherever the output is shown as code (e.g. an editor hover). The closing
-                    // brace always follows on its own line (`comma` forces the newline below).
-                    state.emit("-- ⋯ ");
-                    state.emit(std::to_string(remaining));
-                    state.emit(remaining == 1 ? " more property" : " more properties");
-                    comma = true;
-                }
-                else
-                {
-                    // Single-line output can't use a comment: it would swallow the closing brace.
-                    state.emit("... ");
-                    state.emit(std::to_string(remaining));
-                    state.emit(" more ...");
-                }
-                break;
+                emitMoreProperties(ttv.props.size() - index, comma);
+                truncated = true;
+                return false;
             }
 
             stringify(name, prop);
 
             comma = true;
             ++index;
+            return true;
+        };
+
+        // Luwu (helpful subtyping errors): properties `maxPropertiesShown` leaves out, counted at the end.
+        size_t leftOut = 0;
+        if (showsEveryProperty(ttv))
+        {
+            for (const auto& [name, prop] : ttv.props)
+            {
+                if (!emitProperty(name, prop))
+                    break;
+            }
+        }
+        else
+        {
+            std::vector<std::pair<const std::string*, const Property*>> shown = propertiesToShow(ty, ttv);
+            leftOut = ttv.props.size() - shown.size();
+            for (const auto& [name, prop] : shown)
+            {
+                if (!emitProperty(*name, *prop))
+                    break;
+            }
+        }
+
+        if (leftOut > 0 && !truncated)
+        {
+            if (comma)
+                state.emit(",");
+            state.newline();
+            emitMoreProperties(leftOut, comma);
         }
 
         state.dedent();
@@ -1156,8 +1210,181 @@ struct TypeStringifier
         else
             state.emit("  ");
         state.emit(closedbrace);
+        state.lineBreaks = outerLineBreaks;
 
         state.unsee(&ttv);
+    }
+
+    // The count of properties not printed, in place of them.
+    void emitMoreProperties(size_t remaining, bool& comma)
+    {
+        // Luwu (helpful subtyping errors): a table cut down to what a message points into has the rest as `…`; how
+        // many there are says nothing to that reader.
+        if (state.opts.onlyFocusedProperties && !state.lineBreaks)
+        {
+            state.emit("…");
+            comma = true;
+            return;
+        }
+        if (state.lineBreaks)
+        {
+            // One property per line, so the elision can be a comment of its own -- `...
+            // N more ...` there reads as a malformed property and throws off highlighting
+            // wherever the output is shown as code (e.g. an editor hover). The closing
+            // brace always follows on its own line (`comma` forces the newline below).
+            state.emit("-- ⋯ ");
+            state.emit(std::to_string(remaining));
+            state.emit(remaining == 1 ? " more property" : " more properties");
+            comma = true;
+        }
+        else
+        {
+            // Single-line output can't use a comment: it would swallow the closing brace.
+            state.emit("... ");
+            state.emit(std::to_string(remaining));
+            state.emit(" more ...");
+        }
+    }
+
+    // Luwu (helpful subtyping errors): whether the table prints all its properties, in order: without a limit or under
+    // it, and not only the focused ones
+    bool showsEveryProperty(const TableType& ttv) const
+    {
+        size_t limit = state.opts.maxPropertiesShown;
+        bool limited = limit != 0 && ttv.props.size() > limit;
+        return !state.opts.onlyFocusedProperties && !limited;
+    }
+
+    // Luwu (helpful subtyping errors): the properties `maxPropertiesShown` lets a table print, in the order it
+    // prints them, when it doesn't print them all (showsEveryProperty)
+    std::vector<std::pair<const std::string*, const Property*>> propertiesToShow(TypeId ty, const TableType& ttv) const
+    {
+        LUAU_ASSERT(!showsEveryProperty(ttv));
+
+        std::vector<std::pair<const std::string*, const Property*>> shown;
+        size_t limit = state.opts.maxPropertiesShown;
+        bool onlyFocused = state.opts.onlyFocusedProperties;
+        bool limited = limit != 0 && ttv.props.size() > limit;
+
+        auto isShown = [&](const std::string& name)
+        {
+            return std::any_of(
+                shown.begin(),
+                shown.end(),
+                [&](const auto& entry)
+                {
+                    return *entry.first == name;
+                }
+            );
+        };
+        auto show = [&](const std::string& name)
+        {
+            auto it = ttv.props.find(name);
+            if (it != ttv.props.end() && !isShown(name))
+                shown.emplace_back(&it->first, &it->second);
+        };
+
+        // What the message is about comes first, however many there are.
+        if (state.opts.propertyFocus)
+        {
+            if (const std::vector<std::string>* focus = state.opts.propertyFocus->find(follow(ty)))
+            {
+                for (const std::string& name : *focus)
+                    show(name);
+            }
+        }
+
+        // Then what tells the reader which shape this is: a discriminant, which code tags a shape with.
+        constexpr size_t maxDiscriminants = 2;
+        size_t discriminants = 0;
+        for (const auto& [name, prop] : ttv.props)
+        {
+            if (discriminants == maxDiscriminants || (limited && shown.size() >= limit))
+                break;
+            bool literal = prop.readTy && get<SingletonType>(follow(*prop.readTy));
+            if (literal && !isShown(name))
+            {
+                show(name);
+                ++discriminants;
+            }
+        }
+
+        // A name conventionally saying what it is, when nothing else does (no variable names the table).
+        if (state.opts.identifyByConventionalNames)
+        {
+            static const std::array<const char*, 6> identifying = {"type", "kind", "tag", "name", "id", "is"};
+            for (const char* name : identifying)
+            {
+                if (limited && shown.size() >= limit)
+                    break;
+                show(name);
+            }
+        }
+
+        if (onlyFocused)
+            return shown;
+        for (const auto& [name, prop] : ttv.props)
+        {
+            if (shown.size() >= limit)
+                break;
+            show(name);
+        }
+        return shown;
+    }
+
+    // Luwu (helpful subtyping errors): whether `breakOnlyLargeTables` gives this table a line per field:
+    // it has more fields than fit comfortably on one line, or one of them is long by itself.
+    bool isLargeTable(const TableType& ttv) const
+    {
+        constexpr size_t maxInlineFields = 3;
+        constexpr size_t maxInlineFieldLength = 40;
+
+        // A map or array is one line however long: only a record's properties are worth a line each.
+        if (ttv.props.empty())
+            return false;
+        size_t fields = ttv.props.size() + (ttv.indexer ? 1 : 0);
+        if (fields > maxInlineFields)
+            return true;
+
+        ToStringOptions inlineOptions = state.opts;
+        inlineOptions.useLineBreaks = false;
+        inlineOptions.alwaysExpandRootAlias = false;
+        inlineOptions.includeWhereClauses = false;
+        // A field's type as it prints inside the table: a named one by its name, which printing it on its own
+        // would expand.
+        auto nestedLength = [&](TypeId fieldType)
+        {
+            fieldType = follow(fieldType);
+            if (const std::string* name = state.opts.repeatedTypeNames ? state.opts.repeatedTypeNames->find(fieldType) : nullptr)
+                return name->size();
+            const UnionType* u = get<UnionType>(fieldType);
+            const IntersectionType* intersection = get<IntersectionType>(fieldType);
+            if (u && u->name)
+                return u->name->size();
+            if (intersection && intersection->name)
+                return intersection->name->size();
+            return toString(fieldType, inlineOptions).size();
+        };
+        auto fieldLength = [&](size_t keyLength, TypeId fieldType)
+        {
+            // `key: type`
+            return keyLength + 2 + nestedLength(fieldType);
+        };
+
+        if (ttv.indexer)
+        {
+            // `[key]`
+            size_t keyLength = toString(ttv.indexer->indexType, inlineOptions).size() + 2;
+            if (fieldLength(keyLength, ttv.indexer->indexResultType) > maxInlineFieldLength)
+                return true;
+        }
+        for (const auto& [name, prop] : ttv.props)
+        {
+            std::optional<TypeId> fieldType = prop.readTy ? prop.readTy : prop.writeTy;
+            if (fieldType && fieldLength(name.size(), *fieldType) > maxInlineFieldLength)
+                return true;
+        }
+        return false;
     }
 
     void operator()(TypeId ty, const MetatableType& mtv)
@@ -1189,7 +1416,12 @@ struct TypeStringifier
         state.emit("{ @metatable ");
         stringify(mtv.metatable);
         state.emit(",");
-        state.newline();
+        // Luwu (helpful subtyping errors): under `breakOnlyLargeTables` the table part opens on the same line,
+        // so a large one reads `{ @metatable M, {` with its fields under it.
+        if (state.opts.breakOnlyLargeTables)
+            state.emit(" ");
+        else
+            state.newline();
         stringify(mtv.table);
         state.emit(" }");
 
@@ -1292,11 +1524,21 @@ struct TypeStringifier
         DenseHashSet<TypeId> flattenedUnions{nullptr};
         flattenedUnions.insert(follow(ty));
 
+        // A named union that is being expanded further up (the root of a hover, say) reaches itself again through
+        // a recursive reference. Kept whole, it prints its own name there (emitRecursiveAliasName): `{ read Content? }`
+        // instead of `Content`'s options spilled into the table, ending in `*CYCLE*`.
+        auto isRecursiveAliasReference = [&](const UnionType* nested)
+        {
+            bool hasName = nested->name || (nested->syntheticName && !state.ignoreSyntheticName);
+            return !state.exhaustive && hasName && state.isBeingPrinted(nested);
+        };
+
         auto collectOptions = [&](auto&& collectOptions, TypeId option) -> void
         {
             option = follow(option);
 
-            if (const UnionType* nested = get<UnionType>(option); nested && !willPrintAsBareName(option, state))
+            const UnionType* nested = get<UnionType>(option);
+            if (nested && !willPrintAsBareName(option, state) && !isRecursiveAliasReference(nested))
             {
                 if (flattenedUnions.contains(option))
                     return;
@@ -1361,7 +1603,7 @@ struct TypeStringifier
 
         state.unsee(&uv);
 
-        if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort)
+        if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort && state.opts.sortUnionMembers)
             std::sort(
                 results.begin(),
                 results.end(),
@@ -1375,11 +1617,13 @@ struct TypeStringifier
             state.emit("(");
 
         bool first = true;
-        bool shouldPlaceOnNewlines = results.size() > state.opts.compositeTypesSingleLineLimit;
+        // Luwu (helpful subtyping errors): `breakOnlyLargeTables` keeps a union on one line, however long: a
+        // line per member turns an enum of keys into a page.
+        bool shouldPlaceOnNewlines = results.size() > state.opts.compositeTypesSingleLineLimit && !state.opts.breakOnlyLargeTables;
         // Only give the *first* option its own "| "-prefixed line when we're actually emitting real
         // line breaks -- otherwise (a long union still rendered on one line because useLineBreaks is
         // off) this would just stick a stray leading "| " in front of the first option.
-        bool uniformPipePrefix = shouldPlaceOnNewlines && state.opts.useLineBreaks;
+        bool uniformPipePrefix = shouldPlaceOnNewlines && state.lineBreaks;
         for (ElementResult& elem : results)
         {
             // When multi-line, every option (including the first) goes on its own line prefixed
@@ -1523,7 +1767,7 @@ struct TypeStringifier
 
         state.unsee(&uv);
 
-        if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort)
+        if (!lengthLimitHit && !FFlag::DebugLuauToStringNoLexicalSort && state.opts.sortUnionMembers)
             std::sort(
                 results.begin(),
                 results.end(),
@@ -1543,7 +1787,7 @@ struct TypeStringifier
         // A `--` comment runs to the end of the line, so this is only safe when line breaks are
         // actually being emitted; with useLineBreaks off, fall back to the plain inline join below.
         bool overloaded = isOverloadedFunction(ty);
-        bool wrapOverloadParens = overloaded && state.opts.useLineBreaks && results.size() > 1;
+        bool wrapOverloadParens = overloaded && state.lineBreaks && results.size() > 1;
 
         if (wrapOverloadParens)
         {
@@ -1554,7 +1798,9 @@ struct TypeStringifier
         }
 
         bool first = true;
-        bool shouldPlaceOnNewlines = results.size() > state.opts.compositeTypesSingleLineLimit || overloaded;
+        // Luwu (helpful subtyping errors): as for unions above, except overloads, which are functions.
+        bool longIntersection = results.size() > state.opts.compositeTypesSingleLineLimit && !state.opts.breakOnlyLargeTables;
+        bool shouldPlaceOnNewlines = longIntersection || overloaded;
         for (ElementResult& elem : results)
         {
             if (wrapOverloadParens)
@@ -1964,21 +2210,11 @@ static void assignCycleNames(
 
             if (auto mtv = get<MetatableType>(cycleTyFollowed); mtv && mtv->syntheticName)
                 continue;
-            // UnionType and FunctionType are deliberately left out here. Each has its own reason,
-            // and those reasons limit how far this approach can go:
+            // A named union never gets here: FindCyclicTypes doesn't walk into it.
             //
-            //  - A named type can still be *expanded*: as the root, or as a `where` clause body. The
-            //    expansion then reaches the type's own recursive reference with `exhaustive` set.
-            //    `emitRecursiveAliasName` declines there, so the printer emits `*CYCLE*`, which says
-            //    less than a cycle name like `t1`. For types that are routinely expanded, skipping
-            //    the cycle name is a downgrade. `RefinementTest.cannot_call_a_function_union` pins
-            //    this for a named union.
-            //  - A self-recursive function alias is its own root. `suppressNameFor` then makes
-            //    `willPrintAsBareName` answer false. Because the type is not in `cycleNames`, the
-            //    union and intersection printers wrap it in parentheses: `(F)?` instead of `t1?`.
-            //
-            // The two types that are skipped (the metatable above, the intersection below) are the
-            // shapes class idioms produce. Those are read far more often than they are expanded.
+            // FunctionType is left out. A self-recursive function alias is its own root, where
+            // `suppressNameFor` makes `willPrintAsBareName` answer false. Without a cycle name, the union
+            // and intersection printers then wrap it in parentheses: `(F)?` instead of `t1?`.
             if (isNamed(get<IntersectionType>(cycleTyFollowed)))
                 continue;
         }

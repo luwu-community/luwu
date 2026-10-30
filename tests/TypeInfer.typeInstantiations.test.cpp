@@ -7,6 +7,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauDropUnionSubtypeReasoning)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 TEST_SUITE_BEGIN("TypeInferExplicitTypeInstantiations");
 
@@ -80,6 +81,7 @@ TEST_CASE_FIXTURE(Fixture, "as_stmt_correct")
 
 TEST_CASE_FIXTURE(Fixture, "as_stmt_incorrect")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     SUBCASE_BOTH_SOLVERS()
@@ -319,7 +321,11 @@ TEST_CASE_FIXTURE(Fixture, "unknown_type_reports_error")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     LUAU_REQUIRE_ERROR(result, UnknownSymbol);
 
-    CHECK_EQ("Unknown type 'CoinbasTicker'", toString(result.errors[0]));
+    // Luwu (helpful subtyping errors): `CoinbasTicker` is one typo from `CoinbaseTicker`
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+        CHECK_EQ("Did you mean 'CoinbaseTicker' instead of 'CoinbasTicker'?", toString(result.errors[0]));
+    else
+        CHECK_EQ("Unknown type 'CoinbasTicker'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_call")

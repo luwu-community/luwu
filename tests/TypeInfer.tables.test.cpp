@@ -32,6 +32,7 @@ LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
 LUAU_FASTFLAG(LuauIndexerModifierMismatchErrors)
 LUAU_FASTFLAG(LuauAlwaysIntersectTablesWithTables)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 TEST_SUITE_BEGIN("TableTests");
 
@@ -415,6 +416,49 @@ TEST_CASE_FIXTURE(Fixture, "used_colon_instead_of_dot")
         }
     );
     REQUIRE(it != result.errors.end());
+}
+
+TEST_CASE_FIXTURE(Fixture, "colon_call_suggests_a_dot_when_the_dot_call_type_checks")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        type Process = { shell: (command: string) -> number }
+        local process: Process = { shell = function(command: string) return #command end }
+        local function f(x: number, y: number?) end
+        local function g(name: string, age: number?) end
+        local t = { f = f, g = g }
+
+        local count = process:shell("ls")
+        t:g("tom")
+        t:f("not a number")
+    )");
+
+    // The last call is wrong either way, so it keeps its two argument errors.
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    REQUIRE(get<FunctionDoesNotTakeSelf>(result.errors[0]));
+    CHECK_EQ(Location{{7, 22}, {7, 35}}, result.errors[0].location);
+    CHECK_EQ("Call this function with a '.' instead of ':'", toString(result.errors[0]));
+    // `"tom"` was checked against `age` and failed; only the suggestion is reported.
+    REQUIRE(get<FunctionDoesNotTakeSelf>(result.errors[1]));
+    CHECK(get<TypeMismatch>(result.errors[2]));
+    CHECK(get<TypeMismatch>(result.errors[3]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "colon_call_on_a_method_gets_no_dot_suggestion")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local T = {}
+        function T:method(x: number) end
+        T:method("one")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(!get<FunctionDoesNotTakeSelf>(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "open_table_unification_2")
@@ -914,6 +958,7 @@ TEST_CASE_FIXTURE(Fixture, "array_factory_function")
 
 TEST_CASE_FIXTURE(Fixture, "sealed_table_indexers_must_unify")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function f(a: {number}): {string}
             return a
@@ -924,7 +969,7 @@ TEST_CASE_FIXTURE(Fixture, "sealed_table_indexers_must_unify")
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        std::string expected = "Expected this to be '{string}', but got '{number}'; \n"
+        std::string expected = "Expected this to be '{string}', but got '{number}'\n"
                                "the result of indexing is `number` in the latter type and `string` in the former type, "
                                "and `number` is not exactly `string`";
         auto actual = toString(result.errors[0]);
@@ -1792,6 +1837,7 @@ TEST_CASE_FIXTURE(Fixture, "casting_tables_with_props_into_table_with_indexer4")
 
 TEST_CASE_FIXTURE(Fixture, "table_subtyping_with_missing_props_dont_report_multiple_errors")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function f(vec1: {x: number}): {x: number, y: number, z: number}
             return vec1
@@ -1802,9 +1848,9 @@ TEST_CASE_FIXTURE(Fixture, "table_subtyping_with_missing_props_dont_report_multi
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        std::string expected = "Expected this to be\n\t"
+        std::string expected = "Expected this to be\n    "
                                "'{ x: number, y: number, z: number }'"
-                               "\nbut got\n\t"
+                               "\nbut got\n    "
                                "'{ x: number }'";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
@@ -1882,6 +1928,7 @@ TEST_CASE_FIXTURE(Fixture, "table_subtyping_with_extra_props_is_ok")
 
 TEST_CASE_FIXTURE(Fixture, "type_mismatch_on_massive_table_is_cut_short")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastInt sfis{FInt::LuauTableTypeMaximumStringifierLength, 40};
 
 
@@ -1906,6 +1953,7 @@ TEST_CASE_FIXTURE(Fixture, "type_mismatch_on_massive_table_is_cut_short")
 
 TEST_CASE_FIXTURE(Fixture, "ok_to_set_nil_even_on_non_lvalue_base_expr")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -2389,6 +2437,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cli_186992_accidental_dropping_free_ty_bound
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_prop")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
 type A = { x: number, y: number }
 type B = { x: number, y: string }
@@ -2402,7 +2451,7 @@ local b: B = a
     if (!FFlag::DebugLuauForceOldSolver)
     {
         CHECK(
-            "Expected this to be 'B', but got 'A'; \n"
+            "Expected this to be 'B', but got 'A'\n"
             "accessing `y` results in `number` in the latter type and `string` in the former type, and `number` is not exactly "
             "`string`" == toString(result.errors.at(0))
         );
@@ -2419,6 +2468,7 @@ Expected this to be exactly 'string', but got 'number')";
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_prop_nested")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
 type AS = { x: number, y: number }
 type BS = { x: number, y: string }
@@ -2435,7 +2485,7 @@ local b: B = a
     if (!FFlag::DebugLuauForceOldSolver)
     {
         CHECK(
-            "Expected this to be 'B', but got 'A'; \n"
+            "Expected this to be 'B', but got 'A'\n"
             "accessing `b.y` results in `number` in the latter type and `string` in the former type, and `number` is not exactly "
             "`string`" == toString(result.errors.at(0))
         );
@@ -2455,6 +2505,7 @@ Expected this to be exactly 'string', but got 'number')";
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "error_detailed_metatable_prop")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff[] = {
         {FFlag::LuauInstantiateInSubtyping, true},
     };
@@ -2504,7 +2555,7 @@ but got
         // Second, nil <: unknown, so we consider that parameter to be optional.
         LUAU_REQUIRE_ERROR_COUNT(1, result);
         CHECK(
-            "Expected this to be 'a1', but got 'b1'; \n"
+            "Expected this to be 'a1', but got 'b1'\n"
             "in the table portion, accessing `y` results in `string` in the latter type and `number` in the former type, and "
             "`string` is not exactly `number`" == toString(result.errors[0])
         );
@@ -2525,6 +2576,7 @@ but got
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_indexer_key")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         type A = { [number]: string }
         type B = { [string]: string }
@@ -2538,7 +2590,7 @@ TEST_CASE_FIXTURE(Fixture, "error_detailed_indexer_key")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         CHECK(
-            "Expected this to be 'B', but got 'A'; \n"
+            "Expected this to be 'B', but got 'A'\n"
             "the index type is `number` in the latter type and `string` in the former type, and `number` is not exactly `string`" ==
             toString(result.errors[0])
         );
@@ -2555,6 +2607,7 @@ Expected this to be exactly 'string', but got 'number')";
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_indexer_value")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         type A = { [number]: number }
         type B = { [number]: string }
@@ -2568,7 +2621,7 @@ TEST_CASE_FIXTURE(Fixture, "error_detailed_indexer_value")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         CHECK(
-            "Expected this to be 'B', but got 'A'; \n"
+            "Expected this to be 'B', but got 'A'\n"
             "the result of indexing is `number` in the latter type and `string` in the former type, and `number` is not exactly `string`" ==
             toString(result.errors[0])
         );
@@ -2619,10 +2672,18 @@ local y: number = tmp.p.y
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        CHECK(
-            "Expected this to be 'HasSuper', but got 'tmp'; \n"
-            "accessing `p` results in `{ x: number, y: number }` in the latter type and `Super` in the former type, and `{ x: "
-            "number, y: number }` is not exactly `Super`" == toString(result.errors[0])
+        // The code writes `a.p` on the next line, so the first help doesn't apply; each help names the
+        // condition it depends on.
+        CHECK_EQ(
+            "Expected this to be 'HasSuper', but was given 'tmp' (read works, write doesn't)\n"
+            "\n"
+            "Because a read/write table is expected here, 'tmp.p' could be set to any 'Super' (which must stay a "
+            "'{ x: number, y: number }').\n"
+            "\n"
+            "Help (read/write mismatch):\n"
+            "  • If nothing writes to it, mark 'p' as 'read p: Super' in 'HasSuper'\n"
+            "  • If something writes to it, use a 'HasSuper' instead of 'tmp'",
+            toString(result.errors[0])
         );
     }
     else
@@ -2630,7 +2691,7 @@ local y: number = tmp.p.y
         const std::string expected = R"(Expected this to be exactly 'HasSuper', but got 'tmp'
 caused by:
   Property 'p' is not compatible.
-extra field 'y' found in type
+extra property 'y' found in type
   '{| x: number, y: number |}'
 expected type:
   'Super')";
@@ -3690,8 +3751,8 @@ TEST_CASE_FIXTURE(Fixture, "scalar_is_not_a_subtype_of_a_compatible_polymorphic_
     {
         // CLI-115090 Error reporting is quite bad in this case.
 
-        // This should be just 3
-        LUAU_REQUIRE_ERROR_COUNT(4, result);
+        // Luwu: 3, one per call. Upstream reports the last call twice, once per union member that fails.
+        LUAU_REQUIRE_ERROR_COUNT(3, result);
 
         TypeMismatch* tm1 = get<TypeMismatch>(result.errors[0]);
         REQUIRE(tm1);
@@ -3703,15 +3764,11 @@ TEST_CASE_FIXTURE(Fixture, "scalar_is_not_a_subtype_of_a_compatible_polymorphic_
         CHECK("typeof(string)" == toString(tm2->givenType));
         CHECK("t1 where t1 = { read absolutely_no_scalar_has_this_method: (t1) -> (a...) }" == toString(tm2->wantedType));
 
+        // Luwu: an argument is reported whole, not the union member that failed, as in upstream 0.742.
         TypeMismatch* tm3 = get<TypeMismatch>(result.errors[2]);
         REQUIRE(tm3);
-        CHECK("typeof(string)" == toString(tm3->givenType));
+        CHECK("\"bar\" | \"baz\"" == toString(tm3->givenType));
         CHECK("t1 where t1 = { read absolutely_no_scalar_has_this_method: (t1) -> (a...) }" == toString(tm3->wantedType));
-
-        TypeMismatch* tm4 = get<TypeMismatch>(result.errors[3]);
-        REQUIRE(tm4);
-        CHECK("typeof(string)" == toString(tm4->givenType));
-        CHECK("t1 where t1 = { read absolutely_no_scalar_has_this_method: (t1) -> (a...) }" == toString(tm4->wantedType));
     }
     else
     {
@@ -3721,7 +3778,7 @@ TEST_CASE_FIXTURE(Fixture, "scalar_is_not_a_subtype_of_a_compatible_polymorphic_
             R"(Expected this to be 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}', but got 'string'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type
+required property 'absolutely_no_scalar_has_this_method' not found in type
   'typeof(string)'
 expected type:
   't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
@@ -3731,7 +3788,7 @@ expected type:
             R"(Expected this to be 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}', but got '"bar"'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type
+required property 'absolutely_no_scalar_has_this_method' not found in type
   'typeof(string)'
 expected type:
   't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
@@ -3746,7 +3803,7 @@ caused by:
 Expected this to be 't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}', but got '"bar"'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type
+required property 'absolutely_no_scalar_has_this_method' not found in type
   'typeof(string)'
 expected type:
   't1 where t1 = {- absolutely_no_scalar_has_this_method: (t1) -> (a...) -}')";
@@ -3801,7 +3858,7 @@ TEST_CASE_FIXTURE(Fixture, "a_free_shape_cannot_turn_into_a_scalar_if_it_is_not_
             R"(Expected this to be 'string', but got 't1 where t1 = {+ absolutely_no_scalar_has_this_method: (t1) -> (a, b...) +}'
 caused by:
   The given type's metatable does not satisfy the requirements.
-required field 'absolutely_no_scalar_has_this_method' not found in type
+required property 'absolutely_no_scalar_has_this_method' not found in type
   'typeof(string)'
 expected type:
   't1 where t1 = {+ absolutely_no_scalar_has_this_method: (t1) -> (a, b...) +}')";
@@ -4521,6 +4578,7 @@ TEST_CASE_FIXTURE(Fixture, "write_to_unusually_named_read_only_property")
 
 TEST_CASE_FIXTURE(Fixture, "read_only_property_with_type_mismatch_reports_both_errors")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag sff[] = {
         {FFlag::LuauPropertyModifierMismatchErrors, true},
@@ -4544,6 +4602,7 @@ TEST_CASE_FIXTURE(Fixture, "read_only_property_with_type_mismatch_reports_both_e
 
 TEST_CASE_FIXTURE(Fixture, "read_only_property_subtype_mismatch_error_message")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag sff[] = {
         {FFlag::LuauPropertyModifierMismatchErrors, true},
@@ -4560,15 +4619,16 @@ TEST_CASE_FIXTURE(Fixture, "read_only_property_subtype_mismatch_error_message")
 
     CHECK(
         "Expected this to be\n"
-        "\t'{ woof: number }'\n"
+        "    '{ woof: number }'\n"
         "but got\n"
-        "\t'{ read woof: number }'; \n"
+        "    '{ read woof: number }'\n"
         "`woof` is read-only in the latter type, but the former type requires it to be read-write" == toString(result.errors[0])
     );
 }
 
 TEST_CASE_FIXTURE(Fixture, "write_only_property_subtype_mismatch_error_message")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag sff[] = {
         {FFlag::LuauPropertyModifierMismatchErrors, true},
@@ -4585,9 +4645,9 @@ TEST_CASE_FIXTURE(Fixture, "write_only_property_subtype_mismatch_error_message")
 
     CHECK(
         "Expected this to be\n"
-        "\t'{ woof: number }'\n"
+        "    '{ woof: number }'\n"
         "but got\n"
-        "\t'{ write woof: number }'; \n"
+        "    '{ write woof: number }'\n"
         "`woof` is write-only in the latter type, but the former type requires it to be read-write" == toString(result.errors[0])
     );
 }
@@ -5265,6 +5325,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "length_of_array_is_number")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "subtyping_with_a_metatable_table_path")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
 
     CheckResult result = check(R"(
@@ -5290,7 +5351,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "subtyping_with_a_metatable_table_path")
     // The intersection `{} & {}` cast via `self` (the alias `type self = {} & {}` above)
     // prints by name rather than being expanded inline.
     CHECK(
-        "Expected this to be 'setmetatable<unknown, unknown>', but got '{ @metatable {  }, self }'; \n"
+        "Expected this to be 'setmetatable<unknown, unknown>', but got '{ @metatable {  }, self }'\n"
         "it reduces to `never`, and `{ @metatable {  }, self }` is not a subtype of `never`" == toString(result.errors.at(3))
     );
 }
@@ -5719,6 +5780,7 @@ TEST_CASE_FIXTURE(Fixture, "deeply_nested_classish_inference")
 
 TEST_CASE_FIXTURE(Fixture, "bigger_nested_table_causes_big_type_error")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
@@ -5753,7 +5815,7 @@ TEST_CASE_FIXTURE(Fixture, "bigger_nested_table_causes_big_type_error")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    std::string expected = R"(required field 'name' not found in type
+    std::string expected = R"(required property 'name' not found in type
   '{ path: string, type: "file" }'
 expected type:
   'File')";
@@ -5812,7 +5874,11 @@ TEST_CASE_FIXTURE(Fixture, "stop_refining_new_table_indices_for_non_primitive_ta
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    LUAU_CHECK_ERROR(result, UnknownProperty);
+    // Luwu (helpful subtyping errors): `vall` is one typo from `val`
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+        LUAU_CHECK_ERROR(result, Typo);
+    else
+        LUAU_CHECK_ERROR(result, UnknownProperty);
 }
 
 TEST_CASE_FIXTURE(Fixture, "fuzz_match_literal_type_crash_again")
@@ -7378,6 +7444,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_insert_strings_and_then_concat")
 
 TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_mismatch_error")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag _[] = {
         {FFlag::LuauPropertyModifierMismatchErrors, true},
@@ -7393,12 +7460,13 @@ TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_mismatch_error")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(toString(result.errors[0]), "Expected this to be '{number}', but got '{read number}'; "
+    CHECK_EQ(toString(result.errors[0]), "Expected this to be '{number}', but got '{read number}'"
         "\nthe indexer is read-only in the latter type, but the former type requires it to be read-write");
 }
 
 TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_and_type_mismatch_error")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag _[] = {
         {FFlag::LuauPropertyModifierMismatchErrors, true},
@@ -7414,10 +7482,10 @@ TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_and_type_mismatch_error")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(toString(result.errors[0]), "Expected this to be '{string}', but got '{read number}'; "
-        "\nthis is because "
-        "\n\t * the indexer is read-only in the latter type, but the former type requires it to be read-write"
-        "\n\t * the result of indexing is `number` in the latter type and `string` in the former type, and `number` is not exactly `string`");
+    CHECK_EQ(toString(result.errors[0]), "Expected this to be '{string}', but got '{read number}'"
+        "\nthis is because"
+        "\n    * the indexer is read-only in the latter type, but the former type requires it to be read-write"
+        "\n    * the result of indexing is `number` in the latter type and `string` in the former type, and `number` is not exactly `string`");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "normalization_always_intersects_table")
@@ -7437,6 +7505,474 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "normalization_always_intersects_table")
             end
         end
     )"));
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_indexer")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+
+        local function process(rows: { Scoped }) end
+
+        local vcns: { Vcn } = {}
+        process(vcns)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+
+    CHECK_EQ(
+        "Expected 'vcns' to be '{Scoped}', but was given '{Vcn}' (read works, write doesn't)\n"
+        "\n"
+        "Because 'process' expects a read/write array, it could write any 'Scoped' into 'vcns' (which must "
+        "only hold 'Vcn').\n"
+        "\n"
+        "Help (read/write mismatch):\n"
+        "  • If 'process' only reads 'rows', expect '{ read Scoped }'\n"
+        "  • If it also writes, pass it a '{Scoped}' instead of 'vcns'",
+        toString(result.errors[0])
+    );
+
+    // The value is at the call; the annotation to change is on the parameter, which can be pages
+    // away or in another function entirely. It points at the element type inside the braces, where
+    // `{ read Scoped }` is written -- `read` in front of the parameter's name is a syntax error.
+    CHECK_EQ(
+        "Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'process' only reads from the array", toString(result.errors[1])
+    );
+    CHECK_EQ(Location{{4, 39}, {4, 45}}, result.errors[1].location);
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_map_uses_map_nouns_and_syntax")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // A map's annotation is `{ read [K]: V }`, not the array shorthand, and its contents are values
+    // rather than elements.
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+
+        local function byKey(lookup: { [string]: Scoped }) end
+
+        local map: { [string]: Vcn } = {}
+        byKey(map)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+
+    CHECK_EQ(
+        "Expected 'map' to be\n"
+        "    '{ [string]: Scoped }'\n"
+        "but was given (read works, write doesn't)\n"
+        "    '{ [string]: Vcn }'\n"
+        "\n"
+        "Because 'byKey' expects a read/write map, it could write any 'Scoped' into 'map' (which must only "
+        "hold 'Vcn').\n"
+        "\n"
+        "Help (read/write mismatch):\n"
+        "  • If 'byKey' only reads 'lookup', expect '{ read [string]: Scoped }'\n"
+        "  • If it also writes, pass it a '{ [string]: Scoped }' instead of 'map'",
+        toString(result.errors[0])
+    );
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'byKey' only reads from the map", toString(result.errors[1]));
+
+    // On the indexer, which is where `read` is written.
+    CHECK_EQ(Location{{4, 39}, {4, 55}}, result.errors[1].location);
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_nil_widening_gets_its_own_message")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // Passing `{T}` where `{T?}` is wanted is the most common way to meet this error, and the whole
+    // difference is `nil`, so it gets wording of its own. Subtyping fails against the `nil` member of the
+    // union, and the message is about the union as a whole, not "`string` is not exactly `nil`".
+    CheckResult result = check(R"(
+        local function compact(items: { string? }) end
+
+        local names: { string } = {}
+        compact(names)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+
+    CHECK_EQ(
+        "This array with non-optional elements cannot be passed where optional elements are allowed; doing so would allow "
+        "'nil' to be written into it.\n\n"
+        "Help (read/write mismatch):\n"
+        "  • Annotate the expected indexer as 'read' if nothing writes to it\n"
+        "  • Cast this array to '{string?}' if you know 'nil' will not be written to it",
+        toString(result.errors[0])
+    );
+
+    // The second error is the help on the parameter's indexer.
+    CHECK_EQ(
+        "Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'compact' only reads from the array", toString(result.errors[1])
+    );
+    CHECK_EQ(Location{{1, 40}, {1, 47}}, result.errors[1].location);
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_nil_widening_uses_map_and_property_wording")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult map = check(R"(
+        local function byKey(lookup: { [string]: string? }) end
+
+        local m: { [string]: string } = {}
+        byKey(m)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, map);
+    CHECK_EQ(
+        "This map with non-optional values cannot be passed where optional values are allowed; doing so would allow 'nil' "
+        "to be written into it.\n\n"
+        "Help (read/write mismatch):\n"
+        "  • Annotate the expected indexer as 'read' if nothing writes to it\n"
+        "  • Cast this map to '{ [string]: string? }' if you know 'nil' will not be written to it",
+        toString(map.errors[0])
+    );
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'byKey' only reads from the map", toString(map.errors[1]));
+
+    CheckResult property = check(R"(
+        local function cfg(c: { name: string? }) end
+
+        cfg(({ name = "a" } :: { name: string }))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, property);
+    CHECK_EQ(
+        "Property 'name' is non-optional, so this cannot be passed where it is allowed to be optional; doing so would "
+        "allow 'nil' to be written into it.\n\n"
+        "Help (read/write mismatch):\n"
+        "  • Annotate 'name' as 'read' if nothing writes to it\n"
+        "  • Cast this to '{ name: string? }' if you know 'nil' will not be written to it",
+        toString(property.errors[0])
+    );
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking 'name' as 'read' if the function 'cfg' only reads from it", toString(property.errors[1]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_nil_widening_says_used_when_nothing_is_called")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        local m: { [string]: string } = {}
+        local target: { [string]: string? } = {}
+        target = m
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "This map with non-optional values cannot be used where optional values are allowed; doing so would allow 'nil' "
+        "to be written into it.\n\n"
+        "Help (read/write mismatch):\n"
+        "  • Annotate the expected indexer as 'read' if nothing writes to it\n"
+        "  • Cast this map to '{ [string]: string? }' if you know 'nil' will not be written to it",
+        toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_widening_to_a_union_member_is_a_one_liner")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // Nothing is lost here, one disallowed value could be written in, so the message names that member
+    // and stops.
+    CheckResult result = check(R"(
+        local function widen(cells: { string | number }) end
+
+        local names: { string } = {}
+        widen(names)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(
+        "Expected this to be\n    '{number | string}'\nbut got\n    '{string}'\nThis incorrectly allows a 'number' to be written to your array.\n\n"
+        "Help (read/write mismatch):\n"
+        "  • Annotate the expected indexer as 'read' if nothing writes to it\n"
+        "  • Cast this array to '{number | string}' if you know a 'number' will not be written to it",
+        toString(result.errors[0])
+    );
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'widen' only reads from the array", toString(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_read_only_annotation_actually_fixes_the_wider_element_case")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // The advice has to be true, not just readable.
+    LUAU_REQUIRE_NO_ERRORS(check(R"(
+        local function compact(items: { read string? }) end
+
+        local names: { string } = {}
+        compact(names)
+    )"));
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_read_only_without_a_call_names_no_function")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // An assignment has no function and no parameter, so the clause that would name one is dropped
+    // and no second error is reported.
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+
+        local vcns: { Vcn } = {}
+        local holder: { rows: { Scoped } } = { rows = {} }
+        holder.rows = vcns
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    CHECK_EQ(
+        "Expected 'vcns' to be '{Scoped}', but was given '{Vcn}' (read works, write doesn't)\n"
+        "\n"
+        "Because a read/write array is expected here, any 'Scoped' could be written into 'vcns' (which must "
+        "only hold 'Vcn').\n"
+        "\n"
+        "Help (read/write mismatch):\n"
+        "  • If nothing writes to it, annotate it as '{ read Scoped }'\n"
+        "  • If something writes to it, use a '{Scoped}' instead of 'vcns'",
+        toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_read_only_would_satisfy_property_names_the_modifier_not_a_snippet")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // The property may well be declared in a named type elsewhere, where the annotation to write is
+    // `read value: T` -- so the advice names the modifier rather than spelling out an instantiation
+    // that doesn't appear anywhere in the source.
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+        type Box<T> = { value: T }
+
+        local function takesBox(b: Box<Scoped>) end
+
+        takesBox(({} :: Box<Vcn>))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+
+    CHECK_EQ(
+        "Expected this to be 'Box<Scoped>', but was given 'Box<Vcn>' (read works, write doesn't)\n"
+        "\n"
+        "Because 'takesBox' expects a read/write table, it could set 'value' to any 'Scoped' (which must "
+        "stay a 'Vcn').\n"
+        "\n"
+        "Help (read/write mismatch):\n"
+        "  • If 'takesBox' only reads 'b', mark 'value' as 'read value: Scoped' in 'Box<Scoped>'\n"
+        "  • If it also writes, pass it a 'Box<Scoped>' instead",
+        toString(result.errors[0])
+    );
+
+    CHECK_EQ(
+        "Help (read/write mismatch):\n  • Consider marking 'value' as 'read' if the function 'takesBox' only reads from it",
+        toString(result.errors[1])
+    );
+
+    // The parameter is annotated `Box<Scoped>`, so there is no property to mark on the parameter
+    // itself; the one to mark is in the alias, and that is where this points.
+    CHECK_EQ(Location{{3, 24}, {3, 29}}, result.errors[1].location);
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_read_only_is_not_suggested_when_reading_fails_too")
+{
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // `read` only helps when the given type is a subtype for reading. `{string}` is not a `{number}`
+    // in either direction, so suggesting it would send the reader off after a fix that can't work.
+    CheckResult result = check(R"(
+        local function nums(t: { number }) end
+        nums(({} :: { string }))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    CHECK_EQ(
+        "Expected this to be '{number}', but got '{string}'\n"
+        "the result of indexing is `string` in the latter type and `number` in the former type, "
+        "and `string` is not exactly `number`",
+        toString(result.errors[0])
+    );
+
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+    CheckResult explained = check(R"(
+        local function nums(t: { number }) end
+        nums(({} :: { string }))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, explained);
+    CHECK(toString(explained.errors[0]).find("read/write") == std::string::npos);
+    CHECK(toString(explained.errors[0]).find("'read") == std::string::npos);
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_read_only_is_not_suggested_inside_function_arguments")
+{
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // Inside a function's arguments the roles are reversed and `read` belongs on the callback the
+    // reader wrote, not on the expected type, so this keeps the generic wording rather than giving
+    // advice about the wrong side.
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+
+        local function reg(cb: ({ Scoped }) -> ()) end
+        reg((function(rows: { Vcn }) end))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    CHECK_EQ(
+        "Expected this function to take '{Scoped}', but got '{Vcn}'\n"
+        "the result of indexing is `Vcn` in the latter type and `Scoped` in the former type, "
+        "and `Vcn` is not exactly `Scoped`",
+        toString(result.errors[0])
+    );
+
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+    CheckResult explained = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+
+        local function reg(cb: ({ Scoped }) -> ()) end
+        reg((function(rows: { Vcn }) end))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, explained);
+    CHECK(toString(explained.errors[0]).find("read/write") == std::string::npos);
+    CHECK(toString(explained.errors[0]).find("'read") == std::string::npos);
+}
+
+// Luwu: a union's members can't be told apart by a field some of them lack, since a table type is a shape a class
+// object or vector also fits; the help says how to declare it
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_union_members_lack_says_how_to_tell_them_apart")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Ok = { message: string }
+        type Err = { err: string }
+        local function get(): Ok | Err
+            return { message = "hi" }
+        end
+        local thing = get()
+        if thing.message then
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Key 'message' is missing from 'Err' in the type 'Err | Ok'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Add 'message: nil' to 'Err' so that checking 'message' tells the variants apart",
+        toString(result.errors[0])
+    );
+}
+
+// Luwu: a library's types aren't the reader's to edit, so the help only says how to narrow to the members with the key
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_another_modules_union_lack_says_how_to_narrow")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    fileResolver.source["game/library"] = R"(
+        export type Ok = { ok: true, out: string }
+        export type Err = { ok: false, err: string }
+        export type Found = { path: string }
+        export type Missing = { reason: string }
+        export type Flag = { is: "Flag", aliases: { string } }
+        export type Named = { is: "Named", aliases: { string } }
+        export type Positional = { is: "Positional" }
+        export type Arg = Flag | Named | Positional
+        return {}
+    )";
+
+    fileResolver.source["game/user"] = R"(
+        local library = require(game.library)
+        local function run(): library.Ok | library.Err
+            error("unused")
+        end
+        local function find(): library.Found | library.Missing
+            error("unused")
+        end
+        local function name(): string | { name: string }
+            error("unused")
+        end
+        local function arg(): library.Arg
+            error("unused")
+        end
+        local result = run()
+        local found = find()
+        local named = name()
+        local a = arg()
+        print(result.out, found.path, named.name, a.aliases)
+    )";
+
+    CheckResult result = getFrontend().check("game/user");
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ(
+        "Key 'out' is missing from 'Err' in the type 'Err | Ok'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'result.ok' before reading 'out'",
+        toString(result.errors[0])
+    );
+    // nothing tells these apart, and the types aren't the reader's to change
+    CHECK_EQ(
+        "Key 'path' is missing from 'Missing' in the type 'Found | Missing'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Narrow 'found' to a variant that has 'path' before reading it",
+        toString(result.errors[1])
+    );
+    CHECK_EQ(
+        "Key 'name' is missing from 'string' in the type 'string | { name: string }'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'type(named) == \"table\"' before reading 'name'",
+        toString(result.errors[2])
+    );
+    // a named union is counted rather than printed, and a string field is always truthy, so the check compares it
+    CHECK_EQ(
+        "Key 'aliases' is missing from 1 variant of the union 'Arg'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'a.is == \"Flag\" or a.is == \"Named\"' before reading 'aliases'",
+        toString(result.errors[3])
+    );
+}
+
+// Luwu: a result type with methods, `(Ok | Err) & { methods }`, is named by its alias, and a singleton field that tells
+// its variants apart is the check to make first
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_field_some_members_of_an_intersected_union_lack_names_the_members")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    CheckResult result = check(R"(
+        type Ok = { ok: true, out: string }
+        type Err = { ok: false, err: string }
+        type Result = (Ok | Err) & { unwrap: (self: Result) -> string }
+        local function run(): Result
+            error("unused")
+        end
+        local result = run()
+        print(result.out)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Key 'out' is missing from 1 variant of the union 'Result'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Make sure this is the correct variant by checking 'result.ok' before reading 'out'\n"
+        "  • Or add 'out: nil' to 'Err' so that checking 'out' tells the variants apart",
+        toString(result.errors[0])
+    );
 }
 
 TEST_SUITE_END();
