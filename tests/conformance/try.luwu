@@ -164,6 +164,19 @@ do
     assert(string.find(far.error, "far", 1, true))
 end
 
+-- a result only read through its fields is kept in registers; it reads like the object, wrong fields included
+do
+    const good = try 1 + 2
+    assert(good.value == 3)
+    const bad = try error("kept")
+    assert(string.find(bad.error, "kept", 1, true) and bad.line ~= nil and bad.traceback ~= nil)
+
+    const wrongvalue = try bad.value
+    assert(wrongvalue.error == `{string.match(wrongvalue.error, "^[^:]*:%d+: ")}objects of class 'err' do not have a field named 'value'`)
+    const wronglines = try good.line
+    assert(string.find(wronglines.error, "objects of class 'ok' do not have a field named 'line'", 1, true))
+end
+
 -- a Luau-style `try` function is still a function
 do
     local function try(x: number): number

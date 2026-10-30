@@ -14194,11 +14194,10 @@ local r = try f(a)
 return r
 )"),
         R"(
-try: pc 1 to 5, handler pc 8, R1
-GETIMPORT R5 1 [f]
-LOADN R6 1
-CALL R5 1 1
-MOVE R1 R5
+try: pc 1 to 4, handler pc 7, R1
+GETIMPORT R1 1 [f]
+LOADN R2 1
+CALL R1 1 1
 WRAPRESULT R1 OK
 JUMP L0
 WRAPRESULT R1 ERR
@@ -14224,6 +14223,43 @@ return r
     REQUIRE_EQ(sscanf(nested.c_str() + outer, "try: pc %d to %d", &outerStart, &outerEnd), 2);
     CHECK(outerStart < innerStart);
     CHECK(innerEnd < outerEnd);
+}
+
+// Luwu try expressions: a local only ever read through its fields keeps the result in registers, with a flag for which
+// variant it is, so a `try` that doesn't raise allocates nothing. The other variant's field builds the object to raise.
+TEST_CASE("TryResultReadThroughFieldsStaysInRegisters")
+{
+    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+
+    CHECK_EQ("\n" + compileFunction0(R"(
+local r = try f()
+return r.value + 1
+)"),
+        R"(
+try: pc 1 to 3, handler pc 5, R0
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+LOADB R4 1 +1
+LOADB R4 0
+L0: MOVE R6 R0
+JUMPIF R4 L1
+MOVE R7 R0
+MOVE R8 R1
+MOVE R9 R2
+MOVE R10 R3
+WRAPRESULT R7 ERR
+GETTABLEKS R6 R7 K3 ['value']
+L1: ADDK R5 R6 K2 [1]
+RETURN R5 1
+)");
+
+    // passing the result anywhere needs the object
+    std::string escaping = compileFunction0(R"(
+local r = try f()
+print(r)
+return r.value
+)");
+    CHECK(escaping.find(" OK\n") != std::string::npos);
 }
 
 TEST_SUITE_END();
