@@ -192,6 +192,15 @@ do
     assert(string.find(bare.error, "kept", 1, true))
 end
 
+-- reading a field an object doesn't have saves the instruction's position before raising, so the error names this line
+-- and the `try` around it catches it
+do
+    const holder = result.ok(1)
+    tostring("an unrelated call, which leaves an older position saved")
+    const missing = try holder.error
+    assert(missing.line == 200 and string.find(missing.error, ":200: objects of class 'ok'", 1, true))
+end
+
 -- a Luau-style `try` function is still a function
 do
     local function try(x: number): number
