@@ -1437,6 +1437,38 @@ void translateInstForGPrepInext(IrBuilder& build, const Instruction* pc, int pcp
     build.inst(IrCmd::FORGPREP_XNEXT_FALLBACK, build.constUint(pcpos), build.vmReg(ra), target);
 }
 
+// Luwu: upstream calls executeFORGPREP for every generic `for k, v in t`. For a table without a metatable that only sets
+// up builtin iteration, which takes a few stores inline. Everything else (a metatable with __iter or __call, a function,
+// a class object) still goes through the fallback.
+void translateInstForGPrep(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+
+    IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
+    IrOp fallback = build.fallbackBlock(pcpos);
+
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    build.inst(IrCmd::CHECK_TAG, tag, build.constTag(LUA_TTABLE), fallback);
+    IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(ra));
+    build.inst(IrCmd::CHECK_NO_METATABLE, table, fallback);
+
+    // setobj2s(L, ra + 1, ra)
+    build.inst(IrCmd::STORE_POINTER, build.vmReg(ra + 1), table);
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra + 1), build.constTag(LUA_TTABLE));
+
+    // setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(0)), LU_TAG_ITERATOR);
+    build.inst(IrCmd::STORE_POINTER, build.vmReg(ra + 2), build.constInt(0));
+    build.inst(IrCmd::STORE_EXTRA, build.vmReg(ra + 2), build.constInt(LU_TAG_ITERATOR));
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra + 2), build.constTag(LUA_TLIGHTUSERDATA));
+
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TNIL));
+
+    build.inst(IrCmd::JUMP, target);
+
+    build.beginBlock(fallback);
+    build.inst(IrCmd::FALLBACK_FORGPREP, build.constUint(pcpos), build.vmReg(ra), target);
+}
+
 void translateInstForGLoopIpairs(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);

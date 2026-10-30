@@ -318,6 +318,16 @@ $(BUILD)/%.c.o: %.c
 	@mkdir -p $(dir $@)
 	$(CXX) -x c $< $(CXXFLAGS) -c -MMD -MP -o $@
 
+# Luwu: every object depends on the compiler and the flags all objects share, recorded in a stamp file that changes only
+# when they do. make doesn't otherwise rebuild an object when only those change, and links objects compiled with
+# different ones together (another `CXX`, `config` or `werror`).
+# The stamp is written while the Makefile is read, not by a rule, so `make -n` still lists only what would compile.
+FLAGS_STAMP:=$(BUILD)/flags.stamp
+FLAGS_RECORD:=$(CXX) $(CXXFLAGS) $(LDFLAGS)
+FLAGS_STAMP_UPDATE:=$(shell mkdir -p $(BUILD) && (echo '$(FLAGS_RECORD)' | cmp -s - $(FLAGS_STAMP) || echo '$(FLAGS_RECORD)' > $(FLAGS_STAMP)))
+
+$(OBJECTS): $(FLAGS_STAMP)
+
 # protobuf fuzzer setup
 fuzz/luau.pb.cpp: fuzz/luau.proto $(MUTATOR_LIBS)
 	cd fuzz && $(EPROTOC) luau.proto --cpp_out=.

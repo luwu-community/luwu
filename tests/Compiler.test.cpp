@@ -12844,7 +12844,7 @@ class Ping
         if n <= 0 then
             return 0
         end
-        -- remark: inlining succeeded: Ping:ping (cost 7, profit 1.42x, depth 0)
+        -- remark: inlining succeeded: Ping:ping (cost 7, profit 1.42x, depth 0, proven)
         local v = self:ping(n - 1)
         return v
     end
@@ -14164,6 +14164,43 @@ R0: object [argument]
 R1: class [argument]
 )");
     }
+}
+
+TEST_CASE("InlinedMethodRemarkSaysHowTheReceiverWasKnown")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
+    // A proven receiver and a trusted one both inline; the remark says which it was, since only a trusted one makes a
+    // wrong annotation a runtime error
+    std::string remarks = compileWithRemarks(R"(--!trust
+class Vec(public x: number)
+    public function get(self): number
+        return self.x
+    end
+end
+
+function viaConstruction(n: number): number
+    local v = Vec(n)
+    local r = v:get()
+    return r
+end
+
+function viaAnnotation(v: Vec): number
+    local r = v:get()
+    return r
+end
+)");
+
+    // The remark lines in order: the call in viaConstruction, then the one in viaAnnotation
+    std::vector<std::string> inlined;
+    for (std::string_view line : Luau::split(remarks, '\n'))
+        if (line.find("-- remark: inlining succeeded: Vec:get") != std::string_view::npos)
+            inlined.emplace_back(line);
+
+    REQUIRE_EQ(inlined.size(), 2);
+    CHECK(inlined[0].substr(inlined[0].size() - 9) == ", proven)");
+    CHECK(inlined[1].substr(inlined[1].size() - 10) == ", trusted)");
 }
 
 // Compiler B (classes review) end

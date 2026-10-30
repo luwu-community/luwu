@@ -2308,6 +2308,39 @@ void TypeChecker2::appendArgumentTypes(TypePack& args, AstExprCall* call)
     }
 }
 
+// Luwu: a method merged by mergeUnionMethods takes any member as `self`, which is only right if each member's own method
+// takes that member. Checked here, member by member: a `self` more general than its member (`(self: Shape)` on `Circle`)
+// is fine; one that can't take its own member (`A`'s method wanting a `B`) fails as `A:m()` would.
+void TypeChecker2::checkUnionMethodSelves(AstExprIndexName* indexExpr)
+{
+    const UnionType* members = get<UnionType>(follow(lookupType(indexExpr->expr)));
+    if (!members)
+        return;
+
+    std::string name = indexExpr->index.value;
+    for (TypeId member : members->options)
+    {
+        member = follow(member);
+
+        std::optional<TypeId> method;
+        if (const ExternType* nominal = get<ExternType>(member))
+        {
+            if (const Property* prop = lookupExternTypeProp(nominal, name))
+                method = prop->readTy;
+        }
+        else
+        {
+            ErrorVec ignored;
+            method = findTablePropertyRespectingMeta(builtinTypes, ignored, member, name, ValueContext::RValue, indexExpr->location, true);
+        }
+
+        const FunctionType* fn = method ? get<FunctionType>(follow(*method)) : nullptr;
+        auto [params, _] = fn ? flatten(fn->argTypes) : std::pair<std::vector<TypeId>, std::optional<TypePackId>>{};
+        if (!params.empty())
+            testIsSubtype(member, params[0], indexExpr->expr->location);
+    }
+}
+
 void TypeChecker2::visitCall(AstExprCall* call)
 {
     TypePack args;
@@ -2363,6 +2396,18 @@ void TypeChecker2::visitCall(AstExprCall* call)
         {
             reportError(NormalizationTooComplex{}, call->func->location);
             return;
+        }
+    }
+
+    // Luwu: `v:m()` on a union whose members each have their own `m` (the solver typed the call the same way). After the
+    // overload the solver picked, which is the union again.
+    if (call->self)
+    {
+        if (std::optional<TypeId> merged = mergeUnionMethods(builtinTypes, NotNull{module->internalTypes.get()}, fnTy))
+        {
+            fnTy = *merged;
+            if (AstExprIndexName* indexExpr = call->func->as<AstExprIndexName>())
+                checkUnionMethodSelves(indexExpr);
         }
     }
 

@@ -272,6 +272,7 @@ private:
     // The types of `call`'s arguments as written, without `self`.
     void appendArgumentTypes(TypePack& args, AstExprCall* call);
     void visitCall(AstExprCall* call);
+    void checkUnionMethodSelves(AstExprIndexName* indexExpr);
     void visit(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);

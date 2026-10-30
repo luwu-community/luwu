@@ -996,7 +996,8 @@ struct Compiler
         int thresholdBase,
         int thresholdMaxBoost,
         int depthLimit,
-        AstExpr* selfExpr = nullptr
+        AstExpr* selfExpr = nullptr,
+        const char* receiverKnownBy = nullptr
     )
     {
         Function* fi = functions.find(func);
@@ -1127,7 +1128,19 @@ struct Compiler
         const char* inlinedOwner = nullptr;
         const char* inlinedName = describeInlineTarget(func, inlinedOwner);
 
-        if (inlinedOwner)
+        // Luwu Classes: a method call's remark says how its receiver's class was known, `proven` or `trusted` (from an
+        // annotation under `--!trust`), since only a trusted one turns a wrong annotation into a runtime error
+        if (inlinedOwner && receiverKnownBy)
+            bytecode.addDebugRemark(
+                "inlining succeeded: %s:%s (cost %d, profit %.2fx, depth %d, %s)",
+                inlinedOwner,
+                inlinedName,
+                inlinedCost,
+                double(inlineProfit) / 100,
+                int(inlineFrames.size()),
+                receiverKnownBy
+            );
+        else if (inlinedOwner)
             bytecode.addDebugRemark(
                 "inlining succeeded: %s:%s (cost %d, profit %.2fx, depth %d)",
                 inlinedOwner,
@@ -2505,7 +2518,8 @@ struct Compiler
     // on the class's (it would lose it), nor on the caller's class's (it would gain it). See
     // classInlinedBodyKeepsPrivateAccess. A trusted receiver keeps the method's CHECKSELFCLASS at the
     // inline site (selfIsAlreadyChecked), so a lying annotation can't run the wrong body.
-    AstExprFunction* tryResolveMethodCall(AstExprCall* expr)
+    // `trusted` is set when the receiver's class is known only from a trusted annotation, not proven
+    AstExprFunction* tryResolveMethodCall(AstExprCall* expr, bool& trusted)
     {
         if (!expr->self)
             return nullptr;
@@ -2525,6 +2539,7 @@ struct Compiler
             bytecode.addDebugRemark("inlining failed: %s's class is only known from an annotation", idx->index.value);
             return nullptr;
         }
+        trusted = !receiver.proven;
 
         AstStatClass* recvClass = receiver.cls;
 
@@ -3326,7 +3341,8 @@ struct Compiler
         // statically known and whose body can be inlined here (see tryResolveMethodCall).
         if (options.optimizationLevel >= 2 && expr->self && FFlag::LuwuClasses)
         {
-            if (AstExprFunction* mfunc = tryResolveMethodCall(expr))
+            bool trusted = false;
+            if (AstExprFunction* mfunc = tryResolveMethodCall(expr, trusted))
             {
                 Function* fi = functions.find(mfunc);
                 AstExprIndexName* idx = expr->func->as<AstExprIndexName>();
@@ -3341,7 +3357,8 @@ struct Compiler
                         FInt::LuauCompileInlineThreshold,
                         FInt::LuauCompileInlineThresholdMaxBoost,
                         FInt::LuauCompileInlineDepth,
-                        /* selfExpr= */ idx->expr
+                        /* selfExpr= */ idx->expr,
+                        /* receiverKnownBy= */ trusted ? "trusted" : "proven"
                     ))
                     return;
             }
