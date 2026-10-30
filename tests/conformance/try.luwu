@@ -1,0 +1,175 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing try expressions")
+
+const result = collections.result
+
+local function boom(n: number)
+    if n == 0 then
+        error("boom")
+    end
+    return boom(n - 1)
+end
+
+-- a value is an `ok`, an error an `err` that says where it was raised
+do
+    const good = try 1 + 2
+    assert(class.isinstance(good, result.ok) and good.value == 3)
+
+    const bad = try boom(2)
+    assert(class.isinstance(bad, result.err))
+    assert(string.find(bad.error, "boom", 1, true))
+    assert(bad.line == 8 and string.find(bad.module, "try.luwu", 1, true))
+
+    -- the traceback starts where the error was raised and stops at the frame with the `try`
+    const lines = string.split(bad.traceback, "\n")
+    assert(lines[1] == "[C] function error")
+    assert(string.find(lines[2], ":8 function boom", 1, true))
+    assert(string.find(lines[4], ":10 function boom", 1, true))
+    assert(#lines == 5 and string.find(lines[5], ":18", 1, true))
+end
+
+-- the frame's locals survive, and the value of the `try` lands where it's used
+do
+    const before = "kept"
+    const values = { try error("x"), try 5 }
+    assert(before == "kept" and values[1].error ~= nil and values[2].value == 5)
+end
+
+-- errors raised by the VM and by C functions are caught too
+do
+    local missing = nil
+    const indexed = try missing.field
+    assert(string.find(indexed.error, "attempt to index nil", 1, true))
+
+    const fromc = try string.rep()
+    assert(string.find(fromc.error, "missing argument #1 to 'rep'", 1, true) and fromc.line == 44)
+end
+
+-- an error value that isn't a string arrives intact
+do
+    const structured = try error({ code = 7 })
+    assert(structured.error.code == 7)
+end
+
+-- nested ranges: the innermost catches
+do
+    local function inner_fails()
+        const inner = try error({ code = 7 })
+        return inner.error.code
+    end
+    const nested = try inner_fails()
+    assert(nested.value == 7)
+
+    local function outer_fails()
+        const inner = try 1
+        error(`outer {inner.value}`)
+    end
+    const outer = try outer_fails()
+    assert(string.find(outer.error, "outer 1", 1, true))
+end
+
+-- `pcall` inside `try` catches first, and `try` inside `pcall` keeps `pcall` from seeing the error
+do
+    const ok, value = pcall(function()
+        const caught = try error("in pcall")
+        return caught.error
+    end)
+    assert(ok and string.find(value, "in pcall", 1, true))
+
+    const wrapped = try pcall(error, "caught by pcall")
+    assert(wrapped.value == false)
+end
+
+-- an error crossing C frames: `table.sort` calling a comparator that raises
+do
+    const sorted = try table.sort({ 3, 1, 2 }, function(a, b)
+        error("cmp")
+    end)
+    assert(string.find(sorted.error, "cmp", 1, true))
+end
+
+-- metamethods run in their own interpreter run, and their errors still reach the `try` around them
+do
+    const angry = setmetatable({}, {
+        __index = function()
+            error("no fields")
+        end,
+    })
+    const read = try angry.anything
+    assert(string.find(read.error, "no fields", 1, true))
+end
+
+-- an upvalue captured inside the failing range is closed and keeps its value
+do
+    local captured
+    local function make()
+        local x = 10
+        captured = function()
+            return x
+        end
+        error("after capture")
+    end
+    const _ = try make()
+    assert(captured() == 10)
+end
+
+-- a coroutine that yields inside a range and raises after it resumes
+do
+    const co = coroutine.create(function()
+        const r = try coroutine.yield(1) + nil
+        return r.error
+    end)
+    const ok1, first = coroutine.resume(co)
+    assert(ok1 and first == 1)
+    const ok2, raised = coroutine.resume(co, 5)
+    assert(ok2 and string.find(raised, "attempt to perform arithmetic", 1, true))
+end
+
+-- many catches in a loop
+do
+    local total = 0
+    for i = 1, 1000 do
+        const r = try error({ n = i })
+        total += r.error.n
+    end
+    assert(total == 500500)
+end
+
+-- a stack overflow is a runtime error, and the stack works again afterwards
+do
+    local function forever(n: number): number
+        return forever(n + 1) + 1
+    end
+    const overflow = try forever(1)
+    assert(string.find(overflow.error, "stack overflow", 1, true))
+    const after = try 5
+    assert(after.value == 5)
+end
+
+-- `__tostring` shows where the error was raised and the traceback
+do
+    const shown = tostring(try error("x"))
+    assert(string.find(shown, `result.err(`, 1, true) and string.find(shown, "\n[C] function error", 1, true))
+end
+
+-- a function long enough that its jumps need trampolines, which move its code: the range moves with it
+do
+    const parts = { "local sum = 0\nfor i = 1, 3 do\n" }
+    for i = 1, 10000 do
+        table.insert(parts, "sum = sum + i\nif sum > 1e12 then break end\n")
+    end
+    table.insert(parts, "end\nlocal r = try error('far')\nreturn r, sum\n")
+    const chunk = assert(loadstring(table.concat(parts)))
+    const far = chunk()
+    assert(string.find(far.error, "far", 1, true))
+end
+
+-- a Luau-style `try` function is still a function
+do
+    local function try(x: number): number
+        return x * 2
+    end
+    assert(try(2) == 4 and try(2) - 1 == 3)
+end
+
+return "OK"

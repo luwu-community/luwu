@@ -10,6 +10,7 @@
 
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTryExpressions)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
 
@@ -223,6 +224,8 @@ void BytecodeBuilder::clearState()
     tableShapes.clear();
 
     debugLocals.clear();
+
+    tryRanges.clear();
     debugUpvals.clear();
 
     typedLocals.clear();
@@ -279,6 +282,8 @@ void BytecodeBuilder::endFunction(uint8_t maxstacksize, uint8_t numupvalues, uin
         tableShapes.clear();
 
         debugLocals.clear();
+
+        tryRanges.clear();
         debugUpvals.clear();
 
         typedLocals.clear();
@@ -692,6 +697,19 @@ void BytecodeBuilder::pushDebugLocal(StringRef name, uint8_t reg, uint32_t start
     debugLocals.push_back(local);
 }
 
+void BytecodeBuilder::pushTryRange(uint32_t startpc, uint32_t endpc, uint32_t handlerpc, uint8_t target)
+{
+    LUAU_ASSERT(startpc < endpc && endpc <= handlerpc);
+
+    TryRange range;
+    range.startpc = startpc;
+    range.endpc = endpc;
+    range.handlerpc = handlerpc;
+    range.target = target;
+
+    tryRanges.push_back(range);
+}
+
 void BytecodeBuilder::pushDebugUpval(StringRef name)
 {
     unsigned int index = addStringTableEntry(name);
@@ -1017,6 +1035,24 @@ void BytecodeBuilder::writeFunction(std::string& ss, uint32_t id, uint8_t flags,
 
     if ((flags & LPF_INLINABLE) != 0)
         writeVarInt(ss, cost);
+
+    // Luwu try expressions: only WIP bytecode has protected ranges
+    if (getVersion() == LWBC_VERSION_WIP)
+    {
+        writeVarInt(ss, uint32_t(tryRanges.size()));
+
+        for (const TryRange& range : tryRanges)
+        {
+            writeVarInt(ss, range.startpc);
+            writeVarInt(ss, range.endpc);
+            writeVarInt(ss, range.handlerpc);
+            writeByte(ss, range.target);
+        }
+    }
+    else
+    {
+        LUAU_ASSERT(tryRanges.empty());
+    }
 }
 
 void BytecodeBuilder::writeClassShape(std::string& ss, const ClassShape& cs) const
@@ -1464,6 +1500,14 @@ std::vector<uint32_t> BytecodeBuilder::expandJumps()
         typedLocal.startpc = remap[typedLocal.startpc];
     }
 
+    for (TryRange& range : tryRanges)
+    {
+        // endpc is exclusive, and a range is never empty
+        range.endpc = remap[range.endpc - 1] + 1;
+        range.startpc = remap[range.startpc];
+        range.handlerpc = remap[range.handlerpc];
+    }
+
     return remap;
 }
 
@@ -1479,8 +1523,8 @@ std::string BytecodeBuilder::getError(const std::string& message)
 
 uint8_t BytecodeBuilder::getVersion()
 {
-    // Luwu Classes (rfcs/classes): class bytecode is still a work-in-progress format
-    if (FFlag::LuwuClasses)
+    // Luwu Classes (rfcs/classes) and Luwu try expressions: work-in-progress formats
+    if (FFlag::LuwuClasses || FFlag::LuwuTryExpressions)
         return LWBC_VERSION_WIP;
 
     return LWBC_VERSION_TARGET;
@@ -2009,6 +2053,12 @@ void BytecodeBuilder::validateInstructions() const
             // the runner goes in A and the object is in A + 1; the CALL that follows covers the arguments
             VREG(LUAU_INSN_A(insn) + 1);
             VJUMP(LUAU_INSN_D(insn));
+            break;
+
+        case LOP_WRAPRESULT:
+            // the `err` form reads where the error was raised from the three registers after A
+            LUAU_ASSERT(LUAU_INSN_B(insn) <= LBC_WRAPRESULT_ERR);
+            VREG(LUAU_INSN_A(insn) + (LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR ? 3 : 0));
             break;
 
         default:
@@ -2843,6 +2893,10 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         formatAppend(result, "INITTRAITS R%d L%d\n", LUAU_INSN_A(insn), targetLabel);
         break;
 
+    case LOP_WRAPRESULT:
+        formatAppend(result, "WRAPRESULT R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR ? "ERR" : "OK");
+        break;
+
     default:
         LUAU_ASSERT(!"Unsupported opcode");
     }
@@ -2970,6 +3024,13 @@ std::string BytecodeBuilder::dumpCurrentFunction(std::vector<int>& dumpinstoffs)
 
             formatAppend(result, "R%d: %s%s from %d to %d\n", l.reg, name, optional, l.startpc, l.endpc);
         }
+    }
+
+    // Luwu try expressions: the protected ranges, with pcs as the code below numbers them
+    if (dumpFlags & Dump_Code)
+    {
+        for (const TryRange& range : tryRanges)
+            formatAppend(result, "try: pc %d to %d, handler pc %d, R%d\n", range.startpc, range.endpc - 1, range.handlerpc, range.target);
     }
 
     if (dumpFlags & Dump_Constants)

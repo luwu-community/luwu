@@ -35,6 +35,7 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuTryExpressions)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuGenericNominals)
@@ -14179,6 +14180,50 @@ print(Greeter)
 
 print(Greeter)
 )", 2));
+}
+
+// Luwu try expressions: the expression runs in a protected range of fresh registers and ends wrapped in an `ok`. The
+// range's handler, which only the VM jumps to, wraps the caught error in an `err`.
+TEST_CASE("TryExpressionCompilesToAProtectedRange")
+{
+    ScopedFastFlag sff{FFlag::LuwuTryExpressions, true};
+
+    CHECK_EQ("\n" + compileFunction0(R"(
+local a = 1
+local r = try f(a)
+return r
+)"),
+        R"(
+try: pc 1 to 5, handler pc 8, R1
+GETIMPORT R5 1 [f]
+LOADN R6 1
+CALL R5 1 1
+MOVE R1 R5
+WRAPRESULT R1 OK
+JUMP L0
+WRAPRESULT R1 ERR
+L0: MOVE R0 R1
+RETURN R0 1
+)");
+
+    // nested ranges are listed innermost first, which is the order the VM searches them in
+    std::string nested = compileFunction(
+        R"(
+local function g() end
+local r = try g(try g())
+return r
+)",
+        1
+    );
+    int innerStart = 0, innerEnd = 0, outerStart = 0, outerEnd = 0;
+    size_t inner = nested.find("try: pc");
+    REQUIRE(inner != std::string::npos);
+    size_t outer = nested.find("try: pc", inner + 1);
+    REQUIRE(outer != std::string::npos);
+    REQUIRE_EQ(sscanf(nested.c_str() + inner, "try: pc %d to %d", &innerStart, &innerEnd), 2);
+    REQUIRE_EQ(sscanf(nested.c_str() + outer, "try: pc %d to %d", &outerStart, &outerEnd), 2);
+    CHECK(outerStart < innerStart);
+    CHECK(innerEnd < outerEnd);
 }
 
 TEST_SUITE_END();

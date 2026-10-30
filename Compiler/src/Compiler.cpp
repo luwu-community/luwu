@@ -5887,6 +5887,34 @@ struct Compiler
         }
     }
 
+    // Luwu try expressions: `try expr` evaluates expr in a protected range, into fresh registers so that nothing the range
+    // writes is live outside it. An error raised there resumes at the handler (see LOP_WRAPRESULT).
+    void compileExprTry(AstExprTry* expr, uint8_t target)
+    {
+        RegScope rs(this);
+
+        // the value or the caught error, then where an error was raised
+        uint8_t reg = allocReg(expr, 4u);
+
+        size_t startLabel = bytecode.emitLabel();
+        compileExprTemp(expr->expr, reg);
+        size_t endLabel = bytecode.emitLabel();
+
+        bytecode.emitABC(LOP_WRAPRESULT, reg, LBC_WRAPRESULT_OK, 0);
+        size_t jumpLabel = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMP, 0, 0);
+
+        size_t handlerLabel = bytecode.emitLabel();
+        bytecode.emitABC(LOP_WRAPRESULT, reg, LBC_WRAPRESULT_ERR, 0);
+
+        size_t doneLabel = bytecode.emitLabel();
+        patchJump(expr, jumpLabel, doneLabel);
+        bytecode.pushTryRange(uint32_t(startLabel), uint32_t(endLabel), uint32_t(handlerLabel), reg);
+
+        if (target != reg)
+            bytecode.emitABC(LOP_MOVE, target, reg, 0);
+    }
+
     void compileExprInterpString(AstExprInterpString* expr, uint8_t target, bool targetTemp)
     {
         size_t formatCapacity = 0;
@@ -6627,6 +6655,10 @@ struct Compiler
         else if (AstExprInstantiate* expr = node->as<AstExprInstantiate>())
         {
             compileExpr(expr->expr, target, targetTemp);
+        }
+        else if (AstExprTry* expr = node->as<AstExprTry>())
+        {
+            compileExprTry(expr, target);
         }
         else
         {

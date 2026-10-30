@@ -266,6 +266,10 @@ Proto* onInlineFunction(lua_State* L, Closure* caller, Closure* target, uint32_t
     if ((targetProto->flags & LPF_INLINABLE) == 0)
         return nullptr;
 
+    // Luwu try expressions: rebuilding either function's bytecode would lose its protected ranges
+    if (callerProto->tryranges || targetProto->tryranges)
+        return nullptr;
+
     LUAU_ASSERT(target->nupvalues == 0);
 
     // recursive inlining is not supported yet.

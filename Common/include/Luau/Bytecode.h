@@ -74,6 +74,8 @@
 //   Luwu Traits (rfcs/classes/traits.md): the shape flags varint in LBC_CONSTANT_CLASS_SHAPE (LBC_CLASSSHAPE_TRAIT,
 //   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, and NEWCLASSMEMBER's IMPLEMENTS form.
 //   Luwu collections: LBF_COLLECTIONS_PAIR to LBF_COLLECTIONS_RESULT_ERR.
+//   Luwu try expressions: WRAPRESULT, and each function's protected ranges after its inlining cost: a varint count,
+//   then per range the varints start pc, end pc (exclusive) and handler pc, and a byte for the target register.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -580,6 +582,13 @@ enum LuauOpcode
     // D: jump offset (-32768..32767) past the CALL, taken when the class has no trait initializers
     LOP_INITTRAITS,
 
+    // WRAPRESULT: Luwu try expressions: wraps a value in a `collections.result`, an `ok` or an `err`. A `try` expression
+    // ends with the `ok` form, and its protected range's handler starts with the `err` form: when the VM resumes there,
+    // it has put the caught error in A and where it was raised in A + 1 to A + 3 (module, line, traceback).
+    // A: register holding the value, and receiving the result
+    // B: LBC_WRAPRESULT_OK or LBC_WRAPRESULT_ERR
+    LOP_WRAPRESULT,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };
@@ -615,6 +624,14 @@ enum LuauOpcode
 // Auxiliary NOT: 1-bit negation flag
 // Used in LOP_JUMPXEQK* instructions
 #define LUAU_INSN_AUX_NOT(aux) ((aux) >> 31)
+
+// Luwu try expressions: operand B of LOP_WRAPRESULT
+enum LuauWrapResultForm
+{
+    LBC_WRAPRESULT_OK = 0,
+    // The error in A, then its module, line and traceback in A + 1 to A + 3
+    LBC_WRAPRESULT_ERR = 1,
+};
 
 // Luwu Classes (rfcs/classes): JUMPXISA aux flags (see LOP_JUMPXISA)
 // Jump when the value is an instance of the class, rather than when it is not

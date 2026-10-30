@@ -55,6 +55,11 @@ inline void gatherFunctionsHelper(
     bool shouldGather = hasNativeFunctions ? (!root && (proto->flags & LPF_NATIVE_FUNCTION) != 0)
                                            : ((proto->flags & LPF_NATIVE_COLD) == 0 || (flags & CodeGen_ColdFunctions) != 0);
 
+    // Luwu try expressions: a function with protected ranges runs interpreted. Native code doesn't keep the registers its
+    // handlers read up to date where an error can be raised.
+    if (proto->tryranges)
+        shouldGather = false;
+
     if (shouldGather)
         results[proto->bytecodeid] = proto;
 

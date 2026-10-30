@@ -587,6 +587,10 @@ struct BytecodeGraphSerializer
             bcb.emitAD(LOP_INITTRAITS, uint8_t(getRegInput(insn, 0) - 1), 0);
             break;
 
+        case LOP_WRAPRESULT:
+            // Luwu try expressions: the parser refuses functions with protected ranges
+            LUAU_UNREACHABLE();
+
         case LOP__COUNT:
             LUAU_UNREACHABLE();
         }
