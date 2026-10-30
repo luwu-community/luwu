@@ -148,7 +148,7 @@ TEST_CASE_FIXTURE(Fixture, "local_tables_are_not_any")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    CHECK_EQ("This function does not take self. Did you mean to use a dot instead of a colon?", toString(result.errors[0]));
+    CHECK_EQ("Call this function with a '.' instead of ':'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "offer_a_hint_if_you_use_a_dot_instead_of_a_colon")

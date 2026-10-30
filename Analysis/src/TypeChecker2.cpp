@@ -2284,6 +2284,30 @@ static AstType* parameterAnnotation(
     return fn->args.data[argIndex]->annotation;
 }
 
+void TypeChecker2::appendArgumentTypes(TypePack& args, AstExprCall* call)
+{
+    for (size_t i = 0; i < call->args.size; ++i)
+    {
+        AstExpr* arg = call->args.data[i];
+        TypeId* argTy = module->astTypes.find(arg);
+        if (argTy)
+            args.head.push_back(*argTy);
+        else if (i == call->args.size - 1)
+        {
+            if (auto argTail = module->astTypePacks.find(arg))
+            {
+                auto [head, tail] = flatten(*argTail);
+                args.head.insert(args.head.end(), head.begin(), head.end());
+                args.tail = tail;
+            }
+            else
+                args.tail = builtinTypes->anyTypePack;
+        }
+        else
+            args.head.push_back(builtinTypes->anyType);
+    }
+}
+
 void TypeChecker2::visitCall(AstExprCall* call)
 {
     TypePack args;
@@ -2355,6 +2379,9 @@ void TypeChecker2::visitCall(AstExprCall* call)
         argExprs.push_back(indexExpr->expr);
     }
 
+    // Errors reported from here on are about the arguments.
+    const size_t firstArgumentError = module->errors.size();
+
     const FunctionType* fty = get<FunctionType>(fnTy);
     size_t selfOffset = call->self ? 1 : 0;
 
@@ -2422,27 +2449,9 @@ void TypeChecker2::visitCall(AstExprCall* call)
     }
     else
     {
-        for (size_t i = 0; i < call->args.size; ++i)
-        {
-            AstExpr* arg = call->args.data[i];
+        for (AstExpr* arg : call->args)
             argExprs.push_back(arg);
-            TypeId* argTy = module->astTypes.find(arg);
-            if (argTy)
-                args.head.push_back(*argTy);
-            else if (i == call->args.size - 1)
-            {
-                if (auto argTail = module->astTypePacks.find(arg))
-                {
-                    auto [head, tail] = flatten(*argTail);
-                    args.head.insert(args.head.end(), head.begin(), head.end());
-                    args.tail = tail;
-                }
-                else
-                    args.tail = builtinTypes->anyTypePack;
-            }
-            else
-                args.head.push_back(builtinTypes->anyType);
-        }
+        appendArgumentTypes(args, call);
     }
 
     TypePackId argsTp = module->internalTypes->addTypePack(args);
@@ -2493,6 +2502,22 @@ void TypeChecker2::visitCall(AstExprCall* call)
         if (result2.ok.size() > 1)
             reportError(AmbiguousFunctionCall{fnTy, argsPack}, call->location);
         return;
+    }
+
+    // Luwu (helpful subtyping errors): `t:f(x)` on a function that doesn't take `t` fails on its argument count or
+    // its first parameter. When `t.f(x)` type-checks, that is the fix, and the errors about the arguments go.
+    if (FFlag::LuwuHelpfulSubtypingErrors && call->self)
+    {
+        TypePack dotArgs;
+        appendArgumentTypes(dotArgs, call);
+        TypePackId dotArgsPack = module->internalTypes->addTypePack(std::move(dotArgs));
+        const OverloadResolution dotCall = resolver.resolveOverload(fnTy, dotArgsPack, call->func->location, NotNull{&uniqueTypes}, false);
+        if (!dotCall.ok.empty())
+        {
+            module->errors.erase(module->errors.begin() + firstArgumentError, module->errors.end());
+            reportError(FunctionDoesNotTakeSelf{}, call->func->location);
+            return;
+        }
     }
 
     std::vector<TypeId> overloadsToReport;
@@ -4807,9 +4832,9 @@ static std::optional<TypePath::Path> outermostReadableSlot(
     if (path.empty())
         return std::nullopt;
 
-    for (auto end = path.components.begin() + 1; end <= path.components.end(); ++end)
+    for (size_t length = 1; length <= path.components.size(); ++length)
     {
-        TypePath::Path prefix{std::vector<TypePath::Component>(path.components.begin(), end)};
+        TypePath::Path prefix{std::vector<TypePath::Component>(path.components.begin(), path.components.begin() + length)};
         if (!endsInReadableSlot(prefix))
             continue;
 
