@@ -564,6 +564,9 @@ private:
      */
     void prepopulateGlobalScope(const ScopePtr& globalScope, AstStatBlock* program);
 
+    // Luwu forwarded module types: a module root returning another module's value exports that module's types too
+    void forwardRequiredTypes(AstStatBlock* block);
+
     bool recordPropertyAssignment(TypeId ty);
 
     // Record the fact that a particular local has a particular type in at least

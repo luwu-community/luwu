@@ -971,6 +971,10 @@ struct TypeFun
     // The location of where this TypeFun was defined, if available
     std::optional<Location> definitionLocation;
 
+    // Luwu: the module that declares this type, which definitionLocation is in. Set on a module's exported types,
+    // so copies in other modules keep it. Unset, it's the module whose scope holds this TypeFun.
+    std::optional<ModuleName> definitionModuleName;
+
     TypeFun() = default;
 
     explicit TypeFun(TypeId ty)

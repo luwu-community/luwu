@@ -158,6 +158,11 @@ struct Module
     TypePackId returnType = nullptr;
     std::unordered_map<Name, TypeFun> exportedTypeBindings;
 
+    // Luwu forwarded module types: the exported types of the module this one returns unchanged (`return require(path)`).
+    // clonePublicInterface adds them to exportedTypeBindings, after the types this module declares itself. They aren't
+    // in the module scope, so this module can't name them unqualified.
+    std::unordered_map<Name, TypeFun> forwardedTypeBindings;
+
     // Arenas related to the DFG must persist after the DFG no longer exists, as
     // Module objects maintain raw pointers to objects in these arenas.
     DefArena defArena;
