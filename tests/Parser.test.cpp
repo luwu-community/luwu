@@ -5772,7 +5772,7 @@ TEST_CASE_FIXTURE(Fixture, "an_unfinished_statement_stops_before_a_next_line_tha
     }
 }
 
-// Code that parses keeps its parse, however it's indented
+// Valid code parses the same however it's indented
 TEST_CASE_FIXTURE(Fixture, "an_unindented_continuation_that_parses_is_left_alone")
 {
     for (const char* source : {

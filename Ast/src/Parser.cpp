@@ -6272,7 +6272,7 @@ bool Parser::statementReportedError()
 // Luwu: the next line is a statement of its own, though the one being parsed still needs a value or name. It starts
 // with a name, isn't indented past the statement being parsed, and the token after the name can't continue this
 // statement. Code like that fails to parse either way: this only decides where the error goes, so the next line parses
-// on its own instead of being read into the unfinished one. Valid code keeps its parse however it's indented.
+// on its own instead of being read into the unfinished one. Valid code parses the same however it's indented.
 bool Parser::nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName))
 {
     const Lexeme& current = lexer.current();
