@@ -110,7 +110,7 @@ struct LuwonTable
 {
     // Positional items, the first at index 1. A `nil` item is a hole. Their keys are unset.
     std::vector<LuwonEntry> array;
-    // Keyed entries in the order the file wrote them. A key whose value is `nil` isn't stored.
+    // Keyed entries in file order. A key whose value is `nil` isn't stored.
     std::vector<LuwonEntry> entries;
     // The table constructor, from `{` to `}`, when the table was read from a file.
     std::optional<Location> constructor;

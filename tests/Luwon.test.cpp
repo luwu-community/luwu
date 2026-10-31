@@ -333,7 +333,7 @@ return {
     // Nothing changed: the text comes back byte for byte
     CHECK(editTo(source, R"(return { threads = 4, root = "./src", lib = "./src/lib" })") == source);
 
-    // Only `threads` is rewritten; the computed values that didn't change keep their expressions
+    // Only `threads` is rewritten; the computed values that didn't change are written with the same expressions
     CHECK(editTo(source, R"(return { threads = 8, root = "./src", lib = "./src/lib" })") == R"(--- The project's settings
 type Settings = { threads: number, root: string, lib: string }
 

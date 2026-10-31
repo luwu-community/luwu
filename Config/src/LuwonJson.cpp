@@ -438,7 +438,7 @@ private:
     std::string_view text;
     size_t pos = 0;
 
-    // A JSON object's members in the order it writes them
+    // A JSON object's members in write order
     using Members = std::vector<std::pair<std::string, LuwonValue>>;
 
     std::nullopt_t fail(const std::string& message)

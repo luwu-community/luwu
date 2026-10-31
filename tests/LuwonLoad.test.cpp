@@ -200,7 +200,7 @@ TEST_CASE("luwon_comments_travel_with_a_table")
 {
     std::unique_ptr<lua_State, void (*)(lua_State*)> state = newState();
 
-    // A part of a file's value, saved somewhere else, keeps its comments
+    // A part of a file's value, saved somewhere else, still has its comments
     const char* part = R"LUA(
 local config = luwon.decode("return {\n    deps = {\n        -- pinned\n        json = \"1.0.0\",\n    },\n}\n")
 return luwon.encode({ dependencies = config.deps })
@@ -255,7 +255,7 @@ TEST_CASE("luwon_builds_and_writes_data_classes")
     std::unique_ptr<lua_State, void (*)(lua_State*)> state = newState();
 
     // A primary constructor's fields are its arguments, in order; the default constructor takes a table of them, written
-    // in the order the class declares them
+    // in declaration order
     CHECK(run(state.get(), R"LUA(
 class Point(public x: number, public y: number)
 end

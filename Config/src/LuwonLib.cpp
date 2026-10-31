@@ -1325,7 +1325,7 @@ int luwonReader(lua_State* L)
 }
 
 // luwon.encode(value): the text of a data file. A table a file returned is written back into that file's
-// source, keeping its comments, consts, types and layout; anything else is written anew. Comments tables carry are
+// source with its comments, consts, types and layout intact; anything else is written anew. Comments tables carry are
 // written either way.
 int luwonEncode(lua_State* L)
 {
@@ -1444,7 +1444,7 @@ bool pushNewInfo(lua_State* L, int given, int old)
     int line = 0;
     for (const LuwonComment& comment : comments.above)
     {
-        // A block comment keeps its lines
+        // A block comment's lines are written as they were
         bool block = comment.text.rfind("--[", 0) == 0;
         size_t start = 0;
         while (start <= comment.text.size())

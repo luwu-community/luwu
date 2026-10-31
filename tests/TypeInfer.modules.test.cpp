@@ -1297,7 +1297,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_alias_a_modules_exported_
     CheckResult aResult = getFrontend().check("game/A");
     LUAU_REQUIRE_NO_ERRORS(aResult);
 
-    // A generic type keeps its generics, its defaults included; the one error is `Crate<string>` holding a number
+    // A generic type still has its generics and their defaults; the one error is `Crate<string>` holding a number
     CheckResult bResult = getFrontend().check("game/B");
     LUAU_REQUIRE_ERROR_COUNT(1, bResult);
     CHECK_EQ(bResult.errors[0].location.begin.line, 6);
@@ -1530,7 +1530,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "every_common_way_to_export_a_class_brings_it
     LUAU_REQUIRE_NO_ERRORS(kitty);
 }
 
-// A module exported as a field (`hub.t`) keeps its types, however the hub exports it
+// A module exported as a field (`hub.t`) still has its types, however the hub exports it
 TEST_CASE_FIXTURE(BuiltinsFixture, "modules_exported_as_fields_keep_their_types")
 {
     ScopedFastFlag sff[] = {

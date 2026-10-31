@@ -688,7 +688,7 @@ LuwonWriteResult editLuwon(std::string_view source, const LuwonValue& value)
         return {"", format("the source to edit doesn't read: line %d: %s", error.location.begin.line + 1, error.message.c_str())};
     }
 
-    // Changing a const where it's declared keeps its name everywhere it's used, but also changes every value built from it.
+    // Changing a const where it's declared leaves its name in place everywhere it's used, but also changes every value built from it.
     // Each attempt is read back, and the first that gives exactly `value` wins: every const the change goes through, then
     // the consts that are safe to change on their own, then none, which writes literals where the consts were used.
     std::vector<size_t> wanted;
