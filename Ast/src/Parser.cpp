@@ -4100,8 +4100,8 @@ Parser::Binding Parser::parseBinding(bool isConst, bool allowDefault, bool allow
     if (parsingDeclaredParameters && lexer.current().type == '=')
     {
         // Luwu Declare Statements (rfcs/declare-statements.md): a declared parameter's default is written as its type,
-        // and only tells the caller it may leave the parameter out. `x: T = value` copied from a function keeps its
-        // annotation, and the value is skipped.
+        // and only tells the caller it may leave the parameter out. `x: T = value` copied from a function is read as
+        // its annotation, and the value is skipped.
         Location equalsLocation = lexer.current().location;
         nextLexeme();
 
