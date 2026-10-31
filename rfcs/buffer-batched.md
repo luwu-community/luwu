@@ -21,7 +21,7 @@ crossings, offering low-hanging fruit for performance improvements across the la
 enable concise type truncation and conversion (e.g. f64 to u16) without manual bit manipulation or intermediate
 variables.
 
-This builds on prior concepts, including [the Luau team's buffer/vector RFC](https://github.com/luau-lang/rfcs/pull/198),
+It borrows from earlier proposals, including [the Luau team's buffer/vector RFC](https://github.com/luau-lang/rfcs/pull/198),
 but focuses strictly on `buffer` and `number` types to minimize the implementation surface and maximize ergonomic
 benefits for existing Luwu APIs and user-provided functions that accept variadic numbers.
 
