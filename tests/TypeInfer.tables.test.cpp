@@ -438,7 +438,7 @@ TEST_CASE_FIXTURE(Fixture, "colon_call_suggests_a_dot_when_the_dot_call_type_che
         t:f("not a number")
     )");
 
-    // The last call is wrong either way, so it keeps its two argument errors.
+    // The last call is wrong either way, so it still gets its two argument errors.
     LUAU_REQUIRE_ERROR_COUNT(4, result);
     REQUIRE(get<FunctionDoesNotTakeSelf>(result.errors[0]));
     CHECK_EQ(Location{{7, 22}, {7, 35}}, result.errors[0].location);

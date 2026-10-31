@@ -1824,7 +1824,7 @@ static void patchUnconstrainedGenericsFromExpectedType(
         // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): a bound the arguments did pin still takes the expected type when it fits inside
         // it, which keeps the check. `Exception({ kind = "NotFound" })` against `Exception<Data>` pins `T` to the
         // literal's type, and a nominal's type arguments are invariant, so without this the call can never produce the
-        // `Exception<Data>` the literal was written to make. A literal that doesn't fit `Data` keeps its own type
+        // `Exception<Data>` the literal was written to make. A literal that doesn't fit `Data` gets its own type
         // and is reported against the annotation.
         TypeId expectedArg = expectedEt->instantiatedTypeParams[i];
         const bool unconstrained = is<NeverType>(follow(ft->lowerBound)) && is<UnknownType>(follow(ft->upperBound));

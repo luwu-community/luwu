@@ -562,7 +562,7 @@ do
     collectgarbage("collect")
     assert(weak.t == nil and weak.u == nil and weak.inner == nil and weak.expr == nil)
 
-    -- a closure keeps its captured binding alive, and only it
+    -- a captured binding stays alive for the closure that captured it, and only for it
     local saved
     local function captureAndFail()
         if local v = { "captured" } when (function()

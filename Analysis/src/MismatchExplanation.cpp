@@ -1109,7 +1109,7 @@ struct Differ
                 diff(givenTable->indexer->indexResultType, wantedIndexer.indexResultType, indexPath, depth + 1);
 
             // Each property the expected table doesn't name is a value its indexer would hold. A literal
-            // inferred against a map gets the map's indexer *and* keeps its own properties, so this
+            // inferred against a map gets the map's indexer *and* still has its own properties, so this
             // applies whether or not the given table has an indexer.
             if (givenTable && fits(builtinTypes->stringType, wantedIndexer.indexType))
             {

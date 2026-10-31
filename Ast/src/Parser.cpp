@@ -1435,7 +1435,7 @@ AstStatBlock* Parser::wrapInWhenGuard(const AstArray<AstIfClause>& when, const L
         Location(whenLocation, body->location), when.data[0].expr, body, nullptr, std::nullopt, std::nullopt, whenLocation
     );
     // a single plain condition is an ordinary `if`, which gets every shortcut an ordinary condition does (constant
-    // folding, fused compares); a chain with a binding or several conditions keeps its clauses
+    // folding, fused compares); a chain with a binding or several conditions stays a chain of clauses
     bool plainCondition = when.size == 1 && !when.data[0].declaration;
     if (!plainCondition)
         guard->clauses = when;
@@ -5339,8 +5339,8 @@ Parser::Binding Parser::parseBinding(bool isConst, bool allowDefault, bool allow
     if (parsingDeclaredParameters && lexer.current().type == '=')
     {
         // Luwu Declare Statements (rfcs/declare-statements.md): a declared parameter's default is written as its type,
-        // and only tells the caller it may leave the parameter out. `x: T = value` copied from a function keeps its
-        // annotation, and the value is skipped.
+        // and only tells the caller it may leave the parameter out. `x: T = value` copied from a function is read as
+        // its annotation, and the value is skipped.
         Location equalsLocation = lexer.current().location;
         nextLexeme();
 
@@ -7877,7 +7877,7 @@ static bool isTypeTestKeyword(const Lexeme& lexeme)
     return lexeme.type == Lexeme::Name && (AstName(lexeme.name) == "is" || AstName(lexeme.name) == "implements");
 }
 
-// Luwu match expressions: only in Luwu files. In a Luau file `x is` and `match x` keep their upstream parse
+// Luwu match expressions: only in Luwu files. In a Luau file `x is` and `match x` still parse as upstream
 // (`local a = x is = 1` is two statements there). A Luwu file parses them even with the flag off, so parseMatchExpr and
 // parseTypeTest can say the flag is off instead of the rest of the expression cascading into syntax errors.
 bool Parser::matchExpressionsAvailable()
@@ -9773,7 +9773,7 @@ bool Parser::statementReportedError()
 // Luwu: the next line is a statement of its own, though the one being parsed still needs a value or name. It starts
 // with a name, isn't indented past the statement being parsed, and the token after the name can't continue this
 // statement. Code like that fails to parse either way: this only decides where the error goes, so the next line parses
-// on its own instead of being read into the unfinished one. Valid code keeps its parse however it's indented.
+// on its own instead of being read into the unfinished one. Valid code parses the same however it's indented.
 bool Parser::nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName))
 {
     const Lexeme& current = lexer.current();
@@ -10196,7 +10196,7 @@ void Parser::nextLexeme()
             while (end > 0 && isSpace(text[end - 1]))
                 --end;
 
-            // A directive's content starts after its '!'; an attribute's keeps its '@'
+            // A directive's content starts after its '!'; an attribute's includes its '@'
             const unsigned int start = directive ? 1 : 0;
             hotcomments.push_back({hotcommentHeader, lexeme.location, std::string(text + start, text + end), attribute});
         }

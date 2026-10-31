@@ -2953,7 +2953,7 @@ struct Compiler
             return false;
         }
 
-        // fields in the order compileClassDeclaration emits them: the class body's properties, then
+        // fields in compileClassDeclaration's order: the class body's properties, then
         // the parameters the body doesn't restate
         std::vector<const AstClassProperty*> properties;
 
@@ -3937,7 +3937,7 @@ struct Compiler
         DenseHashSet<AstName> overridden{AstName()};
     };
 
-    // Luwu Traits (rfcs/classes/traits.md): a trait's fields in the order its shape lists them (compileClassDeclaration):
+    // Luwu Traits (rfcs/classes/traits.md): a trait's fields in its shape's order (compileClassDeclaration):
     // the body's provided fields, then the parameters the body doesn't restate. A parameter's entry has no property.
     // An `expect` field restates a parameter too, so the parameter provides no field, as in luaR_implementtraits.
     static std::vector<std::pair<AstName, const AstClassProperty*>> traitProvidedFields(AstStatClass* trait)

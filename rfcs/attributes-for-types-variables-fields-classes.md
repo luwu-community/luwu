@@ -358,7 +358,7 @@ RFCs are what this one extends.
 
 ## Implementation details
 
-All positions above parse and keep their attributes. The `DeprecatedApi` lint reports variables, types, classes, class
+All positions above parse with their attributes. The `DeprecatedApi` lint reports variables, types, classes, class
 fields, table type fields and table constructor entries, including the rule that a field's attribute takes priority
 over its value's. Three positions are parsed but not yet reported, for the reasons in [Future work](#future-work):
 parameters, assignments, and indexers (which have no member name to report against).

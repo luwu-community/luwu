@@ -5196,7 +5196,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "a_table_literal_argument_takes_the_expected_t
     ScopedFastFlag _[2]{{FFlag::LuwuDefaultArguments, true}, {FFlag::LuwuGenericNominals, true}};
 
     // The literal's own type is `{ kind: "NotFound", path: string }`, and type arguments are invariant, so `T` has to be
-    // `Data` for the call to produce the annotated type. A literal that doesn't fit `Data` keeps its own type.
+    // `Data` for the call to produce the annotated type. A literal that doesn't fit `Data` gets its own type.
     CheckResult result = check(R"(
         type Data = { kind: "NotFound" | "Denied", path: string }
 

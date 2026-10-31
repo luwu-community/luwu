@@ -195,7 +195,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_unfinished_match_has_no_unused_subject")
         CHECK_NE(warning.code, LintWarning::Code_LocalUnused);
 }
 
-// Valid Luau that looks like the new syntax keeps its parse in a Luau file
+// Valid Luau that looks like the new syntax parses as before in a Luau file
 TEST_CASE_FIXTURE(Fixture, "match_and_is_stay_names_in_luau_files")
 {
     ScopedFastFlag matchExpressions{FFlag::DebugLuwuMatchExpressions, true};
