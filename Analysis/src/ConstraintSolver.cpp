@@ -1909,6 +1909,13 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
     else if (auto it = get<IntersectionType>(fn))
         fn = collapse(it).value_or(fn);
 
+    // Luwu: `v:m()` on a union whose members each have their own `m`, differing only in `self`
+    if (c.callSite && c.callSite->self)
+    {
+        if (std::optional<TypeId> merged = mergeUnionMethods(builtinTypes, NotNull{arena}, fn))
+            fn = *merged;
+    }
+
     bool usedMagic = false;
 
     const FunctionType* ftv = get<FunctionType>(fn);
