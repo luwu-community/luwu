@@ -530,7 +530,7 @@ RepeatedTypeNames nameRepeatedTypes(
             result.names[ty] = *candidate.name;
     }
 
-    // Declared in the order the walk first met them, which is the order the message prints them.
+    // Declared in the walk's first-seen order, which is also the message's order.
     std::sort(chosen.begin(), chosen.end());
     ToStringOptions declarationOptions = blockPrinting(printing);
     declarationOptions.alwaysExpandRootAlias = true;
