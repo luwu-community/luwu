@@ -99,7 +99,7 @@ do
     assert(string.find(read.error, "no fields", 1, true))
 end
 
--- an upvalue captured inside the failing range is closed and keeps its value
+-- an upvalue captured inside the failing range is closed and still holds its value
 do
     local captured
     local function make()

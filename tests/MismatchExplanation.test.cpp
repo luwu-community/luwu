@@ -1102,7 +1102,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_tagged_match_is_not_printed_twice")
     );
 }
 
-// A swap the help names needs no bullets of its own; anything else wrong keeps its bullet.
+// A swap the help names needs no bullets of its own; anything else wrong still gets a bullet.
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_swap_is_said_only_by_its_help")
 {
     ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};

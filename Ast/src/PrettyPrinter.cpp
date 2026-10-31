@@ -1511,7 +1511,7 @@ struct Printer
                         [&](const AstClassMethod& method)
                         {
                             // A method's attributes may be written on either side of the access
-                            // specifier, so emit them in the order the source had them -- `advance`
+                            // specifier, so emit them in source order -- `advance`
                             // never moves backwards, and writing them in the wrong order would run
                             // them into the keyword.
                             auto visualizeMethodAttributes = [&]()

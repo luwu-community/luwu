@@ -293,7 +293,7 @@ do
     assert(Shape.describe(sq) == "4 sides")
     assert(Shape.describe(Tri()) == "3 sides")
     assert(Shape.name(sq) == "shape")
-    -- the class keeps its copy of the overridden default alive
+    -- the class's copy of the overridden default stays alive
     collectgarbage()
     assert(Shape.describe(Square()) == "4 sides")
 end
@@ -417,7 +417,7 @@ do
     assert(class.implements(h, Named))
 end
 
--- a trait's fields come after the class's own, so the class's methods keep their compile-time offsets
+-- a trait's fields come after the class's own, so the class's methods' compile-time offsets don't change
 trait Tail
     t1 = "t1"
     t2 = "t2"

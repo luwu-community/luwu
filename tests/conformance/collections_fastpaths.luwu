@@ -243,7 +243,7 @@ do
     assert(#list == 0 and vecs.pop(list) == nil and vecs.at(list, 1) == nil)
 end
 
--- vecdeque: entries keep their order while the ring wraps and grows
+-- vecdeque: entries stay in order while the ring wraps and grows
 do
     const queue = collections.vecdeque()
     for i = 1, 6 do
@@ -455,7 +455,7 @@ do
         assert(maps.has(map, "k1") and not maps.has(map, "k41") and not maps.has(map, nil))
     end
 
-    -- an existing key keeps its place, and a nil value keeps the key
+    -- an existing key doesn't move, and a nil value doesn't remove the key
     maps.set(map, "k1", "first")
     assert(maps.get(map, "k1") == "first" and map:index("k1") == 1)
     maps.set(map, "k2", nil)
