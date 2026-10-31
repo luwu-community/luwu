@@ -282,7 +282,7 @@ static AutocompleteEntryMap autocompleteAttributeComment(const std::string& type
 // `--!nolint` or `--!lint`, and an optimization level after `--!optimize`
 static AutocompleteEntryMap autocompleteHotComment(const HotComment& hotComment, Position position)
 {
-    // `content` starts after the `--!` (after the `--` for `--@[nolint(...)]`, whose content keeps its '@') and has no
+    // `content` starts after the `--!` (after the `--` for `--@[nolint(...)]`, whose content includes its '@') and has no
     // trailing whitespace, so a cursor past its end follows a space
     const unsigned contentStart = hotComment.location.begin.column + (hotComment.attribute ? 2 : 3);
     const size_t offset = position.column > contentStart ? position.column - contentStart : 0;
