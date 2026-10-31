@@ -387,7 +387,7 @@ do
         ]])
     end)
 
-    -- a loaded class may keep its constructor private: the trait's code may still construct it
+    -- a loaded class's constructor may be private: the trait's code may still construct it
     local private = Plugin([[
         local Plugin = ...
         class Secretive private () implements Plugin
@@ -767,7 +767,7 @@ do
 end
 
 -- No half-built object is ever reachable: not while its construction is suspended, and not after it raised. The variable
--- it is assigned to keeps its old value until construction completes, even a local another closure reads.
+-- it is assigned to holds its old value until construction completes, even a local another closure reads.
 do
     local Pausing, Raising, readers = compile([[
         trait PausesInit

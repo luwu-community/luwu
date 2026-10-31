@@ -3679,7 +3679,7 @@ used:use()
     CHECK_EQ(toString(result.errors[1]), "rejected");
 }
 
-// Luwu: an imported generic function's `keyof<T>` is irreducible in the caller too, so a literal argument keeps its
+// Luwu: an imported generic function's `keyof<T>` is irreducible in the caller too, so a literal argument stays its
 // literal type rather than widening while it waits for it
 TEST_CASE_FIXTURE(BuiltinsFixture, "keyof_of_a_generic_parameter_from_another_module")
 {
@@ -4003,7 +4003,7 @@ local edited: Edited<R> = nil :: any
     CHECK_EQ(stringSingletonOf(requireType("shown")), "{ p: P, q: Q }");
     // a type a type function didn't change is still the alias it was
     CHECK_EQ(toString(requireType("copied")), "R");
-    // one it changed isn't, and neither is anything that reaches the change; what it didn't touch keeps its name
+    // one it changed isn't, and neither is anything that reaches the change; what it didn't touch has the same name
     CHECK_EQ(toString(requireType("edited")), "{ p: P, q: { a: P, b: number } }");
 }
 
@@ -4762,7 +4762,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "literal_parameters_can_be_optional")
 {
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
     ScopedFastFlag literalParameters{FFlag::LuwuLiteralTypes, true};
-    // A literal argument for a generic keeps its singleton type (`B` is `"b"`)
+    // A literal argument for a generic stays a singleton type (`B` is `"b"`)
     ScopedFastFlag removePrimitiveTypeConstraint{FFlag::LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier, true};
 
     CheckResult result = check(R"(

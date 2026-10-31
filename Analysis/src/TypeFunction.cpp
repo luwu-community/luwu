@@ -528,7 +528,7 @@ struct TypeFunctionReducer
                 {
                     setState(subject, TypeFunctionInstanceState::Solved);
 
-                    // Luwu: an instance from another module (`keyof<T>` in an imported generic function) keeps its
+                    // Luwu: an instance from another module (`keyof<T>` in an imported generic function) holds on to its
                     // state, so the solver is told instead. Upstream leaves it looking blocked, and an argument pushed
                     // into it widens before the push runs.
                     if constexpr (std::is_same_v<T, TypeId>)

@@ -299,7 +299,7 @@ struct TypeFunctionType
     TypeFunctionTypeVariant type;
     bool frozen = false;
 
-    // Luwu: the type this was serialized from. Deserializing keeps its documentation (definition locations, doc symbol),
+    // Luwu: the type this was serialized from. Deserializing carries over its documentation (definition locations, doc symbol),
     // so a type function that rebuilds a type doesn't strip the docs off it.
     TypeId origin = nullptr;
     // Luwu: a type function changed this type's structure (`setproperty`, `setparameters`, ...). Deserializing gives a type
