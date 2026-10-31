@@ -9328,3 +9328,63 @@ bb_6:
 }
 
 TEST_SUITE_END();
+
+TEST_CASE_FIXTURE(LoweringFixture, "GenericForOverPlainTableSetsUpIterationInline")
+{
+    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
+
+    // Luwu: `for k, v in t` over a table without a metatable sets up builtin iteration with stores. Only a value that
+    // isn't such a table reaches FALLBACK_FORGPREP, from the fallback block.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function sum(t)
+    local total = 0
+    for _, v in t do
+        total += v
+    end
+    return total
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function sum($arg0) line 2
+bb_bytecode_0:
+  STORE_DOUBLE R1, 0
+  STORE_TAG R1, tnumber
+  %2 = LOAD_TVALUE R0
+  STORE_TVALUE R2, %2
+  STORE_TAG R3, tnil
+  STORE_TAG R4, tnil
+  CHECK_TAG R0, ttable, bb_fallback_3
+  %8 = LOAD_POINTER R0
+  CHECK_NO_METATABLE %8, bb_fallback_3
+  STORE_POINTER R3, %8
+  STORE_TAG R3, ttable
+  STORE_POINTER R4, 0i
+  STORE_EXTRA R4, 128i
+  STORE_TAG R4, tlightuserdata
+  STORE_TAG R2, tnil
+  JUMP bb_bytecode_2
+bb_bytecode_1:
+  CHECK_TAG R1, tnumber, exit(5)
+  CHECK_TAG R6, tnumber, bb_fallback_4
+  %22 = LOAD_DOUBLE R1
+  %24 = ADD_NUM %22, R6
+  STORE_DOUBLE R1, %24
+  JUMP bb_bytecode_2
+bb_bytecode_2:
+  INTERRUPT 6u
+  CHECK_GC
+  CHECK_TAG R2, tnil, bb_fallback_6
+  FORGLOOP R2, 2i, bb_bytecode_1, bb_5
+bb_5:
+  INTERRUPT 8u
+  RETURN R1, 1i
+)"
+    );
+}
