@@ -198,7 +198,7 @@ static std::string typeDeclaration(const std::string& name, const std::string& e
     constexpr size_t maxDeclarationLineLength = 80;
 
     // A summarized expansion ("a union of 37 members, including:" then one member per line)
-    // keeps its first line after the `=` and indents the rest under it.
+    // stays on the `=` line and indents the rest under it.
     if (size_t firstBreak = expansion.find('\n'); firstBreak != std::string::npos)
     {
         std::string result = "type " + name + " = " + expansion.substr(0, firstBreak);
@@ -243,7 +243,7 @@ static std::string shownType(const std::string& type)
     return indentContinuationLines(type, "    ");
 }
 
-// Luwu (helpful subtyping errors): a `where` line. A table printed a field per line keeps its own layout,
+// Luwu (helpful subtyping errors): a `where` line. A table printed a field per line is laid out the same way,
 // indented under `type X = {`.
 static std::string whereDeclaration(const NamedTypeDeclaration& declaration)
 {
