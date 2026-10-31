@@ -815,7 +815,7 @@ void luaV_pop(lua_State* L, StkId ra, StkId container)
     const TValue* tm = luaT_gettmbyobj(L, container, TM_POP);
     if (!ttisnil(tm))
     {
-        // __pop(container), keeping its first result
+        // __pop(container), truncated to its first result
         ptrdiff_t raoffset = savestack(L, ra);
         ptrdiff_t containeroffset = savestack(L, container);
         luaD_checkstack(L, 2);
