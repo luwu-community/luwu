@@ -2883,7 +2883,7 @@ struct Compiler
             return false;
         }
 
-        // fields in the order compileClassDeclaration emits them: the class body's properties, then
+        // fields in compileClassDeclaration's order: the class body's properties, then
         // the parameters the body doesn't restate
         std::vector<const AstClassProperty*> properties;
 
