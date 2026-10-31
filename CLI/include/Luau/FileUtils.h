@@ -1,6 +1,8 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include "Luau/ParseOptions.h"
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,6 +18,8 @@ std::optional<std::string> readFile(const std::string& name);
 std::optional<std::string> readStdin();
 
 bool hasFileExtension(std::string_view name, const std::vector<std::string>& extensions);
+// Luwu: the language a source file is written in, going by its extension. A name that isn't a Luau or Lua file is Luwu.
+Luau::Language languageOfPath(std::string_view path);
 
 bool isAbsolutePath(std::string_view path);
 bool isFile(const std::string& path);
