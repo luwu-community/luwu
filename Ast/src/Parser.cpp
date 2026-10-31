@@ -2558,7 +2558,7 @@ std::optional<Parser::Name> Parser::parseModulePath()
 //   type FsMetadata = fs.FsMetadata
 //   type Entry = fs.FileEntry
 //
-// A generic type keeps its generics: ConstraintGenerator binds the alias to the imported type function itself. The
+// A generic type still has its generics: ConstraintGenerator binds the alias to the imported type function itself. The
 // first alias is returned; the rest are left in pendingStatements for parseBlockNoScope.
 //
 // The module can be a field of one, `type .{Age} = hub.t`. Its aliases read from a prefix spelled `hub.t`, which
@@ -7435,7 +7435,7 @@ bool Parser::statementReportedError()
 // Luwu: the next line is a statement of its own, though the one being parsed still needs a value or name. It starts
 // with a name, isn't indented past the statement being parsed, and the token after the name can't continue this
 // statement. Code like that fails to parse either way: this only decides where the error goes, so the next line parses
-// on its own instead of being read into the unfinished one. Valid code keeps its parse however it's indented.
+// on its own instead of being read into the unfinished one. Valid code parses the same however it's indented.
 bool Parser::nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName))
 {
     const Lexeme& current = lexer.current();
