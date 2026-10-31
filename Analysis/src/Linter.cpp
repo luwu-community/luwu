@@ -4,6 +4,7 @@
 #include "Luau/AstQuery.h"
 #include "Luau/LinterConfig.h"
 #include "Luau/Module.h"
+#include "Luau/ParseResult.h"
 #include "Luau/Scope.h"
 #include "Luau/TypeInfer.h"
 #include "Luau/StringUtils.h"
@@ -564,6 +565,37 @@ private:
     }
 };
 
+// Luwu: whether `node` holds a node the parser made while recovering from a syntax error. Such a statement ends where
+// the parser gave up, often on the next line, not where the user stopped typing it.
+static bool containsParseError(AstNode* node)
+{
+    struct Finder : AstVisitor
+    {
+        bool found = false;
+
+        bool visit(AstNode*) override
+        {
+            return !found;
+        }
+
+        bool visit(AstExprError*) override
+        {
+            found = true;
+            return false;
+        }
+
+        bool visit(AstStatError*) override
+        {
+            found = true;
+            return false;
+        }
+    };
+
+    Finder finder;
+    node->visit(&finder);
+    return finder.found;
+}
+
 class LintSameLineStatement : AstVisitor
 {
 public:
@@ -601,6 +633,11 @@ private:
 
             // Another common pattern is using multiple statements on the same line with semi-colons on each of them. White-list this pattern too.
             if (node->body.data[i - 1]->hasSemicolon)
+                continue;
+
+            // Luwu: a half-typed statement (`local t =`) ends on the next statement's line because the parser gave up
+            // there. Upstream reports the untouched next line.
+            if (containsParseError(node->body.data[i - 1]))
                 continue;
 
             emitWarning(
@@ -679,7 +716,9 @@ private:
     {
         Statement& top = stack.back();
 
-        if (!top.flagged)
+        // Luwu: an error expression sits where the parser gave up, often on the next line (`local t =` with nothing
+        // after it), so it says nothing about how the statement was laid out. Upstream reports the untouched next line.
+        if (!top.flagged && !node->is<AstExprError>())
         {
             Location location = node->location;
 
@@ -786,6 +825,11 @@ private:
     {
         for (auto& l : locals)
         {
+            // Luwu: a local the parser declared in place of a missing name (`local` with nothing after it). Upstream
+            // reports it as "Variable '%error-id%' is never used", on the untouched next line.
+            if (l.first->name == kParseNameError)
+                continue;
+
             bool shadowsClass = l.second.defined && reportClassShadow(l.first);
 
             if (l.second.used)

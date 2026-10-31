@@ -758,7 +758,10 @@ TEST_CASE_FIXTURE(Fixture, "dont_report_type_errors_within_an_AstExprError")
         local a = foo:
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    // Luwu: one syntax error, for the missing method name. Upstream also reports the missing call arguments at the
+    // same token, which is two errors for one thing not typed yet.
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<SyntaxError>(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "dont_ice_on_astexprerror")
