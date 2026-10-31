@@ -1538,7 +1538,7 @@ static bool luaR_traitneeds(lua_State* L, LuaTable* edges, LuaTable* visited, Lu
     return false;
 }
 
-// Of the traits in `providers` (an array, in the order the class attaches them) that all provide `name`, the one whose
+// Of the traits in `providers` (an array, in attachment order) that all provide `name`, the one whose
 // member the class gets: the one that needs every other. Raises when there is none, or when the override breaks what the
 // overridden trait promised: the member is `final`, a field where the override is a function (or the other way around),
 // or public where the override isn't; or a field's constness differs.
@@ -2036,7 +2036,7 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
     for (uint32_t i = 0; i < newnstatic; i++)
         setnilvalue(&newstaticmembers[i]);
 
-    // The class's own members keep their order: its fields first, where the compiler put them, then its functions,
+    // The class's own members stay in order: its fields first, where the compiler put them, then its functions,
     // shifted past the trait fields.
     for (uint32_t off = 0; off < ownninst; off++)
     {

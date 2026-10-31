@@ -48,7 +48,7 @@ struct HotComment
     bool header;
     Location location;
     std::string content;
-    // Luwu: a `--@[nolint(...)]` or `--@[lint(...)]` comment, whose content keeps its '@'. It turns lints off or on for
+    // Luwu: a `--@[nolint(...)]` or `--@[lint(...)]` comment, whose content includes its '@'. It turns lints off or on for
     // the statement after it, where Luau and Lua files can't write the attribute.
     bool attribute = false;
 };

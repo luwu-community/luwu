@@ -936,7 +936,7 @@ static const luaR_NativeMember kOrderedMapMembers[] = {
     {"__iter", orderedmapiter, 0},
 };
 
-// vec and vecdeque keep their entries in a storage block (LuauStorage) from the first value on. Its capacity is a power
+// vec and vecdeque store their entries in a storage block (LuauStorage) from the first value on. Its capacity is a power
 // of two. The entry `i` places from the front (from 0) is in slot (head + i) & (capacity - 1) (luaR_storageentry): a
 // vecdeque's entries wrap around the block's end, and a vec's start at slot 0 with head 0.
 
@@ -988,7 +988,7 @@ static LuauStorage* newstorage(lua_State* L, LuauObject* container, int idx)
     return storage;
 }
 
-// Gives the block `capacity` slots, enough for every entry. The entries keep their positions: when the block grows,
+// Gives the block `capacity` slots, enough for every entry. The entries don't move: when the block grows,
 // the ones that wrapped around its old end move after it.
 static LuauStorage* resizestorage(lua_State* L, LuauObject* container, uint32_t capacity)
 {
@@ -1040,7 +1040,7 @@ static void storeentry(lua_State* L, LuauObject* container, TValue* slot, const 
     luaC_barrier(L, container, value);
 }
 
-// Empties `container`, keeping its element type, and shrinks a grown block back
+// Empties `container` without changing its element type, and shrinks a grown block back
 static void clearstorage(lua_State* L, LuauObject* container)
 {
     LuauStorage* storage = luaR_storage(container);

@@ -7990,7 +7990,7 @@ struct LintScope
     LintMask disable;
 };
 
-// Luwu: every statement, in the order a visitor reaches them, so the outer one comes first where two start together
+// Luwu: every statement in visit order, so the outer one comes first where two start together
 struct StatementCollector : AstVisitor
 {
     std::vector<AstStat*> statements;

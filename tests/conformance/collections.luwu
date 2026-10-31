@@ -168,7 +168,7 @@ do
     assert(table.concat(order) == "opq")
 end
 
--- a new key goes at the end; an existing key keeps its place
+-- a new key goes at the end; an existing key doesn't move
 do
     const map = collections.orderedmap()
     assert(#map == 0)
