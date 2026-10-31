@@ -1154,9 +1154,8 @@ struct ByteSpan
 
 #define BYTE_SPAN(literal) {literal, sizeof(literal) - 1}
 
-// What trim, trimstart and trimend remove when given no strings: every Unicode White_Space character, and the byte order
-// mark (U+FEFF) because it's never wanted at either end of text. These are the multi-byte ones; isAsciiWhitespace has the
-// rest.
+// What trim, trimstart and trimend remove when given no strings: every Unicode White_Space character and the byte order
+// mark (U+FEFF). These are the multi-byte ones; isAsciiWhitespace has the rest.
 static const ByteSpan kMultiByteWhitespace[] = {
     BYTE_SPAN("\xC2\x85"),     // U+0085 next line
     BYTE_SPAN("\xC2\xA0"),     // U+00A0 no-break space
@@ -1200,8 +1199,7 @@ static bool spanAtEdge(const char* data, size_t size, const char* begin, size_t 
 }
 
 // How many bytes to trim from one end of [begin, end): the first of the strings in arguments firstArg onwards that the
-// text starts (or ends) with, or whitespace when there are no such arguments. Like Python's strip, it never matches an empty
-// string.
+// text starts (or ends) with, or whitespace when there are no such arguments. An empty string never matches.
 static size_t trimLengthAtEdge(lua_State* L, int firstArg, const char* begin, const char* end, bool atEnd)
 {
     size_t available = end - begin;
@@ -1280,8 +1278,6 @@ static int str_trimend(lua_State* L)
 {
     return trimEdges(L, /* fromStart */ false, /* fromEnd */ true);
 }
-
-typedef bool (*NeedleTest)(const char* s, size_t length, const char* needle, size_t needleLength);
 
 // Whether argument 1 passes the test for any needle. The first needle (argument 2) is required; the rest are
 // alternatives.

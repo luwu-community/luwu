@@ -258,7 +258,7 @@ TEST_CASE_FIXTURE(ReplFixture, "TableWithMetatableIndexTable")
         CompletionSet completions = getCompletionSet("t.tkey1.data2:re");
 
         std::string prefix = "t.tkey1.data2:";
-        // Luwu: LuwuStringExtensions adds `string.replace`, which starts with `re` too
+        // Luwu String Extensions (rfcs/string-extensions.md): `string.replace` starts with `re` too
         CHECK(completions.size() == (FFlag::LuwuStringExtensions ? 3 : 2));
         CHECK(checkCompletion(completions, prefix, "rep("));
         CHECK(checkCompletion(completions, prefix, "reverse("));
