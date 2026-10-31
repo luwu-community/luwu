@@ -22,6 +22,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include <math.h>
 
@@ -901,6 +902,21 @@ struct Compiler
             bytecode.emitAux(args[1] | (args[2] << 8));
         else if (opc != LOP_FASTCALL1)
             bytecode.emitAux(aux2K >= 0 ? uint32_t(aux2K) : args[1]);
+    }
+
+    // Emits the NAMECALL that looks up `method` on the receiver in `selfreg`, leaving the function in `regs` and the
+    // receiver after it
+    void emitNamecall(AstExprIndexName* method, uint8_t regs, uint8_t selfreg)
+    {
+        setDebugLine(method->indexLocation);
+
+        BytecodeBuilder::StringRef iname = sref(method->index);
+        int32_t cid = bytecode.addConstantString(iname);
+        if (cid < 0)
+            CompileError::raise(method->location, "Exceeded constant limit; simplify the code to compile");
+
+        bytecode.emitABC(LOP_NAMECALL, regs, selfreg, uint8_t(BytecodeBuilder::getStringHash(iname)));
+        bytecode.emitAux(cid);
     }
 
     void compileExprFastcallN(
@@ -3290,6 +3306,18 @@ struct Compiler
     // initialized them
     static constexpr int kMaxStringProofDepth = 16;
 
+    template<size_t N>
+    static bool isOneOf(AstName name, const char* const (&names)[N])
+    {
+        for (const char* candidate : names)
+        {
+            if (name == candidate)
+                return true;
+        }
+
+        return false;
+    }
+
     // Luwu String Extensions: the functions of the `string` library, which a method call on a string reaches
     static bool isStringLibraryFunction(AstName name)
     {
@@ -3298,13 +3326,7 @@ struct Compiler
             "packsize", "unpack", "trim", "trimstart", "trimend", "startswith", "endswith", "contains", "replace",
         };
 
-        for (const char* function : kFunctions)
-        {
-            if (name == function)
-                return true;
-        }
-
-        return false;
+        return isOneOf(name, kFunctions);
     }
 
     // Luwu String Extensions: the `string` functions whose first result is always a string
@@ -3314,13 +3336,7 @@ struct Compiler
             "char", "format", "gsub", "lower", "rep", "reverse", "sub", "upper", "trim", "trimstart", "trimend", "replace",
         };
 
-        for (const char* function : kFunctions)
-        {
-            if (name == function)
-                return true;
-        }
-
-        return false;
+        return isOneOf(name, kFunctions);
     }
 
     static bool isStringAnnotation(AstType* annotation)
@@ -3447,26 +3463,18 @@ struct Compiler
 
     // Luwu String Extensions: the builtin to try first for a method call on a receiver that may not be a string, or -1.
     // Only builtins whose fast path takes nothing but a string as its first argument qualify, so any other receiver falls
-    // back to the method call. `string.char`'s takes a number, which a number with an embedder-set metatable could be.
+    // back to the method call.
     int stringMethodBuiltin(AstExprCall* expr)
     {
-        AstExprCall* functionForm = stringFunctionForm(expr);
-        const int* bfid = functionForm ? builtins.find(functionForm) : nullptr;
-        if (!bfid)
+        static const char* const kStringOnlyBuiltins[] = {"byte", "len", "sub", "startswith", "endswith", "contains"};
+
+        AstExprIndexName* method = expr->func->as<AstExprIndexName>();
+        if (!method || !isOneOf(method->index, kStringOnlyBuiltins))
             return -1;
 
-        switch (*bfid)
-        {
-        case LBF_STRING_BYTE:
-        case LBF_STRING_LEN:
-        case LBF_STRING_SUB:
-        case LBF_STRING_STARTSWITH:
-        case LBF_STRING_ENDSWITH:
-        case LBF_STRING_CONTAINS:
-            return *bfid;
-        default:
-            return -1;
-        }
+        AstExprCall* functionForm = stringFunctionForm(expr);
+        const int* bfid = functionForm ? builtins.find(functionForm) : nullptr;
+        return bfid ? *bfid : -1;
     }
 
     // Luwu String Extensions (rfcs/string-extensions.md): `s:name(...)` where `name` is a string builtin, as that builtin's
@@ -3511,6 +3519,9 @@ struct Compiler
             }
         }
 
+        if (bytecode.needsDebugRemarks())
+            bytecode.addDebugRemark("builtin string.%s/%d", method->index.value, int(operandCount));
+
         size_t fastcallLabel = bytecode.emitLabel();
         emitFastcallN(opc, bfid, operands);
 
@@ -3525,15 +3536,7 @@ struct Compiler
                 bytecode.emitABC(LOP_MOVE, argReg, uint8_t(operands[i + 1]), 0);
         }
 
-        setDebugLine(method->indexLocation);
-
-        BytecodeBuilder::StringRef iname = sref(method->index);
-        int32_t cid = bytecode.addConstantString(iname);
-        if (cid < 0)
-            CompileError::raise(method->location, "Exceeded constant limit; simplify the code to compile");
-
-        bytecode.emitABC(LOP_NAMECALL, regs, selfreg, uint8_t(BytecodeBuilder::getStringHash(iname)));
-        bytecode.emitAux(cid);
+        emitNamecall(method, regs, selfreg);
 
         size_t callLabel = bytecode.emitLabel();
         if (!bytecode.patchSkipC(fastcallLabel, callLabel))
@@ -3766,15 +3769,7 @@ struct Compiler
             AstExprIndexName* fi = expr->func->as<AstExprIndexName>();
             LUAU_ASSERT(fi);
 
-            setDebugLine(fi->indexLocation);
-
-            BytecodeBuilder::StringRef iname = sref(fi->index);
-            int32_t cid = bytecode.addConstantString(iname);
-            if (cid < 0)
-                CompileError::raise(fi->location, "Exceeded constant limit; simplify the code to compile");
-
-            bytecode.emitABC(LOP_NAMECALL, regs, selfreg, uint8_t(BytecodeBuilder::getStringHash(iname)));
-            bytecode.emitAux(cid);
+            emitNamecall(fi, regs, selfreg);
 
             hintTemporaryExprRegType(fi->expr, selfreg, LBC_TYPE_TABLE, /* instLength */ 2);
         }
@@ -4533,8 +4528,8 @@ struct Compiler
     }
 
     // Luwu String Extensions (rfcs/string-extensions.md): the local `expr` checks, when it is `type(x) == "string"` or
-    // `typeof(x) == "string"` (either way round) for a local of this frame that no nested function writes. A proof from it
-    // also needs a region no write in this frame can cross, like a `class.isinstance` proof (matchIsinstanceCall).
+    // `typeof(x) == "string"` (either way round) for a local of this frame that no nested function writes. The caller
+    // must also check that nothing in the proven region writes the local.
     AstLocal* matchTypeStringCheck(AstExpr* expr)
     {
         if (!FFlag::LuwuStringExtensions || !currentFunction)
@@ -4557,7 +4552,7 @@ struct Compiler
         const int* bfid = call ? builtins.find(call) : nullptr;
 
         bool checksType = bfid && (*bfid == LBF_TYPE || *bfid == LBF_TYPEOF) && call->args.size == 1;
-        bool checksString = name && name->value.size == 6 && memcmp(name->value.data, "string", 6) == 0;
+        bool checksString = name && std::string_view(name->value.data, name->value.size) == "string";
         if (!checksType || !checksString)
             return nullptr;
 
@@ -4571,8 +4566,8 @@ struct Compiler
         return le->local;
     }
 
-    // `assert(type(x) == "string")` as a statement, for the rest of the block. `assert` is the builtin, which raises when
-    // the check fails, under the same assumption every builtin fastcall makes.
+    // `assert(type(x) == "string")` as a statement proves `x` for the rest of the block. Only the builtin `assert`
+    // counts: a module that reassigns the global gets no builtin id for it.
     AstLocal* matchAssertStringProof(AstStat* stat, const AstArray<AstStat*>& body, size_t index)
     {
         AstStatExpr* statExpr = stat->as<AstStatExpr>();

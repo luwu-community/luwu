@@ -2544,7 +2544,7 @@ static int stringNeedleTest(
     int nresults,
     StkId args,
     int nparams,
-    bool (*test)(const char*, size_t, const char*, size_t)
+    NeedleTest test
 )
 {
     if (!FFlag::LuwuStringExtensions || nparams < 2 || nresults > 1 || !ttisstring(arg0))

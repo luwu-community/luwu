@@ -72,7 +72,6 @@
 //   and constant field defaults in LBC_CONSTANT_CLASS_SHAPE, LBC_TYPE_CLASS/LBC_TYPE_OBJECT and
 //   LBF_CLASS_ISINSTANCE.
 
-
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
 // Version 2: (from bytecode version 4) Type information for arguments, upvalues, locals and some temporaries. Currently supported.

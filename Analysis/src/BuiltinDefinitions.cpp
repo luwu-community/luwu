@@ -1261,11 +1261,15 @@ TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     TypeId splitFunc;
     // Luwu String Extensions (rfcs/string-extensions.md): split takes an optional maximum number of pieces.
     if (FFlag::LuwuStringExtensions)
+    {
         splitFunc = makeFunction(
             *arena, stringType, {}, {}, {optionalString, optionalNumber}, {"sep", "maxpieces"}, {splitResult}, /* checked */ true
         );
+    }
     else
+    {
         splitFunc = makeFunction(*arena, stringType, {}, {}, {optionalString}, {}, {splitResult}, /* checked */ true);
+    }
 
     TableType::Props stringLib = {
         {"byte", {arena->addType(std::move(stringDotByte))}},
