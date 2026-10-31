@@ -2961,7 +2961,7 @@ static int createNominal(lua_State* L, bool isTrait)
         valueMetatable["__call"] = Property::readonly(arena->addType(std::move(call)));
         valueEtv->metatable = arena->addType(TableType{std::move(valueMetatable), std::nullopt, TypeLevel{}, builder->ctx->scope.get(), TableState::Sealed});
 
-        // where a written class keeps its constructor's privacy
+        // where a written class's constructor stays private if it was
         Property init = Property::readonly(withSelf(arena, *nominal.constructor, object));
         init.isPrivate = nominal.privateConstructor;
         objectEtv->props()["__init"] = init;

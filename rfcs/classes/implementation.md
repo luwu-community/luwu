@@ -224,7 +224,7 @@ Workaround: annotate the table first (`local info: Info = { ... }`) and pass `in
   object type is its own `object<...>`, so `object<class<object<Dog>>>` is `Dog`. Both are in
   `BuiltinTypeFunctions.cpp` (`classFunc`, `objectFunc`).
 - `class<...>` and `object<...>` are routed to their type functions in `resolveReferenceType`
-  (`ConstraintGenerator.cpp`), so bare `class` and `object` keep their bindings as top types.
+  (`ConstraintGenerator.cpp`), so bare `class` and `object` stay bound as top types.
 - `typeof(Cat)` is an error suggesting `class<Cat>`, since both print as `Cat` otherwise.
 - Type errors print class and trait values as `class<Item>` and `trait<Item>`
   (`ToStringOptions::classAndTraitValuesInTypeForm`). A value against its own objects is said in words instead

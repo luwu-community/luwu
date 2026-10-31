@@ -4746,8 +4746,8 @@ Parser::Binding Parser::parseBinding(bool isConst, bool allowDefault, bool allow
     if (parsingDeclaredParameters && lexer.current().type == '=')
     {
         // Luwu Declare Statements (rfcs/declare-statements.md): a declared parameter's default is written as its type,
-        // and only tells the caller it may leave the parameter out. `x: T = value` copied from a function keeps its
-        // annotation, and the value is skipped.
+        // and only tells the caller it may leave the parameter out. `x: T = value` copied from a function is read as
+        // its annotation, and the value is skipped.
         Location equalsLocation = lexer.current().location;
         nextLexeme();
 
@@ -7904,7 +7904,7 @@ void Parser::nextLexeme()
             while (end > 0 && isSpace(text[end - 1]))
                 --end;
 
-            // A directive's content starts after its '!'; an attribute's keeps its '@'
+            // A directive's content starts after its '!'; an attribute's includes its '@'
             const unsigned int start = directive ? 1 : 0;
             hotcomments.push_back({hotcommentHeader, lexeme.location, std::string(text + start, text + end), attribute});
         }
