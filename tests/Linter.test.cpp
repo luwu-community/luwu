@@ -3898,6 +3898,15 @@ return t, f, print, p, export, g
     CHECK_EQ(builtin[4].text, "'string' hides the builtin 'string' here");
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "BuiltinShadowOfNoneIsOnlyForLuwuFiles")
+{
+    const char* source = "local none = 1\nreturn none\n";
+    CHECK_EQ(warningsWithCode(lint(source), LintWarning::Code_BuiltinShadow).size(), 1);
+
+    configResolver.defaultConfig.language = Language::Luau;
+    CHECK(warningsWithCode(lint(source), LintWarning::Code_BuiltinShadow).empty());
+}
+
 TEST_CASE_FIXTURE(Fixture, "OrContinue")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};

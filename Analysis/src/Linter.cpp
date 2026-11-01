@@ -4496,14 +4496,17 @@ private:
     }
 
     // The standard globals every Luau and Luwu program has. Globals an embedder declares (seal's `p`, Roblox's `game`)
-    // aren't in it: a local named `p` is ordinary code.
-    static bool isStandardGlobal(AstName name)
+    // aren't in it: a local named `p` is ordinary code. `none` is only a global in Luwu modules.
+    bool isStandardGlobal(AstName name) const
     {
+        if (name == "none")
+            return !context->module || context->module->language == Language::Luwu;
+
         static const std::unordered_set<std::string_view> kStandardGlobals = {
             "assert", "error", "getfenv", "setfenv", "getmetatable", "setmetatable", "ipairs", "pairs", "next", "pcall",
             "xpcall", "print", "rawequal", "rawget", "rawset", "rawlen", "select", "tonumber", "tostring", "type", "typeof",
             "unpack", "gcinfo", "collectgarbage", "newproxy", "require", "bit32", "buffer", "coroutine", "debug", "math",
-            "os", "string", "table", "utf8", "vector", "none", "_G", "_VERSION",
+            "os", "string", "table", "utf8", "vector", "_G", "_VERSION",
         };
         return kStandardGlobals.count(name.value) != 0;
     }
