@@ -632,6 +632,57 @@ end
 
 fill()
 
+local function memcmp()
+    local a = buffer.fromstring("abcdef")
+    local b = buffer.fromstring("abcdef")
+    local c = buffer.fromstring("abcdeg")
+
+    assert(buffer.memcmp(a, b) == 0)
+    assert(buffer.memcmp(a, c) == -1)
+    assert(buffer.memcmp(c, a) == 1)
+
+    assert(buffer.memcmp(
+        buffer.fromstring("xxxxabc"),
+        buffer.fromstring("yyyyabc"),
+        4,
+        4
+    ) == 0)
+
+    assert(buffer.memcmp(
+        buffer.fromstring("messxxx"),
+        buffer.fromstring("messyyy"),
+        0,
+        0,
+        4
+    ) == 0)
+
+    assert(buffer.memcmp(
+        buffer.fromstring("xxmess"),
+        buffer.fromstring("yyyymess"),
+        2,
+        4
+    ) == 0)
+
+    assert(buffer.memcmp(
+        buffer.fromstring("xxmess"),
+        buffer.fromstring("yyyymessZZ"),
+        2,
+        4
+    ) == 0)
+
+    -- out of bounds
+    local d = buffer.create(10)
+    local e = buffer.create(10)
+
+    assert(ecall(function() buffer.memcmp(d, e, -1, 0) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.memcmp(d, e, 0, -1) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.memcmp(d, e, 8, 0, 3) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.memcmp(d, e, 0, 8, 3) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.memcmp(d, e, 0, 0, -1) end) == "buffer access out of bounds")
+end
+
+memcmp()
+
 local function misc(t16)
   local native_check = is_native_if_supported()
   local b = buffer.create(1000)

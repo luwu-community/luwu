@@ -7,6 +7,7 @@ LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(LuwuBufferMemcmp)
 LUAU_FASTFLAG(LuwuTableDrop)
 
 namespace Luau
@@ -284,6 +285,11 @@ static constexpr const char* kBuiltinDefinitionBufferSrcIsFrozen = R"BUILTIN_SRC
     isfrozen: @checked (b: buffer) -> boolean,
 )BUILTIN_SRC";
 
+// Luwu buffer.memcmp (rfcs/buffer-memcmp.md):
+static constexpr const char* kBuiltinDefinitionBufferSrcMemcmp = R"BUILTIN_SRC(
+    memcmp: @checked (b1: buffer, b2: buffer, offset1: number?, offset2: number?, count: number?) -> number,
+)BUILTIN_SRC";
+
 static constexpr const char* kBuiltinDefinitionBufferSrcClose = R"BUILTIN_SRC(
 }
 
@@ -401,6 +407,8 @@ std::string getBuiltinDefinitionSource()
         result += kBuiltinDefinitionBufferSrcInteger;
     if (FFlag::LuwuBufferIsFrozen)
         result += kBuiltinDefinitionBufferSrcIsFrozen;
+    if (FFlag::LuwuBufferMemcmp)
+        result += kBuiltinDefinitionBufferSrcMemcmp;
     result += kBuiltinDefinitionBufferSrcClose;
 
     result += kBuiltinDefinitionVectorSrc;
