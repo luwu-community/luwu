@@ -1561,17 +1561,21 @@ TypeId TypeSimplifier::withoutWeakUnknown(TypeId ty, bool& hadWeakUnknown)
     if (!ut)
         return ty;
 
+    // The iterator flattens nested unions, so `rest` can hold more members than `ut` does: whether anything was taken
+    // out is tracked on its own.
     std::vector<TypeId> rest;
+    bool removed = false;
     for (TypeId option : ut)
     {
         if (follow(option) == builtinTypes->weakUnknownType)
-            hadWeakUnknown = true;
+            removed = true;
         else
             rest.push_back(option);
     }
 
-    if (rest.size() == ut->options.size())
+    if (!removed)
         return ty;
+    hadWeakUnknown = true;
     if (rest.empty())
         return builtinTypes->neverType;
     if (rest.size() == 1)

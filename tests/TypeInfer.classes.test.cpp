@@ -6367,6 +6367,29 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "weakunknown_keeps_the_rest_of_its_union")
     CHECK_MESSAGE(pick.find("-> NotFound | ") != std::string::npos, pick);
 }
 
+// Luwu try expressions: weakunknown is found inside a nested union. `protect` returns `(Failure | weakunknown) | Failure`,
+// and joining it must finish instead of recursing until the simplifier's limit raises an internal compiler error.
+TEST_CASE_FIXTURE(BuiltinsFixture, "weakunknown_in_a_nested_union_simplifies")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        type Failure = { message: string }
+        local function protect<T>(f: () -> T): T | Failure
+            return f()
+        end
+        local function g(): Failure | unknown
+            return nil
+        end
+        local r = protect(g)
+        local s = tostring(r)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("s")), "string");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_error_hints")
 {
     ScopedFastFlag sffs[] = {
