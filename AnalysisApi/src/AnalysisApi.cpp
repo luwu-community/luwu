@@ -239,11 +239,36 @@ struct luwu_Analysis
         diagnostics.clear();
         legend.clear();
 
-        frontend.queueModuleCheck(names);
-        frontend.checkQueuedModules();
+        // One at a time, so an internal compiler error in one file doesn't stop the others from being checked
+        std::vector<Luau::ModuleName> checked;
+        for (const Luau::ModuleName& name : names)
+        {
+            try
+            {
+                frontend.queueModuleCheck(name);
+                frontend.checkQueuedModules();
+                checked.push_back(name);
+            }
+            catch (const Luau::InternalCompilerError& error)
+            {
+                addInternalError(name, error);
+            }
+        }
 
-        collectDiagnostics(names);
+        collectDiagnostics(checked);
         return 0;
+    }
+
+    // Reports an internal compiler error where it happened: in `name` or in a module it requires
+    void addInternalError(const Luau::ModuleName& name, const Luau::InternalCompilerError& error)
+    {
+        AnalyzeDiagnostic diagnostic;
+        diagnostic.moduleName = fileResolver.getHumanReadableModuleName(error.moduleName.value_or(name));
+        diagnostic.location = error.location.value_or(Luau::Location{});
+        diagnostic.severity = DiagnosticSeverity::Error;
+        diagnostic.kind = "InternalCompilerError";
+        diagnostic.message = error.message;
+        diagnostics.push_back(std::move(diagnostic));
     }
 };
 
@@ -256,17 +281,6 @@ static int guarded(luwu_Analysis* analysis, F&& call)
     try
     {
         return call();
-    }
-    catch (const Luau::InternalCompilerError& error)
-    {
-        std::string where;
-        if (error.moduleName)
-            where = analysis->fileResolver.getHumanReadableModuleName(*error.moduleName);
-        if (error.location)
-            where += Luau::format("(%d,%d)", error.location->begin.line + 1, error.location->begin.column + 1);
-        if (where.empty())
-            return analysis->fail("Internal compiler error: " + error.message);
-        return analysis->fail(where + ": internal compiler error: " + error.message);
     }
     catch (const std::exception& error)
     {

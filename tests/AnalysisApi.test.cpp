@@ -5,6 +5,7 @@
 #include "luacode.h"
 #include "lualib.h"
 
+#include "ScopedFlags.h"
 #include "doctest.h"
 
 #include <cstdlib>
@@ -75,6 +76,8 @@ static int refLuaFunction(lua_State* L, const char* source)
     lua_pop(L, 1);
     return ref;
 }
+
+LUAU_FASTFLAG(DebugLuauMagicTypes)
 
 TEST_SUITE_BEGIN("AnalysisApi");
 
@@ -225,6 +228,22 @@ TEST_CASE_FIXTURE(AnalysisApiFixture, "a_lua_resolver_that_raises_is_reported_no
     CHECK(found[1].severity == LUWU_DIAGNOSTIC_NOTE);
     CHECK(std::string(found[0].message).find("resolver broke") != std::string::npos);
     CHECK(lua_gettop(L) == 0);
+}
+
+TEST_CASE_FIXTURE(AnalysisApiFixture, "an_internal_compiler_error_is_reported_and_the_other_files_still_checked")
+{
+    // The magic type `_luau_ice` raises an internal compiler error
+    ScopedFastFlag magicTypes{FFlag::DebugLuauMagicTypes, true};
+    std::string crashing = write("crashing.luau", "local x: _luau_ice = 1\nreturn x\n");
+    std::string wrong = write("wrong.luau", "local x: number = \"one\"\nreturn x\n");
+
+    std::vector<luwu_Diagnostic> found = check({crashing, wrong});
+
+    REQUIRE(found.size() == 2);
+    CHECK(std::string(found[0].kind) == "InternalCompilerError");
+    CHECK(std::string(found[0].module).find("crashing.luau") != std::string::npos);
+    CHECK(std::string(found[1].kind) == "TypeError");
+    CHECK(std::string(found[1].module).find("wrong.luau") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(AnalysisApiFixture, "a_missing_file_is_a_read_error")

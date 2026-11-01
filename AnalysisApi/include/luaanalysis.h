@@ -32,7 +32,8 @@ typedef struct luwu_Diagnostic
 {
     // The file the diagnostic is in, relative to the current directory when it's under it
     const char* module;
-    // "TypeError", "SyntaxError", "Typo", "Note", "RequireError", "ConfigError", "ReadError" or a lint's name ("LocalUnused")
+    // "TypeError", "SyntaxError", "Typo", "Note", "RequireError", "ConfigError", "ReadError",
+    // "InternalCompilerError" or a lint's name ("LocalUnused")
     const char* kind;
     const char* message;
     int severity; // luwu_DiagnosticSeverity
@@ -70,7 +71,8 @@ LUAANALYSIS_API void luwu_analysis_setresolver(luwu_Analysis* analysis, lua_Stat
 LUAANALYSIS_API void luwu_analysis_queue(luwu_Analysis* analysis, const char* path);
 
 // Checks the queued files and every module they require, replacing the diagnostics of the previous check with those of
-// the queued files. Returns 0 when the check ran, whatever it found, or nonzero when it failed.
+// the queued files. Returns 0 when the check ran, whatever it found, or nonzero when it failed. An internal compiler
+// error is reported as a diagnostic, and the other files are still checked.
 LUAANALYSIS_API int luwu_analysis_check(luwu_Analysis* analysis);
 
 LUAANALYSIS_API size_t luwu_analysis_diagnosticcount(luwu_Analysis* analysis);
