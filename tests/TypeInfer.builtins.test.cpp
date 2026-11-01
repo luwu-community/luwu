@@ -11,6 +11,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuwuBufferBatched)
 
 TEST_SUITE_BEGIN("BuiltinTests");
 
@@ -524,6 +525,172 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_is_a_type")
 
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK("buffer" == toString(requireType("b")));
+}
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): when the batch size is a number literal the analyzer
+// binds the call to exactly that many numbers, which is what lets a batch be handed to a fixed arity signature
+TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_with_literal_count_returns_exact_number_pack")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    CheckResult result = check(R"(
+        local b = buffer.create(16)
+
+        local function takes3(x: number, y: number, z: number) end
+        takes3(buffer.unpackf32(b, 0, 3))
+
+        local first, second, third = buffer.unpackf32(b, 0, 3)
+        local w = vector.create(buffer.unpackf32(b, 0, 3))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK("number" == toString(requireType("first")));
+    CHECK("number" == toString(requireType("third")));
+}
+
+// the example the feature exists for: a batch of reads straight into a constructor that takes ...number
+TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_literals_forward_into_a_variadic_constructor")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    CheckResult result = check(R"(
+        local b = buffer.create(12)
+        local v = vector.create(buffer.unpackf32(b, 0, 3))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK("vector" == toString(requireType("v")));
+}
+
+// one value is still a batch, and a batch of a few hundred values is still cheap to describe
+TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_literal_count_bounds")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    CheckResult result = check(R"(
+        local b = buffer.create(4)
+
+        local function takes1(x: number) end
+        local function takesNumbers(...: number) end
+
+        takes1(buffer.unpacku8(b, 0, 1))
+        takesNumbers(buffer.unpacku8(b, 0, 4))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// a count that is not a whole number literal keeps the declared `...number`, so it still flows into anything that
+// takes numbers, but a builtin signature like vector.create's - which cannot be called with an open pack - rejects it
+TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_keeps_the_open_pack_when_the_count_is_not_a_literal")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    CheckResult result = check(R"(
+        local b = buffer.create(16)
+        local count = 3
+
+        local function takesNumbers(...: number) end
+        takesNumbers(buffer.unpackf32(b, 0, count))
+
+        local x, y, z = buffer.unpackf32(b, 0, count)
+        local w = vector.create(buffer.unpackf32(b, 0, count))
+    )");
+
+    REQUIRE(result.errors.size() == 1);
+}
+
+// 2.5 does not name a batch size, so it is not given an exact pack either
+TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_fractional_literal_count_keeps_the_open_pack")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    CheckResult result = check(R"(
+        local b = buffer.create(16)
+
+        local function takesNumbers(...: number) end
+        takesNumbers(buffer.unpackf32(b, 0, 2.5))
+
+        local w = vector.create(buffer.unpackf32(b, 0, 2.5))
+    )");
+
+    REQUIRE(result.errors.size() == 1);
+}
+
+// a batch larger than the analyzer is willing to spell out keeps the open pack instead of costing analysis time,
+// even though the runtime is happy to read a batch that big
+TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_huge_literal_count_keeps_the_open_pack")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    CheckResult result = check(R"(
+        local b = buffer.create(4)
+
+        local function takesNumbers(...: number) end
+        takesNumbers(buffer.unpacku8(b, 0, 1000000))
+
+        local w = vector.create(buffer.unpacku8(b, 0, 1000000))
+    )");
+
+    REQUIRE(result.errors.size() == 1);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_pack_takes_the_batch_as_trailing_numbers")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    CheckResult result = check(R"(
+        local b = buffer.create(16)
+
+        buffer.packf32(b, 0, 1, 2, 3)
+        buffer.packu8(b, 0)
+        buffer.packi32(b, 0, 1, 2, 3)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// unpack into pack, converting widths in one statement
+TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_feeds_buffer_pack")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    CheckResult result = check(R"(
+        local from = buffer.create(12)
+        local to = buffer.create(3)
+
+        buffer.packu8(to, 0, buffer.unpacku32(from, 0, 3))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_pack_rejects_values_that_are_not_numbers")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    CheckResult result = check(R"(
+        local b = buffer.create(16)
+
+        buffer.packf32(b, 0, 1, "two", 3)
+    )");
+
+    REQUIRE(result.errors.size() == 1);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_batched_library_is_not_declared_when_the_flag_is_off")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, false};
+
+    CheckResult result = check(R"(
+        local b = buffer.create(16)
+        local x = buffer.unpackf32(b, 0, 3)
+        buffer.packf32(b, 0, 1)
+    )");
+
+    REQUIRE(result.errors.size() == 2);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "coroutine_resume_anything_goes")
