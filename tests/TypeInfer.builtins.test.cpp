@@ -506,6 +506,24 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "os_time_takes_optional_date_table")
     CHECK("number" == toString(requireType("n3")));
 }
 
+// os.difftime reads its arguments with luaL_checknumber and luaL_optnumber: a date table raises at runtime and t1
+// defaults to 0.
+TEST_CASE_FIXTURE(BuiltinsFixture, "os_difftime_takes_numbers_and_an_optional_start")
+{
+    CheckResult result = check(R"(
+        --!strict
+        local elapsed = os.difftime(os.time(), 0)
+        local since_epoch = os.difftime(os.time())
+        local date = { year = 2020, month = 1, day = 1, hour = 0, min = 0, sec = 0, wday = 4, yday = 1, isdst = false }
+        local from_date = os.difftime(date, 0)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(5 == result.errors[0].location.begin.line);
+    CHECK("number" == toString(requireType("elapsed")));
+    CHECK("number" == toString(requireType("since_epoch")));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "thread_is_a_type")
 {
     CheckResult result = check(R"(
