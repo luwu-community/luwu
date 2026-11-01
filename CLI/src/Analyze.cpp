@@ -11,7 +11,7 @@
 #include "Luau/TypeCheckLimits.h"
 #include "Luau/TypeInfer.h"
 
-#include "Luau/AnalyzeRequirer.h"
+#include "Luau/AnalyzeResolvers.h"
 #include "Luau/FileUtils.h"
 #include "Luau/Flags.h"
 #include "Luau/RequireNavigator.h"
@@ -68,37 +68,14 @@ static void report(ReportFormat format, const char* name, const Luau::Location& 
     }
 }
 
+static void reportDiagnostic(ReportFormat format, const AnalyzeDiagnostic& diagnostic)
+{
+    report(format, diagnostic.moduleName.c_str(), diagnostic.location, diagnostic.kind.c_str(), diagnostic.message.c_str());
+}
+
 // Luwu (helpful subtyping errors): the path notation used by every mismatch reported, so its legend is
 // printed once after all of them rather than once per error.
 static uint8_t mismatchNotationUsed = 0;
-
-static void reportError(const Luau::Frontend& frontend, ReportFormat format, const Luau::TypeError& error)
-{
-    const Luau::TypeMismatch* mismatch = Luau::get_if<Luau::TypeMismatch>(&error.data);
-    if (mismatch && mismatch->explained)
-        mismatchNotationUsed |= mismatch->explained->notation;
-
-    std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(error.moduleName);
-
-    if (const Luau::SyntaxError* syntaxError = Luau::get_if<Luau::SyntaxError>(&error.data))
-        report(format, humanReadableName.c_str(), error.location, "SyntaxError", syntaxError->message.c_str());
-    // Luwu (helpful subtyping errors): a misspelled name is labeled as one, so it isn't read as a broken type.
-    else if (Luau::isTypo(error))
-        report(format, humanReadableName.c_str(), error.location, "Typo", Luau::toString(error, Luau::TypeErrorToStringOptions{frontend.fileResolver}).c_str());
-    else
-        report(
-            format,
-            humanReadableName.c_str(),
-            error.location,
-            "TypeError",
-            Luau::toString(error, Luau::TypeErrorToStringOptions{frontend.fileResolver}).c_str()
-        );
-}
-
-static void reportWarning(ReportFormat format, const char* name, const Luau::LintWarning& warning)
-{
-    report(format, name, warning.location, Luau::LintWarning::getName(warning.code), warning.text.c_str());
-}
 
 static bool reportModuleResult(Luau::Frontend& frontend, const Luau::ModuleName& name, ReportFormat format, bool annotate)
 {
@@ -116,35 +93,8 @@ static bool reportModuleResult(Luau::Frontend& frontend, const Luau::ModuleName&
         return false;
     }
 
-    std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(name);
-
-    // Luwu: notes (Module::notes) follow the error they're about, and any about no error reported here come after
-    Luau::ModulePtr module = frontend.moduleResolver.getModule(name);
-    std::vector<bool> notePrinted(module ? module->notes.size() : 0);
-    auto reportNotes = [&](std::optional<Luau::Location> origin)
-    {
-        for (size_t i = 0; i < notePrinted.size(); ++i)
-        {
-            const Luau::DiagnosticNote& note = module->notes[i];
-            if (notePrinted[i] || (origin && note.origin != origin))
-                continue;
-            report(format, humanReadableName.c_str(), note.location, "Note", note.message.c_str());
-            notePrinted[i] = true;
-        }
-    };
-
-    for (auto& error : cr->errors)
-    {
-        reportError(frontend, format, error);
-        if (error.moduleName == name)
-            reportNotes(error.location);
-    }
-    reportNotes(std::nullopt);
-
-    for (auto& error : cr->lintResult.errors)
-        reportWarning(format, humanReadableName.c_str(), error);
-    for (auto& warning : cr->lintResult.warnings)
-        reportWarning(format, humanReadableName.c_str(), warning);
+    for (const AnalyzeDiagnostic& diagnostic : collectModuleDiagnostics(frontend, name, *cr, mismatchNotationUsed))
+        reportDiagnostic(format, diagnostic);
 
     if (annotate)
     {
@@ -185,201 +135,6 @@ static int assertionHandler(const char* expr, const char* file, int line, const 
     fflush(stdout);
     return 1;
 }
-
-struct LuauConfigInterruptInfo
-{
-    Luau::TypeCheckLimits limits;
-    std::string module;
-};
-
-struct CliFileResolver : Luau::FileResolver
-{
-    std::optional<Luau::SourceCode> readSource(const Luau::ModuleName& name) override
-    {
-        Luau::SourceCode::Type sourceType;
-        std::optional<std::string> source = std::nullopt;
-
-        // If the module name is "-", then read source from stdin
-        if (name == "-")
-        {
-            source = readStdin();
-            sourceType = Luau::SourceCode::Script;
-        }
-        else
-        {
-            source = readFile(name);
-            sourceType = Luau::SourceCode::Module;
-        }
-
-        if (!source)
-            return std::nullopt;
-
-        return Luau::SourceCode{*source, sourceType};
-    }
-
-    std::optional<Luau::ModuleInfo> resolveModule(const Luau::ModuleInfo* context, Luau::AstExpr* node, const Luau::TypeCheckLimits& limits) override
-    {
-        if (Luau::AstExprConstantString* expr = node->as<Luau::AstExprConstantString>())
-        {
-            std::string path{expr->value.data, expr->value.size};
-
-            FileNavigationContext navigationContext{context->name};
-
-            LuauConfigInterruptInfo info = {limits, path};
-            navigationContext.luauConfigInit = [&info](lua_State* L)
-            {
-                lua_setthreaddata(L, &info);
-            };
-            navigationContext.luauConfigInterrupt = [](lua_State* L, int gc)
-            {
-                LuauConfigInterruptInfo* info = static_cast<LuauConfigInterruptInfo*>(lua_getthreaddata(L));
-                if (info->limits.finishTime && Luau::TimeTrace::getClock() > *info->limits.finishTime)
-                    throw Luau::TimeLimitError{info->module};
-                if (info->limits.cancellationToken && info->limits.cancellationToken->requested())
-                    throw Luau::UserCancelError{info->module};
-            };
-
-            Luau::Require::ErrorHandler nullErrorHandler{};
-
-            Luau::Require::Navigator navigator(navigationContext, nullErrorHandler);
-            if (navigator.navigate(std::move(path)) != Luau::Require::Navigator::Status::Success)
-                return std::nullopt;
-
-            if (!navigationContext.isModulePresent())
-                return std::nullopt;
-
-            if (std::optional<std::string> identifier = navigationContext.getIdentifier())
-                return {{*identifier}};
-        }
-
-        return std::nullopt;
-    }
-
-    std::string getHumanReadableModuleName(const Luau::ModuleName& name) const override
-    {
-        if (name == "-")
-            return "stdin";
-        // modules are named by absolute path (see `moduleNameForPath`); show them the way they'd be typed
-        if (cwd && name.size() > cwd->size() + 1 && name.compare(0, cwd->size(), *cwd) == 0 && name[cwd->size()] == '/')
-            return name.substr(cwd->size() + 1);
-        return name;
-    }
-
-    // Luwu: a module is named by its absolute path, which is what `resolveModule` gets from the require
-    // navigator. A file passed on the command line has to be named the same way, or a file that is both
-    // passed and required is checked (and reported) twice, once under each spelling.
-    std::string moduleNameForPath(const std::string& path) const
-    {
-        if (path == "-")
-            return path;
-        if (!cwd || isAbsolutePath(path))
-            return normalizePath(path);
-        return normalizePath(*cwd + "/" + path);
-    }
-
-    std::optional<std::string> cwd = getCurrentWorkingDirectory();
-};
-
-struct CliConfigResolver : Luau::ConfigResolver
-{
-    Luau::Config defaultConfig;
-
-    mutable std::unordered_map<std::string, Luau::Config> configCache;
-    mutable std::vector<std::pair<std::string, std::string>> configErrors;
-
-    CliConfigResolver(Luau::Mode mode)
-    {
-        defaultConfig.mode = mode;
-    }
-
-    // Luwu: one copy of a directory's config per language, since a `.luau` and a `.luwu` file there share everything else.
-    mutable std::map<std::pair<std::string, Luau::Language>, Luau::Config> languageConfigCache;
-
-    const Luau::Config& getConfig(const Luau::ModuleName& name, const Luau::TypeCheckLimits& limits) const override
-    {
-        std::optional<std::string> path = getParentPath(name);
-        const Luau::Config& directoryConfig = path ? readConfigRec(*path, limits) : defaultConfig;
-
-        Luau::Language language = languageOfPath(name);
-        if (directoryConfig.language == language)
-            return directoryConfig;
-
-        auto [it, inserted] = languageConfigCache.try_emplace({path.value_or(""), language}, directoryConfig);
-        if (inserted)
-            it->second.language = language;
-        return it->second;
-    }
-
-    const Luau::Config& readConfigRec(const std::string& path, const Luau::TypeCheckLimits& limits) const
-    {
-        auto it = configCache.find(path);
-        if (it != configCache.end())
-            return it->second;
-
-        std::optional<std::string> parent = getParentPath(path);
-        Luau::Config result = parent ? readConfigRec(*parent, limits) : defaultConfig;
-
-        std::optional<std::string> configPath = joinPaths(path, Luau::kConfigName);
-        if (!isFile(*configPath))
-            configPath = std::nullopt;
-
-        std::optional<std::string> luauConfigPath = joinPaths(path, Luau::kLuauConfigName);
-        if (!isFile(*luauConfigPath))
-            luauConfigPath = std::nullopt;
-
-        if (configPath && luauConfigPath)
-        {
-            std::string ambiguousError = Luau::format("Both %s and %s files exist", Luau::kConfigName, Luau::kLuauConfigName);
-            configErrors.emplace_back(*configPath, std::move(ambiguousError));
-        }
-        else if (configPath)
-        {
-            if (std::optional<std::string> contents = readFile(*configPath))
-            {
-                Luau::ConfigOptions::AliasOptions aliasOpts;
-                aliasOpts.configLocation = *configPath;
-                aliasOpts.overwriteAliases = true;
-
-                Luau::ConfigOptions opts;
-                opts.aliasOptions = std::move(aliasOpts);
-
-                std::optional<std::string> error = Luau::parseConfig(*contents, result, opts);
-                if (error)
-                    configErrors.emplace_back(*configPath, *error);
-            }
-        }
-        else if (luauConfigPath)
-        {
-            if (std::optional<std::string> contents = readFile(*luauConfigPath))
-            {
-                Luau::ConfigOptions::AliasOptions aliasOpts;
-                aliasOpts.configLocation = *configPath;
-                aliasOpts.overwriteAliases = true;
-
-                Luau::InterruptCallbacks callbacks;
-                LuauConfigInterruptInfo info{limits, *luauConfigPath};
-                callbacks.initCallback = [&info](lua_State* L)
-                {
-                    lua_setthreaddata(L, &info);
-                };
-                callbacks.interruptCallback = [](lua_State* L, int gc)
-                {
-                    LuauConfigInterruptInfo* info = static_cast<LuauConfigInterruptInfo*>(lua_getthreaddata(L));
-                    if (info->limits.finishTime && Luau::TimeTrace::getClock() > *info->limits.finishTime)
-                        throw Luau::TimeLimitError{info->module};
-                    if (info->limits.cancellationToken && info->limits.cancellationToken->requested())
-                        throw Luau::UserCancelError{info->module};
-                };
-
-                std::optional<std::string> error = Luau::extractLuauConfig(*contents, result, aliasOpts, std::move(callbacks));
-                if (error)
-                    configErrors.emplace_back(*luauConfigPath, *error);
-            }
-        }
-
-        return configCache[path] = result;
-    }
-};
 
 struct TaskScheduler
 {

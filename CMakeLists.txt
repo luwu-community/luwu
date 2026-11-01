@@ -43,6 +43,7 @@ if (LUAU_BUILD_SHARED)
     add_library(Luwu.CodeGen SHARED)
     add_library(Luwu.VM SHARED)
     add_library(Luwu.Require SHARED)
+    add_library(Luwu.AnalysisApi SHARED)
     add_library(isocline SHARED)
 else()
     add_library(Luwu.Common STATIC)
@@ -56,6 +57,7 @@ else()
     add_library(Luwu.CodeGen STATIC)
     add_library(Luwu.VM STATIC)
     add_library(Luwu.Require STATIC)
+    add_library(Luwu.AnalysisApi STATIC)
     add_library(isocline STATIC)
 endif()
 
@@ -138,6 +140,12 @@ target_link_libraries(Luwu.VM PUBLIC Luwu.Common)
 target_compile_features(Luwu.Require PUBLIC cxx_std_17)
 target_include_directories(Luwu.Require PUBLIC Require/include)
 target_link_libraries(Luwu.Require PUBLIC Luwu.Config Luwu.VM)
+
+# Luwu Analysis C API: luaanalysis.h, built on luwu-analyze's resolvers
+target_compile_features(Luwu.AnalysisApi PUBLIC cxx_std_17)
+target_include_directories(Luwu.AnalysisApi PUBLIC AnalysisApi/include CLI/include)
+target_link_libraries(Luwu.AnalysisApi PUBLIC Luwu.Analysis Luwu.VM)
+target_link_libraries(Luwu.AnalysisApi PRIVATE Luwu.Require Luwu.CLI.lib)
 
 target_include_directories(isocline PUBLIC extern/isocline/include)
 
@@ -283,7 +291,7 @@ if(LUAU_BUILD_CLI)
     target_link_libraries(Luwu.Compile.CLI PRIVATE osthreads)
     target_link_libraries(Luwu.Bytecode.CLI PRIVATE osthreads)
 
-    target_link_libraries(Luwu.Analyze.CLI PRIVATE Luwu.Analysis Luwu.CLI.lib Luwu.Require)
+    target_link_libraries(Luwu.Analyze.CLI PRIVATE Luwu.AnalysisApi Luwu.Analysis Luwu.CLI.lib Luwu.Require)
 
     target_link_libraries(Luwu.Ast.CLI PRIVATE Luwu.Ast Luwu.Analysis Luwu.CLI.lib)
 
@@ -323,7 +331,7 @@ if(LUAU_BUILD_TESTS)
     target_compile_options(Luwu.CLI.Test PRIVATE ${LUAU_OPTIONS})
     target_compile_definitions(Luwu.CLI.Test PRIVATE DOCTEST_CONFIG_USE_STD_HEADERS)
     target_include_directories(Luwu.CLI.Test PRIVATE extern CLI)
-    target_link_libraries(Luwu.CLI.Test PRIVATE Luwu.Compiler Luwu.Inliner Luwu.Config Luwu.CodeGen Luwu.VM Luwu.Require Luwu.CLI.lib isocline)
+    target_link_libraries(Luwu.CLI.Test PRIVATE Luwu.AnalysisApi Luwu.Analysis Luwu.Compiler Luwu.Inliner Luwu.Config Luwu.CodeGen Luwu.VM Luwu.Require Luwu.CLI.lib isocline)
     target_link_libraries(Luwu.CLI.Test PRIVATE osthreads)
 
     if(LUAU_BUILD_FUZZ)

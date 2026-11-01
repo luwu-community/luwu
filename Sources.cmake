@@ -497,12 +497,20 @@ endif()
 if(TARGET Luwu.Analyze.CLI)
     # Luwu.Analyze.CLI Sources
     target_sources(Luwu.Analyze.CLI PRIVATE
-        CLI/include/Luau/AnalyzeRequirer.h
-
         CLI/src/Analyze.cpp
-        CLI/src/AnalyzeRequirer.cpp
     )
 endif()
+
+# Luwu Analysis C API sources
+target_sources(Luwu.AnalysisApi PRIVATE
+    AnalysisApi/include/luaanalysis.h
+    CLI/include/Luau/AnalyzeRequirer.h
+    CLI/include/Luau/AnalyzeResolvers.h
+
+    AnalysisApi/src/AnalysisApi.cpp
+    CLI/src/AnalyzeRequirer.cpp
+    CLI/src/AnalyzeResolvers.cpp
+)
 
 if(TARGET Luwu.Ast.CLI)
     # Luwu.Ast.CLI Sources
@@ -652,6 +660,7 @@ if(TARGET Luwu.CLI.Test)
         CLI/src/Repl.cpp
         CLI/src/ReplRequirer.cpp
 
+        tests/AnalysisApi.test.cpp
         tests/RegisterCallbacks.h
         tests/RegisterCallbacks.cpp
         tests/Repl.test.cpp
