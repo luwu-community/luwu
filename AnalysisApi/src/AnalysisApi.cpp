@@ -43,6 +43,13 @@ struct LuaFileResolver : CliFileResolver
         if (!context || !expr)
             return std::nullopt;
 
+        // the resolver, its two arguments, then its two results
+        if (!lua_checkstack(L, 3))
+        {
+            recordFailure(context->name, expr->location, "The require resolver has no Lua stack space left to run in");
+            return std::nullopt;
+        }
+
         int top = lua_gettop(L);
         lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
         lua_pushlstring(L, context->name.data(), context->name.size());
