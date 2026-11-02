@@ -379,6 +379,16 @@ struct FeedbackVectorSlot
     };
 };
 
+// Luwu try expressions: an error raised while the function runs [startpc, endpc) resumes at handlerpc, with the error
+// in register target and where it was raised in the three registers after it (see LOP_WRAPRESULT)
+struct LuauTryRange
+{
+    uint32_t startpc;
+    uint32_t endpc;
+    uint32_t handlerpc;
+    uint8_t target;
+};
+
 /*
 ** Function Prototypes
 */
@@ -461,6 +471,10 @@ typedef struct Proto
     Proto* optimized;
     Proto* deoptimized;
     uint64_t cost;
+
+    // Luwu try expressions: the protected ranges, innermost first where they nest; NULL when there are none
+    LuauTryRange* tryranges;
+    int sizetryranges;
 } Proto;
 // clang-format on
 

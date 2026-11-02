@@ -42,6 +42,7 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuGenericNominals)
@@ -15011,6 +15012,95 @@ print(Greeter)
 
 print(Greeter)
 )", 2));
+}
+
+// Luwu try expressions: the expression runs in a protected range of fresh registers and ends wrapped in an `ok`. The
+// range's handler, which only the VM jumps to, wraps the caught error in an `err`.
+TEST_CASE("TryExpressionCompilesToAProtectedRange")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    CHECK_EQ("\n" + compileFunction0(R"(
+local a = 1
+local r = try f(a)
+return r
+)"),
+        R"(
+try: pc 1 to 4, handler pc 7, R1
+GETIMPORT R1 1 [f]
+LOADN R2 1
+CALL R1 1 1
+WRAPRESULT R1 OK
+JUMP L0
+WRAPRESULT R1 ERR
+L0: MOVE R0 R1
+RETURN R0 1
+)");
+
+    // nested ranges are listed innermost first, which is the order the VM searches them in
+    std::string nested = compileFunction(
+        R"(
+local function g() end
+local r = try g(try g())
+return r
+)",
+        1
+    );
+    int innerStart = 0, innerEnd = 0, outerStart = 0, outerEnd = 0;
+    size_t inner = nested.find("try: pc");
+    REQUIRE(inner != std::string::npos);
+    size_t outer = nested.find("try: pc", inner + 1);
+    REQUIRE(outer != std::string::npos);
+    REQUIRE_EQ(sscanf(nested.c_str() + inner, "try: pc %d to %d", &innerStart, &innerEnd), 2);
+    REQUIRE_EQ(sscanf(nested.c_str() + outer, "try: pc %d to %d", &outerStart, &outerEnd), 2);
+    CHECK(outerStart < innerStart);
+    CHECK(innerEnd < outerEnd);
+}
+
+// Luwu try expressions: a local only ever read through its fields keeps the result in registers, with a flag for which
+// variant it is, so a `try` that doesn't raise allocates nothing. The other variant's field builds the object to raise.
+TEST_CASE("TryResultReadThroughFieldsStaysInRegisters")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    CHECK_EQ("\n" + compileFunction0(R"(
+local r = try f()
+return r.value + 1
+)"),
+        R"(
+try: pc 1 to 3, handler pc 5, R0
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+LOADB R4 1 +1
+LOADB R4 0
+L0: MOVE R6 R0
+JUMPIF R4 L1
+MOVE R7 R0
+MOVE R8 R1
+MOVE R9 R2
+MOVE R10 R3
+WRAPRESULT R7 ERR
+GETTABLEKS R6 R7 K3 ['value']
+L1: ADDK R5 R6 K2 [1]
+RETURN R5 1
+)");
+
+    // `ok` and `err` are one instruction each, and never need the object
+    std::string methods = compileFunction0(R"(
+local r = try f()
+return r:ok(), r:err()
+)");
+    CHECK(methods.find(" R0 OK\n") != std::string::npos);
+    CHECK(methods.find(" R0 ERR\n") != std::string::npos);
+    CHECK(methods.find("WRAPRESULT") == std::string::npos);
+
+    // passing the result anywhere needs the object
+    std::string escaping = compileFunction0(R"(
+local r = try f()
+print(r)
+return r.value
+)");
+    CHECK(escaping.find(" OK\n") != std::string::npos);
 }
 
 TEST_SUITE_END();

@@ -484,6 +484,10 @@ struct FunctionType
     };
     std::vector<LiteralParameter> literalParameters;
 
+    // Luwu try expressions: the errors the function says it raises (`! E`), joined with the ones inferred from its body.
+    // A hint types a `try` around a call; nothing checks it against what the function really raises.
+    std::optional<TypeId> errorHint;
+
     // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
     std::optional<std::string> name;
     std::optional<std::string> syntheticName;
@@ -1016,6 +1020,8 @@ struct PendingExpansionType
     std::vector<TypeId> typeArguments;
     std::vector<TypePackId> packArguments;
     size_t index;
+    // Luwu try expressions: expands the alias's error hint (TypeFun::errorHint) instead of its type
+    bool errorHint = false;
 
     static size_t nextIndex;
 };
@@ -1287,6 +1293,9 @@ struct TypeFun
      */
     TypeId type;
 
+    // Luwu try expressions: `type Result<T> = T ! IoError`. A function whose return type is exactly this alias raises it.
+    std::optional<TypeId> errorHint;
+
     // The location of where this TypeFun was defined, if available
     std::optional<Location> definitionLocation;
 
@@ -1446,6 +1455,9 @@ public:
     const TypeId falseType;
     const TypeId anyType;
     const TypeId unknownType;
+    // Luwu try expressions: `unknown` that doesn't absorb the rest of a union, printed as `unknown`. `FileIoError |
+    // weakunknown` keeps FileIoError's members for autocomplete and indexing. An annotation `X | unknown` means this.
+    const TypeId weakUnknownType;
     const TypeId neverType;
     const TypeId errorType;
     const TypeId noRefineType;

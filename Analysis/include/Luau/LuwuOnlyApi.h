@@ -22,6 +22,9 @@ inline bool isLuwuOnlyMember(std::string_view library, std::string_view member)
     if (library == "string")
         return member == "trim" || member == "trimstart" || member == "trimend" || member == "startswith" || member == "endswith" ||
                member == "contains" || member == "replace";
+    // Luwu try expressions
+    if (library == "types")
+        return member == "raises";
     return false;
 }
 

@@ -22,6 +22,7 @@ LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
@@ -2563,6 +2564,31 @@ class Puppy(@[deprecated] public x: number, public @[ deprecated ] y: number, pr
     public sound: string
     private @[ deprecated ] age: number
 end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_try_expressions")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    std::string code = R"(
+        local r = try  read( path )
+        local s = try   a +b
+        local t = try(x)
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("prettyPrint_error_hints")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    std::string code = R"(
+        local function read(path: string): string  !  NotFound | Denied return path end
+        local function meow():! string error("meow") end
+        type Reader = (string) -> string ! NotFound
+        type Result<T, E = string> = T  !  E
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }

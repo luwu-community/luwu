@@ -417,7 +417,10 @@ struct ClonePublicInterface : Substitution
 
         TypeId type = cloneType(tf.type);
 
-        return TypeFun{std::move(typeParams), std::move(typePackParams), type, tf.definitionLocation};
+        TypeFun result{std::move(typeParams), std::move(typePackParams), type, tf.definitionLocation};
+        if (tf.errorHint)
+            result.errorHint = cloneType(*tf.errorHint);
+        return result;
     }
 };
 

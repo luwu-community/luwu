@@ -142,7 +142,7 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
         VM_DISPATCH_OP(LOP_GETPOSITIONAL), VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE), \
-        VM_DISPATCH_OP(LOP_PUSH), VM_DISPATCH_OP(LOP_POP),
+        VM_DISPATCH_OP(LOP_PUSH), VM_DISPATCH_OP(LOP_POP), VM_DISPATCH_OP(LOP_WRAPRESULT), VM_DISPATCH_OP(LOP_RESULTGET),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -1107,8 +1107,6 @@ reentry:
                             }
                         }
 
-||||||| 0d9fbcdcd
-                            luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
                         // note: order of copies allows rb to alias ra+1 or ra
                         setobj2s(L, ra + 1, rb);
                         setobj2s(L, ra, luaR_lookupmemberatoffset(inst, slot));
@@ -4271,6 +4269,50 @@ reentry:
                 VM_NEXT();
             }
 
+            VM_CASE(LOP_WRAPRESULT)
+            {
+                // Luwu try expressions: the value of a `try` expression, or the error its protected range caught
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                bool caught = LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR;
+
+                VM_PROTECT_PC(); // raises when the collections library isn't open, and allocates
+
+                LuauObject* result = luaR_newpayload(L, caught ? LUWU_BUILTIN_ERR : LUWU_BUILTIN_OK, ra);
+                if (caught)
+                {
+                    // where the error was raised, which the handler's registers hold after it; a new object needs no barrier
+                    LUAU_ASSERT(result->numberofmembers >= 4);
+                    TValue* members = luaR_members(result);
+                    for (int i = 1; i <= 3; i++)
+                        setobj(L, &members[i], ra + i);
+                }
+
+                setobjectvalue(L, ra, result);
+                VM_PROTECT(luaC_checkGC(L));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_RESULTGET)
+            {
+                // Luwu try expressions: `r:ok()` or `r:err()` of a result kept in registers
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                bool isOk = !l_isfalse(rb + LBC_TRYRESULT_OKFLAG);
+                bool wantsOk = LUAU_INSN_C(insn) == LBC_RESULTGET_OK;
+                if (isOk == wantsOk)
+                {
+                    setobj2s(L, ra, rb);
+                }
+                else
+                {
+                    setsymnonevalue(ra);
+                }
+                VM_NEXT();
+            }
+
             VM_CASE(LOP_JUMPXISA)
             {
                 // Luwu Classes (rfcs/classes): fused class.isinstance(value, class) test-and-branch.
@@ -4312,12 +4354,18 @@ reentry:
 exit:;
 }
 
-void luau_execute(lua_State* L)
+static void executeloop(lua_State* L)
 {
     if (L->singlestep)
         luau_execute<true>(L);
     else
         luau_execute<false>(L);
+}
+
+void luau_execute(lua_State* L)
+{
+    // Luwu try expressions: the catch for errors raised in protected ranges
+    luaD_executetry(L, executeloop);
 }
 
 void luau_finishop(lua_State* L)

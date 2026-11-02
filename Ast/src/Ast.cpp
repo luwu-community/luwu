@@ -398,6 +398,9 @@ void AstExprFunction::visit(AstVisitor* visitor)
         if (returnAnnotation)
             returnAnnotation->visit(visitor);
 
+        if (errorHint)
+            errorHint->visit(visitor);
+
         body->visit(visitor);
     }
 }
@@ -779,6 +782,19 @@ void AstExprInterpString::visit(AstVisitor* visitor)
         for (AstExpr* expr : expressions)
             expr->visit(visitor);
     }
+}
+
+AstExprTry::AstExprTry(const Location& location, const Location& tryLocation, AstExpr* expr)
+    : AstExpr(ClassIndex(), location)
+    , tryLocation(tryLocation)
+    , expr(expr)
+{
+}
+
+void AstExprTry::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        expr->visit(visitor);
 }
 
 AstExprInstantiate::AstExprInstantiate(const Location& location, AstExpr* expr, AstArray<AstTypeOrPack> types)
@@ -1261,6 +1277,9 @@ void AstStatTypeAlias::visit(AstVisitor* visitor)
         }
 
         type->visit(visitor);
+
+        if (errorHint)
+            errorHint->visit(visitor);
     }
 }
 
@@ -1502,6 +1521,8 @@ void AstStatDeclareFunction::visit(AstVisitor* visitor)
 
         visitTypeList(visitor, params);
         retTypes->visit(visitor);
+        if (errorHint)
+            errorHint->visit(visitor);
     }
 }
 
@@ -1630,6 +1651,9 @@ void AstStatDeclareClass::visit(AstVisitor* visitor)
 
             if (function->returnAnnotation)
                 function->returnAnnotation->visit(visitor);
+
+            if (function->errorHint)
+                function->errorHint->visit(visitor);
         }
     }
 }
@@ -1761,6 +1785,8 @@ void AstTypeFunction::visit(AstVisitor* visitor)
 
         visitTypeList(visitor, argTypes);
         returnTypes->visit(visitor);
+        if (errorHint)
+            errorHint->visit(visitor);
     }
 }
 

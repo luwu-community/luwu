@@ -71,6 +71,8 @@ LUAI_FUNC void luaD_callint(lua_State* L, StkId func, int nresults, bool forreen
 LUAI_FUNC void luaD_call(lua_State* L, StkId func, int nresults);
 LUAI_FUNC void luaD_callny(lua_State* L, StkId func, int nresults);
 LUAI_FUNC int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t oldtop, ptrdiff_t ef);
+// Luwu try expressions: runs the interpreter, resuming at a protected range's handler when an error is raised in one
+LUAI_FUNC void luaD_executetry(lua_State* L, void (*execute)(lua_State* L));
 LUAI_FUNC int luaD_pcall_multi(lua_State* L, Pfunc func, void* u, ptrdiff_t oldtop, ptrdiff_t ef);
 LUAI_FUNC void luaD_reallocCI(lua_State* L, int newsize);
 LUAI_FUNC void luaD_reallocstack(lua_State* L, int newsize, int fornewci);

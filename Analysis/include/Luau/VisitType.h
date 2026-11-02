@@ -279,6 +279,9 @@ struct GenericTypeVisitor
             {
                 traverse(ftv->argTypes);
                 traverse(ftv->retTypes);
+                // Luwu try expressions
+                if (ftv->errorHint)
+                    traverse(*ftv->errorHint);
             }
         }
         else if (auto ttv = get<TableType>(ty))

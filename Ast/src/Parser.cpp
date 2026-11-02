@@ -26,6 +26,7 @@ LUAU_FASTFLAGVARIABLE(LuauSolverV2)
 LUAU_DYNAMIC_FASTFLAGVARIABLE(DebugLuauReportReturnTypeVariadicWithTypeSuffix, false)
 LUAU_FASTFLAGVARIABLE(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauExportValueSyntax)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FLAGVERSION(LuauExportValueSyntax, 3)
 
 // Luwu @noinline (rfcs/noinline-attribute.md): gates parsing `@noinline`, and the compiler honoring it (no
@@ -131,6 +132,8 @@ const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ tr
 // them behind LuauExportValueSyntax, which its library and Roblox leave off, so they're Luwu's. `export type` is ordinary
 // Luau.
 const LuwuFeature kExportsFeature{"exported values", /* plural= */ true, "LuauExportValueSyntax"};
+const LuwuFeature kTryExpressionsFeature{"'try' expressions", /* plural= */ true, "DebugLuwuTryExpressions"};
+const LuwuFeature kErrorHintsFeature{"error hints", /* plural= */ true, "DebugLuwuTryExpressions"};
 // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, `declare` is only allowed where it
 // visibly applies to the whole file.
 const char* const kDeclarationPlacementError =
@@ -3484,14 +3487,25 @@ AstStat* Parser::parseTypeAlias(
     bool typeFollows = equalsFound || continuesOnSameLine();
     AstType* type = typeFollows ? parseType() : missingTypeHere();
 
+    // Luwu try expressions: `type Result<T> = T ! IoError`
+    Position errorHintPosition = Position::missing();
+    AstType* errorHint = parseOptionalErrorHint(&errorHintPosition);
+    // A hint still being typed ends at the next token, often on the next line, so it doesn't extend the alias
+    Location end = errorHint && !errorHint->is<AstTypeError>() ? errorHint->location : type->location;
+
     AstStatTypeAlias* node = allocator.alloc<AstStatTypeAlias>(
-        Location(start, type->location), name->name, name->location, generics, genericPacks, type, exported, typeKeywordLocation
+        Location(start, end), name->name, name->location, generics, genericPacks, type, exported, typeKeywordLocation
     );
     node->attributes = attributes;
+    node->errorHint = errorHint;
     if (options.storeCstData)
-        cstNodeMap[node] = allocator.alloc<CstStatTypeAlias>(
+    {
+        CstStatTypeAlias* cst = allocator.alloc<CstStatTypeAlias>(
             typeKeywordPosition, genericsOpenPosition, genericsCommaPositions, genericsClosePosition, equalsPosition
         );
+        cst->errorHintPosition = errorHintPosition;
+        cstNodeMap[node] = cst;
+    }
     return node;
 }
 
@@ -5169,6 +5183,7 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         retTypes = parseOptionalReturnType();
         if (!retTypes)
             retTypes = allocator.alloc<AstTypePackExplicit>(lexer.current().location, AstTypeList{copy<AstType*>(nullptr, 0), nullptr});
+        AstType* errorHint = parseOptionalErrorHint();
         // Luwu: upstream ends the declaration at the token after it, so whatever follows a `declare function` looks
         // like it's on the same line (the SameLineStatement lint reports it, once declarations can be in source).
         Location end = lexer.previousLocation();
@@ -5203,7 +5218,7 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
 
         checkDuplicateDeclaration(globalName);
 
-        return allocator.alloc<AstStatDeclareFunction>(
+        AstStatDeclareFunction* declaration = allocator.alloc<AstStatDeclareFunction>(
             Location(start, end),
             attributes,
             globalName.name,
@@ -5218,6 +5233,8 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
             start,
             functionLocation
         );
+        declaration->errorHint = errorHint;
+        return declaration;
     }
     // When FFlag::LuauAllowGlobalDeclarationToBeCalledClass is set, `declare class : T` is parsed as a
     // global variable declaration whose name is `class`, not as a malformed class declaration. This allows
@@ -6303,6 +6320,7 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
     matchRecoveryStopOnToken[')']--;
 
     AstTypePack* typelist = parseOptionalReturnType(cstNode ? &cstNode->returnSpecifierPosition : nullptr);
+    AstType* errorHint = parseOptionalErrorHint(cstNode ? &cstNode->errorHintPosition : nullptr);
 
     AstLocal* funLocal = nullptr;
 
@@ -6372,6 +6390,7 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
         varargAnnotation,
         argLocation
     );
+    node->errorHint = errorHint;
     if (options.storeCstData)
     {
         cstNode->functionKeywordPosition = matchFunction.location.begin;
@@ -6640,6 +6659,10 @@ AstTypePack* Parser::parseOptionalReturnType(Position* returnSpecifierPosition)
             *returnSpecifierPosition = lexer.current().location.begin;
         nextLexeme();
 
+        // Luwu try expressions: `function f(): ! E` infers the return type and only gives the error hint
+        if (lexer.current().type == '!')
+            return nullptr;
+
         unsigned int oldRecursionCount = recursionCounter;
 
         auto result = parseReturnType();
@@ -6660,6 +6683,20 @@ AstTypePack* Parser::parseOptionalReturnType(Position* returnSpecifierPosition)
     }
 
     return nullptr;
+}
+
+// Luwu try expressions: ErrorHint ::= `!' Type. `!' binds looser than `|', so `! A | B' is one union.
+AstType* Parser::parseOptionalErrorHint(Position* bangPosition)
+{
+    if (lexer.current().type != '!')
+        return nullptr;
+
+    checkLuwuFeature(lexer.current().location, kErrorHintsFeature, FFlag::DebugLuwuTryExpressions);
+    if (bangPosition)
+        *bangPosition = lexer.current().location.begin;
+    nextLexeme();
+
+    return parseType();
 }
 
 // ReturnType ::= Type | `(' TypeList `)'
@@ -6752,11 +6789,12 @@ AstTypePack* Parser::parseReturnType()
     }
 
     Position returnArrowPosition = lexer.current().location.begin;
-    AstType* tail = parseFunctionTypeTail(begin, {nullptr, 0}, {}, {}, copy(result), copy(resultNames), varargAnnotation);
+    Position errorHintPosition = Position::missing();
+    AstType* tail = parseFunctionTypeTail(begin, {nullptr, 0}, {}, {}, copy(result), copy(resultNames), varargAnnotation, &errorHintPosition);
 
     if (options.storeCstData && tail->is<AstTypeFunction>())
     {
-        cstNodeMap[tail] = allocator.alloc<CstTypeFunction>(
+        CstTypeFunction* cst = allocator.alloc<CstTypeFunction>(
             Position::missing(),
             AstArray<Position>{},
             Position::missing(),
@@ -6766,6 +6804,8 @@ AstTypePack* Parser::parseReturnType()
             closeParenthesesPosition,
             returnArrowPosition
         );
+        cst->errorHintPosition = errorHintPosition;
+        cstNodeMap[tail] = cst;
     }
 
     AstTypePackExplicit* node = allocator.alloc<AstTypePackExplicit>(Location{location, tail->location}, AstTypeList{copy(&tail, 1), nullptr});
@@ -7108,10 +7148,11 @@ AstTypeOrPack Parser::parseFunctionType(bool allowPack, const AstArray<AstAttr*>
     AstArray<std::optional<AstArgumentName>> paramNames = copy(names);
 
     Position returnArrowPosition = lexer.current().location.begin;
-    AstType* node = parseFunctionTypeTail(begin, attributes, generics, genericPacks, paramTypes, paramNames, varargAnnotation);
+    Position errorHintPosition = Position::missing();
+    AstType* node = parseFunctionTypeTail(begin, attributes, generics, genericPacks, paramTypes, paramNames, varargAnnotation, &errorHintPosition);
     if (options.storeCstData && node->is<AstTypeFunction>())
     {
-        cstNodeMap[node] = allocator.alloc<CstTypeFunction>(
+        CstTypeFunction* cst = allocator.alloc<CstTypeFunction>(
             genericsOpenPosition,
             genericsCommaPositions,
             genericsClosePosition,
@@ -7121,6 +7162,8 @@ AstTypeOrPack Parser::parseFunctionType(bool allowPack, const AstArray<AstAttr*>
             closeArgsFound ? closeArgsLocation.begin : Position::missing(),
             returnArrowPosition
         );
+        cst->errorHintPosition = errorHintPosition;
+        cstNodeMap[node] = cst;
     }
     return {node, {}};
 }
@@ -7132,7 +7175,8 @@ AstType* Parser::parseFunctionTypeTail(
     AstArray<AstGenericTypePack*> genericPacks,
     AstArray<AstType*> params,
     AstArray<std::optional<AstArgumentName>> paramNames,
-    AstTypePack* varargAnnotation
+    AstTypePack* varargAnnotation,
+    Position* errorHintPosition
 )
 {
     incrementRecursionCounter("type annotation");
@@ -7179,11 +7223,14 @@ AstType* Parser::parseFunctionTypeTail(
             cstNodeMap[returnType] = allocator.alloc<CstTypePackExplicit>();
     }
     LUAU_ASSERT(returnType);
+    AstType* errorHint = parseOptionalErrorHint(errorHintPosition);
+    Location end = errorHint ? errorHint->location : returnType->location;
 
     AstTypeList paramTypes = AstTypeList{params, varargAnnotation};
-    return allocator.alloc<AstTypeFunction>(
-        Location(begin.location, returnType->location), attributes, generics, genericPacks, paramTypes, paramNames, returnType
-    );
+    AstTypeFunction* node =
+        allocator.alloc<AstTypeFunction>(Location(begin.location, end), attributes, generics, genericPacks, paramTypes, paramNames, returnType);
+    node->errorHint = errorHint;
+    return node;
 }
 
 static bool isTypeFollow(Lexeme::Type c)
@@ -8369,10 +8416,61 @@ AstExpr* Parser::parseSimpleExpr()
         report(before, "Expected a value; the next line starts a new statement");
         return allocator.alloc<AstExprError>(Location(before.end, before.end), copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
     }
+    else if (tryExpressionFollows())
+    {
+        return parseTryExpr();
+    }
     else
     {
         return parsePrimaryExpr(/* asStatement= */ false);
     }
+}
+
+// Luwu try expressions: `try` is a contextual keyword, since `try` is a common function name. It starts a `try`
+// expression only when the next token starts an expression and can't continue one that names `try`: `try(x)`, `try.x`
+// and `try - x` stay uses of the name. In a Luwu file the tokens decide, whatever line they're on, and the
+// AmbiguousContinuation lint asks for a ';' where the expression reads like a new statement. In a Luau module `try`
+// before a token that can start a statement stays a name: `local f = try x()` is two statements there.
+bool Parser::tryExpressionFollows()
+{
+    if (lexer.current().type != Lexeme::Name || AstName(lexer.current().name) != "try")
+        return false;
+
+    Lexeme next = lexer.lookahead();
+    bool luwuFile = options.language == Language::Luwu;
+
+    // An int, since '#' is a character rather than a named token
+    switch (int(next.type))
+    {
+    case Lexeme::Number:
+    case Lexeme::ReservedNil:
+    case Lexeme::ReservedTrue:
+    case Lexeme::ReservedFalse:
+    case Lexeme::ReservedNot:
+    case '#':
+    case Lexeme::Dot3:
+    case Lexeme::InterpStringBegin:
+    case Lexeme::InterpStringSimple:
+        return true;
+    case Lexeme::Name:
+    case Lexeme::ReservedFunction:
+    case Lexeme::ReservedIf:
+    case Lexeme::ReservedDo:
+        return luwuFile;
+    default:
+        return false;
+    }
+}
+
+// Luwu try expressions: `try` takes the whole expression after it, so `try a + b` protects both operands
+AstExpr* Parser::parseTryExpr()
+{
+    Location tryLocation = lexer.current().location;
+    checkLuwuFeature(tryLocation, kTryExpressionsFeature, FFlag::DebugLuwuTryExpressions);
+    nextLexeme();
+
+    AstExpr* expr = parseExpr();
+    return allocator.alloc<AstExprTry>(Location(tryLocation, expr->location), tryLocation, expr);
 }
 
 std::tuple<AstArray<AstExpr*>, Location, Location> Parser::parseCallList(TempVector<Position>* commaPositions, Position* closeParenPosition)

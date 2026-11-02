@@ -117,6 +117,7 @@ struct LintWarning
         Code_StringOperations = 80,        // Luwu: a string library call that `""` makes pointless or wrong (`s:startswith("")`)
         Code_AmbiguousContinuation = 81,   // Luwu: a line starting with `-` or a string that continues the expression above it
         Code_UnflippedGuard = 82,          // Luwu: `x == nil or return` followed by code using `x`, which is always nil there
+        Code_UncaughtErrors = 83,          // Luwu: a call to a function with error hints outside a `try`. Off by default.
 
         Code__Count
     };
@@ -249,6 +250,7 @@ inline constexpr const char* kWarningNames[] = {
     "StringOperations",
     "AmbiguousContinuation",
     "UnflippedGuard",
+    "UncaughtErrors",
 };
 // clang-format on
 

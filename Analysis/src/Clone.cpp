@@ -364,6 +364,10 @@ private:
         t->argTypes = shallowClone(t->argTypes);
         t->retTypes = shallowClone(t->retTypes);
 
+        // Luwu try expressions
+        if (t->errorHint)
+            t->errorHint = shallowClone(*t->errorHint);
+
         // Luwu user-defined refinements
         if (t->truthyRefinement)
             t->truthyRefinement->type = shallowClone(t->truthyRefinement->type);
@@ -750,6 +754,8 @@ TypeFun clone(const TypeFun& typeFun, TypeArena& dest, CloneState& cloneState)
     }
 
     copy.type = cloner.clone(copy.type);
+    if (copy.errorHint)
+        copy.errorHint = cloner.clone(*copy.errorHint);
 
     return copy;
 }
@@ -833,6 +839,8 @@ TypeFun cloneIncremental(const TypeFun& typeFun, TypeArena& dest, CloneState& cl
     }
 
     copy.type = cloner.clone(copy.type);
+    if (copy.errorHint)
+        copy.errorHint = cloner.clone(*copy.errorHint);
 
     return copy;
 }

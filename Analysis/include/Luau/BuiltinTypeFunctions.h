@@ -56,6 +56,9 @@ struct BuiltinTypeFunctions
     // Luwu: `unlessnever<refined, fallback, tests...>` is `refined`, or `fallback` when `refined` is uninhabited
     // because tests on one property contradict each other (one of `tests` is uninhabited). See applyRefinements.
     TypeFunction unlessneverFunc;
+    // Luwu try expressions: `raises<F>` is what calling F can raise: the error hints of F (each overload's, for an
+    // intersection) joined with weakunknown, or weakunknown alone. `try f()` types its error with it.
+    TypeFunction raisesFunc;
 
     // Luwu: `oneof<A, B, ...>`, the union of its arguments where each table member has the others' fields as `nil`
     TypeFunction oneofFunc;

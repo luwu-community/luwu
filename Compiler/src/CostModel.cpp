@@ -240,6 +240,11 @@ struct CostVisitor : AstVisitor
             // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): one instruction, which can call __pop
             return model(expr->expr) + 1;
         }
+        else if (AstExprTry* expr = node->as<AstExprTry>())
+        {
+            // Luwu try expressions: wrapping the value and jumping over the handler
+            return model(expr->expr) + 3;
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");

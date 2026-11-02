@@ -264,6 +264,8 @@ struct BytecodeFeatures
     bool feedbackVector = false;
     bool protoSizePrefix = false;
     bool inlineCost = false;
+    // Luwu try expressions: each function's protected ranges, after its inlining cost
+    bool tryRanges = false;
 };
 
 static BytecodeFeatures getLegacyFeatures(uint8_t version)
@@ -277,13 +279,14 @@ static BytecodeFeatures getLegacyFeatures(uint8_t version)
     return features;
 }
 
-static BytecodeFeatures getLuwuFeatures()
+static BytecodeFeatures getLuwuFeatures(uint8_t luwuVersion)
 {
     BytecodeFeatures features;
     features.typeInfo = true;
     features.feedbackVector = true;
     features.protoSizePrefix = true;
     features.inlineCost = true;
+    features.tryRanges = luwuVersion == LWBC_VERSION_WIP;
     return features;
 }
 
@@ -443,7 +446,7 @@ static int loadsafe(
                 LWBC_VERSION_WIP
             );
 
-        features = getLuwuFeatures();
+        features = getLuwuFeatures(luwuVersion);
     }
     else if (version >= LBC_VERSION_MIN && version <= LBC_VERSION_MAX)
     {
@@ -1041,6 +1044,28 @@ static int loadsafe(
         {
             if ((p->flags & LPF_INLINABLE) != 0)
                 p->cost = readVarInt64(data, size, offset);
+        }
+
+        if (features.tryRanges)
+        {
+            int sizetryranges = readVarInt(data, size, offset);
+
+            if (sizetryranges > 0)
+            {
+                p->tryranges = luaM_newarray(L, sizetryranges, LuauTryRange, p->memcat);
+                p->sizetryranges = sizetryranges;
+
+                for (int j = 0; j < sizetryranges; ++j)
+                {
+                    LuauTryRange& range = p->tryranges[j];
+                    range.startpc = readVarInt(data, size, offset);
+                    range.endpc = readVarInt(data, size, offset);
+                    range.handlerpc = readVarInt(data, size, offset);
+                    range.target = read<uint8_t>(data, size, offset);
+                    LUAU_ASSERT(range.startpc < range.endpc && range.endpc <= range.handlerpc);
+                    LUAU_ASSERT(range.handlerpc < uint32_t(p->sizecode) && range.target + 3 < p->maxstacksize);
+                }
+            }
         }
 
         if (features.protoSizePrefix)
