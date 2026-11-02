@@ -5873,6 +5873,57 @@ Yielder_ = Yielder
         CHECK(lua_gettop(L) == 3);
     }
 
+    SUBCASE("lua_classof")
+    {
+        lua_getglobal(L, "Hidden_");
+        lua_getglobal(L, "Hidden_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "a");
+        lua_newobject(L, 2);
+        lua_pushnumber(L, 5);
+        lua_getglobal(L, "Plain_");
+
+        // an object gives its class
+        CHECK(lua_classof(L, 2) == 1);
+        CHECK(lua_rawequal(L, -1, 1));
+        CHECK(!lua_rawequal(L, -1, 4));
+
+        // anything else pushes nothing, a class included, like `class.of`
+        CHECK(lua_classof(L, 1) == 0);
+        CHECK(lua_classof(L, 3) == 0);
+        CHECK(lua_classof(L, 10) == 0); // an unused stack slot
+        CHECK(lua_gettop(L) == 5);
+    }
+
+    SUBCASE("lua_classis")
+    {
+        lua_getglobal(L, "Hidden_");
+        lua_getglobal(L, "Hidden_");
+        lua_pushnumber(L, 1);
+        lua_pushliteral(L, "a");
+        lua_newobject(L, 2);
+        lua_getglobal(L, "Plain_");
+        lua_pushnumber(L, 5);
+
+        CHECK(lua_classis(L, 2, 1) == 1);
+        CHECK(lua_classis(L, 2, 3) == 0); // another class
+        CHECK(lua_classis(L, 1, 1) == 0); // a class isn't an object of itself
+        CHECK(lua_classis(L, 4, 1) == 0);
+        CHECK(lua_classis(L, 10, 1) == 0); // an unused stack slot
+        CHECK(lua_gettop(L) == 4);
+
+        std::string err = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_pushnumber(L, 1);
+                lua_pushnumber(L, 2);
+                lua_classis(L, 1, 2);
+            }
+        );
+        CHECK(err == "expected a class, got number");
+    }
+
     SUBCASE("lua_newobject on a POD class reads an object argument's private fields as the embedder")
     {
         lua_getglobal(L, "Plain_");

@@ -1987,6 +1987,28 @@ int lua_getclassdatashape(lua_State* L, int idx, int* hasmethods)
     return shape;
 }
 
+int lua_classof(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    if (!ttisobject(o))
+        return 0;
+
+    luaC_threadbarrier(L);
+    setclassvalue(L, L->top, objectvalue(o)->lclass);
+    api_incr_top(L);
+    return 1;
+}
+
+int lua_classis(lua_State* L, int idx, int classidx)
+{
+    const TValue* cls = index2addr(L, classidx);
+    if (!ttisclass(cls))
+        luaG_runerror(L, "expected a class, got %s", luaT_objtypename(L, cls));
+
+    const TValue* o = index2addr(L, idx);
+    return ttisobject(o) && objectvalue(o)->lclass == classvalue(cls);
+}
+
 static const char* aux_upvalue(StkId fi, int n, TValue** val)
 {
     Closure* f;
