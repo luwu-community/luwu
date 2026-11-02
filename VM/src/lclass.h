@@ -158,16 +158,23 @@ LUAI_FUNC void luaR_checkconstassign(lua_State* L, const TValue* key, const Luau
 // class with `hasprivatemembers`. It tests the member's own flag bits first, so the out-of-line
 // authorization call only happens for members that are actually private, or for `__init`. `__init` is
 // only ever resolved by name; see luaR_sealclassshape. Worth ~1.3ns per access, interpreted.
+// The interpreter passes `pc`, which is saved before a check that can raise, so the error points at the instruction
+// being run (and a `try` around it catches it). Other callers have saved it already.
 LUAU_FORCEINLINE void luaR_checkprivateaccessfast(
     lua_State* L,
     const TValue* key,
     const LuauClass* classdef,
     const Closure* cl,
-    uint32_t offset
+    uint32_t offset,
+    const Instruction* pc = NULL
 )
 {
     if (LUAU_UNLIKELY((classdef->memberflags[offset] & (LBC_CLASSMEMBER_PRIVATE | LBC_CLASSMEMBER_INITBLOCKED)) != 0))
+    {
+        if (pc)
+            L->ci->savedpc = pc;
         luaR_checkprivateaccess(L, key, classdef, cl, offset);
+    }
 }
 
 LUAU_FORCEINLINE void luaR_checkconstassignfast(
@@ -175,11 +182,16 @@ LUAU_FORCEINLINE void luaR_checkconstassignfast(
     const TValue* key,
     const LuauObject* object,
     const Closure* cl,
-    uint32_t offset
+    uint32_t offset,
+    const Instruction* pc = NULL
 )
 {
     if (LUAU_UNLIKELY((object->lclass->memberflags[offset] & LBC_CLASSMEMBER_CONST) != 0))
+    {
+        if (pc)
+            L->ci->savedpc = pc;
         luaR_checkconstassign(L, key, object, cl, offset);
+    }
 }
 
 /**
