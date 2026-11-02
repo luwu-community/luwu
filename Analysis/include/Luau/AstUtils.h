@@ -51,4 +51,10 @@ bool returnsOnlySelf(AstExprFunction* fn, AstLocal* self);
 // Luwu Traits (rfcs/classes/traits.md): `class.of(self)` called, the `self` it is the class of
 AstLocal* newOfClassOf(AstExprCall* call);
 
+// Luwu: `fn`'s own `return` statements, not those of functions nested in it, in source order
+std::vector<AstStatReturn*> findOwnReturns(const AstExprFunction* fn);
+
+// Luwu: whether `expr` is a cast to `any` (`x :: any`), parentheses included
+bool isAnyCast(AstExpr* expr);
+
 } // namespace Luau

@@ -322,26 +322,33 @@ std::optional<Location> Scope::isInvalidTypeAlias(const std::string& name) const
     return std::nullopt;
 }
 
+// Luwu: sibling scopes can enclose one another, so each step takes the narrowest child that encloses the location, not the
+// first. A `for ... in` loop's scope spans its whole statement, header included, and is created before the header is
+// checked, so a function written in the header (`for _, p in fs.listdir(dir, true, function(p) ... end) do`) has a
+// scope that is the loop scope's later sibling. Upstream takes the loop scope, and the function's `return` is then
+// checked against the enclosing function's return type. Of two children with the same location, the first wins.
 NotNull<Scope> Scope::findNarrowestScopeContaining(Location location)
 {
     Scope* bestScope = this;
 
-    bool didNarrow;
-    do
+    while (true)
     {
-        didNarrow = false;
-        for (auto scope : bestScope->children)
+        Scope* narrowest = nullptr;
+        for (NotNull<Scope> child : bestScope->children)
         {
-            if (scope->location.encloses(location))
-            {
-                bestScope = scope.get();
-                didNarrow = true;
-                break;
-            }
-        }
-    } while (didNarrow && bestScope->children.size() > 0);
+            if (!child->location.encloses(location))
+                continue;
 
-    return NotNull{bestScope};
+            bool narrower = !narrowest || (narrowest->location.encloses(child->location) && narrowest->location != child->location);
+            if (narrower)
+                narrowest = child.get();
+        }
+
+        if (!narrowest)
+            return NotNull{bestScope};
+
+        bestScope = narrowest;
+    }
 }
 
 

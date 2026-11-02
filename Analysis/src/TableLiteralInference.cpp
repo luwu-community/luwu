@@ -167,7 +167,10 @@ struct BidirectionalTypePusher
         // We'll have a cycle between trying to push `fact`'s type into its
         // arguments and generalizing `fact`.
 
-        if (auto tfit = get<TypeFunctionInstanceType>(expectedType); tfit && tfit->state == TypeFunctionInstanceState::Unsolved)
+        // Luwu: a type function instance from another module (a generic function's `Row<C>`) can't have its state set by
+        // this solver, so it stays Unsolved after this module's reduction gives up on it. Upstream reads the state alone and
+        // re-pushes such an argument until the constraint budget runs out. `isBlocked` also knows what was given up on here.
+        if (get<TypeFunctionInstanceType>(expectedType) && solver->isBlocked(expectedType))
         {
             incompleteInferences.push_back(IncompleteInference{expectedType, exprType, expr});
             return exprType;
