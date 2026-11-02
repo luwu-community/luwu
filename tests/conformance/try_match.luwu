@@ -1,0 +1,43 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+-- `try e case ...` matches on the result of `try e`, like `match try e case ...`
+print("testing try with case arms")
+
+const .{result.{ok as Ok, err as Err}} = collections
+
+local function read(path: string): string
+    if path == "" then
+        error({ kind = "NotFound" })
+    end
+    if path == "?" then
+        error("broken")
+    end
+    return `contents of {path}`
+end
+
+local function load(path: string): string
+    return try read(path)
+        case is Ok.(content) then content
+        case is Err.(.{kind}) when kind == "NotFound" then "missing"
+        case .(other) then `other: {other.error}`
+end
+
+assert(load("a") == "contents of a")
+assert(load("") == "missing")
+assert(string.find(load("?"), "broken", 1, true))
+
+-- `match try e`: the arms are the match's, not the try's
+local function first(path: string): string
+    return match try read(path)
+        case is Ok.(content) then content
+        else "failed"
+end
+assert(first("b") == "contents of b")
+assert(first("") == "failed")
+
+-- a statement assigning a variable named `case` after a `try` is still a statement
+local case = 1
+local r = try read("c")
+case = 2
+assert(case == 2 and r:ok() == "contents of c")
+
+return "OK"

@@ -9525,8 +9525,6 @@ TEST_SUITE_END();
 
 TEST_CASE_FIXTURE(LoweringFixture, "GenericForOverPlainTableSetsUpIterationInline")
 {
-    ScopedFastFlag luauBackedgeHeapCheck{FFlag::LuauBackedgeHeapCheck, true};
-
     // Luwu: `for k, v in t` over a table without a metatable sets up builtin iteration with stores. Only a value that
     // isn't such a table reaches FALLBACK_FORGPREP, from the fallback block.
     CHECK_EQ(

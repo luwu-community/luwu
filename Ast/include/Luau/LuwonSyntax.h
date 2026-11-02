@@ -38,6 +38,10 @@ std::vector<LuwonBuiltinClass> luwonBuiltinClasses();
 
 LuwonConstructor luwonConstructorOf(const AstExprCall* call);
 
+// Luwu Traits (rfcs/classes/traits.md): whether a class's `implements` list names `luwon.data` as written, which lets it
+// define `__todata` and `__fromdata`
+bool implementsLuwonData(const AstArray<AstClassTraitRef>& implements);
+
 // The name a `Class` call constructs, as the file writes it.
 std::string luwonClassNameOf(const AstExprCall* call);
 

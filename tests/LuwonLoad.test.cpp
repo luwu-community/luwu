@@ -17,6 +17,8 @@
 
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(DebugLuwuCollections)
 
 using namespace Luau;
 
@@ -336,6 +338,101 @@ return tostring(pcall(function()
     reader.classes.Other = Point
 end))
 )LUA") == "false");
+}
+
+TEST_CASE("luwon_collections_bundles_round_trip")
+{
+    ScopedFastFlag flags[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::DebugLuwuCollections, true},
+    };
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state = newState();
+
+    CHECK(run(state.get(), R"LUA(
+local config = luwon.decode("return { range = collections.pair(1, 10) }")
+assert(class.isinstance(config.range, collections.pair) and config.range.second == 10)
+assert(not pcall(luwon.decode, "return collections.pair(1, 2, 3)"))
+
+config.range = collections.pair(2, 20)
+config.rgb = collections.triple(1, 2, 3)
+return luwon.encode(config)
+)LUA") == "return { range = collections.pair(2, 20), rgb = collections.triple(1, 2, 3) }");
+}
+
+TEST_CASE("luwon_data_classes_with_methods_can_be_read")
+{
+    ScopedFastFlag flags[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state = newState();
+
+    // A reader builds a class with methods when it implements luwon.data
+    CHECK(run(state.get(), R"LUA(
+class Semver(public major: number, public minor: number, public patch: number) implements luwon.data
+    public function bump(self): Semver
+        return Semver(self.major, self.minor + 1, 0)
+    end
+end
+
+local package = luwon.reader({ Semver }):decode("return { version = Semver(0, 2, 0) }")
+assert(class.isinstance(package.version, Semver))
+package.version = package.version:bump()
+return luwon.encode(package)
+)LUA") == "return { version = Semver(0, 3, 0) }");
+
+    // Implementing it registers nothing by name: two classes may share one
+    CHECK(run(state.get(), "class Tag(public name: string) implements luwon.data end return 'ok'") == "ok");
+    CHECK(run(state.get(), "class Tag(public label: string) implements luwon.data end return 'ok'") == "ok");
+}
+
+TEST_CASE("luwon_data_hooks_say_what_a_call_holds")
+{
+    ScopedFastFlag flags[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state = newState();
+
+    // `__todata` gives the call's arguments and `__fromdata` builds the object from them
+    CHECK(run(state.get(), R"LUA(
+class Semver(
+    public const major: number,
+    public const minor: number,
+    public const patch: number
+) implements luwon.data
+    public function __todata(self)
+        return `{self.major}.{self.minor}.{self.patch}`
+    end
+
+    public function __fromdata(text: string): Semver
+        const major, minor, patch = string.match(text, "^(%d+)%.(%d+)%.(%d+)$")
+        return Semver(tonumber(major) :: number, tonumber(minor) :: number, tonumber(patch) :: number)
+    end
+end
+
+local package = luwon.reader({ Semver }):decode('return { version = Semver("0.2.0") }')
+assert(class.isinstance(package.version, Semver) and package.version.minor == 2)
+package.version = Semver(0, 3, 1)
+return luwon.encode(package)
+)LUA") == "return { version = Semver(\"0.3.1\") }");
+
+    // `__fromdata` builds its own class
+    CHECK(run(state.get(), R"LUA(
+class Count(public n: number) implements luwon.data
+    public function __fromdata(n: number)
+        return n
+    end
+end
+return luwon.reader({ Count }):decode("return Count(1)")
+)LUA").find("'Count.__fromdata' must return a Count, but returned a number") != std::string::npos);
+
+    // Only a class that implements luwon.data has them
+    CHECK(run(state.get(), "class Plain(public n: number)\n    public function __todata(self)\n        return self.n\n    end\nend\nreturn 'ok'").find("'__todata' is only for classes that implement luwon.data") != std::string::npos);
 }
 
 TEST_SUITE_END();

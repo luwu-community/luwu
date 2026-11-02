@@ -1592,7 +1592,8 @@ void ConstraintGenerator::prototypeClass(
     auto classFieldUserData = std::make_shared<ClassFieldUserData>();
     classFieldUserData->fieldNames = std::move(instanceFieldNames);
 
-    if (classDecl->primaryConstructor)
+    // Luwu Traits (rfcs/classes/traits.md): only a class is destructured by position (see compileClassDeclaration)
+    if (classDecl->primaryConstructor && !classDecl->isTrait)
     {
         std::vector<Name> positionalFields;
         for (AstLocal* param : classDecl->primaryConstructor->args)
@@ -3430,6 +3431,68 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
     }
 }
 
+ConstraintGenerator::ResolvedAnnotation ConstraintGenerator::resolveLocalAnnotation(const ScopePtr& scope, AstLocal* local)
+{
+    if (ResolvedAnnotation* resolved = bundleElementAnnotations.find(local))
+        return *resolved;
+
+    polarity = Polarity::Positive;
+    if (FFlag::LuwuLiteralTypes)
+        return resolveLiteralCheckAnnotation(scope, local->annotation, /* inTypeArguments */ false, /* replaceErrorWithFresh */ false);
+    return ResolvedAnnotation{resolveType(scope, local->annotation, /* inTypeArguments */ false), std::nullopt};
+}
+
+// Luwu collections: how many values the `.(...)` that `expr` evaluates to holds (Parser::parseDotPositional), looking
+// through parentheses and if-else branches. 0 when it isn't one.
+static size_t dotPositionalSize(AstExpr* expr)
+{
+    if (AstExprGroup* group = expr->as<AstExprGroup>())
+        return dotPositionalSize(group->expr);
+
+    if (AstExprIfElse* ifElse = expr->as<AstExprIfElse>())
+    {
+        size_t size = dotPositionalSize(ifElse->trueExpr);
+        return size != 0 ? size : dotPositionalSize(ifElse->falseExpr);
+    }
+
+    AstExprCall* call = expr->as<AstExprCall>();
+    return call && call->fromDotPositional ? call->args.size : 0;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a positional pattern on a `.(...)` value gives the bundle its elements'
+// annotations as its expected type, so `const .(format: Format, extension: string) = .("Zip", "zip")` checks "Zip"
+// against `Format` instead of widening it to `string`. Every element needs an annotation: a placeholder for a missing one
+// would be inferred from how the element is used later instead of from its value.
+std::optional<TypeId> ConstraintGenerator::expectedBundleType(const ScopePtr& scope, AstStatLocal* statLocal)
+{
+    AstDestructurePattern* pattern = statLocal->destructure;
+    if (!pattern || !pattern->positional || statLocal->vars.size != 1 || statLocal->values.size != 1 || statLocal->vars.data[0]->annotation)
+        return std::nullopt;
+
+    static const char* const kBundles[] = {"pair", "triple", "quad"};
+    size_t size = dotPositionalSize(statLocal->values.data[0]);
+    if (size < 2 || size > 4 || pattern->fields.size != size || !globalScope->lookupImportedType("collections", kBundles[size - 2]))
+        return std::nullopt;
+
+    for (const AstDestructureField& field : pattern->fields)
+    {
+        if (field.target.location || !field.target.local->annotation)
+            return std::nullopt;
+    }
+
+    std::vector<TypeId> elements;
+    for (const AstDestructureField& field : pattern->fields)
+    {
+        ResolvedAnnotation annotation = resolveLocalAnnotation(scope, field.target.local);
+        bundleElementAnnotations[field.target.local] = annotation;
+        elements.push_back(annotation.type);
+    }
+
+    TypeId bundle = arena->addType(PendingExpansionType{AstName{"collections"}, AstName{kBundles[size - 2]}, std::move(elements), {}});
+    addConstraint(globalScope, statLocal->location, TypeAliasExpansionConstraint{/* target */ bundle});
+    return bundle;
+}
+
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* statLocal)
 {
     std::vector<TypeId> annotatedTypes;
@@ -3472,13 +3535,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
 
         ResolvedAnnotation annotation{nullptr, std::nullopt};
         if (local->annotation)
-        {
-            polarity = Polarity::Positive;
-            if (FFlag::LuwuLiteralTypes)
-                annotation = resolveLiteralCheckAnnotation(scope, local->annotation, /* inTypeArguments */ false, /* replaceErrorWithFresh */ false);
-            else
-                annotation.type = resolveType(scope, local->annotation, /* inTypeArguments */ false);
-        }
+            annotation = resolveLocalAnnotation(scope, local);
 
         if (annotation.check)
         {
@@ -3516,6 +3573,9 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
             scope->lvalueTypes[def] = assignee;
         }
     }
+
+    if (std::optional<TypeId> bundle = expectedBundleType(scope, statLocal))
+        expectedTypes[0] = bundle;
 
     Checkpoint start = checkpoint(this);
     TypePackId rvaluePack = checkPack(scope, statLocal->values, expectedTypes).tp;
@@ -8065,6 +8125,7 @@ ConstraintGenerator::ResolvedAnnotation ConstraintGenerator::resolveLiteralCheck
             }
         }
 
+        weakenUnknownMembers(options, members);
         TypeId unionTy = arena->addType(UnionType{std::move(members)});
         module->astResolvedTypes[options] = unionTy;
         // Every member literal (reported above) leaves no alternatives

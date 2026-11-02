@@ -15,6 +15,7 @@
 
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 
 // Luwu object notation: the `luwon` library, and `luwon_load` for `require`. Values cross between Lua and the
 // notation's value tree here.
@@ -1617,6 +1618,48 @@ static void openTaggedClass(lua_State* L)
     lua_setfield(L, LUA_REGISTRYINDEX, kTaggedClassKey);
 }
 
+// Records a class that implements `luwon.data`, for the trait's `__implemented` hook. A reader may then construct it
+// whatever it holds.
+static int registerDataClass(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TCLASS);
+    pushDataClasses(L);
+    lua_pushvalue(L, 1);
+    lua_pushboolean(L, 1);
+    lua_rawset(L, -3);
+    return 0;
+}
+
+// `luwon.data`, the trait that lets a reader construct a class whatever it holds. It's a trait written in Luwu: its
+// `__implemented` hook runs once for each class that implements it.
+static const char* const kDataTraitSource = R"(
+const register = ...
+
+trait data
+    final function __implemented(cls)
+        register(cls)
+    end
+end
+
+return data
+)";
+
+// Pushes the trait `luwon.data`, compiling it from kDataTraitSource.
+static void openDataTrait(lua_State* L)
+{
+    CompileOptions options;
+    options.language = int(Language::Luwu);
+    std::string bytecode = compile(kDataTraitSource, options);
+
+    int loaded = luau_load(L, "=luwon.data", bytecode.data(), bytecode.size(), 0);
+    LUAU_ASSERT(loaded == 0);
+    if (loaded != 0)
+        lua_error(L);
+
+    lua_pushcfunction(L, registerDataClass, "register");
+    lua_call(L, 1, 1);
+}
+
 } // namespace Luau
 
 int luaopen_luwon(lua_State* L)
@@ -1627,6 +1670,12 @@ int luaopen_luwon(lua_State* L)
     {
         Luau::openTaggedClass(L);
         lua_setfield(L, -2, "tagged");
+    }
+
+    if (FFlag::LuwuClasses && FFlag::LuwuTraits)
+    {
+        Luau::openDataTrait(L);
+        lua_setfield(L, -2, "data");
     }
 
     return 1;

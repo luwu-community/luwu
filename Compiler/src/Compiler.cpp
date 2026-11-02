@@ -5248,10 +5248,12 @@ struct Compiler
             }
 
             // Luwu Destructuring (rfcs/destructuring.md): a positional pattern reads the parameters' fields in parameter
-            // order, which differs from member order when the body restates a parameter
+            // order, which differs from member order when the body restates a parameter.
+            // Luwu Traits (rfcs/classes/traits.md): only a class has positions. A trait's parameters become fields of the
+            // classes implementing it, which have their own constructors.
             shape.propertyPositions.assign(shape.propertyNames.size(), -1);
 
-            for (size_t i = 0; i < decl->primaryConstructor->args.size; ++i)
+            for (size_t i = 0; i < decl->primaryConstructor->args.size && !decl->isTrait; ++i)
             {
                 int offset = classInstanceMemberOffset(decl, decl->primaryConstructor->args.data[i]->name, /* forWrite= */ false);
                 LUAU_ASSERT(offset >= 0 && size_t(offset) < shape.propertyNames.size());
@@ -5784,10 +5786,45 @@ struct Compiler
         return le->local;
     }
 
+    // Luwu Do Expressions (rfcs/do-expressions.md): the check in `type(x) == "string" or return` (or `break`, `continue`)
+    // written as a statement, a declaration's value or an assignment's value, which only completes when the check passes
+    static AstExpr* orLeaveCheck(AstStat* stat)
+    {
+        if (AstStatExpr* statExpr = stat->as<AstStatExpr>())
+        {
+            AstExprBinary* orLeave = asOrLeave(statExpr->expr);
+            return orLeave ? orLeave->left : nullptr;
+        }
+
+        const AstArray<AstExpr*>* values = nullptr;
+        if (AstStatLocal* local = stat->as<AstStatLocal>())
+            values = &local->values;
+        else if (AstStatAssign* assign = stat->as<AstStatAssign>())
+            values = &assign->values;
+
+        for (size_t i = 0; values && i < values->size; ++i)
+        {
+            if (AstExprBinary* orLeave = asOrLeave(values->data[i]))
+                return orLeave->left;
+        }
+
+        return nullptr;
+    }
+
     // `assert(type(x) == "string")` as a statement proves `x` for the rest of the block. Only the builtin `assert`
-    // counts: a module that reassigns the global gets no builtin id for it.
+    // counts: a module that reassigns the global gets no builtin id for it. `type(x) == "string" or return` proves the
+    // same (see orLeaveCheck).
     AstLocal* matchAssertStringProof(AstStat* stat, const AstArray<AstStat*>& body, size_t index)
     {
+        if (AstExpr* check = orLeaveCheck(stat))
+        {
+            AstLocal* local = matchTypeStringCheck(check);
+            if (!local || bodyWritesLocal(body, index + 1, local))
+                return nullptr;
+
+            return local;
+        }
+
         AstStatExpr* statExpr = stat->as<AstStatExpr>();
         AstExprCall* call = statExpr ? statExpr->expr->as<AstExprCall>() : nullptr;
         const int* bfid = call ? builtins.find(call) : nullptr;
@@ -6674,11 +6711,11 @@ struct Compiler
     // `target`, closes the block's captured locals and jumps to the end, the way an inlined function's `return` does
     // (compileInlineReturn). `return`, `break` and `continue` leave through their usual paths: they close upvalues
     // from the local stack, which already holds the block's locals.
-    void compileExprDo(AstExprDo* expr, uint8_t target, bool targetTemp)
+    void compileExprDo(AstExprDo* expr, uint8_t target, bool targetTemp, unsigned bundleSize = 0)
     {
         RegScope rs(this);
 
-        giveFrames.push_back({target, targetTemp, localStack.size(), {}});
+        giveFrames.push_back({target, targetTemp, localStack.size(), {}, bundleSize});
 
         // The block always ends in a `give`, `return`, `break` or `continue`, so nothing falls through it
         LUAU_ASSERT(alwaysTerminates(expr->body));
@@ -7080,7 +7117,10 @@ struct Compiler
         {
             RegScope rs(this);
             GiveFrame& frame = giveFrames.back();
-            compileExpr(stat->value, frame.target, frame.targetTemp);
+            if (frame.bundleSize > 0)
+                compileBundleElements(stat->value->as<AstExprCall>(), frame.target);
+            else
+                compileExpr(stat->value, frame.target, frame.targetTemp);
         }
 
         closeLocals(giveFrames.back().localOffset);
@@ -7676,6 +7716,10 @@ struct Compiler
     {
         setDebugLine(expr); // normally compileExpr sets up line info, but compileExprIndexName can be called directly
 
+        // Luwu collections: a destructured bundle's element is already in a register
+        if (tryCompileUnfoldedBundleRead(expr, target))
+            return;
+
         // Luwu try expressions: a field of a result kept in registers
         if (AstExprLocal* local = expr->expr->as<AstExprLocal>(); local && tryResultLocals.contains(local->local))
             return compileTryResultField(expr, getLocalReg(local->local), target, targetTemp);
@@ -7807,6 +7851,10 @@ struct Compiler
 
         if (expr->positional)
         {
+            // Luwu collections: an element of a bundle this code built and destructured is already in a register
+            if (tryCompileUnfoldedBundleRead(expr, target))
+                return;
+
             // Luwu Destructuring (rfcs/destructuring.md): the parser writes the position as a constant, and a pattern has
             // fewer elements than a function has registers
             LUAU_ASSERT(cv.type == Constant::Type_Number && cv.valueNumber >= 1 && cv.valueNumber <= 256);
@@ -9046,6 +9094,175 @@ struct Compiler
         return true;
     }
 
+    // Luwu collections: the position of the bundle element `name` (`first` to `fourth`) in a bundle of `size`, or -1
+    static int bundleElementIndex(AstName name, unsigned size)
+    {
+        static const char* const kElements[] = {"first", "second", "third", "fourth"};
+        for (unsigned i = 0; i < size; i++)
+        {
+            if (name == kElements[i])
+                return int(i);
+        }
+        return -1;
+    }
+
+    // Luwu collections: the size of the bundle every `give` of `expr` constructs, or 0 when one gives anything else or
+    // the sizes differ. Gives of nested `do` expressions belong to those.
+    unsigned bundleSizeOfGives(AstExprDo* expr)
+    {
+        struct GiveVisitor : AstVisitor
+        {
+            AstExprDo* root;
+            std::vector<AstStatGive*> gives;
+
+            bool visit(AstExprDo* node) override
+            {
+                return node == root;
+            }
+
+            bool visit(AstExprFunction* node) override
+            {
+                return false;
+            }
+
+            bool visit(AstStatGive* node) override
+            {
+                gives.push_back(node);
+                return false;
+            }
+        };
+
+        GiveVisitor visitor;
+        visitor.root = expr;
+        expr->visit(&visitor);
+
+        unsigned size = 0;
+        for (AstStatGive* give : visitor.gives)
+        {
+            unsigned giveSize = bundleConstructionSize(give->value);
+            if (giveSize == 0 || (size != 0 && giveSize != size))
+                return 0;
+            size = giveSize;
+        }
+        return size;
+    }
+
+    // Luwu collections: the arguments of a bundle construction into consecutive registers from `target`, in order
+    void compileBundleElements(AstExprCall* call, uint8_t target)
+    {
+        LUAU_ASSERT(call);
+        for (size_t i = 0; i < call->args.size; i++)
+        {
+            RegScope rs(this);
+            compileExpr(call->args.data[i], uint8_t(target + i), /* targetTemp= */ true);
+        }
+    }
+
+    // Luwu collections: `const .{ first, second } = collections.pair(a, b)` creates no object. The hidden local a
+    // destructuring desugars to gets one register per element, and its field reads become those registers (see
+    // compileExprIndexName). A `do` expression unfolds the same way when every `give` builds the same kind of bundle.
+    // Like a fastcall, this assumes `collections` is the builtin library when the module never assigns it; anything the
+    // pattern reads that isn't an element of the bundle keeps the object.
+    bool tryCompileUnfoldedBundle(AstStatLocal* stat)
+    {
+        AstDestructurePattern* pattern = stat->destructure;
+        if (!pattern || stat->vars.size != 1 || stat->values.size != 1 || stat->vars.data[0] != pattern->local)
+            return false;
+
+        AstLocal* local = pattern->local;
+        if (strcmp(local->name.value, kDestructuredLocalName) != 0)
+            return false;
+
+        AstExpr* value = stat->values.data[0];
+        while (AstExprGroup* group = value->as<AstExprGroup>())
+            value = group->expr;
+
+        AstExprDo* doExpr = value->as<AstExprDo>();
+        unsigned size = doExpr ? bundleSizeOfGives(doExpr) : bundleConstructionSize(value);
+        if (size == 0)
+            return false;
+
+        // a position past the bundle's end raises, so the object stays
+        if (pattern->positional && pattern->fields.size > size)
+            return false;
+
+        for (const AstDestructureField& field : pattern->fields)
+        {
+            if (!pattern->positional && bundleElementIndex(field.key, size) < 0)
+                return false;
+        }
+
+        uint8_t reg = allocReg(stat, size);
+        uint32_t allocpc = bytecode.getDebugPC();
+
+        if (doExpr)
+            compileExprDo(doExpr, reg, /* targetTemp= */ true, size);
+        else
+            compileBundleElements(value->as<AstExprCall>(), reg);
+
+        pushLocal(local, reg, allocpc);
+        unfoldedBundles[local] = {reg, size};
+        return true;
+    }
+
+    // Luwu collections: a local bound to an unfolded bundle's element (`local first = (destructured).first`) uses the
+    // element's register, the way `local a = b` reuses `b`'s. Only when nothing writes it, since two bindings can
+    // share an element.
+    bool tryBindBundleElement(AstStatLocal* stat)
+    {
+        if (stat->vars.size != 1 || stat->values.size != 1 || stat->vars.data[0]->isExported)
+            return false;
+
+        std::optional<uint8_t> source = unfoldedBundleElement(stat->values.data[0]);
+        if (!source)
+            return false;
+
+        Variable* lv = variables.find(stat->vars.data[0]);
+        if (lv && lv->written)
+            return false;
+
+        pushLocal(stat->vars.data[0], *source, kDefaultAllocPc);
+        return true;
+    }
+
+    // Luwu collections: the register holding the element `read` takes from an unfolded bundle, by name
+    // (`(destructured).first`) or by position (`.(a, b)`)
+    std::optional<uint8_t> unfoldedBundleElement(AstExpr* read)
+    {
+        AstExprIndexName* field = read->as<AstExprIndexName>();
+        AstExprIndexExpr* element = read->as<AstExprIndexExpr>();
+        if (element && !element->positional)
+            return std::nullopt;
+
+        AstExpr* object = field ? field->expr : element ? element->expr : nullptr;
+        AstExprLocal* local = object ? object->as<AstExprLocal>() : nullptr;
+        const UnfoldedBundle* bundle = local ? unfoldedBundles.find(local->local) : nullptr;
+        if (!bundle)
+            return std::nullopt;
+
+        int index = -1;
+        if (field)
+            index = bundleElementIndex(field->index, bundle->size);
+        else if (AstExprConstantNumber* position = element->index->as<AstExprConstantNumber>())
+            index = int(position->value) - 1;
+
+        // tryCompileUnfoldedBundle only unfolds a bundle whose every read is one of its elements
+        LUAU_ASSERT(index >= 0 && unsigned(index) < bundle->size);
+        return uint8_t(bundle->reg + index);
+    }
+
+    // Luwu collections: an element of an unfolded bundle into `target`, a move from the register holding it
+    bool tryCompileUnfoldedBundleRead(AstExpr* read, uint8_t target)
+    {
+        std::optional<uint8_t> source = unfoldedBundleElement(read);
+        if (!source)
+            return false;
+
+        if (target != *source)
+            bytecode.emitABC(LOP_MOVE, target, *source, 0);
+        return true;
+    }
+
     void compileStatLocal(AstStatLocal* stat)
     {
         // Luwu try expressions: a result only ever read through its fields stays in registers
@@ -9057,6 +9274,9 @@ struct Compiler
 
         // Optimization: we don't need to allocate and assign const locals, since their uses will be constant-folded
         if (options.optimizationLevel >= 1 && options.debugLevel <= 1 && areLocalsRedundant(stat))
+            return;
+
+        if (options.optimizationLevel >= 1 && (tryCompileUnfoldedBundle(stat) || tryBindBundleElement(stat)))
             return;
 
         // Optimization: for 1-1 local assignments, we can reuse the register *if* neither local is mutated
@@ -9441,6 +9661,8 @@ struct Compiler
         size_t oldLocals = localStack.size();
         size_t oldJumps = loopJumps.size();
         loops.push_back({oldLocals, oldLocals, nullptr});
+        // Luwu: the body is compiled once per element
+        RepeatedCompile repeated(this);
 
         for (size_t i = 0; i < unfolded.elements.size(); i++)
         {
@@ -11716,8 +11938,19 @@ struct Compiler
         bool targetTemp;
         size_t localOffset;
         std::vector<size_t> jumps;
+        // Luwu collections: when nonzero, every `give` constructs a bundle this size, and its elements go to
+        // `target` onward instead (see tryCompileUnfoldedBundle)
+        unsigned bundleSize = 0;
     };
     std::vector<GiveFrame> giveFrames;
+
+    // Luwu collections: a destructured bundle's elements, held in consecutive registers instead of an object
+    struct UnfoldedBundle
+    {
+        uint8_t reg;
+        unsigned size;
+    };
+    DenseHashMap<AstLocal*, UnfoldedBundle> unfoldedBundles{nullptr};
 
     // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the comprehensions being compiled, innermost last
     struct ComprehensionFrame

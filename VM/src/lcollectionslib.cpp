@@ -382,10 +382,11 @@ static int bundleiter(lua_State* L)
     return 2;
 }
 
-static const uint8_t kBundleField = LBC_CLASSMEMBER_CONST;
+// Luwu Destructuring (rfcs/destructuring.md): a pair's, triple's or quad's elements and an option's or result's payload are read by `.(a, b)`
+static const uint8_t kBundleField = LBC_CLASSMEMBER_CONST | LBC_CLASSMEMBER_POSITIONAL;
 static const uint8_t kPrivateField = LBC_CLASSMEMBER_PRIVATE;
 // An option's or result's payload, readable as `value` (`error` for `err`) like a bundle's elements
-static const uint8_t kPayloadField = LBC_CLASSMEMBER_CONST;
+static const uint8_t kPayloadField = LBC_CLASSMEMBER_CONST | LBC_CLASSMEMBER_POSITIONAL;
 
 static const luaR_NativeMember kPairMembers[] = {
     {"first", NULL, kBundleField},
@@ -1859,6 +1860,13 @@ int luaopen_collections(lua_State* L)
     lua_setfield(L, -2, "result");
 
     setnonemetatable(L);
+
+    // Luwu object notation: data files construct pair, triple and quad through the registry's copy of the library, which
+    // a global named `collections` can't replace
+    luaL_findtable(L, LUA_REGISTRYINDEX, "_LOADED", 1);
+    lua_pushvalue(L, -2);
+    lua_setfield(L, -2, LUA_COLLECTIONSLIBNAME);
+    lua_pop(L, 1);
 
     lua_pushvalue(L, -1);
     lua_setglobal(L, LUA_COLLECTIONSLIBNAME);

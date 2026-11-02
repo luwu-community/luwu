@@ -19,18 +19,17 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
-LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
-LUAU_FASTFLAG(LuwuLiteralTypes)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(LuwuLiteralTypes)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -43,6 +42,7 @@ LUAU_FASTFLAG(LuauAutocompleteSkipErrorTypeInUnion)
 LUAU_FASTFLAG(LuauCheckTypeForDeprecated)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 
 using namespace Luau;
 
@@ -1365,6 +1365,35 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_metamethods_where_a_member_sta
     REQUIRE(ac.entryMap.count("__len"));
     CHECK_EQ(ac.entryMap["__len"].insertText, "public function __len(self): number\nend");
     CHECK(ac.entryMap.count("public"));
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_luwon_data_hooks")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    // Luwu object notation: a class that implements `luwon.data` may say how a data file holds it
+    check(R"(
+        class Color(public r: number) implements luwon.data
+            public function __@1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__todata"));
+    CHECK_EQ(ac.entryMap["__todata"].insertText, "__todata(self)\nend");
+    CHECK(ac.entryMap.count("__fromdata"));
+
+    check(R"(
+        class Color(public r: number)
+            public function __@1
+        end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("__todata"), 0);
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_a_traits_special_functions")
@@ -6616,6 +6645,40 @@ TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_in_loop_bindings_complete_the_e
     CHECK(!ac.entryMap.count("name"));
 }
 
+// The value is a call, so its type is a pack (astTypePacks), not a single type
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "destructuring_keys_complete_a_required_modules_exports")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["Module/A"] = R"(
+export trait Path end
+export class FilePath implements Path end
+export const PathSeparator = "/"
+)";
+    getFrontend().check("Module/A");
+
+    fileResolver.source["Module/B"] = R"(
+local .{Pa} = require(script.Parent.A)
+local .{} = require(script.Parent.A)
+)";
+
+    // after `Pa`, and in the empty pattern
+    for (Position position : {Position{1, 10}, Position{2, 8}})
+    {
+        AutocompleteResult ac = autocomplete("Module/B", position);
+        CHECK_EQ(ac.context, AutocompleteContext::Property);
+        CHECK(ac.entryMap.count("Path"));
+        CHECK(ac.entryMap.count("FilePath"));
+        CHECK(ac.entryMap.count("PathSeparator"));
+    }
+}
+
 TEST_CASE_FIXTURE(ACFixture, "type_destructuring_keys_complete_the_modules_exported_types")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
@@ -6662,6 +6725,97 @@ TEST_CASE_FIXTURE(ACFixture, "destructuring_hidden_local_is_not_suggested")
     auto ac = autocomplete('1');
     CHECK(ac.entryMap.count("alpha"));
     CHECK(!ac.entryMap.count(kDestructuredLocalName));
+}
+
+// Luwu match expressions: the `.{...}` after a type test completes the fields of the class it tests for, in a
+// condition and in a `case` pattern
+TEST_CASE_FIXTURE(ACFixture, "type_test_pattern_keys_complete_the_class_fields")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    check(R"(
+        class Point
+            x: number
+            y: number
+        end
+        class Segment
+            start: Point
+            label: string
+        end
+        local function f(p: Point | string, s: Segment | number)
+            if p is Point.{@1} then end
+            if p is Point.{x, @2} then end
+            if s is Segment.{start as .{@3}} then end
+            local _ = match p
+                case is Point.{@4} then 1
+                else 2
+        end
+    )");
+
+    AutocompleteResult ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(ac.entryMap.count("y"));
+    CHECK(!ac.entryMap.count("p"));
+
+    ac = autocomplete('2');
+    CHECK(!ac.entryMap.count("x"));
+    CHECK(ac.entryMap.count("y"));
+
+    ac = autocomplete('3');
+    CHECK(ac.entryMap.count("x"));
+    CHECK(!ac.entryMap.count("label"));
+
+    ac = autocomplete('4');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(ac.entryMap.count("y"));
+}
+
+// Luwu match expressions: an element of a type test's `.(...)` declares a local, so nothing is offered there, and a
+// `.{...}` nested in one completes the field it destructures
+TEST_CASE_FIXTURE(ACFixture, "type_test_positional_pattern_elements_complete_nothing")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    check(R"(
+        class Point(x: number, y: number) end
+        class Segment(start: Point, label: string) end
+        local function f(p: Point | string, s: Segment | number)
+            if p is Point.(@1) then end
+            if p is Point.(x, @2) then end
+            if s is Segment.(start.{@3}) then end
+            local _ = match p
+                case is Point.(@4) then 1
+                else 2
+        end
+    )");
+
+    for (char marker : {'1', '2', '4'})
+    {
+        INFO(marker);
+        AutocompleteResult ac = autocomplete(marker);
+        CHECK(ac.entryMap.empty());
+        CHECK_EQ(ac.context, AutocompleteContext::Unknown);
+    }
+
+    AutocompleteResult ac = autocomplete('3');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(ac.entryMap.count("y"));
+    CHECK(!ac.entryMap.count("label"));
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): a `.` alone where an expression goes starts a `.{...}` table, so nothing

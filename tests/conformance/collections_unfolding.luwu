@@ -1,0 +1,128 @@
+--!nocheck
+-- Luwu collections: destructuring a bundle the code constructs creates no object at -O1 and -O2. Every level must give
+-- the same results, the fallbacks included.
+
+local function direct(a: number, b: number): number
+    const .{ first, second } = collections.pair(a + 1, b * 2)
+    return first + second
+end
+assert(direct(1, 2) == 6)
+
+-- every `give` builds a pair, so the `do` expression unfolds; arguments still run in order
+local function branches(x: number): (number, number)
+    const .{ first as lo, second as hi } = do
+        if x < 0 then
+            give collections.pair(x, 0)
+        end
+        const doubled = x * 2
+        give collections.pair(0, doubled)
+    return lo, hi
+end
+local lo, hi = branches(-3)
+assert(lo == -3 and hi == 0)
+lo, hi = branches(4)
+assert(lo == 0 and hi == 8)
+
+local order = {}
+local function note(value: number): number
+    table.insert(order, value)
+    return value
+end
+const .{ third } = collections.triple(note(1), note(2), note(3))
+assert(third == 3 and #order == 3 and order[1] == 1 and order[3] == 3)
+
+-- a written binding gets its own register, so another binding of the same element keeps its value
+do
+    local .{ first, first as again } = collections.pair(1, 2)
+    first += 10
+    assert(first == 11 and again == 1)
+end
+
+-- closures capture the bindings like any locals
+do
+    const .{ first, fourth } = collections.quad("a", "b", "c", "d")
+    local function both(): string
+        return first .. fourth
+    end
+    assert(both() == "ad")
+end
+
+-- a nested pattern reads an element that is itself an object
+do
+    const .{ first as .{ second as inner } } = collections.pair(collections.pair(1, 2), 3)
+    assert(inner == 2)
+end
+
+-- these keep the object: a mixed `give`, bundles of different sizes, and a field that isn't an element
+local function mixed(flag: boolean)
+    const .{ first } = do
+        if flag then
+            give collections.pair(1, 2)
+        end
+        give collections.triple(3, 4, 5)
+    return first
+end
+assert(mixed(true) == 1 and mixed(false) == 3)
+
+local ok, err = pcall(function()
+    const .{ first, fifth } = collections.quad(1, 2, 3, 4)
+    return first, fifth
+end)
+assert(not ok and string.find(err, "fifth", 1, true))
+
+-- `.(a, b)` builds a pair, triple or quad by its count, and destructuring it by position builds nothing
+do
+    local p = .(1, "x")
+    assert(class.isinstance(p, collections.pair) and p.second == "x")
+    assert(class.isinstance(.(1, 2, 3), collections.triple) and class.isinstance(.(1, 2, 3, 4), collections.quad))
+
+    local function lookup(id: number)
+        const .(name, age) = do
+            if id < 0 then
+                give .("nobody", 0)
+            end
+            give .(`user{id}`, id * 2)
+        return name, age
+    end
+    local name, age = lookup(3)
+    assert(name == "user3" and age == 6)
+    name, age = lookup(-1)
+    assert(name == "nobody" and age == 0)
+
+    const .(a, .(b, c)) = .(1, .(2, 3))
+    assert(a == 1 and b == 2 and c == 3)
+
+    -- a position past the bundle's end keeps the object, and raises
+    local ok2, err2 = pcall(function()
+        const .(x, y, z) = .(1, 2)
+        return z
+    end)
+    assert(not ok2 and string.find(err2, "at position 3", 1, true))
+end
+
+-- options and results destructure by position, and their payload is a public field
+do
+    const .{option.{some}, result.{ok, err}} = collections
+    const .(five) = some(5)
+    assert(five == 5 and some(5).value == 5 and err("e").error == "e")
+    assert(not pcall(function()
+        local s = some(5)
+        s.value = 6
+    end))
+
+    local function read(path: string): collections.result<string, string>
+        return if path == "good" then ok("contents") else err(`missing {path}`)
+    end
+    if read("good") is ok.(content) then
+        assert(content == "contents")
+    else
+        error("unreachable")
+    end
+    local message = match read("bad")
+        case is ok.(content) then content
+        case is result.err.(e) then e
+        else error("unreachable")
+    assert(message == "missing bad")
+end
+
+return "OK"

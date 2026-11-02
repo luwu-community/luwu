@@ -7,11 +7,13 @@
 #include "Luau/AutocompleteTypes.h"
 
 #include "Luau/BuiltinDefinitions.h"
+#include "Luau/BuiltinTypeFunctions.h"
 #include "Luau/Common.h"
 #include "Luau/FileResolver.h"
 #include "Luau/Frontend.h"
 #include "Luau/LinterConfig.h"
 #include "Luau/LuwuOnlyApi.h"
+#include "Luau/LuwonSyntax.h"
 #include "Luau/TimeTrace.h"
 #include "Luau/ToString.h"
 #include "Luau/Subtyping.h"
@@ -2456,6 +2458,13 @@ static void autocompleteMissingFunctions(
     if (!classStat->isTrait && !classStat->primaryConstructor)
         add("__init", "(self)", nullptr, "function ");
 
+    // Luwu object notation: how a data file holds a class that implements `luwon.data`
+    if (!classStat->isTrait && !final && implementsLuwonData(classStat->implements))
+    {
+        add("__todata", "(self)", nullptr, "function ");
+        add("__fromdata", "(...)", nullptr, "function ");
+    }
+
     // Luwu Traits (rfcs/classes/traits.md): a trait's factory, and its hook for each implementing class, which is always final
     if (classStat->isTrait && !classStat->primaryConstructor && !final)
         add("__create", "(...)", nullptr, "function ");
@@ -2798,7 +2807,37 @@ struct DestructureCursor
 
     // For a pattern in a `for` loop's bindings: the loop. `block` is then its body, which starts with the fields.
     const AstStatForIn* loop = nullptr;
+
+    // Luwu match expressions: for the `.{...}` after a type test (`x is Point.{x, y}`), the test's call. Its fields are
+    // declared by the clauses of the condition it's in, which are in `clauseDeclarations`.
+    const AstExprCall* typeTest = nullptr;
+    std::vector<const AstStatLocal*> clauseDeclarations;
 };
+
+// Luwu match expressions: the declarations in the `when` chains of the conditions around the cursor
+static std::vector<const AstStatLocal*> clauseDeclarationsIn(const std::vector<AstNode*>& ancestry)
+{
+    std::vector<const AstStatLocal*> declarations;
+    auto add = [&](const AstArray<AstIfClause>& clauses)
+    {
+        for (const AstIfClause& clause : clauses)
+        {
+            if (clause.declaration)
+                declarations.push_back(clause.declaration);
+        }
+    };
+
+    for (AstNode* node : ancestry)
+    {
+        if (const AstStatIf* statement = node->as<AstStatIf>())
+            add(statement->clauses);
+        else if (const AstExprIfElse* expression = node->as<AstExprIfElse>())
+            add(expression->clauses);
+        else if (const AstStatWhile* loop = node->as<AstStatWhile>())
+            add(loop->clauses);
+    }
+    return declarations;
+}
 
 // Right after a `}` is outside a pattern; at the end of an unclosed one is where the next field goes
 static bool patternHolds(const Location& location, bool closed, Position position)
@@ -2840,6 +2879,17 @@ static std::optional<DestructureCursor> findDestructureCursor(const std::vector<
 {
     for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
     {
+        const AstExprCall* call = (*it)->as<AstExprCall>();
+        if (call && call->typeTestPattern)
+        {
+            if (std::optional<DestructureCursor> cursor = findDestructureCursorInPattern(*call->typeTestPattern, position))
+            {
+                cursor->typeTest = call;
+                cursor->clauseDeclarations = clauseDeclarationsIn(ancestry);
+                return cursor;
+            }
+        }
+
         if (const AstStatForIn* loop = (*it)->as<AstStatForIn>())
         {
             for (const AstDestructurePattern* pattern : loop->destructure)
@@ -2902,10 +2952,88 @@ static const AstTypeDestructure* findTypeDestructure(const std::vector<AstNode*>
     return nullptr;
 }
 
+// Luwu match expressions: the type of the value a type test's pattern level destructures. The whole pattern takes the
+// objects of the tested class, whatever the tested value's own type; a nested level takes its field's value.
+// Luwu match expressions: the type of the property `name` of `ty`, a class's object or a table
+static std::optional<TypeId> propertyTypeOf(TypeId ty, const std::string& name)
+{
+    ty = follow(ty);
+    const Property* prop = nullptr;
+    if (const ExternType* etv = get<ExternType>(ty))
+        prop = lookupExternTypeProp(etv, name);
+    else if (const TableType* table = get<TableType>(ty))
+        prop = table->props.count(name) ? &table->props.at(name) : nullptr;
+
+    if (!prop || !prop->readTy)
+        return std::nullopt;
+    return follow(*prop->readTy);
+}
+
+// Luwu match expressions: the type of `target`, a level of a type test's pattern, found by walking down from `level`,
+// whose value has type `levelType`: by field name in a `.{...}`, by primary constructor parameter in a `.(...)`. The
+// pattern's own reads don't see the type test's refinement while autocomplete checks the code, so their types can't be used.
+static std::optional<TypeId> typeTestLevelType(const AstDestructurePattern& level, TypeId levelType, const AstDestructurePattern* target)
+{
+    if (&level == target)
+        return levelType;
+
+    const ClassFieldUserData* data = level.positional ? getClassFieldUserData(levelType) : nullptr;
+    for (size_t i = 0; i < level.fields.size; ++i)
+    {
+        const AstDestructureField& field = level.fields.data[i];
+
+        std::optional<std::string> name;
+        if (!level.positional)
+            name = field.key.value;
+        else if (data && data->positionalFields && i < data->positionalFields->size())
+            name = (*data->positionalFields)[i];
+
+        std::optional<TypeId> fieldType = name ? propertyTypeOf(levelType, *name) : std::nullopt;
+        if (!fieldType)
+            continue;
+
+        if (std::optional<TypeId> found = typeTestLevelType(field.target, *fieldType, target))
+            return found;
+    }
+    return std::nullopt;
+}
+
+static std::optional<TypeId> typeTestValueType(const Module& module, NotNull<BuiltinTypes> builtinTypes, const DestructureCursor& cursor)
+{
+    const TypeId* classValue = cursor.typeTest->args.size == 2 ? module.astTypes.find(cursor.typeTest->args.data[1]) : nullptr;
+    std::optional<TypeId> testedType = classValue ? objectTypeOfClassValue(builtinTypes, *classValue) : std::nullopt;
+    if (testedType)
+    {
+        if (std::optional<TypeId> levelType = typeTestLevelType(*cursor.typeTest->typeTestPattern, *testedType, cursor.level))
+            return levelType;
+    }
+
+    if (cursor.level == cursor.typeTest->typeTestPattern)
+        return testedType;
+
+    for (const AstStatLocal* declaration : cursor.clauseDeclarations)
+    {
+        if (declaration->vars.size != 1 || declaration->vars.data[0] != cursor.level->local || declaration->values.size == 0)
+            continue;
+
+        if (const TypeId* valueType = module.astTypes.find(declaration->values.data[0]))
+            return follow(*valueType);
+    }
+    return std::nullopt;
+}
+
 // The type of the value a pattern level destructures: its annotation's, or else its desugared statement's value's.
-static std::optional<TypeId> destructuredValueType(const Module& module, const DestructureCursor& cursor, const ScopePtr& scope)
+static std::optional<TypeId> destructuredValueType(
+    const Module& module,
+    NotNull<BuiltinTypes> builtinTypes,
+    const DestructureCursor& cursor,
+    const ScopePtr& scope
+)
 {
     const AstDestructurePattern& level = *cursor.level;
+
+    if (cursor.typeTest)
+        return typeTestValueType(module, builtinTypes, cursor);
 
     if (level.local->annotation)
     {
@@ -3065,7 +3193,7 @@ AutocompleteResult autocomplete_(
             return {{}, ancestry, AutocompleteContext::Unknown};
 
         AutocompleteEntryMap props;
-        if (std::optional<TypeId> valueType = destructuredValueType(*module, *cursor, scopeAtPosition))
+        if (std::optional<TypeId> valueType = destructuredValueType(*module, builtinTypes, *cursor, scopeAtPosition))
             props = autocompleteProps(*module, typeArena, builtinTypes, *valueType, PropIndexType::Point, ancestry);
 
         // Keys already in the pattern, except the one being written

@@ -4,6 +4,8 @@
 #include <string>
 #include <string.h>
 
+LUAU_FASTFLAG(DebugLuwuCollections)
+
 namespace Luau
 {
 
@@ -54,7 +56,14 @@ LuwonConstructor luwonConstructorOf(const AstExprCall* call)
 
 std::vector<LuwonBuiltinClass> luwonBuiltinClasses()
 {
-    return {};
+    if (!FFlag::DebugLuwuCollections)
+        return {};
+
+    return {
+        {"collections", "pair", {"first", "second"}},
+        {"collections", "triple", {"first", "second", "third"}},
+        {"collections", "quad", {"first", "second", "third", "fourth"}},
+    };
 }
 
 std::string luwonClassNameOf(const AstExprCall* call)
@@ -243,8 +252,9 @@ struct LuwonSyntaxChecker
     void checkStat(AstStat* stat)
     {
         // Types and declarations are only analysis, and the reader skips them
+        // Luwu Declare Statements (rfcs/declare-statements.md): `declare class`, `class type` and their trait forms too
         bool typesOnly = stat->is<AstStatTypeAlias>() || stat->is<AstStatTypeFunction>() || stat->is<AstStatDeclareGlobal>() ||
-                         stat->is<AstStatDeclareFunction>() || stat->is<AstStatDeclareExternType>();
+                         stat->is<AstStatDeclareFunction>() || stat->is<AstStatDeclareExternType>() || stat->is<AstStatDeclareClass>();
         if (typesOnly || stat->is<AstStatError>())
             return;
 
@@ -293,6 +303,19 @@ void checkLuwonSyntax(AstStatBlock* root, std::vector<ParseError>& errors)
 {
     LuwonSyntaxChecker checker{errors};
     checker.checkChunk(root);
+}
+
+bool implementsLuwonData(const AstArray<AstClassTraitRef>& implements)
+{
+    for (const AstClassTraitRef& ref : implements)
+    {
+        AstExprIndexName* index = ref.trait->as<AstExprIndexName>();
+        AstExprGlobal* library = index ? index->expr->as<AstExprGlobal>() : nullptr;
+        if (library && library->name == "luwon" && index->index == "data")
+            return true;
+    }
+
+    return false;
 }
 
 } // namespace Luau
