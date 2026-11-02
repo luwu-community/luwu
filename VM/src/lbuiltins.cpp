@@ -793,7 +793,12 @@ static int luauF_type(lua_State* L, StkId res, TValue* arg0, int nresults, StkId
         int tt = ttype(arg0);
         if (tt == LUA_TSYMNONE)
             return -1;
+
         TString* ttname = L->global->ttname[tt];
+
+        // Luwu Traits (rfcs/classes/traits.md): a trait is tagged as a class, but its type is "trait"
+        if (tt == LUA_TCLASS && classvalue(arg0)->istrait)
+            ttname = L->global->traittypename;
 
         setsvalue(L, res, ttname);
         return 1;

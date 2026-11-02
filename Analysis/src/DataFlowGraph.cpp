@@ -967,6 +967,40 @@ void DataFlowGraphBuilder::visitClassShape(AstStatClass* d)
             member
         );
     }
+
+    // Luwu Traits (rfcs/classes/traits.md): every part of an `implements` or `needs` entry AstStatClass::visitChildren
+    // visits gets a def here: the name, the type arguments (`Box<typeof(v)>`) and the trait arguments. Trait arguments
+    // see the primary constructor's parameters, like field initializers. A `needs` entry with arguments is a parse
+    // error, but analysis still runs on it.
+    auto visitTraitRefs = [&](const AstArray<AstClassTraitRef>& refs)
+    {
+        for (const AstClassTraitRef& ref : refs)
+        {
+            visitExpr(ref.trait);
+
+            for (const AstTypeOrPack& param : ref.typeArguments)
+            {
+                if (param.type)
+                    visitType(param.type);
+                else if (param.typePack)
+                    visitTypePack(param.typePack);
+            }
+
+            for (AstExpr* arg : ref.args)
+            {
+                if (primaryConstructorScope)
+                {
+                    PushScope ps{scopeStack, primaryConstructorScope};
+                    visitExpr(arg);
+                }
+                else
+                    visitExpr(arg);
+            }
+        }
+    };
+
+    visitTraitRefs(d->needs);
+    visitTraitRefs(d->implements);
 }
 
 ControlFlow DataFlowGraphBuilder::visit(AstStatError* error)
@@ -1209,6 +1243,14 @@ DataFlowResult DataFlowGraphBuilder::visitFunction(AstExprFunction* f, NotNull<D
 
     if (f->returnAnnotation)
         visitTypePack(f->returnAnnotation);
+
+    // Luwu user-defined refinements: `@[truthy(param, Type)]`'s type is resolved in the signature like the return
+    // annotation, and an expression in it (a `typeof(...)`) needs a def like one there
+    for (AstAttr* attr : f->attributes)
+    {
+        if (attr->refinedType)
+            visitType(attr->refinedType);
+    }
 
     if (FFlag::LuwuDefaultArguments)
     {

@@ -142,7 +142,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
-        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER),
+        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -3765,10 +3765,28 @@ reentry:
                 VM_CASE_INSTRUCTION insn = *pc++;
                 uint32_t aux = *pc++;
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(insn));
+                VM_CASE_STKID rc = VM_REG(LUAU_INSN_C(insn));
+
+                // Luwu Traits (rfcs/classes/traits.md): the class's `implements` list
+                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
+                {
+                    VM_PROTECT(luaR_implementtraits(L, classvalue(ra), rc, aux));
+                    VM_NEXT();
+                }
+
+                // Luwu Traits (rfcs/classes/traits.md): the class's compiled copy of a trait's function
+                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+                {
+                    TValue* name = VM_KV(aux);
+                    LUAU_ASSERT(ttisstring(name) && ttisclass(rc + 1));
+                    VM_PROTECT_PC();
+                    luaR_addcompiledtraitcopy(L, classvalue(ra), classvalue(rc + 1), tsvalue(name), rc);
+                    VM_NEXT();
+                }
+
                 TValue* membername = VM_KV(aux);
                 LUAU_ASSERT(ttisstring(membername));
                 LUAU_ASSERT(LUAU_INSN_B(insn) == 0);
-                VM_CASE_STKID rc = VM_REG(LUAU_INSN_C(insn));
                 VM_PROTECT_PC();
                 luaR_addclassmember(L, classvalue(ra), tsvalue(membername), rc);
                 VM_NEXT();
@@ -3857,18 +3875,33 @@ reentry:
                 // assign fields from its parameters, which the construction site has already done. Any
                 // other custom `__init` has to actually run, which is why the asserts below require the
                 // form to agree with `hascustominit`.
+                //
+                // Luwu Traits (rfcs/classes/traits.md): the ALLOC form is the FIELDS form's counterpart for a class
+                // that implements traits, with the site storing the fields after INITTRAITS. A class that
+                // implements traits never gets the FIELDS or DEFAULT form, which would write the class's own fields
+                // before its trait fields are initialized.
                 bool fieldsform = form == LBC_NEWOBJECT_FIELDS;
+                bool allocform = form == LBC_NEWOBJECT_ALLOC;
                 LUAU_ASSERT(ttisclass(classReg));
-                LUAU_ASSERT(
-                    fieldsform ? !(classvalue(classReg)->hascustominit && !classvalue(classReg)->hasprimaryinit)
-                               : classvalue(classReg)->hascustominit == custominit
-                );
-                LUAU_ASSERT(custominit || !classvalue(classReg)->haspoddefaultsfn);
-                LUAU_ASSERT(!fieldsform || classvalue(classReg)->numberofinstancemembers == aux);
+
+                LuauClass* classdef = classvalue(classReg);
+                bool onlyprimaryinit = !(classdef->hascustominit && !classdef->hasprimaryinit);
+                LUAU_ASSERT((fieldsform || allocform) ? onlyprimaryinit : classdef->hascustominit == custominit);
+                LUAU_ASSERT(custominit || !classdef->haspoddefaultsfn);
+                LUAU_ASSERT(!classdef->istrait);
+                LUAU_ASSERT(custominit || allocform || classdef->numtraits == 0);
+                LUAU_ASSERT(!fieldsform || classdef->numberofinstancemembers == aux);
+                LUAU_ASSERT(!allocform || aux == 0);
                 // the POD form takes at most one argument; more compile to a call, which raises
                 LUAU_ASSERT(form != LBC_NEWOBJECT_DEFAULT || aux <= 1);
 
-                LuauClass* classdef = classvalue(classReg);
+                // Luwu Traits (rfcs/classes/traits.md): a class whose statement hasn't implemented its traits yet can't
+                // be constructed (see LuauClass::traitspending)
+                if (LUAU_UNLIKELY(classdef->traitspending))
+                {
+                    VM_PROTECT_PC();
+                    luaR_checktraitsimplemented(L, classdef);
+                }
 
                 // Luwu Classes (rfcs/classes): a private `__init` is only callable from inside its
                 // own class. The `__call` path gets that from luaR_createobject, and NEWOBJECT exists
@@ -3999,6 +4032,26 @@ reentry:
                 LuauObject* inst = objectvalue(rb);
                 setobj2class(L, &inst->members[aux], ra);
                 luaC_barrier(L, inst, ra);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_INITTRAITS)
+            {
+                // Luwu Traits (rfcs/classes/traits.md): sets up the call that initializes the object's trait fields, or
+                // skips it when no trait has a field to compute, which is most classes
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+
+                LUAU_ASSERT(ttisobject(ra + 1));
+
+                if (!objectvalue(ra + 1)->lclass->traitinits)
+                {
+                    pc += LUAU_INSN_D(insn);
+                    LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
+                    VM_NEXT();
+                }
+
+                setclvalue(L, ra, L->global->traitinitrunner);
                 VM_NEXT();
             }
 

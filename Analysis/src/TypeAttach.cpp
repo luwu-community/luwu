@@ -311,11 +311,11 @@ public:
             return externTypeReference(etv, name);
 
         AstArray<AstTableProp> props;
-        props.size = countPropEntries(etv.props);
+        props.size = countPropEntries(etv.props());
         props.data = static_cast<AstTableProp*>(allocator->allocate(sizeof(AstTableProp) * props.size));
 
         int idx = 0;
-        for (const auto& [propName, prop] : etv.props)
+        for (const auto& [propName, prop] : etv.props())
         {
             char* name = allocateString(*allocator, propName);
 

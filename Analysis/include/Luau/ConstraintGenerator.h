@@ -337,6 +337,72 @@ private:
     );
 
     LUAU_NOINLINE void prototypeTypeDefinitions(const ScopePtr& scope, AstStatBlock* block);
+    // Luwu Traits (rfcs/classes/traits.md): after the traits of a block are prototyped, record the traits each one needs.
+    void linkTraitNeeds(const ScopePtr& scope, const AstArray<AstStat*>& statements);
+    // Luwu Traits (rfcs/classes/traits.md): record the type arguments `trait`'s `needs` entry `ref` gives the trait it
+    // names (`needs Base<T>`), on `traitType`
+    void recordNeededTypeArguments(AstStatClass* trait, const AstClassTraitRef& ref, TypeId needed, ExternType* traitType);
+    // Luwu Traits (rfcs/classes/traits.md): the trait an `implements`/`needs` entry names, as its object type, or nullptr.
+    TypeId resolveTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref);
+    // Luwu Traits (rfcs/classes/traits.md): type calling `class<Trait>` from the trait's expected `__init` signature.
+    void bindTraitImplementorConstructor(ClassDeclRecord* traitRecord, TypeId initSignature);
+    // Luwu Traits (rfcs/classes/traits.md): record the traits a class implements and give it the members they provide.
+    // Returns the types of the fields the traits expect, by name.
+    std::map<Name, TypeId> implementTraits(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record);
+
+    // Luwu Traits (rfcs/classes/traits.md): a generic trait instantiated by an `implements` entry's type arguments
+    struct TraitInstantiation
+    {
+        // the instantiated trait, expanded by the solver
+        TypeId instantiated;
+        // the trait's generics, and the type each one stands for here
+        std::vector<TypeId> params;
+        std::vector<TypeId> args;
+    };
+    std::optional<TraitInstantiation> instantiateTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref);
+    // Luwu Traits (rfcs/classes/traits.md): the type of `self` in each trait method generic over `Self` (`Self & Trait`).
+    // `class.of(self)(...)` there makes another object of self's class, so it has that type too (checkPack).
+    DenseHashSet<TypeId> traitSelfTypes{nullptr};
+
+    // Luwu Traits (rfcs/classes/traits.md): set while checking the signature of an override, whose expected type is the
+    // function it overrides. Its unannotated `...` then takes that function's variadic type too, which upstream leaves
+    // `any` for a lambda's.
+    bool checkingOverride = false;
+
+    // Luwu Traits (rfcs/classes/traits.md): each trait's function signatures in this module, keyed by the trait's object type,
+    // as checkFunctionSignature made them. A function's member type is blocked until the solver generalizes it, so an
+    // override in this module reads the function it overrides from here.
+    DenseHashMap<TypeId, std::map<Name, TypeId>> traitFunctionSignatures{nullptr};
+
+    // Luwu Traits (rfcs/classes/traits.md): records the template of a trait field naming `Self` (TraitInfo::selfFieldTemplates)
+    void resolveSelfFieldTemplate(const ScopePtr& traitScope, ClassDeclRecord* trait, const AstClassProperty& field);
+    // Luwu Traits (rfcs/classes/traits.md): `trait` instantiated with `args`, for a trait implied through `needs`.
+    // `copiedReferences` are alias references substituting the arguments copied, which this expands with the rest.
+    TraitInstantiation instantiateImpliedTrait(
+        const ScopePtr& scope,
+        Location location,
+        TypeId trait,
+        std::vector<TypeId> args,
+        std::vector<TypeId> copiedReferences
+    );
+    // Luwu Traits (rfcs/classes/traits.md): `ty`, a type from `trait`'s declaration, as `instantiation` of it sees it
+    TypeId instantiateTraitMember(
+        const ScopePtr& scope,
+        Location location,
+        TypeId trait,
+        const TraitInstantiation& instantiation,
+        TypeId ty
+    );
+    Property instantiateTraitProperty(
+        const ScopePtr& scope,
+        Location location,
+        TypeId trait,
+        const TraitInstantiation& instantiation,
+        const Property& prop
+    );
+    // Luwu Traits (rfcs/classes/traits.md): checks the arguments of each `implements` entry against its trait's parameters,
+    // in the scope the class's field initializers are checked in
+    void checkTraitArguments(const ScopePtr& initializerScope, AstStatClass* cls);
     void prototypeClass(
         const ScopePtr& scope,
         AstStatClass* classDecl,
@@ -349,6 +415,7 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStat* stat);
     ControlFlow visit(const ScopePtr& scope, AstStatBlock* block);
     ControlFlow visit(const ScopePtr& scope, AstStatLocal* local);
+    void importRequiredTypes(const ScopePtr& scope, AstStatLocal* statLocal);
     ControlFlow visit(const ScopePtr& scope, AstStatFor* for_);
     ControlFlow visit(const ScopePtr& scope, AstStatForIn* forIn);
     ControlFlow visit(const ScopePtr& scope, AstStatWhile* while_);
@@ -452,6 +519,10 @@ private:
         // The scope that encompasses the function's body. Is a child scope of
         // signatureScope, if present.
         ScopePtr bodyScope;
+        // Luwu Traits (rfcs/classes/traits.md): for a trait method generic over `Self`, that generic and the type of
+        // `self` (`Self & Trait`)
+        TypeId traitSelf = nullptr;
+        TypeId traitSelfType = nullptr;
     };
 
     FunctionSignature checkFunctionSignature(
@@ -468,6 +539,7 @@ private:
      * @param fn the function expression to check.
      */
     void checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn);
+    std::optional<FunctionType::TruthyRefinement> resolveTruthyRefinement(const ScopePtr& signatureScope, AstExprFunction* fn);
 
     // Specializations of 'resolveType' below
     TypeId resolveReferenceType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref, bool inTypeArguments, bool replaceErrorWithFresh);

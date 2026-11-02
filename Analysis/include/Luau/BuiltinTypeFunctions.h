@@ -47,7 +47,7 @@ struct BuiltinTypeFunctions
     TypeFunction setmetatableFunc;
     TypeFunction getmetatableFunc;
 
-    TypeFunction objectofFunc;
+    TypeFunction objectFunc;
     TypeFunction classFunc;
 
     TypeFunction weakoptionalFunc;
@@ -59,5 +59,8 @@ struct BuiltinTypeFunctions
 };
 
 const BuiltinTypeFunctions& builtinTypeFunctions_DEPRECATED();
+
+// Luwu Classes (rfcs/classes): the object type of a class or trait value (what `object<C>` gives), or nullopt for any other type
+std::optional<TypeId> objectTypeOfClassValue(NotNull<BuiltinTypes> builtinTypes, TypeId classValue);
 
 } // namespace Luau

@@ -544,8 +544,17 @@ enum lua_MemberAccess
 };
 
 LUA_API void lua_newobject(lua_State* L, int idx);
+// Luwu Traits (rfcs/classes/traits.md): whether the value at `idx` is a trait. A trait's lua_type is LUA_TCLASS.
+LUA_API int lua_istrait(lua_State* L, int idx);
+// Luwu Traits (rfcs/classes/traits.md): `class.implements` for embedders. Returns 1 if the value at `idx` is an object whose
+// class implements the trait at `traitidx`, directly or through `needs`, and 0 otherwise. Raises if the value at
+// `traitidx` isn't a trait.
+LUA_API int lua_classimplements(lua_State* L, int idx, int traitidx);
 LUA_API int lua_getmemberaccess(lua_State* L, int idx, const char* membername);
 LUA_API int lua_ismemberconst(lua_State* L, int idx, const char* membername);
+// Luwu Traits (rfcs/classes/traits.md): whether `membername` of the trait, class or object at `idx` is `final`. Returns 0
+// if the member doesn't exist. Raises if the value at `idx` isn't a trait, class or object.
+LUA_API int lua_ismemberfinal(lua_State* L, int idx, const char* membername);
 LUA_API const char* lua_getclassname(lua_State* L, int idx);
 
 LUA_API int lua_getbuffermode(lua_State* L, int idx);

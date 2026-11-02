@@ -50,6 +50,7 @@ struct NativeContext
     LuaTable* (*luaH_new)(lua_State* L, int narray, int lnhash) = nullptr;
     LuaTable* (*luaH_clone)(lua_State* L, LuaTable* tt) = nullptr;
     LuauObject* (*luaR_newobjectuninit)(lua_State* L, LuauClass* classdef) = nullptr;
+    LuauObject* (*luaR_newobject)(lua_State* L, LuauClass* classdef) = nullptr;
     void (*luaH_resizearray)(lua_State* L, LuaTable* t, int nasize) = nullptr;
     TValue* (*luaH_setnum)(lua_State* L, LuaTable* t, int key);
 
@@ -110,6 +111,7 @@ struct NativeContext
     const Instruction* (*executeFORGPREP)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeNEWOBJECT)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeNEWCLASSMEMBER)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
+    const Instruction* (*executeINITTRAITS)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     void (*executeGETVARARGSMultRet)(lua_State* L, const Instruction* pc, StkId base, int rai) = nullptr;
     void (*executeGETVARARGSConst)(lua_State* L, StkId base, int rai, int b) = nullptr;
     const Instruction* (*executeDUPCLOSURE)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;

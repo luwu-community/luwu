@@ -360,7 +360,14 @@ void IterativeTypeVisitor::process(TypeId ty)
     {
         if (visit(ty, *etv))
         {
-            for (const auto& [name, prop] : etv->props)
+            // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation's members are its template's
+            // with its type arguments in, so the type arguments (below) are all of it there is to visit; walking the
+            // members would build them
+            static const ExternType::Props noMembers;
+            const ExternType::Props* members = &etv->builtProps();
+            if (etv->genericTemplate)
+                members = &noMembers;
+            for (const auto& [name, prop] : *members)
             {
                 if (auto ty = prop.readTy)
                     traverse(*ty);

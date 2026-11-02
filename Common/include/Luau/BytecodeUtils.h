@@ -93,6 +93,7 @@ inline bool isJumpD(LuauOpcode op)
     case LOP_JUMPXEQKS:
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
+    case LOP_INITTRAITS:
         return true;
 
     default:

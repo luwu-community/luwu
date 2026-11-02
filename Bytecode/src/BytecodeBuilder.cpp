@@ -1028,6 +1028,12 @@ void BytecodeBuilder::writeClassShape(std::string& ss, const ClassShape& cs) con
     writeVarInt(ss, cs.className);
     writeVarInt(ss, cs.propertyNames.size());
     writeVarInt(ss, cs.methodNames.size());
+    uint32_t shapeFlags = 0;
+    if (cs.isTrait)
+        shapeFlags |= LBC_CLASSSHAPE_TRAIT;
+    if (cs.implementsTraits)
+        shapeFlags |= LBC_CLASSSHAPE_IMPLEMENTS;
+    writeVarInt(ss, shapeFlags);
     // Each member's name and flags byte are written together (properties first, then methods,
     // matching offset order) so the reader can fill in offsetToMember/memberFlags in one pass.
     for (size_t i = 0; i < cs.propertyNames.size(); i++)
@@ -1933,9 +1939,22 @@ void BytecodeBuilder::validateInstructions() const
 
         case LOP_NEWCLASSMEMBER:
             VREG(LUAU_INSN_A(insn));
-            LUAU_ASSERT(LUAU_INSN_B(insn) == 0);
-            VREG(LUAU_INSN_C(insn));
-            VCONST(insns[i + 1], String);
+
+            if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
+            {
+                VREGRANGE(LUAU_INSN_C(insn), int(insns[i + 1]) * 2);
+            }
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+            {
+                VREGRANGE(LUAU_INSN_C(insn), 2);
+                VCONST(insns[i + 1], String);
+            }
+            else
+            {
+                LUAU_ASSERT(LUAU_INSN_B(insn) == 0);
+                VREG(LUAU_INSN_C(insn));
+                VCONST(insns[i + 1], String);
+            }
             break;
 
         case LOP_GETUDATAKS:
@@ -1979,11 +1998,17 @@ void BytecodeBuilder::validateInstructions() const
             break;
 
         case LOP_NEWOBJECT:
-            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_FIELDS);
+            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_ALLOC);
             // with a user __init the instruction lays out `__init`, `self` and the arguments above A;
             // the other forms use one register per argument or per field
             VREG(LUAU_INSN_A(insn) + (LUAU_INSN_C(insn) == LBC_NEWOBJECT_INIT ? 2 : 0) + insns[i + 1]);
             VREG(LUAU_INSN_B(insn));
+            break;
+
+        case LOP_INITTRAITS:
+            // the runner goes in A and the object is in A + 1; the CALL that follows covers the arguments
+            VREG(LUAU_INSN_A(insn) + 1);
+            VJUMP(LUAU_INSN_D(insn));
             break;
 
         default:
@@ -2315,7 +2340,15 @@ void BytecodeBuilder::dumpConstant(std::string& result, int k, bool detailed) co
         // This should always be printable, in fact this should always be a
         // valid Luau identifier!
         LUAU_ASSERT(printableStringConstant(str.data, str.length));
-        formatAppend(result, "class %.*s (props: %zu, methods: %zu)", int(str.length), str.data, cs.propertyNames.size(), cs.methodNames.size());
+        formatAppend(
+            result,
+            "%s %.*s (props: %zu, methods: %zu)",
+            cs.isTrait ? "trait" : "class",
+            int(str.length),
+            str.data,
+            cs.propertyNames.size(),
+            cs.methodNames.size()
+        );
     }
     }
 }
@@ -2746,9 +2779,22 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         break;
 
     case LOP_NEWCLASSMEMBER:
-        formatAppend(result, "NEWCLASSMEMBER R%d R%d [", LUAU_INSN_A(insn), LUAU_INSN_C(insn));
-        dumpConstant(result, *code, false);
-        result.append("]\n");
+        if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
+        {
+            formatAppend(result, "NEWCLASSMEMBER R%d IMPLEMENTS R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_C(insn), int(*code));
+        }
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+        {
+            formatAppend(result, "NEWCLASSMEMBER R%d TRAITCOPY R%d R%d [", LUAU_INSN_A(insn), LUAU_INSN_C(insn), LUAU_INSN_C(insn) + 1);
+            dumpConstant(result, *code, false);
+            result.append("]\n");
+        }
+        else
+        {
+            formatAppend(result, "NEWCLASSMEMBER R%d R%d [", LUAU_INSN_A(insn), LUAU_INSN_C(insn));
+            dumpConstant(result, *code, false);
+            result.append("]\n");
+        }
         code++;
         break;
 
@@ -2787,10 +2833,15 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_NEWOBJECT:
     {
-        const char* form = LUAU_INSN_C(insn) == LBC_NEWOBJECT_INIT ? " INIT" : (LUAU_INSN_C(insn) == LBC_NEWOBJECT_FIELDS ? " FIELDS" : "");
-        formatAppend(result, "NEWOBJECT R%d R%d %d%s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++, form);
+        static const char* const kForms[] = {"", " INIT", " FIELDS", " ALLOC"};
+        LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_ALLOC);
+        formatAppend(result, "NEWOBJECT R%d R%d %d%s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++, kForms[LUAU_INSN_C(insn)]);
         break;
     }
+
+    case LOP_INITTRAITS:
+        formatAppend(result, "INITTRAITS R%d L%d\n", LUAU_INSN_A(insn), targetLabel);
+        break;
 
     default:
         LUAU_ASSERT(!"Unsupported opcode");

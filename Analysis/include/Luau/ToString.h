@@ -68,6 +68,10 @@ struct ToStringOptions
     // holds them (the order they were written in, for an annotation) instead of sorted. Mismatch
     // explanations number union members (`Drop#2`), and the number has to match what the reader sees.
     bool sortUnionMembers = true;
+    // Luwu (helpful subtyping errors): print a class or trait value as `class<Paint>` or `trait<Colored>`. Without it a
+    // value and its objects' type both print as `Paint`. Type errors turn it on to tell the two apart. Hover and other
+    // prose say "class Paint".
+    bool classAndTraitValuesInTypeForm = false;
     // Luwu (helpful subtyping errors): types an error message names because it would otherwise print them
     // several times (`where type Animal = ...`), printed by that name. The root of a call with
     // `alwaysExpandRootAlias` is still expanded, which is how the name's own declaration is printed.

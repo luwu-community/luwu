@@ -107,6 +107,11 @@ static void emitClassMemberAuthX64(
         build.test(byteReg(flag.reg), int8_t(LBC_CLASSMEMBER_CONST));
         build.jcc(ConditionX64::Zero, authorized);
 
+        // Luwu Traits (rfcs/classes/traits.md): a final field is written only by a trait initializer, which the interpreter
+        // authorizes (luaR_checkconstassign)
+        build.test(byteReg(flag.reg), int8_t(LBC_CLASSMEMBER_FINAL));
+        build.jcc(ConditionX64::NotZero, mismatch);
+
         build.cmp(byte[owner.reg + offsetof(LuauClass, hascustominit)], 0);
         build.jcc(ConditionX64::Equal, mismatch); // no custom __init -> const is never writable
 
@@ -2720,6 +2725,7 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+    case IrCmd::CHECK_CLASS_ALLOCATABLE:
     {
         // The runtime conditions of executeNEWOBJECT's member-copy case (see IrData.h). The class's
         // shape is guaranteed by the compiler. A custom `__init` that reaches this check is always a
@@ -2736,7 +2742,11 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         ScopedRegX64 flags{regs, SizeX64::qword};
         ScopedRegX64 offset{regs, SizeX64::qword};
 
-        build.cmp(qword[classReg + offsetof(LuauClass, memberdefaults)], 0);
+        // Luwu Traits (rfcs/classes/traits.md): ALLOC keeps the constant defaults, but needs the traits implemented
+        if (inst.cmd == IrCmd::CHECK_CLASS_ALLOCATABLE)
+            build.cmp(byte[classReg + offsetof(LuauClass, traitspending)], 0);
+        else
+            build.cmp(qword[classReg + offsetof(LuauClass, memberdefaults)], 0);
         build.jcc(ConditionX64::NotEqual, fail);
 
         Label constructible;
@@ -2759,11 +2769,14 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::NEW_OBJECT:
+    case IrCmd::NEW_OBJECT_DEFAULTS:
     {
+        size_t allocator = inst.cmd == IrCmd::NEW_OBJECT ? offsetof(NativeContext, luaR_newobjectuninit) : offsetof(NativeContext, luaR_newobject);
+
         IrCallWrapperX64 callWrap(regs, build, index);
         callWrap.addArgument(SizeX64::qword, rState);
         callWrap.addArgument(SizeX64::qword, regOp(OP_A(inst)), OP_A(inst));
-        callWrap.call(qword[rNativeContext + offsetof(NativeContext, luaR_newobjectuninit)]);
+        callWrap.call(qword[rNativeContext + allocator]);
         inst.regX64 = regs.takeReg(rax, index);
         break;
     }
@@ -3244,6 +3257,9 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         emitFallback(regs, build, offsetof(NativeContext, executeNEWCLASSMEMBER), uintOp(OP_A(inst)));
         break;
+    case IrCmd::FALLBACK_INITTRAITS:
+        emitFallback(regs, build, offsetof(NativeContext, executeINITTRAITS), uintOp(OP_A(inst)));
+        break;
     case IrCmd::FALLBACK_FORGPREP:
         emitFallback(regs, build, offsetof(NativeContext, executeFORGPREP), uintOp(OP_A(inst)));
         jumpOrFallthrough(blockOp(OP_C(inst)), next);
@@ -3489,6 +3505,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::GET_TYPE:
     {
+        // Luwu Traits (rfcs/classes/traits.md): a class value whose class is a trait has the type "trait", which its tag can't tell
+        bool mayBeTrait = HAS_OP_B(inst) && OP_B(inst).kind == IrOpKind::VmReg &&
+                          (OP_A(inst).kind == IrOpKind::Inst || tagOp(OP_A(inst)) == LUA_TCLASS);
+
         inst.regX64 = regs.allocReg(SizeX64::qword, index);
 
         build.mov(inst.regX64, qword[rState + offsetof(lua_State, global)]);
@@ -3499,6 +3519,29 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             build.mov(inst.regX64, qword[inst.regX64 + tagOp(OP_A(inst)) * sizeof(TString*) + offsetof(global_State, ttypename)]);
         else
             CODEGEN_ASSERT(!"Unsupported instruction form");
+
+        if (mayBeTrait)
+        {
+            Label notTrait;
+
+            // before the branch: taking a register may spill another value, which both paths have to see
+            ScopedRegX64 tmp{regs, SizeX64::qword};
+
+            if (OP_A(inst).kind == IrOpKind::Inst)
+            {
+                build.cmp(regOp(OP_A(inst)), LUA_TCLASS);
+                build.jcc(ConditionX64::NotEqual, notTrait);
+            }
+
+            build.mov(tmp.reg, luauRegValue(vmRegOp(OP_B(inst))));
+            build.cmp(byte[tmp.reg + offsetof(LuauClass, istrait)], 0);
+            build.jcc(ConditionX64::Equal, notTrait);
+
+            build.mov(inst.regX64, qword[rState + offsetof(lua_State, global)]);
+            build.mov(inst.regX64, qword[inst.regX64 + offsetof(global_State, traittypename)]);
+
+            build.setLabel(notTrait);
+        }
         break;
     }
     case IrCmd::GET_TYPEOF:
