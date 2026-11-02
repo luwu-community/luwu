@@ -418,6 +418,7 @@ struct ClonePublicInterface : Substitution
         TypeId type = cloneType(tf.type);
 
         TypeFun result{std::move(typeParams), std::move(typePackParams), type, tf.definitionLocation};
+        result.definitionModuleName = tf.definitionModuleName;
         if (tf.errorHint)
             result.errorHint = cloneType(*tf.errorHint);
         return result;
@@ -455,6 +456,11 @@ void Module::clonePublicInterface(NotNull<BuiltinTypes> builtinTypes, InternalEr
     for (auto& [name, tf] : moduleScope->exportedTypeBindings)
     {
         tf = clonePublicInterface.cloneTypeFun(tf);
+
+        // Luwu: an exported type names the module it's declared in, so a copy in another module (an import, a forwarded
+        // or destructured type) still says which file definitionLocation is in. Upstream doesn't record it.
+        if (!tf.definitionModuleName)
+            tf.definitionModuleName = this->name;
     }
 
     for (auto& [name, ty] : declaredGlobals)
@@ -480,6 +486,10 @@ void Module::clonePublicInterface(NotNull<BuiltinTypes> builtinTypes, InternalEr
     // Copy external stuff over to Module itself
     this->returnType = moduleScope->returnType;
     this->exportedTypeBindings = moduleScope->exportedTypeBindings;
+
+    // Luwu forwarded module types: these are already the required module's public interface, so they aren't cloned
+    for (const auto& [name, tf] : forwardedTypeBindings)
+        this->exportedTypeBindings.try_emplace(name, tf);
 }
 
 bool Module::hasModuleScope() const
