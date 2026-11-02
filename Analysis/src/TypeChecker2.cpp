@@ -6922,6 +6922,46 @@ const std::vector<std::string>& TypeChecker2::requiredProperties(const TableType
     return requiredPropertiesCache[table] = std::move(required);
 }
 
+/// Luwu: `Fields & (A | B)` rewritten as `(Fields & A) | (Fields & B)`, or nullopt unless the intersection has exactly one
+/// union part and every variant simplifies to a single table. The simplifier doesn't distribute an intersection over a
+/// union, and `Fields & oneof<A, B>` always has this shape.
+static std::optional<TypeId> distributeOverTableUnion(
+    NotNull<BuiltinTypes> builtinTypes,
+    NotNull<TypeArena> arena,
+    const IntersectionType* intersection
+)
+{
+    const UnionType* unionPart = nullptr;
+    TypeIds rest;
+    for (TypeId part : intersection)
+    {
+        if (const UnionType* utv = get<UnionType>(part))
+        {
+            if (unionPart)
+                return std::nullopt;
+            unionPart = utv;
+        }
+        else
+            rest.insert(part);
+    }
+
+    if (!unionPart)
+        return std::nullopt;
+
+    std::vector<TypeId> variants;
+    for (TypeId option : unionPart)
+    {
+        TypeIds parts = rest;
+        parts.insert(option);
+        TypeId variant = simplifyIntersection(builtinTypes, arena, std::move(parts)).result;
+        if (!is<TableType>(variant))
+            return std::nullopt;
+        variants.push_back(variant);
+    }
+
+    return arena->addType(UnionType{std::move(variants)});
+}
+
 bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedType)
 {
     auto exprType = follow(lookupType(expr));
@@ -6986,6 +7026,16 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
             TypeId simplified = simplifyIntersection(builtinTypes, NotNull{module->internalTypes.get()}, std::move(parts)).result;
             if (is<TableType>(simplified))
                 return testPotentialLiteralIsSubtype(expr, simplified);
+
+            // Luwu: a table intersected with a union of tables (`Fields & oneof<A, B>`) is checked against the variant the
+            // literal matches, field by field, the way a single table is. Upstream's plain subtyping check rejects a mutable
+            // field `version: Semver` given a `SemanticVersion`. Without a match, the error below names the type as written.
+            NotNull<TypeArena> arena{module->internalTypes.get()};
+            if (std::optional<TypeId> variants = distributeOverTableUnion(builtinTypes, arena, itv))
+            {
+                if (std::optional<TypeId> matching = extractMatchingTableType(get<UnionType>(*variants), exprType, builtinTypes, arena))
+                    return testPotentialLiteralIsSubtype(expr, *matching);
+            }
         }
 
         return testIsSubtype(exprType, expectedType, expr->location);
