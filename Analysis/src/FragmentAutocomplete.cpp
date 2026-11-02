@@ -1343,8 +1343,8 @@ FragmentAutocompleteStatusResult tryFragmentAutocomplete(
     StringCompletionCallback stringCompletionCB
 )
 {
-    bool isInHotComment = isWithinHotComment(context.freshParse.hotcomments, cursorPosition);
-    if (isWithinComment(context.freshParse.commentLocations, cursorPosition) && !isInHotComment)
+    const HotComment* hotComment = findHotComment(context.freshParse.hotcomments, cursorPosition);
+    if (isWithinComment(context.freshParse.commentLocations, cursorPosition) && !hotComment)
         return {FragmentAutocompleteStatus::Success, std::nullopt};
     // TODO: we should calculate fragmentEnd position here, by using context.newAstRoot and cursorPosition
     try
@@ -1359,7 +1359,7 @@ FragmentAutocompleteStatusResult tryFragmentAutocomplete(
             context.DEPRECATED_fragmentEndPosition,
             context.freshParse.root,
             context.reporter,
-            isInHotComment
+            hotComment
         );
         return {FragmentAutocompleteStatus::Success, std::move(fragmentAutocomplete)};
     }
@@ -1381,7 +1381,7 @@ FragmentAutocompleteResult fragmentAutocomplete(
     std::optional<Position> fragmentEndPosition,
     AstStatBlock* recentParse,
     IFragmentAutocompleteReporter* reporter,
-    bool isInHotComment
+    const HotComment* hotComment
 )
 {
     LUAU_TIMETRACE_SCOPE("Luau::fragmentAutocomplete", "FragmentAutocomplete");
@@ -1406,7 +1406,7 @@ FragmentAutocompleteResult fragmentAutocomplete(
         cursorPosition,
         frontend.fileResolver,
         std::move(callback),
-        isInHotComment
+        hotComment
     );
     freeze(*tcResult.incrementalModule->internalTypes);
     reportWaypoint(reporter, FragmentAutocompleteWaypoint::AutocompleteEnd);

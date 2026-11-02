@@ -1,0 +1,4 @@
+-- basic exports of values
+export version = "1.0.0"
+export name = "test module"
+export count = 41 + 1

@@ -1,4 +1,4 @@
 -- export inside repeat/until should error
 repeat
-    export local inside = "repeat"
+    export inside = "repeat"
 until true

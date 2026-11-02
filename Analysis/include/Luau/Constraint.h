@@ -54,6 +54,9 @@ struct GeneralizationConstraint
     std::vector<TypeId> interiorTypes;
     bool hasDeprecatedAttribute = false;
     AstAttr::DeprecatedInfo deprecatedInfo;
+    // Luwu: `@nodiscard` (see FunctionType::isNodiscard)
+    bool hasNodiscardAttribute = false;
+    std::string nodiscardReason;
 
     /// If true, never introduce generics.  Always replace free types by their
     /// bounds or unknown. Presently used only to generalize the whole module.
