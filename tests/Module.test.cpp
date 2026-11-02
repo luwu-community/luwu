@@ -176,6 +176,56 @@ TEST_CASE_FIXTURE(Fixture, "deepClone_cyclic_table_2")
     CHECK(*cloneMethodReturnType == cloneTy);
 }
 
+// Luwu doc references: a property's doc comments come along when its table is cloned
+TEST_CASE_FIXTURE(Fixture, "clone_keeps_a_propertys_metadata")
+{
+    TypeArena src;
+
+    auto comments = std::make_shared<TypeMetadataTable>();
+    comments->entries.emplace_back(std::string("comments"), std::string("the port to listen on"));
+
+    TypeId tableTy = src.addType(TableType{});
+    TableType* tt = getMutable<TableType>(tableTy);
+    REQUIRE(tt);
+    tt->props["port"].setType(getBuiltins()->numberType);
+    tt->props["port"].metadata = comments;
+
+    TypeArena dest;
+    CloneState cloneState{getBuiltins()};
+    TypeId cloneTy = clone(tableTy, dest, cloneState);
+    const TableType* ctt = get<TableType>(cloneTy);
+    REQUIRE(ctt);
+
+    auto port = ctt->props.find("port");
+    REQUIRE(port != ctt->props.end());
+    CHECK_EQ(port->second.metadata, comments);
+}
+
+// Luwu: a type in a type's metadata belongs to the arena the metadata was made in, so it's cloned along with the type
+TEST_CASE_FIXTURE(Fixture, "clone_copies_the_types_in_metadata")
+{
+    TypeArena src;
+
+    TypeId tagTy = src.addType(SingletonType{StringSingleton{"tag"}});
+    auto metadata = std::make_shared<TypeMetadataTable>();
+    metadata->entries.emplace_back(std::string("tag"), tagTy);
+
+    TypeId tableTy = src.addType(TableType{});
+    asMutable(tableTy)->metadata = metadata;
+
+    TypeArena dest;
+    CloneState cloneState{getBuiltins()};
+    TypeId cloneTy = clone(tableTy, dest, cloneState);
+
+    REQUIRE(cloneTy->metadata);
+    REQUIRE_EQ(cloneTy->metadata->entries.size(), 1);
+    const TypeId* clonedTag = get_if<TypeId>(&cloneTy->metadata->entries[0].second);
+    REQUIRE(clonedTag);
+    CHECK_NE(*clonedTag, tagTy);
+    CHECK_EQ((*clonedTag)->owningArena, &dest);
+    CHECK_EQ(toString(*clonedTag), "\"tag\"");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "builtin_types_point_into_globalTypes_arena")
 {
     CheckResult result = check(R"(
