@@ -2454,6 +2454,7 @@ TEST_CASE("prettyPrint_error_hints")
         local function read(path: string): string  !  NotFound | Denied return path end
         local function meow():! string error("meow") end
         type Reader = (string) -> string ! NotFound
+        type Result<T, E = string> = T  !  E
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }

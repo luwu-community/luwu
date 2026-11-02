@@ -556,6 +556,17 @@ private:
 
     // Specializations of 'resolveType' below
     TypeId resolveReferenceType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref, bool inTypeArguments, bool replaceErrorWithFresh);
+    // Luwu try expressions: the return annotation being resolved, when it's exactly one alias reference: the one place an
+    // alias with an error hint may go
+    AstTypeReference* hintedAliasReturn = nullptr;
+    TypePackId resolveReturnTypePack(
+        const ScopePtr& scope,
+        AstTypePack* returns,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh,
+        std::optional<Polarity> initialPolarity = std::nullopt
+    );
+    std::optional<TypeId> returnErrorHint(const ScopePtr& scope, AstTypePack* returns, std::optional<TypeId> declared, bool inTypeArguments);
     TypeId resolveTableType(const ScopePtr& scope, AstType* ty, AstTypeTable* tab, bool inTypeArguments, bool replaceErrorWithFresh);
     TypeId resolveFunctionType(const ScopePtr& scope, AstType* ty, AstTypeFunction* fn, bool inTypeArguments, bool replaceErrorWithFresh);
 

@@ -434,6 +434,7 @@ public:
     AstArray<Position> genericsCommaPositions;
     Position genericsClosePosition;
     Position equalsPosition;
+    Position errorHintPosition = Position::missing();
 };
 
 class CstStatTypeFunction : public CstNode

@@ -15,6 +15,7 @@
 
 using namespace Luau;
 
+LUAU_FASTFLAG(LuauHigherOrderGenericInference)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuGenericNominals)
@@ -6390,6 +6391,132 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "weakunknown_in_a_nested_union_simplifies")
     CHECK_EQ(toString(requireType("s")), "string");
 }
 
+// Luwu try expressions: a function whose return type is exactly an alias with a hint raises the hint, expanded with the
+// alias's arguments and defaults
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_aliases_with_error_hints_are_return_types")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type NotFound = { kind: "NotFound" }
+        type Lookup = string ! NotFound
+        type Result<T, E = string> = T ! E
+        type Checked<T> = T ! { bad: T }
+        local function read(path: string): Lookup
+            return path
+        end
+        local function parse(s: string): Result<number>
+            return #s
+        end
+        local function load(s: string): (Result<boolean, NotFound>)
+            return s == ""
+        end
+        local function check(n: number): Checked<number>
+            return n
+        end
+        local function both(s: string): Lookup ! number
+            return s
+        end
+        type Reader = (string) -> Result<string, NotFound>
+        local reader: Reader = read
+        declare function open(path: string): Result<number, NotFound>
+        local r = try read("x")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("read")), "(string) -> string ! NotFound");
+    CHECK_EQ(toString(requireType("parse")), "(string) -> number ! string");
+    CHECK_EQ(toString(requireType("load")), "(string) -> boolean ! NotFound");
+    CHECK_EQ(toString(requireType("check")), "(number) -> number ! { bad: number }");
+    CHECK_EQ(toString(requireType("both")), "(string) -> string ! NotFound | number");
+    CHECK_EQ(toString(requireType("reader")), "(string) -> string ! NotFound");
+    CHECK_EQ(toString(requireType("open")), "(string) -> number ! NotFound");
+    CHECK_EQ(toString(requireType("r")), "err<NotFound | unknown> | ok<string>");
+}
+
+// Luwu try expressions: the hint would be lost anywhere but a function's whole return type, so any other use is an error
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_aliases_with_error_hints_are_only_return_types")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        type Lookup = string ! number
+        type Result<T, E = string> = T ! E
+        local v: Lookup = "x"
+        type Holder = { value: Lookup }
+        local f: () -> (Lookup, number)
+        local list: { Result<string> }
+        type Alias = Lookup
+        local function take(x: Lookup) end
+        local function returns(): Result<string>?
+            return nil
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(7, result);
+    for (size_t i = 0; i < result.errors.size(); ++i)
+    {
+        INFO(i);
+        CHECK(get<GenericError>(result.errors[i]));
+        CHECK_EQ(result.errors[i].location.begin.line, i + 4);
+    }
+}
+
+// Luwu try expressions: a generic in a function parameter's hint is inferred from the argument's hint, so a pcall-like
+// function can say what its failure value holds. An argument without a hint can raise anything.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_generic_error_hint_is_inferred_from_the_arguments_hint")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuauHigherOrderGenericInference, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type BadCat = { kind: "BadCat" }
+        local function protect<R, E, A...>(f: (A...) -> R ! E, ...: A...): (boolean, R | E | unknown)
+            return true, f(...)
+        end
+        local function rethrow<R, E, A...>(f: (A...) -> R ! E, ...: A...): R | E
+            return f(...)
+        end
+        local function meow(name: string): string ! BadCat
+            return name
+        end
+        local function purr<T>(name: T): T ! BadCat
+            return name
+        end
+        local function plain(n: number): number
+            return n
+        end
+        local cat_name = "Taz"
+        local succ, response = protect(meow, cat_name)
+        local ok, plain_response = protect(plain, 1)
+        local purred = rethrow(purr, cat_name)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    std::string response = toString(requireType("response"));
+    CHECK_MESSAGE(response.find("string") != std::string::npos, response);
+    CHECK_MESSAGE(response.find("BadCat") != std::string::npos, response);
+    CHECK_MESSAGE(response.find("unknown") != std::string::npos, response);
+    std::string plainResponse = toString(requireType("plain_response"));
+    CHECK_MESSAGE(plainResponse.find("number") != std::string::npos, plainResponse);
+    CHECK_MESSAGE(plainResponse.find("BadCat") == std::string::npos, plainResponse);
+
+    // a generic function's hint too
+    CHECK_EQ(toString(requireType("purred")), "BadCat | string");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_error_hints")
 {
     ScopedFastFlag sffs[] = {
@@ -6406,6 +6533,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_error_hints")
     checkTypewriting(*this, before, "local function read(path: string): string ! NotFound | string\n    return path\nend", after);
     checkTypewriting(*this, before, "local function meow(): ! NotFound\n    return 1\nend", after);
     checkTypewriting(*this, before, "local function apply(read: (string) -> string ! NotFound)\n    return read(\"x\")\nend", after);
+    checkTypewriting(*this, "type NotFound = { kind: \"NotFound\" }\ntype Lookup = string", " ! NotFound", after);
+    const char* withLookup = "type NotFound = { kind: \"NotFound\" }\ntype Lookup = string ! NotFound\n";
+    checkTypewriting(*this, withLookup, "local function read(path: string): Lookup\n    return path\nend", after);
 }
 
 // Luwu collections: an `err` can say where its error was raised, with optional fields after the error

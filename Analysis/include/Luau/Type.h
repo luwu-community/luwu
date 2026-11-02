@@ -930,6 +930,8 @@ struct PendingExpansionType
     std::vector<TypeId> typeArguments;
     std::vector<TypePackId> packArguments;
     size_t index;
+    // Luwu try expressions: expands the alias's error hint (TypeFun::errorHint) instead of its type
+    bool errorHint = false;
 
     static size_t nextIndex;
 };
@@ -1124,6 +1126,9 @@ struct TypeFun
      * You must first use TypeChecker::instantiateTypeFun to turn it into a real type.
      */
     TypeId type;
+
+    // Luwu try expressions: `type Result<T> = T ! IoError`. A function whose return type is exactly this alias raises it.
+    std::optional<TypeId> errorHint;
 
     // The location of where this TypeFun was defined, if available
     std::optional<Location> definitionLocation;

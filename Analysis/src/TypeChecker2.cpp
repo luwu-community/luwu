@@ -1666,6 +1666,8 @@ void TypeChecker2::visit(AstStatTypeAlias* stat)
 
     visitGenerics(stat->generics, stat->genericPacks);
     visit(stat->type);
+    if (stat->errorHint)
+        visit(stat->errorHint);
 }
 
 void TypeChecker2::visit(AstStatTypeFunction* stat)

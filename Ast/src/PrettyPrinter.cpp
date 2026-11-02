@@ -1366,6 +1366,8 @@ struct Printer
                 }
 
                 visualizeTypeAnnotation(*a->type);
+                if (a->errorHint)
+                    visualizeErrorHint(*a->errorHint, cstNode ? cstNode->errorHintPosition : Position::missing());
             }
         }
         else if (const auto& t = program.as<AstStatTypeFunction>())

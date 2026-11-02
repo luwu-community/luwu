@@ -716,6 +716,8 @@ TypeFun clone(const TypeFun& typeFun, TypeArena& dest, CloneState& cloneState)
     }
 
     copy.type = cloner.clone(copy.type);
+    if (copy.errorHint)
+        copy.errorHint = cloner.clone(*copy.errorHint);
 
     return copy;
 }
@@ -799,6 +801,8 @@ TypeFun cloneIncremental(const TypeFun& typeFun, TypeArena& dest, CloneState& cl
     }
 
     copy.type = cloner.clone(copy.type);
+    if (copy.errorHint)
+        copy.errorHint = cloner.clone(*copy.errorHint);
 
     return copy;
 }

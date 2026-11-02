@@ -2120,14 +2120,25 @@ AstStat* Parser::parseTypeAlias(
 
     AstType* type = parseType();
 
+    // Luwu try expressions: `type Result<T> = T ! IoError`
+    Position errorHintPosition = Position::missing();
+    AstType* errorHint = parseOptionalErrorHint(&errorHintPosition);
+    // A hint still being typed ends at the next token, often on the next line, so it doesn't extend the alias
+    Location end = errorHint && !errorHint->is<AstTypeError>() ? errorHint->location : type->location;
+
     AstStatTypeAlias* node = allocator.alloc<AstStatTypeAlias>(
-        Location(start, type->location), name->name, name->location, generics, genericPacks, type, exported, typeKeywordLocation
+        Location(start, end), name->name, name->location, generics, genericPacks, type, exported, typeKeywordLocation
     );
     node->attributes = attributes;
+    node->errorHint = errorHint;
     if (options.storeCstData)
-        cstNodeMap[node] = allocator.alloc<CstStatTypeAlias>(
+    {
+        CstStatTypeAlias* cst = allocator.alloc<CstStatTypeAlias>(
             typeKeywordPosition, genericsOpenPosition, genericsCommaPositions, genericsClosePosition, equalsPosition
         );
+        cst->errorHintPosition = errorHintPosition;
+        cstNodeMap[node] = cst;
+    }
     return node;
 }
 

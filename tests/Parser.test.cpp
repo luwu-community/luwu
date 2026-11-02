@@ -2447,6 +2447,35 @@ TEST_CASE_FIXTURE(Fixture, "error_hints_follow_the_return_type")
     CHECK(open->errorHint);
 }
 
+TEST_CASE_FIXTURE(Fixture, "error_hints_on_type_aliases")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseResult result = tryParse(R"(
+        type Result<T, E = string> = T ! E
+        type Lookup = string? ! NotFound | Denied
+        type Reader = (string) -> string ! NotFound
+    )");
+    CHECK(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatTypeAlias* resultAlias = result.root->body.data[0]->as<AstStatTypeAlias>();
+    REQUIRE(resultAlias);
+    REQUIRE(resultAlias->errorHint);
+    CHECK(resultAlias->errorHint->is<AstTypeReference>());
+    CHECK_EQ(resultAlias->location.end, resultAlias->errorHint->location.end);
+
+    AstStatTypeAlias* lookup = result.root->body.data[1]->as<AstStatTypeAlias>();
+    REQUIRE(lookup);
+    REQUIRE(lookup->errorHint);
+    CHECK(lookup->errorHint->is<AstTypeUnion>());
+
+    // a hint after a function type is the function's
+    AstStatTypeAlias* reader = result.root->body.data[2]->as<AstStatTypeAlias>();
+    REQUIRE(reader);
+    CHECK(!reader->errorHint);
+}
+
 TEST_CASE_FIXTURE(Fixture, "error_hints_are_gated_and_luwu_only")
 {
     {

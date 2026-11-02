@@ -1205,6 +1205,8 @@ public:
     AstArray<AstGenericType*> generics;
     AstArray<AstGenericTypePack*> genericPacks;
     AstType* type;
+    // Luwu try expressions: `type Result<T> = T ! IoError`. Only a function's return type may name an alias with a hint.
+    AstType* errorHint = nullptr;
     bool exported;
 
     // Location of the leading 'type' keyword token only.

@@ -46,6 +46,7 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
         else if constexpr (std::is_same_v<T, PendingExpansionType>)
         {
             PendingExpansionType clone = PendingExpansionType{a.prefix, a.name, a.typeArguments, a.packArguments};
+            clone.errorHint = a.errorHint;
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, AnyType>)

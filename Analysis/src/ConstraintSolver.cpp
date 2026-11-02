@@ -1413,6 +1413,11 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
         return true;
     }
 
+    // Luwu try expressions: a function's return type that names an alias with a hint raises that hint, expanded with the
+    // same arguments (ConstraintGenerator::returnErrorHint)
+    if (petv->errorHint)
+        tf = TypeFun{tf->typeParams, tf->typePackParams, tf->errorHint.value_or(builtinTypes->neverType), tf->definitionLocation};
+
     // Adding ReduceConstraint on type function for the constraint solver
     if (get<TypeFunctionInstanceType>(follow(tf->type)))
         pushConstraint(NotNull(constraint->scope.get()), constraint->location, ReduceConstraint{tf->type});
@@ -1546,6 +1551,12 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     InstantiationQueuer queuer{constraint->scope, constraint->location, this};
     queuer.run(target);
     if (target->persistent || target->owningArena != arena)
+    {
+        bindResult(target);
+        return true;
+    }
+    // Luwu try expressions: a hint isn't an instance of the alias, so it doesn't take the alias's name and arguments
+    if (petv->errorHint)
     {
         bindResult(target);
         return true;

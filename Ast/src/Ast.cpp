@@ -1036,6 +1036,9 @@ void AstStatTypeAlias::visit(AstVisitor* visitor)
         }
 
         type->visit(visitor);
+
+        if (errorHint)
+            errorHint->visit(visitor);
     }
 }
 
