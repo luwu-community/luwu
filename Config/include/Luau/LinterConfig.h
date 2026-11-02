@@ -99,6 +99,21 @@ struct LintWarning
         Code_DuplicateProperty = 64,       // Luwu: a property declared twice in a table type (part of TableLiteral)
         Code_DuplicateReadWrite = 65,      // Luwu: a table type property given its read or write type twice (part of TableLiteral)
         Code_ReturnSelf = 66,              // Luwu Traits: a trait method returning `self` typed as the trait, not `Self`
+        Code_ReturnOnNextLine = 67,        // Luwu: a `return` in a `do` expression whose value starts on the next line
+        Code_OrContinue = 68,              // Luwu: `x or continue`, which reads a binding named `continue`
+        Code_KeywordShadow = 69,           // Luwu: a binding named after a contextual keyword (`class`, `continue`, ...)
+        Code_BuiltinShadow = 70,           // Luwu: a binding that hides a builtin global (`type`, `typeof`, `table`, ...)
+        Code_BindingSwallowsCondition = 71, // Luwu: `if local x = f() and x > 1`, where the `and` is part of the bound value
+        Code_Style = 72,                   // Luwu: the group of layout lints; turning it off turns off all of its parts
+        // Luwu: parts of Style that can be turned off on their own (ConstLocal, SameLineStatement and MultiLineStatement too)
+        Code_OneLineStatement = 73,        // `if x then y end`, `while c do f() end`, `function f() return 1 end` on one line
+        Code_OneLineGuard = 74,            // `if not x then return end` on one line, in a Luau file
+        Code_InlineOrLeave = 75,           // `x or return` ending a line much longer than the lines around it
+        Code_LuaGuard = 76,                // `if not x then return end` on one line, in a Luwu file, which can write `x or return`
+        Code_OrReturnComma = 77,           // Luwu: `f(x or return a, b)`, where `b` is the next argument, not a second return value
+        Code_MisleadingIndentation = 78,   // Luwu: a `do` expression's block reaching lines indented like the code after it
+        Code_AmbiguousContinuation = 79,   // Luwu: a line starting with `-` or a string that continues the expression above it
+        Code_UnflippedGuard = 80,          // Luwu: `x == nil or return` followed by code using `x`, which is always nil there
 
         Code__Count
     };
@@ -215,6 +230,20 @@ inline constexpr const char* kWarningNames[] = {
     "DuplicateProperty",
     "DuplicateReadWrite",
     "ReturnSelf",
+    "ReturnOnNextLine",
+    "OrContinue",
+    "KeywordShadow",
+    "BuiltinShadow",
+    "BindingSwallowsCondition",
+    "Style",
+    "OneLineStatement",
+    "OneLineGuard",
+    "InlineOrLeave",
+    "LuaGuard",
+    "OrReturnComma",
+    "MisleadingIndentation",
+    "AmbiguousContinuation",
+    "UnflippedGuard",
 };
 // clang-format on
 

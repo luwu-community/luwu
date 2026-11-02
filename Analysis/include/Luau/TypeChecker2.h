@@ -179,6 +179,7 @@ struct TypeChecker2
     // Returns whether `subjectType` is one; only types that are so without normalizing are recognized.
     bool reportImproperUse(AstExpr* subject, TypeId subjectType, ImproperUse use);
     void reportUnreachableUse(AstExpr* subject, ImproperUse use);
+    void checkImpossibleTypeTest(AstExprCall* call);
     // Why the local read at `use` is `never`, when something the reader wrote says so; nullopt when it may be a type
     // checker bug
     std::optional<UnreachableCodeUse::Reason> unreachableReason(const AstExprLocal* use);
@@ -245,11 +246,14 @@ private:
     Scope* findInnermostScope(Location location) const;
     void visit(AstStat* stat);
     void visit(AstStatIf* ifStatement);
+    void visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses);
     void visit(AstStatWhile* whileStatement);
     void visit(AstStatRepeat* repeatStatement);
     void visit(AstStatBreak*);
     void visit(AstStatContinue*);
     void visit(AstStatReturn* ret);
+    void visit(AstStatGive* give);
+    void visit(AstStatComprehensionItem* item);
     void visit(AstStatExpr* expr);
     void visit(AstStatLocal* local);
     void visit(AstStatFor* forStatement);
@@ -341,6 +345,8 @@ private:
     void checkLuwuNominalTypeComparison(AstExprBinary* expr);
     void visit(AstExprTypeAssertion* expr);
     void visit(AstExprIfElse* expr);
+    void visit(AstExprDo* expr);
+    void visit(AstExprTableComprehension* expr);
     void visit(AstExprInterpString* interpString);
     void visit(AstExprInstantiate* explicitTypeInstantiation);
     void visit(AstExprError* expr);
