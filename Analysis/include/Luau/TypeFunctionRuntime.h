@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/Common.h"
+#include "Luau/DenseHash2.h"
 #include "Luau/Scope.h"
 #include "Luau/TypeFunctionError.h"
 #include "Luau/TypeFunctionRuntimeBuilder.h"
@@ -55,6 +56,21 @@ struct TypeFunctionPrimitiveType
         : type(type)
     {
     }
+};
+
+struct TypeFunctionPinnedType
+{
+    enum Type
+    {
+        // Luwu: after `None`, Luwu's last primitive (upstream's last is `Buffer`)
+        Any = TypeFunctionPrimitiveType::None + 1,
+        Unknown,
+        Never,
+        TrueSingleton,
+        FalseSingleton,
+
+        Count,
+    };
 };
 
 struct TypeFunctionBooleanSingleton
@@ -145,6 +161,8 @@ struct TypeFunctionGenericTypePack
     bool isNamed = false;
 
     std::string name;
+
+    TypeFunctionTypeId genericType = nullptr;
 };
 
 using TypeFunctionTypePackVariant = Variant<TypeFunctionTypePack, TypeFunctionVariadicTypePack, TypeFunctionGenericTypePack>;
@@ -309,6 +327,12 @@ struct TypeFunctionType
     // Luwu: see TypeFunctionMetadataTable
     std::shared_ptr<const TypeFunctionMetadataTable> metadata;
 
+    // Indicates the type is cached and made up of only cached types, so it's only equal to itself
+    bool canonical = false;
+
+    // Registry reference to the userdata of an immutable type, 0 until it's first pushed
+    int userDataRef = 0;
+
     explicit TypeFunctionType(TypeFunctionTypeVariant type)
         : type(std::move(type))
     {
@@ -333,6 +357,22 @@ T* getMutable(TypeFunctionTypeId tv)
     return tv ? Luau::get_if<T>(&const_cast<TypeFunctionType*>(tv)->type) : nullptr;
 }
 
+struct CachedTypeFunctionType
+{
+    size_t hash = 0;
+    TypeFunctionTypeId type = nullptr;
+
+    bool operator==(const CachedTypeFunctionType& rhs) const;
+};
+
+struct HashCachedTypeFunctionType
+{
+    size_t operator()(const CachedTypeFunctionType& entry) const
+    {
+        return entry.hash;
+    }
+};
+
 struct TypeFunctionRuntime
 {
     TypeFunctionRuntime(NotNull<InternalErrorReporter> ice, NotNull<TypeCheckLimits> limits);
@@ -352,6 +392,17 @@ struct TypeFunctionRuntime
     NotNull<TypeCheckLimits> limits;
 
     StateRef state;
+
+    // Registry references to extern type instances, keyed by the extern type as each serialization of one is a different type
+    DenseHashMap2<TypeId, int> externTypeUserDataRefs;
+
+    TypeFunctionTypeId pinnedTypes[TypeFunctionPinnedType::Count] = {};
+
+    // Stores string singletons and optional types, so equal ones share a type instance
+    DenseHashSet2<CachedTypeFunctionType, HashCachedTypeFunctionType> cachedTypes;
+
+    // Returns the type instance of a type that equal types share, which is created the first time
+    TypeFunctionTypeId cacheType(TypeFunctionTypeVariant type);
 
     // Set of functions which have their environment table initialized
     DenseHashSet<AstStatTypeFunction*> initialized{nullptr};
@@ -395,6 +446,7 @@ TypeFunctionType* allocateTypeFunctionType(lua_State* L, TypeFunctionTypeVariant
 TypeFunctionTypePackVar* allocateTypeFunctionTypePack(lua_State* L, TypeFunctionTypePackVariant type);
 
 void pushType(lua_State* L, TypeFunctionTypeId type);
+
 void pushTypePack(lua_State* L, TypeFunctionTypePackId tp);
 
 void allocTypeUserData(lua_State* L, TypeFunctionTypeVariant type, bool frozen = false);
