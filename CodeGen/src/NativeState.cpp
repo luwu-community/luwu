@@ -110,6 +110,8 @@ void initFunctions(NativeContext& context)
     context.executeINITTRAITS = executeINITTRAITS;
     context.executeGETPOSITIONAL = executeGETPOSITIONAL;
     context.executePRESIZETABLE = executePRESIZETABLE;
+    context.executePUSH = executePUSH;
+    context.executePOP = executePOP;
     context.executeGETVARARGSMultRet = executeGETVARARGSMultRet;
     context.executeGETVARARGSConst = executeGETVARARGSConst;
     context.executeDUPCLOSURE = executeDUPCLOSURE;

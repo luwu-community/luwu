@@ -184,6 +184,7 @@ private:
     ControlFlow visit(AstStatForIn* f);
     ControlFlow visit(AstStatAssign* a);
     ControlFlow visit(AstStatCompoundAssign* c);
+    ControlFlow visit(AstStatPush* p);
     ControlFlow visit(AstStatFunction* f);
     ControlFlow visit(AstStatLocalFunction* l);
     ControlFlow visit(AstStatTypeAlias* t);
@@ -209,6 +210,7 @@ private:
 
     DataFlowResult visitExpr(AstExprTable* t);
     DataFlowResult visitExpr(AstExprUnary* u);
+    DataFlowResult visitExpr(AstExprPop* p);
     DataFlowResult visitExpr(AstExprBinary* b);
     DataFlowResult visitExpr(AstExprTypeAssertion* t);
     DataFlowResult visitExpr(AstExprIfElse* i);

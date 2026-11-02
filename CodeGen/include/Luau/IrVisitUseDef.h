@@ -219,6 +219,14 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
             visitor.useRange(vmRegOp(OP_C(inst)), form <= LBC_PRESIZE_ITER_HASH ? 2 : 3);
         break;
     }
+    case IrCmd::FALLBACK_PUSH:
+        visitor.use(OP_B(inst));
+        visitor.useRange(vmRegOp(OP_C(inst)), function.intOp(OP_D(inst)));
+        break;
+    case IrCmd::FALLBACK_POP:
+        visitor.use(OP_C(inst));
+        visitor.def(OP_B(inst));
+        break;
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         visitor.use(OP_B(inst));
         visitor.useRange(vmRegOp(OP_C(inst)), function.intOp(OP_D(inst)));
