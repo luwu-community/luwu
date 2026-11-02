@@ -2,6 +2,8 @@
 
 #include "Luau/GlobalTypes.h"
 
+#include "Luau/BuiltinDefinitions.h"
+
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
@@ -49,6 +51,8 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     asMutable(builtinTypes->stringType)->ty.emplace<PrimitiveType>(PrimitiveType::String, stringMetatableTy);
     persist(stringMetatableTy);
     makeVectorMetatable(builtinTypes);
+    if (collectionsLibraryEnabled())
+        makeNoneMetatable(builtinTypes);
     freeze(*builtinTypes->arena);
 }
 

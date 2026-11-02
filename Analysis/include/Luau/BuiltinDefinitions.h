@@ -153,6 +153,12 @@ Property makeProperty(TypeId ty, std::optional<std::string> documentationSymbol 
 void assignPropDocumentationSymbols(TableType::Props& props, const std::string& baseName);
 
 std::string getBuiltinDefinitionSource();
+
+// Luwu collections: whether Analysis has the `collections` library: the flags the VM opens it with
+// (luaL_openlibs), and LuwuDeclareStatements, which parses its declarations
+bool collectionsLibraryEnabled();
+// Luwu collections: the library's declarations, a definition file of its own (see registerBuiltinGlobals)
+std::string getCollectionsDefinitionSource();
 std::string getTypeFunctionDefinitionSource();
 
 void addGlobalBinding(GlobalTypes& globals, const std::string& name, TypeId ty, const std::string& packageName);

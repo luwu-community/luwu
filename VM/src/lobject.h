@@ -599,6 +599,12 @@ typedef struct LuaTable
 } LuaTable;
 // clang-format on
 
+// Luwu collections: a frameless version of a builtin class's method, which the interpreter runs at the NAMECALL
+// instead of calling the C method. It reads `self` and the `nargs` arguments at `args`, writes its results from `res`
+// and returns how many, or returns -1 to leave the call to the C method. It never allocates, raises or calls Lua, so
+// every error still comes from the C method.
+typedef int (*luaR_FastMethod)(lua_State* L, struct LuauObject* self, StkId res, StkId args, int nargs);
+
 typedef struct LuauClass
 {
     CommonHeader;
@@ -750,32 +756,94 @@ typedef struct LuauClass
     uint32_t* positionalmembers;
     int numberofpositional;
 
+    // Luwu collections: the number field `#` reads for a builtin container (vec, vecdeque, orderedmap) instead of
+    // calling its `__len`, which returns the same number. LUAR_NO_LENGTH_FIELD for every other class.
+    uint32_t lengthfield;
+
+    // Luwu collections: a builtin class's fast methods by member offset, with NULL for the members that have none. NULL
+    // for every other class. Owned by this class.
+    luaR_FastMethod* fastmethods;
+
 } LuauClass;
 
+#define LUAR_NO_LENGTH_FIELD UINT32_MAX
+
+// Luwu Classes (rfcs/classes): the header is 24 bytes on 64-bit platforms, where upstream's is 40. Upstream also
+// stores a `members` pointer, which always points just past the header. Luwu computes it instead (luaR_members) and
+// keeps `numberofmembers` in the padding after CommonHeader, which saves 16 bytes per object.
 typedef struct LuauObject
 {
     CommonHeader;
 
-    GCObject* gclist;
-
-    // The class object that this value is an instance of.
-    LuauClass* lclass;
+    // Luwu collections: what the object's storage block holds (LuwuStorageKind), or LUAR_STORAGE_NONE without one. The
+    // object keeps it because a sweep can free the class first. It sits in the padding after CommonHeader.
+    uint8_t storagekind;
 
     // The number of members that this instance contains. We need this in order
     // to free ourselves if we got swept in the same GC cycle as our class
     // pointer.
     uint32_t numberofmembers;
 
-    // The fields of this instance.
-    TValue* members;
+    GCObject* gclist;
+
+    // The class object that this value is an instance of.
+    LuauClass* lclass;
 
 } LuauObject;
 
+// Luwu collections: the kinds of storage block a builtin container owns (LuauObject::storagekind)
+enum LuwuStorageKind
+{
+    LUAR_STORAGE_NONE,
+    // `vec`: entries 1 to count in items[0] to items[count - 1]
+    LUAR_STORAGE_VEC,
+    // `vecdeque`: a ring. The entry i places from the front is in items[(head + i) & (capacity - 1)].
+    LUAR_STORAGE_RING,
+};
+
+// Luwu collections: the entries of a `vec` or `vecdeque`, in a block the object owns from its first value on. The
+// object's first member points to it as light userdata, and is nil before the first value. It's allocated with luaM_
+// in the object's memory category and freed with the object (luaR_freeobject). traverseobject marks the element type and the live entries; the slots
+// after them are never read.
+typedef struct LuauStorage
+{
+    uint32_t count;
+    // The number of slots in `items`, always a power of two
+    uint32_t capacity;
+    // A ring's front slot; always 0 for a `vec`, so the ring's formula finds a `vec`'s entries too
+    uint32_t head;
+    // The type the first value fixed (see lcollectionslib.cpp): the tag every entry has, or LUAR_STORAGE_ENUM when the
+    // entries are the values of a builtin enum. Entries tagged LUA_TOBJECT are objects of `elementclass`.
+    uint8_t elementtag;
+    // The builtin enum when `elementtag` is LUAR_STORAGE_ENUM
+    uint8_t elementenum;
+    uint16_t padding;
+    struct LuauClass* elementclass;
+    TValue items[1];
+} LuauStorage;
+
+// Luwu collections: LuauStorage::elementtag for a builtin enum, which no value's tag matches
+#define LUAR_STORAGE_ENUM 0xff
+
+// Luwu collections: the member of a builtin container that points to its LuauStorage
+#define LUAR_STORAGE_MEMBER 0
+
 // Luwu Classes (rfcs/classes): an object's members are allocated inline, immediately after its
-// header (luaR_objectsize, luaR_newobject, luaR_newobjectuninit), so `members` always equals
-// `(TValue*)(object + 1)`. Native code addresses members from the object pointer with this offset
-// instead of loading `members`; anything that ever allocates members out of line must change both.
+// header (luaR_objectsize, luaR_newobject, luaR_newobjectuninit). Native code addresses them from the
+// object pointer with this offset; anything that ever allocates members out of line must change it
+// and luaR_members.
 #define LUAR_OBJECT_MEMBERS_OFFSET sizeof(LuauObject)
+
+// Luwu Classes (rfcs/classes): the fields of `object`, which follow its header
+LUAU_FORCEINLINE TValue* luaR_members(LuauObject* object)
+{
+    return reinterpret_cast<TValue*>(object + 1);
+}
+
+LUAU_FORCEINLINE const TValue* luaR_members(const LuauObject* object)
+{
+    return reinterpret_cast<const TValue*>(object + 1);
+}
 
 /*
 ** `module' operation for hashing (size is always a power of 2)

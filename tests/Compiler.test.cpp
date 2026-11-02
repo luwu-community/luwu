@@ -37,6 +37,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
+LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
@@ -15233,3 +15234,126 @@ end
 }
 
 // Compiler B (classes review) end
+
+// Luwu collections: a small table literal in a loop header is never built. The body runs once per item, skipping the
+// items that are nil at run time, and those known to be nil aren't compiled at all.
+TEST_CASE("LoopOverSmallTableLiteralBuildsNoTable")
+{
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(x, y)
+    local t = {}
+    for i, v in { x, nil, y } do
+        t[i] = v
+    end
+    return t
+end
+)",
+                   0,
+                   1
+               ),
+        R"(
+NEWTABLE R2 0 0
+MOVE R3 R0
+LOADNIL R4
+MOVE R5 R1
+JUMPXEQKNIL R3 L0
+LOADN R6 1
+SETTABLE R3 R2 R6
+L0: JUMPXEQKNIL R5 L1
+LOADN R6 3
+SETTABLE R5 R2 R6
+L1: RETURN R2 1
+)"
+    );
+
+    // five items, keys or a trailing call build the table and loop over it
+    const char* const kept[] = {
+        "local function f(t) for _, v in { 1, 2, 3, 4, 5 } do t[v] = v end end",
+        "local function f(t) for _, v in { a = 1 } do t[v] = v end end",
+        "local function f(t, g) for _, v in { 1, g() } do t[v] = v end end",
+    };
+    for (const char* source : kept)
+    {
+        INFO(source);
+        std::string bytecode = compileFunction(source, 0, 1);
+        CHECK(bytecode.find("FORGLOOP") != std::string::npos);
+    }
+}
+
+// Luwu collections: calling a builtin class's constructor directly or through a local compiles to a fastcall, including
+// the constructors of `collections.result` and `collections.option`, which are three names deep
+TEST_CASE("CollectionsConstructorsCompileToFastcalls")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+
+    const char* fastcalls[] = {
+        "local function f(x) local v = collections.pair(x, x) return v end",
+        "local function f(x) local v = collections.option.some(x) return v end",
+        "local function f(x) local v = collections.result.ok(x) return v end",
+        "local ok = collections.result.ok local function f(x) local v = ok(x) return v end",
+        "local result = collections.result local function f(x) local v = result.err(x) return v end",
+    };
+    for (const char* source : fastcalls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("FASTCALL") != std::string::npos);
+    }
+
+    const char* calls[] = {
+        "local collections = {} local function f(x) local v = collections.result.ok(x) return v end",
+        "local function f(x) local v = string.result.ok(x) return v end",
+        "local function f(x) local v = collections.result.other(x) return v end",
+    };
+    for (const char* source : calls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("FASTCALL") == std::string::npos);
+    }
+
+    ScopedFastFlag off{FFlag::DebugLuwuCollections, false};
+    CHECK(compileFunction(fastcalls[2], 0, 1).find("FASTCALL") == std::string::npos);
+}
+
+// Luwu collections: `for i, v in collections.pair(a, b)` constructs no pair. The position is only loaded when the body
+// reads it.
+TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(t, a, b)
+    for i, v in collections.pair(a, b) do
+        t[i] = v
+    end
+    for _, v in collections.triple(a, b, a) do
+        t[v] = true
+    end
+end
+)",
+                   0,
+                   1
+               ),
+        R"(
+MOVE R3 R1
+MOVE R4 R2
+LOADN R5 1
+SETTABLE R3 R0 R5
+LOADN R5 2
+SETTABLE R4 R0 R5
+MOVE R3 R1
+MOVE R4 R2
+MOVE R5 R1
+LOADB R6 1
+SETTABLE R6 R0 R3
+LOADB R6 1
+SETTABLE R6 R0 R4
+LOADB R6 1
+SETTABLE R6 R0 R5
+RETURN R0 0
+)"
+    );
+}

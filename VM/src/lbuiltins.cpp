@@ -10,6 +10,7 @@
 #include "ldo.h"
 #include "lbuffer.h"
 #include "lvector.h"
+#include "lclass.h"
 
 #include <math.h>
 #include <string.h>
@@ -999,6 +1000,35 @@ static int luauF_class_isinstance(lua_State* L, StkId res, TValue* arg0, int nre
     }
 
     return -1;
+}
+
+// Luwu collections: builds a pair, triple, quad, some, ok or err the way its `__init` would, without a call frame. A
+// member with no argument for it is nil. `ok()` and `err()` without an argument and `some` of nil or none fall back
+// to the constructor, which raises where it should.
+template<LuwuBuiltinClass Kind>
+static int luauF_collections_construct(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    LuauClass* classdef = L->global->builtinclasses[Kind];
+    bool payloadMissing = nparams < 1 || (Kind == LUWU_BUILTIN_SOME && (ttisnil(arg0) || ttissymnone(arg0)));
+    if (!classdef || nresults > 1 || payloadMissing)
+        return -1;
+
+    if (luaC_needsGC(L))
+        return -1; // we can't call luaC_checkGC so fall back to C implementation
+
+    // A new object is white, so storing into it needs no barrier
+    LuauObject* object = luaR_newobjectuninit(L, classdef);
+    TValue* members = luaR_members(object);
+    int count = int(object->numberofmembers);
+    LUAU_ASSERT(count >= 1);
+    setobj(L, &members[0], arg0);
+    for (int i = 1; i < count && i < nparams; i++)
+        setobj(L, &members[i], &args[i - 1]);
+    for (int i = nparams; i < count; i++)
+        setnilvalue(&members[i]);
+
+    setobjectvalue(L, res, object);
+    return 1;
 }
 
 static int luauF_rawget(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
@@ -2863,6 +2893,13 @@ const luau_FastFunction luauF_table[256] = {
     luauF_startswith,
     luauF_endswith,
     luauF_contains,
+
+    luauF_collections_construct<LUWU_BUILTIN_PAIR>,
+    luauF_collections_construct<LUWU_BUILTIN_TRIPLE>,
+    luauF_collections_construct<LUWU_BUILTIN_QUAD>,
+    luauF_collections_construct<LUWU_BUILTIN_SOME>,
+    luauF_collections_construct<LUWU_BUILTIN_OK>,
+    luauF_collections_construct<LUWU_BUILTIN_ERR>,
 
 // When adding builtins, add them above this line; what follows is 64 "dummy" entries with luauF_missing fallback.
 // This is important so that older versions of the runtime that don't support newer builtins automatically fall back via luauF_missing.

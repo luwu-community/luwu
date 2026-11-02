@@ -74,6 +74,7 @@
 //   Luwu Traits (rfcs/classes/traits.md): the shape flags varint in LBC_CONSTANT_CLASS_SHAPE (LBC_CLASSSHAPE_TRAIT,
 //   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, and NEWCLASSMEMBER's IMPLEMENTS form.
 //   Luwu Destructuring: GETPOSITIONAL, and LBC_CLASSMEMBER_POSITIONAL with its position in LBC_CONSTANT_CLASS_SHAPE.
+//   Luwu collections: LBF_COLLECTIONS_PAIR to LBF_COLLECTIONS_RESULT_ERR.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -1043,6 +1044,14 @@ enum LuauBuiltinFunction
     LBF_STRING_STARTSWITH,
     LBF_STRING_ENDSWITH,
     LBF_STRING_CONTAINS,
+
+    // Luwu collections: constructing a builtin class without a call frame
+    LBF_COLLECTIONS_PAIR,
+    LBF_COLLECTIONS_TRIPLE,
+    LBF_COLLECTIONS_QUAD,
+    LBF_COLLECTIONS_OPTION_SOME,
+    LBF_COLLECTIONS_RESULT_OK,
+    LBF_COLLECTIONS_RESULT_ERR,
 };
 
 // Capture type, used in LOP_CAPTURE

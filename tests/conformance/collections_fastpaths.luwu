@@ -1,0 +1,631 @@
+--!nocheck
+-- Luwu collections: the VM's fast paths for builtin containers give the same results and raise the same errors as
+-- their C methods. Every case goes through a function parameter, so the compiler can't tell the receiver's class.
+
+local function raises(f: () -> (), message: string)
+    local ok, err = pcall(f)
+    assert(not ok, `expected an error containing '{message}'`)
+    assert(string.find(tostring(err), message, 1, true), `expected '{message}' in '{err}'`)
+end
+
+local function length(value): number
+    return #value
+end
+
+-- `#` reads a container's count without calling `__len`
+do
+    const list = collections.vec()
+    assert(length(list) == 0)
+    for i = 1, 20 do
+        list:push(i)
+    end
+    assert(length(list) == 20)
+    list:pop()
+    list:remove(1)
+    assert(length(list) == 18)
+    list:clear()
+    assert(length(list) == 0)
+
+    const queue = collections.vecdeque({ "a", "b" })
+    queue:pushfront("z")
+    assert(length(queue) == 3)
+    queue:popback()
+    assert(length(queue) == 2)
+
+    const map = collections.orderedmap()
+    map:set("a", 1)
+    map:set("b", 2)
+    map:set("a", 3)
+    assert(length(map) == 2)
+    map:remove("a")
+    assert(length(map) == 1)
+end
+
+class Sized(private size: number)
+    public function __len(self): number
+        return self.size
+    end
+end
+
+class Plain(public x: number) end
+
+-- a class without a length field keeps calling its `__len`, or raises without one
+do
+    assert(length(Sized(7)) == 7)
+    raises(function()
+        length(Plain(1))
+    end, "attempt to get length of")
+    raises(function()
+        length(collections.pair(1, 2))
+    end, "attempt to get length of")
+end
+
+-- Every method call below goes through one of these. A NAMECALL learns its method's slot on its first run, and only
+-- runs a fast method from its second, so each call site has to run many times and see one class. Functions in a table
+-- aren't inlined at -O2, which would give every call its own NAMECALL.
+const vecs = {}
+const deques = {}
+const maps = {}
+const holders = {}
+
+function vecs.push(list, value)
+    list:push(value)
+end
+function vecs.pop(list)
+    return list:pop()
+end
+function vecs.at(list, position)
+    return list:at(position)
+end
+function vecs.set(list, position, value)
+    list:set(position, value)
+end
+-- two results from a call that gives one
+function vecs.attwo(list, position)
+    const first, second = list:at(position)
+    return first, second
+end
+function vecs.pushcount(list, value): number
+    return select("#", list:push(value))
+end
+
+function deques.pushback(queue, value)
+    queue:pushback(value)
+end
+function deques.pushfront(queue, value)
+    queue:pushfront(value)
+end
+function deques.popback(queue)
+    return queue:popback()
+end
+function deques.popfront(queue)
+    return queue:popfront()
+end
+function deques.front(queue)
+    return queue:front()
+end
+function deques.back(queue)
+    return queue:back()
+end
+function deques.at(queue, position)
+    return queue:at(position)
+end
+function deques.set(queue, position, value)
+    queue:set(position, value)
+end
+
+function maps.get(map, key)
+    return map:get(key)
+end
+function maps.has(map, key)
+    return map:has(key)
+end
+function maps.set(map, key, value)
+    map:set(key, value)
+end
+
+-- `some`, `ok` and `err` keep `expect` at the same offset, so one call site serves all three
+function holders.get(holder)
+    return holder:get()
+end
+function holders.ok(holder)
+    return holder:ok()
+end
+function holders.expect(holder, message)
+    return holder:expect(message)
+end
+function holders.err(holder)
+    return holder:err()
+end
+
+-- the element type check: one type per container, fixed by the first value
+do
+    const numbers = collections.vec()
+    vecs.push(numbers, 1)
+    vecs.push(numbers, 2.5)
+    raises(function()
+        vecs.push(numbers, "3")
+    end, "this vec can only accept numbers, but you passed a string")
+    raises(function()
+        vecs.push(numbers, nil)
+    end, "this vec can only accept numbers, but you passed nil")
+    raises(function()
+        vecs.push(numbers, none)
+    end, "this vec can only accept numbers, but you passed none")
+    raises(function()
+        vecs.set(numbers, 1, true)
+    end, "this vec can only accept numbers, but you passed a boolean")
+    assert(#numbers == 2 and vecs.at(numbers, 1) == 1)
+
+    const empty = collections.vec()
+    raises(function()
+        vecs.push(empty, nil)
+    end, "this vec can't accept nil")
+
+    const bundles = collections.vecdeque()
+    deques.pushback(bundles, collections.pair(1, 2))
+    deques.pushback(bundles, collections.pair(3, 4))
+    raises(function()
+        deques.pushback(bundles, collections.triple(1, 2, 3))
+    end, "this vecdeque can only accept 'pair' objects, but you passed a 'triple' object")
+    raises(function()
+        deques.pushfront(bundles, { 1, 2 })
+    end, "this vecdeque can only accept 'pair' objects, but you passed a table")
+    raises(function()
+        deques.set(bundles, 1, collections.option.some(1))
+    end, "this vecdeque can only accept 'pair' objects, but you passed a 'some' object")
+
+    -- an enum takes all of its variants, and only those
+    const options = collections.vec()
+    vecs.push(options, collections.option.some(1))
+    vecs.push(options, none)
+    raises(function()
+        vecs.push(options, collections.result.ok(1))
+    end, "this vec can only accept options, but you passed an 'ok' object")
+    raises(function()
+        vecs.push(options, 1)
+    end, "this vec can only accept options, but you passed a number")
+    assert(#options == 2 and vecs.at(options, 2) == none)
+
+    const results = collections.vec({ collections.result.err("e") })
+    vecs.push(results, collections.result.ok(1))
+    raises(function()
+        vecs.push(results, none)
+    end, "this vec can only accept results, but you passed none")
+end
+
+-- vec: results, positions and arguments the fast methods leave to the C methods
+do
+    const list = collections.vec()
+    for i = 1, 100 do
+        vecs.push(list, i * 10)
+    end
+    assert(#list == 100 and vecs.at(list, 1) == 10 and vecs.at(list, 100) == 1000)
+
+    -- a missing result is nil, and a multret call gets exactly as many results as the C method gives
+    for _ = 1, 3 do
+        const first, second = vecs.attwo(list, 1)
+        assert(first == 10 and second == nil)
+        assert(select("#", vecs.at(list, 1)) == 1 and select("#", vecs.at(list, 500)) == 1)
+        assert(vecs.pushcount(list, 1010) == 0 and vecs.pop(list) == 1010)
+    end
+
+    -- positions that aren't whole numbers in range give nil
+    for _, position in { 0, -1, 101, 1.5, 0 / 0, math.huge, -math.huge } do
+        assert(vecs.at(list, position) == nil)
+    end
+    -- a numeric string is converted, like any number argument
+    assert(vecs.at(list, "2") == 20)
+    raises(function()
+        vecs.at(list, {})
+    end, "invalid argument #2 to 'at'")
+
+    -- arguments from a multret call
+    list:push(table.unpack({ 1010 }))
+    assert(#list == 101 and vecs.pop(list) == 1010)
+
+    raises(function()
+        list:push()
+    end, "missing argument #2")
+    raises(function()
+        vecs.set(list, 101, 1)
+    end, "position 101 is out of range 1 to 100")
+    raises(function()
+        vecs.set(list, 1.5, 1)
+    end, "position 1.5 is out of range 1 to 100")
+    vecs.set(list, "3", 33)
+    assert(vecs.at(list, 3) == 33)
+
+    -- popping to empty and past it
+    for i = 100, 1, -1 do
+        assert(vecs.pop(list) == if i == 3 then 33 else i * 10)
+    end
+    assert(#list == 0 and vecs.pop(list) == nil and vecs.at(list, 1) == nil)
+end
+
+-- vecdeque: entries stay in order while the ring wraps and grows
+do
+    const queue = collections.vecdeque()
+    for i = 1, 6 do
+        deques.pushback(queue, i)
+    end
+    for _ = 1, 4 do
+        assert(deques.popfront(queue) ~= nil)
+    end
+    -- the ring of 8 now wraps: 5, 6, then 7 to 12. The push at the front grows it while it wraps.
+    for i = 7, 12 do
+        deques.pushback(queue, i)
+    end
+    deques.pushfront(queue, 4)
+    assert(#queue == 9 and deques.front(queue) == 4 and deques.back(queue) == 12 and deques.at(queue, 9) == 12)
+    for position = 1, 9 do
+        assert(deques.at(queue, position) == position + 3)
+    end
+    deques.set(queue, 9, 120)
+    assert(deques.back(queue) == 120)
+
+    local sum = 0
+    for _, value in queue do
+        sum += value
+    end
+    assert(sum == 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 120)
+    assert(deques.popfront(queue) == 4 and deques.popback(queue) == 120 and deques.front(queue) == 5)
+
+    const empty = collections.vecdeque()
+    for _ = 1, 3 do
+        assert(deques.popfront(empty) == nil and deques.popback(empty) == nil)
+        assert(deques.front(empty) == nil and deques.back(empty) == nil and deques.at(empty, 1) == nil)
+    end
+    raises(function()
+        deques.set(empty, 1, 1)
+    end, "position 1 is out of range 1 to 0")
+end
+
+-- random operations on a vec and a vecdeque give what the same operations on a table give
+do
+    -- Park-Miller: the products stay under 2^53, so every bit is exact
+    local seed = 12345
+    local function random(n: number): number
+        seed = seed * 16807 % 2147483647
+        return seed // 16 % n + 1
+    end
+
+    const list = collections.vec()
+    const queue = collections.vecdeque()
+    const listmodel = {}
+    const queuemodel = {}
+    const garbage = {}
+    for step = 1, 20000 do
+        const op = random(11)
+        const value = { step }
+        if op <= 2 then
+            vecs.push(list, value)
+            table.insert(listmodel, value)
+        elseif op == 3 then
+            deques.pushfront(queue, value)
+            table.insert(queuemodel, 1, value)
+        elseif op == 4 then
+            deques.pushback(queue, value)
+            table.insert(queuemodel, value)
+        elseif op == 5 then
+            assert(vecs.pop(list) == table.remove(listmodel))
+            assert(deques.popback(queue) == table.remove(queuemodel))
+        elseif op == 6 then
+            assert(deques.popfront(queue) == (if #queuemodel > 0 then table.remove(queuemodel, 1) else nil))
+        elseif op == 7 and #listmodel > 0 then
+            const position = random(#listmodel)
+            vecs.set(list, position, value)
+            listmodel[position] = value
+        elseif op == 8 and #queuemodel > 0 then
+            const position = random(#queuemodel)
+            deques.set(queue, position, value)
+            queuemodel[position] = value
+        elseif op == 9 and #listmodel > 0 then
+            const position = random(#listmodel + 1)
+            list:insert(position, value)
+            table.insert(listmodel, position, value)
+        elseif op == 10 and #listmodel > 0 then
+            const position = random(#listmodel)
+            assert(list:remove(position) == table.remove(listmodel, position))
+        elseif op == 11 then
+            -- garbage keeps the incremental collector running, so stores into black tables need their barriers
+            table.insert(garbage, table.create(64, step))
+            if #garbage > 64 then
+                table.clear(garbage)
+            end
+        end
+
+        assert(#list == #listmodel and #queue == #queuemodel)
+        const position = random(#listmodel + 2) - 1
+        assert(vecs.at(list, position) == listmodel[position])
+        const qposition = random(#queuemodel + 2) - 1
+        assert(deques.at(queue, qposition) == queuemodel[qposition])
+        assert(deques.front(queue) == queuemodel[1] and deques.back(queue) == queuemodel[#queuemodel])
+    end
+
+    -- every value pushed is still alive and in place after a full collection
+    collectgarbage()
+    for position, value in listmodel do
+        assert(vecs.at(list, position) == value and value[1] > 0)
+    end
+    for position, value in queuemodel do
+        assert(deques.at(queue, position) == value and value[1] > 0)
+    end
+end
+
+-- vec and vecdeque loops run without calling `__iter`, and visit what it would
+local function visit(container): string
+    local text = ""
+    for position, value in container do
+        text ..= `{position}={value} `
+    end
+    return text
+end
+
+class TrueIterator(public x: number)
+    public function __iter(self)
+        return true, self, nil
+    end
+end
+
+do
+    assert(visit(collections.vec()) == "" and visit(collections.vecdeque()) == "")
+    assert(visit(collections.vec({ "a", "b" })) == "1=a 2=b ")
+
+    -- a ring that wraps around its end
+    const queue = collections.vecdeque({ 3, 4 })
+    queue:pushfront(2)
+    queue:pushfront(1)
+    queue:popback()
+    queue:pushback(9)
+    assert(visit(queue) == "1=1 2=2 3=3 4=9 ")
+
+    -- an entry added during a loop is visited, and a removed one isn't
+    const list = collections.vec({ 1, 2, 3 })
+    local seen = {}
+    for position, value in list do
+        table.insert(seen, value)
+        if value == 1 then
+            list:push(4)
+        elseif value == 2 then
+            list:pop()
+        end
+    end
+    assert(table.concat(seen, " ") == "1 2 3")
+
+    -- a loop can yield
+    const looper = coroutine.wrap(function()
+        for _, value in queue do
+            coroutine.yield(value)
+        end
+        return "done"
+    end)
+    assert(looper() == 1 and looper() == 2 and looper() == 3 and looper() == 9 and looper() == "done")
+
+    -- true is the loop's marker for a vec or vecdeque, so an `__iter` giving true raises before the first step
+    raises(function()
+        for x in TrueIterator(1) do
+        end
+    end, "attempt to call a boolean value")
+end
+
+-- the element type stays when the entries go: a class nothing else holds stays alive, and `clear` keeps it too
+do
+    const list = collections.vec()
+    -- the class only lives in the chunk that makes the one object
+    vecs.push(list, loadstring("class Gone(public x: number) end return Gone(1)")())
+    vecs.pop(list)
+    collectgarbage()
+    raises(function()
+        vecs.push(list, 1)
+    end, "this vec can only accept 'Gone' objects, but you passed a number")
+
+    const queue = collections.vecdeque()
+    for i = 1, 100 do
+        deques.pushback(queue, i)
+    end
+    queue:clear()
+    assert(#queue == 0 and deques.popfront(queue) == nil)
+    raises(function()
+        deques.pushback(queue, "x")
+    end, "this vecdeque can only accept numbers, but you passed a string")
+    deques.pushfront(queue, 7)
+    assert(visit(queue) == "1=7 ")
+
+    raises(function()
+        collections.vec():push(nil)
+    end, "this vec can't accept nil")
+    raises(function()
+        collections.vecdeque():pushfront(nil)
+    end, "this vecdeque can't accept nil")
+end
+
+-- orderedmap: `get`, `has` and `set` of a key it has
+do
+    const map = collections.orderedmap()
+    for i = 1, 40 do
+        maps.set(map, `k{i}`, i)
+    end
+    maps.set(map, 1, "one")
+    maps.set(map, true, "yes")
+
+    for _ = 1, 3 do
+        assert(maps.get(map, "k40") == 40 and maps.get(map, 1) == "one" and maps.get(map, true) == "yes")
+        assert(maps.get(map, "missing") == nil and maps.get(map, nil) == nil and maps.get(map, 0 / 0) == nil)
+        assert(maps.has(map, "k1") and not maps.has(map, "k41") and not maps.has(map, nil))
+    end
+
+    -- an existing key doesn't move, and a nil value doesn't remove the key
+    maps.set(map, "k1", "first")
+    assert(maps.get(map, "k1") == "first" and map:index("k1") == 1)
+    maps.set(map, "k2", nil)
+    assert(maps.get(map, "k2") == nil and maps.has(map, "k2") and #map == 42)
+    maps.set(map, "k2", 2)
+    assert(maps.get(map, "k2") == 2 and map:index("k2") == 2)
+
+    -- a removed key, and a new one taking its id, go through the C method
+    map:remove("k3")
+    assert(maps.get(map, "k3") == nil and not maps.has(map, "k3"))
+    maps.set(map, "new", "n")
+    assert(maps.get(map, "new") == "n" and map:index("new") == #map)
+
+    raises(function()
+        map:set("k1")
+    end, "missing argument #3")
+end
+
+-- option and result: `get`, `ok`, `expect` and `err`
+do
+    const some = collections.option.some({ 1 })
+    const good = collections.result.ok(nil)
+    const bad = collections.result.err("e")
+    for _ = 1, 3 do
+        assert(holders.get(some)[1] == 1 and holders.expect(some)[1] == 1 and holders.expect(some, "why")[1] == 1)
+        assert(holders.expect(some, 5)[1] == 1)
+        assert(holders.ok(good) == nil and holders.err(good) == none and holders.expect(good) == nil)
+        assert(holders.ok(bad) == none and holders.err(bad) == "e")
+        assert(select("#", holders.ok(good)) == 1)
+    end
+    raises(function()
+        holders.expect(some, {})
+    end, "invalid argument #2 to 'expect'")
+    raises(function()
+        holders.expect(bad, "parsing")
+    end, "parsing: e")
+end
+
+-- a user class's methods with the same names are unaffected
+class Stack(private items: { number })
+    public function push(self, value: number)
+        table.insert(self.items, value)
+    end
+    public function at(self, position: number): number?
+        return self.items[position]
+    end
+end
+
+do
+    const stack = Stack({})
+    for i = 1, 3 do
+        vecs.push(stack, i)
+    end
+    assert(vecs.at(stack, 2) == 2 and vecs.at(collections.vec({ 7 }), 1) == 7 and vecs.at(stack, 3) == 3)
+end
+
+-- names with a builtin fast method on a user class, and on a builtin one, at the same call sites
+class Box(public value: number)
+    public function get(self): number
+        return self.value
+    end
+    public function set(self, key: string, value: number)
+        self.value = value
+    end
+    public function has(self, key: string): boolean
+        return key == "a"
+    end
+end
+
+do
+    const box = Box(1)
+    const map = collections.orderedmap()
+    map:set("a", 10)
+    for i = 1, 50 do
+        const receiver = if i % 2 == 0 then box else map
+        maps.set(receiver, "a", i)
+        assert(maps.has(receiver, "a") == true)
+    end
+    assert(box.value == 50 and maps.get(map, "a") == 49 and box:get() == 50)
+end
+
+-- orderedmap loops run without calling `__iter`, and visit what it would
+local function entries(map): string
+    local text = ""
+    for key, value in map do
+        text ..= `{key}={value} `
+    end
+    return text
+end
+
+class FalseIterator(public x: number)
+    public function __iter(self)
+        return false, self, nil
+    end
+end
+
+do
+    const map = collections.orderedmap()
+    assert(entries(map) == "")
+    for i = 1, 5 do
+        map:set(`k{i}`, i)
+    end
+    map:move("k5", 1)
+    map:swap("k1", "k2")
+    assert(entries(map) == "k5=5 k2=2 k1=1 k3=3 k4=4 ")
+    map:sort(function(a, b)
+        return a > b
+    end)
+    assert(entries(map) == "k5=5 k4=4 k3=3 k2=2 k1=1 ")
+
+    -- an entry added before the current one moves it, and the loop still continues after it
+    const shifted = collections.orderedmap()
+    for i = 1, 4 do
+        shifted:set(`s{i}`, i)
+    end
+    local order = {}
+    for key in shifted do
+        table.insert(order, key)
+        if key == "s2" then
+            shifted:insert(1, "s0", 0)
+        end
+    end
+    assert(table.concat(order, " ") == "s1 s2 s3 s4")
+
+    -- extra loop variables are nil, and a loop can stop early or nest
+    for key, value, extra in map do
+        assert(extra == nil)
+    end
+    local pairs = 0
+    for outer in map do
+        for inner in map do
+            pairs += 1
+            if inner == outer then
+                break
+            end
+        end
+    end
+    assert(pairs == 1 + 2 + 3 + 4 + 5)
+
+    -- a later entry removed during a loop isn't visited; the current key's removal raises
+    const seen = {}
+    for key in map do
+        table.insert(seen, key)
+        if key == "k4" then
+            map:remove("k3")
+        end
+    end
+    assert(table.concat(seen, " ") == "k5 k4 k2 k1")
+    const ok, err = pcall(function()
+        for key in map do
+            map:remove(key)
+        end
+    end)
+    assert(not ok and string.find(tostring(err), `orderedmap lost key "k5" while it was being iterated`, 1, true))
+
+    -- a loop can yield
+    const looper = coroutine.wrap(function()
+        for key, value in map do
+            coroutine.yield(key)
+        end
+        return "done"
+    end)
+    assert(looper() == "k4" and looper() == "k2" and looper() == "k1" and looper() == "done")
+
+    -- false is the loop's marker for an orderedmap, so an `__iter` giving false raises before the first step
+    const fok, ferr = pcall(function()
+        for x in FalseIterator(1) do
+        end
+    end)
+    assert(not fok and string.find(tostring(ferr), "attempt to call a boolean value", 1, true))
+end
+
+return "OK"

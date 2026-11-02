@@ -491,7 +491,19 @@ static void traverseobject(global_State* g, LuauObject* object)
 {
     markobject(g, object->lclass);
     for (uint32_t i = 0; i < object->numberofmembers; i++)
-        markvalue(g, &object->members[i]);
+        markvalue(g, &luaR_members(object)[i]);
+
+    // Luwu collections: a `vec`'s or `vecdeque`'s entries, in one or two runs of the ring
+    if (LuauStorage* storage = luaR_storage(object))
+    {
+        if (storage->elementclass)
+            markobject(g, storage->elementclass);
+        uint32_t first = storage->count < storage->capacity - storage->head ? storage->count : storage->capacity - storage->head;
+        for (uint32_t i = 0; i < first; i++)
+            markvalue(g, &storage->items[storage->head + i]);
+        for (uint32_t i = 0; i < storage->count - first; i++)
+            markvalue(g, &storage->items[i]);
+    }
 }
 
 static void clearstack(lua_State* l)
@@ -623,8 +635,8 @@ static size_t propagatemark(global_State* g)
         g->gray = object->gclist;
         traverseobject(g, object);
         // We've traversed the instance, header plus its inline fields (one allocation, see
-        // luaR_objectsize).
-        return luaR_objectsize(object->numberofmembers);
+        // luaR_objectsize), and its storage block if it has one.
+        return luaR_objectmemory(object);
     }
     default:
         LUAU_ASSERT(0);
@@ -905,6 +917,11 @@ static void markroot(lua_State* L)
     markvalue(g, registry(L));
     if (g->traitinitrunner)
         markobject(g, g->traitinitrunner);
+    for (int i = 0; i < LUWU_BUILTIN__COUNT; i++)
+    {
+        if (g->builtinclasses[i])
+            markobject(g, g->builtinclasses[i]);
+    }
     g->gc_ref_gray = 0;
     for (int i = 0; i < g->ref_size; i++) {
         if (g->ref_array[i].tt != LUA_TNONE)

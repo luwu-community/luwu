@@ -1298,7 +1298,8 @@ struct ConstPropState
         else
         {
             // GET_CLOSURE_UPVAL_ADDR writes aren't cached anywhere else in this pass, nothing to invalidate
-            CODEGEN_ASSERT(targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR);
+            // Luwu collections: neither are GET_STORAGE_ENTRY_ADDR writes
+            CODEGEN_ASSERT(targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR || targetAddr.cmd == IrCmd::GET_STORAGE_ENTRY_ADDR);
         }
     }
 
@@ -1323,7 +1324,11 @@ struct ConstPropState
         }
         else
         {
-            CODEGEN_ASSERT(targetAddr.cmd == IrCmd::TABLE_SETNUM || targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR);
+            // Luwu collections: loads from a GET_STORAGE_ENTRY_ADDR aren't cached, so nothing reads a forwarded store
+            CODEGEN_ASSERT(
+                targetAddr.cmd == IrCmd::TABLE_SETNUM || targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR ||
+                targetAddr.cmd == IrCmd::GET_STORAGE_ENTRY_ADDR
+            );
         }
     }
 
@@ -1621,6 +1626,12 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_STRING_STARTSWITH:
     case LBF_STRING_ENDSWITH:
     case LBF_STRING_CONTAINS:
+    case LBF_COLLECTIONS_PAIR:
+    case LBF_COLLECTIONS_TRIPLE:
+    case LBF_COLLECTIONS_QUAD:
+    case LBF_COLLECTIONS_OPTION_SOME:
+    case LBF_COLLECTIONS_RESULT_OK:
+    case LBF_COLLECTIONS_RESULT_ERR:
         break;
     case LBF_BUFFER_WRITEU8:
     case LBF_BUFFER_WRITEU16:
@@ -2668,6 +2679,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::INVOKE_FASTCALL:
         handleBuiltinEffects(state, LuauBuiltinFunction(function.uintOp(OP_A(inst))), vmRegOp(OP_B(inst)), function.intOp(OP_G(inst)));
         break;
+    case IrCmd::INVOKE_FAST_METHOD:
+        // Luwu collections: a fast method writes its container's tables and its results, and never calls Lua
+        state.invalidateHeap();
+        state.invalidateRegistersFrom(vmRegOp(OP_C(inst)));
+        break;
 
         // These instructions don't have an effect on register/memory state we are tracking
     case IrCmd::NOP:
@@ -2782,6 +2798,12 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     }
     case IrCmd::GET_HASH_NODE_ADDR:
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
+        break;
+    case IrCmd::LOAD_STORAGE:
+    case IrCmd::LOAD_STORAGE_INT:
+    case IrCmd::STORE_STORAGE_INT:
+    case IrCmd::GET_STORAGE_ENTRY_ADDR:
+        // Luwu collections: a storage block changes under calls and its own stores, so nothing is cached
         break;
     case IrCmd::LOAD_OWNER_CLASS:
         // Proto::ownerclass is fixed for the executing closure; there is nothing to propagate
@@ -3482,6 +3504,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
     case IrCmd::CHECK_OBJECT_CLASS:
         // TODO(rfcs/classes): no redundant-check elimination yet, unlike CHECK_SLOT_MATCH above
+        break;
+    case IrCmd::CHECK_STORAGE:
+    case IrCmd::CHECK_STORAGE_ELEMENT:
         break;
 
     case IrCmd::ADD_VEC:

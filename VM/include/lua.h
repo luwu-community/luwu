@@ -557,6 +557,19 @@ LUA_API int lua_ismemberconst(lua_State* L, int idx, const char* membername);
 LUA_API int lua_ismemberfinal(lua_State* L, int idx, const char* membername);
 LUA_API const char* lua_getclassname(lua_State* L, int idx);
 
+// Luwu builtin classes: options and results for embedders. Building one raises if the `collections` library isn't open.
+// lua_pushsome pushes `option.some(v)` for the value at `idx` and raises if it is nil or none. An empty option is
+// lua_pushsymnone.
+LUA_API void lua_pushsome(lua_State* L, int idx);
+LUA_API void lua_pushresultok(lua_State* L, int idx);
+LUA_API void lua_pushresulterr(lua_State* L, int idx);
+LUA_API int lua_issome(lua_State* L, int idx);
+LUA_API int lua_isresultok(lua_State* L, int idx);
+LUA_API int lua_isresulterr(lua_State* L, int idx);
+// Pushes the value a `some`, `ok` or `err` at `idx` holds and returns its type. Pushes nothing and returns LUA_TNONE for
+// any other value.
+LUA_API int lua_getpayload(lua_State* L, int idx);
+
 LUA_API int lua_getbuffermode(lua_State* L, int idx);
 LUA_API void* lua_getbufferuserdata(lua_State* L, int idx);
 

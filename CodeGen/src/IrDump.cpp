@@ -397,6 +397,20 @@ const char* getCmdName(IrCmd cmd)
         return "TRY_OBJECT_MEMBER_ADDR";
     case IrCmd::OBJECT_MEMBER_ADDR:
         return "OBJECT_MEMBER_ADDR";
+    case IrCmd::CHECK_STORAGE:
+        return "CHECK_STORAGE";
+    case IrCmd::LOAD_STORAGE:
+        return "LOAD_STORAGE";
+    case IrCmd::LOAD_STORAGE_INT:
+        return "LOAD_STORAGE_INT";
+    case IrCmd::STORE_STORAGE_INT:
+        return "STORE_STORAGE_INT";
+    case IrCmd::GET_STORAGE_ENTRY_ADDR:
+        return "GET_STORAGE_ENTRY_ADDR";
+    case IrCmd::CHECK_STORAGE_ELEMENT:
+        return "CHECK_STORAGE_ELEMENT";
+    case IrCmd::INVOKE_FAST_METHOD:
+        return "INVOKE_FAST_METHOD";
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
         return "CHECK_CLASS_FIELDS_CONSTRUCTIBLE";
     case IrCmd::CHECK_CLASS_ALLOCATABLE:

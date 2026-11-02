@@ -4,6 +4,7 @@
 
 #include "lmem.h"
 #include "lobject.h"
+#include "lstate.h"
 #include "lbytecode.h"
 
 // An instance's members are allocated inline, immediately after the LuauObject header, so a
@@ -189,6 +190,122 @@ LUAI_FUNC void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* n
 
 LUAI_FUNC void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page);
 
+// Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits.
+struct luaR_NativeMember
+{
+    const char* name;
+    lua_CFunction method;
+    uint8_t flags;
+    // A method's frameless version for the interpreter, or NULL
+    luaR_FastMethod fast;
+};
+
+/**
+ * Luwu builtin classes: builds a class from C++, the way the loader builds one from bytecode, and leaves it on the
+ * stack. `members` lists the fields first, in the order of their offsets, then the methods and metamethods. `init` is
+ * the class's `__init`, called with the new object and the constructor's arguments; without one, the class constructs
+ * like a class without `__init`. Names must outlive the state: methods use them as their debug names.
+ */
+LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init);
+
+/**
+ * Luwu builtin classes: the object a C method of `classdef` was called on, its first argument. Raises the error a
+ * Luwu method's prologue raises (luaG_selfclasserror) when that isn't an object of `classdef`.
+ */
+LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method);
+
+/**
+ * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns
+ * false otherwise. The loop calls neither `__iter` nor anything per step: `ra` becomes a boolean, which FORGLOOP hands
+ * to luaR_collectionnext, and `ra + 1` the container. `ra + 2` is the loop's state:
+ *  - a `vec` or `vecdeque` gets `ra` = true and the number of entries visited, as light userdata like a table loop's
+ *    index (luaR_storagenext);
+ *  - an `orderedmap` gets `ra` = false and the previous key, nil at the start. `ra`'s extra field keeps that key's
+ *    position, so a step only looks the key up when the entry there changed.
+ */
+LUAI_FUNC bool luaR_collectionprep(lua_State* L, StkId ra);
+
+/**
+ * Luwu collections: one step of a loop luaR_collectionprep set up. Writes the next key and value to `ra + 3` and
+ * `ra + 4` and updates the state in `ra + 2`, or returns false at the end. It visits what `__iter` would, and raises the
+ * same errors.
+ */
+LUAI_FUNC bool luaR_collectionnext(lua_State* L, StkId ra);
+
+// Luwu collections: a new `some`, `ok` or `err` (`kind`) holding `value`, for the C API. Raises if the library isn't open
+// or a `some` gets nil or none.
+LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value);
+
+// Luwu collections: the value a `some`, `ok` or `err` holds, or NULL for any other value
+LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
+
+// Luwu collections: the storage block of a `vec` or `vecdeque`, or NULL before its first value. Its `__init` sets the
+// object's storage kind and leaves the storage member nil. Native code reads light userdata there as a block.
+LUAU_FORCEINLINE LuauStorage* luaR_storage(LuauObject* object)
+{
+    if (object->storagekind == LUAR_STORAGE_NONE)
+        return NULL;
+
+    const TValue* member = &luaR_members(object)[LUAR_STORAGE_MEMBER];
+    return ttislightuserdata(member) ? static_cast<LuauStorage*>(pvalue(member)) : NULL;
+}
+
+LUAU_FORCEINLINE const LuauStorage* luaR_storage(const LuauObject* object)
+{
+    return luaR_storage(const_cast<LuauObject*>(object));
+}
+
+// Luwu collections: the size of a storage block with `capacity` slots
+LUAU_FORCEINLINE size_t luaR_storagesize(uint32_t capacity)
+{
+    return offsetof(LuauStorage, items) + size_t(capacity) * sizeof(TValue);
+}
+
+// The memory `object` holds: its allocation and its storage block (luaR_storage), if it has one
+LUAU_FORCEINLINE size_t luaR_objectmemory(const LuauObject* object)
+{
+    const LuauStorage* storage = luaR_storage(object);
+    return luaR_objectsize(object->numberofmembers) + (storage ? luaR_storagesize(storage->capacity) : 0);
+}
+
+// Luwu collections: the slot of the entry `offset` places from the front of a `vec` or `vecdeque`
+LUAU_FORCEINLINE TValue* luaR_storageentry(LuauStorage* storage, uint32_t offset)
+{
+    LUAU_ASSERT(offset < storage->count);
+    return &storage->items[(storage->head + offset) & (storage->capacity - 1)];
+}
+
+// Luwu collections: one step of a loop over a `vec` or `vecdeque`, the case of luaR_collectionnext that FORGLOOP runs
+// inline
+LUAU_FORCEINLINE bool luaR_storagenext(lua_State* L, LuauObject* container, StkId ra)
+{
+    LuauStorage* storage = luaR_storage(container);
+    uint32_t visited = uint32_t(reinterpret_cast<uintptr_t>(pvalue(ra + 2)));
+    if (!storage || visited >= storage->count)
+        return false;
+
+    // Like a table loop's index, so native code can update only the low 32 bits
+    setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(visited + 1)), LU_TAG_ITERATOR);
+    setnvalue(ra + 3, double(visited + 1));
+    // note: a plain copy, since setobj2s needs lgc.h
+    *(ra + 4) = *luaR_storageentry(storage, visited);
+    return true;
+}
+
+// Luwu collections: the length `#` gives `object` without calling `__len`, or -1 when its class has no such length. A
+// `vec` and a `vecdeque` read their storage block, an `orderedmap` its length field (LuauClass::lengthfield).
+LUAU_FORCEINLINE double luaR_objectlength(const LuauObject* object)
+{
+    if (object->storagekind != LUAR_STORAGE_NONE)
+    {
+        const LuauStorage* storage = luaR_storage(object);
+        return storage ? double(storage->count) : 0;
+    }
+
+    uint32_t field = object->lclass->lengthfield;
+    return field == LUAR_NO_LENGTH_FIELD ? -1 : nvalue(&luaR_members(object)[field]);
+}
+
 /**
  * Callback for creating objects. This is written as a Lua API function and expects the stack to be:
  *
@@ -258,5 +375,5 @@ LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait
 
 #define luaR_lookupmemberatoffset(object, offset) \
     (LUAU_ASSERT(luaR_checkoffsetinbounds(object, offset)), \
-     offset < (object)->lclass->numberofinstancemembers ? &(object)->members[offset] \
+     offset < (object)->lclass->numberofinstancemembers ? &luaR_members(object)[offset] \
                                                       : &(object)->lclass->staticmembers[offset - object->lclass->numberofinstancemembers])

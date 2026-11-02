@@ -21,6 +21,7 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCIProto)
 LUAU_FASTFLAG(LuauCodegenSharedLog)
+LUAU_FASTFLAG(LuwuClasses)
 
 namespace Luau
 {
@@ -28,6 +29,9 @@ namespace CodeGen
 {
 namespace X64
 {
+
+// Luwu collections: where a `vec`'s or `vecdeque`'s storage member is in the object
+static const int kStorageMemberOffset = int(LUAR_OBJECT_MEMBERS_OFFSET + LUAR_STORAGE_MEMBER * sizeof(TValue));
 
 IrLoweringX64::IrLoweringX64(LogBuilder* logger, AssemblyBuilderX64& build, ModuleHelpers& helpers, IrFunction& function, LoweringStats* stats)
     : logger(logger)
@@ -2282,6 +2286,19 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // Skipping high register bits clear, only consumer is CHECK_FASTCALL_RES which doesn't read them
         break;
     }
+    case IrCmd::INVOKE_FAST_METHOD:
+    {
+        IrCallWrapperX64 callWrap(regs, build, index);
+        callWrap.addArgument(SizeX64::qword, rState);
+        callWrap.addArgument(SizeX64::qword, regOp(OP_A(inst)), OP_A(inst));
+        callWrap.addArgument(SizeX64::dword, uintOp(OP_B(inst)));
+        callWrap.addArgument(SizeX64::dword, vmRegOp(OP_C(inst)));
+        callWrap.addArgument(SizeX64::dword, intOp(OP_D(inst)));
+        callWrap.addArgument(SizeX64::dword, intOp(OP_E(inst)));
+        callWrap.call(qword[rNativeContext + offsetof(NativeContext, invokeFastMethod)]);
+        inst.regX64 = regs.takeReg(eax, index);
+        break;
+    }
     case IrCmd::CHECK_FASTCALL_RES:
     {
         RegisterX64 res = regOp(OP_A(inst));
@@ -2724,6 +2741,80 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         break;
     }
+    case IrCmd::CHECK_STORAGE:
+    {
+        // Luwu collections: the object's storage kind, then light userdata in its storage member, which only a block
+        // gives it
+        RegisterX64 object = regOp(OP_A(inst));
+        int kind = intOp(OP_B(inst));
+        Label fresh;
+        build.cmp(byte[object + offsetof(LuauObject, storagekind)], uint8_t(kind));
+        jumpOrAbortOnUndefNoFinalize(kind == LUAR_STORAGE_NONE ? ConditionX64::Equal : ConditionX64::NotEqual, OP_C(inst), index, next, fresh);
+        build.cmp(dword[object + kStorageMemberOffset + offsetof(TValue, tt)], LUA_TLIGHTUSERDATA);
+        jumpOrAbortOnUndefNoFinalize(ConditionX64::NotEqual, OP_C(inst), index, next, fresh);
+        finalizeTargetLabel(OP_C(inst), index, fresh);
+        break;
+    }
+    case IrCmd::LOAD_STORAGE:
+        inst.regX64 = regs.allocRegOrReuse(SizeX64::qword, index, {OP_A(inst)});
+        build.mov(inst.regX64, qword[regOp(OP_A(inst)) + kStorageMemberOffset + offsetof(TValue, value)]);
+        break;
+    case IrCmd::LOAD_STORAGE_INT:
+        inst.regX64 = regs.allocReg(SizeX64::dword, index);
+        build.mov(inst.regX64, dword[regOp(OP_A(inst)) + intOp(OP_B(inst))]);
+        break;
+    case IrCmd::STORE_STORAGE_INT:
+        if (OP_C(inst).kind == IrOpKind::Constant)
+            build.mov(dword[regOp(OP_A(inst)) + intOp(OP_B(inst))], intOp(OP_C(inst)));
+        else
+            build.mov(dword[regOp(OP_A(inst)) + intOp(OP_B(inst))], regOp(OP_C(inst)));
+        break;
+    case IrCmd::GET_STORAGE_ENTRY_ADDR:
+    {
+        // Luwu collections: items[(head + B) & (capacity - 1)]
+        RegisterX64 storage = regOp(OP_A(inst));
+        ScopedRegX64 mask{regs, SizeX64::dword};
+        inst.regX64 = regs.allocReg(SizeX64::qword, index);
+
+        build.mov(dwordReg(inst.regX64), dword[storage + offsetof(LuauStorage, head)]);
+        if (OP_B(inst).kind == IrOpKind::Constant)
+            build.add(dwordReg(inst.regX64), intOp(OP_B(inst)));
+        else
+            build.add(dwordReg(inst.regX64), regOp(OP_B(inst)));
+        build.mov(mask.reg, dword[storage + offsetof(LuauStorage, capacity)]);
+        build.dec(mask.reg);
+        build.and_(dwordReg(inst.regX64), mask.reg);
+        build.shl(inst.regX64, kTValueSizeLog2);
+        build.lea(inst.regX64, addr[inst.regX64 + storage + int32_t(offsetof(LuauStorage, items))]);
+        break;
+    }
+    case IrCmd::CHECK_STORAGE_ELEMENT:
+    {
+        // Luwu collections: the tag matches the element tag, and an object's class the element class
+        RegisterX64 storage = regOp(OP_A(inst));
+        Label fresh;
+        Label matched;
+        ScopedRegX64 tmp{regs, SizeX64::qword};
+
+        if (OP_B(inst).kind == IrOpKind::Constant)
+            build.mov(dwordReg(tmp.reg), tagOp(OP_B(inst)));
+        else
+            build.mov(dwordReg(tmp.reg), regOp(OP_B(inst)));
+        build.cmp(byte[storage + offsetof(LuauStorage, elementtag)], byteReg(tmp.reg));
+        jumpOrAbortOnUndefNoFinalize(ConditionX64::NotEqual, OP_D(inst), index, next, fresh);
+
+        if (OP_B(inst).kind != IrOpKind::Constant || tagOp(OP_B(inst)) == LUA_TOBJECT)
+        {
+            build.cmp(dwordReg(tmp.reg), LUA_TOBJECT);
+            build.jcc(ConditionX64::NotEqual, matched);
+            build.mov(tmp.reg, qword[regOp(OP_C(inst)) + offsetof(LuauObject, lclass)]);
+            build.cmp(tmp.reg, qword[storage + offsetof(LuauStorage, elementclass)]);
+            jumpOrAbortOnUndefNoFinalize(ConditionX64::NotEqual, OP_D(inst), index, next, fresh);
+            build.setLabel(matched);
+        }
+        finalizeTargetLabel(OP_D(inst), index, fresh);
+        break;
+    }
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
     case IrCmd::CHECK_CLASS_ALLOCATABLE:
     {
@@ -3085,6 +3176,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     case IrCmd::FORGLOOP_FALLBACK:
     {
+        // Luwu collections: a `vec` or `vecdeque` steps inline
+        if (FFlag::LuwuClasses)
+            emitInstForGLoopStorage(regs, build, vmRegOp(OP_A(inst)), intOp(OP_B(inst)), labelOp(OP_C(inst)), labelOp(OP_D(inst)));
+
         IrCallWrapperX64 callWrap(regs, build, index);
         callWrap.addArgument(SizeX64::qword, rState);
         callWrap.addArgument(SizeX64::dword, vmRegOp(OP_A(inst)));

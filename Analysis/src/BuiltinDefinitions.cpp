@@ -374,6 +374,31 @@ static void finalizeGlobalBindings(ScopePtr scope)
 // `vector` is a language primitive (its own nominal root) that reuses the ExternType
 // representation for its x/y/z fields and operator metatable. Like the string metatable, this is
 // built directly on the shared `builtinTypes` arena so there is a single canonical `vector` type.
+// Luwu collections: `none` is the empty option, so it has `get` (giving `none`) and `expect` (which raises), which
+// `collections` gives it at runtime through its type's metatable
+void makeNoneMetatable(NotNull<BuiltinTypes> builtinTypes)
+{
+    PrimitiveType* none = getMutable<PrimitiveType>(builtinTypes->noneType);
+    LUAU_ASSERT(none);
+
+    // Every GlobalTypes (the checker's and autocomplete's) calls this on the same shared `none`
+    if (none->metatable)
+        return;
+
+    NotNull<TypeArena> arena{builtinTypes->arena.get()};
+    TypeId noneTy = builtinTypes->noneType;
+    TypeId message = makeOption(builtinTypes, *arena, builtinTypes->stringType);
+
+    TableType methods{{}, std::nullopt, TypeLevel{}, TableState::Sealed};
+    methods.props["get"] = {makeFunction(*arena, noneTy, {}, {noneTy})};
+    methods.props["expect"] = {makeFunction(*arena, noneTy, {message}, {builtinTypes->neverType})};
+
+    TableType metatable{{}, std::nullopt, TypeLevel{}, TableState::Sealed};
+    metatable.props["__index"] = {arena->addType(std::move(methods))};
+    none->metatable = arena->addType(std::move(metatable));
+    persist(*none->metatable);
+}
+
 void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
 {
     NotNull<TypeArena> arena{builtinTypes->arena.get()};
@@ -585,6 +610,24 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     TypeId requireTy = getGlobalBinding(globals, "require");
     attachTag(requireTy, kRequireTagName);
     attachMagicFunction(requireTy, std::make_shared<MagicRequire>());
+
+    // Luwu collections: a builtin module. Its types are its exports, filed under `collections` the way a required
+    // module's are, so code imports them (`type .{ option } = collections`, `const .{ orderedmap } = collections`) or
+    // names them (`collections.option<T>`) instead of finding them as globals. The `collections` value is a global.
+    if (collectionsLibraryEnabled())
+    {
+        ScopePtr library = std::make_shared<Scope>(globals.globalScope);
+        LoadDefinitionFileResult collections = frontend.loadDefinitionFile(
+            globals, library, getCollectionsDefinitionSource(), "@luau", /* captureComments */ false, typeCheckForAutocomplete
+        );
+        LUAU_ASSERT(collections.success);
+
+        const Name name = "collections";
+        globals.globalScope->importedTypeBindings[name] = library->exportedTypeBindings;
+        globals.globalScope->importedModules[name] = "@luau/collections";
+        for (const auto& [symbol, binding] : library->bindings)
+            globals.globalScope->bindings[symbol] = binding;
+    }
 
     // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder
     globals.globalTypeFunctionScope->exportedTypeBindings = globals.globalScope->exportedTypeBindings;
