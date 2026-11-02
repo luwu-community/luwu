@@ -25,6 +25,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -9084,4 +9085,652 @@ local function c() end
 }
 
 // TODO unit tests for various parse errors.
+// Luwu Destructuring (rfcs/destructuring.md)
+
+static AstStatLocal* destructuredLocal(AstStatBlock* block, size_t index)
+{
+    REQUIRE(index < block->body.size);
+    AstStatLocal* local = block->body.data[index]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->vars.size, 1);
+    REQUIRE_EQ(local->values.size, 1);
+    return local;
+}
+
+// `local` of `name` whose value is `<object>.<key>`, with `object` the first var of `from`
+static void checkFieldRead(AstStatLocal* local, const char* name, AstStatLocal* from, const char* key)
+{
+    CHECK_EQ(std::string(local->vars.data[0]->name.value), name);
+    AstExprIndexName* read = local->values.data[0]->as<AstExprIndexName>();
+    REQUIRE(read);
+    CHECK_EQ(std::string(read->index.value), key);
+    AstExprLocal* object = read->expr->as<AstExprLocal>();
+    REQUIRE(object);
+    CHECK_EQ(object->local, from->vars.data[0]);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_desugars_to_one_local_per_binding")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const fs.{readfile as rf, path} = require("@std/fs")
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+
+    AstStatLocal* whole = destructuredLocal(block, 0);
+    CHECK_EQ(std::string(whole->vars.data[0]->name.value), "fs");
+    CHECK(whole->values.data[0]->is<AstExprCall>());
+    CHECK(whole->isConst);
+    CHECK(whole->vars.data[0]->isConst);
+    CHECK(whole->destructuredFrom == nullptr);
+
+    AstStatLocal* rf = destructuredLocal(block, 1);
+    checkFieldRead(rf, "rf", whole, "readfile");
+    CHECK(rf->vars.data[0]->isConst);
+    CHECK_EQ(rf->destructuredFrom, whole);
+
+    AstStatLocal* path = destructuredLocal(block, 2);
+    checkFieldRead(path, "path", whole, "path");
+    CHECK_EQ(path->destructuredFrom, whole);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_without_a_name_binds_the_value_to_a_hidden_local")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        local .{x, y} = t
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+    AstStatLocal* hidden = destructuredLocal(block, 0);
+    CHECK_EQ(std::string(hidden->vars.data[0]->name.value), kDestructuredLocalName);
+    CHECK(!hidden->isConst);
+    checkFieldRead(destructuredLocal(block, 1), "x", hidden, "x");
+    checkFieldRead(destructuredLocal(block, 2), "y", hidden, "y");
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_nests_depth_first_in_source_order")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // `tar as .{...}` doesn't bind `tar`; `a.{...}` binds `a`
+    AstStatBlock* block = parse(R"(
+        const .{tar as .{gz as targz}, a.{b}, zip} = archive
+    )");
+
+    REQUIRE_EQ(block->body.size, 6);
+    AstStatLocal* value = destructuredLocal(block, 0);
+    AstStatLocal* tar = destructuredLocal(block, 1);
+    checkFieldRead(tar, kDestructuredLocalName, value, "tar");
+    checkFieldRead(destructuredLocal(block, 2), "targz", tar, "gz");
+    AstStatLocal* a = destructuredLocal(block, 3);
+    checkFieldRead(a, "a", value, "a");
+    checkFieldRead(destructuredLocal(block, 4), "b", a, "b");
+    checkFieldRead(destructuredLocal(block, 5), "zip", value, "zip");
+    CHECK_EQ(destructuredLocal(block, 5)->destructuredFrom, value);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_const_is_told_apart_from_indexing_a_global_named_const")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const .{x} = t
+        const.y = 1
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+    CHECK(destructuredLocal(block, 0)->isConst);
+    checkFieldRead(destructuredLocal(block, 1), "x", destructuredLocal(block, 0), "x");
+    CHECK(block->body.data[2]->is<AstStatAssign>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_annotation_types_the_whole_value")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const fs.{path}: FsLib = require("@std/fs")
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    CHECK(destructuredLocal(block, 0)->vars.data[0]->annotation != nullptr);
+    CHECK(destructuredLocal(block, 1)->vars.data[0]->annotation == nullptr);
+}
+
+static std::string annotationOf(AstStatLocal* local)
+{
+    AstTypeReference* reference = local->vars.data[0]->annotation ? local->vars.data[0]->annotation->as<AstTypeReference>() : nullptr;
+    return reference ? reference->name.value : "(none)";
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_annotation_follows_the_binding_it_types")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // leaf, renamed leaf, a nested pattern's value, a pattern after `as`, the whole value
+    AstStatBlock* block = parse(R"(
+        local .{x: number, y as py: string, pos.{a}: Vec2, tar as .{gz}: Archive}: Whole = t
+    )");
+
+    REQUIRE_EQ(block->body.size, 7);
+    CHECK_EQ(annotationOf(destructuredLocal(block, 0)), "Whole");
+    CHECK_EQ(annotationOf(destructuredLocal(block, 1)), "number");
+    CHECK_EQ(annotationOf(destructuredLocal(block, 2)), "string");
+    CHECK_EQ(std::string(destructuredLocal(block, 2)->vars.data[0]->name.value), "py");
+    CHECK_EQ(annotationOf(destructuredLocal(block, 3)), "Vec2");
+    CHECK_EQ(annotationOf(destructuredLocal(block, 4)), "(none)");
+    CHECK_EQ(annotationOf(destructuredLocal(block, 5)), "Archive");
+    CHECK_EQ(std::string(destructuredLocal(block, 5)->vars.data[0]->name.value), kDestructuredLocalName);
+    CHECK_EQ(annotationOf(destructuredLocal(block, 6)), "(none)");
+
+    // a table type after `:` is still just a type
+    AstStatBlock* tableTyped = parse("local .{i: {number}, am} = t");
+    REQUIRE_EQ(tableTyped->body.size, 3);
+    CHECK(destructuredLocal(tableTyped, 1)->vars.data[0]->annotation->is<AstTypeTable>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_trailing_semicolon_belongs_to_the_last_binding")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        local .{a, b} = t; print(a)
+    )");
+
+    REQUIRE_EQ(block->body.size, 4);
+    CHECK(!block->body.data[0]->hasSemicolon);
+    CHECK(block->body.data[2]->hasSemicolon);
+    CHECK(block->body.data[3]->is<AstStatExpr>());
+}
+
+// Every mistake below gets exactly one error, naming a form that works
+static void matchOnlyDestructuringError(Fixture& fixture, const std::string& source, const std::string& message)
+{
+    ParseResult result = fixture.tryParse(source);
+    INFO(source);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), message);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_parse_errors")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(*this, "local .{} = t", "A destructuring pattern needs at least one field");
+    matchOnlyDestructuringError(*this, "local .{x}", "Expected '=' and a value after the destructuring pattern");
+    matchOnlyDestructuringError(*this, "local .{x} = a, b", "A destructuring declaration takes exactly one value");
+    matchOnlyDestructuringError(*this, "local .{x as} = t", "Expected a name or '.{' after 'as', got '}'");
+    matchOnlyDestructuringError(*this, "@deprecated local .{x} = t", "Attributes can't be applied to a destructuring declaration");
+}
+
+TEST_CASE_FIXTURE(Fixture, "exported_destructuring_exports_every_name_it_binds")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDestructuring, true}, {FFlag::LuauExportValueSyntax, true}};
+
+    AstStatBlock* block = parse(R"(
+        export const .{x, y} = t
+        export local m.{z} = t
+        export .{w} = t
+    )");
+
+    // The hidden local of an unnamed pattern isn't exported; every name the declaration binds is
+    REQUIRE_EQ(block->body.size, 7);
+    const bool exported[] = {false, true, true, true, true, false, true};
+    for (size_t i = 0; i < 7; ++i)
+    {
+        AstStatLocal* local = destructuredLocal(block, i);
+        INFO(i);
+        CHECK(local->isExported);
+        CHECK_EQ(local->isConst, i != 3 && i != 4);
+        CHECK_EQ(local->vars.data[0]->isExported, exported[i]);
+    }
+
+    // `export .{w} = t` is const, with no keyword after `export`
+    CHECK(!destructuredLocal(block, 5)->keywordLocation);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // JavaScript habits
+    matchOnlyDestructuringError(*this, "local {x, y} = t", "Destructuring needs a '.' before '{': 'local .{x, y} = t'");
+    matchOnlyDestructuringError(*this, "local .{x: number as y} = t", "An annotation goes after the name it types: 'x as y: T'");
+    matchOnlyDestructuringError(*this, "local .{...rest} = t", "Destructuring has no rest pattern; bind the value with a name to keep the rest: 'local t.{x} = ...'");
+    matchOnlyDestructuringError(
+        *this, "local .{x = 1, y} = t", "Destructured fields can't have default values; a missing field reads as whatever indexing the value gives"
+    );
+
+    // Keys other than names
+    for (const char* source : {"local .{[1] as x} = t", "local .{\"x\"} = t", "local .{1} = t"})
+        matchOnlyDestructuringError(*this, source, "Destructured fields are names; read any other key by indexing the value: 'local v = t[key]'");
+
+    // A path instead of a nested pattern
+    matchOnlyDestructuringError(
+        *this, "local .{tar.gz} = t", "To take 'gz' out of 'tar', write 'tar.{gz}' to bind both, or 'tar as .{gz}' to bind only 'gz'"
+    );
+    matchOnlyDestructuringError(*this, "local .{.{x}} = t", "A nested pattern needs the field it destructures: 'field.{...}' or 'field as .{...}'");
+    // Found by fuzzing: this recovery path used to leave the field with nothing to bind to
+    matchOnlyDestructuringError(*this, "local .{fs as .x} = t", "To take 'x' out of 'fs', write 'fs.{x}' to bind both, or 'fs as .{x}' to bind only 'x'");
+
+    // Punctuation
+    matchOnlyDestructuringError(*this, "local .{x y} = t", "Expected ',' between destructured fields, got 'y'");
+    matchOnlyDestructuringError(*this, "local .{x as (function() end)()} = t", "Expected a name or '.{' after 'as', got '('");
+
+    // Missing keyword, and patterns where only names go
+    matchOnlyDestructuringError(*this, ".{x} = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "fs.{path} = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "local a, .{b} = t", "A destructuring pattern has to be the only binding in its declaration");
+    matchOnlyDestructuringError(
+        *this, "local function f(.{x}) end", "Destructuring isn't supported in function parameters; destructure the parameter in the body"
+    );
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{x, y = v}` builds `{x = x, y = v}`
+TEST_CASE_FIXTURE(Fixture, "dot_tables_name_their_fields_after_bare_names")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+local x = 1
+return .{x, y = 2, z}
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatReturn* ret = block->body.data[1]->as<AstStatReturn>();
+    REQUIRE(ret);
+    REQUIRE_EQ(ret->list.size, 1);
+    AstExprTable* table = ret->list.data[0]->as<AstExprTable>();
+    REQUIRE(table);
+    CHECK(table->luwuOnly);
+    REQUIRE_EQ(table->items.size, 3);
+
+    const char* keys[] = {"x", "y", "z"};
+    for (size_t i = 0; i < 3; ++i)
+    {
+        const AstExprTable::Item& item = table->items.data[i];
+        CHECK(item.kind == AstExprTable::Item::Kind::Record);
+        AstExprConstantString* key = item.key->as<AstExprConstantString>();
+        REQUIRE(key);
+        CHECK_EQ(std::string(key->value.data, key->value.size), keys[i]);
+    }
+
+    // a bare name reads the local or global of that name
+    CHECK(table->items.data[0].value->is<AstExprLocal>());
+    CHECK(table->items.data[1].value->is<AstExprConstantNumber>());
+    CHECK(table->items.data[2].value->is<AstExprGlobal>());
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `f.{x}` is a call like `f{x = x}`, except where a statement starting
+// with it is a destructuring declaration missing its keyword
+TEST_CASE_FIXTURE(Fixture, "dot_tables_are_call_arguments")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+local c = Color .{r, g}
+register.{name, handler}
+obj:configure .{width}
+local nested = make.{inner = wrap.{a}}
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 4);
+
+    AstStatLocal* local = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->values.size, 1);
+    AstExprCall* call = local->values.data[0]->as<AstExprCall>();
+    REQUIRE(call);
+    REQUIRE_EQ(call->args.size, 1);
+    CHECK(call->args.data[0]->is<AstExprTable>());
+
+    AstStatExpr* statement = block->body.data[1]->as<AstStatExpr>();
+    REQUIRE(statement);
+    CHECK(statement->expr->is<AstExprCall>());
+
+    AstStatExpr* method = block->body.data[2]->as<AstStatExpr>();
+    REQUIRE(method);
+    AstExprCall* methodCall = method->expr->as<AstExprCall>();
+    REQUIRE(methodCall);
+    CHECK(methodCall->self);
+
+    // `fs.{path} = t` is still a declaration missing 'local'
+    matchOnlyDestructuringError(*this, "fs.{path} = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "fs.{path}: Fs = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "dot_table_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(
+        *this, "local t = .{a as b}", "'as' renames only when destructuring; to build the field 'b' from 'a', write 'b = a'"
+    );
+    for (const char* source : {"local t = .{1}", "local t = .{self.x}", "local t = .{f()}", "local t = .{[k] = v}"})
+        matchOnlyDestructuringError(*this, source, "Fields in '.{...}' are names or 'key = value'; use '{...}' for list items and '[key]' fields");
+    matchOnlyDestructuringError(*this, "local t = .{a b}", "Expected ',' after table constructor element");
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a `.` with no `{` after it yet is one error, and the next line still parses
+TEST_CASE_FIXTURE(Fixture, "a_bare_dot_is_a_dot_table_missing_its_brace")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    ParseResult result = tryParse(R"(
+local cat = .
+local unrelated = 1
+)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected '{' after '.': '.{x, y}' builds a table from the locals 'x' and 'y'");
+    REQUIRE_EQ(result.root->body.size, 2);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a `const` on the line after an unclosed `.{` ends the table, and the one
+// error is the missing `}`. Read as the table's next field, it would be an error that consumes nothing, repeated until
+// the parser runs out of memory.
+TEST_CASE_FIXTURE(Fixture, "a_const_below_an_unclosed_dot_table_ends_it")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    ParseResult result = tryParse("const y = 2\nlocal t = .{\n    y\nconst x = 1\n");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK(result.errors[0].getMessage().find("Expected '}'") == 0);
+    REQUIRE_EQ(result.root->body.size, 3);
+    CHECK(result.root->body.data[2]->is<AstStatLocal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "dot_tables_need_luwu_destructuring")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, false};
+
+    ParseResult result = tryParse("local t = .{x}");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use disabled Luwu feature '.{...}' table constructors; enable via FFlag 'LuwuDestructuring'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_for_in_bindings_start_the_body_with_their_fields")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        for _, .{name, age as years} in people do
+            print(name, years)
+        end
+        for i, entry.{kind} in entries do
+            print(entry)
+        end
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstStatForIn* unnamed = block->body.data[0]->as<AstStatForIn>();
+    REQUIRE(unnamed);
+    CHECK(unnamed->luwuOnly);
+    REQUIRE_EQ(unnamed->destructure.size, 2);
+    CHECK(!unnamed->destructure.data[0]);
+    REQUIRE(unnamed->destructure.data[1]);
+    AstLocal* hidden = unnamed->vars.data[1];
+    CHECK_EQ(std::string(hidden->name.value), kDestructuredLocalName);
+    CHECK_EQ(unnamed->destructure.data[1]->local, hidden);
+
+    // the body starts with the fields, read from the loop variable
+    REQUIRE_EQ(unnamed->body->body.size, 3);
+    AstStatLocal* name = unnamed->body->body.data[0]->as<AstStatLocal>();
+    AstStatLocal* years = unnamed->body->body.data[1]->as<AstStatLocal>();
+    REQUIRE(name);
+    REQUIRE(years);
+    CHECK(name->destructuredFromLoop);
+    CHECK(name->isDesugaredField());
+    CHECK(name->luwuOnly);
+    CHECK_EQ(std::string(years->vars.data[0]->name.value), "years");
+    AstExprIndexName* read = name->values.data[0]->as<AstExprIndexName>();
+    REQUIRE(read);
+    REQUIRE(read->expr->is<AstExprLocal>());
+    CHECK_EQ(read->expr->as<AstExprLocal>()->local, hidden);
+
+    AstStatForIn* named = block->body.data[1]->as<AstStatForIn>();
+    REQUIRE(named);
+    REQUIRE_EQ(named->vars.size, 2);
+    CHECK_EQ(std::string(named->vars.data[1]->name.value), "entry");
+    REQUIRE_EQ(named->body->body.size, 2);
+    CHECK(named->body->body.data[0]->as<AstStatLocal>()->destructuredFromLoop);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_a_numeric_for_variable_gets_one_error")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(
+        *this, "for .{x} = 1, 2 do end", "A numeric 'for' loop's variable is a number; only 'for ... in' bindings can be destructured"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "type_destructuring_desugars_to_one_alias_per_type")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        type .{Metadata, Entry as FileEntry} = fs
+        export type .{Box} = fs
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+
+    AstStatTypeAlias* first = block->body.data[0]->as<AstStatTypeAlias>();
+    AstStatTypeAlias* renamed = block->body.data[1]->as<AstStatTypeAlias>();
+    AstStatTypeAlias* exported = block->body.data[2]->as<AstStatTypeAlias>();
+    REQUIRE(first);
+    REQUIRE(renamed);
+    REQUIRE(exported);
+
+    // the first spans the declaration and holds its source form; the rest point back to it
+    REQUIRE(first->destructure);
+    CHECK_EQ(first->location, Location{{1, 8}, {1, 49}});
+    CHECK_EQ(std::string(first->destructure->module.value), "fs");
+    REQUIRE_EQ(first->destructure->fields.size, 2);
+    CHECK(!first->destructure->fields.data[0].asLocation);
+    CHECK(first->destructure->fields.data[1].asLocation);
+    CHECK_EQ(first->destructure->fields.data[1].alias, renamed);
+    CHECK_EQ(renamed->destructuredFrom, first);
+    CHECK(first->luwuOnly);
+    CHECK(renamed->luwuOnly);
+
+    // `type FileEntry = fs.Entry`
+    CHECK_EQ(std::string(renamed->name.value), "FileEntry");
+    CHECK_EQ(renamed->generics.size, 0);
+    AstTypeReference* reference = renamed->destructuredReference();
+    REQUIRE(reference);
+    REQUIRE(reference->prefix);
+    CHECK_EQ(std::string(reference->prefix->value), "fs");
+    CHECK_EQ(std::string(reference->name.value), "Entry");
+    CHECK(!reference->hasParameterList);
+
+    CHECK(exported->exported);
+    CHECK_EQ(std::string(exported->name.value), "Box");
+    CHECK(exported->destructure);
+}
+
+// `type .{Age} = hub.t` reads from a module `hub` exports: its alias's prefix is the whole path
+TEST_CASE_FIXTURE(Fixture, "type_destructuring_reads_from_a_path_to_a_module")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        type .{Age} = hub.t
+        type .{Name} = hub.a.b
+    )");
+
+    REQUIRE_EQ(block->body.size, 2);
+    for (size_t i = 0; i < 2; ++i)
+    {
+        AstStatTypeAlias* alias = block->body.data[i]->as<AstStatTypeAlias>();
+        REQUIRE(alias);
+        AstTypeReference* reference = alias->destructuredReference();
+        REQUIRE(reference);
+        REQUIRE(reference->prefix);
+        CHECK_EQ(std::string(reference->prefix->value), i == 0 ? "hub.t" : "hub.a.b");
+        CHECK_EQ(std::string(alias->destructure->module.value), i == 0 ? "hub.t" : "hub.a.b");
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "type_destructuring_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(*this, "type fs.{A} = fs", "A type destructuring declares only the types; drop 'fs' before '.{'");
+    matchOnlyDestructuringError(*this, "type .{A} = fs<number>", "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(*this, "type .{A} = fs | other", "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(
+        *this, "type .{A} = { x: number }", "A type destructuring reads types from a required module: 'type .{A, B} = module'"
+    );
+    matchOnlyDestructuringError(
+        *this, "type .{inner.{A}} = fs", "A type destructuring can't nest; list the module's types directly: 'type .{A, B} = module'"
+    );
+    matchOnlyDestructuringError(*this, "type .{A: number} = fs", "A destructured type takes no annotation: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(*this, "type .{A}", "Expected '=' and a module after the destructuring pattern: 'type .{A, B} = module'");
+    matchOnlyDestructuringError(*this, "type .{} = fs", "A destructuring pattern needs at least one field");
+}
+
+// `local` of `name` whose value is element `position` of a positional pattern on the first var of `from`
+static void checkElementRead(AstStatLocal* local, const char* name, AstStatLocal* from, double position)
+{
+    CHECK_EQ(std::string(local->vars.data[0]->name.value), name);
+    AstExprIndexExpr* read = local->values.data[0]->as<AstExprIndexExpr>();
+    REQUIRE(read);
+    CHECK(read->positional);
+    AstExprConstantNumber* index = read->index->as<AstExprConstantNumber>();
+    REQUIRE(index);
+    CHECK_EQ(index->value, position);
+    AstExprLocal* object = read->expr->as<AstExprLocal>();
+    REQUIRE(object);
+    CHECK_EQ(object->local, from->vars.data[0]);
+}
+
+TEST_CASE_FIXTURE(Fixture, "positional_destructuring_reads_each_element_by_position")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const cat.(name, age) = Cat("Taz", 12)
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+    AstStatLocal* cat = destructuredLocal(block, 0);
+    CHECK_EQ(std::string(cat->vars.data[0]->name.value), "cat");
+    REQUIRE(cat->destructure);
+    CHECK(cat->destructure->positional);
+    checkElementRead(destructuredLocal(block, 1), "name", cat, 1);
+    checkElementRead(destructuredLocal(block, 2), "age", cat, 2);
+}
+
+TEST_CASE_FIXTURE(Fixture, "positional_and_field_patterns_nest_in_each_other")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        local .(first, .(x, y), entry.{kind}) = t
+        local .{pos as .(px, py)} = u
+    )");
+
+    REQUIRE_EQ(block->body.size, 11);
+    AstStatLocal* value = destructuredLocal(block, 0);
+    checkElementRead(destructuredLocal(block, 1), "first", value, 1);
+    AstStatLocal* pair = destructuredLocal(block, 2);
+    checkElementRead(pair, kDestructuredLocalName, value, 2);
+    checkElementRead(destructuredLocal(block, 3), "x", pair, 1);
+    checkElementRead(destructuredLocal(block, 4), "y", pair, 2);
+    AstStatLocal* entry = destructuredLocal(block, 5);
+    checkElementRead(entry, "entry", value, 3);
+    checkFieldRead(destructuredLocal(block, 6), "kind", entry, "kind");
+
+    AstStatLocal* pos = destructuredLocal(block, 8);
+    checkFieldRead(pos, kDestructuredLocalName, destructuredLocal(block, 7), "pos");
+    checkElementRead(destructuredLocal(block, 9), "px", pos, 1);
+    checkElementRead(destructuredLocal(block, 10), "py", pos, 2);
+}
+
+TEST_CASE_FIXTURE(Fixture, "positional_destructuring_in_loop_bindings")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        for _, .(key, value) in pairs_list do end
+    )");
+
+    REQUIRE_EQ(block->body.size, 1);
+    AstStatForIn* loop = block->body.data[0]->as<AstStatForIn>();
+    REQUIRE(loop);
+    REQUIRE_EQ(loop->destructure.size, 2);
+    REQUIRE(loop->destructure.data[1]);
+    CHECK(loop->destructure.data[1]->positional);
+    REQUIRE_EQ(loop->body->body.size, 2);
+}
+
+TEST_CASE_FIXTURE(Fixture, "positional_destructuring_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(*this, "local .() = t", "A positional pattern needs at least one element");
+    matchOnlyDestructuringError(
+        *this, "local .(a as b) = t", "Positional elements are bound to the name written in their place; 'as' only renames fields of '.{...}'"
+    );
+    matchOnlyDestructuringError(
+        *this, "local .(a = 1, b) = t", "Destructured elements can't have default values; a missing element reads as whatever indexing the value gives"
+    );
+    matchOnlyDestructuringError(
+        *this, "local .(a, ...) = t", "Destructuring has no rest pattern; bind the value with a name to keep the rest: 'local t.(x) = ...'"
+    );
+    matchOnlyDestructuringError(*this, "local .(1) = t", "Expected a name or a pattern in the positional pattern, got '1'");
+    matchOnlyDestructuringError(*this, "local .(a b) = t", "Expected ',' or ')' after a positional element, got 'b'");
+    matchOnlyDestructuringError(*this, ".(x) = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "pair.(a, b) = t", "Destructuring declares new locals; start it with 'local' or 'const'");
+    matchOnlyDestructuringError(*this, "local a, .(b) = t", "A destructuring pattern has to be the only binding in its declaration");
+    matchOnlyDestructuringError(
+        *this, "local function f(.(x)) end", "Destructuring isn't supported in function parameters; destructure the parameter in the body"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_is_luwu_only")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const fs.{path, tar as .{gz}} = require("@std/fs")
+        local plain = 1
+    )");
+
+    REQUIRE_EQ(block->body.size, 5);
+    for (size_t i = 0; i < 4; ++i)
+        CHECK(block->body.data[i]->luwuOnly);
+    CHECK(!block->body.data[4]->luwuOnly);
+
+    // The synthesized reads are ordinary syntax
+    CHECK(!destructuredLocal(block, 1)->values.data[0]->luwuOnly);
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_without_the_flag_says_how_to_enable_it")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, false};
+
+    matchParseError("local .{x} = t", "attempt to use disabled Luwu feature destructuring; enable via FFlag 'LuwuDestructuring'");
+    matchParseError("const .{x} = t", "attempt to use disabled Luwu feature destructuring; enable via FFlag 'LuwuDestructuring'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_is_an_error_in_a_luau_module")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    ParseResult result = tryParse("local .{x} = t", luau);
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: destructuring");
+}
+
 TEST_SUITE_END();

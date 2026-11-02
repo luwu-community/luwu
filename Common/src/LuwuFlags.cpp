@@ -10,3 +10,7 @@ LUAU_FASTFLAGVARIABLE(LuwuClasses)
 
 // Luwu Traits (rfcs/classes/traits.md): enables `trait` declarations and `implements` (in progress). Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(LuwuTraits)
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{x, y}` and `.(x, y)` patterns. The parser gates the syntax, and while it
+// is on the compiler emits WIP bytecode (version 200), which positional patterns need for LOP_GETPOSITIONAL.
+LUAU_FASTFLAGVARIABLE(LuwuDestructuring)

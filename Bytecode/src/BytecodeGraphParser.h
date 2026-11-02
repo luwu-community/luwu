@@ -1045,6 +1045,12 @@ struct BytecodeGraphParser
                 addImmInput(node, static_cast<int32_t>(aux));
                 break;
 
+            case LOP_GETPOSITIONAL:
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(LUAU_INSN_C(insn)));
+                addProducer(LUAU_INSN_A(insn), nodeOp);
+                break;
+
             case LOP_NEWOBJECT:
             {
                 // Luwu Classes (rfcs/classes): A is only written. What else is read and written depends on the

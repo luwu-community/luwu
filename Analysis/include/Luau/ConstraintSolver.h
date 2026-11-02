@@ -261,6 +261,7 @@ public:
         Set<TypeId>& seen
     );
     bool tryDispatch(const HasIndexerConstraint& c, NotNull<const Constraint> constraint);
+    std::optional<bool> tryDispatchPositional(NotNull<const Constraint> constraint, TypeId subjectType, size_t position, TypeId resultType);
 
     bool tryDispatch(const AssignPropConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const AssignIndexConstraint& c, NotNull<const Constraint> constraint);

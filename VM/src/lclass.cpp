@@ -72,6 +72,8 @@ LuauClass* luaR_newclass(
     classdef->numoverriddenconsts = 0;
     classdef->traitdefaults = NULL;
     classdef->compiledtraitcopies = NULL;
+    classdef->positionalmembers = NULL;
+    classdef->numberofpositional = -1;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -172,7 +174,24 @@ void luaR_sealclassshape(lua_State* L, LuauClass* classdef)
         classdef->hasprivatemembers = true;
     }
 
+    for (int i = 0; i < classdef->numberofpositional; i++)
+        LUAU_ASSERT(classdef->positionalmembers[i] < classdef->numberofinstancemembers);
+
     classdef->memberstooffset->readonly = true;
+}
+
+void luaR_newpositionalmembers(lua_State* L, LuauClass* classdef, int count)
+{
+    LUAU_ASSERT(classdef->numberofpositional == -1 && count >= 0);
+
+    if (count > 0)
+    {
+        classdef->positionalmembers = luaM_newarray(L, count, uint32_t, classdef->memcat);
+        for (int i = 0; i < count; i++)
+            classdef->positionalmembers[i] = UINT32_MAX;
+    }
+
+    classdef->numberofpositional = count;
 }
 
 size_t luaR_classsize(const LuauClass* classdef)
@@ -187,9 +206,11 @@ size_t luaR_classsize(const LuauClass* classdef)
            (classdef->numberofallmembers * (sizeof(TString*) + sizeof(uint8_t))) +
            // ... plus the constant field defaults, when the class carries them ...
            (classdef->memberdefaults ? classdef->numberofinstancemembers * sizeof(TValue) : 0) +
-           // ... plus what it keeps about the traits it implements.
+           // ... plus what it keeps about the traits it implements ...
            (classdef->numtraits * sizeof(LuauClass*)) + (classdef->numtraitinits * (sizeof(TValue) + 2 * sizeof(uint32_t))) +
-           (classdef->numoverriddenconsts * sizeof(uint32_t));
+           (classdef->numoverriddenconsts * sizeof(uint32_t)) +
+           // ... plus the offsets of its positional members.
+           (classdef->positionalmembers ? classdef->numberofpositional * sizeof(uint32_t) : 0);
 }
 
 bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
@@ -953,6 +974,8 @@ void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
         luaM_freearray(L, classdef->memberflags, classdef->numberofallmembers, uint8_t, classdef->memcat);
     if (classdef->memberdefaults)
         luaM_freearray(L, classdef->memberdefaults, classdef->numberofinstancemembers, TValue, classdef->memcat);
+    if (classdef->positionalmembers)
+        luaM_freearray(L, classdef->positionalmembers, classdef->numberofpositional, uint32_t, classdef->memcat);
     luaM_freegco(L, classdef, sizeof(LuauClass), classdef->memcat, page);
 }
 

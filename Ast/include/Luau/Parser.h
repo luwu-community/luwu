@@ -223,6 +223,58 @@ private:
         TempVector<CstAttrList*>* cstAttrLists = nullptr
     );
 
+    // Luwu Destructuring (rfcs/destructuring.md):
+    // destructuring ::= (`local' | `const') target `=' exp
+    // pattern ::= `.' `{' fieldlist `}' | `.' `(' elementlist `)'
+    // fieldlist ::= field {`,' field} [`,']
+    // field ::= Name [pattern] [`:' Type] | Name `as' target
+    // elementlist ::= target {`,' target} [`,']
+    // target ::= Name [pattern] [`:' Type] | pattern [`:' Type]
+    // An annotation follows the binding it types; after a pattern, it types the value the pattern destructures.
+    struct DestructureTarget;
+
+    bool destructuringFollows();
+    bool destructurePatternFollows();
+    bool positionalPatternFollows();
+    bool dotTableFollows();
+    void parseDestructureElements(DestructureTarget& target);
+    void parseDestructureTarget(DestructureTarget& target);
+    bool destructuringAssignmentFollows();
+    bool dotTableMissingBraceFollows();
+    bool destructuringAvailable();
+    AstStat* parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name = {});
+    void parseDestructurePattern(DestructureTarget& target);
+    struct DestructureField;
+    DestructureField parseDestructureField();
+    void reportDestructureKeyError();
+    void skipDestructureField();
+    AstDestructurePattern desugarDestructuring(
+        const DestructureTarget& target,
+        AstExpr* value,
+        const Location& location,
+        const Location& equalsLocation,
+        bool isConst,
+        std::vector<AstStat*>& out
+    );
+    AstDestructurePattern desugarDestructureFields(const DestructureTarget& target, AstLocal* local, bool isConst, std::vector<AstStat*>& out);
+
+    // Luwu Destructuring (rfcs/destructuring.md): patterns in a `for ... in` loop's bindings
+    bool loopPatternFollows();
+    AstStatBlock* prependLoopFields(const std::vector<AstStat*>& fields, AstStatBlock* body);
+    Binding parseLoopPattern(std::vector<std::optional<DestructureTarget>>& patterns);
+    void parseLoopBindings(
+        TempVector<Binding>& names,
+        std::vector<std::optional<DestructureTarget>>& patterns,
+        AstArray<Position>* commaPositions,
+        Position* initialCommaPosition
+    );
+    AstArray<AstLocal*> pushLoopLocals(
+        const TempVector<Binding>& names,
+        const std::vector<std::optional<DestructureTarget>>& patterns,
+        std::vector<AstStat*>& fields,
+        AstArray<AstDestructurePattern*>& destructure
+    );
+
     // return [explist]
     AstStat* parseReturn();
 
@@ -234,6 +286,8 @@ private:
         const Location& typeKeywordLocation,
         const AstArray<AstAttr*>& attributes = {nullptr, 0}
     );
+    std::optional<Name> parseModulePath();
+    AstStat* parseTypeDestructuring(const Location& start, bool exported, const Location& typeKeywordLocation);
 
     // `declared` parses the shape of a `declare class` (see AstStatDeclareClass) and returns the AstStatClass for it.
     // Luwu Traits (rfcs/classes/traits.md): `isTrait` parses `trait Name ... end`, which is a class with trait members.
@@ -460,6 +514,11 @@ private:
     // fieldsep ::= `,' | `;'
     AstExpr* parseTableConstructor();
 
+    // Luwu Destructuring (rfcs/destructuring.md):
+    // dottable ::= `.' `{' [dotfield {fieldsep dotfield} [fieldsep]] `}'
+    // dotfield ::= Name | Name `=' exp
+    AstExpr* parseDotTableConstructor();
+
     // TODO: Add grammar rules here?
     AstExpr* parseIfElseExpr();
 
@@ -514,6 +573,7 @@ private:
     bool startsConstDeclaration();
     bool startsTypeAliasDeclaration();
     bool nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName));
+    bool nextLineStartsUnpatternedStatement();
     bool statementReportedError();
     AstExpr* unfinishedIfElseExpr(
         const Location& start,
@@ -663,6 +723,27 @@ private:
         }
     };
 
+    // Luwu Destructuring (rfcs/destructuring.md): a parsed `.{ ... }` pattern, see parseDestructuring.
+    struct DestructureTarget
+    {
+        // The local the value is bound to. Unnamed, the value goes to a hidden local.
+        std::optional<Name> name;
+        // Where the `.{ ... }` is, when the value is destructured further.
+        std::optional<Location> patternLocation;
+        // `: Type` after the binding, typing the local it binds.
+        AstType* annotation = nullptr;
+        bool closed = true;
+        // `.(a, b)`: `fields` are elements read by position, with empty keys
+        bool positional = false;
+        std::vector<DestructureField> fields;
+    };
+    struct DestructureField
+    {
+        Name key;
+        std::optional<Location> asLocation;
+        DestructureTarget target;
+    };
+
     ParseOptions options;
 
     Lexer lexer;
@@ -682,6 +763,8 @@ private:
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;
+    // Luwu Destructuring (rfcs/destructuring.md): the hidden local an unnamed pattern binds its value to.
+    AstName nameDestructured;
     AstName nameNil;
     AstName nameClass;
     AstName nameTrait;
@@ -743,6 +826,8 @@ private:
     std::vector<Position> scratchPosition;
     std::vector<Position> scratchPosition2;
     std::vector<CstAttrList*> scratchCstAttrList;
+    std::vector<AstDestructureField> scratchDestructureField;
+    std::vector<AstTypeDestructureField> scratchTypeDestructureField;
     std::string scratchData;
 
     CstNodeMap cstNodeMap;
@@ -779,9 +864,10 @@ private:
     };
     std::optional<PendingFunctionAttributes> pendingFunctionAttributes;
 
-    // Luwu Declare Statements (rfcs/declare-statements.md): a declaration can desugar to several statements, as
-    // `declare Name: class type Name(...)` does to the class and the global holding it. parseStat returns the first, and
-    // parseBlockNoScope appends these right after it.
+    // Luwu Declare Statements (rfcs/declare-statements.md) and Luwu Destructuring (rfcs/destructuring.md): a
+    // declaration can desugar to several statements, as `declare class Name` does to the class and the global holding it,
+    // and a destructuring to one `local` per name. parseStat returns the first, and parseBlockNoScope appends these right
+    // after it.
     std::vector<AstStat*> pendingStatements;
 };
 

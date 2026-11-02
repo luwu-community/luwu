@@ -447,6 +447,13 @@ private:
         return false;
     }
 
+    // Luwu Destructuring (rfcs/destructuring.md): `local x = _.x`, desugared from `_.{x}`, reads a field of the
+    // pattern's name, which the source doesn't read
+    bool visit(AstStatLocal* node) override
+    {
+        return !node->isDesugaredField();
+    }
+
     bool visit(AstStatAssign* node) override
     {
         for (size_t i = 0; i < node->vars.size; ++i)
@@ -736,6 +743,18 @@ private:
             if (node->body.data[i - 1]->hasSemicolon)
                 continue;
 
+            // Luwu Destructuring (rfcs/destructuring.md): the statements a destructuring declaration desugars to
+            // are one statement in the source.
+            if (AstStatLocal* local = node->body.data[i]->as<AstStatLocal>(); local && local->isDesugaredField())
+                continue;
+
+            if (AstStatTypeAlias* alias = node->body.data[i]->as<AstStatTypeAlias>(); alias && alias->destructuredFrom)
+                continue;
+
+            // A loop's destructured fields are written in the loop's header, before its body
+            if (AstStatLocal* local = node->body.data[i - 1]->as<AstStatLocal>(); local && local->destructuredFromLoop)
+                continue;
+
             // Luwu: a half-typed statement (`local t =`) ends on the next statement's line because the parser gave up
             // there. Upstream reports the untouched next line.
             if (containsParseError(node->body.data[i - 1]))
@@ -913,12 +932,16 @@ private:
 
     DenseHashMap<AstLocal*, Local> locals;
     DenseHashMap<AstName, AstLocal*> imports;
+    // Luwu Destructuring (rfcs/destructuring.md): locals read from a field, `local Cat = animals.Cat`, which bring a
+    // class's type along when the field is one
+    DenseHashMap<AstName, AstLocal*> fieldLocals;
     DenseHashMap<AstName, Global> globals;
     DenseHashMap<AstName, AstStatClass*> classes;
 
     LintLocalHygiene()
         : locals(NULL)
         , imports(AstName())
+        , fieldLocals(AstName())
         , globals(AstName())
         , classes(AstName())
     {
@@ -969,6 +992,11 @@ private:
 
     void reportUsedLocal(AstLocal* local, const Local& info)
     {
+        // Luwu Destructuring (rfcs/destructuring.md): a `_` is only used through its pattern (`for _, _.{x} in t`), and
+        // PlaceholderRead reports any other read
+        if (local->name == context->placeholder)
+            return;
+
         if (AstLocal* shadow = local->shadow)
         {
             // LintDuplicateFunctions will catch this.
@@ -1103,6 +1131,8 @@ private:
 
             if (l.import)
                 imports[node->vars.data[0]->name] = node->vars.data[0];
+            else if (node->values.data[0]->is<AstExprIndexName>())
+                fieldLocals[node->vars.data[0]->name] = node->vars.data[0];
         }
         else
         {
@@ -1168,18 +1198,47 @@ private:
 
     bool visit(AstTypeReference* node) override
     {
+        // Luwu Destructuring (rfcs/destructuring.md): `c: Cat` uses a `Cat` holding a class, which is also its type
         if (!node->prefix)
-            return true;
+        {
+            if (AstLocal** fieldLocal = fieldLocals.find(node->name))
+                locals[*fieldLocal].used = true;
 
-        if (!imports.contains(*node->prefix))
             return true;
+        }
 
-        AstLocal* astLocal = imports[*node->prefix];
-        Local& local = locals[astLocal];
-        LUAU_ASSERT(local.import);
-        local.used = true;
+        if (AstLocal* import = findModuleLocal(imports, *node->prefix))
+        {
+            Local& local = locals[import];
+            LUAU_ASSERT(local.import);
+            local.used = true;
+        }
+        // Luwu Destructuring (rfcs/destructuring.md): `m.Age` uses a `const m = hub.t` holding a module
+        else if (AstLocal* fieldLocal = findModuleLocal(fieldLocals, *node->prefix))
+            locals[fieldLocal].used = true;
 
         return true;
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): the local a type's prefix reads from. A path to a module another one
+    // exports (`type .{Age} = hub.t`) reads from the local it starts with.
+    static AstLocal* findModuleLocal(const DenseHashMap<AstName, AstLocal*>& byName, AstName prefix)
+    {
+        const char* dot = strchr(prefix.value, '.');
+        if (!dot)
+        {
+            AstLocal* const* found = byName.find(prefix);
+            return found ? *found : nullptr;
+        }
+
+        size_t length = size_t(dot - prefix.value);
+        for (const auto& [name, local] : byName)
+        {
+            if (strncmp(name.value, prefix.value, length) == 0 && name.value[length] == '\0')
+                return local;
+        }
+
+        return nullptr;
     }
 
     bool visit(AstExprFunction* node) override
