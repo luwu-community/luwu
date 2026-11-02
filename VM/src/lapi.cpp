@@ -838,6 +838,14 @@ void* lua_pushcclosurewithdatak(lua_State* L, lua_CFunction fn, const char* debu
     return (void*)cl->fatc.data;
 }
 
+void* lua_pushdatacfunctionk(lua_State* L, lua_DataCFunction fn, const char* debugname, lua_Continuation cont, size_t size, lua_ClosureWithDataFree dtor)
+{
+    api_check(L, fn != nullptr);
+    void* data = lua_pushcclosurewithdatak(L, luaF_calldatacfunction, debugname, cont, size, dtor);
+    clvalue(L->top - 1)->fatc.df = fn;
+    return data;
+}
+
 void* lua_getcclosuredata(lua_State* L)
 {
     LUAU_ASSERT(FFlag::LuwuFatCClosure);
@@ -1309,6 +1317,13 @@ int lua_cpcall(lua_State* L, lua_CFunction func, void* ud)
     c.ud = ud;
 
     return luaD_pcall(L, f_Ccall, &c, savestack(L, L->top), 0);
+}
+
+int lua_rawpcall(lua_State* L, int nargs, void (*func)(lua_State* L, void* ud), void* ud)
+{
+    api_check(L, func != nullptr);
+    api_checknelems(L, nargs);
+    return luaD_pcall(L, func, ud, savestack(L, L->top - nargs), 0);
 }
 
 int lua_status(lua_State* L)

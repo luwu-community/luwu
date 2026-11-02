@@ -217,6 +217,11 @@ LUA_API void lua_pushcclosurek(lua_State* L, lua_CFunction fn, const char* debug
 
 typedef void (*lua_ClosureWithDataFree)(lua_State* L, void* data, size_t sz);
 LUA_API void* lua_pushcclosurewithdatak(lua_State *L, lua_CFunction fn, const char *debugname, lua_Continuation cont, size_t size, lua_ClosureWithDataFree dtor);
+// Luwu: a C function that gets its closure's data and its argument count passed in, so it needs no
+// lua_getcclosuredata or lua_gettop call to find them
+typedef int (*lua_DataCFunction)(lua_State* L, void* data, int nargs);
+// Luwu: lua_pushcclosurewithdatak with a lua_DataCFunction. The closure is an ordinary C function everywhere else.
+LUA_API void* lua_pushdatacfunctionk(lua_State* L, lua_DataCFunction fn, const char* debugname, lua_Continuation cont, size_t size, lua_ClosureWithDataFree dtor);
 LUA_API void* lua_getcclosuredata(lua_State *L);
 LUA_API void lua_pushboolean(lua_State* L, int b);
 LUA_API int lua_pushthread(lua_State* L);
@@ -273,6 +278,10 @@ LUA_API void lua_call(lua_State* L, int nargs, int nresults);
 LUA_API int lua_pcall(lua_State* L, int nargs, int nresults, int errfunc);
 LUA_API int lua_pcallmulti(lua_State* L, int nargs, int nresults, int errfunc);
 LUA_API int lua_cpcall(lua_State* L, lua_CFunction func, void* ud);
+// Luwu: runs `func(L, ud)` on the current stack and catches any error, without a call frame. On an error it removes the
+// `nargs` values below the top that `func` was given, pushes the error object and returns the status, as lua_pcall would.
+// `func` works on the caller's stack: positive indices and lua_gettop count from the caller's frame.
+LUA_API int lua_rawpcall(lua_State* L, int nargs, void (*func)(lua_State* L, void* ud), void* ud);
 
 /*
 ** coroutine functions
