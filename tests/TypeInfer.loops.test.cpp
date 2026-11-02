@@ -1729,4 +1729,40 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "iterating_a_table_that_the_loop_inserts_into
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+// Luwu: a local given a table in both branches of an `if` is a union of the two table types after it. Iterating it
+// gives the union of their keys and values instead of the error type.
+TEST_CASE_FIXTURE(BuiltinsFixture, "iterating_a_union_of_indexed_tables")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        --!strict
+        type R = { p: boolean }
+        type S = { q: number }
+        local data: { R }
+        if math.random() > 0.5 then
+            data = {}
+        else
+            data = { { p = true } }
+        end
+        for i, r in data do
+            local index: number = i
+            local p: boolean = r.p
+        end
+
+        local function f(t: { R } | { [string]: S })
+            for k, v in t do
+                local key: number | string = k
+                local wrong: R = v
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 18);
+    const TypeMismatch* mismatch = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(mismatch);
+    CHECK_EQ("R | S", toString(mismatch->givenType));
+}
+
 TEST_SUITE_END();
