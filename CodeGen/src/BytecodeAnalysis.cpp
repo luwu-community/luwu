@@ -654,6 +654,13 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
         types.a = LBC_TYPE_NUMBER;
         types.result = LBC_TYPE_INTEGER;
         break;
+    case LBF_STRING_STARTSWITH:
+    case LBF_STRING_ENDSWITH:
+    case LBF_STRING_CONTAINS:
+        types.result = LBC_TYPE_BOOLEAN;
+        types.a = LBC_TYPE_STRING;
+        types.b = LBC_TYPE_STRING;
+        break;
     }
 }
 

@@ -1038,6 +1038,11 @@ enum LuauBuiltinFunction
 
     // Luwu Classes (rfcs/classes): class.isinstance(value, class) -> boolean
     LBF_CLASS_ISINSTANCE,
+
+    // Luwu String Extensions (rfcs/string-extensions.md): string.startswith/endswith/contains(s, needle, ...) -> boolean
+    LBF_STRING_STARTSWITH,
+    LBF_STRING_ENDSWITH,
+    LBF_STRING_CONTAINS,
 };
 
 // Capture type, used in LOP_CAPTURE

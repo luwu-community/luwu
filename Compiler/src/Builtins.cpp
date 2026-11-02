@@ -11,6 +11,7 @@ LUAU_FASTFLAGVARIABLE(LuauIntegerFastcalls)
 LUAU_FASTFLAGVARIABLE(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(LuwuStringExtensions)
 
 namespace Luau
 {
@@ -219,6 +220,12 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
             return LBF_STRING_LEN;
         if (builtin.method == "sub")
             return LBF_STRING_SUB;
+        if (FFlag::LuwuStringExtensions && builtin.method == "startswith")
+            return LBF_STRING_STARTSWITH;
+        if (FFlag::LuwuStringExtensions && builtin.method == "endswith")
+            return LBF_STRING_ENDSWITH;
+        if (FFlag::LuwuStringExtensions && builtin.method == "contains")
+            return LBF_STRING_CONTAINS;
     }
 
     if (builtin.object == "table")
@@ -594,6 +601,11 @@ BuiltinInfo getBuiltinInfo(int bfid)
 
     case LBF_STRING_SUB:
         return {-1, 1}; // 2 or 3 parameters
+
+    case LBF_STRING_STARTSWITH:
+    case LBF_STRING_ENDSWITH:
+    case LBF_STRING_CONTAINS:
+        return {-1, 1}; // the string and one or more needles
 
     case LBF_MATH_CLAMP:
         return {3, 1, BuiltinInfo::Flag_NoneSafe};
