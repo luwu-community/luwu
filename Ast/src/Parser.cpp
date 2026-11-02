@@ -910,8 +910,9 @@ AstStat* Parser::parseStat()
     AstExpr* expr = parsePrimaryExpr(/* asStatement= */ true);
 
     // Luwu Do Expressions (rfcs/do-expressions.md): `x or return v`, `f() or continue` and the like as statements. An
-    // expression statement is otherwise always a call, so no Luau statement starts like this.
-    bool operatorFollows = !expr->is<AstExprError>() && parseBinaryOp(lexer.current());
+    // expression statement is otherwise always a call, so no Luau statement starts like this. A type test counts too:
+    // `r is Ok and return 1`.
+    bool operatorFollows = !expr->is<AstExprError>() && (parseBinaryOp(lexer.current()) || typeTestFollows());
     if (operatorFollows)
         return parseOrLeaveStatement(parseBinaryTail(expr, start, 0), errorsBeforeExpr);
 

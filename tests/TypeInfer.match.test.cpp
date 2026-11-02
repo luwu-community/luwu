@@ -258,8 +258,42 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_match_expressions")
     checkTypewriting(*this, kTypewriterBefore, "local n = maybe()\nlocal ok = n is 1 | 2 | nil", kTypewriterAfter);
 }
 
+// A guard statement can start with a type test, and narrows after it like the written-out test
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_guard_can_start_with_a_type_test")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        local function f(r: unknown): number
+            r is string and return 1
+            r is number or return 2
+            return r
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_a_guard_that_starts_with_a_type_test")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "local function f(r: unknown): number?\n    r is string and return 1\n    r is number or return nil\n    return r\nend",
+        kTypewriterAfter
+    );
+}
+
 // `is` with alternatives narrows like the `or` of its tests, and `is not` like the `and` of their negations
-TEST_CASE_FIXTURE(BuiltinsFixture, "is_with_alternatives_narrows_the_value")
+TEST_CASE_FIXTURE(ClassesFixture, "is_with_alternatives_narrows_the_value")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
