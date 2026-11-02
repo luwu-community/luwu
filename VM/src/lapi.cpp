@@ -1921,6 +1921,57 @@ int lua_getpayload(lua_State* L, int idx)
     return ttype(payload);
 }
 
+// Whether the class has members that are functions, other than the constructor and the defaults a POD class computes
+static bool classhasmethods(const LuauClass* classdef)
+{
+    if (classdef->instancemetatable)
+        return true;
+
+    for (uint32_t offset = classdef->numberofinstancemembers; offset < classdef->numberofallmembers; offset++)
+    {
+        bool constructor = offset == classdef->initoffset;
+        bool defaults = classdef->haspoddefaultsfn && offset == classdef->poddefaultsoffset;
+        if (!constructor && !defaults && ttisfunction(&classdef->staticmembers[offset - classdef->numberofinstancemembers]))
+            return true;
+    }
+
+    return false;
+}
+
+int lua_getclassdatashape(lua_State* L, int idx, int* hasmethods)
+{
+    const LuauClass* classdef = classofvalue(index2addr(L, idx));
+    api_check(L, classdef);
+
+    *hasmethods = classhasmethods(classdef);
+
+    // Luwu Destructuring (rfcs/destructuring.md): a primary constructor's parameters are the class's positional members,
+    // which a data file writes in parameter order (LuauClass::positionalmembers)
+    int shape = LUA_CLASSDATA_TABLE;
+    if (classdef->numberofpositional >= 0)
+    {
+        bool coversfields = uint32_t(classdef->numberofpositional) == classdef->numberofinstancemembers;
+        shape = coversfields ? LUA_CLASSDATA_POSITIONAL : LUA_CLASSDATA_NONE;
+    }
+    else if (classdef->hascustominit)
+        shape = LUA_CLASSDATA_NONE;
+
+    if (shape == LUA_CLASSDATA_NONE)
+        return shape;
+
+    lua_createtable(L, int(classdef->numberofinstancemembers), 0);
+    for (uint32_t i = 0; i < classdef->numberofinstancemembers; i++)
+    {
+        uint32_t offset = shape == LUA_CLASSDATA_POSITIONAL ? classdef->positionalmembers[i] : i;
+        ensure_stack(L, 1);
+        setsvalue(L, L->top, classdef->offsettomember[offset]);
+        api_incr_top(L);
+        lua_rawseti(L, -2, int(i + 1));
+    }
+
+    return shape;
+}
+
 static const char* aux_upvalue(StkId fi, int n, TValue** val)
 {
     Closure* f;

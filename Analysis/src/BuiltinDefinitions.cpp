@@ -128,6 +128,19 @@ struct MagicFreeze final : MagicFunction
     bool typeCheck(const MagicFunctionTypeCheckContext& ctx) override;
 };
 
+// Luwu object notation: `luwon.reader({ A, B })`, where two classes with one name are an error
+struct MagicLuwonReader final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+    bool typeCheck(const MagicFunctionTypeCheckContext& ctx) override;
+};
+
 struct MagicFormat final : MagicFunction
 {
     std::optional<WithPredicate<TypePackId>> handleOldSolver(
@@ -662,6 +675,15 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassInstanceCheck>());
             if (auto it = ctv->props.find("implements"); it != ctv->props.end() && it->second.readTy)
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassInstanceCheck>());
+        }
+    }
+
+    if (FFlag::LuwuClasses)
+    {
+        if (TableType* luwon = getMutable<TableType>(getGlobalBinding(globals, "luwon")))
+        {
+            if (auto it = luwon->props.find("reader"); it != luwon->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicLuwonReader>());
         }
     }
 
@@ -2312,6 +2334,66 @@ bool MagicClassFields::infer(const MagicFunctionCallContext& context)
     asMutable(context.result)->ty.emplace<BoundTypePack>(resultPack);
 
     return true;
+}
+
+std::optional<WithPredicate<TypePackId>> MagicLuwonReader::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicLuwonReader::infer(const MagicFunctionCallContext&)
+{
+    return false;
+}
+
+// A data file names a class by its name, so a reader can't hold two classes with one name. The arguments are still checked
+// as usual.
+bool MagicLuwonReader::typeCheck(const MagicFunctionTypeCheckContext& ctx)
+{
+    AstExprTable* classes = ctx.callSite->args.size > 0 ? ctx.callSite->args.data[0]->as<AstExprTable>() : nullptr;
+    if (!classes)
+        return false;
+
+    struct Seen
+    {
+        TypeId cls;
+        Location location;
+    };
+    DenseHashMap<Name, Seen> seen{""};
+    for (const AstExprTable::Item& item : classes->items)
+    {
+        if (item.kind != AstExprTable::Item::Kind::List)
+            continue;
+
+        TypeId* itemTy = ctx.typechecker->module->astTypes.find(item.value);
+        const ExternType* cls = itemTy ? get<ExternType>(follow(*itemTy)) : nullptr;
+        if (!cls || !cls->root || *cls->root != ctx.builtinTypes->classType)
+            continue;
+
+        const Seen* first = seen.find(cls->name);
+        if (!first)
+            seen[cls->name] = Seen{follow(*itemTy), item.value->location};
+        else if (first->cls == follow(*itemTy))
+            ctx.typechecker->reportError(
+                GenericError{format("'%s' is in this reader twice; remove this one", cls->name.c_str())}, item.value->location
+            );
+        else
+            ctx.typechecker->reportError(
+                GenericError{format(
+                    "Two classes in this reader are named '%s' (the first is on line %d), so a data file couldn't tell them apart",
+                    cls->name.c_str(),
+                    first->location.begin.line + 1
+                )},
+                item.value->location
+            );
+    }
+
+    return false;
 }
 
 std::optional<WithPredicate<TypePackId>> MagicClassName::handleOldSolver(

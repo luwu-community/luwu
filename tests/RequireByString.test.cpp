@@ -393,6 +393,31 @@ TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireLuwuNextToLuauIsAmbiguous")
     );
 }
 
+// Luwu object notation: a `.luwon` file is required like a module, and its value is read without running it.
+TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireLuwon")
+{
+    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/luwon_dependency";
+    runProtectedRequire(path);
+    assertOutputContainsAll({"true", "result from luwon_dependency"});
+}
+
+TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireLuwonReportsEvaluationErrors")
+{
+    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/luwon_evaluation_error";
+    runProtectedRequire(path);
+    assertOutputContainsAll({"false", "luwon_evaluation_error.luwon:3: '..' needs strings or numbers, but got a table"});
+}
+
+TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireLuwonNextToLuauIsAmbiguous")
+{
+    std::string ambiguousPath = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/ambiguous_luwon_file_requirer";
+
+    runProtectedRequire(ambiguousPath);
+    assertOutputContainsAll(
+        {"false", "error requiring module \"./ambiguous/luwon_file/dependency\": could not resolve child component \"dependency\" (ambiguous)"}
+    );
+}
+
 TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireInitLuau")
 {
     std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/luau";

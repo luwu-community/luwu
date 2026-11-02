@@ -9,6 +9,7 @@
 
 #include "lua.h"
 #include "lualib.h"
+#include "luwon.h"
 
 #include <string>
 #include <string_view>
@@ -136,9 +137,35 @@ static luarequire_WriteResult get_config(lua_State* L, void* ctx, char* buffer, 
     return write(req->vfs.getConfig(), buffer, buffer_size, size_out);
 }
 
+// Luwu object notation: a data file's value is evaluated, never compiled or run.
+static int loadLuwon(lua_State* L, const char* chunkname, const char* loadname)
+{
+    bool hadContents = false;
+    int status = LUA_OK;
+
+    // Handle C++ RAII objects in a scope which doesn't cause a Luau error
+    {
+        std::optional<std::string> contents = readFile(loadname);
+        hadContents = contents.has_value();
+
+        if (contents)
+            status = luwon_load(L, chunkname, contents->data(), contents->size());
+    }
+
+    if (!hadContents)
+        luaL_error(L, "could not read file '%s'", loadname);
+    if (status != LUA_OK)
+        luaL_error(L, "error while loading module: %s", lua_tostring(L, -1));
+
+    return 1;
+}
+
 static int load(lua_State* L, void* ctx, const char* path, const char* chunkname, const char* loadname)
 {
     ReplRequirer* req = static_cast<ReplRequirer*>(ctx);
+
+    if (isLuwonPath(loadname))
+        return loadLuwon(L, chunkname, loadname);
 
     // module needs to run in a new thread, isolated from the rest
     // note: we create ML on main thread so that it doesn't inherit environment of L

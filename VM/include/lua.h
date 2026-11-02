@@ -570,6 +570,17 @@ LUA_API int lua_isresulterr(lua_State* L, int idx);
 // any other value.
 LUA_API int lua_getpayload(lua_State* L, int idx);
 
+// Luwu object notation: how objects of the class (or the object's class) at `idx` can be written as data. Returns the
+// form the constructor takes, and for LUA_CLASSDATA_POSITIONAL and LUA_CLASSDATA_TABLE pushes an array of the field names
+// in constructor order (nothing for LUA_CLASSDATA_NONE). Sets `hasmethods` when the class has methods or metamethods.
+enum lua_ClassDataShape
+{
+    LUA_CLASSDATA_NONE = 0,   // a constructor that runs code of its own, or a primary constructor that doesn't set every field
+    LUA_CLASSDATA_POSITIONAL, // a primary constructor whose parameters are all the fields: `Point(1, 2)`
+    LUA_CLASSDATA_TABLE,      // the default constructor, which takes a table of fields: `Point { x = 1, y = 2 }`
+};
+LUA_API int lua_getclassdatashape(lua_State* L, int idx, int* hasmethods);
+
 LUA_API int lua_getbuffermode(lua_State* L, int idx);
 LUA_API void* lua_getbufferuserdata(lua_State* L, int idx);
 
