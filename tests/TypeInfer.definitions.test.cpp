@@ -10,6 +10,8 @@
 using namespace Luau;
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
+LUAU_FASTFLAG(LuwuDeclareStatements)
+LUAU_FASTFLAG(LuauSolverV2)
 
 TEST_SUITE_BEGIN("DefinitionTests");
 
@@ -79,6 +81,9 @@ TEST_CASE_FIXTURE(Fixture, "definition_file_loading")
 
 TEST_CASE_FIXTURE(Fixture, "load_definition_file_errors_do_not_pollute_global_scope")
 {
+    // Luwu Declare Statements (rfcs/declare-statements.md) accepts the untyped `declare foo` this test fails to parse
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
     unfreeze(getFrontend().globals.globalTypes);
     LoadDefinitionFileResult parseFailResult = getFrontend().loadDefinitionFile(
         getFrontend().globals,
@@ -212,7 +217,7 @@ TEST_CASE_FIXTURE(Fixture, "class_definitions_cannot_extend_non_class")
     REQUIRE_EQ(result.module->errors.size(), 1);
     GenericError* ge = get<GenericError>(result.module->errors[0]);
     REQUIRE(ge);
-    CHECK_EQ("Cannot use non-class type 'NotAClass' as a superclass of class 'Foo'", ge->message);
+    CHECK_EQ("Cannot use non-extern type 'NotAClass' as the supertype of extern type 'Foo'", ge->message);
 }
 
 TEST_CASE_FIXTURE(Fixture, "no_cyclic_defined_extern_types")
@@ -714,6 +719,215 @@ da.value = false
     REQUIRE(get<TypeMismatch>(result.errors[1]));
     CHECK_EQ(result.errors[0].location.begin.line, 4);
     CHECK_EQ(result.errors[1].location.begin.line, 6);
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_declare_globals_for_the_whole_file")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    // A use above the declaration, one inside a function, and one after a `do` block still see it
+    CheckResult result = check(R"(
+        --!strict
+        local a: number = early + 1
+        local function f(): string
+            return greet(later)
+        end
+        do
+            declare later: string
+            declare function greet(name: string): string
+        end
+        declare early: number
+        type Path = { path: string }
+        declare script: Path
+        local b: string = script.path
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_are_checked_like_globals")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    CheckResult result = check(R"(
+        --!strict
+        declare count: number
+        declare function greet(name: string): string
+        local s: string = count
+        greet(1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "declare_statements_stay_in_their_file")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        declare fromA: number
+        return {}
+    )";
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local _ = require(game.A)
+        local x = fromA
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
+    CHECK_FALSE(getFrontend().globals.globalScope->lookup(getFrontend().globals.globalNames.names->getOrAdd("fromA")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_can_redeclare_a_loaded_global")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    loadDefinition(R"(
+        declare script: { path: string }
+    )");
+
+    // Same type or not, redeclaring is not a type error (the DeclareMismatch lint reports the difference)
+    CheckResult result = check(R"(
+        --!strict
+        declare script: { path: number }
+        local n: number = script.path
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_referring_to_themselves")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    // Must not bind the declaration to itself
+    CheckResult result = check(R"(
+        declare x: typeof(x)
+        local y = x
+    )");
+
+    CHECK_EQ(toString(requireType("y")), "*error-type*");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "declare_extern_types_are_scoped_like_type_aliases")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    // An extern type in a `do` block applies to the whole file, like any declaration
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        local function first(h: Hidden): string
+            return h.name
+        end
+        do
+            export declare extern type Path
+                function exists(self): boolean
+            end
+            declare extern type Hidden
+                name: string
+            end
+        end
+        return {}
+    )";
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local path = require(game.A)
+        type P = path.Path
+        local function check(p: P): boolean
+            return p:exists()
+        end
+        type H = path.Hidden
+        type Q = Path
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+
+    // `Hidden` wasn't exported
+    UnknownSymbol* hidden = get<UnknownSymbol>(result.errors[0]);
+    REQUIRE(hidden);
+    CHECK_EQ(hidden->name, "path.Hidden");
+
+    // An exported extern type is qualified by its module, like an exported alias
+    UnknownSymbol* unqualified = get<UnknownSymbol>(result.errors[1]);
+    REQUIRE(unqualified);
+    CHECK_EQ(unqualified->name, "Path");
+
+    LUAU_REQUIRE_NO_ERRORS(getFrontend().check("game/A"));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "declared_parameter_defaults_can_be_left_out")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    CheckResult result = check(R"(
+        --!strict
+        declare function split(s: string, sep = string): { string }
+        declare extern type File
+            function read(self, count = number): string
+        end
+        declare file: File
+
+        local a = split("a b")
+        local b = split("a,b", ",")
+        local c: string = file:read()
+        local d: string = file:read(4)
+
+        local e = split("a", 1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK_EQ(result.errors[0].location.begin.line, 13);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "untyped_value_declarations")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    loadDefinition(R"(
+        declare script: { path: string }
+    )");
+
+    CheckResult result = check(R"(
+        --!strict
+        -- `script` keeps the environment's type, `bundled` isn't in the environment and is `any`
+        declare script
+        declare bundled
+        declare function helper(a, b)
+
+        local p: string = script.path
+        local n: number = bundled
+        local s: string = bundled
+        helper(1, "two")
+
+        local wrong: number = script.path
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK_EQ(result.errors[0].location.begin.line, 12);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "extern_type_errors_underline_what_they_are_about")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauSolverV2, true}, {FFlag::LuwuDeclareStatements, true}};
+
+    CheckResult result = check(R"(
+        declare extern type Result extends Error
+            inner: number
+        end
+    )");
+
+    // Only `Error`, not the whole declaration
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    UnknownSymbol* unknown = get<UnknownSymbol>(result.errors[0]);
+    REQUIRE(unknown);
+    CHECK_EQ(unknown->name, "Error");
+    CHECK_EQ(result.errors[0].location, Location{{1, 43}, {1, 48}});
 }
 
 TEST_SUITE_END();

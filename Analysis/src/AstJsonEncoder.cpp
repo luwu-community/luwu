@@ -946,7 +946,8 @@ struct AstJsonEncoder : public AstVisitor
             {
                 PROP(name);
                 PROP(nameLocation);
-                PROP(type);
+                if (node->type)
+                    PROP(type);
             }
         );
     }
@@ -976,6 +977,24 @@ struct AstJsonEncoder : public AstVisitor
                     write("superName", *node->superName);
                 PROP(props);
                 PROP(indexer);
+                // Luwu Declare Statements (rfcs/declare-statements.md)
+                if (node->exportLocation)
+                    write("exported", true);
+            }
+        );
+    }
+
+    // Luwu Declare Statements (rfcs/declare-statements.md)
+    void write(class AstStatDeclareClass* node)
+    {
+        writeNode(
+            node,
+            "AstStatDeclareClass",
+            [&]()
+            {
+                write("name", node->shape->name->name);
+                if (node->shape->exported)
+                    write("exported", true);
             }
         );
     }
@@ -1453,6 +1472,12 @@ struct AstJsonEncoder : public AstVisitor
     }
 
     bool visit(class AstStatDeclareExternType* node) override
+    {
+        write(node);
+        return false;
+    }
+
+    bool visit(class AstStatDeclareClass* node) override
     {
         write(node);
         return false;
