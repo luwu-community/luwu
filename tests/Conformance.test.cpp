@@ -7537,3 +7537,94 @@ TEST_CASE("ClassesInterpreterMemberSlotCacheSkipsWideOffsets")
 }
 
 TEST_SUITE_END();
+
+TEST_CASE("TablePresizingLearnsFromTheLastTableOfASite")
+{
+    // Luwu table presizing: a NEWTABLE starts its table as long as the last table it made got, as long as that table
+    // is alive. A collected last table is forgotten.
+    const std::string source = R"(
+local function make(n)
+    local t = {}
+    for i = 1, n do
+        t[i] = i
+    end
+    return t
+end
+local filled = make(100)
+local after_filled = make(0)
+local after_empty = make(0)
+local after_collected = (function()
+    make(100)
+    collect()
+    return make(0)
+end)()
+-- a full collection that abandons an incremental mark halfway (luaC_fullgc) still forgets the dead table
+local after_abandoned_mark = (function()
+    step()
+    make(100)
+    collect()
+    return make(0)
+end)()
+return filled, after_filled, after_empty, after_collected, after_abandoned_mark
+)";
+
+    for (bool native : {false, true})
+    {
+        if (native && !luau_codegen_supported())
+            continue;
+
+        StateRef globalState(luaL_newstate(), lua_close);
+        lua_State* L = globalState.get();
+        luaL_openlibs(L);
+
+        lua_pushcfunction(
+            L,
+            [](lua_State* L)
+            {
+                lua_gc(L, LUA_GCCOLLECT, 0);
+                return 0;
+            },
+            "collect"
+        );
+        lua_setglobal(L, "collect");
+        lua_pushcfunction(
+            L,
+            [](lua_State* L)
+            {
+                lua_gc(L, LUA_GCSTEP, 1);
+                return 0;
+            },
+            "step"
+        );
+        lua_setglobal(L, "step");
+
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+        int result = luau_load(L, "=TablePresizing", bytecode, bytecodeSize, 0);
+        free(bytecode);
+        REQUIRE(result == LUA_OK);
+
+        if (native)
+        {
+            luau_codegen_create(L);
+            luau_codegen_compile(L, -1);
+        }
+
+        int status = lua_pcall(L, 0, 5, 0);
+        INFO(native);
+        std::string error = status == LUA_OK ? "" : lua_tostring(L, -1);
+        INFO(error);
+        REQUIRE(status == LUA_OK);
+
+        auto sizeArray = [&](int index)
+        {
+            return static_cast<const LuaTable*>(lua_topointer(L, index))->sizearray;
+        };
+
+        CHECK(sizeArray(-5) >= 100);
+        CHECK(sizeArray(-4) >= 100);
+        CHECK(sizeArray(-3) == 0);
+        CHECK(sizeArray(-2) == 0);
+        CHECK(sizeArray(-1) == 0);
+    }
+}

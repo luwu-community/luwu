@@ -425,6 +425,14 @@ static void traverseproto(global_State* g, Proto* f)
     // uses it as the class (its error path reads the class name).
     if (f->ownerclass)
         markobject(g, f->ownerclass);
+
+    // Luwu table presizing: a site's last table is weak. cleartablesites clears the ones that died, after marking.
+    if (f->sizetablesites > 0 && !f->tablesiteslisted)
+    {
+        f->tablesiteslisted = 1;
+        f->nextsited = g->sitedprotos;
+        g->sitedprotos = f;
+    }
 }
 
 static void traverseclosure(global_State* g, Closure* cl)
@@ -707,6 +715,33 @@ static void tableresizeprotected(lua_State* L, LuaTable* t, int nhsize)
 /*
 ** clear collected entries from weaktables
 */
+// Luwu table presizing: forgets the last tables of the marked protos' sites that are about to be collected. Only this
+// empties g->sitedprotos: a mark that luaC_fullgc abandons leaves its protos listed, which is safe because the sweep that
+// follows it frees nothing. Emptying the list anywhere else would leave protos marked as listed but off it, never
+// cleared, with sites pointing at freed tables.
+static size_t cleartablesites(global_State* g)
+{
+    size_t work = 0;
+    Proto* p = g->sitedprotos;
+    while (p)
+    {
+        for (int i = 0; i < p->sizetablesites; i++)
+        {
+            LuaTable* last = p->tablesites[i].last;
+            if (last && iswhite(obj2gco(last)))
+                p->tablesites[i].last = NULL;
+        }
+        work += p->sizetablesites * sizeof(TableSite);
+
+        Proto* next = p->nextsited;
+        p->nextsited = NULL;
+        p->tablesiteslisted = 0;
+        p = next;
+    }
+    g->sitedprotos = NULL;
+    return work;
+}
+
 static size_t cleartable(lua_State* L, GCObject* l)
 {
     size_t work = 0;
@@ -1099,6 +1134,7 @@ static size_t atomic(lua_State* L)
     // remove collected objects from weak tables
     work += cleartable(L, g->weak);
     g->weak = NULL;
+    work += cleartablesites(g);
 
 #ifdef LUAI_GCMETRICS
     g->gcmetrics.currcycle.atomictimeclear += recordGcDeltaTime(currts);
