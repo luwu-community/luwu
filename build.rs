@@ -9,10 +9,9 @@
 // rather than a repo-root `build/` directory. `cargo clean` is a builtin
 // that can't be hooked or aliased, but it does wipe `target/` unconditionally
 // -- so by building inside OUT_DIR, `cargo clean` genuinely deletes the C++
-// build artifacts too, for free. On Linux/macOS the Makefile's own `luwu`/
-// `luwu-analyze` targets then symlink those OUT_DIR binaries to the repo
-// root (`ln -fs`), so they stay easy to find; on Windows we do the same
-// manually since CMake has no equivalent alias rule. Those symlinks go
+// build artifacts too, for free. After every build, the repo root's `luwu`,
+// `luwu-analyze` and `luwu-tests` symlinks are repointed at those OUT_DIR
+// binaries so they stay easy to find. Those symlinks go
 // stale (dangling) after `cargo clean` until the next build recreates them.
 //
 // Compiling is slow and cargo hides a build script's stdout/stderr unless it
@@ -202,8 +201,16 @@ fn main() {
             eprintln!("\n{total} sources changed while make ran; compiling them again\n");
         }
 
-        // `make ... luwu luwu-analyze` already symlinks these to the repo
-        // root itself (see the Makefile's `luwu`/`luwu-analyze` targets).
+        // Luwu: the Makefile's `luwu`/`luwu-analyze` alias rules only relink when make thinks the symlink is out of date,
+        // and make judges that by the binary the symlink points to. A symlink pointing at a newer build elsewhere (an
+        // agent's `build-assert`) never gets moved back. Repoint every symlink at this build after every `cargo build`.
+        let root = Path::new(&manifest_dir);
+        for name in ["luwu", "luwu-analyze", "luwu-tests"] {
+            let binary = build_dir.join(name);
+            if binary.exists() {
+                refresh_symlink(&root.join(name), &binary);
+            }
+        }
         eprintln!("\nLuwu CLI binaries: {}/luwu, {0}/luwu-analyze\n", manifest_dir);
     }
 }

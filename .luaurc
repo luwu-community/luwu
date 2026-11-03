@@ -1,0 +1,9 @@
+{
+    "aliases": {
+        // following 3 are seal typedefs which we expect live in user home .seal
+        // if you don't have seal installed you need to install it 
+        "std": "~/.seal/typedefs/std/",
+        "interop": "~/.seal/typedefs/interop/",
+        "extra": "~/.seal/extra/"
+    }
+}
