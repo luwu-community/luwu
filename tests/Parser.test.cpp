@@ -8695,6 +8695,37 @@ local is_string = x is string
     );
 }
 
+// Luwu match expressions: `x is None` compares with the global `None` like `x is none`, but a local named `None` (a
+// user's class) is tested against like any other class
+TEST_CASE_FIXTURE(Fixture, "is_None_compares_unless_a_local_shadows_it")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuMatchExpressions, true};
+
+    AstStatBlock* block = parse(R"(
+local a = x is None
+local None = {}
+local b = x is None
+)");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 3);
+
+    AstStatLocal* global = block->body.data[0]->as<AstStatLocal>();
+    REQUIRE(global);
+    AstExprBinary* compare = global->values.data[0]->as<AstExprBinary>();
+    REQUIRE(compare);
+    CHECK_EQ(compare->op, AstExprBinary::CompareEq);
+    AstExprGlobal* none = compare->right->as<AstExprGlobal>();
+    REQUIRE(none);
+    CHECK_EQ(std::string(none->name.value), "None");
+
+    AstStatLocal* shadowed = block->body.data[2]->as<AstStatLocal>();
+    REQUIRE(shadowed);
+    AstExprCall* test = shadowed->values.data[0]->as<AstExprCall>();
+    REQUIRE(test);
+    REQUIRE_EQ(test->args.size, 2);
+    CHECK(test->args.data[1]->is<AstExprLocal>());
+}
+
 TEST_CASE_FIXTURE(Fixture, "for_when_is_stored_as_a_guard_around_the_body")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};

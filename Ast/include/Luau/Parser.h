@@ -808,6 +808,7 @@ private:
     AstName nameImplements;
     AstName nameMatched;
     AstName nameNone;
+    AstName nameNoneGlobal;
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;

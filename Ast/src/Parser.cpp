@@ -635,6 +635,7 @@ Parser::Parser(const char* buffer, size_t bufferSize, AstNameTable& names, Alloc
     nameImplements = names.getOrAdd("implements");
     nameMatched = names.getOrAdd(kMatchedLocalName);
     nameNone = names.getOrAdd("none");
+    nameNoneGlobal = names.getOrAdd("None");
     nameContinue = names.getOrAdd("continue");
     nameNumber = names.getOrAdd("number");
     nameAny = names.getOrAdd("any");
@@ -7926,8 +7927,9 @@ AstExprCall* Parser::makeGlobalCall(AstName library, std::optional<AstName> func
     return call;
 }
 
-// Luwu match expressions: `nil` or `none`, the values a type test or pattern compares with directly, as itself. `none`
-// is the global, never a local that shadows it.
+// Luwu match expressions: `nil`, `none` or `None`, the values a type test or pattern compares with directly, as
+// itself. `none` is the global, never a local that shadows it. `None` is the global holding `none`, but a local named
+// `None` (a user's `class None`) is a class to test against like any other.
 std::optional<AstExpr*> Parser::parseNothingValue()
 {
     const Lexeme& current = lexer.current();
@@ -7938,14 +7940,18 @@ std::optional<AstExpr*> Parser::parseNothingValue()
         return allocator.alloc<AstExprConstantNil>(location);
     }
 
-    if (current.type == Lexeme::Name && AstName(current.name) == nameNone)
-    {
-        Location location = current.location;
-        nextLexeme();
-        return allocator.alloc<AstExprGlobal>(location, nameNone);
-    }
+    if (current.type != Lexeme::Name)
+        return std::nullopt;
 
-    return std::nullopt;
+    AstName name(current.name);
+    AstLocal* const* local = localMap.find(name);
+    bool isNoneGlobal = name == nameNone || (name == nameNoneGlobal && !(local && *local));
+    if (!isNoneGlobal)
+        return std::nullopt;
+
+    Location location = current.location;
+    nextLexeme();
+    return allocator.alloc<AstExprGlobal>(location, name);
 }
 
 // Luwu match expressions: points `test`'s reads of `from` at `to` instead. `test` is one the type test parser built,
