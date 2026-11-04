@@ -230,7 +230,12 @@ TEST_CASE_FIXTURE(Fixture, "index_on_a_union_type_with_missing_property")
 
     MissingUnionProperty* mup = get<MissingUnionProperty>(result.errors[0]);
     REQUIRE(mup);
-    CHECK_EQ("Key 'x' is missing from 'B' in the type 'A | B'", toString(result.errors[0]));
+    CHECK_EQ(
+        "Key 'x' is missing from 'B' in the type 'A | B'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Add 'x: nil' to 'B' so that checking 'x' tells the variants apart",
+        toString(result.errors[0])
+    );
 
     if (!FFlag::DebugLuauForceOldSolver)
         CHECK_EQ("(A | B) -> number", toString(requireType("f")));
@@ -535,11 +540,15 @@ TEST_CASE_FIXTURE(Fixture, "optional_missing_key_error_details")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(4, result);
-    CHECK_EQ("Key 'y' is missing from 'C', 'D' in the type 'A | B | C | D'", toString(result.errors[0]));
+    const std::string missingY =
+        "Key 'y' is missing from 'C', 'D' in the type 'A | B | C | D'\n\n"
+        "Help (telling variants apart):\n"
+        "  • Add 'y: nil' to 'C', 'D' so that checking 'y' tells the variants apart";
+    CHECK_EQ(missingY, toString(result.errors[0]));
     CHECK_EQ("Type 'A | B | C | D' does not have key 'z'", toString(result.errors[1]));
 
     CHECK_EQ("Value of type '(A | B | C | D)?' could be nil", toString(result.errors[2]));
-    CHECK_EQ("Key 'y' is missing from 'C', 'D' in the type 'A | B | C | D'", toString(result.errors[3]));
+    CHECK_EQ(missingY, toString(result.errors[3]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "optional_iteration")
@@ -606,6 +615,7 @@ local oh : boolean = t.y
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_union_part")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     CheckResult result = check(R"(
@@ -626,11 +636,11 @@ end
     {
         CHECK_EQ(
             toString(result.errors[0]),
-            "Expected this to be '{ w: number }', but got 'X | Y | Z'; \n"
-            "this is because \n\t"
-            " * `X` is not a subtype of `{ w: number }`\n\t"
-            " * `Y` is not a subtype of `{ w: number }`\n\t"
-            " * `Z` is not a subtype of `{ w: number }`"
+            "Expected this to be '{ w: number }', but got 'X | Y | Z'\n"
+            "this is because\n    * "
+            "`X` is not a subtype of `{ w: number }`\n    * "
+            "`Y` is not a subtype of `{ w: number }`\n    * "
+            "`Z` is not a subtype of `{ w: number }`"
         );
     }
     else
@@ -638,7 +648,7 @@ end
         CHECK_EQ(toString(result.errors[0]), R"(Expected this to be '{ w: number }', but got 'X | Y | Z'
 caused by:
   Not all union options are compatible.
-required field 'w' not found in type
+required property 'w' not found in type
   'X'
 expected type:
   '{ w: number }')");
@@ -647,6 +657,7 @@ expected type:
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_union_all")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     CheckResult result = check(R"(
@@ -668,6 +679,7 @@ TEST_CASE_FIXTURE(Fixture, "error_detailed_union_all")
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_optional")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     CheckResult result = check(R"(
@@ -678,13 +690,13 @@ local a: X? = { w = 4 }
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     if (!FFlag::DebugLuauForceOldSolver)
-        CHECK("required field 'x' not found in type\n  '{ w: number }'\nexpected type:\n  'X'" == toString(result.errors[0]));
+        CHECK("required property 'x' not found in type\n  '{ w: number }'\nexpected type:\n  'X'" == toString(result.errors[0]));
     else
     {
         const std::string expected = R"(Expected this to be 'X?', but got 'a'
 caused by:
   None of the union options are compatible. For example:
-required field 'x' not found in type
+required property 'x' not found in type
   'a'
 expected type:
   'X')";
@@ -769,9 +781,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_union_write_indirect")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     // NOTE: union normalization will improve this message
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'((number) -> string) | ((number) -> string)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(string) -> number'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -861,9 +873,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_mentioning_generic_typepacks")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'((number) -> number) | ((number?, a...) -> (number?, a...))'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, a...) -> (number?, a...)'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -882,9 +894,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_mismatching_arg_arities")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'((number) -> nil) | ((number, string?) -> number)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number) -> number?'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -903,9 +915,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_mismatching_result_arities")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(() -> (string, string)) | (() -> number)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'() -> number | string'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -924,9 +936,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_variadics")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'((...string?) -> (...number)) | ((...string?) -> nil)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(...nil) -> (...number?)'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -934,6 +946,7 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_variadics")
 
 TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_mismatching_arg_variadics")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     CheckResult result = check(R"(
@@ -949,9 +962,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_mismatching_arg_variadics")
         // clang-format off
         const std::string expected =
             "Expected this to be\n"
-            "\t'((...number?) -> ()) | ((number?) -> ())'\n"
+            "    '((...number?) -> ()) | ((number?) -> ())'\n"
             "but got\n"
-            "\t'(number) -> ()'\n";
+            "    '(number) -> ()'\n";
         ;
         // clang-format on
         CHECK_LONG_STRINGS_EQ(expected, toString(result.errors[0]));
@@ -979,9 +992,9 @@ TEST_CASE_FIXTURE(Fixture, "union_of_functions_with_mismatching_result_variadics
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(() -> (...number)) | (() -> number)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'() -> (number?, ...number)'"
                                  "; none of the union options are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -1219,6 +1232,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "oss_2025")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "optional_mismatch_reasoning_names_the_optional_type")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     // The subtyping test fails on the `nil` member of the union, but naming that member makes the
     // reader work backwards to figure out which type it came from. Name the optional instead.
     CheckResult result = check(R"(
@@ -1233,17 +1247,136 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "optional_mismatch_reasoning_names_the_option
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(3, result);
-    CHECK_EQ("Expected this to be 'number', but got 'number?'; \n`number?` could be `nil`", toString(result.errors[0]));
+    CHECK_EQ("Expected this to be 'number', but got 'number?'\n`number?` could be `nil`", toString(result.errors[0]));
     CHECK_EQ(
-        "Expected this to be\n\t'{ n: number }'\nbut got\n\t'{ n: number? }'; \naccessing `n` results in `number?` in the latter type and "
+        "Expected this to be\n    '{ n: number }'\nbut got\n    '{ n: number? }'\naccessing `n` results in `number?` in the latter type and "
         "`number` in the former type, and `number?` could be `nil`",
         toString(result.errors[1])
     );
     CHECK_EQ(
-        "Expected this to be '{number}', but got '{number?}'; \nthe result of indexing is `number?` in the latter type and `number` in the former "
+        "Expected this to be '{number}', but got '{number?}'\nthe result of indexing is `number?` in the latter type and `number` in the former "
         "type, and `number?` could be `nil`",
         toString(result.errors[2])
     );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "method_call_on_a_union_whose_members_each_have_the_method")
+{
+    CheckResult result = check(R"(
+        --!strict
+        type A = { tag: "a", name: (self: A, prefix: string) -> string, size: (self: A) -> number, put: (self: A, v: number | string) -> () }
+        type B = { tag: "b", name: (self: B, prefix: string) -> string, size: (self: B) -> boolean, put: (self: B, v: number) -> () }
+
+        local v: A | B = nil :: any
+        local s = v:name("x")
+        local n = v:size()
+        v:put(1)
+        v:put("only A takes strings")
+        local f = v.name
+        local unpaired = f(v, "x")
+    )");
+
+    // `put("...")` doesn't suit B's `put`. `f(v)` isn't a method call, so `f` could be A's `name` while `v` is a B.
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 9);
+    CHECK_EQ(result.errors[1].location.begin.line, 11);
+    CHECK_EQ(toString(requireType("s")), "string");
+    CHECK_EQ(toString(requireType("n")), "boolean | number");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "method_call_on_a_union_keeps_one_of_each_member_signature")
+{
+    // each member writes the same signature out, which makes copies of the same types: the result is one of them, not a
+    // union of every copy
+    CheckResult result = check(R"(
+        --!strict
+        type A = { tag: "a", info: (self: A, opts: { x: number }) -> { comments: { string }? } }
+        type B = { tag: "b", info: (self: B, opts: { x: number }) -> { comments: { string }? } }
+        type C = { tag: "c", info: (self: C, opts: { x: number }) -> { comments: { string }? } }
+
+        local v: A | B | C = nil :: any
+        local i = v:info({ x = 1 })
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("i")), "{ comments: {string}? }");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "or_an_empty_table_is_the_table_type")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    // the empty literal is already a `{ Comment }`, so `x or {}` is just that
+    CheckResult result = check(R"(
+        --!strict
+        type Comment = { message: string }
+        local function get(): { comments: { Comment }? } return {} end
+        local comments = get().comments or {}
+        table.insert(comments, { message = "hi" })
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("comments")), "{Comment}");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "arrays_of_different_types_stay_apart_in_a_union")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        --!strict
+        local a: { number } = {}
+        local b: { string } = {}
+        local u = if math.random() > 0.5 then a else b
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("u")), "{number} | {string}");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "method_call_on_a_union_of_metatable_objects")
+{
+    CheckResult result = check(R"(
+        --!strict
+        local Reader = {}
+        Reader.__index = Reader
+        function Reader.read(self: Reader): string return "" end
+        type Reader = setmetatable<{ path: string }, typeof(Reader)>
+
+        local Writer = {}
+        Writer.__index = Writer
+        function Writer.read(self: Writer): string return "" end
+        type Writer = setmetatable<{ fd: number }, typeof(Writer)>
+
+        local function use(io: Reader | Writer): string
+            return io:read()
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "method_call_on_a_union_checks_each_member_against_its_own_method")
+{
+    CheckResult result = check(R"(
+        --!strict
+        type Circle = { tag: "circle", area: (self: Shape) -> number }
+        type Square = { tag: "square", area: (self: Shape) -> number }
+        type Shape = Circle | Square
+        local s: Shape = nil :: any
+        local n = s:area()
+
+        type A = { tag: "a", m: (self: B) -> () }
+        type B = { tag: "b", m: (self: A) -> () }
+        local v: A | B = nil :: any
+        v:m()
+    )");
+
+    // a `self` more general than its member is fine; `A`'s `m` can't take an `A`, nor `B`'s a `B`
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 11);
+    CHECK_EQ(result.errors[1].location.begin.line, 11);
+    CHECK_EQ(toString(requireType("n")), "number");
 }
 
 TEST_SUITE_END();
