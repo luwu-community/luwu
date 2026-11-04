@@ -57,6 +57,7 @@ TEST_CASE_FIXTURE(Fixture, "names_are_ascribed")
 
 TEST_CASE_FIXTURE(Fixture, "cannot_steal_hoisted_type_alias")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     // This is a tricky case. In order to support recursive type aliases,
     // we first walk the block and generate free types as placeholders.
     // We then walk the AST as normal. If we declare a type alias as below,
@@ -210,6 +211,7 @@ TEST_CASE_FIXTURE(Fixture, "mutually_recursive_aliases")
 
 TEST_CASE_FIXTURE(Fixture, "generic_aliases")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
 
     CheckResult result = check(R"(
@@ -226,6 +228,7 @@ TEST_CASE_FIXTURE(Fixture, "generic_aliases")
 
 TEST_CASE_FIXTURE(Fixture, "dependent_generic_aliases")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
 
     CheckResult result = check(R"(
@@ -912,7 +915,8 @@ TEST_CASE_FIXTURE(Fixture, "cannot_create_cyclic_type_with_unknown_module")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK(toString(result.errors[0]) == "Unknown type 'B.AAA'");
+    // Luwu: says which half of `B.AAA` is missing; upstream reports "Unknown type 'B.AAA'"
+    CHECK(toString(result.errors[0]) == "Unknown type 'B.AAA': 'B' isn't a required module");
 }
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_locations")
