@@ -60,6 +60,8 @@ struct IrLoweringX64
     OperandX64 memRegIntOp(IrOp op);
     OperandX64 memRegInt64Op(IrOp op);
     OperandX64 memRegTagOp(IrOp op);
+    // The TValue operand `op` refers to (a VM register, a constant or a pointer instruction result), plus offset
+    OperandX64 tvalueMemOp(IrOp op, int offset, SizeX64 size);
     RegisterX64 regOp(IrOp op);
     OperandX64 bufferAddrOp(IrOp bufferOp, IrOp indexOp, uint8_t tag);
     RegisterX64 vecOp(IrOp op, ScopedRegX64& tmp);

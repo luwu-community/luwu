@@ -1,0 +1,1129 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-load-buffer-data buf)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list buf)))
+        (gen:build :ldr (result-reg) (a64:mem (reg-op buf) (gen:offsetof :Buffer.data))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list buf)))
+        (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (reg-op buf) (gen:offsetof :Buffer.data)))))]))
+
+(define (lower-load-env)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+        (gen:build :ldr (result-reg) (a64:mem (a64:reg :rClosure) (gen:offsetof :Closure.env))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :qword) cpp:index))
+        (gen:build :mov (result-reg) (gen:name :sClosure))
+        (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (result-reg) (gen:offsetof :Closure.env)))))]))
+
+(define (lower-get-closure-upval-addr cl upval)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list cl)))
+        (gen:if (gen:== (gen:field cl :kind) (gen:enum :IrOpKind :Undef))
+          (gen:block
+            (gen:build :add (result-reg) (a64:reg :rClosure) (gen:cast "uint16_t" (gen:+ (gen:offsetof :Closure.l.uprefs) (gen:* (gen:call :vmUpvalueOp upval) (gen:sizeof "TValue"))))))
+          (gen:block
+            (gen:build :add (result-reg) (reg-op cl) (gen:cast "uint16_t" (gen:+ (gen:offsetof :Closure.l.uprefs) (gen:* (gen:call :vmUpvalueOp upval) (gen:sizeof "TValue"))))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list cl)))
+        (gen:if (gen:== (gen:field cl :kind) (gen:enum :IrOpKind :Undef))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:name :sClosure)))
+          (gen:block
+            (gen:if (gen:|| (gen:!= (gen:field cl :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op cl)))
+              (gen:block
+                (gen:build :mov (result-reg) (reg-op cl))))))
+        (gen:build :add (result-reg) (gen:cast "int32_t" (gen:+ (gen:offsetof :Closure.l.uprefs) (gen:* (gen:call :vmUpvalueOp upval) (gen:sizeof "TValue"))))))]))
+
+(define (lower-load-owner-class)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+        (gen:build :ldr (result-reg) (a64:mem (a64:reg :rClosure) (gen:offsetof :Closure.l.p)))
+        (gen:build :ldr (result-reg) (a64:mem (result-reg) (gen:offsetof :Proto.ownerclass))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :qword) cpp:index))
+        (gen:build :mov (result-reg) (gen:name :sClosure))
+        (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (result-reg) (gen:offsetof :Closure.l.p))))
+        (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (result-reg) (gen:offsetof :Proto.ownerclass)))))]))
+
+(define (lower-add-int a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)) (gen:<= (gen:cast "unsigned" (int-val b)) (gen:name :AssemblyBuilderA64::kMaxImmediate)))
+          (gen:block
+            (gen:build :add (result-reg) (reg-op a) (gen:cast "uint16_t" (int-val b))))
+          (gen:if (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant)) (gen:<= (gen:cast "unsigned" (int-val a)) (gen:name :AssemblyBuilderA64::kMaxImmediate)))
+            (gen:block
+              (gen:build :add (result-reg) (reg-op b) (gen:cast "uint16_t" (int-val a))))
+            (gen:block
+              (gen:let ([temp1 (gen:method cpp:lowering :tempInt a)])
+                (gen:let ([temp2 (gen:method cpp:lowering :tempInt b)])
+                  (gen:build :add (result-reg) temp1 temp2)))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:+ (reg-op b) (int-val a)))))
+          (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst))
+            (gen:block
+              (gen:if (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:== (result-reg) (reg-op a)))
+                (gen:block
+                  (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Inst))
+                    (gen:block
+                      (gen:build :add (result-reg) (reg-op b)))
+                    (gen:if (gen:== (int-val b) 1)
+                      (gen:block
+                        (gen:build :inc (result-reg)))
+                      (gen:block
+                        (gen:build :add (result-reg) (int-val b))))))
+                (gen:block
+                  (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Inst))
+                    (gen:block
+                      (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:+ (reg-op a) (reg-op b)))))
+                    (gen:block
+                      (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:+ (reg-op a) (int-val b)))))))))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]))
+
+(define (lower-sub-int a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)) (gen:<= (gen:cast "unsigned" (int-val b)) (gen:name :AssemblyBuilderA64::kMaxImmediate)))
+          (gen:block
+            (gen:build :sub (result-reg) (reg-op a) (gen:cast "uint16_t" (int-val b))))
+          (gen:block
+            (gen:let ([temp1 (gen:method cpp:lowering :tempInt a)])
+              (gen:let ([temp2 (gen:method cpp:lowering :tempInt b)])
+                (gen:build :sub (result-reg) temp1 temp2))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst))
+          (gen:block
+            (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+              (gen:block
+                (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+                  (gen:block
+                    (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:- (reg-op a) (int-val b)))))
+                  (gen:block
+                    (gen:build :sub (result-reg) (int-val b)))))
+              (gen:block
+                (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+                  (gen:block
+                    (gen:build :mov (result-reg) (reg-op a))))
+                (gen:build :sub (result-reg) (reg-op b)))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Inst))
+            (gen:block
+              (gen:build :mov (result-reg) (int-val a))
+              (gen:build :sub (result-reg) (reg-op b)))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]))
+
+(define (lower-add-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)) (gen:<= (gen:cast "uint64_t" (int64-val b)) (gen:name :AssemblyBuilderA64::kMaxImmediate)))
+          (gen:block
+            (gen:let ([temp (gen:method cpp:lowering :tempInt64 a)])
+              (gen:build :add (result-reg) temp (gen:cast "uint16_t" (int64-val b)))))
+          (gen:if (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant)) (gen:<= (gen:cast "uint64_t" (int64-val a)) (gen:name :AssemblyBuilderA64::kMaxImmediate)))
+            (gen:block
+              (gen:let ([temp (gen:method cpp:lowering :tempInt64 b)])
+                (gen:build :add (result-reg) temp (gen:cast "uint16_t" (int64-val a)))))
+            (gen:block
+              (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+                (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+                  (gen:build :add (result-reg) temp1 temp2)))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:if (gen:&& (gen:>= (int64-val a) (gen:name :INT32_MIN)) (gen:<= (int64-val a) (gen:name :INT32_MAX)))
+              (gen:block
+                (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:+ (reg-op b) (gen:cast "int32_t" (int64-val a))))))
+              (gen:block
+                (gen:build :mov64 (result-reg) (int64-val a))
+                (gen:build :add (result-reg) (reg-op b)))))
+          (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst))
+            (gen:block
+              (gen:if (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:== (result-reg) (reg-op a)))
+                (gen:block
+                  (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Inst))
+                    (gen:block
+                      (gen:build :add (result-reg) (reg-op b)))
+                    (gen:if (gen:== (int64-val b) 1)
+                      (gen:block
+                        (gen:build :inc (result-reg)))
+                      (gen:if (gen:&& (gen:>= (int64-val b) (gen:name :INT32_MIN)) (gen:<= (int64-val b) (gen:name :INT32_MAX)))
+                        (gen:block
+                          (gen:build :add (result-reg) (gen:cast "int32_t" (int64-val b))))
+                        (gen:block
+                          (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+                            (gen:build :mov64 (x64:scoped-reg tmp) (int64-val b))
+                            (gen:build :add (result-reg) (x64:scoped-reg tmp))))))))
+                (gen:block
+                  (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Inst))
+                    (gen:block
+                      (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:+ (reg-op a) (reg-op b)))))
+                    (gen:if (gen:&& (gen:>= (int64-val b) (gen:name :INT32_MIN)) (gen:<= (int64-val b) (gen:name :INT32_MAX)))
+                      (gen:block
+                        (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:+ (reg-op a) (gen:cast "int32_t" (int64-val b))))))
+                      (gen:block
+                        (gen:build :mov64 (result-reg) (int64-val b))
+                        (gen:build :add (result-reg) (reg-op a))))))))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]))
+
+(define (lower-sub-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)) (gen:<= (gen:cast "uint64_t" (int64-val b)) (gen:name :AssemblyBuilderA64::kMaxImmediate)))
+          (gen:block
+            (gen:let ([temp (gen:method cpp:lowering :tempInt64 a)])
+              (gen:build :sub (result-reg) temp (gen:cast "uint16_t" (int64-val b)))))
+          (gen:block
+            (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+              (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+                (gen:build :sub (result-reg) temp1 temp2))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst))
+          (gen:block
+            (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+              (gen:block
+                (gen:if (gen:&& (gen:>= (int64-val b) (gen:name :INT32_MIN)) (gen:<= (int64-val b) (gen:name :INT32_MAX)))
+                  (gen:block
+                    (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+                      (gen:block
+                        (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:- (reg-op a) (gen:cast "int32_t" (int64-val b))))))
+                      (gen:block
+                        (gen:build :sub (result-reg) (gen:cast "int32_t" (int64-val b))))))
+                  (gen:block
+                    (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+                      (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+                        (gen:block
+                          (gen:build :mov (result-reg) (reg-op a))))
+                      (gen:build :mov64 (x64:scoped-reg tmp) (int64-val b))
+                      (gen:build :sub (result-reg) (x64:scoped-reg tmp))))))
+              (gen:block
+                (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+                  (gen:block
+                    (gen:build :mov (result-reg) (reg-op a))))
+                (gen:build :sub (result-reg) (reg-op b)))))
+          (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Inst))
+            (gen:block
+              (gen:build :mov64 (result-reg) (int64-val a))
+              (gen:build :sub (result-reg) (reg-op b)))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]))
+
+(define (lower-mul-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+            (gen:build :mul (result-reg) temp1 temp2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+        (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op a))
+        (gen:build :imul (result-reg) (gen:method cpp:lowering :memRegInt64Op b)))]))
+
+(define (lower-sexti8-int val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list val)))
+        (gen:build :sbfx (result-reg) (reg-op val) 0 8))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list val)))
+        (gen:build :movsx (result-reg) (gen:call :byteReg (reg-op val))))]))
+
+(define (lower-sexti16-int val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list val)))
+        (gen:build :sbfx (result-reg) (reg-op val) 0 16))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list val)))
+        (gen:build :movsx (result-reg) (gen:call :wordReg (reg-op val))))]))
+
+(define (lower-add-num a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :d) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempDouble a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempDouble b)])
+            (gen:build :fadd (result-reg) t1 t2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovsd (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp a))
+              (gen:build :vaddsd (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp b))))
+          (gen:block
+            (gen:build :vaddsd (result-reg) (reg-op a) (gen:method cpp:lowering :memRegDoubleOp b)))))]))
+
+(define (lower-sub-num a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :d) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempDouble a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempDouble b)])
+            (gen:build :fsub (result-reg) t1 t2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovsd (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp a))
+              (gen:build :vsubsd (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp b))))
+          (gen:block
+            (gen:build :vsubsd (result-reg) (reg-op a) (gen:method cpp:lowering :memRegDoubleOp b)))))]))
+
+(define (lower-mul-num a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :d) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempDouble a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempDouble b)])
+            (gen:build :fmul (result-reg) t1 t2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovsd (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp a))
+              (gen:build :vmulsd (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp b))))
+          (gen:block
+            (gen:build :vmulsd (result-reg) (reg-op a) (gen:method cpp:lowering :memRegDoubleOp b)))))]))
+
+(define (lower-div-num a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :d) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempDouble a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempDouble b)])
+            (gen:build :fdiv (result-reg) t1 t2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovsd (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp a))
+              (gen:build :vdivsd (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp b))))
+          (gen:block
+            (gen:build :vdivsd (result-reg) (reg-op a) (gen:method cpp:lowering :memRegDoubleOp b)))))]))
+
+(define (lower-idiv-num a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :d) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempDouble a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempDouble b)])
+            (gen:build :fdiv (result-reg) t1 t2)
+            (gen:build :frintm (result-reg) (result-reg)))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovsd (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp a))
+              (gen:build :vdivsd (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp b))))
+          (gen:block
+            (gen:build :vdivsd (result-reg) (reg-op a) (gen:method cpp:lowering :memRegDoubleOp b))))
+        (gen:build :vroundsd (result-reg) (result-reg) (result-reg) (gen:enum :RoundingModeX64 :RoundToNegativeInfinity)))]))
+
+(define (lower-min-num a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :d) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempDouble a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempDouble b)])
+            (gen:build :fcmp t1 t2)
+            (gen:build :fcsel (result-reg) t1 t2 (gen:call :getConditionFP (gen:enum :IrCondition :Less))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovsd (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp a))
+              (gen:build :vminsd (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp b))))
+          (gen:block
+            (gen:build :vminsd (result-reg) (reg-op a) (gen:method cpp:lowering :memRegDoubleOp b)))))]))
+
+(define (lower-max-num a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :d) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempDouble a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempDouble b)])
+            (gen:build :fcmp t1 t2)
+            (gen:build :fcsel (result-reg) t1 t2 (gen:call :getConditionFP (gen:enum :IrCondition :Greater))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovsd (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp a))
+              (gen:build :vmaxsd (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegDoubleOp b))))
+          (gen:block
+            (gen:build :vmaxsd (result-reg) (reg-op a) (gen:method cpp:lowering :memRegDoubleOp b)))))]))
+
+(define (lower-floor-num a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :d) cpp:index (gen:init-list a)))
+        (gen:let ([t (gen:method cpp:lowering :tempDouble a)])
+          (gen:build :frintm (result-reg) t)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a)))
+        (gen:build :vroundsd (result-reg) (result-reg) (gen:method cpp:lowering :memRegDoubleOp a) (gen:enum :RoundingModeX64 :RoundToNegativeInfinity)))]))
+
+(define (lower-ceil-num a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :d) cpp:index (gen:init-list a)))
+        (gen:let ([t (gen:method cpp:lowering :tempDouble a)])
+          (gen:build :frintp (result-reg) t)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a)))
+        (gen:build :vroundsd (result-reg) (result-reg) (gen:method cpp:lowering :memRegDoubleOp a) (gen:enum :RoundingModeX64 :RoundToPositiveInfinity)))]))
+
+(define (lower-sqrt-num a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :d) cpp:index (gen:init-list a)))
+        (gen:let ([t (gen:method cpp:lowering :tempDouble a)])
+          (gen:build :fsqrt (result-reg) t)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a)))
+        (gen:build :vsqrtsd (result-reg) (result-reg) (gen:method cpp:lowering :memRegDoubleOp a)))]))
+
+(define (lower-add-float a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :s) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempFloat a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempFloat b)])
+            (gen:build :fadd (result-reg) t1 t2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovss (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp a))
+              (gen:build :vaddss (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp b))))
+          (gen:block
+            (gen:build :vaddss (result-reg) (reg-op a) (gen:method cpp:lowering :memRegFloatOp b)))))]))
+
+(define (lower-sub-float a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :s) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempFloat a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempFloat b)])
+            (gen:build :fsub (result-reg) t1 t2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovss (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp a))
+              (gen:build :vsubss (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp b))))
+          (gen:block
+            (gen:build :vsubss (result-reg) (reg-op a) (gen:method cpp:lowering :memRegFloatOp b)))))]))
+
+(define (lower-mul-float a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :s) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempFloat a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempFloat b)])
+            (gen:build :fmul (result-reg) t1 t2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovss (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp a))
+              (gen:build :vmulss (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp b))))
+          (gen:block
+            (gen:build :vmulss (result-reg) (reg-op a) (gen:method cpp:lowering :memRegFloatOp b)))))]))
+
+(define (lower-div-float a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :s) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempFloat a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempFloat b)])
+            (gen:build :fdiv (result-reg) t1 t2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovss (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp a))
+              (gen:build :vdivss (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp b))))
+          (gen:block
+            (gen:build :vdivss (result-reg) (reg-op a) (gen:method cpp:lowering :memRegFloatOp b)))))]))
+
+(define (lower-min-float a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :s) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempFloat a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempFloat b)])
+            (gen:build :fcmp t1 t2)
+            (gen:build :fcsel (result-reg) t1 t2 (gen:call :getConditionFP (gen:enum :IrCondition :Less))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovss (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp a))
+              (gen:build :vminss (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp b))))
+          (gen:block
+            (gen:build :vminss (result-reg) (reg-op a) (gen:method cpp:lowering :memRegFloatOp b)))))]))
+
+(define (lower-max-float a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :s) cpp:index (gen:init-list a b)))
+        (gen:let ([t1 (gen:method cpp:lowering :tempFloat a)])
+          (gen:let ([t2 (gen:method cpp:lowering :tempFloat b)])
+            (gen:build :fcmp t1 t2)
+            (gen:build :fcsel (result-reg) t1 t2 (gen:call :getConditionFP (gen:enum :IrCondition :Greater))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a b)))
+        (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+              (gen:build :vmovss (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp a))
+              (gen:build :vmaxss (result-reg) (x64:scoped-reg tmp) (gen:method cpp:lowering :memRegFloatOp b))))
+          (gen:block
+            (gen:build :vmaxss (result-reg) (reg-op a) (gen:method cpp:lowering :memRegFloatOp b)))))]))
+
+(define (lower-floor-float a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :s) cpp:index (gen:init-list a)))
+        (gen:let ([t (gen:method cpp:lowering :tempFloat a)])
+          (gen:build :frintm (result-reg) t)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a)))
+        (gen:build :vroundss (result-reg) (result-reg) (gen:method cpp:lowering :memRegFloatOp a) (gen:enum :RoundingModeX64 :RoundToNegativeInfinity)))]))
+
+(define (lower-ceil-float a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :s) cpp:index (gen:init-list a)))
+        (gen:let ([t (gen:method cpp:lowering :tempFloat a)])
+          (gen:build :frintp (result-reg) t)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a)))
+        (gen:build :vroundss (result-reg) (result-reg) (gen:method cpp:lowering :memRegFloatOp a) (gen:enum :RoundingModeX64 :RoundToPositiveInfinity)))]))
+
+(define (lower-sqrt-float a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :s) cpp:index (gen:init-list a)))
+        (gen:let ([t (gen:method cpp:lowering :tempFloat a)])
+          (gen:build :fsqrt (result-reg) t)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a)))
+        (gen:build :vsqrtss (result-reg) (result-reg) (gen:method cpp:lowering :memRegFloatOp a)))]))
+
+(define (lower-jump-eq-pointer a b then-block else-block)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:build :cmp (reg-op a) (reg-op b))
+        (gen:build :b (gen:enum :ConditionA64 :Equal) (label-of then-block))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of else-block) cpp:next))]
+    [:x64
+      (gen:seq
+        (gen:build :cmp (reg-op a) (reg-op b))
+        (gen:build :jcc (gen:enum :ConditionX64 :Equal) (label-of then-block))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of else-block) cpp:next))]))
+
+(define (lower-string-len str)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :w) cpp:index))
+        (gen:build :ldr (result-reg) (a64:mem (reg-op str) (gen:offsetof :TString.len))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :dword) cpp:index))
+        (gen:build :mov (result-reg) (gen:index (gen:name :dword) (gen:+ (reg-op str) (gen:offsetof :TString.len)))))]))
+
+(define (lower-buffer-isfrozen buf)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :w) cpp:index))
+        (gen:let ([tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+          (gen:build :ldrb tmp (a64:mem (reg-op buf) (gen:offsetof :Buffer.mode)))
+          (gen:build :cmp tmp (gen:cast "uint16_t" (gen:name :LUA_BHOST_IMMUTABLE)))
+          (gen:build :cset (result-reg) (gen:enum :ConditionA64 :Equal))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :dword) cpp:index))
+        (gen:build :xor_ (result-reg) (result-reg))
+        (gen:build :cmp (gen:index (gen:name :byte) (gen:+ (reg-op buf) (gen:offsetof :Buffer.mode))) (gen:name :LUA_BHOST_IMMUTABLE))
+        (gen:build :setcc (gen:enum :ConditionX64 :Equal) (gen:call :byteReg (result-reg))))]))
+
+(define (lower-int-to-num a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :d) cpp:index))
+        (gen:let ([tmp (gen:method cpp:lowering :tempInt a)])
+          (gen:build :scvtf (result-reg) tmp)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :xmmword) cpp:index))
+        (gen:build :vcvtsi2sd (result-reg) (result-reg) (reg-op a)))]))
+
+(define (lower-int64-to-num a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :d) cpp:index))
+        (gen:let ([tmp (gen:method cpp:lowering :tempInt64 a)])
+          (gen:build :scvtf (result-reg) tmp)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :xmmword) cpp:index))
+        (gen:build :vcvtsi2sd (result-reg) (result-reg) (reg-op a)))]))
+
+(define (lower-uint-to-num a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :d) cpp:index))
+        (gen:let ([tmp (gen:method cpp:lowering :tempInt a)])
+          (gen:build :ucvtf (result-reg) tmp)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :xmmword) cpp:index))
+        (gen:if (gen:== (gen:field (gen:method (gen:field cpp:lowering :function) :instOp a) :cmd) (gen:enum :IrCmd :NUM_TO_UINT))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :dword))])
+              (gen:build :mov (x64:scoped-reg tmp) (reg-op a))
+              (gen:build :vcvtsi2sd (result-reg) (result-reg) (gen:call :qwordReg (x64:scoped-reg tmp)))))
+          (gen:block
+            (gen:assert (gen:! (gen:== (gen:field (gen:method (gen:field cpp:lowering :function) :instOp a) :cmd) (gen:enum :IrCmd :SUBSTITUTE))))
+            (gen:build :vcvtsi2sd (result-reg) (result-reg) (gen:call :qwordReg (reg-op a))))))]))
+
+(define (lower-uint-to-float a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :s) cpp:index))
+        (gen:let ([tmp (gen:method cpp:lowering :tempInt a)])
+          (gen:build :ucvtf (result-reg) tmp)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :xmmword) cpp:index))
+        (gen:if (gen:== (gen:field (gen:method (gen:field cpp:lowering :function) :instOp a) :cmd) (gen:enum :IrCmd :NUM_TO_UINT))
+          (gen:block
+            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :dword))])
+              (gen:build :mov (x64:scoped-reg tmp) (reg-op a))
+              (gen:build :vcvtsi2ss (result-reg) (result-reg) (gen:call :qwordReg (x64:scoped-reg tmp)))))
+          (gen:block
+            (gen:assert (gen:! (gen:== (gen:field (gen:method (gen:field cpp:lowering :function) :instOp a) :cmd) (gen:enum :IrCmd :SUBSTITUTE))))
+            (gen:build :vcvtsi2ss (result-reg) (result-reg) (gen:call :qwordReg (reg-op a))))))]))
+
+(define (lower-num-to-int a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :w) cpp:index))
+        (gen:let ([tmp (gen:method cpp:lowering :tempDouble a)])
+          (gen:build :fcvtzs (result-reg) tmp)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :dword) cpp:index))
+        (gen:build :vcvttsd2si (result-reg) (gen:method cpp:lowering :memRegDoubleOp a)))]))
+
+(define (lower-num-to-int64 a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+        (gen:let ([tmp (gen:method cpp:lowering :tempDouble a)])
+          (gen:build :fcvtzs (result-reg) tmp)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :qword) cpp:index))
+        (gen:build :vcvttsd2si (result-reg) (gen:method cpp:lowering :memRegDoubleOp a)))]))
+
+(define (lower-num-to-uint a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :w) cpp:index))
+        (gen:let ([tmp (gen:method cpp:lowering :tempDouble a)])
+          (gen:build :fcvtzs (gen:call :castReg (gen:enum :KindA64 :x) (result-reg)) tmp)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :dword) cpp:index))
+        (gen:build :vcvttsd2si (gen:call :qwordReg (result-reg)) (gen:method cpp:lowering :memRegDoubleOp a)))]))
+
+(define (lower-float-to-num a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :d) cpp:index))
+        (gen:build :fcvt (result-reg) (reg-op a)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a)))
+        (gen:build :vcvtss2sd (result-reg) (result-reg) (gen:method cpp:lowering :memRegDoubleOp a)))]))
+
+(define (lower-num-to-float a)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :s) cpp:index))
+        (gen:build :fcvt (result-reg) (reg-op a)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :xmmword) cpp:index (gen:init-list a)))
+        (gen:build :vcvtsd2ss (result-reg) (result-reg) (gen:method cpp:lowering :memRegDoubleOp a)))]))
+
+(define (lower-truncate-uint val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list val)))
+        (gen:build :ubfx (gen:call :castReg (gen:enum :KindA64 :x) (result-reg)) (gen:call :castReg (gen:enum :KindA64 :x) (reg-op val)) 0 32))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list val)))
+        (gen:build :mov (result-reg) (reg-op val)))]))
+
+(define (lower-adjust-stack-to-top)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+          (gen:build :ldr tmp (a64:mem (a64:reg :rState) (gen:offsetof :lua_State.ci)))
+          (gen:build :ldr tmp (a64:mem tmp (gen:offsetof :CallInfo.top)))
+          (gen:build :str tmp (a64:mem (a64:reg :rState) (gen:offsetof :lua_State.top)))))]
+    [:x64
+      (gen:seq
+        (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+          (gen:build :mov (x64:scoped-reg tmp) (gen:index (gen:name :qword) (gen:+ (x64:reg :rState) (gen:offsetof :lua_State.ci))))
+          (gen:build :mov (x64:scoped-reg tmp) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg tmp) (gen:offsetof :CallInfo.top))))
+          (gen:build :mov (gen:index (gen:name :qword) (gen:+ (x64:reg :rState) (gen:offsetof :lua_State.top))) (x64:scoped-reg tmp))))]))
+
+(define (lower-check-fastcall-res res fallback)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:build :cmp (reg-op res) (gen:cast "uint16_t" 0))
+        (gen:build :b (gen:enum :ConditionA64 :Less) (label-of fallback)))]
+    [:x64
+      (gen:seq
+        (gen:build :test (reg-op res) (reg-op res))
+        (gen:build :jcc (gen:enum :ConditionX64 :Less) (label-of fallback)))]))
+
+(define (lower-check-tag a b fallback)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([fresh (:type "Label")])
+          (gen:if (gen:== (tag-val b) 0)
+            (gen:block
+              (gen:build :cbnz (reg-op a) (gen:method cpp:lowering :getTargetLabel fallback cpp:index fresh))
+              (gen:method cpp:lowering :finalizeTargetLabel fallback cpp:index fresh))
+            (gen:block
+              (gen:build :cmp (reg-op a) (gen:cast "uint16_t" (tag-val b)))
+              (gen:build :b (gen:enum :ConditionA64 :NotEqual) (gen:method cpp:lowering :getTargetLabel fallback cpp:index fresh))
+              (gen:method cpp:lowering :finalizeTargetLabel fallback cpp:index fresh)))))]
+    [:x64
+      (gen:seq
+        (gen:build :cmp (gen:method cpp:lowering :memRegTagOp a) (tag-val b))
+        (gen:method cpp:lowering :jumpOrAbortOnUndef (gen:enum :ConditionX64 :NotEqual) fallback cpp:index cpp:next))]))
+
+(define (lower-check-readonly table fallback)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([fresh (:type "Label")]
+                  [tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+          (gen:build :ldrb tmp (a64:mem (reg-op table) (gen:offsetof :LuaTable.readonly)))
+          (gen:build :cbnz tmp (gen:method cpp:lowering :getTargetLabel fallback cpp:index fresh))
+          (gen:method cpp:lowering :finalizeTargetLabel fallback cpp:index fresh)))]
+    [:x64
+      (gen:seq
+        (gen:build :cmp (gen:index (gen:name :byte) (gen:+ (reg-op table) (gen:offsetof :LuaTable.readonly))) 0)
+        (gen:method cpp:lowering :jumpOrAbortOnUndef (gen:enum :ConditionX64 :NotEqual) fallback cpp:index cpp:next))]))
+
+(define (lower-check-no-metatable table fallback)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([fresh (:type "Label")]
+                  [tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+          (gen:build :ldr tmp (a64:mem (reg-op table) (gen:offsetof :LuaTable.metatable)))
+          (gen:build :cbnz tmp (gen:method cpp:lowering :getTargetLabel fallback cpp:index fresh))
+          (gen:method cpp:lowering :finalizeTargetLabel fallback cpp:index fresh)))]
+    [:x64
+      (gen:seq
+        (gen:build :cmp (gen:index (gen:name :qword) (gen:+ (reg-op table) (gen:offsetof :LuaTable.metatable))) 0)
+        (gen:method cpp:lowering :jumpOrAbortOnUndef (gen:enum :ConditionX64 :NotEqual) fallback cpp:index cpp:next))]))
+
+(define (lower-check-node-no-next node fallback)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([fresh (:type "Label")]
+                  [tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+          (gen:build :ldr tmp (a64:mem (reg-op node) (gen:+ (gen:offsetof :LuaNode.key) (gen:name :kOffsetOfTKeyTagNext))))
+          (gen:build :lsr tmp tmp (gen:name :kTKeyTagBits))
+          (gen:build :cbnz tmp (gen:method cpp:lowering :getTargetLabel fallback cpp:index fresh))
+          (gen:method cpp:lowering :finalizeTargetLabel fallback cpp:index fresh)))]
+    [:x64
+      (gen:seq
+        (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :dword))])
+          (gen:build :mov (x64:scoped-reg tmp) (gen:index (gen:name :dword) (gen:+ (gen:+ (reg-op node) (gen:offsetof :LuaNode.key)) (gen:name :kOffsetOfTKeyTagNext))))
+          (gen:build :shr (x64:scoped-reg tmp) (gen:name :kTKeyTagBits))
+          (gen:method cpp:lowering :jumpOrAbortOnUndef (gen:enum :ConditionX64 :NotZero) fallback cpp:index cpp:next)))]))
+
+(define (lower-check-node-value node fallback)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([fresh (:type "Label")]
+                  [tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+          (gen:build :ldr tmp (a64:mem (reg-op node) (gen:offsetof :LuaNode.val.tt)))
+          (gen:build :cbz tmp (gen:method cpp:lowering :getTargetLabel fallback cpp:index fresh))
+          (gen:method cpp:lowering :finalizeTargetLabel fallback cpp:index fresh)))]
+    [:x64
+      (gen:seq
+        (gen:build :cmp (gen:index (gen:name :dword) (gen:+ (reg-op node) (gen:offsetof :LuaNode.val.tt))) 0)
+        (gen:method cpp:lowering :jumpOrAbortOnUndef (gen:enum :ConditionX64 :Equal) fallback cpp:index cpp:next))]))
+
+(define (lower-check-object-class obj expected-class fallback)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([fresh (:type "Label")]
+                  [tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+          (gen:build :ldr tmp (a64:mem (reg-op obj) (gen:offsetof :LuauObject.lclass)))
+          (gen:build :cmp tmp (reg-op expected-class))
+          (gen:build :b (gen:enum :ConditionA64 :NotEqual) (gen:method cpp:lowering :getTargetLabel fallback cpp:index fresh))
+          (gen:method cpp:lowering :finalizeTargetLabel fallback cpp:index fresh)))]
+    [:x64
+      (gen:seq
+        (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+          (gen:build :mov (x64:scoped-reg tmp) (gen:index (gen:name :qword) (gen:+ (reg-op obj) (gen:offsetof :LuauObject.lclass))))
+          (gen:build :cmp (x64:scoped-reg tmp) (reg-op expected-class))
+          (gen:method cpp:lowering :jumpOrAbortOnUndef (gen:enum :ConditionX64 :NotEqual) fallback cpp:index cpp:next)))]))
+
+(define (lower-object-member-addr obj offset)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+        (gen:call :emitAddOffset cpp:build (result-reg) (reg-op obj) (gen:+ (gen:name :LUAR_OBJECT_MEMBERS_OFFSET) (gen:* (uint-val offset) (gen:sizeof "TValue")))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :qword) cpp:index))
+        (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:+ (reg-op obj) (gen:cast "int32_t" (gen:+ (gen:name :LUAR_OBJECT_MEMBERS_OFFSET) (gen:* (uint-val offset) (gen:sizeof "TValue"))))))))]))
+
+(define (lower-check-buffer-mutable buf fallback)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([fresh (:type "Label")]
+                  [tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+          (gen:build :ldrb tmp (a64:mem (reg-op buf) (gen:offsetof :Buffer.mode)))
+          (gen:build :cmp tmp (gen:cast "uint16_t" (gen:name :LUA_BHOST_IMMUTABLE)))
+          (gen:build :b (gen:enum :ConditionA64 :Equal) (gen:method cpp:lowering :getTargetLabel fallback cpp:index fresh))
+          (gen:method cpp:lowering :finalizeTargetLabel fallback cpp:index fresh)))]
+    [:x64
+      (gen:seq
+        (gen:build :cmp (gen:index (gen:name :byte) (gen:+ (reg-op buf) (gen:offsetof :Buffer.mode))) (gen:name :LUA_BHOST_IMMUTABLE))
+        (gen:method cpp:lowering :jumpOrAbortOnUndef (gen:enum :ConditionX64 :Equal) fallback cpp:index cpp:next))]))
+
+(define (lower-check-userdata-tag udata tag fallback)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([fresh (:type "Label")]
+                  [tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+          (gen:build :ldrb tmp (a64:mem (reg-op udata) (gen:offsetof :Udata.tag)))
+          (gen:build :cmp tmp (gen:cast "uint16_t" (int-val tag)))
+          (gen:build :b (gen:enum :ConditionA64 :NotEqual) (gen:method cpp:lowering :getTargetLabel fallback cpp:index fresh))
+          (gen:method cpp:lowering :finalizeTargetLabel fallback cpp:index fresh)))]
+    [:x64
+      (gen:seq
+        (gen:build :cmp (gen:index (gen:name :byte) (gen:+ (reg-op udata) (gen:offsetof :Udata.tag))) (int-val tag))
+        (gen:method cpp:lowering :jumpOrAbortOnUndef (gen:enum :ConditionX64 :NotEqual) fallback cpp:index cpp:next))]))
+
+(define (lower-set-savedpc pc-offset)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([pc-addr (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                  [ci (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+          (gen:call :emitAddOffset cpp:build pc-addr (a64:reg :rCode) (gen:* (uint-val pc-offset) (gen:sizeof "Instruction")))
+          (gen:build :ldr ci (a64:mem (a64:reg :rState) (gen:offsetof :lua_State.ci)))
+          (gen:build :str pc-addr (a64:mem ci (gen:offsetof :CallInfo.savedpc)))))]
+    [:x64
+      (gen:seq
+        (gen:let ([ci (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                  [pc-addr (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+          (gen:build :mov (x64:scoped-reg pc-addr) (gen:name :sCode))
+          (gen:build :add (x64:scoped-reg pc-addr) (gen:* (uint-val pc-offset) (gen:sizeof "Instruction")))
+          (gen:build :mov (x64:scoped-reg ci) (gen:index (gen:name :qword) (gen:+ (x64:reg :rState) (gen:offsetof :lua_State.ci))))
+          (gen:build :mov (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg ci) (gen:offsetof :CallInfo.savedpc))) (x64:scoped-reg pc-addr))))]))
+
+(define (lower-bitand-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+            (gen:build :and_ (result-reg) temp1 temp2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+        (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op a))))
+        (gen:build :and_ (result-reg) (gen:method cpp:lowering :memRegInt64Op b)))]))
+
+(define (lower-bitxor-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+            (gen:build :eor (result-reg) temp1 temp2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+        (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op a))))
+        (gen:build :xor_ (result-reg) (gen:method cpp:lowering :memRegInt64Op b)))]))
+
+(define (lower-bitor-int64 a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list a b)))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempInt64 a)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempInt64 b)])
+            (gen:build :orr (result-reg) temp1 temp2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list a)))
+        (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op a))))
+        (gen:build :or_ (result-reg) (gen:method cpp:lowering :memRegInt64Op b)))]))
+
+(define (lower-bitnot-int64 val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list val)))
+        (gen:build :mvn_ (result-reg) (gen:method cpp:lowering :tempInt64 val)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list val)))
+        (gen:if (gen:|| (gen:!= (gen:field val :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op val)))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op val))))
+        (gen:build :not_ (result-reg)))]))
+
+(define (lower-byteswap-int64 val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list val)))
+        (gen:build :rev (result-reg) (gen:method cpp:lowering :tempInt64 val)))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list val)))
+        (gen:if (gen:|| (gen:!= (gen:field val :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op val)))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegInt64Op val))))
+        (gen:build :bswap (result-reg)))]))
+
+(define (lower-bitand-uint a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))) (gen:call :AssemblyBuilderA64::isMaskSupported (gen:cast "unsigned" (int-val b))))
+          (gen:block
+            (gen:build :and_ (result-reg) (reg-op a) (gen:cast "unsigned" (int-val b))))
+          (gen:block
+            (gen:let ([temp1 (gen:method cpp:lowering :tempInt a)])
+              (gen:let ([temp2 (gen:method cpp:lowering :tempInt b)])
+                (gen:build :and_ (result-reg) temp1 temp2))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+        (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegUintOp a))))
+        (gen:build :and_ (result-reg) (gen:method cpp:lowering :memRegUintOp b)))]))
+
+(define (lower-bitxor-uint a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))) (gen:call :AssemblyBuilderA64::isMaskSupported (gen:cast "unsigned" (int-val b))))
+          (gen:block
+            (gen:build :eor (result-reg) (reg-op a) (gen:cast "unsigned" (int-val b))))
+          (gen:block
+            (gen:let ([temp1 (gen:method cpp:lowering :tempInt a)])
+              (gen:let ([temp2 (gen:method cpp:lowering :tempInt b)])
+                (gen:build :eor (result-reg) temp1 temp2))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+        (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegUintOp a))))
+        (gen:build :xor_ (result-reg) (gen:method cpp:lowering :memRegUintOp b)))]))
+
+(define (lower-bitor-uint a b)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a b)))
+        (gen:if (gen:&& (gen:&& (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))) (gen:call :AssemblyBuilderA64::isMaskSupported (gen:cast "unsigned" (int-val b))))
+          (gen:block
+            (gen:build :orr (result-reg) (reg-op a) (gen:cast "unsigned" (int-val b))))
+          (gen:block
+            (gen:let ([temp1 (gen:method cpp:lowering :tempInt a)])
+              (gen:let ([temp2 (gen:method cpp:lowering :tempInt b)])
+                (gen:build :orr (result-reg) temp1 temp2))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list a)))
+        (gen:if (gen:|| (gen:!= (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op a)))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegUintOp a))))
+        (gen:build :or_ (result-reg) (gen:method cpp:lowering :memRegUintOp b)))]))
+
+(define (lower-bitnot-uint val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list val)))
+        (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+              (gen:build :mov tmp (int-val val))
+              (gen:build :mvn_ (result-reg) tmp)))
+          (gen:block
+            (gen:build :mvn_ (result-reg) (reg-op val)))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list val)))
+        (gen:if (gen:|| (gen:!= (gen:field val :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op val)))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegUintOp val))))
+        (gen:build :not_ (result-reg)))]))
+
+(define (lower-byteswap-uint val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list val)))
+        (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:let ([tmp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+              (gen:build :mov tmp (int-val val))
+              (gen:build :rev (result-reg) tmp)))
+          (gen:block
+            (gen:build :rev (result-reg) (reg-op val)))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list val)))
+        (gen:if (gen:|| (gen:!= (gen:field val :kind) (gen:enum :IrOpKind :Inst)) (gen:!= (result-reg) (reg-op val)))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:method cpp:lowering :memRegUintOp val))))
+        (gen:build :bswap (result-reg)))]))

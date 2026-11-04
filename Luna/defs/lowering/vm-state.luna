@@ -1,0 +1,192 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-adjust-stack-to-reg ra count)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+          (gen:if (gen:== (gen:field count :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :add temp (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:+ (gen:call :vmRegOp ra) (int-val count)) (gen:sizeof "TValue"))))
+              (gen:build :str temp (a64:mem (a64:reg :rState) (gen:offsetof :lua_State.top))))
+            (gen:if (gen:== (gen:field count :kind) (gen:enum :IrOpKind :Inst))
+              (gen:block
+                (gen:build :add temp (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+                (gen:build :add temp temp (reg-op count) (gen:name :kTValueSizeLog2))
+                (gen:build :str temp (a64:mem (a64:reg :rState) (gen:offsetof :lua_State.top))))
+              (gen:block
+                (gen:assert (gen:! (gen:string "Unsupported instruction form"))))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+          (gen:if (gen:== (gen:field count :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :lea (x64:scoped-reg tmp) (gen:index (gen:name :addr) (gen:+ (x64:reg :rBase) (gen:* (gen:+ (gen:call :vmRegOp ra) (int-val count)) (gen:sizeof "TValue")))))
+              (gen:build :mov (gen:index (gen:name :qword) (gen:+ (x64:reg :rState) (gen:offsetof :lua_State.top))) (x64:scoped-reg tmp)))
+            (gen:if (gen:== (gen:field count :kind) (gen:enum :IrOpKind :Inst))
+              (gen:block
+                (gen:build :mov (gen:call :dwordReg (x64:scoped-reg tmp)) (reg-op count))
+                (gen:build :shl (x64:scoped-reg tmp) (gen:name :kTValueSizeLog2))
+                (gen:build :lea (x64:scoped-reg tmp) (gen:index (gen:name :addr) (gen:+ (gen:+ (x64:reg :rBase) (x64:scoped-reg tmp)) (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue")))))
+                (gen:build :mov (gen:index (gen:name :qword) (gen:+ (x64:reg :rState) (gen:offsetof :lua_State.top))) (x64:scoped-reg tmp)))
+              (gen:block
+                (gen:assert (gen:! (gen:string "Unsupported instruction form"))))))))]))
+
+(define (lower-interrupt pc)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:let ([self (:type "Label")])
+          (gen:build :ldr (a64:reg :x0) (a64:mem (a64:reg :rGlobalState) (gen:offsetof :global_State.cb.interrupt)))
+          (gen:build :cbnz (a64:reg :x0) self)
+          (gen:block
+            (gen:let ([resume (gen:build :setLabel)])
+              (gen:method (gen:field cpp:lowering :interruptHandlers) :push_back (gen:init-list self (uint-val pc) resume))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([pcpos (:type "unsigned") (uint-val pc)])
+          (gen:method cpp:regs :preserveAndFreeInstValues)
+          (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                    [self (:type "Label")])
+            (gen:build :mov (x64:scoped-reg tmp) (gen:index (gen:name :qword) (gen:+ (x64:reg :rState) (gen:offsetof :lua_State.global))))
+            (gen:build :cmp (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg tmp) (gen:offsetof :global_State.cb.interrupt))) 0)
+            (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) self)
+            (gen:block
+              (gen:let ([resume (gen:build :setLabel)])
+                (gen:method (gen:field cpp:lowering :interruptHandlers) :push_back (gen:init-list self pcpos resume)))))))]))
+
+(define (lower-check-gc)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([temp1 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                  [temp2 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                  [skip (:type "Label")])
+          (gen:assert (gen:== (gen:offsetof :global_State.totalbytes) (gen:+ (gen:offsetof :global_State.GCthreshold) (gen:sizeof "global_State::GCthreshold"))))
+          (gen:build :ldp temp1 temp2 (a64:mem (a64:reg :rGlobalState) (gen:offsetof :global_State.GCthreshold)))
+          (gen:build :cmp temp1 temp2)
+          (gen:build :b (gen:enum :ConditionA64 :UnsignedGreater) skip)
+          (gen:let ([spills (:type "size_t") (gen:method cpp:regs :spill cpp:index)])
+            (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+            (gen:build :mov (a64:reg :w1) 1)
+            (gen:build :ldr (a64:reg :x2) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaC_step)))
+            (gen:build :blr (a64:reg :x2))
+            (gen:call :emitUpdateBase cpp:build)
+            (gen:method cpp:regs :restore spills)
+            (gen:build :setLabel skip))))]
+    [:x64
+      (gen:seq
+        (gen:call :callStepGc cpp:regs cpp:build))]))
+
+(define (lower-close-upvals ra)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([skip (:type "Label")]
+                  [temp1 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                  [temp2 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+          (gen:build :ldr temp1 (a64:mem (a64:reg :rState) (gen:offsetof :lua_State.openupval)))
+          (gen:build :cbz temp1 skip)
+          (gen:build :ldr temp1 (a64:mem temp1 (gen:offsetof :UpVal.v)))
+          (gen:build :add temp2 (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+          (gen:build :cmp temp2 temp1)
+          (gen:build :b (gen:enum :ConditionA64 :UnsignedGreater) skip)
+          (gen:let ([spills (:type "size_t") (gen:method cpp:regs :spill cpp:index (gen:init-list temp2))])
+            (gen:build :mov (a64:reg :x1) temp2)
+            (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+            (gen:build :ldr (a64:reg :x2) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaF_close)))
+            (gen:build :blr (a64:reg :x2))
+            (gen:method cpp:regs :restore spills)
+            (gen:build :setLabel skip))))]
+    [:x64
+      (gen:seq
+        (gen:let ([skip (:type "Label")]
+                  [tmp1 (gen:call "ScopedRegX64" cpp:regs)]
+                  [tmp2 (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:method tmp1 :alloc (gen:enum :SizeX64 :qword))
+          (gen:method tmp2 :alloc (gen:enum :SizeX64 :qword))
+          (gen:build :mov (x64:scoped-reg tmp1) (gen:index (gen:name :qword) (gen:+ (x64:reg :rState) (gen:offsetof :lua_State.openupval))))
+          (gen:build :test (x64:scoped-reg tmp1) (x64:scoped-reg tmp1))
+          (gen:build :jcc (gen:enum :ConditionX64 :Zero) skip)
+          (gen:build :lea (x64:scoped-reg tmp2) (gen:index (gen:name :addr) (gen:+ (x64:reg :rBase) (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue")))))
+          (gen:build :cmp (x64:scoped-reg tmp2) (gen:index (gen:name :qword) (gen:+ (x64:scoped-reg tmp1) (gen:offsetof :UpVal.v))))
+          (gen:build :jcc (gen:enum :ConditionX64 :Above) skip)
+          (gen:method tmp1 :free)
+          (gen:block
+            (gen:let ([spill-guard (gen:call "ScopedSpills" cpp:regs)]
+                      [call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+              (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+              (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) tmp2)
+              (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.luaF_close))))))
+          (gen:build :setLabel skip)))]))
+
+(define (lower-capture ra kind)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:seq))]
+    [:x64
+      (gen:seq
+        (gen:seq))]))
+
+(define (lower-setlist pc ra rb count index-op known-size)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executeSETLIST) (uint-val pc)))]
+    [:x64
+      (gen:seq
+        (gen:method cpp:regs :assertAllFree)
+        (gen:let ([size (:type "int") (gen:? (gen:== (gen:field known-size :kind) (gen:enum :IrOpKind :Undef)) (gen:- 1) (gen:cast "int" (uint-val known-size)))])
+          (gen:call :emitInstSetList cpp:regs cpp:build (gen:call :vmRegOp ra) (gen:call :vmRegOp rb) (int-val count) (uint-val index-op) size)))]))
+
+(define (lower-coverage pc)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([temp1 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                  [temp2 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                  [temp3 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+          (gen:build :mov temp1 (gen:* (uint-val pc) (gen:sizeof "Instruction")))
+          (gen:build :ldr temp2 (a64:mem (a64:reg :rCode) temp1))
+          (gen:build :add temp3 temp2 (gen:cast "uint16_t" 256))
+          (gen:build :cmp temp3 (gen:cast "uint16_t" 0))
+          (gen:build :csel temp2 temp2 temp3 (gen:enum :ConditionA64 :Less))
+          (gen:build :str temp2 (a64:mem (a64:reg :rCode) temp1))))]
+    [:x64
+      (gen:seq
+        (gen:let ([tmp1 (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))]
+                  [tmp2 (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :dword))]
+                  [tmp3 (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :dword))])
+          (gen:build :mov (x64:scoped-reg tmp1) (gen:name :sCode))
+          (gen:build :add (x64:scoped-reg tmp1) (gen:* (uint-val pc) (gen:sizeof "Instruction")))
+          (gen:build :mov (x64:scoped-reg tmp2) (gen:index (gen:name :dword) (x64:scoped-reg tmp1)))
+          (gen:build :sar (x64:scoped-reg tmp2) 8)
+          (gen:build :xor_ (x64:scoped-reg tmp3) (x64:scoped-reg tmp3))
+          (gen:build :cmp (x64:scoped-reg tmp2) 8388607)
+          (gen:build :setcc (gen:enum :ConditionX64 :NotEqual) (gen:call :byteReg (x64:scoped-reg tmp3)))
+          (gen:build :add (x64:scoped-reg tmp2) (x64:scoped-reg tmp3))
+          (gen:build :sal (x64:scoped-reg tmp2) 8)
+          (gen:build :movzx (x64:scoped-reg tmp3) (gen:index (gen:name :byte) (x64:scoped-reg tmp1)))
+          (gen:build :or_ (x64:scoped-reg tmp3) (x64:scoped-reg tmp2))
+          (gen:build :mov (gen:index (gen:name :dword) (x64:scoped-reg tmp1)) (x64:scoped-reg tmp3))))]))
+
+(define (lower-findupval ra)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :add (a64:reg :x1) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+        (gen:build :ldr (a64:reg :x2) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaF_findupval)))
+        (gen:build :blr (a64:reg :x2))
+        (gen:set! (result-reg) (gen:method cpp:regs :takeReg (a64:reg :x0) cpp:index)))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (gen:call :luauRegAddress (gen:call :vmRegOp ra)))
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.luaF_findupval))))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (x64:reg :rax) cpp:index))))]))

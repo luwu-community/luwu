@@ -31,6 +31,7 @@ LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
+LUAU_FASTFLAG(DebugCodegenLimitRegs)
 
 #define ensureVectorSize3() \
     if constexpr (LUA_VECTOR_SIZE != 3) \
@@ -9041,11 +9042,16 @@ static std::string lowerClassInstUnderPressure(Luau::CodeGen::AssemblyOptions::T
     for (int i = 0; i < kLiveValues; i++)
         live.push_back(build.inst(IrCmd::ADD_INT, base, build.constInt(i + 1)));
 
-    if (cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR)
+    if (cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR || cmd == IrCmd::TRY_OBJECT_NAMECALL_ADDR)
     {
         // write mode, so the authorization takes its const path
-        IrOp addr = build.inst(IrCmd::TRY_OBJECT_MEMBER_ADDR, ptr, build.constUint(0), build.vmConst(0), fallback, build.constUint(1));
-        build.inst(IrCmd::STORE_TVALUE, addr, build.inst(IrCmd::LOAD_TVALUE, build.vmReg(2)));
+        IrOp addr = cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR
+                        ? build.inst(cmd, ptr, build.constUint(0), build.vmConst(0), fallback, build.constUint(1))
+                        : build.inst(cmd, ptr, build.constUint(0), build.vmConst(0), fallback);
+        if (cmd == IrCmd::TRY_OBJECT_NAMECALL_ADDR)
+            build.inst(IrCmd::STORE_TVALUE, build.vmReg(3), build.inst(IrCmd::LOAD_TVALUE, addr));
+        else
+            build.inst(IrCmd::STORE_TVALUE, addr, build.inst(IrCmd::LOAD_TVALUE, build.vmReg(2)));
     }
     else if (cmd == IrCmd::CLASS_ISINSTANCE)
     {
@@ -9092,6 +9098,13 @@ TEST_CASE("ClassLoweringsReserveScratchRegistersBeforeRejoiningBranches")
     if (!Luau::CodeGen::isSupported())
         return;
 
+    // Exercise the seven-register pool too; authorization must reuse the caller's
+    // scratch instead of exhausting it with hidden allocations.
+    bool limited = false;
+    SUBCASE("full register pool") {}
+    SUBCASE("limited register pool") { limited = true; }
+    ScopedFastFlag limitRegs{FFlag::DebugCodegenLimitRegs, limited};
+
     const std::regex labelDef(R"(^(\.L\d+):)");
     // a64 `str w4,[sp,#144]`, x64 `mov dword ptr [rsp+048h],r11d`
     const std::regex spillStore(R"(^\s+(str\s+[wxdq]\d+,\[sp,|\w+\s+\w+ ptr \[rsp\+\w+\],))");
@@ -9099,7 +9112,7 @@ TEST_CASE("ClassLoweringsReserveScratchRegistersBeforeRejoiningBranches")
 
     for (AssemblyOptions::Target target : {AssemblyOptions::A64, AssemblyOptions::X64_SystemV})
     {
-        for (IrCmd cmd : {IrCmd::TRY_OBJECT_MEMBER_ADDR, IrCmd::CLASS_ISINSTANCE, IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE})
+        for (IrCmd cmd : {IrCmd::TRY_OBJECT_MEMBER_ADDR, IrCmd::TRY_OBJECT_NAMECALL_ADDR, IrCmd::CLASS_ISINSTANCE, IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE})
         {
             CAPTURE(int(target));
             CAPTURE(int(cmd));

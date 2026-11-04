@@ -187,6 +187,7 @@ public:
     void frinta(RegisterA64 dst, RegisterA64 src);
     void frintm(RegisterA64 dst, RegisterA64 src);
     void frintp(RegisterA64 dst, RegisterA64 src);
+    void frintz(RegisterA64 dst, RegisterA64 src);
     void fcvt(RegisterA64 dst, RegisterA64 src);
     void fcvtzs(RegisterA64 dst, RegisterA64 src);
     void fcvtzu(RegisterA64 dst, RegisterA64 src);

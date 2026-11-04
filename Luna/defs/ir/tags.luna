@@ -1,0 +1,39 @@
+~ Compute Luau 'not' operation on destructured TValue
+~ A: tag
+~ B: int (value)
+(define-ircmd NOT_ANY
+  (operands [tag :tag] [val :int])
+  (result :int)
+  (class :value)
+  (lowering (lower-not-any tag val)))
+
+~ Perform a comparison of two tags. Result is an integer register containing 0 or 1
+~ A: tag or Rn
+~ B: tag
+~ C: condition
+(define-ircmd CMP_TAG
+  (operands [a :tag|:Rn] [b :tag] [cond :cond])
+  (result :int)
+  (class :value)
+  (facts (reads (tvalue a :tag)))
+  (lowering (lower-cmp-tag a b cond)))
+
+~ Jump if TValue is truthy
+~ A: Rn
+~ B: block (if true)
+~ C: block (if false)
+(define-ircmd JUMP_IF_TRUTHY
+  (operands [a :Rn] [if-true :block] [if-false :block])
+  (class :terminator)
+  (facts (reads (vm-slot a)))
+  (lowering (lower-jump-if-truthy a if-true if-false)))
+
+~ Jump if TValue is falsy
+~ A: Rn
+~ B: block (if true)
+~ C: block (if false)
+(define-ircmd JUMP_IF_FALSY
+  (operands [a :Rn] [if-false :block] [if-true :block])
+  (class :terminator)
+  (facts (reads (vm-slot a)))
+  (lowering (lower-jump-if-falsy a if-false if-true)))
