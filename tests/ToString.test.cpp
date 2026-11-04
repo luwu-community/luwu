@@ -902,6 +902,7 @@ TEST_CASE_FIXTURE(Fixture, "tostring_unsee_ttv_if_array")
 
 TEST_CASE_FIXTURE(Fixture, "tostring_error_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         --!strict
         function f1(t: {a : number, b: string, c: {d: string}}) : {a : number, b : string, c : { d : number}}
@@ -911,22 +912,22 @@ TEST_CASE_FIXTURE(Fixture, "tostring_error_mismatch")
 
     std::string expected;
     if (!FFlag::DebugLuauForceOldSolver)
-        expected = "Expected this to be\n\t"
+        expected = "Expected this to be\n    "
                    "'{ a: number, b: string, c: { d: number } }'\n"
-                   "but got\n\t"
-                   "'{ a: number, b: string, c: { d: string } }'; \n"
+                   "but got\n    "
+                   "'{ a: number, b: string, c: { d: string } }'\n"
                    "accessing `c.d` results in `string` in the latter type and `number` in the former "
                    "type, and `string` is not exactly `number`";
     else
-        expected = "Expected this to be exactly\n\t"
+        expected = "Expected this to be exactly\n    "
                    "'{ a: number, b: string, c: { d: number } }'\n"
-                   "but got\n\t"
+                   "but got\n    "
                    "'{ a: number, b: string, c: { d: string } }'\n"
                    "caused by:\n  "
                    "Property 'c' is not compatible.\n"
-                   "Expected this to be exactly\n\t"
+                   "Expected this to be exactly\n    "
                    "'{ d: number }'\n"
-                   "but got\n\t"
+                   "but got\n    "
                    "'{ d: string }'\n"
                    "caused by:\n  "
                    "Property 'd' is not compatible.\n"
@@ -1151,6 +1152,39 @@ TEST_CASE_FIXTURE(Fixture, "expanded_root_alias_prints_recursive_references_by_n
     std::string list = toString(requireTypeAlias("List"), opts);
     CHECK_EQ(std::string::npos, list.find("CYCLE"));
     CHECK_NE(std::string::npos, list.find("next: List<T>?"));
+}
+
+TEST_CASE_FIXTURE(Fixture, "recursive_union_alias_prints_by_name")
+{
+    CheckResult result = check(R"(
+        type Content = string | { read Content | nil }
+        local optional: Content | nil = "a"
+    )");
+
+    TypeId content = requireTypeAlias("Content");
+
+    // the table's element type reaches `Content` itself, not a copy of it
+    const UnionType* contentUnion = get<UnionType>(follow(content));
+    REQUIRE(contentUnion);
+    REQUIRE(contentUnion->options.size() == 2);
+    const TableType* array = get<TableType>(follow(contentUnion->options[1]));
+    REQUIRE(array);
+    REQUIRE(array->indexer);
+    const UnionType* element = get<UnionType>(follow(array->indexer->indexResultType));
+    REQUIRE(element);
+    REQUIRE(element->options.size() == 2);
+    CHECK_EQ(follow(element->options[0]), follow(content));
+
+    CHECK_EQ("Content?", toString(requireType("optional")));
+    CHECK_EQ("Content?", toString(array->indexer->indexResultType));
+
+    // expanded as the root, the way a hover shows an alias
+    ToStringOptions opts;
+    opts.alwaysExpandRootAlias = true;
+    opts.includeWhereClauses = true;
+    ToStringResult expanded = toStringDetailed(content, opts);
+    CHECK_EQ("string | {read Content?}", expanded.name);
+    CHECK_EQ("", expanded.whereClauses);
 }
 
 TEST_SUITE_END();

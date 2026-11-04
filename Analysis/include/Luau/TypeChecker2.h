@@ -10,6 +10,9 @@
 #include "Luau/Type.h"
 #include "Luau/TypeFwd.h"
 #include "Luau/TypeUtils.h"
+#include "Luau/UnknownVariable.h"
+
+#include <memory>
 
 namespace Luau
 {
@@ -41,6 +44,14 @@ struct Reasonings
     // originate from a recognized one.
     std::optional<std::string> contextVerb;
 
+    // Luwu (helpful subtyping errors): when `contextVerb` is set, the preamble promises a specific part of
+    // the type ("Expected this function to return"), but the enclosing TypeMismatch still holds the
+    // *root* types, so it would go on to print the whole function type after that promise. These carry
+    // the stringified types at the end of the shared context path instead, so the message names what it
+    // claims to.
+    std::optional<std::string> contextWantedDisplay;
+    std::optional<std::string> contextGivenDisplay;
+
     std::string toString()
     {
         if (reasons.empty())
@@ -57,11 +68,11 @@ struct Reasonings
         // same line twice is just noise, so collapse them.
         reasons.erase(std::unique(reasons.begin(), reasons.end()), reasons.end());
 
-        std::string allReasons = reasons.size() < 2 ? "\n" : "\nthis is because ";
+        std::string allReasons = reasons.size() < 2 ? "\n" : "\nthis is because";
         for (const std::string& reason : reasons)
         {
             if (reasons.size() > 1)
-                allReasons += "\n\t * ";
+                allReasons += "\n    * ";
 
             allReasons += reason;
         }
@@ -78,7 +89,8 @@ void check(
     NotNull<TypeCheckLimits> limits,
     DcrLogger* logger,
     const SourceModule& sourceModule,
-    Module* module
+    Module* module,
+    Helpifier helpifier = {}
 );
 
 struct TypeChecker2
@@ -87,6 +99,8 @@ struct TypeChecker2
     NotNull<TypeFunctionRuntime> typeFunctionRuntime;
     DcrLogger* logger;
     const NotNull<TypeCheckLimits> limits;
+    // Luwu: writes the help in the errors this reports; off when the frontend's `showHelp` is
+    Helpifier helpifier;
     const NotNull<InternalErrorReporter> ice;
     const SourceModule* sourceModule;
     Module* module;
@@ -96,8 +110,13 @@ struct TypeChecker2
     std::vector<TypeId> functionDeclStack;
     // The function expressions being visited, innermost last.
     std::vector<const AstExprFunction*> enclosingFunctions;
+    // Luwu Classes (rfcs/classes): per class `__init`, the locals that always hold its `self` (see
+    // isInitWritingItsSelf). Filled only when a `const` write would otherwise be reported.
+    mutable DenseHashMap<const AstExprFunction*, DenseHashSet<const AstLocal*>> initSelfAliases{nullptr};
 
     DenseHashSet<TypeId> seenTypeFunctionInstances{nullptr};
+    // Luwu: see requiredProperties
+    DenseHashMap<const TableType*, std::vector<std::string>> requiredPropertiesCache{nullptr};
 
     Normalizer normalizer;
     Subtyping _subtyping;
@@ -117,6 +136,82 @@ struct TypeChecker2
     void reportError(TypeErrorData data, const Location& location);
     Reasonings explainReasonings(TypeId subTy, TypeId superTy, Location location, const SubtypingResult& r);
     Reasonings explainReasonings(TypePackId subTp, TypePackId superTp, Location location, const SubtypingResult& r);
+
+    // Luwu (helpful subtyping errors): set while checking the packs of a `return` statement, so a pack
+    // mismatch reported from there can phrase itself as being about what the function returns. The same
+    // test runs for argument packs and assignments, where that phrasing would be wrong.
+    bool checkingReturnStatement = false;
+
+    // Luwu (helpful subtyping errors): set while checking one argument of a call, so a mismatch reported from
+    // there can name the function being called and point a second diagnostic at the parameter it came
+    // from. The same mismatch also arises from assignments and returns, which have neither. Holds only
+    // what the clean path already has at hand: the callee's name and its parameter's annotation are
+    // looked up from these once there is an error to explain.
+    struct ArgumentContext
+    {
+        AstExpr* callee = nullptr;
+        const FunctionType* calleeType = nullptr;
+        size_t parameterIndex = 0;
+    };
+
+    std::optional<ArgumentContext> argumentContext;
+
+    // Luwu (helpful subtyping errors): a table literal checked against the one member of a union it was
+    // narrowed to, and that union, so missing fields are reported as being for `GameEvent` rather than
+    // for an unnamed member. Only for that exact expression, not the literals inside it.
+    struct NarrowedLiteral
+    {
+        const AstExpr* literal = nullptr;
+        const UnionType* narrowedFrom = nullptr;
+    };
+
+    std::optional<NarrowedLiteral> narrowedLiteralUnion;
+
+    // Luwu (helpful subtyping errors): the module's functions by location and type aliases by name, so an
+    // explanation can find what the user wrote without walking the AST per lookup. Built by
+    // `getDeclarationIndex` the first time an error needs it, never on the clean path.
+    struct DeclarationIndex;
+    std::shared_ptr<DeclarationIndex> declarationIndex;
+
+    // Luwu: a call or index of a value that is `never` or has an error type (see UnreachableCodeUse, NoTypeUse).
+    // Returns whether `subjectType` is one; only types that are so without normalizing are recognized.
+    bool reportImproperUse(AstExpr* subject, TypeId subjectType, ImproperUse use);
+    void reportUnreachableUse(AstExpr* subject, ImproperUse use);
+    // Why the local read at `use` is `never`, when something the reader wrote says so; nullopt when it may be a type
+    // checker bug
+    std::optional<UnreachableCodeUse::Reason> unreachableReason(const AstExprLocal* use);
+    // The first error reported in `local`'s declaration, which explains what is wrong with its type
+    std::optional<Location> declarationError(const AstLocal* local);
+    std::optional<Location> firstErrorIn(const Location& range);
+    // The first line of the message of the syntax or type error firstErrorIn found at `location`
+    std::string errorMessageAt(const Location& location);
+    // The first error in an annotation, or in the declaration of an alias it names (`type Result = Nope`)
+    std::optional<Location> annotationError(AstNode* annotation);
+    // Why a local has no type: the error in its declaration, or the one behind another local with no type that its
+    // declaration uses (`local alias = w`). `root` is the local the chain starts at; it gets one error, at the first
+    // improper use of any local in the chain.
+    struct NoTypeCause
+    {
+        std::optional<Location> origin;
+        const AstLocal* root = nullptr;
+    };
+    NoTypeCause noTypeCause(const AstLocal* local, size_t depth = 0);
+    DenseHashMap<const AstLocal*, NoTypeCause> noTypeCauses{nullptr};
+    DenseHashSet<const AstLocal*> noTypeRootsReported{nullptr};
+    // Whether a value of the normalized type `norm` can't exist
+    bool isUninhabited(const NormalizedType* norm);
+    // A note on every use of an error-typed local that didn't get the error (see NoTypeUse)
+    void reportNoTypeNotes();
+    // Locals with an improper use reported: each gets one error
+    DenseHashSet<const AstLocal*> improperlyUsedLocals{nullptr};
+    DenseHashSet<const AstExpr*> improperlyUsedRoots{nullptr};
+    // Every use of an error-typed local, and those reported as an improper use
+    std::vector<const AstExprLocal*> noTypeUses;
+    DenseHashSet<const AstExprLocal*> noTypeUsesReported{nullptr};
+    // Uses cast to a type (`self :: Class`): the cast gives the value a type, so they get no note
+    DenseHashSet<const AstExprLocal*> noTypeUsesCast{nullptr};
+    DenseHashMap<const AstLocal*, std::optional<Location>> declarationErrors{nullptr};
+    const DeclarationIndex& getDeclarationIndex();
 
     bool testIsSubtype(TypeId subTy, TypeId superTy, Location location);
     bool testIsSubtype(TypePackId subTy, TypePackId superTy, Location location);
@@ -174,12 +269,15 @@ private:
     void visit(AstExprLocal* expr);
     void visit(AstExprGlobal* expr);
     void visit(AstExprVarargs* expr);
+    // The types of `call`'s arguments as written, without `self`.
+    void appendArgumentTypes(TypePack& args, AstExprCall* call);
     void visitCall(AstExprCall* call);
     void checkUnionMethodSelves(AstExprIndexName* indexExpr);
     void visit(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);
-    void visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy);
+    // `separator` is the `.` or `:` of `expr.propName`, and 0 for `expr["propName"]`.
+    void visitExprName(AstExpr* expr, Location location, const std::string& propName, ValueContext context, TypeId astIndexExprTy, char separator);
     void visit(AstExprIndexName* indexName, ValueContext context);
     void indexExprMetatableHelper(AstExprIndexExpr* indexExpr, const MetatableType* metaTable, TypeId exprType, TypeId indexType);
     void visit(AstExprIndexExpr* indexExpr, ValueContext context);
@@ -209,12 +307,23 @@ private:
     template<typename TID>
     Reasonings explainReasonings_(TID subTy, TID superTy, Location location, const SubtypingResult& r);
 
-    void explainError(TypeId subTy, TypeId superTy, Location location, const SubtypingResult& result);
+    // `contextVerb` says what the two types are of, when they're a part of what's at `location` (`every returned
+    // value to be`), as `TypeMismatch::contextVerb`.
+    void explainError(
+        TypeId subTy,
+        TypeId superTy,
+        Location location,
+        const SubtypingResult& result,
+        std::optional<std::string> contextVerb = std::nullopt
+    );
     void explainError(TypePackId subTy, TypePackId superTy, Location location, const SubtypingResult& result);
 
     bool testLiteralOrAstTypeIsSubtype(AstExpr* expr, TypeId expectedType);
 
     bool testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedType);
+    // Luwu: the properties a table literal checked against `table` has to write: readable and not optional. Cached, so
+    // literals checked against one wide record (150 optional fields) don't each test every field.
+    const std::vector<std::string>& requiredProperties(const TableType* table);
 
     void maybeReportSubtypingError(TypeId subTy, TypeId superTy, const Location& location);
     // Tests whether subTy is a subtype of superTy in the context of a function iterator for a for-in statement.
@@ -232,7 +341,19 @@ private:
         std::vector<TypeError>& errors
     );
     // If the provided type does not have the named property, report an error.
-    void checkIndexTypeFromType(TypeId tableTy, const std::string& prop, ValueContext context, const Location& location, TypeId astIndexExprType);
+    // Returns whether `tableTy` can't exist (a `never` the normalizer had to work out), for the caller to report.
+    // `receiver` is how the indexed value is written before the property (`player.`), for a typo's message.
+    bool checkIndexTypeFromType(
+        TypeId tableTy,
+        const std::string& prop,
+        ValueContext context,
+        const Location& location,
+        TypeId astIndexExprType,
+        const std::string& receiver = ""
+    );
+    // Luwu (helpful subtyping errors): reports `error` for a property `tableTy` doesn't have, or a typo when it has one
+    // spelled almost the same.
+    void reportMissingProperty(TypeErrorData error, TypeId tableTy, const std::string& prop, const std::string& receiver, const Location& location);
     // If the named property is `private` on some user-defined class in tableTy's hierarchy, and
     // `location` falls outside of that class's own definition block, report an error.
     void checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location);
@@ -265,6 +386,11 @@ private:
 
     // Avoid duplicate warnings being emitted for the same global variable.
     DenseHashSet<std::string> warnedGlobals{""};
+
+    // Luwu: says why a name isn't a variable here. Created at the first unknown name.
+    std::unique_ptr<UnknownVariableExplainer> unknownVariables;
+    UnknownVariableExplainer& unknownVariableExplainer();
+    void reportUnknownVariable(const AstExprGlobal* expr, NotNull<Scope> scope);
 
     void suggestAnnotations(AstExprFunction* expr, TypeId ty);
 
