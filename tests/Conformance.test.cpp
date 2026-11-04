@@ -69,6 +69,7 @@ void luaC_validate(lua_State* L);
 #define lua_pushvector3(L, x, y, z) lua_pushvector(L, x, y, z)
 #endif
 
+LUAU_FASTFLAG(DebugLuwuLuauClassCompat)
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
 LUAU_FASTFLAG(LuauBytecodeFold)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
@@ -4850,6 +4851,50 @@ std::string classesCApiProtected(lua_State* L, std::function<void(lua_State*)> f
 }
 
 } // namespace
+
+TEST_CASE("LuauModulesRunUpstreamClassesWithClassCompat")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuLuauClassCompat, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    // upstream Luau 0.742's class syntax: `public` fields next to unqualified methods, construction by calling, `classof`
+    const char* source = R"(
+class Point
+    public x
+    public y
+
+    function magnitude(self)
+        return math.sqrt(self.x * self.x + self.y * self.y)
+    end
+end
+
+local p = Point { x = 3, y = 4 }
+assert(p:magnitude() == 5)
+assert(class.isinstance(p, Point))
+assert(class.classof(p) == Point)
+return "OK"
+)";
+
+    lua_CompileOptions options = {};
+    options.optimizationLevel = 1;
+    options.debugLevel = 1;
+    options.language = LUA_LANGUAGE_LUAU;
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), &options, &bytecodeSize);
+    int loadResult = luau_load(L, "=LuauClassCompat", bytecode, bytecodeSize, 0);
+    free(bytecode);
+
+    REQUIRE(loadResult == 0);
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK_EQ(std::string(lua_tostring(L, -1)), "OK");
+}
 
 TEST_CASE("ClassesCApi")
 {
