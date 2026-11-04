@@ -26,6 +26,7 @@ LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuauHigherOrderGenericInference)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuauAllowIntersectionOfOneTableWithExtern)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 TEST_SUITE_BEGIN("TypeInferExternTypes");
 
@@ -366,9 +367,15 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_properties_are_invariant")
         g(t2) -- line 13.  Breaks soundness
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    // `f(t)` also gets a help at `f`'s parameter, where marking `foo` as `read` would accept it. `g(t2)`
+    // doesn't: reading a `BaseClass` as a `ChildClass` fails too.
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
     CHECK_EQ(6, result.errors.at(0).location.begin.line);
-    CHECK_EQ(13, result.errors[1].location.begin.line);
+    const GenericError* help = get<GenericError>(result.errors[1]);
+    REQUIRE(help);
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking 'foo' as 'read' if the function 'f' only reads from it", help->message);
+    CHECK_EQ(Location{{1, 23}, {1, 26}}, result.errors[1].location);
+    CHECK_EQ(13, result.errors[2].location.begin.line);
 }
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "table_indexers_are_invariant")
@@ -389,13 +396,20 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_indexers_are_invariant")
         g(t2) -- line 13.  Breaks soundness
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    // `f(t)` also gets a help at `f`'s parameter, where marking the indexer as `read` would accept it.
+    // `g(t2)` doesn't: reading a `BaseClass` as a `ChildClass` fails too.
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
     CHECK_EQ(6, result.errors.at(0).location.begin.line);
-    CHECK_EQ(13, result.errors[1].location.begin.line);
+    const GenericError* help = get<GenericError>(result.errors[1]);
+    REQUIRE(help);
+    CHECK_EQ("Help (read/write mismatch):\n  • Consider marking this as 'read' if the function 'f' only reads from the array", help->message);
+    CHECK_EQ(Location{{1, 23}, {1, 42}}, result.errors[1].location);
+    CHECK_EQ(13, result.errors[2].location.begin.line);
 }
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "table_class_unification_reports_sane_errors_for_missing_properties")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         function foo(bar)
             bar.Y = 1 -- valid
@@ -422,6 +436,7 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "table_class_unification_reports_sane_error
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "class_unification_type_mismatch_is_correct_order")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         local p: BaseClass
         local foo: number = p
@@ -452,6 +467,7 @@ b.X = 2 -- real Vector2.X is also read-only
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "detailed_class_unification_error")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
 local function foo(v)
     return v.X :: number + string.len(v.Y)
@@ -467,7 +483,7 @@ b(a)
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        const std::string expected = "Expected this to be '{ read X: unknown, read Y: string }', but got 'Vector2'; \n"
+        const std::string expected = "Expected this to be '{ read X: unknown, read Y: string }', but got 'Vector2'\n"
                                      "accessing `Y` results in `number` in the latter type and `string` in the former type, "
                                      "and `number` is not a subtype of `string`";
         CHECK_EQ(expected, toString(result.errors.at(0)));
@@ -486,6 +502,7 @@ Expected this to be 'string', but got 'number')";
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "class_type_mismatch_with_name_conflict")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
 local i = ChildClass.New()
 type ChildClass = { x: number }
@@ -559,10 +576,16 @@ local b: B = a
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        CHECK(
-            "Expected this to be 'B', but got 'A'; \n"
-            "accessing `x` results in `ChildClass` in the latter type and `BaseClass` in the former type, and `ChildClass` is not "
-            "exactly `BaseClass`" == toString(result.errors.at(0))
+        CHECK_EQ(
+            "Expected 'a' to be 'B', but was given 'A' (read works, write doesn't)\n"
+            "\n"
+            "Because a read/write table is expected here, 'a.x' could be set to any 'BaseClass' (which must stay "
+            "a 'ChildClass').\n"
+            "\n"
+            "Help (read/write mismatch):\n"
+            "  • If nothing writes to it, mark 'x' as 'read x: BaseClass' in 'B'\n"
+            "  • If something writes to it, use a 'B' instead of 'a'",
+            toString(result.errors.at(0))
         );
     }
     else
@@ -614,6 +637,7 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "callable_extern_types")
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "indexable_extern_types")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
     // Test reading from an index
     {
@@ -969,8 +993,20 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_check_missing_key")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, results);
-    auto err = get<UnknownProperty>(results.errors[0]);
-    CHECK_EQ("IsEnabled", err->key);
+    // Luwu (helpful subtyping errors): `IsEnabled` is one typo from `Enabled`
+    if (FFlag::LuwuHelpfulSubtypingErrors)
+    {
+        const Typo* typo = get<Typo>(results.errors[0]);
+        REQUIRE(typo);
+        CHECK_EQ("foo.IsEnabled", typo->written);
+        CHECK_EQ("foo.Enabled", typo->meant);
+    }
+    else
+    {
+        auto err = get<UnknownProperty>(results.errors[0]);
+        REQUIRE(err);
+        CHECK_EQ("IsEnabled", err->key);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_check_present_key_in_superclass")
@@ -1069,6 +1105,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "extern_type_check_key_superset")
         end
     )");
 
+    // Luwu: `IsEnabled` is a string, so the second check can't run, but an `assert` is a defensive check and using a
+    // `never` value in one isn't reported (UnreachableCodeUse)
     LUAU_REQUIRE_NO_ERRORS(results);
     CHECK_EQ("(Foobar) -> Foobar", toString(requireType("update")));
 }
@@ -1805,6 +1843,7 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_inferred_from_union_argument_me
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics_mismatch_reasoning_is_terse_and_context_aware")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     // Regression test for a confusing TypeMismatch explanation. The mismatch is entirely about the
     // function's return type, so the explanation is one short, plain-English line: a context-aware
     // preamble ("Expected this function to return") instead of the generic "Expected this to be",
@@ -1842,11 +1881,13 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_mismatch_reasoning_is_terse_and
     REQUIRE_EQ(1, result.errors.size());
     std::string message = toString(result.errors[0]);
 
+    // The preamble names the return type, so it prints the return type rather than the whole function
+    // type.
     CHECK_EQ(
         "Expected this function to return\n"
-        "\t'(string) -> Exception<string> | number'\n"
+        "    'Exception<string> | number'\n"
         "but got\n"
-        "\t'(string) -> Exception<Wrapped> | number'; \n"
+        "    'Exception<Wrapped> | number'\n"
         "`Exception<Wrapped>` is not a subtype of `Exception<string> | number`",
         message
     );
