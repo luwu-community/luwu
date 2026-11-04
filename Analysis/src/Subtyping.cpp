@@ -2024,10 +2024,25 @@ SubtypingResult Subtyping::isCovariantWith(
     bool hasErrorSuppression = false;
     bool shouldSuppressErrors = true;
 
+    // Luwu: the reasonings of failing properties go into one set, which becomes `result`'s at the end. Upstream merges
+    // each into `result` with `andAlso`, which rebuilds the set every time, so a table where many properties fail
+    // rebuilds it once per property. Reasonings of different properties never combine (their paths start at their own
+    // property), so the set is the same union.
+    SubtypingResult failedProperties{false};
     auto record = [&](SubtypingResult subResult)
     {
         hasErrorSuppression |= subResult.isErrorSuppressing;
         shouldSuppressErrors &= subResult.isSubtype || subResult.isErrorSuppressing;
+        if (!subResult.isSubtype)
+        {
+            for (const SubtypingReasoning& reasoning : subResult.reasoning)
+            {
+                if (failedProperties.reasoning.size() >= size_t(FInt::LuauSubtypingReasoningLimit))
+                    break;
+                failedProperties.reasoning.insert(reasoning);
+            }
+            subResult.reasoning.clear();
+        }
         result.andAlso(std::move(subResult));
     };
 
@@ -2132,6 +2147,8 @@ SubtypingResult Subtyping::isCovariantWith(
     }
 
     result.isErrorSuppressing = hasErrorSuppression && shouldSuppressErrors;
+    if (!result.isSubtype)
+        result.reasoning = std::move(failedProperties.reasoning);
     return result;
 }
 
