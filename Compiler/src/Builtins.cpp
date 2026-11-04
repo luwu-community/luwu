@@ -18,71 +18,68 @@ namespace Luau
 namespace Compile
 {
 
-// Luwu collections: `name` in a library that is a member of a builtin global, as `collections.result.ok`
-static Builtin getNestedBuiltin(AstExprIndexName* library, AstName name, const DenseHashMap<AstName, Global>& globals)
-{
-    AstExprGlobal* object = library->expr->as<AstExprGlobal>();
-    if (!object || getGlobalState(globals, object->name) != Global::Default)
-        return Builtin();
-
-    return Builtin{object->name, library->index, name};
-}
-
-Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, const DenseHashMap<AstLocal*, Variable>& variables)
+// The names `node` reads, rooted at a global that's never assigned: `collections.result.ok` is collections, result, ok.
+// Locals that are never written stand for their initializer, so `local result = collections.result` and destructured
+// aliases (`const .{result.{ok as Ok}} = collections`) resolve as well. Returns how many names it wrote, or 0.
+static size_t resolveBuiltinPath(
+    AstExpr* node,
+    const DenseHashMap<AstName, Global>& globals,
+    const DenseHashMap<AstLocal*, Variable>& variables,
+    bool isLibrary,
+    AstName (&path)[3]
+)
 {
     if (AstExprLocal* expr = node->as<AstExprLocal>())
     {
         const Variable* v = variables.find(expr->local);
+        if (!v || v->written || !v->init)
+            return 0;
 
-        return v && !v->written && v->init ? getBuiltin(v->init, globals, variables) : Builtin();
+        // 'local math = math or replacement': fastcall is used in safe env where libraries like 'math' are built-in, so
+        // if we are still in safe env, 'math' was truthy and the local was initialized to the library value. If safe env
+        // is false, 'math' could be a polyfill or something else and fastcall takes the fallback, preserving the behavior.
+        AstExprBinary* cond = v->init->as<AstExprBinary>();
+        if (isLibrary && cond && cond->op == AstExprBinary::Or && cond->left->is<AstExprGlobal>())
+            return resolveBuiltinPath(cond->left, globals, variables, isLibrary, path);
+
+        return resolveBuiltinPath(v->init, globals, variables, isLibrary, path);
     }
     else if (AstExprIndexName* expr = node->as<AstExprIndexName>())
     {
-        if (AstExprLocal* object = expr->expr->as<AstExprLocal>())
-        {
-            const Variable* v = variables.find(object->local);
+        size_t length = resolveBuiltinPath(expr->expr, globals, variables, /* isLibrary= */ true, path);
+        if (length == 0 || length == 3)
+            return 0;
 
-            // Local that is initialized and not modified might hold the built-in library itself
-            if (v && !v->written && v->init)
-            {
-                AstExprGlobal* object = nullptr;
-
-                // Look for patterns like 'local m = math' and 'local math = math or replacement'
-                // Fastcall is used in safe env where libraries like 'math' are built-in
-                // This means that if we are still in safe env, 'math' was truthy and local was initialized to the library value
-                // If safe env is false, 'math' could be a polyfill or something else and fastcall takes the fallback, preserving the behavior
-                if (AstExprGlobal* global = v->init->as<AstExprGlobal>())
-                    object = global;
-                else if (AstExprBinary* cond = v->init->as<AstExprBinary>(); cond && cond->op == AstExprBinary::Or)
-                    object = cond->left->as<AstExprGlobal>();
-
-                if (object)
-                    return getGlobalState(globals, object->name) == Global::Default ? Builtin{object->name, expr->index} : Builtin();
-
-                // Luwu collections: 'local result = collections.result'
-                if (AstExprIndexName* library = v->init->as<AstExprIndexName>())
-                    return getNestedBuiltin(library, expr->index, globals);
-            }
-        }
-
-        if (AstExprIndexName* library = expr->expr->as<AstExprIndexName>())
-            return getNestedBuiltin(library, expr->index, globals);
-
-        if (AstExprGlobal* object = expr->expr->as<AstExprGlobal>())
-        {
-            return getGlobalState(globals, object->name) == Global::Default ? Builtin{object->name, expr->index} : Builtin();
-        }
-        else
-        {
-            return Builtin();
-        }
+        path[length] = expr->index;
+        return length + 1;
     }
     else if (AstExprGlobal* expr = node->as<AstExprGlobal>())
     {
-        return getGlobalState(globals, expr->name) == Global::Default ? Builtin{AstName(), expr->name} : Builtin();
+        if (getGlobalState(globals, expr->name) != Global::Default)
+            return 0;
+
+        path[0] = expr->name;
+        return 1;
     }
     else
     {
+        return 0;
+    }
+}
+
+Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, const DenseHashMap<AstLocal*, Variable>& variables)
+{
+    AstName path[3];
+    switch (resolveBuiltinPath(node, globals, variables, /* isLibrary= */ false, path))
+    {
+    case 1:
+        return Builtin{AstName(), path[0]};
+    case 2:
+        return Builtin{path[0], path[1]};
+    case 3:
+        // Luwu collections: a member of a library in a builtin global, as `collections.result.ok`
+        return Builtin{path[0], path[1], path[2]};
+    default:
         return Builtin();
     }
 }
