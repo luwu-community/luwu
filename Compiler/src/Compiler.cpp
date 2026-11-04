@@ -6155,13 +6155,30 @@ struct Compiler
         patchJump(call, doneJump, doneLabel);
     }
 
-    // Luwu try expressions: a field of a try result kept in registers. The other variant's fields don't exist on it, so
-    // reading one builds the real object and reads from that, which raises what reading the object would.
+    // Luwu try expressions: a field of a try result kept in registers
     void compileTryResultField(AstExprIndexName* expr, uint8_t reg, uint8_t target, bool targetTemp)
     {
-        bool okField = expr->index == "value";
         int field = tryResultField(expr->index);
         LUAU_ASSERT(field >= 0);
+
+        auto readObject = [&](uint8_t object)
+        {
+            BytecodeBuilder::StringRef name = sref(expr->index);
+            int32_t cid = bytecode.addConstantString(name);
+            if (cid < 0)
+                CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+            bytecode.emitABC(LOP_GETTABLEKS, target, object, uint8_t(BytecodeBuilder::getStringHash(name)));
+            bytecode.emitAux(cid);
+        };
+        compileTryResultRead(expr, field, /* okField= */ expr->index == "value", reg, target, targetTemp, readObject);
+    }
+
+    // Luwu try expressions: register `field` of a try result kept in registers, which holds a field of the ok variant or
+    // of the err one. The other variant doesn't have it, so reading it there builds the real object and reads from that
+    // with `readObject`, which raises what reading the object would.
+    template<typename ReadObject>
+    void compileTryResultRead(AstExpr* expr, int field, bool okField, uint8_t reg, uint8_t target, bool targetTemp, ReadObject readObject)
+    {
         uint8_t okFlag = uint8_t(reg + kTryResultOkFlag);
 
         // The field is read before the check when target is a temporary, so the right variant takes one jump. A local's
@@ -6193,13 +6210,7 @@ struct Compiler
             for (unsigned i = 0; i < count; ++i)
                 bytecode.emitABC(LOP_MOVE, uint8_t(object + i), uint8_t(reg + i), 0);
             bytecode.emitABC(LOP_WRAPRESULT, object, okField ? LBC_WRAPRESULT_ERR : LBC_WRAPRESULT_OK, 0);
-
-            BytecodeBuilder::StringRef name = sref(expr->index);
-            int32_t cid = bytecode.addConstantString(name);
-            if (cid < 0)
-                CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
-            bytecode.emitABC(LOP_GETTABLEKS, target, object, uint8_t(BytecodeBuilder::getStringHash(name)));
-            bytecode.emitAux(cid);
+            readObject(object);
         }
 
         size_t doneLabel = bytecode.emitLabel();
