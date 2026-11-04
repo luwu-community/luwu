@@ -5755,9 +5755,9 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprInterpString*
     return Inference{builtinTypes->stringType};
 }
 
-// Luwu try expressions: `try expr` is `collections.result<T, E>`, with T expr's type. It's expanded like that
-// annotation, but looked up in the global scope, so a module's own `collections` import can't change it. E is
-// weakunknown, joined with the callee's error hints when expr is a call.
+// Luwu try expressions: `try expr` is `Result<T, E>`, with T expr's type. It's expanded like that annotation, but looked
+// up in the global scope, so a module's own `Result` type can't change it. E is weakunknown, joined with the callee's
+// error hints when expr is a call.
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTry* tryExpr)
 {
     TypeId valueTy = check(scope, tryExpr->expr).ty;
@@ -5769,15 +5769,16 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTry* tryExpr)
             errorTy = createTypeFunctionInstance(builtinTypes->typeFunctions->raisesFunc, {*callee}, {}, scope, tryExpr->location);
     }
 
-    const AstName library{"collections"};
-    const AstName result{"result"};
-    if (!globalScope->lookupImportedType(library.value, result.value))
+    const AstName result{"Result"};
+    if (!globalScope->lookupType(result.value))
     {
-        reportError(tryExpr->tryLocation, GenericError{"'try' gives a collections.result, so it needs the collections library"});
+        const char* message = "'try' gives a Result, which needs the LuwuNonePrimitive, LuwuDeclareStatements and "
+                              "LuwuGenericNominals flags";
+        reportError(tryExpr->tryLocation, GenericError{message});
         return Inference{builtinTypes->errorType};
     }
 
-    TypeId resultTy = arena->addType(PendingExpansionType{library, result, {valueTy, errorTy}, {}});
+    TypeId resultTy = arena->addType(PendingExpansionType{std::nullopt, result, {valueTy, errorTy}, {}});
     addConstraint(globalScope, tryExpr->location, TypeAliasExpansionConstraint{/* target */ resultTy});
     return Inference{resultTy};
 }

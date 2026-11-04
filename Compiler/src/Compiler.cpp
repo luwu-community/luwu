@@ -5959,7 +5959,7 @@ struct Compiler
     static constexpr uint8_t kTryResultOkFlag = LBC_TRYRESULT_OKFLAG;
 
     // Luwu try expressions: evaluates expr into reg in a protected range. An error raised there resumes at the handler,
-    // with the error in reg and where it was raised in the three registers after it. The result is a `collections.result`
+    // with the error in reg and where it was raised in the three registers after it. The result is an `Ok` or `Err`
     // object (see LOP_WRAPRESULT), or with `inRegisters` the flag in reg + kTryResultOkFlag.
     void compileTryRange(AstExprTry* expr, uint8_t reg, bool inRegisters)
     {
@@ -6016,7 +6016,7 @@ struct Compiler
         pushLocal(stat->vars.data[0], reg, allocpc);
     }
 
-    // The field of a `collections.result` a try result's register holds: value and error at 0, then module, line and
+    // The field of a result a try result's register holds: value and error at 0, then module, line and
     // traceback. -1 for a name that isn't a field.
     static int tryResultField(AstName name)
     {
@@ -6051,26 +6051,26 @@ struct Compiler
         return nullptr;
     }
 
-    // Luwu try expressions: which variant of `collections.result` `cls` names, when it certainly names one: true for ok,
-    // false for err. A result kept in registers has no object to test against a class, so this is where the compiler
-    // assumes `cls` is the builtin class. It only does where it folds builtins (optimization level 2), which assumes the
-    // same of `math`. `cls` resolves through aliases (getBuiltin), so `const .{result.{ok as Ok}} = collections` works.
-    // Moving ok and err out of `collections` changes the names here and nothing else.
+    // Luwu try expressions: which result class `cls` names, when it certainly names one: true for `Ok`, false for `Err`.
+    // A result kept in registers has no object to test against a class, so this is where the compiler assumes `cls` is
+    // the builtin class. It only does where it folds builtins (optimization level 2), which assumes the same of `math`.
+    // `cls` resolves through aliases (getBuiltin), so `local Success = Ok` works. Renaming or moving `Ok` and `Err`
+    // changes the names here and in getBuiltinFunctionId (Builtins.cpp), and nothing else.
     std::optional<bool> builtinResultVariant(AstExpr* cls)
     {
         if (!builtinsFold)
             return std::nullopt;
 
         Builtin builtin = getBuiltin(cls, globals, variables);
-        if (builtin.isNestedMethod("collections", "result", "ok"))
+        if (builtin.isGlobal("Ok"))
             return true;
-        if (builtin.isNestedMethod("collections", "result", "err"))
+        if (builtin.isGlobal("Err"))
             return false;
         return std::nullopt;
     }
 
-    // Luwu try expressions: `class.isinstance(r, ok)` or `class.isinstance(r, err)`, which a result kept in registers
-    // answers from its flag. `is ok.(value)` desugars to it. Gives whether it tests for ok and sets `local` to r.
+    // Luwu try expressions: `class.isinstance(r, Ok)` or `class.isinstance(r, Err)`, which a result kept in registers
+    // answers from its flag. `is Ok.(value)` desugars to it. Gives whether it tests for Ok and sets `local` to r.
     std::optional<bool> tryResultVariantTest(AstExprCall* call, AstExprLocal*& local)
     {
         const int* bfid = builtins.find(call);
@@ -8984,7 +8984,7 @@ struct Compiler
 
     // Luwu try expressions: finds the locals holding a `try` result that are only ever read as `r.value`, `r.error`,
     // `r.module`, `r.line` or `r.traceback`, used as `r:ok()`, `r:err()` or `r:expect()` (tryResultMethodCall), or tested
-    // with `class.isinstance(r, ok)` (tryResultVariantTest). Such a result needs no object: its registers hold all of it.
+    // with `class.isinstance(r, Ok)` (tryResultVariantTest). Such a result needs no object: its registers hold all of it.
     // Any other use of the local (passing it, a method call, writing through it, a closure capturing it) needs the object.
     struct TryResultLocalsVisitor : AstVisitor
     {

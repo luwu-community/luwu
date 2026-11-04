@@ -2,12 +2,12 @@
 --!optimize 2
 print("testing try result variant tests")
 
--- At O2 `class.isinstance(r, ok)` of a result kept in registers reads its flag. These compare it with the same test on
+-- At O2 `class.isinstance(r, Ok)` of a result kept in registers reads its flag. These compare it with the same test on
 -- the object, which a function call gets.
 
-const result = collections.result
-const ok = result.ok
-const results = result
+const Success = Ok
+const Failure = Err
+const failure = Failure
 
 local function value(n: number): number
     if n < 0 then
@@ -17,26 +17,26 @@ local function value(n: number): number
 end
 
 local function isok(r: unknown): boolean
-    return class.isinstance(r, collections.result.ok)
+    return class.isinstance(r, Ok)
 end
 
 local function iserr(r: unknown): boolean
-    return class.isinstance(r, collections.result.err)
+    return class.isinstance(r, Err)
 end
 
 local function variants(n: number): (boolean, boolean, boolean, boolean, string)
     const r = try value(n)
-    const testedok = class.isinstance(r, ok)
-    const testederr = class.isinstance(r, results.err)
-    const notok = not class.isinstance(r, collections.result.ok)
+    const testedok = class.isinstance(r, Success)
+    const testederr = class.isinstance(r, failure)
+    const notok = not class.isinstance(r, Ok)
 
     local branch = "neither"
-    if class.isinstance(r, ok) then
+    if class.isinstance(r, Success) then
         branch = `ok {r.value}`
-    elseif class.isinstance(r, result.err) then
+    elseif class.isinstance(r, Err) then
         branch = `err {r.error}`
     end
-    return testedok, testederr, notok, class.isinstance(r, ok) and class.isinstance(r, result.err), branch
+    return testedok, testederr, notok, class.isinstance(r, Ok) and class.isinstance(r, Err), branch
 end
 
 for _, n in { 3, -1 } do
@@ -51,12 +51,12 @@ end
 do
     local function expectok(n: number): number
         const r = try value(n)
-        assert(class.isinstance(r, ok))
+        assert(class.isinstance(r, Ok))
         return r.value
     end
     assert(expectok(4) == 4)
     const failed = try expectok(-1)
-    assert(class.isinstance(failed, result.err) and string.find(failed.error, "assertion failed", 1, true))
+    assert(class.isinstance(failed, Err) and string.find(failed.error, "assertion failed", 1, true))
 end
 
 -- the test is one value wherever a call could give several
@@ -66,16 +66,16 @@ do
     end
     local function tested(n: number): number
         const r = try value(n)
-        return count(class.isinstance(r, ok))
+        return count(class.isinstance(r, Ok))
     end
     assert(tested(1) == 1 and tested(-1) == 1)
 end
 
--- a `collections` of the module's own is tested against the object it holds
+-- a local named `Ok` is the module's own, so the test checks the object against it
 do
-    local collections = { result = { ok = class.of(result.ok(1)) } }
+    local Ok = class.of(Ok(1))
     const r = try value(1)
-    assert(class.isinstance(r, collections.result.ok))
+    assert(class.isinstance(r, Ok))
 end
 
 return "OK"

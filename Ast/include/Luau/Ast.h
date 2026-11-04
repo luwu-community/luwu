@@ -829,7 +829,7 @@ public:
     AstArray<AstExpr*> expressions;
 };
 
-// Luwu try expressions: `try expr`, a `collections.result` holding expr's value, or the error evaluating it raised
+// Luwu try expressions: `try expr`, an `Ok` holding expr's value, or an `Err` holding the error evaluating it raised
 class AstExprTry : public AstExpr
 {
 public:

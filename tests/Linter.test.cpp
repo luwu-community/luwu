@@ -4007,6 +4007,38 @@ return map, shadowed, count
     CHECK_EQ(found[1].text, "'collections.Vec' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
 }
 
+// Luwu try expressions: `Ok`, `Err`, `Some` and `None` are Luwu-only globals. A local with one of their names is the
+// module's own.
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsResultGlobalsInLuauFiles")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    fileResolver.source["game/a"] = R"(
+local good = Ok(1)
+local bad = Err("no")
+local hit = Some(2)
+local empty = None
+local function shadowed(Ok: (number) -> number)
+    return Ok(1)
+end
+return good, bad, hit, empty, shadowed
+)";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    std::vector<std::string> names;
+    for (const LintWarning& warning : lintModule("game/a").warnings)
+        if (warning.code == LintWarning::Code_LuwuOnlyApi)
+            names.push_back(warning.text.substr(0, warning.text.find(' ')));
+
+    CHECK_EQ(names, std::vector<std::string>{"'Ok'", "'Err'", "'Some'", "'None'"});
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")
 {
     const std::string source = R"(

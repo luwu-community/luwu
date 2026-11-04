@@ -74,6 +74,7 @@
 //   Luwu Traits (rfcs/classes/traits.md): the shape flags varint in LBC_CONSTANT_CLASS_SHAPE (LBC_CLASSSHAPE_TRAIT,
 //   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, and NEWCLASSMEMBER's IMPLEMENTS form.
 //   Luwu collections: LBF_COLLECTIONS_PAIR to LBF_COLLECTIONS_QUAD.
+//   Luwu try expressions: LBF_OPTION_SOME to LBF_RESULT_ERR.
 //   Luwu try expressions: WRAPRESULT, RESULTGET, and each function's protected ranges after its inlining cost: a varint count,
 //   then per range the varints start pc, end pc (exclusive) and handler pc, and a byte for the target register.
 
@@ -582,9 +583,9 @@ enum LuauOpcode
     // D: jump offset (-32768..32767) past the CALL, taken when the class has no trait initializers
     LOP_INITTRAITS,
 
-    // WRAPRESULT: Luwu try expressions: wraps a value in a `collections.result`, an `ok` or an `err`. A `try` expression
-    // ends with the `ok` form, and its protected range's handler starts with the `err` form: when the VM resumes there,
-    // it has put the caught error in A and where it was raised in A + 1 to A + 3 (module, line, traceback).
+    // WRAPRESULT: Luwu try expressions: wraps a value in an `Ok` or an `Err`. A `try` expression ends with the `Ok` form,
+    // and its protected range's handler starts with the `Err` form: when the VM resumes there, it has put the caught
+    // error in A and where it was raised in A + 1 to A + 3 (module, line, traceback).
     // A: register holding the value, and receiving the result
     // B: LBC_WRAPRESULT_OK or LBC_WRAPRESULT_ERR
     LOP_WRAPRESULT,
@@ -1012,6 +1013,11 @@ enum LuauBuiltinFunction
     LBF_COLLECTIONS_PAIR,
     LBF_COLLECTIONS_TRIPLE,
     LBF_COLLECTIONS_QUAD,
+
+    // Luwu try expressions: constructing a `Some`, `Ok` or `Err` without a call frame
+    LBF_OPTION_SOME,
+    LBF_RESULT_OK,
+    LBF_RESULT_ERR,
 };
 
 // Capture type, used in LOP_CAPTURE

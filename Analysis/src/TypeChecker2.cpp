@@ -7648,6 +7648,26 @@ bool TypeChecker2::checkIndexTypeFromType(
     return false;
 }
 
+// Luwu try expressions: the table of methods `none` has while the result library exists (`get` and `expect`, from
+// makeNoneMetatable)
+static std::optional<TypeId> noneMethods(TypeId ty)
+{
+    const PrimitiveType* none = get<PrimitiveType>(ty);
+    if (!none || none->type != PrimitiveType::NoneType || !none->metatable)
+        return std::nullopt;
+
+    const TableType* metatable = get<TableType>(follow(*none->metatable));
+    if (!metatable)
+        return std::nullopt;
+
+    auto index = metatable->props.find("__index");
+    if (index == metatable->props.end() || !index->second.readTy)
+        return std::nullopt;
+
+    return follow(*index->second.readTy);
+}
+
+
 PropertyType TypeChecker2::hasIndexTypeFromType(
     TypeId ty,
     const std::string& prop,
@@ -7674,6 +7694,8 @@ PropertyType TypeChecker2::hasIndexTypeFromType(
         LUAU_ASSERT(mtIndex);
         ty = *mtIndex;
     }
+    else if (std::optional<TypeId> methods = noneMethods(ty); methods && context == ValueContext::RValue)
+        ty = *methods;
 
     if (auto tt = getTableType(ty))
     {

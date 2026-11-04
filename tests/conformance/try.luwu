@@ -1,7 +1,7 @@
 -- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 print("testing try expressions")
 
-const result = collections.result
+-- `try e` gives an `Ok` holding e's value or an `Err` holding the error evaluating it raised
 
 local function boom(n: number)
     if n == 0 then
@@ -13,10 +13,10 @@ end
 -- a value is an `ok`, an error an `err` that says where it was raised
 do
     const good = try 1 + 2
-    assert(class.isinstance(good, result.ok) and good.value == 3)
+    assert(class.isinstance(good, Ok) and good.value == 3)
 
     const bad = try boom(2)
-    assert(class.isinstance(bad, result.err))
+    assert(class.isinstance(bad, Err))
     assert(string.find(bad.error, "boom", 1, true))
     assert(bad.line == 8 and string.find(bad.module, "try.luwu", 1, true))
 
@@ -149,7 +149,7 @@ end
 -- `__tostring` shows where the error was raised and the traceback
 do
     const shown = tostring(try error("x"))
-    assert(string.find(shown, `result.err(`, 1, true) and string.find(shown, "\n[C] function error", 1, true))
+    assert(string.find(shown, `Err(`, 1, true) and string.find(shown, "\n[C] function error", 1, true))
 end
 
 -- a function long enough that its jumps need trampolines, which move its code: the range moves with it
@@ -172,9 +172,9 @@ do
     assert(string.find(bad.error, "kept", 1, true) and bad.line ~= nil and bad.traceback ~= nil)
 
     const wrongvalue = try bad.value
-    assert(wrongvalue.error == `{string.match(wrongvalue.error, "^[^:]*:%d+: ")}objects of class 'err' do not have a field named 'value'`)
+    assert(wrongvalue.error == `{string.match(wrongvalue.error, "^[^:]*:%d+: ")}objects of class 'Err' do not have a field named 'value'`)
     const wronglines = try good.line
-    assert(string.find(wronglines.error, "objects of class 'ok' do not have a field named 'line'", 1, true))
+    assert(string.find(wronglines.error, "objects of class 'Ok' do not have a field named 'line'", 1, true))
 
     -- `ok`, `err` and `expect` answer like the object's methods
     const okvalue = good:ok()
@@ -195,10 +195,10 @@ end
 -- reading a field an object doesn't have saves the instruction's position before raising, so the error names this line
 -- and the `try` around it catches it
 do
-    const holder = result.ok(1)
+    const holder = Ok(1)
     tostring("an unrelated call, which leaves an older position saved")
     const missing = try holder.error
-    assert(missing.line == 200 and string.find(missing.error, ":200: objects of class 'ok'", 1, true))
+    assert(missing.line == 200 and string.find(missing.error, ":200: objects of class 'Ok'", 1, true))
 end
 
 -- a Luau-style `try` function is still a function

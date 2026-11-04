@@ -819,13 +819,18 @@ typedef struct LuauStorage
     uint32_t capacity;
     // A ring's front slot; always 0 for a `Vec`, so the ring's formula finds a `Vec`'s entries too
     uint32_t head;
-    // The type the first value fixed (see lcollectionslib.cpp): the tag every entry has. Entries tagged LUA_TOBJECT are
-    // objects of `elementclass`.
+    // The type the first value fixed (see lcollectionslib.cpp): the tag every entry has, or LUAR_STORAGE_ENUM when the
+    // entries are the values of a builtin enum. Entries tagged LUA_TOBJECT are objects of `elementclass`.
     uint8_t elementtag;
-    uint8_t padding[3];
+    // The builtin enum when `elementtag` is LUAR_STORAGE_ENUM
+    uint8_t elementenum;
+    uint16_t padding;
     struct LuauClass* elementclass;
     TValue items[1];
 } LuauStorage;
+
+// Luwu try expressions: LuauStorage::elementtag for a builtin enum, which no value's tag matches
+#define LUAR_STORAGE_ENUM 0xff
 
 // Luwu collections: the member of a builtin container that points to its LuauStorage
 #define LUAR_STORAGE_MEMBER 0

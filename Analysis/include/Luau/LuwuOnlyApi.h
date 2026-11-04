@@ -24,10 +24,13 @@ inline bool isLuwuOnlyMember(std::string_view library, std::string_view member)
     return false;
 }
 
-// Luwu: whether `name` is a global library or function only Luwu has, such as `collections`. The LuwuOnlyApi lint
+// Luwu: whether `name` is a global library, class or value only Luwu has, such as `collections`. The LuwuOnlyApi lint
 // reports it in Luau and Lua modules, and autocomplete doesn't offer it there.
 inline bool isLuwuOnlyGlobal(std::string_view name)
 {
+    // Luwu try expressions: options and results
+    if (name == "Ok" || name == "Err" || name == "Some" || name == "None")
+        return true;
     return name == "collections";
 }
 

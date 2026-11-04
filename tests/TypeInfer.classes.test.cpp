@@ -6139,13 +6139,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_eleme
     CHECK_EQ(result.errors[0].location.begin.line, 14);
 }
 
-// Luwu collections: an empty option is `none`, which gets `get` and `expect` while the library exists
-TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
+// Luwu try expressions: options and results are global classes, and an empty option is `none`, which gets `get` and
+// `expect` while the library exists
+TEST_CASE_FIXTURE(BuiltinsFixture, "option_and_result_types")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuTryExpressions, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -6156,21 +6157,19 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
         local function fail(): number
             return none:expect("no value")
         end
-        local hit = collections.option.some(5)
+        local hit = Some(5)
         local value = hit:get()
-        local good = collections.result.ok("x")
+        local good = Ok("x")
         local text = good:expect()
-        local bad = collections.result.err(42)
+        local bad = Err(42)
         local code = bad:err()
         local missing = bad:ok()
-        local typed: collections.option<number> = collections.option.none
-        local typedhit: collections.option<number> = hit
-        local notglobal: option<number> = hit
+        local typed: Option<number> = None
+        local typedhit: Option<number> = hit
+        local either: Result<string, number> = if value > 1 then good else bad
     )");
 
-    // the library's types are its exports, not global type names
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK(get<UnknownSymbol>(result.errors[0]));
+    LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ(toString(requireType("empty")), "none");
     CHECK_EQ(toString(requireType("value")), "number");
     CHECK_EQ(toString(requireType("text")), "string");
@@ -6178,13 +6177,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
     CHECK_EQ(toString(requireType("missing")), "none");
 }
 
-// Luwu try expressions: `try expr` is a collections.result of expr's type, with an unknown error
+// Luwu try expressions: `try expr` is a Result of expr's type, with an unknown error
 TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
@@ -6197,20 +6195,21 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
         end
         local text = try read("x")
         local sum = try 1 + 2
-        local typed: collections.result<string, unknown> = try read("y")
+        local typed: Result<string, unknown> = try read("y")
         local wrong: number = try 1
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(result.errors[0].location.begin.line, 8);
     CHECK_EQ(toString(requireType("text")), toString(requireType("typed")));
-    CHECK(toString(requireType("sum")).find("ok<number>") != std::string::npos);
+    CHECK(toString(requireType("sum")).find("Ok<number>") != std::string::npos);
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "try_needs_the_collections_library")
+// Luwu try expressions: `try` gives a Result, which isn't declared without `none`
+TEST_CASE_FIXTURE(BuiltinsFixture, "try_needs_the_result_types")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuwuCollections, false},
+        {FFlag::LuwuNonePrimitive, false},
         {FFlag::DebugLuwuTryExpressions, true},
     };
 
@@ -6227,7 +6226,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_try_expressions")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
@@ -6245,7 +6243,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "try_types_its_error_from_the_callees_hint")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
@@ -6295,9 +6292,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "try_types_its_error_from_the_callees_hint")
     CHECK_MESSAGE(parse.find("\"meow\"") != std::string::npos, parse);
     CHECK_MESSAGE(parse.find("| string") != std::string::npos, parse);
 
-    CHECK_EQ(toString(requireType("r")), "err<NotFound | unknown> | ok<string>");
-    CHECK_EQ(toString(requireType("s")), "err<unknown> | ok<number>");
-    CHECK_EQ(toString(requireType("w")), "err<unknown> | ok<string>");
+    CHECK_EQ(toString(requireType("r")), "Err<NotFound | unknown> | Ok<string>");
+    CHECK_EQ(toString(requireType("s")), "Err<unknown> | Ok<number>");
+    CHECK_EQ(toString(requireType("w")), "Err<unknown> | Ok<string>");
 }
 
 // Luwu try expressions: `raises<F>` and `types.raises(f)` give what `try f()` would hold as its error
@@ -6306,7 +6303,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "raises_gives_a_functions_error_hints")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
@@ -6398,7 +6394,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "type_aliases_with_error_hints_are_return_typ
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
@@ -6439,7 +6434,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "type_aliases_with_error_hints_are_return_typ
     CHECK_EQ(toString(requireType("both")), "(string) -> string ! NotFound | number");
     CHECK_EQ(toString(requireType("reader")), "(string) -> string ! NotFound");
     CHECK_EQ(toString(requireType("open")), "(string) -> number ! NotFound");
-    CHECK_EQ(toString(requireType("r")), "err<NotFound | unknown> | ok<string>");
+    CHECK_EQ(toString(requireType("r")), "Err<NotFound | unknown> | Ok<string>");
 }
 
 // Luwu try expressions: the hint would be lost anywhere but a function's whole return type, so any other use is an error
@@ -6522,7 +6517,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_error_hints")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
@@ -6538,25 +6532,25 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_error_hints")
     checkTypewriting(*this, withLookup, "local function read(path: string): Lookup\n    return path\nend", after);
 }
 
-// Luwu collections: an `err` can say where its error was raised, with optional fields after the error
-TEST_CASE_FIXTURE(BuiltinsFixture, "collections_err_has_optional_position_fields")
+// Luwu try expressions: an `Err` can say where its error was raised, with optional fields after the error
+TEST_CASE_FIXTURE(BuiltinsFixture, "err_has_optional_position_fields")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuTryExpressions, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
 
     CheckResult result = check(R"(
         --!strict
-        local bare = collections.result.err("boom")
-        local placed = collections.result.err("boom", "main.luau", 12, "trace")
+        local bare = Err("boom")
+        local placed = Err("boom", "main.luau", 12, "trace")
         local module = placed.module
         local line = placed.line
         local traceback = placed.traceback
-        local wrong = collections.result.err("boom", 12)
+        local wrong = Err("boom", 12)
     )");
 
     // the module has to be a string
@@ -6567,13 +6561,13 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_err_has_optional_position_fields
     CHECK_EQ(toString(requireType("traceback")), "string?");
 }
 
-// Luwu collections: `none` has only the methods the library gives it, so any other key is missing
+// Luwu try expressions: `none` has only the methods the result library gives it, so any other key is missing
 TEST_CASE_FIXTURE(BuiltinsFixture, "indexing_none_by_an_unknown_key_is_an_error")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuTryExpressions, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -6603,11 +6597,11 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "indexing_none_by_an_unknown_key_is_an_error"
     CHECK_EQ(toString(requireType("empty")), "none");
 }
 
-// Luwu: without the collections library `none` has no methods at all
-TEST_CASE_FIXTURE(BuiltinsFixture, "none_has_no_keys_without_collections")
+// Luwu: without the result library `none` has no methods at all
+TEST_CASE_FIXTURE(BuiltinsFixture, "none_has_no_keys_without_the_result_library")
 {
     ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuwuCollections, false},
+        {FFlag::DebugLuwuTryExpressions, false},
         {FFlag::LuwuNonePrimitive, true},
     };
 

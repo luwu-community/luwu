@@ -219,6 +219,21 @@ LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const l
  */
 LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method);
 
+// Luwu builtin classes: an `__init` that fills the object's fields from its arguments in order. A field with no
+// argument for it stays nil.
+LUAI_FUNC int luaR_fieldsinit(lua_State* L);
+
+// Luwu builtin classes: pops the value on top of the stack and adds it to `b` the way a constructor call in `__tostring`
+// shows it: strings quoted, everything else as `tostring` gives it
+LUAI_FUNC void luaR_addshowntop(struct luaL_Strbuf* b);
+
+// Luwu try expressions: a new `Some`, `Ok` or `Err` (`kind`) holding `value`, for the C API and `try`. Raises if the
+// library isn't open or a `Some` gets nil or none.
+LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value);
+
+// Luwu try expressions: the value a `Some`, `Ok` or `Err` holds, or NULL for any other value
+LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
+
 /**
  * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns
  * false otherwise. The loop calls neither `__iter` nor anything per step: `ra` becomes a boolean, which FORGLOOP hands

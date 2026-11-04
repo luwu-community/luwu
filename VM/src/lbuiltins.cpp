@@ -1001,13 +1001,15 @@ static int luauF_class_isinstance(lua_State* L, StkId res, TValue* arg0, int nre
     return -1;
 }
 
-// Luwu collections: builds a Pair, Triple or Quad the way its `__init` would, without a call frame. A member with no
-// argument for it is nil. A call without arguments falls back to the constructor.
+// Luwu collections and try expressions: builds a Pair, Triple, Quad, Some, Ok or Err the way its `__init` would,
+// without a call frame. A member with no argument for it is nil. A call without arguments and `Some` of nil or none
+// fall back to the constructor, which raises where it should.
 template<LuwuBuiltinClass Kind>
 static int luauF_collections_construct(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
     LuauClass* classdef = L->global->builtinclasses[Kind];
-    if (!classdef || nresults > 1 || nparams < 1)
+    bool payloadMissing = nparams < 1 || (Kind == LUWU_BUILTIN_SOME && (ttisnil(arg0) || ttissymnone(arg0)));
+    if (!classdef || nresults > 1 || payloadMissing)
         return -1;
 
     if (luaC_needsGC(L))
@@ -2838,6 +2840,10 @@ const luau_FastFunction luauF_table[256] = {
     luauF_collections_construct<LUWU_BUILTIN_PAIR>,
     luauF_collections_construct<LUWU_BUILTIN_TRIPLE>,
     luauF_collections_construct<LUWU_BUILTIN_QUAD>,
+
+    luauF_collections_construct<LUWU_BUILTIN_SOME>,
+    luauF_collections_construct<LUWU_BUILTIN_OK>,
+    luauF_collections_construct<LUWU_BUILTIN_ERR>,
 
 // When adding builtins, add them above this line; what follows is 64 "dummy" entries with luauF_missing fallback.
 // This is important so that older versions of the runtime that don't support newer builtins automatically fall back via luauF_missing.

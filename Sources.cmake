@@ -437,6 +437,7 @@ target_sources(Luwu.VM PRIVATE
     VM/src/lclass.cpp
     VM/src/lclasslib.cpp
     VM/src/lcollectionslib.cpp
+    VM/src/lresultlib.cpp
     VM/src/lvector.cpp
     VM/src/lvmload.cpp
     VM/src/lvmutils.cpp

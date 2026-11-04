@@ -55,7 +55,6 @@ const DEPTHS = { 0, 1, 5, 40, 400, 3000 }
 const KINDS = 10
 
 const PRELUDE = [[
-local result = collections.result
 
 local function deep(n, f, ...)
     local a, b, c, d = n, n + 1, n + 2, n + 3
@@ -116,10 +115,10 @@ end
 -- the result as an object
 local function check_object(case, ok, value, r)
     if ok then
-        assert(class.isinstance(r, result.ok), `case {case}: pcall succeeded with {describe(value)}, try gave {r}`)
+        assert(class.isinstance(r, Ok), `case {case}: pcall succeeded with {describe(value)}, try gave {r}`)
         assert(equal(r.value, value), `case {case}: value {describe(r.value)} vs {describe(value)}`)
     else
-        assert(class.isinstance(r, result.err), `case {case}: pcall failed with {describe(value)}, try gave {r}`)
+        assert(class.isinstance(r, Err), `case {case}: pcall failed with {describe(value)}, try gave {r}`)
         assert(equal(r.error, value), `case {case}: error {describe(r.error)} vs {describe(value)}`)
         assert(type(r.traceback) == "string", `case {case}: no traceback`)
     end
@@ -203,9 +202,9 @@ local function gen_case(rng: Rng, case: number): string
         -- fields kept in registers, including the other variant's field, which raises
         return `do\n{gc}    local ok, v = pcall(function() return {expr} end); local r = try {expr}\n`
             .. `    if ok then\n        assert(equal(r.value, v), "case {case}: value")\n`
-            .. `        local wrong = try r.error\n        assert(class.isinstance(wrong, result.err), "case {case}: ok had an error field")\n`
+            .. `        local wrong = try r.error\n        assert(class.isinstance(wrong, Err), "case {case}: ok had an error field")\n`
             .. `    else\n        assert(equal(r.error, v) and r.line ~= nil and r.traceback ~= nil, "case {case}: error")\n`
-            .. `        local wrong = try r.value\n        assert(class.isinstance(wrong, result.err), "case {case}: err had a value field")\n`
+            .. `        local wrong = try r.value\n        assert(class.isinstance(wrong, Err), "case {case}: err had a value field")\n`
             .. `    end\nend\n`
     elseif form == 4 then
         -- inside a vararg function, with `...` in the range
@@ -217,9 +216,9 @@ local function gen_case(rng: Rng, case: number): string
     elseif form == 5 then
         -- `class.isinstance` of the variants, kept in registers at O2
         return `do\n{gc}    local ok, v = pcall(function() return {expr} end); local r = try {expr}\n`
-            .. `    local isok = class.isinstance(r, result.ok)\n    assert(isok == ok, "case {case}: isinstance ok")\n`
-            .. `    if class.isinstance(r, result.err) then\n        assert(not ok and equal(r.error, v), "case {case}: err branch")\n`
-            .. `    elseif not class.isinstance(r, result.ok) then\n        error("case {case}: neither variant")\n`
+            .. `    local isok = class.isinstance(r, Ok)\n    assert(isok == ok, "case {case}: isinstance ok")\n`
+            .. `    if class.isinstance(r, Err) then\n        assert(not ok and equal(r.error, v), "case {case}: err branch")\n`
+            .. `    elseif not class.isinstance(r, Ok) then\n        error("case {case}: neither variant")\n`
             .. `    else\n        assert(ok and equal(r.value, v), "case {case}: ok branch")\n    end\nend\n`
     else
         -- inside a coroutine, around a call that yields first

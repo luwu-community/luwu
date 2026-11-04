@@ -141,6 +141,10 @@ void assignPropDocumentationSymbols(TableType::Props& props, const std::string& 
 
 std::string getBuiltinDefinitionSource();
 
+// Luwu try expressions: whether Analysis has the `Ok`, `Err`, `Some` and `None` globals: the flags the VM opens them
+// with (luaL_openlibs), LuwuDeclareStatements, which parses their declarations, and LuwuGenericNominals, which types
+// their generic classes
+bool resultLibraryEnabled();
 // Luwu collections: whether Analysis has the `collections` library: the flags the VM opens it with
 // (luaL_openlibs), and LuwuDeclareStatements, which parses its declarations
 bool collectionsLibraryEnabled();
