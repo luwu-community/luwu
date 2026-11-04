@@ -301,7 +301,16 @@ TEST_CASE_FIXTURE(Fixture, "for_in_loop_on_error")
         end
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    // Luwu: the third is the first use of `part`, which has no type because of `i_am_not_defined` (NoTypeUse)
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(3, result);
+        CHECK(get<NoTypeUse>(result.errors[2]));
+    }
+    else
+    {
+        LUAU_REQUIRE_ERROR_COUNT(2, result);
+    }
 
     TypeId p = requireType("p");
     if (!FFlag::DebugLuauForceOldSolver)
