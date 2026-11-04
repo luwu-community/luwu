@@ -102,6 +102,7 @@ inline bool canInvalidateSafeEnv(IrCmd cmd)
     case IrCmd::SET_TABLE:
     case IrCmd::CONCAT: // TODO: if only strings and numbers are concatenated, there will be no user calls
     case IrCmd::CALL:
+    case IrCmd::TAILCALL:
     case IrCmd::FORGLOOP_FALLBACK:
     case IrCmd::FALLBACK_GETGLOBAL:
     case IrCmd::FALLBACK_SETGLOBAL:

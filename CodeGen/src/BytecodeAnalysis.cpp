@@ -1320,7 +1320,7 @@ static void analyzeBytecodeTypesPass(
                 int skip = LUAU_INSN_C(*pc);
 
                 Instruction call = pc[skip + 1];
-                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
                 int ra = LUAU_INSN_A(call);
 
                 applyBuiltinCall(LuauBuiltinFunction(bfid), bcType);
@@ -1342,7 +1342,7 @@ static void analyzeBytecodeTypesPass(
                 int skip = LUAU_INSN_C(*pc);
 
                 Instruction call = pc[skip + 1];
-                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
                 int ra = LUAU_INSN_A(call);
 
                 applyBuiltinCall(LuauBuiltinFunction(bfid), bcType);
@@ -1361,7 +1361,7 @@ static void analyzeBytecodeTypesPass(
                 int skip = LUAU_INSN_C(*pc);
 
                 Instruction call = pc[skip + 1];
-                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
                 int ra = LUAU_INSN_A(call);
 
                 applyBuiltinCall(LuauBuiltinFunction(bfid), bcType);
@@ -1382,7 +1382,7 @@ static void analyzeBytecodeTypesPass(
                 int aux = pc[1];
 
                 Instruction call = pc[skip + 1];
-                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL || LUAU_INSN_OP(call) == LOP_TAILCALL);
                 int ra = LUAU_INSN_A(call);
 
                 applyBuiltinCall(LuauBuiltinFunction(bfid), bcType);
@@ -1461,6 +1461,7 @@ static void analyzeBytecodeTypesPass(
             }
             case LOP_CALLFB:
             case LOP_CALL:
+            case LOP_TAILCALL:
             {
                 int ra = LUAU_INSN_A(*pc);
 
@@ -1697,8 +1698,9 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
         break;
     case LOP_CALL:
     case LOP_CALLFB:
+    case LOP_TAILCALL:
     {
-        int results = LUAU_INSN_C(*code) - 1;
+        int results = (LUAU_INSN_OP(*code) == LOP_TAILCALL) ? -1 : (LUAU_INSN_C(*code) - 1);
 
         visit(ra, callResultTypes[pc]);
         visitRange(ra + 1, results < 0 ? proto->maxstacksize : results - 1);
