@@ -110,59 +110,24 @@ static uint32_t checkposition(lua_State* L, int idx, uint32_t last)
     return uint32_t(position);
 }
 
-// vec and vecdeque hold one type of value: the first value one gets fixes it, and a value of any other type raises.
-// nil never goes in. A type is a primitive type, an object's class, or a builtin enum.
-//
-// Builtin enums are types whose values come from several variants, classes or primitives: an `option` is a `some`
-// object or `none`, a `result` an `ok` or an `err` object. A container of an enum takes all of its variants. Enums
-// aren't user facing yet.
-
-enum BuiltinEnum
-{
-    NOT_AN_ENUM,
-    ENUM_OPTION,
-    ENUM_RESULT,
-};
-
-// How an error names the values of each enum, by BuiltinEnum
-static const char* const kEnumPlurals[] = {NULL, "options", "results"};
+// Vec and VecDeque hold one type of value: the first value one gets fixes it, and a value of any other type raises.
+// nil never goes in. A type is a primitive type or an object's class.
 
 static bool isnovalue(const TValue* value)
 {
     return ttisnil(value) || ttissymnone(value);
 }
 
-static BuiltinEnum enumof(lua_State* L, const TValue* value)
-{
-    if (ttissymnone(value))
-        return ENUM_OPTION;
-    if (!ttisobject(value))
-        return NOT_AN_ENUM;
-
-    const LuauClass* classdef = objectvalue(value)->lclass;
-    if (classdef == builtinclass(L, LUWU_BUILTIN_SOME))
-        return ENUM_OPTION;
-    if (classdef == builtinclass(L, LUWU_BUILTIN_OK) || classdef == builtinclass(L, LUWU_BUILTIN_ERR))
-        return ENUM_RESULT;
-    return NOT_AN_ENUM;
-}
-
-// Fixes the element type of `storage` to the type of `value`: its builtin enum, its class, or its type tag
+// Fixes the element type of `storage` to the type of `value`: its class, or its type tag
 static void setelementtype(lua_State* L, LuauStorage* storage, const TValue* value)
 {
-    BuiltinEnum builtinenum = enumof(L, value);
-    storage->elementtag = builtinenum != NOT_AN_ENUM ? LUAR_STORAGE_ENUM : uint8_t(ttype(value));
-    storage->elementenum = uint8_t(builtinenum);
-    storage->elementclass = builtinenum == NOT_AN_ENUM && ttisobject(value) ? objectvalue(value)->lclass : NULL;
+    storage->elementtag = uint8_t(ttype(value));
+    storage->elementclass = ttisobject(value) ? objectvalue(value)->lclass : NULL;
 }
 
-// Whether `value` is of the element type of `storage`. It takes one compare unless the type is an object's class or a
-// builtin enum. An enum's variants never match a class or a primitive element type, since setelementtype gives their
-// values the enum and `none` is an option.
+// Whether `value` is of the element type of `storage`. It takes one compare unless the type is an object's class.
 static bool hastype(lua_State* L, const LuauStorage* storage, const TValue* value)
 {
-    if (storage->elementtag == LUAR_STORAGE_ENUM)
-        return enumof(L, value) == BuiltinEnum(storage->elementenum);
     return ttype(value) == storage->elementtag && (storage->elementtag != LUA_TOBJECT || objectvalue(value)->lclass == storage->elementclass);
 }
 
@@ -173,7 +138,7 @@ static bool fitselement(lua_State* L, const LuauStorage* storage, const TValue* 
     return storage && hastype(L, storage, value);
 }
 
-// Writes how an error names the values of the element type of `storage`: "strings", "'Player' objects", "options"
+// Writes how an error names the values of the element type of `storage`: "strings", "'Player' objects"
 static void addtypeplural(luaL_Strbuf* b, const LuauStorage* storage)
 {
     if (storage->elementclass)
@@ -181,12 +146,6 @@ static void addtypeplural(luaL_Strbuf* b, const LuauStorage* storage)
         luaL_addchar(b, '\'');
         luaL_addstring(b, getstr(storage->elementclass->name));
         luaL_addstring(b, "' objects");
-        return;
-    }
-
-    if (storage->elementtag == LUAR_STORAGE_ENUM)
-    {
-        luaL_addstring(b, kEnumPlurals[storage->elementenum]);
         return;
     }
 
@@ -275,7 +234,7 @@ static void containerfill(lua_State* L, LuauObject* container, lua_CFunction pus
     }
 }
 
-// `__tostring`: the call that builds an equal container, `vec({1, 2})`, or `vec()` when it's empty. `at` reads an
+// `__tostring`: the call that builds an equal container, `Vec({1, 2})`, or `Vec()` when it's empty. `at` reads an
 // entry by position.
 static int containertostring(lua_State* L, LuauObject* container, uint32_t count, lua_CFunction at)
 {
@@ -306,7 +265,7 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
     return 1;
 }
 
-// pair, triple and quad: `first` to `fourth`, public and const
+// Pair, Triple and Quad: `first` to `fourth`, public and const
 
 template<LuwuBuiltinClass Kind>
 static LuauObject* checkbundle(lua_State* L, const char* method)
@@ -314,8 +273,7 @@ static LuauObject* checkbundle(lua_State* L, const char* method)
     return luaR_checknativeself(L, builtinclass(L, Kind), method);
 }
 
-// `__init` is only ever called by construction, with a new object of the class: it can't be read as a member. Also
-// `err`'s, which fills its error and position fields in order.
+// `__init` is only ever called by construction, with a new object of the class: it can't be read as a member.
 static int bundleinit(lua_State* L)
 {
     LuauObject* bundle = objectvalue(L->base);
@@ -384,8 +342,6 @@ static int bundleiter(lua_State* L)
 
 static const uint8_t kBundleField = LBC_CLASSMEMBER_CONST;
 static const uint8_t kPrivateField = LBC_CLASSMEMBER_PRIVATE;
-// An option's or result's payload, readable as `value` (`error` for `err`) like a bundle's elements
-static const uint8_t kPayloadField = LBC_CLASSMEMBER_CONST;
 
 static const luaR_NativeMember kPairMembers[] = {
     {"first", NULL, kBundleField},
@@ -414,7 +370,7 @@ static const luaR_NativeMember kQuadMembers[] = {
     {"__tostring", bundletostring<LUWU_BUILTIN_QUAD>, 0},
 };
 
-// orderedmap: a map in an order the user decides. Every entry has an id that stays the same while it exists, the
+// OrderedMap: a map in an order the user decides. Every entry has an id that stays the same while it exists, the
 // index of its key and value. Lookups go key, id, value. The order is an array of ids and each id's position is kept
 // current, so `index` and `at` take constant time and rearranging moves only 4-byte ids.
 
@@ -478,7 +434,7 @@ static uint32_t* omreserve(lua_State* L, LuauObject* map, OrderedMapField field,
 
     uint32_t grown = capacity * 2 > ids ? capacity * 2 : ids;
     if (size_t(grown) * sizeof(uint32_t) > MAX_BUFFER_SIZE)
-        luaL_error(L, "orderedmap can't hold more than %d entries", int(MAX_BUFFER_SIZE / sizeof(uint32_t)));
+        luaL_error(L, "OrderedMap can't hold more than %d entries", int(MAX_BUFFER_SIZE / sizeof(uint32_t)));
 
     Buffer* replacement = luaB_newbuffer(L, grown * sizeof(uint32_t));
     memcpy(replacement->data, buffer->data, buffer->len);
@@ -506,7 +462,7 @@ static uint32_t omcheckid(lua_State* L, LuauObject* map, int idx)
 {
     uint32_t id = omidof(map, L->base + idx - 1);
     if (id == 0)
-        luaL_error(L, "orderedmap has no key %s", pushshown(L, idx));
+        luaL_error(L, "OrderedMap has no key %s", pushshown(L, idx));
     return id;
 }
 
@@ -789,7 +745,7 @@ static int orderedmapsort(lua_State* L)
     omsortids(L, map, ids, ids + count, count);
 
     if (omnumber(map, OM_COUNT) != count)
-        luaL_error(L, "orderedmap changed while it was being sorted");
+        luaL_error(L, "OrderedMap changed while it was being sorted");
 
     memcpy(omids(map, OM_ORDER), ids, count * sizeof(uint32_t));
     omrenumber(map, 1, count);
@@ -847,7 +803,7 @@ static uint32_t omnextposition(lua_State* L, LuauObject* map, int idx)
 {
     uint32_t id = omidof(map, L->base + idx - 1);
     if (id == 0)
-        luaL_error(L, "orderedmap lost key %s while it was being iterated", pushshown(L, idx));
+        luaL_error(L, "OrderedMap lost key %s while it was being iterated", pushshown(L, idx));
     return omids(map, OM_POSITIONS)[id - 1] + 1;
 }
 
@@ -869,7 +825,7 @@ static int orderedmapiter(lua_State* L)
     return 3;
 }
 
-// orderedmap's fast methods (luaR_FastMethod). `set` leaves a new key to the C method, which may grow the map.
+// OrderedMap's fast methods (luaR_FastMethod). `set` leaves a new key to the C method, which may grow the map.
 
 static int orderedmapgetfast(lua_State* L, LuauObject* map, StkId res, StkId args, int nargs)
 {
@@ -936,9 +892,9 @@ static const luaR_NativeMember kOrderedMapMembers[] = {
     {"__iter", orderedmapiter, 0},
 };
 
-// vec and vecdeque store their entries in a storage block (LuauStorage) from the first value on. Its capacity is a power
+// Vec and VecDeque store their entries in a storage block (LuauStorage) from the first value on. Its capacity is a power
 // of two. The entry `i` places from the front (from 0) is in slot (head + i) & (capacity - 1) (luaR_storageentry): a
-// vecdeque's entries wrap around the block's end, and a vec's start at slot 0 with head 0.
+// VecDeque's entries wrap around the block's end, and a Vec's start at slot 0 with head 0.
 
 // A container holds at most this many entries, as many as a table's array part
 static const uint32_t kMaxEntries = 1u << 26;
@@ -980,7 +936,7 @@ static LuauStorage* newstorage(lua_State* L, LuauObject* container, int idx)
     storage->count = 0;
     storage->capacity = kInitialSlots;
     storage->head = 0;
-    storage->padding = 0;
+    memset(storage->padding, 0, sizeof(storage->padding));
     setelementtype(L, storage, L->base + idx - 1);
     setstorage(container, storage);
     if (storage->elementclass)
@@ -1063,7 +1019,7 @@ static int pushentryat(lua_State* L, LuauObject* container, double position)
     return 1;
 }
 
-// `popback` of a vec or vecdeque: takes the last entry, or nil when there's none
+// `popback` of a Vec or VecDeque: takes the last entry, or nil when there's none
 static int popback(lua_State* L, LuauObject* container)
 {
     LuauStorage* storage = luaR_storage(container);
@@ -1117,7 +1073,7 @@ static bool fitsset(lua_State* L, LuauObject* container, StkId args, int nargs)
            fitselement(L, luaR_storage(container), args + 1);
 }
 
-// vecdeque: a double-ended queue on a ring. Pushing at the front moves the head back one slot.
+// VecDeque: a double-ended queue on a ring. Pushing at the front moves the head back one slot.
 
 static LuauObject* checkdeque(lua_State* L, const char* method)
 {
@@ -1234,7 +1190,7 @@ static int vecdequetostring(lua_State* L)
     return containertostring(L, dq, countof(dq), vecdequeat);
 }
 
-// vecdeque's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or
+// VecDeque's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or
 // mistyped value, growing, a missing argument and a position that isn't a number.
 
 static int vecdequepushbackfast(lua_State* L, LuauObject* dq, StkId res, StkId args, int nargs)
@@ -1260,7 +1216,7 @@ static int vecdequepushfrontfast(lua_State* L, LuauObject* dq, StkId res, StkId 
     return 0;
 }
 
-// `popback` of a vec or vecdeque
+// `popback` of a Vec or VecDeque
 static int popbackfast(lua_State* L, LuauObject* container, StkId res, StkId args, int nargs)
 {
     LuauStorage* storage = luaR_storage(container);
@@ -1332,7 +1288,7 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     {"__tostring", vecdequetostring, 0},
 };
 
-// vec: a growable array. Its head stays 0, so position `p` is slot `p - 1`.
+// Vec: a growable array. Its head stays 0, so position `p` is slot `p - 1`.
 
 static LuauObject* checkvec(lua_State* L, const char* method)
 {
@@ -1436,7 +1392,7 @@ static int vectostring(lua_State* L)
     return containertostring(L, vec, countof(vec), vecat);
 }
 
-// vec's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or mistyped
+// Vec's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or mistyped
 // value, growing, a missing argument and a position that isn't a number.
 
 static int vecpushfast(lua_State* L, LuauObject* vec, StkId res, StkId args, int nargs)
@@ -1463,285 +1419,6 @@ static const luaR_NativeMember kVecMembers[] = {
     {"__iter", veciter, 0},
     {"__tostring", vectostring, 0},
 };
-
-// option and result. A full option is a `some` object and an empty one is the `none` primitive itself, so an empty
-// option allocates nothing. `none` gets `get` and `expect` through its type's metatable, whose `__index` only runs when
-// code indexes `none`, which is otherwise an error: nothing else `none` does gets slower. A result is an `ok` or an
-// `err` object. Each holds its value in its first field. An `err` also has where its error was raised, which a `try`
-// expression fills in.
-
-// The first field of a `some`, `ok` or `err`
-static const int kPayload = 0;
-// `err`'s position fields, after its error
-static const int kErrModule = 1;
-static const int kErrLine = 2;
-static const int kErrTraceback = 3;
-
-template<LuwuBuiltinClass Kind>
-static LuauObject* checkpayload(lua_State* L, const char* method)
-{
-    return luaR_checknativeself(L, builtinclass(L, Kind), method);
-}
-
-// `__init` for `ok`, which holds any value
-static int payloadinit(lua_State* L)
-{
-    setfield(L, objectvalue(L->base), kPayload, L->base + 1);
-    return 0;
-}
-
-static void formatsomemissing(lua_State* L, char (&message)[LUA_BUFFERSIZE], int type)
-{
-    snprintf(message, sizeof(message), "option.some needs a value, but you passed %s", getstr(L->global->ttname[type]));
-}
-
-// `__init` runs under the class's C constructor, so its error is raised at the Lua code constructing
-static int someinit(lua_State* L)
-{
-    if (lua_gettop(L) < 2 || isnovalue(L->base + 1))
-    {
-        char message[LUA_BUFFERSIZE];
-        formatsomemissing(L, message, lua_gettop(L) < 2 ? LUA_TNIL : ttype(L->base + 1));
-        luaG_runerroratlua(L, message);
-    }
-    return payloadinit(L);
-}
-
-LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value)
-{
-    LuauClass* classdef = builtinclass(L, kind);
-    if (!classdef)
-        luaG_runerror(L, "open the collections library before building an option or result");
-
-    if (kind == LUWU_BUILTIN_SOME && isnovalue(value))
-    {
-        char message[LUA_BUFFERSIZE];
-        formatsomemissing(L, message, ttype(value));
-        luaG_runerror(L, "%s", message);
-    }
-
-    // A new object is white, so storing into it needs no barrier
-    LuauObject* object = luaR_newobjectuninit(L, classdef);
-    TValue* members = luaR_members(object);
-    setobj(L, &members[kPayload], value);
-    for (int i = kPayload + 1; i < int(object->numberofmembers); i++)
-        setnilvalue(&members[i]);
-    return object;
-}
-
-const TValue* luaR_payload(lua_State* L, const TValue* value)
-{
-    if (!ttisobject(value))
-        return NULL;
-
-    LuauObject* object = objectvalue(value);
-    bool holdsPayload = object->lclass == builtinclass(L, LUWU_BUILTIN_SOME) || object->lclass == builtinclass(L, LUWU_BUILTIN_OK) ||
-                        object->lclass == builtinclass(L, LUWU_BUILTIN_ERR);
-    return holdsPayload ? &luaR_members(object)[kPayload] : NULL;
-}
-
-// `get` of a `some` and `ok` of an `ok`: the value
-template<LuwuBuiltinClass Kind>
-static int payloadget(lua_State* L)
-{
-    const char* method = Kind == LUWU_BUILTIN_SOME ? "get" : "ok";
-    luaA_pushvalue(L, &luaR_members(checkpayload<Kind>(L, method))[kPayload]);
-    return 1;
-}
-
-template<LuwuBuiltinClass Kind>
-static int payloadexpect(lua_State* L)
-{
-    LuauObject* holder = checkpayload<Kind>(L, "expect");
-    luaL_optstring(L, 2, NULL);
-    luaA_pushvalue(L, &luaR_members(holder)[kPayload]);
-    return 1;
-}
-
-template<LuwuBuiltinClass Kind>
-static int payloadeq(lua_State* L)
-{
-    LuauObject* holder = checkpayload<Kind>(L, "__eq");
-    const TValue* other = L->base + 1;
-    bool equal = ttisobject(other) && objectvalue(other)->lclass == holder->lclass &&
-                 equalobj(L, &luaR_members(holder)[kPayload], &luaR_members(objectvalue(other))[kPayload]);
-    lua_pushboolean(L, equal);
-    return 1;
-}
-
-// `__tostring`: the constructor call, `option.some(1)`. An `err` adds where its error was raised when it knows, and
-// the traceback on the lines after.
-template<LuwuBuiltinClass Kind>
-static int payloadtostring(lua_State* L)
-{
-    LuauObject* holder = checkpayload<Kind>(L, "__tostring");
-    luaL_Strbuf b;
-    luaL_buffinit(L, &b);
-    luaL_addstring(&b, Kind == LUWU_BUILTIN_SOME ? "option." : "result.");
-    luaL_addstring(&b, getstr(holder->lclass->name));
-    luaL_addchar(&b, '(');
-    luaA_pushvalue(L, &luaR_members(holder)[kPayload]);
-    addshowntop(&b);
-    luaL_addchar(&b, ')');
-
-    if (Kind == LUWU_BUILTIN_ERR)
-    {
-        const TValue* members = luaR_members(holder);
-        if (ttisstring(&members[kErrModule]))
-        {
-            luaL_addstring(&b, " at ");
-            luaL_addstring(&b, svalue(&members[kErrModule]));
-            if (ttisnumber(&members[kErrLine]))
-            {
-                char line[32];
-                snprintf(line, sizeof(line), ":%d", int(nvalue(&members[kErrLine])));
-                luaL_addstring(&b, line);
-            }
-        }
-        if (ttisstring(&members[kErrTraceback]))
-        {
-            luaL_addchar(&b, '\n');
-            luaL_addstring(&b, svalue(&members[kErrTraceback]));
-        }
-    }
-
-    luaL_pushresult(&b);
-    return 1;
-}
-
-// `err` of an `ok`: there's no error
-static int okerr(lua_State* L)
-{
-    checkpayload<LUWU_BUILTIN_OK>(L, "err");
-    lua_pushsymnone(L);
-    return 1;
-}
-
-// `ok` of an `err`: there's no value
-static int errok(lua_State* L)
-{
-    checkpayload<LUWU_BUILTIN_ERR>(L, "ok");
-    lua_pushsymnone(L);
-    return 1;
-}
-
-static int errerr(lua_State* L)
-{
-    luaA_pushvalue(L, &luaR_members(checkpayload<LUWU_BUILTIN_ERR>(L, "err"))[kPayload]);
-    return 1;
-}
-
-// `expect` of an `err` raises: the message and the error, or without a message the error itself, which keeps an error
-// that isn't a string intact
-static int errexpect(lua_State* L)
-{
-    LuauObject* failed = checkpayload<LUWU_BUILTIN_ERR>(L, "expect");
-    const char* message = luaL_optstring(L, 2, NULL);
-    luaA_pushvalue(L, &luaR_members(failed)[kPayload]);
-    if (!message)
-        lua_error(L);
-
-    luaL_error(L, "%s: %s", message, luaL_tolstring(L, -1, NULL));
-}
-
-// The fast methods of `some`, `ok` and `err` (luaR_FastMethod): each gives the one field or `none`
-
-static int payloadgetfast(lua_State* L, LuauObject* holder, StkId res, StkId args, int nargs)
-{
-    setobj2s(L, res, &luaR_members(holder)[kPayload]);
-    return 1;
-}
-
-// `expect` of a `some` or an `ok`. A message that isn't a string is left to the C method, which converts or refuses it.
-static int payloadexpectfast(lua_State* L, LuauObject* holder, StkId res, StkId args, int nargs)
-{
-    if (nargs >= 1 && !ttisnil(args) && !ttisstring(args))
-        return -1;
-    return payloadgetfast(L, holder, res, args, nargs);
-}
-
-static int nonefast(lua_State* L, LuauObject* holder, StkId res, StkId args, int nargs)
-{
-    setsymnonevalue(res);
-    return 1;
-}
-
-static const luaR_NativeMember kSomeMembers[] = {
-    {"value", NULL, kPayloadField},
-    {"get", payloadget<LUWU_BUILTIN_SOME>, 0, payloadgetfast},
-    {"expect", payloadexpect<LUWU_BUILTIN_SOME>, 0, payloadexpectfast},
-    {"__eq", payloadeq<LUWU_BUILTIN_SOME>, 0},
-    {"__tostring", payloadtostring<LUWU_BUILTIN_SOME>, 0},
-};
-
-static const luaR_NativeMember kOkMembers[] = {
-    {"value", NULL, kPayloadField},
-    {"ok", payloadget<LUWU_BUILTIN_OK>, 0, payloadgetfast},
-    {"expect", payloadexpect<LUWU_BUILTIN_OK>, 0, payloadexpectfast},
-    {"err", okerr, 0, nonefast},
-    {"__eq", payloadeq<LUWU_BUILTIN_OK>, 0},
-    {"__tostring", payloadtostring<LUWU_BUILTIN_OK>, 0},
-};
-
-static const luaR_NativeMember kErrMembers[] = {
-    {"error", NULL, kPayloadField},
-    {"module", NULL, kPayloadField},
-    {"line", NULL, kPayloadField},
-    {"traceback", NULL, kPayloadField},
-    {"ok", errok, 0, nonefast},
-    {"expect", errexpect, 0},
-    {"err", errerr, 0, payloadgetfast},
-    {"__eq", payloadeq<LUWU_BUILTIN_ERR>, 0},
-    {"__tostring", payloadtostring<LUWU_BUILTIN_ERR>, 0},
-};
-
-// `none:get()`: an empty option has no value, so `none`
-static int noneget(lua_State* L)
-{
-    lua_pushsymnone(L);
-    return 1;
-}
-
-// `none:expect(message?)` raises: an empty option has no value
-static int noneexpect(lua_State* L)
-{
-    const char* message = luaL_optstring(L, 2, NULL);
-    if (message)
-        luaL_error(L, "%s", message);
-    luaL_error(L, "expected a value, but got none");
-}
-
-// `none`'s `__index`: `get` and `expect`, kept as its upvalues, and the usual index error for anything else
-static int noneindex(lua_State* L)
-{
-    const char* key = lua_isstring(L, 2) ? lua_tostring(L, 2) : NULL;
-    if (key && strcmp(key, "get") == 0)
-    {
-        lua_pushvalue(L, lua_upvalueindex(1));
-        return 1;
-    }
-    if (key && strcmp(key, "expect") == 0)
-    {
-        lua_pushvalue(L, lua_upvalueindex(2));
-        return 1;
-    }
-    luaG_indexerroratlua(L, L->base, L->base + 1);
-}
-
-static void setnonemetatable(lua_State* L)
-{
-    lua_createtable(L, 0, 1);
-    lua_pushcfunction(L, noneget, "get");
-    lua_pushcfunction(L, noneexpect, "expect");
-    lua_pushcclosure(L, noneindex, "__index", 2);
-    lua_setfield(L, -2, "__index");
-    lua_setreadonly(L, -1, true);
-
-    lua_pushsymnone(L);
-    lua_insert(L, -2);
-    lua_setmetatable(L, -2);
-    lua_pop(L, 1);
-}
 
 bool luaR_collectionprep(lua_State* L, StkId ra)
 {
@@ -1819,8 +1496,8 @@ bool luaR_collectionnext(lua_State* L, StkId ra)
     return true;
 }
 
-// Builds a class, records it as builtin `kind` and stores it in the library table on top of the stack. An `orderedmap`
-// passes the field holding its length as `lengthfield`, for `#` to read; `vec` and `vecdeque` read their storage.
+// Builds a class, records it as builtin `kind` and stores it in the library table on top of the stack. An `OrderedMap`
+// passes the field holding its length as `lengthfield`, for `#` to read; `Vec` and `VecDeque` read their storage.
 template<size_t N>
 static void addclass(
     lua_State* L,
@@ -1839,26 +1516,13 @@ static void addclass(
 
 int luaopen_collections(lua_State* L)
 {
-    lua_createtable(L, 0, 8);
-    addclass(L, LUWU_BUILTIN_PAIR, "pair", kPairMembers, bundleinit);
-    addclass(L, LUWU_BUILTIN_TRIPLE, "triple", kTripleMembers, bundleinit);
-    addclass(L, LUWU_BUILTIN_QUAD, "quad", kQuadMembers, bundleinit);
-    addclass(L, LUWU_BUILTIN_ORDEREDMAP, "orderedmap", kOrderedMapMembers, orderedmapinit, OM_COUNT);
-    addclass(L, LUWU_BUILTIN_VEC, "vec", kVecMembers, vecinit);
-    addclass(L, LUWU_BUILTIN_VECDEQUE, "vecdeque", kVecDequeMembers, vecdequeinit);
-
-    lua_createtable(L, 0, 2);
-    addclass(L, LUWU_BUILTIN_SOME, "some", kSomeMembers, someinit);
-    lua_pushsymnone(L);
-    lua_setfield(L, -2, "none");
-    lua_setfield(L, -2, "option");
-
-    lua_createtable(L, 0, 2);
-    addclass(L, LUWU_BUILTIN_OK, "ok", kOkMembers, payloadinit);
-    addclass(L, LUWU_BUILTIN_ERR, "err", kErrMembers, bundleinit);
-    lua_setfield(L, -2, "result");
-
-    setnonemetatable(L);
+    lua_createtable(L, 0, 6);
+    addclass(L, LUWU_BUILTIN_PAIR, "Pair", kPairMembers, bundleinit);
+    addclass(L, LUWU_BUILTIN_TRIPLE, "Triple", kTripleMembers, bundleinit);
+    addclass(L, LUWU_BUILTIN_QUAD, "Quad", kQuadMembers, bundleinit);
+    addclass(L, LUWU_BUILTIN_ORDEREDMAP, "OrderedMap", kOrderedMapMembers, orderedmapinit, OM_COUNT);
+    addclass(L, LUWU_BUILTIN_VEC, "Vec", kVecMembers, vecinit);
+    addclass(L, LUWU_BUILTIN_VECDEQUE, "VecDeque", kVecDequeMembers, vecdequeinit);
 
     lua_pushvalue(L, -1);
     lua_setglobal(L, LUA_COLLECTIONSLIBNAME);

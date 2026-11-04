@@ -740,7 +740,7 @@ enum class IrCmd : uint8_t
     // B: unsigned int (member offset)
     OBJECT_MEMBER_ADDR,
 
-    // Luwu collections: guard against an object not being a `vec` or `vecdeque` with a storage block (LuauStorage)
+    // Luwu collections: guard against an object not being a `Vec` or `VecDeque` with a storage block (LuauStorage)
     // A: pointer (LuauObject)
     // B: int (LuwuStorageKind, or LUAR_STORAGE_NONE for either)
     // C: block/vmexit/undef

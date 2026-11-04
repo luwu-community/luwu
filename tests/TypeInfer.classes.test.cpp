@@ -6066,20 +6066,20 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
 
     CheckResult result = check(R"(
         --!strict
-        local map = collections.orderedmap<<string, number>>()
+        local map = collections.OrderedMap<<string, number>>()
         map:set("a", 1)
         local value = map:get("a")
-        local range = collections.pair(1, "x")
+        local range = collections.Pair(1, "x")
         local first = range.first
         local second = range.second
         for key, entry in map do
             local k: string = key
             local v: number = entry
         end
-        local queue = collections.vecdeque<<string>>()
+        local queue = collections.VecDeque<<string>>()
         queue:pushback("a")
         local front = queue:popfront()
-        local list = collections.vec<<number>>()
+        local list = collections.Vec<<number>>()
         for position, item in list do
             local p: number = position
             local i: number = item
@@ -6098,7 +6098,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
     // the declarations leave out private fields, which only the VM's classes have
     CHECK_EQ(result.errors[3].location.begin.line, 22);
     CHECK(get<ConstPropertyAssignment>(result.errors[4]));
-    CHECK_EQ(toString(requireType("map")), "orderedmap<string, number>");
+    CHECK_EQ(toString(requireType("map")), "OrderedMap<string, number>");
     CHECK_EQ(toString(requireType("value")), "number?");
     CHECK_EQ(toString(requireType("first")), "number");
     CHECK_EQ(toString(requireType("second")), "string");
@@ -6118,18 +6118,18 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_eleme
 
     CheckResult result = check(R"(
         --!strict
-        for position, value in collections.pair(1, "x") do
+        for position, value in collections.Pair(1, "x") do
             local p: number = position
             local v: number | string = value
         end
-        local color = collections.triple(255, true, "red")
+        local color = collections.Triple(255, true, "red")
         for _, channel in color do
             local c: number | boolean | string = channel
         end
-        for _, side in collections.quad(1, 2, 3, 4) do
+        for _, side in collections.Quad(1, 2, 3, 4) do
             local s: number = side
         end
-        for _, value in collections.pair(1, "x") do
+        for _, value in collections.Pair(1, "x") do
             local wrong: number = value
         end
     )");
@@ -6620,6 +6620,32 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "none_has_no_keys_without_collections")
     LUAU_REQUIRE_ERROR_COUNT(2, result);
     CHECK_EQ(result.errors[0].location.begin.line, 2);
     CHECK_EQ(result.errors[1].location.begin.line, 3);
+}
+
+// Luwu: `none` has no keys, so indexing an optional `T | none` names its `none` as the problem
+TEST_CASE_FIXTURE(BuiltinsFixture, "indexing_none_by_a_key_is_an_error")
+{
+    ScopedFastFlag sff{FFlag::LuwuNonePrimitive, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local a = none.foo
+        local b = none["bar"]
+        local function f(x: number | none)
+            return x.baz
+        end
+        local function g(s: string | none)
+            return s.len
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 2);
+    CHECK_EQ(result.errors[1].location.begin.line, 3);
+    CHECK_EQ(result.errors[2].location.begin.line, 5);
+    // only `none` lacks `len`
+    CHECK_EQ(result.errors[3].location.begin.line, 8);
+    CHECK(toString(result.errors[3]).find("may be 'none'") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "trait_function_naming_self_without_a_self_parameter")

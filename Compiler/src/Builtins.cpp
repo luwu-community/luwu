@@ -18,15 +18,15 @@ namespace Luau
 namespace Compile
 {
 
-// The names `node` reads, rooted at a global that's never assigned: `collections.result.ok` is collections, result, ok.
-// Locals that are never written stand for their initializer, so `local result = collections.result` and destructured
-// aliases (`const .{result.{ok as Ok}} = collections`) resolve as well. Returns how many names it wrote, or 0.
+// The names `node` reads, rooted at a global that's never assigned: `collections.Pair` is collections, Pair. Locals that
+// are never written stand for their initializer, so `local c = collections` and destructured aliases
+// (`const .{Pair} = collections`) resolve as well. Returns how many names it wrote, or 0.
 static size_t resolveBuiltinPath(
     AstExpr* node,
     const DenseHashMap<AstName, Global>& globals,
     const DenseHashMap<AstLocal*, Variable>& variables,
     bool isLibrary,
-    AstName (&path)[3]
+    AstName (&path)[2]
 )
 {
     if (AstExprLocal* expr = node->as<AstExprLocal>())
@@ -47,7 +47,7 @@ static size_t resolveBuiltinPath(
     else if (AstExprIndexName* expr = node->as<AstExprIndexName>())
     {
         size_t length = resolveBuiltinPath(expr->expr, globals, variables, /* isLibrary= */ true, path);
-        if (length == 0 || length == 3)
+        if (length != 1)
             return 0;
 
         path[length] = expr->index;
@@ -69,16 +69,13 @@ static size_t resolveBuiltinPath(
 
 Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, const DenseHashMap<AstLocal*, Variable>& variables)
 {
-    AstName path[3];
+    AstName path[2];
     switch (resolveBuiltinPath(node, globals, variables, /* isLibrary= */ false, path))
     {
     case 1:
         return Builtin{AstName(), path[0]};
     case 2:
         return Builtin{path[0], path[1]};
-    case 3:
-        // Luwu collections: a member of a library in a builtin global, as `collections.result.ok`
-        return Builtin{path[0], path[1], path[2]};
     default:
         return Builtin();
     }
@@ -88,18 +85,12 @@ Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, 
 // `collections` might have been replaced.
 static int getCollectionsFunctionId(const Builtin& builtin)
 {
-    if (builtin.isMethod("collections", "pair"))
+    if (builtin.isMethod("collections", "Pair"))
         return LBF_COLLECTIONS_PAIR;
-    if (builtin.isMethod("collections", "triple"))
+    if (builtin.isMethod("collections", "Triple"))
         return LBF_COLLECTIONS_TRIPLE;
-    if (builtin.isMethod("collections", "quad"))
+    if (builtin.isMethod("collections", "Quad"))
         return LBF_COLLECTIONS_QUAD;
-    if (builtin.isNestedMethod("collections", "option", "some"))
-        return LBF_COLLECTIONS_OPTION_SOME;
-    if (builtin.isNestedMethod("collections", "result", "ok"))
-        return LBF_COLLECTIONS_RESULT_OK;
-    if (builtin.isNestedMethod("collections", "result", "err"))
-        return LBF_COLLECTIONS_RESULT_ERR;
 
     return -1;
 }
@@ -108,9 +99,6 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
 {
     if (FFlag::DebugLuwuCollections && builtin.object == "collections")
         return getCollectionsFunctionId(builtin);
-
-    if (builtin.nestedMethod.value)
-        return -1;
 
     if (builtin.isGlobal("assert"))
         return LBF_ASSERT;
@@ -659,11 +647,6 @@ BuiltinInfo getBuiltinInfo(int bfid)
         return {3, 1};
     case LBF_COLLECTIONS_QUAD:
         return {4, 1};
-    case LBF_COLLECTIONS_OPTION_SOME:
-    case LBF_COLLECTIONS_RESULT_OK:
-        return {1, 1};
-    case LBF_COLLECTIONS_RESULT_ERR:
-        return {-1, 1}; // the error, then optionally where it was raised
 
     case LBF_TABLE_INSERT:
         return {-1, 0}; // 2 or 3 parameters

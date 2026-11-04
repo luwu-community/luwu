@@ -26,7 +26,7 @@ namespace CodeGen
 namespace A64
 {
 
-// Luwu collections: where a `vec`'s or `vecdeque`'s storage member is in the object
+// Luwu collections: where a `Vec`'s or `VecDeque`'s storage member is in the object
 static const int kStorageMemberOffset = int(LUAR_OBJECT_MEMBERS_OFFSET + LUAR_STORAGE_MEMBER * sizeof(TValue));
 
 inline ConditionA64 getConditionFP(IrCondition cond)

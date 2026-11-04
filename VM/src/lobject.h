@@ -802,13 +802,13 @@ typedef struct LuauObject
 enum LuwuStorageKind
 {
     LUAR_STORAGE_NONE,
-    // `vec`: entries 1 to count in items[0] to items[count - 1]
+    // `Vec`: entries 1 to count in items[0] to items[count - 1]
     LUAR_STORAGE_VEC,
-    // `vecdeque`: a ring. The entry i places from the front is in items[(head + i) & (capacity - 1)].
+    // `VecDeque`: a ring. The entry i places from the front is in items[(head + i) & (capacity - 1)].
     LUAR_STORAGE_RING,
 };
 
-// Luwu collections: the entries of a `vec` or `vecdeque`, in a block the object owns from its first value on. The
+// Luwu collections: the entries of a `Vec` or `VecDeque`, in a block the object owns from its first value on. The
 // object's first member points to it as light userdata, and is nil before the first value. It's allocated with luaM_
 // in the object's memory category and freed with the object (luaR_freeobject). traverseobject marks the element type and the live entries; the slots
 // after them are never read.
@@ -817,20 +817,15 @@ typedef struct LuauStorage
     uint32_t count;
     // The number of slots in `items`, always a power of two
     uint32_t capacity;
-    // A ring's front slot; always 0 for a `vec`, so the ring's formula finds a `vec`'s entries too
+    // A ring's front slot; always 0 for a `Vec`, so the ring's formula finds a `Vec`'s entries too
     uint32_t head;
-    // The type the first value fixed (see lcollectionslib.cpp): the tag every entry has, or LUAR_STORAGE_ENUM when the
-    // entries are the values of a builtin enum. Entries tagged LUA_TOBJECT are objects of `elementclass`.
+    // The type the first value fixed (see lcollectionslib.cpp): the tag every entry has. Entries tagged LUA_TOBJECT are
+    // objects of `elementclass`.
     uint8_t elementtag;
-    // The builtin enum when `elementtag` is LUAR_STORAGE_ENUM
-    uint8_t elementenum;
-    uint16_t padding;
+    uint8_t padding[3];
     struct LuauClass* elementclass;
     TValue items[1];
 } LuauStorage;
-
-// Luwu collections: LuauStorage::elementtag for a builtin enum, which no value's tag matches
-#define LUAR_STORAGE_ENUM 0xff
 
 // Luwu collections: the member of a builtin container that points to its LuauStorage
 #define LUAR_STORAGE_MEMBER 0

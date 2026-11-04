@@ -1082,7 +1082,7 @@ static void enumobject(EnumContext* ctx, LuauObject* inst)
         enumedge(ctx, obj, gcvalue(&luaR_members(inst)[i]), membername);
     }
 
-    // Luwu collections: a `vec`'s or `vecdeque`'s entries
+    // Luwu collections: a `Vec`'s or `VecDeque`'s entries
     LuauStorage* storage = luaR_storage(inst);
     for (uint32_t i = 0; storage && i < storage->count; i++)
     {

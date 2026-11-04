@@ -4791,23 +4791,13 @@ static std::string declaredClassMembers(Luau::TypeId classValue)
     return joinNames(names);
 }
 
-// The declared class value named `name` in the library table, or in a table it holds (`option.some`)
+// The declared class value named `name` in the library table
 static std::optional<Luau::TypeId> declaredClassValue(const Luau::TableType* library, const std::string& name)
 {
-    auto direct = library->props.find(name);
-    if (direct != library->props.end() && direct->second.readTy)
-        return direct->second.readTy;
-
-    for (const auto& prop : library->props)
-    {
-        const Luau::TableType* nested = prop.second.readTy ? Luau::get<Luau::TableType>(Luau::follow(*prop.second.readTy)) : nullptr;
-        if (!nested)
-            continue;
-        auto inner = nested->props.find(name);
-        if (inner != nested->props.end() && inner->second.readTy)
-            return inner->second.readTy;
-    }
-    return std::nullopt;
+    auto declared = library->props.find(name);
+    if (declared == library->props.end() || !declared->second.readTy)
+        return std::nullopt;
+    return declared->second.readTy;
 }
 
 // Luwu collections: the builtin definitions declare each class the VM builds, with exactly its public members
@@ -5181,120 +5171,6 @@ return Component, Card, Ace(), Plain(), Ace
     }
 
     CHECK(lua_gettop(L) == 5);
-}
-
-// Luwu collections: options and results built and read by an embedder, with no Lua frame
-TEST_CASE("CollectionsCApi")
-{
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuwuClasses, true},
-        {FFlag::DebugLuwuCollections, true},
-        {FFlag::LuwuNonePrimitive, true},
-        {FFlag::LuwuDeclareStatements, true},
-    };
-
-    StateRef globalState(luaL_newstate(), lua_close);
-    lua_State* L = globalState.get();
-    luaL_openlibs(L);
-
-    SUBCASE("built values are the library's own and work from Luwu code")
-    {
-        const char* source = R"(
-return function(some, ok, err)
-    return some:get(), ok:ok(), err:err(), ok:err(), tostring(some)
-end
-)";
-        size_t bytecodeSize = 0;
-        char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
-        int loadResult = luau_load(L, "=CollectionsCApi", bytecode, bytecodeSize, 0);
-        free(bytecode);
-        REQUIRE(loadResult == 0);
-        REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
-
-        lua_pushliteral(L, "payload");
-        lua_pushsome(L, -1);
-        lua_pushnumber(L, 42);
-        lua_pushresultok(L, -1);
-        lua_remove(L, -2);
-        lua_pushliteral(L, "failed");
-        lua_pushresulterr(L, -1);
-        lua_remove(L, -2);
-        lua_remove(L, 2); // the "payload" string, so only the some holds it
-        // stack: function, some, ok, err
-
-        lua_gc(L, LUA_GCCOLLECT, 0);
-
-        CHECK(lua_issome(L, 2) == 1);
-        CHECK(lua_isresultok(L, 3) == 1);
-        CHECK(lua_isresulterr(L, 4) == 1);
-        CHECK(lua_issome(L, 3) == 0);
-        CHECK(lua_isresultok(L, 4) == 0);
-        CHECK(lua_isresulterr(L, 1) == 0);
-
-        REQUIRE(lua_getpayload(L, 2) == LUA_TSTRING);
-        CHECK(std::string(lua_tostring(L, -1)) == "payload");
-        lua_pop(L, 1);
-        REQUIRE(lua_getpayload(L, 4) == LUA_TSTRING);
-        CHECK(std::string(lua_tostring(L, -1)) == "failed");
-        lua_pop(L, 1);
-        CHECK(lua_getpayload(L, 1) == LUA_TNONE);
-        CHECK(lua_gettop(L) == 4);
-
-        REQUIRE(lua_pcall(L, 3, 5, 0) == LUA_OK);
-        CHECK(std::string(lua_tostring(L, 1)) == "payload");
-        CHECK(lua_tonumber(L, 2) == 42);
-        CHECK(std::string(lua_tostring(L, 3)) == "failed");
-        CHECK(lua_issymnone(L, 4));
-        CHECK(std::string(lua_tostring(L, 5)) == "option.some(\"payload\")");
-    }
-
-    SUBCASE("some needs a value")
-    {
-        std::string nilErr = classesCApiProtected(
-            L,
-            [](lua_State* L)
-            {
-                lua_pushnil(L);
-                lua_pushsome(L, -1);
-            }
-        );
-        CHECK(nilErr == "option.some needs a value, but you passed nil");
-
-        std::string noneErr = classesCApiProtected(
-            L,
-            [](lua_State* L)
-            {
-                lua_pushsymnone(L);
-                lua_pushsome(L, -1);
-            }
-        );
-        CHECK(noneErr == "option.some needs a value, but you passed none");
-
-        // ok and err hold any value
-        lua_pushnil(L);
-        lua_pushresultok(L, -1);
-        CHECK(lua_getpayload(L, -1) == LUA_TNIL);
-    }
-
-    SUBCASE("building raises when the library isn't open")
-    {
-        StateRef bareState(luaL_newstate(), lua_close);
-        lua_State* bare = bareState.get();
-
-        std::string err = classesCApiProtected(
-            bare,
-            [](lua_State* L)
-            {
-                lua_pushnumber(L, 1);
-                lua_pushresultok(L, -1);
-            }
-        );
-        CHECK(err == "open the collections library before building an option or result");
-
-        lua_pushnumber(bare, 1);
-        CHECK(lua_isresultok(bare, -1) == 0);
-        CHECK(lua_getpayload(bare, -1) == LUA_TNONE);
-    }
 }
 
 TEST_CASE("ClassesCApi")

@@ -8647,7 +8647,7 @@ TEST_CASE_FIXTURE(LoweringFixture, "CollectionsMethodsRunInlineWithoutACall")
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
-    // Luwu collections: a `vec` or `vecdeque` method on an untyped receiver runs inline in the object path
+    // Luwu collections: a `Vec` or `VecDeque` method on an untyped receiver runs inline in the object path
     // (translateStorageMethod). The table path stays as it is, and every slow path joins the one CALL.
     //
     // Expected: no CALL or FALLBACK_NAMECALL between CHECK_STORAGE and the JUMP past the call. `push` checks the element
@@ -8742,7 +8742,7 @@ TEST_CASE_FIXTURE(LoweringFixture, "CollectionsFastMethodsRunWithoutACall")
     ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
 
-    // Luwu collections: a method with an interpreter fast method, like `orderedmap:get`, runs it through INVOKE_FAST_METHOD
+    // Luwu collections: a method with an interpreter fast method, like `OrderedMap:get`, runs it through INVOKE_FAST_METHOD
     // in the untyped receiver's object path. When there's none for the receiver, or it bails, the generic object path and
     // the CALL follow.
     assemblyOptions.includeOutlinedCode = true;

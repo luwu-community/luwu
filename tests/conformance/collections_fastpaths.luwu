@@ -14,7 +14,7 @@ end
 
 -- `#` reads a container's count without calling `__len`
 do
-    const list = collections.vec()
+    const list = collections.Vec()
     assert(length(list) == 0)
     for i = 1, 20 do
         list:push(i)
@@ -26,13 +26,13 @@ do
     list:clear()
     assert(length(list) == 0)
 
-    const queue = collections.vecdeque({ "a", "b" })
+    const queue = collections.VecDeque({ "a", "b" })
     queue:pushfront("z")
     assert(length(queue) == 3)
     queue:popback()
     assert(length(queue) == 2)
 
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     map:set("a", 1)
     map:set("b", 2)
     map:set("a", 3)
@@ -56,7 +56,7 @@ do
         length(Plain(1))
     end, "attempt to get length of")
     raises(function()
-        length(collections.pair(1, 2))
+        length(collections.Pair(1, 2))
     end, "attempt to get length of")
 end
 
@@ -66,7 +66,6 @@ end
 const vecs = {}
 const deques = {}
 const maps = {}
-const holders = {}
 
 function vecs.push(list, value)
     list:push(value)
@@ -124,79 +123,44 @@ function maps.set(map, key, value)
     map:set(key, value)
 end
 
--- `some`, `ok` and `err` keep `expect` at the same offset, so one call site serves all three
-function holders.get(holder)
-    return holder:get()
-end
-function holders.ok(holder)
-    return holder:ok()
-end
-function holders.expect(holder, message)
-    return holder:expect(message)
-end
-function holders.err(holder)
-    return holder:err()
-end
-
 -- the element type check: one type per container, fixed by the first value
 do
-    const numbers = collections.vec()
+    const numbers = collections.Vec()
     vecs.push(numbers, 1)
     vecs.push(numbers, 2.5)
     raises(function()
         vecs.push(numbers, "3")
-    end, "this vec can only accept numbers, but you passed a string")
+    end, "this Vec can only accept numbers, but you passed a string")
     raises(function()
         vecs.push(numbers, nil)
-    end, "this vec can only accept numbers, but you passed nil")
+    end, "this Vec can only accept numbers, but you passed nil")
     raises(function()
         vecs.push(numbers, none)
-    end, "this vec can only accept numbers, but you passed none")
+    end, "this Vec can only accept numbers, but you passed none")
     raises(function()
         vecs.set(numbers, 1, true)
-    end, "this vec can only accept numbers, but you passed a boolean")
+    end, "this Vec can only accept numbers, but you passed a boolean")
     assert(#numbers == 2 and vecs.at(numbers, 1) == 1)
 
-    const empty = collections.vec()
+    const empty = collections.Vec()
     raises(function()
         vecs.push(empty, nil)
-    end, "this vec can't accept nil")
+    end, "this Vec can't accept nil")
 
-    const bundles = collections.vecdeque()
-    deques.pushback(bundles, collections.pair(1, 2))
-    deques.pushback(bundles, collections.pair(3, 4))
+    const bundles = collections.VecDeque()
+    deques.pushback(bundles, collections.Pair(1, 2))
+    deques.pushback(bundles, collections.Pair(3, 4))
     raises(function()
-        deques.pushback(bundles, collections.triple(1, 2, 3))
-    end, "this vecdeque can only accept 'pair' objects, but you passed a 'triple' object")
+        deques.pushback(bundles, collections.Triple(1, 2, 3))
+    end, "this VecDeque can only accept 'Pair' objects, but you passed a 'Triple' object")
     raises(function()
         deques.pushfront(bundles, { 1, 2 })
-    end, "this vecdeque can only accept 'pair' objects, but you passed a table")
-    raises(function()
-        deques.set(bundles, 1, collections.option.some(1))
-    end, "this vecdeque can only accept 'pair' objects, but you passed a 'some' object")
-
-    -- an enum takes all of its variants, and only those
-    const options = collections.vec()
-    vecs.push(options, collections.option.some(1))
-    vecs.push(options, none)
-    raises(function()
-        vecs.push(options, collections.result.ok(1))
-    end, "this vec can only accept options, but you passed an 'ok' object")
-    raises(function()
-        vecs.push(options, 1)
-    end, "this vec can only accept options, but you passed a number")
-    assert(#options == 2 and vecs.at(options, 2) == none)
-
-    const results = collections.vec({ collections.result.err("e") })
-    vecs.push(results, collections.result.ok(1))
-    raises(function()
-        vecs.push(results, none)
-    end, "this vec can only accept results, but you passed none")
+    end, "this VecDeque can only accept 'Pair' objects, but you passed a table")
 end
 
 -- vec: results, positions and arguments the fast methods leave to the C methods
 do
-    const list = collections.vec()
+    const list = collections.Vec()
     for i = 1, 100 do
         vecs.push(list, i * 10)
     end
@@ -245,7 +209,7 @@ end
 
 -- vecdeque: entries stay in order while the ring wraps and grows
 do
-    const queue = collections.vecdeque()
+    const queue = collections.VecDeque()
     for i = 1, 6 do
         deques.pushback(queue, i)
     end
@@ -271,7 +235,7 @@ do
     assert(sum == 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 120)
     assert(deques.popfront(queue) == 4 and deques.popback(queue) == 120 and deques.front(queue) == 5)
 
-    const empty = collections.vecdeque()
+    const empty = collections.VecDeque()
     for _ = 1, 3 do
         assert(deques.popfront(empty) == nil and deques.popback(empty) == nil)
         assert(deques.front(empty) == nil and deques.back(empty) == nil and deques.at(empty, 1) == nil)
@@ -290,8 +254,8 @@ do
         return seed // 16 % n + 1
     end
 
-    const list = collections.vec()
-    const queue = collections.vecdeque()
+    const list = collections.Vec()
+    const queue = collections.VecDeque()
     const listmodel = {}
     const queuemodel = {}
     const garbage = {}
@@ -369,11 +333,11 @@ class TrueIterator(public x: number)
 end
 
 do
-    assert(visit(collections.vec()) == "" and visit(collections.vecdeque()) == "")
-    assert(visit(collections.vec({ "a", "b" })) == "1=a 2=b ")
+    assert(visit(collections.Vec()) == "" and visit(collections.VecDeque()) == "")
+    assert(visit(collections.Vec({ "a", "b" })) == "1=a 2=b ")
 
     -- a ring that wraps around its end
-    const queue = collections.vecdeque({ 3, 4 })
+    const queue = collections.VecDeque({ 3, 4 })
     queue:pushfront(2)
     queue:pushfront(1)
     queue:popback()
@@ -381,7 +345,7 @@ do
     assert(visit(queue) == "1=1 2=2 3=3 4=9 ")
 
     -- an entry added during a loop is visited, and a removed one isn't
-    const list = collections.vec({ 1, 2, 3 })
+    const list = collections.Vec({ 1, 2, 3 })
     local seen = {}
     for position, value in list do
         table.insert(seen, value)
@@ -411,16 +375,16 @@ end
 
 -- the element type stays when the entries go: a class nothing else holds stays alive, and `clear` keeps it too
 do
-    const list = collections.vec()
+    const list = collections.Vec()
     -- the class only lives in the chunk that makes the one object
     vecs.push(list, loadstring("class Gone(public x: number) end return Gone(1)")())
     vecs.pop(list)
     collectgarbage()
     raises(function()
         vecs.push(list, 1)
-    end, "this vec can only accept 'Gone' objects, but you passed a number")
+    end, "this Vec can only accept 'Gone' objects, but you passed a number")
 
-    const queue = collections.vecdeque()
+    const queue = collections.VecDeque()
     for i = 1, 100 do
         deques.pushback(queue, i)
     end
@@ -428,21 +392,21 @@ do
     assert(#queue == 0 and deques.popfront(queue) == nil)
     raises(function()
         deques.pushback(queue, "x")
-    end, "this vecdeque can only accept numbers, but you passed a string")
+    end, "this VecDeque can only accept numbers, but you passed a string")
     deques.pushfront(queue, 7)
     assert(visit(queue) == "1=7 ")
 
     raises(function()
-        collections.vec():push(nil)
-    end, "this vec can't accept nil")
+        collections.Vec():push(nil)
+    end, "this Vec can't accept nil")
     raises(function()
-        collections.vecdeque():pushfront(nil)
-    end, "this vecdeque can't accept nil")
+        collections.VecDeque():pushfront(nil)
+    end, "this VecDeque can't accept nil")
 end
 
 -- orderedmap: `get`, `has` and `set` of a key it has
 do
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     for i = 1, 40 do
         maps.set(map, `k{i}`, i)
     end
@@ -474,26 +438,6 @@ do
     end, "missing argument #3")
 end
 
--- option and result: `get`, `ok`, `expect` and `err`
-do
-    const some = collections.option.some({ 1 })
-    const good = collections.result.ok(nil)
-    const bad = collections.result.err("e")
-    for _ = 1, 3 do
-        assert(holders.get(some)[1] == 1 and holders.expect(some)[1] == 1 and holders.expect(some, "why")[1] == 1)
-        assert(holders.expect(some, 5)[1] == 1)
-        assert(holders.ok(good) == nil and holders.err(good) == none and holders.expect(good) == nil)
-        assert(holders.ok(bad) == none and holders.err(bad) == "e")
-        assert(select("#", holders.ok(good)) == 1)
-    end
-    raises(function()
-        holders.expect(some, {})
-    end, "invalid argument #2 to 'expect'")
-    raises(function()
-        holders.expect(bad, "parsing")
-    end, "parsing: e")
-end
-
 -- a user class's methods with the same names are unaffected
 class Stack(private items: { number })
     public function push(self, value: number)
@@ -509,7 +453,7 @@ do
     for i = 1, 3 do
         vecs.push(stack, i)
     end
-    assert(vecs.at(stack, 2) == 2 and vecs.at(collections.vec({ 7 }), 1) == 7 and vecs.at(stack, 3) == 3)
+    assert(vecs.at(stack, 2) == 2 and vecs.at(collections.Vec({ 7 }), 1) == 7 and vecs.at(stack, 3) == 3)
 end
 
 -- names with a builtin fast method on a user class, and on a builtin one, at the same call sites
@@ -527,7 +471,7 @@ end
 
 do
     const box = Box(1)
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     map:set("a", 10)
     for i = 1, 50 do
         const receiver = if i % 2 == 0 then box else map
@@ -553,7 +497,7 @@ class FalseIterator(public x: number)
 end
 
 do
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     assert(entries(map) == "")
     for i = 1, 5 do
         map:set(`k{i}`, i)
@@ -567,7 +511,7 @@ do
     assert(entries(map) == "k5=5 k4=4 k3=3 k2=2 k1=1 ")
 
     -- an entry added before the current one moves it, and the loop still continues after it
-    const shifted = collections.orderedmap()
+    const shifted = collections.OrderedMap()
     for i = 1, 4 do
         shifted:set(`s{i}`, i)
     end
@@ -609,7 +553,7 @@ do
             map:remove(key)
         end
     end)
-    assert(not ok and string.find(tostring(err), `orderedmap lost key "k5" while it was being iterated`, 1, true))
+    assert(not ok and string.find(tostring(err), `OrderedMap lost key "k5" while it was being iterated`, 1, true))
 
     -- a loop can yield
     const looper = coroutine.wrap(function()

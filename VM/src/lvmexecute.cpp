@@ -2928,8 +2928,8 @@ reentry:
                     pc++;
                     VM_NEXT();
                 }
-                // Luwu collections: a builtin container's loop (luaR_collectionprep), stepped without a call. A `vec` or
-                // `vecdeque` (true) steps inline and can't raise.
+                // Luwu collections: a builtin container's loop (luaR_collectionprep), stepped without a call. A `Vec` or
+                // `VecDeque` (true) steps inline and can't raise.
                 else if (LUAU_UNLIKELY(ttisboolean(ra)))
                 {
                     bool more;

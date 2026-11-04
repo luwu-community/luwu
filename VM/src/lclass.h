@@ -223,9 +223,9 @@ LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classd
  * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns
  * false otherwise. The loop calls neither `__iter` nor anything per step: `ra` becomes a boolean, which FORGLOOP hands
  * to luaR_collectionnext, and `ra + 1` the container. `ra + 2` is the loop's state:
- *  - a `vec` or `vecdeque` gets `ra` = true and the number of entries visited, as light userdata like a table loop's
+ *  - a `Vec` or `VecDeque` gets `ra` = true and the number of entries visited, as light userdata like a table loop's
  *    index (luaR_storagenext);
- *  - an `orderedmap` gets `ra` = false and the previous key, nil at the start. `ra`'s extra field keeps that key's
+ *  - an `OrderedMap` gets `ra` = false and the previous key, nil at the start. `ra`'s extra field keeps that key's
  *    position, so a step only looks the key up when the entry there changed.
  */
 LUAI_FUNC bool luaR_collectionprep(lua_State* L, StkId ra);
@@ -237,14 +237,7 @@ LUAI_FUNC bool luaR_collectionprep(lua_State* L, StkId ra);
  */
 LUAI_FUNC bool luaR_collectionnext(lua_State* L, StkId ra);
 
-// Luwu collections: a new `some`, `ok` or `err` (`kind`) holding `value`, for the C API. Raises if the library isn't open
-// or a `some` gets nil or none.
-LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value);
-
-// Luwu collections: the value a `some`, `ok` or `err` holds, or NULL for any other value
-LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
-
-// Luwu collections: the storage block of a `vec` or `vecdeque`, or NULL before its first value. Its `__init` sets the
+// Luwu collections: the storage block of a `Vec` or `VecDeque`, or NULL before its first value. Its `__init` sets the
 // object's storage kind and leaves the storage member nil. Native code reads light userdata there as a block.
 LUAU_FORCEINLINE LuauStorage* luaR_storage(LuauObject* object)
 {
@@ -273,14 +266,14 @@ LUAU_FORCEINLINE size_t luaR_objectmemory(const LuauObject* object)
     return luaR_objectsize(object->numberofmembers) + (storage ? luaR_storagesize(storage->capacity) : 0);
 }
 
-// Luwu collections: the slot of the entry `offset` places from the front of a `vec` or `vecdeque`
+// Luwu collections: the slot of the entry `offset` places from the front of a `Vec` or `VecDeque`
 LUAU_FORCEINLINE TValue* luaR_storageentry(LuauStorage* storage, uint32_t offset)
 {
     LUAU_ASSERT(offset < storage->count);
     return &storage->items[(storage->head + offset) & (storage->capacity - 1)];
 }
 
-// Luwu collections: one step of a loop over a `vec` or `vecdeque`, the case of luaR_collectionnext that FORGLOOP runs
+// Luwu collections: one step of a loop over a `Vec` or `VecDeque`, the case of luaR_collectionnext that FORGLOOP runs
 // inline
 LUAU_FORCEINLINE bool luaR_storagenext(lua_State* L, LuauObject* container, StkId ra)
 {
@@ -298,7 +291,7 @@ LUAU_FORCEINLINE bool luaR_storagenext(lua_State* L, LuauObject* container, StkI
 }
 
 // Luwu collections: the length `#` gives `object` without calling `__len`, or -1 when its class has no such length. A
-// `vec` and a `vecdeque` read their storage block, an `orderedmap` its length field (LuauClass::lengthfield).
+// `Vec` and a `VecDeque` read their storage block, an `OrderedMap` its length field (LuauClass::lengthfield).
 LUAU_FORCEINLINE double luaR_objectlength(const LuauObject* object)
 {
     if (object->storagekind != LUAR_STORAGE_NONE)

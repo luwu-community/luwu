@@ -3608,16 +3608,7 @@ struct Compiler
             Builtin builtin = getBuiltin(expr->func, globals, variables);
             bool lastMult = expr->args.size > 0 && isExprMultRet(expr->args.data[expr->args.size - 1]);
 
-            if (builtin.nestedMethod.value)
-                bytecode.addDebugRemark(
-                    "builtin %s.%s.%s/%d%s",
-                    builtin.object.value,
-                    builtin.method.value,
-                    builtin.nestedMethod.value,
-                    int(expr->args.size),
-                    lastMult ? "+" : ""
-                );
-            else if (builtin.object.value)
+            if (builtin.object.value)
                 bytecode.addDebugRemark("builtin %s.%s/%d%s", builtin.object.value, builtin.method.value, int(expr->args.size), lastMult ? "+" : "");
             else if (builtin.method.value)
                 bytecode.addDebugRemark("builtin %s/%d%s", builtin.method.value, int(expr->args.size), lastMult ? "+" : "");
@@ -7940,7 +7931,7 @@ struct Compiler
         loops.pop_back();
     }
 
-    // Luwu collections: the size of the bundle `expr` constructs, a `collections.pair`, `triple` or `quad` call with one
+    // Luwu collections: the size of the bundle `expr` constructs, a `collections.Pair`, `Triple` or `Quad` call with one
     // argument per element, or 0 for anything else
     unsigned bundleConstructionSize(AstExpr* expr)
     {
@@ -7950,11 +7941,11 @@ struct Compiler
 
         Builtin builtin = getBuiltin(call->func, globals, variables);
         unsigned size = 0;
-        if (builtin.isMethod("collections", "pair"))
+        if (builtin.isMethod("collections", "Pair"))
             size = 2;
-        else if (builtin.isMethod("collections", "triple"))
+        else if (builtin.isMethod("collections", "Triple"))
             size = 3;
-        else if (builtin.isMethod("collections", "quad"))
+        else if (builtin.isMethod("collections", "Quad"))
             size = 4;
 
         return call->args.size == size ? size : 0;
@@ -8024,7 +8015,7 @@ struct Compiler
         return visitor.found;
     }
 
-    // Luwu collections: `for i, v in collections.pair(a, b)`, and `for i, v in { a, b }` with up to four plain items,
+    // Luwu collections: `for i, v in collections.Pair(a, b)`, and `for i, v in { a, b }` with up to four plain items,
     // build no bundle or table. Each element goes into a register and the body is compiled once per element. Each copy
     // binds `v` to its element's register and `i` to its position, and a closure in one copy captures that copy's `v`.
     // A table literal's `nil` items are skipped the way iterating the table skips them. Like a fastcall, this assumes

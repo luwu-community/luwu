@@ -73,7 +73,7 @@
 //   LBF_CLASS_ISINSTANCE.
 //   Luwu Traits (rfcs/classes/traits.md): the shape flags varint in LBC_CONSTANT_CLASS_SHAPE (LBC_CLASSSHAPE_TRAIT,
 //   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, and NEWCLASSMEMBER's IMPLEMENTS form.
-//   Luwu collections: LBF_COLLECTIONS_PAIR to LBF_COLLECTIONS_RESULT_ERR.
+//   Luwu collections: LBF_COLLECTIONS_PAIR to LBF_COLLECTIONS_QUAD.
 //   Luwu try expressions: WRAPRESULT, RESULTGET, and each function's protected ranges after its inlining cost: a varint count,
 //   then per range the varints start pc, end pc (exclusive) and handler pc, and a byte for the target register.
 
@@ -1012,9 +1012,6 @@ enum LuauBuiltinFunction
     LBF_COLLECTIONS_PAIR,
     LBF_COLLECTIONS_TRIPLE,
     LBF_COLLECTIONS_QUAD,
-    LBF_COLLECTIONS_OPTION_SOME,
-    LBF_COLLECTIONS_RESULT_OK,
-    LBF_COLLECTIONS_RESULT_ERR,
 };
 
 // Capture type, used in LOP_CAPTURE
