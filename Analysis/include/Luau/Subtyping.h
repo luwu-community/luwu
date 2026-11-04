@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/DenseHash.h"
+#include "Luau/DenseHash2.h"
 #include "Luau/Set.h"
 #include "Luau/SubtypingVariance.h"
 #include "Luau/TypeCheckLimits.h"
@@ -54,7 +55,7 @@ struct SubtypingReasoningHash
     size_t operator()(const SubtypingReasoning& r) const;
 };
 
-using SubtypingReasonings = DenseHashSet<SubtypingReasoning, SubtypingReasoningHash>;
+using SubtypingReasonings = DenseHashSet2<SubtypingReasoning, SubtypingReasoningHash>;
 inline const SubtypingReasoning kEmptyReasoning = SubtypingReasoning{TypePath::kEmpty, TypePath::kEmpty, SubtypingVariance::Invalid};
 
 /*
@@ -71,11 +72,11 @@ struct MappedGenericEnvironment
 {
     struct MappedGenericFrame
     {
-        DenseHashMap<TypePackId, std::optional<TypePackId>> mappings;
+        DenseHashMap2<TypePackId, std::optional<TypePackId>> mappings;
         std::optional<size_t> parentScopeIndex; // nullopt if this is the root frame
-        DenseHashSet<size_t> children{0};
+        DenseHashSet2<size_t> children;
 
-        MappedGenericFrame(DenseHashMap<TypePackId, std::optional<TypePackId>> mappings, std::optional<size_t> parentScopeIndex);
+        MappedGenericFrame(DenseHashMap2<TypePackId, std::optional<TypePackId>> mappings, std::optional<size_t> parentScopeIndex);
     };
 
     std::vector<MappedGenericFrame> frames;
@@ -122,7 +123,7 @@ struct SubtypingResult
     ErrorVec errors;
     /// The reason for isSubtype to be false. May not be present even if
     /// isSubtype is false, depending on the input types.
-    SubtypingReasonings reasoning{kEmptyReasoning};
+    SubtypingReasonings reasoning;
 
     // If this subtype result required testing free types, we might be making
     // assumptions about what the free type eventually resolves to.  If so,

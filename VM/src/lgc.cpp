@@ -23,7 +23,6 @@ LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcTableStepFix, false)
 LUAU_FASTFLAGVARIABLE(LuauGcTraceUdata)
 LUAU_FLAGVERSION(LuauGcTraceUdata, 2)
 LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcMarkUdataAccess, false)
-LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 
 /*
  * Luau uses an incremental non-generational non-moving mark&sweep garbage collector.
@@ -1312,7 +1311,7 @@ size_t luaC_step(lua_State* L, bool assist)
 #endif
 
     // if allocations outpace the GC to require an assist, adjust step size to cover the difference
-    if ((FFlag::LuauBackedgeHeapCheck || LUA_VECTOR_DOUBLE == 1) && assist)
+    if (assist)
     {
         size_t need = debt * g->gcstepmul / 100;
 
