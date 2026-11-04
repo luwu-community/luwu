@@ -1053,6 +1053,13 @@ enum class IrCmd : uint8_t
     // C: Rn (object)
     FALLBACK_INITTRAITS,
 
+    // Luwu try expressions: LOP_WRAPRESULT. Wraps B in an `Ok`, or in the ERR form wraps the caught error in B and where
+    // it was raised (B + 1 to B + 3) in an `Err`. Allocates and runs the collector, but runs no Luau code.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (the value, and the result)
+    // C: int (LBC_WRAPRESULT_OK or LBC_WRAPRESULT_ERR)
+    FALLBACK_WRAPRESULT,
+
     // Instruction that passes value through, it is produced by constant folding and users substitute it with the value
     // A: operand of any type
     SUBSTITUTE,
@@ -1066,6 +1073,13 @@ enum class IrCmd : uint8_t
     // A: Rn (start)
     // B: int (count, -1 to mark all registers after start)
     MARK_DEAD,
+
+    // Luwu try expressions: pseudo instruction to mark the VM registers a protected range's handler reads, before an
+    // instruction in the range that can raise. Dead store elimination keeps the stores to them that come before it.
+    // Liveness doesn't count it as a use: only the VM enters a handler, and some of the registers may be unwritten.
+    // A: Rn (start)
+    // B: int (count)
+    MARK_TRY_READS,
 
     // Performs bitwise and/xor/or on two int64
     // A, B: int64
@@ -1513,6 +1527,9 @@ inline constexpr uint32_t kBlockNoStartPc = ~0u;
 inline constexpr uint8_t kBlockFlagSafeEnvCheck = 1 << 0;
 inline constexpr uint8_t kBlockFlagSafeEnvClear = 1 << 1;
 inline constexpr uint8_t kBlockFlagEntryArgCheck = 1 << 2;
+// Luwu try expressions: the block starts a protected range's handler. Only the VM enters it, when it catches an error,
+// so it has no predecessors in the IR and is never removed.
+inline constexpr uint8_t kBlockFlagTryHandler = 1 << 3;
 
 struct IrBlock
 {

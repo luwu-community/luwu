@@ -414,6 +414,36 @@ void translateInstJumpxEqNil(IrBuilder& build, const Instruction* pc, int pcpos)
 
 // Luwu Traits (rfcs/classes/traits.md): INITTRAITS. The fallback puts the trait initializer runner in A, or nil when the
 // object's class has no trait initializers, and the jump skips the CALL in that case.
+// Luwu try expressions: `r:ok()` or `r:err()` of a result kept in registers
+void translateInstResultGet(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    int rb = LUAU_INSN_B(*pc);
+
+    IrOp holds = build.block(IrBlockKind::Internal);
+    IrOp holdsNot = build.block(IrBlockKind::Internal);
+    IrOp next = build.blockAtInst(pcpos + 1);
+
+    // A can be one of the result's registers, so it's written only after the flag is read
+    IrOp okFlag = build.vmReg(uint8_t(rb + LBC_TRYRESULT_OKFLAG));
+    if (LUAU_INSN_C(*pc) == LBC_RESULTGET_OK)
+        build.inst(IrCmd::JUMP_IF_TRUTHY, okFlag, holds, holdsNot);
+    else
+        build.inst(IrCmd::JUMP_IF_FALSY, okFlag, holds, holdsNot);
+
+    build.beginBlock(holds);
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::LOAD_TVALUE, build.vmReg(rb)));
+    build.inst(IrCmd::JUMP, next);
+
+    build.beginBlock(holdsNot);
+    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TSYMNONE));
+    build.inst(IrCmd::JUMP, next);
+
+    // Fallthrough in original bytecode is implicit, so we start next internal block here
+    if (build.isInternalBlock(next))
+        build.beginBlock(next);
+}
+
 void translateInstInitTraits(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);

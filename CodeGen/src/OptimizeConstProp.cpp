@@ -3553,6 +3553,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::SUBSTITUTE:
     case IrCmd::MARK_USED:
     case IrCmd::MARK_DEAD:
+    case IrCmd::MARK_TRY_READS:
     case IrCmd::ADJUST_STACK_TO_REG: // Changes stack top, but not the values
     case IrCmd::ADJUST_STACK_TO_TOP: // Changes stack top, but not the values
     case IrCmd::CHECK_FASTCALL_RES:  // Changes stack top, but not the values
@@ -3698,6 +3699,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::FALLBACK_INITTRAITS:
         // writes the runner or nil, and runs nothing; the CALL after it runs the initializers
         state.invalidate(OP_B(inst));
+        break;
+    case IrCmd::FALLBACK_WRAPRESULT:
+        // writes the result, and its allocation can run the collector
+        state.invalidate(OP_B(inst));
+        state.invalidateHeapTableData();
         break;
     case IrCmd::FALLBACK_NEWOBJECT:
         // Construction writes the instance (and, for a user __init, the frame it lays out above it),

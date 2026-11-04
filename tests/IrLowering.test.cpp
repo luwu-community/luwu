@@ -32,6 +32,7 @@ LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 
 #define ensureVectorSize3() \
     if constexpr (LUA_VECTOR_SIZE != 3) \
@@ -9596,6 +9597,65 @@ bb_bytecode_2:
 bb_5:
   INTERRUPT 8u
   RETURN R1, 1i
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "TryRangeHandlerIsABlockOnlyTheVmEnters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    // The handler (bb_bytecode_1) has no uses but stays. Inside the range, savedpc names the call before it runs.
+    // Leaving the range names the instruction after it, and the ok path defines the registers the VM writes on an error.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function f(g, t)
+    local r = try g(t)
+    return r:ok()
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2,
+                   /* clipToFirstReturn= */ true
+               ),
+        R"(
+; function f($arg0, $arg1) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R0
+  STORE_TVALUE R2, %0
+  %2 = LOAD_TVALUE R1
+  STORE_TVALUE R3, %2
+  INTERRUPT 2u
+  SET_SAVEDPC 3u
+  CALL R2, 1i, 1i
+  SET_SAVEDPC 4u
+  STORE_TAG R3, tnil
+  STORE_TAG R4, tnil
+  STORE_TAG R5, tnil
+  STORE_INT R6, 1i
+  STORE_TAG R6, tboolean
+  JUMP bb_bytecode_2
+bb_bytecode_1:
+  STORE_INT R6, 0i
+  STORE_TAG R6, tboolean
+  JUMP bb_bytecode_2
+bb_bytecode_2:
+  JUMP_IF_TRUTHY R6, bb_3, bb_4
+bb_3:
+  %19 = LOAD_TVALUE R2
+  STORE_TVALUE R7, %19
+  JUMP bb_5
+bb_4:
+  STORE_TAG R7, tsymnone
+  JUMP bb_5
+bb_5:
+  INTERRUPT 6u
+  RETURN R7, 1i
 )"
     );
 }

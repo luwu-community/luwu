@@ -209,4 +209,50 @@ do
     assert(try(2) == 4 and try(2) - 1 == 3)
 end
 
+-- errors from operations native code runs inline are caught at their own line, in a loop that also succeeds
+do
+    local function lowered(n: number)
+        local t = { inner = { x = 1 } }
+        local text = "text"
+        local b = buffer.create(4)
+        local holder = Ok(1)
+        local caught = 0
+        for i = 1, n do
+            const index = try t.missing.x; assert(class.isinstance(index, Err) and index.line == debug.info(1, "l"))
+            const arith = try text + i; assert(class.isinstance(arith, Err) and arith.line == debug.info(1, "l"))
+            const read = try buffer.readu8(b, i + 3); assert(class.isinstance(read, Err) and read.line == debug.info(1, "l"))
+            const field = try holder.error; assert(class.isinstance(field, Err) and field.line == debug.info(1, "l"))
+            const call = try t.nope(i); assert(class.isinstance(call, Err) and call.line == debug.info(1, "l"))
+            const compare = try t < i; assert(class.isinstance(compare, Err) and compare.line == debug.info(1, "l"))
+            const concat = try t .. "a"; assert(class.isinstance(concat, Err) and concat.line == debug.info(1, "l"))
+            const fine = try t.inner.x + i
+            assert(fine.value == 1 + i)
+            caught += 7
+        end
+        return caught
+    end
+    assert(lowered(20) == 140)
+end
+
+-- locals written around a range keep their values when it raises, and results kept in registers are read in a loop
+do
+    local function mixed(n: number)
+        local sum = 0
+        local errors = 0
+        for i = 1, n do
+            sum += 1
+            local r = try if i % 3 == 0 then error(i, 0) else i
+            sum += 1
+            if class.isinstance(r, Err) then
+                errors += r.error
+            else
+                sum += r.value
+            end
+        end
+        return sum, errors
+    end
+    local sum, errors = mixed(30)
+    assert(sum == 360 and errors == 165)
+end
+
 return "OK"

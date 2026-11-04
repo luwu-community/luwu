@@ -94,6 +94,21 @@ LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* v
     return object;
 }
 
+void luaR_wrapresult(lua_State* L, StkId ra, bool caught)
+{
+    LuauObject* result = luaR_newpayload(L, caught ? LUWU_BUILTIN_ERR : LUWU_BUILTIN_OK, ra);
+    if (caught)
+    {
+        // the module, line and traceback fields follow the payload; a new object needs no barrier
+        LUAU_ASSERT(result->numberofmembers >= kPayload + 4);
+        TValue* members = luaR_members(result);
+        for (int i = 1; i <= 3; i++)
+            setobj(L, &members[kPayload + i], ra + i);
+    }
+
+    setobjectvalue(L, ra, result);
+}
+
 const TValue* luaR_payload(lua_State* L, const TValue* value)
 {
     if (!ttisobject(value))

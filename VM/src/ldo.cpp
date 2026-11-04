@@ -880,11 +880,10 @@ static const LuauTryRange* findtryrange(Proto* p, int pc)
     return NULL;
 }
 
-// Resumes ci at the range's handler, with the error and where it was raised in the handler's registers
+// Resumes ci at the range's handler, with the error and where it was raised in the handler's registers. A native frame
+// stays native: the run's next luau_execute enters its code at the handler.
 static void resumeintry(lua_State* L, CallInfo* ci, const LuauTryRange& range, const TryRun& run)
 {
-    LUAU_ASSERT(!(ci->flags & LUA_CALLINFO_NATIVE));
-
     // where the error was raised, read while the frames that raised it are still there
     TString* module = NULL;
     int line = 0;

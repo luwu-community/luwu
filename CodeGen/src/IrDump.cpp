@@ -491,12 +491,16 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_NEWCLASSMEMBER";
     case IrCmd::FALLBACK_INITTRAITS:
         return "FALLBACK_INITTRAITS";
+    case IrCmd::FALLBACK_WRAPRESULT:
+        return "FALLBACK_WRAPRESULT";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:
         return "MARK_USED";
     case IrCmd::MARK_DEAD:
         return "MARK_DEAD";
+    case IrCmd::MARK_TRY_READS:
+        return "MARK_TRY_READS";
     case IrCmd::BITAND_INT64:
         return "BITAND_INT64";
     case IrCmd::BITXOR_INT64:

@@ -157,6 +157,9 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::FALLBACK_INITTRAITS:
         invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
         break;
+    case IrCmd::FALLBACK_WRAPRESULT:
+        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
+        break;
 
         // Make sure all VmReg referencing instructions are handled explicitly (only register reads here)
     case IrCmd::FALLBACK_NEWCLASSMEMBER:

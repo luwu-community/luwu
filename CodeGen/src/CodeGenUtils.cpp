@@ -1211,6 +1211,20 @@ const Instruction* executeINITTRAITS(lua_State* L, const Instruction* pc, StkId 
     return pc;
 }
 
+// Luwu try expressions: LOP_WRAPRESULT for native code (see FALLBACK_WRAPRESULT). Kept in step with
+// VM_CASE(LOP_WRAPRESULT) in lvmexecute.cpp.
+const Instruction* executeWRAPRESULT(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+
+    VM_PROTECT_PC(); // raises when the result library isn't open, and allocates
+    luaR_wrapresult(L, ra, LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR);
+    VM_PROTECT(luaC_checkGC(L));
+    return pc;
+}
+
 void executeGETVARARGSMultRet(lua_State* L, const Instruction* pc, StkId base, int rai)
 {
     [[maybe_unused]] Closure* cl = clvalue(L->ci->func);

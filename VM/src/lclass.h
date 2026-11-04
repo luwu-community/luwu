@@ -231,6 +231,10 @@ LUAI_FUNC void luaR_addshowntop(struct luaL_Strbuf* b);
 // library isn't open or a `Some` gets nil or none.
 LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value);
 
+// Luwu try expressions: LOP_WRAPRESULT. Replaces the value in `ra` with an `Ok` holding it, or with `caught` an `Err`
+// holding the error in `ra` and where it was raised in `ra + 1` to `ra + 3`. Doesn't run the collector.
+LUAI_FUNC void luaR_wrapresult(lua_State* L, StkId ra, bool caught);
+
 // Luwu try expressions: the value a `Some`, `Ok` or `Err` holds, or NULL for any other value
 LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
 

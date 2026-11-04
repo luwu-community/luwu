@@ -72,7 +72,8 @@ local function raise(kind)
     if kind == 1 then
         error("boom")
     elseif kind == 2 then
-        error({ code = 7 })
+        -- a message built from it (`expect`'s) is the same in both runs
+        error(setmetatable({ code = 7 }, { __tostring = function() return "code 7" end }))
     elseif kind == 3 then
         error(42)
     elseif kind == 4 then
@@ -93,6 +94,12 @@ end
 local function yielding(kind)
     coroutine.yield()
     return raise(kind)
+end
+
+-- the kind a loop's iteration raises, leaving out stack overflow, which is slow
+local function kind_at(i, salt)
+    local kind = (i * 7 + salt) % 10 + 1
+    return if kind == 7 then 8 else kind
 end
 
 local function equal(a, b)
@@ -146,9 +153,10 @@ local function new_rng(seed: number): Rng
     local state = seed
     return {
         next = function(_, lo: number, hi: number): number
-            -- an LCG is enough to pick shapes, and gives the same programs on every platform
+            -- an LCG is enough to pick shapes, and gives the same programs on every platform. Its low bits repeat with a
+            -- short period, so the pick reads the high ones.
             state = (state * 1103515245 + 12345) % 2147483648
-            return lo + state % (hi - lo + 1)
+            return lo + (state // 65536) % (hi - lo + 1)
         end,
     }
 end
@@ -157,12 +165,13 @@ local function pick<T>(rng: Rng, list: { T }): T
     return list[rng:next(1, #list)]
 end
 
--- An expression that may raise, as source text. `inner` adds a nesting level.
-local function gen_expr(rng: Rng, depth: number): string
+-- An expression that may raise, as source text, nested `depth` levels in. `kind` is the source of what `raise` gets, or
+-- nil for a constant one.
+local function gen_expr(rng: Rng, depth: number, kind: string?): string
     const n = pick(rng, DEPTHS)
-    const kind = rng:next(1, KINDS)
+    const constant = rng:next(1, KINDS)
     -- stack overflow is slow, so it's rare
-    const k = if kind == 7 and rng:next(1, 4) > 1 then 8 else kind
+    const k = kind or tostring(if constant == 7 and rng:next(1, 4) > 1 then 8 else constant)
     const call = `deep({n}, raise, {k})`
 
     -- none of these starts with `(`, which would make `try (` a call
@@ -181,14 +190,14 @@ local function gen_expr(rng: Rng, depth: number): string
         return `select(2, pcall(raise, {k}))`
     elseif shape == 7 then
         -- a nested try, unwrapped through the object
-        return `unwrap(try {gen_expr(rng, depth + 1)})`
+        return `unwrap(try {gen_expr(rng, depth + 1, kind)})`
     else
-        return `#tostring({gen_expr(rng, depth + 1)})`
+        return `#tostring({gen_expr(rng, depth + 1, kind)})`
     end
 end
 
 local function gen_case(rng: Rng, case: number): string
-    const form = rng:next(1, 6)
+    const form = rng:next(1, 8)
     const expr = gen_expr(rng, 0)
     const gc = if rng:next(1, 6) == 1 then "    collectgarbage(\"collect\")\n" else ""
 
@@ -220,7 +229,7 @@ local function gen_case(rng: Rng, case: number): string
             .. `    if class.isinstance(r, Err) then\n        assert(not ok and equal(r.error, v), "case {case}: err branch")\n`
             .. `    elseif not class.isinstance(r, Ok) then\n        error("case {case}: neither variant")\n`
             .. `    else\n        assert(ok and equal(r.value, v), "case {case}: ok branch")\n    end\nend\n`
-    else
+    elseif form == 6 then
         -- inside a coroutine, around a call that yields first
         const n = pick(rng, DEPTHS)
         const k = rng:next(1, 6)
@@ -229,6 +238,31 @@ local function gen_case(rng: Rng, case: number): string
             .. `        local ok, v = pcall(function() return {call} end); local r = try {call}\n`
             .. `        check_object({case}, ok, v, r)\n        return "done"\n    end)\n`
             .. `    co(); co(); assert(co() == "done", "case {case}: coroutine")\nend\n`
+    elseif form == 7 then
+        -- a hot loop through the object, against the same loop through pcall; a local written on both sides of the range
+        -- shows a store the handler needed going missing
+        const n = pick(rng, { 0, 1, 5, 40 })
+        const salt = rng:next(0, 9)
+        const loop = function(protect: string, failed: string, value: string): string
+            return `        local sum, errs, vals = 0, 0, 0\n        for i = 1, 60 do\n            sum += 1\n`
+                .. `            {protect}\n            sum += 1\n`
+                .. `            if {failed} then\n                errs += 1\n            else\n                vals += {value}\n            end\n`
+                .. `        end\n        return sum, errs, vals\n`
+        end
+        return `do\n{gc}    local function hot()\n`
+            .. loop(`local r = try deep({n}, raise, kind_at(i, {salt}))`, "class.isinstance(r, Err)", "r.value")
+            .. `    end\n    local function reference()\n`
+            .. loop(`local ok, v = pcall(deep, {n}, raise, kind_at(i, {salt}))`, "not ok", "v")
+            .. `    end\n    local a, b, c = hot()\n    local x, y, z = reference()\n`
+            .. `    assert(a == x and b == y and c == z, \`case {case}: hot loop {a} {b} {c} vs {x} {y} {z}\`)\nend\n`
+    else
+        -- a hot loop over any expression, with the result kept in registers
+        const loop_expr = gen_expr(rng, 0, "k")
+        return `do\n{gc}    local function hot()\n        local sum = 0\n        for i = 1, 30 do\n`
+            .. `            local k = kind_at(i, {rng:next(0, 9)})\n            sum += 1\n`
+            .. `            local ok, v = pcall(function() return {loop_expr} end); local r = try {loop_expr}\n`
+            .. `            sum += 1\n            check_methods({case}, ok, v, r:ok(), r:err())\n        end\n`
+            .. `        return sum\n    end\n    assert(hot() == 60, "case {case}: hot loop locals")\nend\n`
     end
 end
 
@@ -254,14 +288,16 @@ local function main()
         const path = `{programs}/{seed}.luwu`
         fs.writefile(path, source)
 
-        for _, mode in { {}, { "--codegen" } } do
+        -- `--codegen-cold` compiles every function natively, plain `--codegen` only those with loops, so frames switch between
+        -- the interpreter and native code
+        for _, mode in { {}, { "--codegen" }, { "--codegen-cold" } } do
             const args = table.clone(mode)
             table.insert(args, "--fflags=DebugLuwuCollections=true,DebugLuwuTryExpressions=true")
             table.insert(args, path)
             const run = process.run({ program = options.luwu, args = args })
             if not run.ok or not string.find(run.stdout, "OK", 1, true) then
                 failures += 1
-                const label = if #mode > 0 then "codegen" else "interp"
+                const label = if #mode > 0 then string.sub(mode[1], 3) else "interp"
                 const output = if run.ok then run.stdout else run.err
                 fs.writefile(`{options.out}/fail-{seed}-{label}.txt`, output .. "\n" .. run.stderr)
                 print(`seed {seed} ({label}) failed: {string.sub(output, 1, 200)}`)

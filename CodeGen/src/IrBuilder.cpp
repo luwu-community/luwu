@@ -158,6 +158,8 @@ void IrBuilder::buildFunctionIr(Proto* proto)
     bool generateTypeChecks = hasTypedParameters(function.bcTypeInfo);
     IrOp entry = generateTypeChecks ? block(IrBlockKind::Internal) : IrOp{};
 
+    analyzeTryRanges(proto);
+
     // Rebuild original control flow blocks
     rebuildBytecodeBasicBlocks(proto);
 
@@ -210,6 +212,9 @@ void IrBuilder::buildFunctionIr(Proto* proto)
         // We skip dead bytecode instructions when they appear after block was already terminated
         if (!inTerminatedBlock)
         {
+            if (proto->tryranges)
+                beforeInstWithTryRanges(op, i);
+
             if (interruptRequested)
             {
                 interruptRequested = false;
@@ -268,6 +273,10 @@ void IrBuilder::rebuildBytecodeBasicBlocks(Proto* proto)
     // Bytecode blocks are created at bytecode jump targets and the start of a function
     jumpTargets[0] = true;
 
+    // Luwu try expressions: so are protected ranges' handlers, which the VM jumps to when it catches an error
+    for (int i = 0; i < proto->sizetryranges; i++)
+        jumpTargets[proto->tryranges[i].handlerpc] = true;
+
     for (int i = 0; i < proto->sizecode; i++)
     {
         if (jumpTargets[i])
@@ -277,7 +286,106 @@ void IrBuilder::rebuildBytecodeBasicBlocks(Proto* proto)
         }
     }
 
+    for (int i = 0; i < proto->sizetryranges; i++)
+        function.blocks[instIndexToBlock[proto->tryranges[i].handlerpc]].flags |= kBlockFlagTryHandler;
+
     buildBytecodeBlocks(function, jumpTargets);
+}
+
+void IrBuilder::analyzeTryRanges(Proto* proto)
+{
+    tryRangeTargets.assign(proto->tryranges ? proto->sizecode : 0, kNoTryRange);
+    leavesTryRange.assign(tryRangeTargets.size(), false);
+    tryRangeEndTargets.assign(tryRangeTargets.size(), kNoTryRange);
+
+    // ranges are innermost first, so the first range to claim an instruction is its innermost
+    for (int r = 0; r < proto->sizetryranges; r++)
+    {
+        const LuauTryRange& range = proto->tryranges[r];
+
+        if (int(range.endpc) < proto->sizecode)
+        {
+            leavesTryRange[range.endpc] = true;
+            tryRangeEndTargets[range.endpc] = range.target;
+        }
+
+        for (int i = int(range.startpc); i < int(range.endpc);)
+        {
+            const Instruction* pc = &proto->code[i];
+
+            if (tryRangeTargets[i] == kNoTryRange)
+                tryRangeTargets[i] = range.target;
+
+            // a jump out of the range, from `break`, `continue` or a short-circuit past its end
+            int target = getJumpTarget(*pc, uint32_t(i));
+            bool jumpsOut = target >= 0 && (uint32_t(target) < range.startpc || uint32_t(target) >= range.endpc);
+            if (jumpsOut)
+                leavesTryRange[target] = true;
+
+            i += getOpLength(LuauOpcode(LUAU_INSN_OP(*pc)));
+        }
+    }
+}
+
+// Luwu try expressions: whether an instruction may raise, or run Luau code that may
+static bool mayRaise(LuauOpcode op)
+{
+    switch (int(op))
+    {
+    case LOP_NOP:
+    case LOP_LOADNIL:
+    case LOP_LOADB:
+    case LOP_LOADN:
+    case LOP_LOADK:
+    case LOP_LOADKX:
+    case LOP_MOVE:
+    case LOP_GETUPVAL:
+    case LOP_JUMP:
+    case LOP_JUMPIF:
+    case LOP_JUMPIFNOT:
+    case LOP_JUMPXEQKNIL:
+    case LOP_JUMPXEQKB:
+    case LOP_JUMPXEQKN:
+    case LOP_JUMPXEQKS:
+    case LOP_NOT:
+    case LOP_CAPTURE:
+    case LOP_COVERAGE:
+    case LOP_RESULTGET:
+        return false;
+    default:
+        return true;
+    }
+}
+
+// Luwu try expressions: the VM catches an error by the instruction `savedpc` names, and resumes at the handler of the
+// innermost range around it. The handler reads the registers below the range's target. So before an instruction that
+// may raise in a range, savedpc has to name it, and MARK_TRY_READS keeps dead store elimination from dropping or delaying
+// a store to those registers. Leaving a range updates savedpc too: an instruction that raises without naming itself
+// can't be caught by a range it isn't in.
+void IrBuilder::beforeInstWithTryRanges(LuauOpcode op, int i)
+{
+    int target = tryRangeTargets[i];
+    bool raisesInRange = target != kNoTryRange && (mayRaise(op) || interruptRequested);
+
+    // a call names itself before anything in it can raise
+    bool namesItself = op == LOP_CALL || op == LOP_CALLFB;
+
+    if ((raisesInRange && !namesItself) || leavesTryRange[i])
+        inst(IrCmd::SET_SAVEDPC, constUint(i + 1));
+
+    if (raisesInRange && target > 0)
+        inst(IrCmd::MARK_TRY_READS, vmReg(0), constInt(target));
+
+    // A result kept in registers gets its flag right after its range (see compileTryRange). The code after it reads where
+    // an error was raised behind a test of the flag, which the IR can't follow, so on the ok path those registers are
+    // defined here instead of only by the VM.
+    int endTarget = tryRangeEndTargets[i];
+    bool setsOkFlag = op == LOP_LOADB && LUAU_INSN_A(function.proto->code[i]) == endTarget + LBC_TRYRESULT_OKFLAG;
+    if (endTarget != kNoTryRange && setsOkFlag)
+    {
+        for (int reg = endTarget + 1; reg < endTarget + LBC_TRYRESULT_OKFLAG; reg++)
+            inst(IrCmd::STORE_TAG, vmReg(uint8_t(reg)), constTag(LUA_TNIL));
+    }
 }
 
 static bool isDirectCompare(Proto* proto, const Instruction* pc, int i)
@@ -705,6 +813,14 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
 
     case LOP_INITTRAITS:
         translateInstInitTraits(*this, pc, i);
+        break;
+
+    case LOP_WRAPRESULT:
+        inst(IrCmd::FALLBACK_WRAPRESULT, constUint(i), vmReg(LUAU_INSN_A(*pc)), constInt(LUAU_INSN_B(*pc)));
+        break;
+
+    case LOP_RESULTGET:
+        translateInstResultGet(*this, pc, i);
         break;
 
     case LOP_GETOBJECTMEMBER:

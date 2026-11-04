@@ -32,6 +32,7 @@ void translateInstJumpIfCond(IrBuilder& build, const Instruction* pc, int pcpos,
 void translateInstJumpX(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstJumpxEqNil(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstInitTraits(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstResultGet(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstJumpxEqNilShortcut(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstJumpxEqB(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstJumpxEqBShortcut(IrBuilder& build, const Instruction* pc, int pcpos);

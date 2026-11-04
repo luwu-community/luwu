@@ -4139,21 +4139,9 @@ reentry:
                 // Luwu try expressions: the value of a `try` expression, or the error its protected range caught
                 Instruction insn = *pc++;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
-                bool caught = LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR;
 
-                VM_PROTECT_PC(); // raises when the collections library isn't open, and allocates
-
-                LuauObject* result = luaR_newpayload(L, caught ? LUWU_BUILTIN_ERR : LUWU_BUILTIN_OK, ra);
-                if (caught)
-                {
-                    // where the error was raised, which the handler's registers hold after it; a new object needs no barrier
-                    LUAU_ASSERT(result->numberofmembers >= 4);
-                    TValue* members = luaR_members(result);
-                    for (int i = 1; i <= 3; i++)
-                        setobj(L, &members[i], ra + i);
-                }
-
-                setobjectvalue(L, ra, result);
+                VM_PROTECT_PC(); // raises when the result library isn't open, and allocates
+                luaR_wrapresult(L, ra, LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR);
                 VM_PROTECT(luaC_checkGC(L));
                 VM_NEXT();
             }
