@@ -232,7 +232,12 @@ TEST_CASE_FIXTURE(Fixture, "typepack_unification_should_trim_free_tails")
         end
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    // `f` falls off its end: one error on its `end`, and one on the `if` that skips the return.
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<FunctionExitsWithoutReturning>(result.errors[0]));
+    CHECK_EQ(Location{{6, 8}, {6, 11}}, result.errors[0].location);
+    CHECK(get<FunctionExitsWithoutReturning>(result.errors[1]));
+    CHECK_EQ(Location{{3, 12}, {3, 14}}, result.errors[1].location);
     CHECK_EQ("(number) -> boolean", toString(requireType("f")));
 }
 
@@ -277,6 +282,7 @@ TEST_CASE_FIXTURE(Fixture, "variadics_should_use_reversed_properly")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "cli_41095_concat_log_in_sealed_table_unification")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
 
     CheckResult result = check(R"(
         --!strict
