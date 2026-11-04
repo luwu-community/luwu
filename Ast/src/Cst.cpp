@@ -355,4 +355,86 @@ CstTypePackGeneric::CstTypePackGeneric(Position ellipsisPosition)
 {
 }
 
+std::string toString(CstExprConstantString::QuoteStyle quoteStyle)
+{
+    switch (quoteStyle)
+    {
+    case CstExprConstantString::QuoteStyle::QuotedSingle:
+        return "single";
+    case CstExprConstantString::QuoteStyle::QuotedDouble:
+        return "double";
+    case CstExprConstantString::QuoteStyle::QuotedRaw:
+        return "raw";
+    case CstExprConstantString::QuoteStyle::QuotedInterp:
+        return "interp";
+    }
+    return "unknown";
+}
+
+template<>
+std::optional<CstExprConstantString::QuoteStyle> fromString<CstExprConstantString::QuoteStyle>(std::string_view s)
+{
+    if (s == "single")
+        return CstExprConstantString::QuoteStyle::QuotedSingle;
+    if (s == "double")
+        return CstExprConstantString::QuoteStyle::QuotedDouble;
+    if (s == "raw")
+        return CstExprConstantString::QuoteStyle::QuotedRaw;
+    if (s == "interp")
+        return CstExprConstantString::QuoteStyle::QuotedInterp;
+    return std::nullopt;
+}
+
+std::string toString(CstExprTable::Separator separator)
+{
+    switch (separator)
+    {
+    case CstExprTable::Separator::Comma:
+        return "comma";
+    case CstExprTable::Separator::Semicolon:
+        return "semicolon";
+    case CstExprTable::Separator::Missing:
+        return "none";
+    }
+    return "unknown";
+}
+
+template<>
+std::optional<CstExprTable::Separator> fromString<CstExprTable::Separator>(std::string_view s)
+{
+    if (s == "comma" || s == ",")
+        return CstExprTable::Separator::Comma;
+    if (s == "semicolon" || s == ";")
+        return CstExprTable::Separator::Semicolon;
+    if (s == "none" || s == "missing")
+        return CstExprTable::Separator::Missing;
+    return std::nullopt;
+}
+
+std::string toString(CstTypeTable::Item::Kind kind)
+{
+    switch (kind)
+    {
+    case CstTypeTable::Item::Kind::Indexer:
+        return "indexer";
+    case CstTypeTable::Item::Kind::Property:
+        return "property";
+    case CstTypeTable::Item::Kind::StringProperty:
+        return "stringProperty";
+    }
+    return "unknown";
+}
+
+template<>
+std::optional<CstTypeTable::Item::Kind> fromString<CstTypeTable::Item::Kind>(std::string_view s)
+{
+    if (s == "indexer")
+        return CstTypeTable::Item::Kind::Indexer;
+    if (s == "property")
+        return CstTypeTable::Item::Kind::Property;
+    if (s == "stringProperty")
+        return CstTypeTable::Item::Kind::StringProperty;
+    return std::nullopt;
+}
+
 } // namespace Luau

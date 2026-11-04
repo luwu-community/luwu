@@ -1328,4 +1328,31 @@ void Lexer::fixupMultilineString(std::string& data)
     data.resize(dst - &data[0]);
 }
 
+std::string toString(Lexeme::Type type)
+{
+    switch (type)
+    {
+    case Lexeme::Comment:
+        return "single";
+    case Lexeme::BlockComment:
+        return "block";
+    case Lexeme::BrokenComment:
+        return "broken";
+    default:
+        return "unknown";
+    }
+}
+
+template<>
+std::optional<Lexeme::Type> fromString<Lexeme::Type>(std::string_view s)
+{
+    if (s == "single" || s == "comment")
+        return Lexeme::Comment;
+    if (s == "block" || s == "blockComment")
+        return Lexeme::BlockComment;
+    if (s == "broken" || s == "brokenComment")
+        return Lexeme::BrokenComment;
+    return std::nullopt;
+}
+
 } // namespace Luau

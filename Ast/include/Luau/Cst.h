@@ -588,4 +588,16 @@ public:
     Position ellipsisPosition;
 };
 
+std::string toString(CstExprConstantString::QuoteStyle quoteStyle);
+template<>
+std::optional<CstExprConstantString::QuoteStyle> fromString<CstExprConstantString::QuoteStyle>(std::string_view s);
+
+std::string toString(CstExprTable::Separator separator);
+template<>
+std::optional<CstExprTable::Separator> fromString<CstExprTable::Separator>(std::string_view s);
+
+std::string toString(CstTypeTable::Item::Kind kind);
+template<>
+std::optional<CstTypeTable::Item::Kind> fromString<CstTypeTable::Item::Kind>(std::string_view s);
+
 } // namespace Luau

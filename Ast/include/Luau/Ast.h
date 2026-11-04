@@ -255,6 +255,10 @@ public:
     AstName name;
 };
 
+std::string toString(AstAttr::Type type);
+template<>
+std::optional<AstAttr::Type> fromString<AstAttr::Type>(std::string_view s);
+
 class AstExpr : public AstNode
 {
 public:
@@ -420,6 +424,10 @@ public:
     AstArray<char> value;
     QuoteStyle quoteStyle;
 };
+
+std::string toString(AstExprConstantString::QuoteStyle style);
+template<>
+std::optional<AstExprConstantString::QuoteStyle> fromString<AstExprConstantString::QuoteStyle>(std::string_view s);
 
 class AstExprLocal : public AstExpr
 {
@@ -596,6 +604,10 @@ public:
     AstArray<Item> items;
 };
 
+std::string toString(AstExprTable::Item::Kind kind);
+template<>
+std::optional<AstExprTable::Item::Kind> fromString<AstExprTable::Item::Kind>(std::string_view s);
+
 class AstExprUnary : public AstExpr
 {
 public:
@@ -617,6 +629,8 @@ public:
 };
 
 std::string toString(AstExprUnary::Op op);
+template<>
+std::optional<AstExprUnary::Op> fromString<AstExprUnary::Op>(std::string_view s);
 
 class AstExprBinary : public AstExpr
 {
@@ -655,6 +669,8 @@ public:
 };
 
 std::string toString(AstExprBinary::Op op);
+template<>
+std::optional<AstExprBinary::Op> fromString<AstExprBinary::Op>(std::string_view s);
 
 class AstExprTypeAssertion : public AstExpr
 {
@@ -1194,6 +1210,10 @@ enum class AstTableAccess
     ReadWrite = 0b11,
 };
 
+std::string toString(AstTableAccess access);
+template<>
+std::optional<AstTableAccess> fromString<AstTableAccess>(std::string_view s);
+
 struct AstDeclaredExternTypeProperty
 {
     AstName name;
@@ -1568,7 +1588,7 @@ public:
 
     void visit(AstVisitor* visitor) override;
 
-    const AstArray<char> value;
+    AstArray<char> value;
 };
 
 class AstTypeGroup : public AstType
