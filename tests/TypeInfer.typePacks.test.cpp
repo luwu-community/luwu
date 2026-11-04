@@ -927,11 +927,13 @@ a = b
     if (!FFlag::DebugLuauForceOldSolver)
     {
 
-        const std::string expected = "Expected this function to return\n\t"
-                                     "'() -> (number, ...string)'"
-                                     "\nbut got\n\t"
-                                     "'() -> (number, ...boolean)'"
-                                     "; \n"
+        // The preamble names the return type, so it prints the return type rather than the whole
+        // function type it belongs to.
+        const std::string expected = "Expected this function to return\n    "
+                                     "'number, ...string'"
+                                     "\nbut got\n    "
+                                     "'number, ...boolean'"
+                                     "\n"
                                      "it has a tail of the variadic `boolean` in the latter type and `string` in the former "
                                      "type, and `boolean` is not a subtype of `string`";
 
@@ -1073,7 +1075,7 @@ TEST_CASE_FIXTURE(Fixture, "unify_variadic_tails_in_arguments_free")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         CHECK(
-            toString(result.errors.at(0)) == "Expected this to be 'boolean', but got '...number'; \n"
+            toString(result.errors.at(0)) == "Expected this to be 'boolean', but got '...number'\n"
                                              "it has a tail of `...number`, which is not a subtype of `boolean`"
         );
     }
@@ -1148,6 +1150,58 @@ TEST_CASE_FIXTURE(Fixture, "type_param_overflow")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "variadic_argument_tail_is_checked_against_variadic_parameter")
+{
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // Upstream accepts these calls: the failing path ends at `tail().variadic()`, which is neither an
+    // argument index nor a pack, so `OverloadResolver::reportErrors` reports nothing. Luwu reports it.
+    CheckResult result = check(R"(
+        local function takesNumbers(...: number) end
+        local function passesStrings(...: string)
+            takesNumbers(...)
+        end
+        local function passesSome(a: number, ...: string)
+            takesNumbers(a, ...)
+        end
+        local function takesOptional(...: string?) end
+        local function fine(...: string)
+            takesOptional(...)
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(toString(result.errors[0]), "Expected this to be '...number', but got '...string'");
+    CHECK_EQ(result.errors[0].location, Location{{3, 25}, {3, 28}});
+    CHECK_EQ(toString(result.errors[1]), "Expected this to be '...number', but got '...string'");
+    CHECK_EQ(result.errors[1].location, Location{{6, 28}, {6, 31}});
+}
+
+TEST_CASE_FIXTURE(Fixture, "variadic_argument_tail_mismatch_names_the_callee")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+    ScopedFastFlag explained{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local function takesNumbers(...: number) end
+        local function passesStrings(...: string)
+            takesNumbers(...)
+        end
+        local function passesSome(...: string | boolean | number)
+            takesNumbers(...)
+        end
+    )");
+
+    // One error for the pack, not one per union member that doesn't fit.
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(toString(result.errors[0]), "'takesNumbers' takes '...number', but was given '...string'");
+    CHECK_EQ(
+        toString(result.errors[1]),
+        "'takesNumbers' takes '...number', but was given '...string | boolean | number'\n\nNeither 'string' nor 'boolean' is a 'number'."
+    );
 }
 
 TEST_SUITE_END();

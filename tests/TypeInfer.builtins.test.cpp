@@ -149,15 +149,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "sort_with_bad_predicate")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'((string, string) -> boolean)?'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, number) -> boolean'"
                                  "\ncaused by:\n"
                                  "  None of the union options are compatible. For example:\n"
-                                 "Expected this to be\n\t"
+                                 "Expected this to be\n    "
                                  "'(string, string) -> boolean'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, number) -> boolean'"
                                  "\ncaused by:\n"
                                  "  Argument #1 type is not compatible.\n"
@@ -187,6 +187,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "math_max_variatic")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "math_max_checks_for_numbers")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local n = math.max(1,2,"3")
     )");
@@ -1037,6 +1038,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "string_format_report_all_type_errors_at_corr
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "tonumber_returns_optional_number_type")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         --!strict
         local b: number = tonumber('asdf')
@@ -1047,7 +1049,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "tonumber_returns_optional_number_type")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         CHECK_EQ(
-            "Expected this to be 'number', but got 'number?'; \n"
+            "Expected this to be 'number', but got 'number?'\n"
             "`number?` could be `nil`",
             toString(result.errors[0])
         );
@@ -1398,7 +1400,7 @@ TEST_CASE_FIXTURE(Fixture, "typeof_unresolved_function")
         local function f(a: typeof(f)) end
         )");
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Unknown global 'f'; consider assigning to it first", toString(result.errors[0]));
+    CHECK_EQ("Unknown variable 'f', define it with 'local f = value'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "no_persistent_typelevel_change")
@@ -1917,6 +1919,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "vector_lerp_should_not_crash")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "instantiation_works_on_builtins")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local foo = table.create<<string>>(4)
         local bar = table.unpack<<string>>({})
@@ -1999,6 +2002,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_freeze_with_variadic_any_should_not_er
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_freeze_with_variadic_non_error_suppressing_should_error")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
 
     CheckResult result = check(R"(
