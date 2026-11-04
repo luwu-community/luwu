@@ -1871,6 +1871,11 @@ struct Printer
 
     void visualizeAttribute(AstAttr& attribute)
     {
+        // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): a `--@[...]` comment is dropped
+        // like every other comment
+        if (attribute.comment)
+            return;
+
         advance(attribute.location.begin);
         if (FFlag::LuauCstAttr)
         {
