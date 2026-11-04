@@ -51,6 +51,9 @@ struct BuiltinTypeFunctions
     TypeFunction classFunc;
 
     TypeFunction weakoptionalFunc;
+    // Luwu: `unlessnever<refined, fallback, tests...>` is `refined`, or `fallback` when `refined` is uninhabited
+    // because tests on one property contradict each other (one of `tests` is uninhabited). See applyRefinements.
+    TypeFunction unlessneverFunc;
 
     void addToScope(NotNull<TypeArena> arena, NotNull<Scope> scope) const;
 };
