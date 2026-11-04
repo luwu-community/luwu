@@ -14546,7 +14546,8 @@ L1: RETURN R2 1
 }
 
 // Luwu collections: calling a builtin class's constructor directly or through a local compiles to a fastcall, including
-// the constructors of `collections.result` and `collections.option`, which are three names deep
+// the constructors of `collections.result` and `collections.option`, which are three names deep. Any chain of locals
+// that are never written resolves, which is what destructuring them out of `collections` desugars to.
 TEST_CASE("CollectionsConstructorsCompileToFastcalls")
 {
     ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
@@ -14557,6 +14558,9 @@ TEST_CASE("CollectionsConstructorsCompileToFastcalls")
         "local function f(x) local v = collections.result.ok(x) return v end",
         "local ok = collections.result.ok local function f(x) local v = ok(x) return v end",
         "local result = collections.result local function f(x) local v = result.err(x) return v end",
+        "local c = collections local r = c.result local ok = r.ok local function f(x) local v = ok(x) return v end",
+        "local c = collections local function f(x) local v = c.result.ok(x) return v end",
+        "local r = collections.result local r2 = r local function f(x) local v = r2.ok(x) return v end",
     };
     for (const char* source : fastcalls)
     {
@@ -14568,6 +14572,8 @@ TEST_CASE("CollectionsConstructorsCompileToFastcalls")
         "local collections = {} local function f(x) local v = collections.result.ok(x) return v end",
         "local function f(x) local v = string.result.ok(x) return v end",
         "local function f(x) local v = collections.result.other(x) return v end",
+        "local c = collections c = {} local function f(x) local v = c.result.ok(x) return v end",
+        "local r = collections.result local ok = r.ok ok = print local function f(x) local v = ok(x) return v end",
     };
     for (const char* source : calls)
     {
