@@ -27,6 +27,7 @@ target_sources(Luwu.Ast PRIVATE
     Ast/include/Luau/Ast.h
     Ast/include/Luau/Confusables.h
     Ast/include/Luau/Cst.h
+    Ast/include/Luau/Helpifier.h
     Ast/include/Luau/Lexer.h
     Ast/include/Luau/Location.h
     Ast/include/Luau/ParseOptions.h
@@ -38,6 +39,7 @@ target_sources(Luwu.Ast PRIVATE
     Ast/src/Ast.cpp
     Ast/src/Confusables.cpp
     Ast/src/Cst.cpp
+    Ast/src/Helpifier.cpp
     Ast/src/Lexer.cpp
     Ast/src/Location.cpp
     Ast/src/Parser.cpp
@@ -245,6 +247,8 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/Linter.h
     Analysis/include/Luau/LValue.h
     Analysis/include/Luau/Metamethods.h
+    Analysis/include/Luau/MismatchExplanation.h
+    Analysis/include/Luau/MismatchWording.h
     Analysis/include/Luau/Module.h
     Analysis/include/Luau/ModuleResolver.h
     Analysis/include/Luau/NonStrictTypeChecker.h
@@ -255,6 +259,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/Quantify.h
     Analysis/include/Luau/RecursionCounter.h
     Analysis/include/Luau/Refinement.h
+    Analysis/include/Luau/RepeatedTypeNames.h
     Analysis/include/Luau/RequireTracer.h
     Analysis/include/Luau/Scope.h
     Analysis/include/Luau/Set.h
@@ -284,15 +289,19 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/TypeFwd.h
     Analysis/include/Luau/TypeIds.h
     Analysis/include/Luau/TypeInfer.h
+    Analysis/include/Luau/TypeNaming.h
     Analysis/include/Luau/TypeOrPack.h
     Analysis/include/Luau/TypePack.h
     Analysis/include/Luau/TypePairHash.h
     Analysis/include/Luau/TypePath.h
     Analysis/include/Luau/TypeUtils.h
+    Analysis/include/Luau/Typos.h
     Analysis/include/Luau/Unifiable.h
     Analysis/include/Luau/Unifier.h
     Analysis/include/Luau/Unifier2.h
     Analysis/include/Luau/UnifierSharedState.h
+    Analysis/include/Luau/UnknownVariable.h
+    Analysis/include/Luau/UnreachableProof.h
     Analysis/include/Luau/UserDefinedTypeFunction.h
     Analysis/include/Luau/VisitType.h
     Analysis/include/Luau/IterativeTypeVisitor.h
@@ -336,6 +345,8 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/JsonEmitter.cpp
     Analysis/src/Linter.cpp
     Analysis/src/LValue.cpp
+    Analysis/src/MismatchExplanation.cpp
+    Analysis/src/MismatchWording.cpp
     Analysis/src/Module.cpp
     Analysis/src/NonStrictTypeChecker.cpp
     Analysis/src/Normalize.cpp
@@ -343,6 +354,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/Quantify.cpp
     Analysis/src/RecursionCounter.cpp
     Analysis/src/Refinement.cpp
+    Analysis/src/RepeatedTypeNames.cpp
     Analysis/src/RequireTracer.cpp
     Analysis/src/Scope.cpp
     Analysis/src/Simplify.cpp
@@ -368,13 +380,17 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/TypeFunctionRuntimeBuilder.cpp
     Analysis/src/TypeIds.cpp
     Analysis/src/TypeInfer.cpp
+    Analysis/src/TypeNaming.cpp
     Analysis/src/TypeOrPack.cpp
     Analysis/src/TypePack.cpp
     Analysis/src/TypePath.cpp
     Analysis/src/TypeUtils.cpp
+    Analysis/src/Typos.cpp
     Analysis/src/Unifiable.cpp
     Analysis/src/Unifier.cpp
     Analysis/src/Unifier2.cpp
+    Analysis/src/UnknownVariable.cpp
+    Analysis/src/UnreachableProof.cpp
     Analysis/src/UserDefinedTypeFunction.cpp
 )
 
@@ -537,6 +553,7 @@ if(TARGET Luwu.UnitTest)
         tests/Lexer.test.cpp
         tests/Linter.test.cpp
         tests/LValue.test.cpp
+        tests/MismatchExplanation.test.cpp
         tests/Module.test.cpp
         tests/NonstrictMode.test.cpp
         tests/NonStrictTypeChecker.test.cpp
@@ -546,6 +563,7 @@ if(TARGET Luwu.UnitTest)
         tests/Parser.test.cpp
         tests/PrettyPrinter.test.cpp
         tests/RegisterCallbacks.cpp
+        tests/RepeatedTypeNames.test.cpp
         tests/RegisterCallbacks.h
         tests/RequireTracer.test.cpp
         tests/RuntimeLimits.test.cpp
