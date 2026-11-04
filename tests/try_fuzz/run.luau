@@ -189,7 +189,7 @@ local function gen_expr(rng: Rng, depth: number): string
 end
 
 local function gen_case(rng: Rng, case: number): string
-    const form = rng:next(1, 5)
+    const form = rng:next(1, 6)
     const expr = gen_expr(rng, 0)
     const gc = if rng:next(1, 6) == 1 then "    collectgarbage(\"collect\")\n" else ""
 
@@ -214,6 +214,13 @@ local function gen_case(rng: Rng, case: number): string
         return `do\n{gc}    local function v(...)\n`
             .. `        local ok, val = pcall(function(...) return deep({n}, raise, ...) end, ...); local r = try deep({n}, raise, ...)\n`
             .. `        check_object({case}, ok, val, r)\n    end\n    v({k})\nend\n`
+    elseif form == 5 then
+        -- `class.isinstance` of the variants, kept in registers at O2
+        return `do\n{gc}    local ok, v = pcall(function() return {expr} end); local r = try {expr}\n`
+            .. `    local isok = class.isinstance(r, result.ok)\n    assert(isok == ok, "case {case}: isinstance ok")\n`
+            .. `    if class.isinstance(r, result.err) then\n        assert(not ok and equal(r.error, v), "case {case}: err branch")\n`
+            .. `    elseif not class.isinstance(r, result.ok) then\n        error("case {case}: neither variant")\n`
+            .. `    else\n        assert(ok and equal(r.value, v), "case {case}: ok branch")\n    end\nend\n`
     else
         -- inside a coroutine, around a call that yields first
         const n = pick(rng, DEPTHS)

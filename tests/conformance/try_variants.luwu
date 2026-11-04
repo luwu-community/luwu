@@ -1,0 +1,81 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+--!optimize 2
+print("testing try result variant tests")
+
+-- At O2 `class.isinstance(r, ok)` of a result kept in registers reads its flag. These compare it with the same test on
+-- the object, which a function call gets.
+
+const result = collections.result
+const ok = result.ok
+const results = result
+
+local function value(n: number): number
+    if n < 0 then
+        error("negative")
+    end
+    return n
+end
+
+local function isok(r: unknown): boolean
+    return class.isinstance(r, collections.result.ok)
+end
+
+local function iserr(r: unknown): boolean
+    return class.isinstance(r, collections.result.err)
+end
+
+local function variants(n: number): (boolean, boolean, boolean, boolean, string)
+    const r = try value(n)
+    const testedok = class.isinstance(r, ok)
+    const testederr = class.isinstance(r, results.err)
+    const notok = not class.isinstance(r, collections.result.ok)
+
+    local branch = "neither"
+    if class.isinstance(r, ok) then
+        branch = `ok {r.value}`
+    elseif class.isinstance(r, result.err) then
+        branch = `err {r.error}`
+    end
+    return testedok, testederr, notok, class.isinstance(r, ok) and class.isinstance(r, result.err), branch
+end
+
+for _, n in { 3, -1 } do
+    const testedok, testederr, notok, both, branch = variants(n)
+    const object = try value(n)
+    assert(testedok == isok(object) and testederr == iserr(object))
+    assert(notok == not testedok and both == false)
+    assert(if n >= 0 then branch == "ok 3" else string.find(branch, "^err .*negative$") ~= nil)
+end
+
+-- an assert of a variant test passes on the variant and raises on the other one
+do
+    local function expectok(n: number): number
+        const r = try value(n)
+        assert(class.isinstance(r, ok))
+        return r.value
+    end
+    assert(expectok(4) == 4)
+    const failed = try expectok(-1)
+    assert(class.isinstance(failed, result.err) and string.find(failed.error, "assertion failed", 1, true))
+end
+
+-- the test is one value wherever a call could give several
+do
+    local function count(...: unknown): number
+        return select("#", ...)
+    end
+    local function tested(n: number): number
+        const r = try value(n)
+        return count(class.isinstance(r, ok))
+    end
+    assert(tested(1) == 1 and tested(-1) == 1)
+end
+
+-- a `collections` of the module's own is tested against the object it holds
+do
+    local collections = { result = { ok = class.of(result.ok(1)) } }
+    const r = try value(1)
+    assert(class.isinstance(r, collections.result.ok))
+end
+
+return "OK"

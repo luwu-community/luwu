@@ -796,8 +796,8 @@ struct Compiler
         if (!expr)
             return node->is<AstExprVarargs>();
 
-        // Luwu try expressions: compiled to one value (compileTryResultMethod)
-        if (isTryResultMethodCall(expr))
+        // Luwu try expressions: compiled to one value (compileTryResultMethod, compileTryResultVariantTest)
+        if (isTryResultCall(expr))
             return false;
 
         // conservative version, optimized for compilation throughput
@@ -840,8 +840,8 @@ struct Compiler
     {
         if (AstExprCall* expr = node->as<AstExprCall>())
         {
-            // Luwu try expressions: compiled to one value (compileTryResultMethod)
-            if (isTryResultMethodCall(expr))
+            // Luwu try expressions: compiled to one value (compileTryResultMethod, compileTryResultVariantTest)
+            if (isTryResultCall(expr))
             {
                 compileExprTemp(node, target);
                 return false;
@@ -3509,6 +3509,18 @@ struct Compiler
             return;
         }
 
+        if (std::optional<bool> testsOk = tryResultVariantTest(expr, resultLocal); testsOk && tryResultLocals.contains(resultLocal->local))
+        {
+            LUAU_ASSERT(!multRet);
+            if (targetCount == 0)
+                return;
+
+            compileTryResultVariantTest(*testsOk, getLocalReg(resultLocal->local), target);
+            for (unsigned i = 1; i < targetCount; ++i)
+                bytecode.emitABC(LOP_LOADNIL, uint8_t(target + i), 0, 0);
+            return;
+        }
+
         // try inlining the function
         if (options.optimizationLevel >= 2 && !expr->self)
         {
@@ -5060,7 +5072,7 @@ struct Compiler
             condition = group->expr;
 
         AstExprCall* isinstance = condition->as<AstExprCall>();
-        if (!isinstance || isinstance->args.size != 2)
+        if (!isinstance || isinstance->args.size != 2 || isTryResultCall(isinstance))
             return nullptr;
 
         auto isRereadable = [&](AstExpr* arg)
@@ -5116,6 +5128,25 @@ struct Compiler
         const int* bfid = builtins.find(call);
         if (!bfid || *bfid != LBF_CLASS_ISINSTANCE || call->args.size != 2)
             return false;
+
+        // Luwu try expressions: a result kept in registers is tested by its flag
+        AstExprLocal* resultLocal = nullptr;
+        if (std::optional<bool> testsOk = tryResultVariantTest(call, resultLocal); testsOk && tryResultLocals.contains(resultLocal->local))
+        {
+            uint8_t reg = getLocalReg(resultLocal->local);
+            uint8_t tested = uint8_t(reg + kTryResultOkFlag);
+            bool jumpIfTruthy = *testsOk == onlyTruth;
+            if (target)
+            {
+                compileTryResultVariantTest(*testsOk, reg, *target);
+                tested = *target;
+                jumpIfTruthy = onlyTruth;
+            }
+
+            skipJump.push_back(bytecode.emitLabel());
+            bytecode.emitAD(jumpIfTruthy ? LOP_JUMPIF : LOP_JUMPIFNOT, tested, 0);
+            return true;
+        }
 
         bool classIsKnown = isClassBoundAt(call->args.data[1]);
 
@@ -6029,10 +6060,54 @@ struct Compiler
         return nullptr;
     }
 
-    bool isTryResultMethodCall(AstExprCall* call)
+    // Luwu try expressions: which variant of `collections.result` `cls` names, when it certainly names one: true for ok,
+    // false for err. A result kept in registers has no object to test against a class, so this is where the compiler
+    // assumes `cls` is the builtin class. It only does where it folds builtins (optimization level 2), which assumes the
+    // same of `math`. `cls` resolves through aliases (getBuiltin), so `const .{result.{ok as Ok}} = collections` works.
+    // Moving ok and err out of `collections` changes the names here and nothing else.
+    std::optional<bool> builtinResultVariant(AstExpr* cls)
+    {
+        if (!builtinsFold)
+            return std::nullopt;
+
+        Builtin builtin = getBuiltin(cls, globals, variables);
+        if (builtin.isNestedMethod("collections", "result", "ok"))
+            return true;
+        if (builtin.isNestedMethod("collections", "result", "err"))
+            return false;
+        return std::nullopt;
+    }
+
+    // Luwu try expressions: `class.isinstance(r, ok)` or `class.isinstance(r, err)`, which a result kept in registers
+    // answers from its flag. `is ok.(value)` desugars to it. Gives whether it tests for ok and sets `local` to r.
+    std::optional<bool> tryResultVariantTest(AstExprCall* call, AstExprLocal*& local)
+    {
+        const int* bfid = builtins.find(call);
+        if (!bfid || *bfid != LBF_CLASS_ISINSTANCE || call->args.size != 2)
+            return std::nullopt;
+
+        local = call->args.data[0]->as<AstExprLocal>();
+        if (!local || local->upvalue)
+            return std::nullopt;
+
+        return builtinResultVariant(call->args.data[1]);
+    }
+
+    // Luwu try expressions: a method call or a variant test that a result kept in registers answers itself
+    bool isTryResultCall(AstExprCall* call)
     {
         AstExprLocal* local = nullptr;
-        return tryResultMethodCall(call, local) && tryResultLocals.contains(local->local);
+        if (tryResultMethodCall(call, local) && tryResultLocals.contains(local->local))
+            return true;
+
+        return tryResultVariantTest(call, local) && tryResultLocals.contains(local->local);
+    }
+
+    // Luwu try expressions: the result of a variant test (tryResultVariantTest) into `target`. The flag is true for an
+    // ok, so testing for err negates it.
+    void compileTryResultVariantTest(bool testsOk, uint8_t reg, uint8_t target)
+    {
+        bytecode.emitABC(testsOk ? LOP_MOVE : LOP_NOT, target, uint8_t(reg + kTryResultOkFlag), 0);
     }
 
     // Luwu try expressions: a method of a try result kept in registers. `ok` and `err` are a RESULTGET. `expect` gives an
@@ -8906,13 +8981,19 @@ struct Compiler
     };
 
     // Luwu try expressions: finds the locals holding a `try` result that are only ever read as `r.value`, `r.error`,
-    // `r.module`, `r.line` or `r.traceback`, or used as `r:ok()`, `r:err()` or `r:expect()` (tryResultMethodCall). Such a
-    // result needs no object: its registers hold all of it. Any other use
-    // of the local (passing it, a method call, writing through it, a closure capturing it) needs the object.
+    // `r.module`, `r.line` or `r.traceback`, used as `r:ok()`, `r:err()` or `r:expect()` (tryResultMethodCall), or tested
+    // with `class.isinstance(r, ok)` (tryResultVariantTest). Such a result needs no object: its registers hold all of it.
+    // Any other use of the local (passing it, a method call, writing through it, a closure capturing it) needs the object.
     struct TryResultLocalsVisitor : AstVisitor
     {
+        Compiler& compiler;
         DenseHashSet<AstLocal*> candidates{nullptr};
         DenseHashSet<AstLocal*> escaped{nullptr};
+
+        explicit TryResultLocalsVisitor(Compiler& compiler)
+            : compiler(compiler)
+        {
+        }
 
         bool visit(AstStatLocal* node) override
         {
@@ -8933,7 +9014,11 @@ struct Compiler
 
         bool visit(AstExprCall* node) override
         {
+            // the class names a builtin, so it reads no local, and the tested local doesn't escape
             AstExprLocal* local = nullptr;
+            if (compiler.tryResultVariantTest(node, local))
+                return false;
+
             if (!tryResultMethodCall(node, local))
                 return true;
 
@@ -10180,20 +10265,6 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
     if (FFlag::LuwuClasses)
         compiler.buildTraitFunctionCopies(root, classSynthesisAllocator, functions);
 
-    // Luwu try expressions: needs `variables`, from trackValues
-    if (FFlag::DebugLuwuTryExpressions && options.optimizationLevel >= 1)
-    {
-        Compiler::TryResultLocalsVisitor visitor;
-        root->visit(&visitor);
-        for (AstLocal* local : visitor.candidates)
-        {
-            const Variable* variable = compiler.variables.find(local);
-            bool written = variable && variable->written;
-            if (!written && !local->isExported && !visitor.escaped.contains(local))
-                compiler.tryResultLocals.insert(local);
-        }
-    }
-
     // this visitor tracks calls to getfenv/setfenv and disables some optimizations when they are found
     if (options.optimizationLevel >= 1 && (names.get("getfenv").value || names.get("setfenv").value))
     {
@@ -10227,6 +10298,20 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
     {
         // this pass tracks which calls are builtins and can be compiled more efficiently
         analyzeBuiltins(compiler.builtins, compiler.globals, compiler.variables, options, root, names);
+
+        // Luwu try expressions: needs `variables` and `builtins`
+        if (FFlag::DebugLuwuTryExpressions)
+        {
+            Compiler::TryResultLocalsVisitor visitor(compiler);
+            root->visit(&visitor);
+            for (AstLocal* local : visitor.candidates)
+            {
+                const Variable* variable = compiler.variables.find(local);
+                bool written = variable && variable->written;
+                if (!written && !local->isExported && !visitor.escaped.contains(local))
+                    compiler.tryResultLocals.insert(local);
+            }
+        }
 
         // this pass determines which locals hold constant tables that are never mutated
         buildTableConstantMap(compiler.tableConstants, compiler.variables, root);

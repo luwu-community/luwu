@@ -14271,6 +14271,59 @@ return r.value
     CHECK(escaping.find(" OK\n") != std::string::npos);
 }
 
+// `class.isinstance(r, ok)`, which `r is ok.(value)` desugars to, is answered by the result's flag at O2, the level that
+// assumes builtins. The class may be an alias of `collections.result.ok` or `err` through any chain of locals.
+TEST_CASE("TryResultVariantTestsStayInRegisters")
+{
+    ScopedFastFlag sff[]{{FFlag::DebugLuwuTryExpressions, true}, {FFlag::DebugLuwuCollections, true}, {FFlag::LuwuClasses, true}};
+
+    CHECK_EQ("\n" + compileFunction(R"(
+local result = collections.result
+local ok = result.ok
+local r = try f()
+if class.isinstance(r, ok) then
+    return 1
+elseif not class.isinstance(r, result.err) then
+    return 2
+end
+return class.isinstance(r, result.err)
+)", 0, 2),
+        R"(
+try: pc 5 to 7, handler pc 9, R2
+GETIMPORT R0 2 [collections.result]
+GETTABLEKS R1 R0 K3 ['ok']
+GETIMPORT R2 5 [f]
+CALL R2 0 1
+LOADB R6 1 +1
+LOADB R6 0
+L0: JUMPIFNOT R6 L1
+LOADN R7 1
+RETURN R7 1
+L1: JUMPIFNOT R6 L2
+LOADN R7 2
+RETURN R7 1
+L2: NOT R7 R6
+RETURN R7 1
+)");
+
+    // O1 doesn't assume builtins, and a `collections` of the module's own isn't the library, so both test the object
+    const char* objects[] = {
+        "local r = try f() return class.isinstance(r, collections.result.ok)",
+        "local collections = g() local r = try f() if class.isinstance(r, collections.result.ok) then return 1 end",
+    };
+    for (int i = 0; i < 2; ++i)
+    {
+        std::string bytecode = compileFunction(objects[i], 0, i == 0 ? 1 : 2);
+        CHECK(bytecode.find(" OK\n") != std::string::npos);
+        CHECK((bytecode.find("FASTCALL2") != std::string::npos || bytecode.find("JUMPXISA") != std::string::npos));
+    }
+
+    // the assert fusion reads its operands twice, which a result kept in registers doesn't have
+    std::string asserted = compileFunction("local r = try f() assert(class.isinstance(r, collections.result.ok)) return r.value", 0, 2);
+    CHECK(asserted.find("WRAPRESULT R0 OK") == std::string::npos);
+    CHECK(asserted.find("JUMPXISA") == std::string::npos);
+}
+
 TEST_SUITE_END();
 
 // Compiler B (classes review) begin

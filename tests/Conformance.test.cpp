@@ -4868,6 +4868,7 @@ TEST_CASE("TryExpressions")
     };
 
     runConformance("try.luwu");
+    runConformance("try_variants.luwu");
 }
 
 TEST_CASE("CollectionsFastPaths")
