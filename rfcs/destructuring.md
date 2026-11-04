@@ -127,34 +127,32 @@ Positional patterns go anywhere `.{...}` patterns do, nest in each other, and ta
 In a type test, a positional pattern binds the values for the branch the test guards, like `.{...}` does:
 
 ```luwu
-const .{result.{ok}} = collections
-
-if fs.read(p) is ok.(content) then
+if fs.read(p) is Ok.(content) then
     print(content)
 end
 
 const data = match fs.read(p)
-    case is ok.(content) then do
+    case is Ok.(content) then do
         print(content)
         give content
-    case is result.err.(err) then error(err)
+    case is Err.(err) then error(err)
     else error("unreachable")
 ```
 
 The `.` isn't needed to tell a pattern apart in this position, but we require it for consistency with every other
-pattern, and so `ok.(content)` can't be read as calling `ok`. A type test written as a call whose arguments are all
-names nothing in scope has (`is ok(content)`) is a syntax error that suggests the `.`.
+pattern, and so `Ok.(content)` can't be read as calling `Ok`. A type test written as a call whose arguments are all
+names nothing in scope has (`is Ok(content)`) is a syntax error that suggests the `.`.
 
 #### Building pairs, triples and quads with `.(...)`
 
-Where a value goes, `.(a, b)` builds a `collections.pair`, the way `.{x, y}` builds a table. Three values make a
-`collections.triple` and four a `quad`. More than four is a syntax error that suggests a table or a function returning
-multiple values instead.
+Where a value goes, `.(a, b)` builds a `collections.Pair`, the way `.{x, y}` builds a table. Three values make a
+`collections.Triple` and four a `collections.Quad`. More than four is a syntax error that suggests a table or a
+function returning multiple values instead.
 
 ```luwu
 const .(name, age) = do
     -- ... a bunch of logic
-    give .(got_name, got_age) -- a collections.pair
+    give .(got_name, got_age) -- a collections.Pair
 ```
 
 A pair that's destructured right where it's built, like this one, is never created. The compiler keeps each value in a
