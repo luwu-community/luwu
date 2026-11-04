@@ -17,9 +17,6 @@ struct Builtin
 {
     AstName object;
     AstName method;
-    // Luwu collections: the function in a library that is itself a member of `object`, as `ok` in
-    // `collections.result.ok`, where `method` is `result`
-    AstName nestedMethod;
 
     bool empty() const
     {
@@ -28,18 +25,14 @@ struct Builtin
 
     bool isGlobal(const char* name) const
     {
-        return object == AstName() && method == name && nestedMethod == AstName();
+        return object == AstName() && method == name;
     }
 
     bool isMethod(const char* table, const char* name) const
     {
-        return object == table && method == name && nestedMethod == AstName();
+        return object == table && method == name;
     }
 
-    bool isNestedMethod(const char* table, const char* library, const char* name) const
-    {
-        return object == table && method == library && nestedMethod == name;
-    }
 };
 
 Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, const DenseHashMap<AstLocal*, Variable>& variables);

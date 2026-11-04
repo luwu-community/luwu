@@ -7214,7 +7214,7 @@ private:
         return true;
     }
 
-    // A Luwu-only library's types (`collections.option<T>`, or `type .{ option } = collections`, which desugars to it)
+    // A Luwu-only library's types (`collections.Vec<T>`, or `type .{ Vec } = collections`, which desugars to it)
     bool visit(AstTypeReference* node) override
     {
         if (node->prefix && isLuwuOnlyGlobal(node->prefix->value))

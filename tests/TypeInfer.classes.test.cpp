@@ -6137,127 +6137,30 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_eleme
     CHECK_EQ(result.errors[0].location.begin.line, 14);
 }
 
-// Luwu collections: an empty option is `none`, which gets `get` and `expect` while the library exists
-TEST_CASE_FIXTURE(BuiltinsFixture, "collections_option_and_result_types")
+// Luwu: `none` has no keys, so indexing an optional `T | none` names its `none` as the problem
+TEST_CASE_FIXTURE(BuiltinsFixture, "indexing_none_by_a_key_is_an_error")
 {
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuwuClasses, true},
-        {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
-        {FFlag::LuwuNonePrimitive, true},
-        {FFlag::LuwuDeclareStatements, true},
-    };
+    ScopedFastFlag sff{FFlag::LuwuNonePrimitive, true};
 
     CheckResult result = check(R"(
         --!strict
-        local empty = none:get()
-        local function fail(): number
-            return none:expect("no value")
-        end
-        local hit = collections.option.some(5)
-        local value = hit:get()
-        local good = collections.result.ok("x")
-        local text = good:expect()
-        local bad = collections.result.err(42)
-        local code = bad:err()
-        local missing = bad:ok()
-        local typed: collections.option<number> = collections.option.none
-        local typedhit: collections.option<number> = hit
-        local notglobal: option<number> = hit
-    )");
-
-    // the library's types are its exports, not global type names
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK(get<UnknownSymbol>(result.errors[0]));
-    CHECK_EQ(toString(requireType("empty")), "none");
-    CHECK_EQ(toString(requireType("value")), "number");
-    CHECK_EQ(toString(requireType("text")), "string");
-    CHECK_EQ(toString(requireType("code")), "number");
-    CHECK_EQ(toString(requireType("missing")), "none");
-}
-
-// Luwu collections: an `err` can say where its error was raised, with optional fields after the error
-TEST_CASE_FIXTURE(BuiltinsFixture, "collections_err_has_optional_position_fields")
-{
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuwuClasses, true},
-        {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
-        {FFlag::LuwuNonePrimitive, true},
-        {FFlag::LuwuDeclareStatements, true},
-    };
-
-    CheckResult result = check(R"(
-        --!strict
-        local bare = collections.result.err("boom")
-        local placed = collections.result.err("boom", "main.luau", 12, "trace")
-        local module = placed.module
-        local line = placed.line
-        local traceback = placed.traceback
-        local wrong = collections.result.err("boom", 12)
-    )");
-
-    // the module has to be a string
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(result.errors[0].location.begin.line, 7);
-    CHECK_EQ(toString(requireType("module")), "string?");
-    CHECK_EQ(toString(requireType("line")), "number?");
-    CHECK_EQ(toString(requireType("traceback")), "string?");
-}
-
-// Luwu collections: `none` has only the methods the library gives it, so any other key is missing
-TEST_CASE_FIXTURE(BuiltinsFixture, "indexing_none_by_an_unknown_key_is_an_error")
-{
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuwuClasses, true},
-        {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
-        {FFlag::LuwuNonePrimitive, true},
-        {FFlag::LuwuDeclareStatements, true},
-    };
-
-    CheckResult result = check(R"(
-        --!strict
-        local empty = none:get()
         local a = none.foo
         local b = none["bar"]
         local function f(x: number | none)
             return x.baz
         end
-        none.get = none.get
         local function g(s: string | none)
             return s.len
         end
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(5, result);
-    CHECK_EQ(result.errors[0].location.begin.line, 3);
-    CHECK_EQ(result.errors[1].location.begin.line, 4);
-    CHECK_EQ(result.errors[2].location.begin.line, 6);
-    CHECK_EQ(result.errors[3].location.begin.line, 8);
-    CHECK(get<PropertyAccessViolation>(result.errors[3]));
-    // only `none` lacks `len`
-    CHECK_EQ(toString(result.errors[4]), "this 'string' value is optional and may be 'none', use an if condition to check");
-    CHECK_EQ(toString(requireType("empty")), "none");
-}
-
-// Luwu: without the collections library `none` has no methods at all
-TEST_CASE_FIXTURE(BuiltinsFixture, "none_has_no_keys_without_collections")
-{
-    ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuwuCollections, false},
-        {FFlag::LuwuNonePrimitive, true},
-    };
-
-    CheckResult result = check(R"(
-        --!strict
-        local a = none.foo
-        local b = none:get()
-    )");
-
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
     CHECK_EQ(result.errors[0].location.begin.line, 2);
     CHECK_EQ(result.errors[1].location.begin.line, 3);
+    CHECK_EQ(result.errors[2].location.begin.line, 5);
+    // only `none` lacks `len`
+    CHECK_EQ(result.errors[3].location.begin.line, 8);
+    CHECK(toString(result.errors[3]).find("may be 'none'") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "trait_function_naming_self_without_a_self_parameter")

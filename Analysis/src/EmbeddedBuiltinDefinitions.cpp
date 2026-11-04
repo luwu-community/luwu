@@ -11,7 +11,6 @@ LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuwuTableDrop)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuDeclareStatements)
-LUAU_FASTFLAG(LuwuNonePrimitive)
 
 namespace Luau
 {
@@ -461,39 +460,6 @@ class type VecDeque<T>
     public function __tostring(self): string
 end
 
-class type some<T>(public const value: T)
-    public function get(self): T
-    public function expect(self, message: string?): T
-    public function __eq(self, other: some<T>): boolean
-    public function __tostring(self): string
-end
-
-class type ok<T>(public const value: T)
-    public function ok(self): T
-    public function expect(self, message: string?): T
-    public function err(self): none
-    public function __eq(self, other: ok<T>): boolean
-    public function __tostring(self): string
-end
-
--- `module`, `line` and `traceback` say where the error was raised. A `try` expression fills them in.
-class type err<E>(
-    public const error: E,
-    public const module: string?,
-    public const line: number?,
-    public const traceback: string?
-)
-    public function ok(self): none
-    public function expect(self, message: string?): never
-    public function err(self): E
-    public function __eq(self, other: err<E>): boolean
-    public function __tostring(self): string
-end
-
--- An empty option is `none` itself, which has `get` and `expect` while `collections` exists (makeNoneMetatable)
-export type option<T> = some<T> | none
-export type result<T, E> = ok<T> | err<E>
-
 declare collections: {
     Pair: class<Pair>,
     Triple: class<Triple>,
@@ -501,8 +467,6 @@ declare collections: {
     OrderedMap: class<OrderedMap>,
     Vec: class<Vec>,
     VecDeque: class<VecDeque>,
-    option: { some: class<some>, none: none },
-    result: { ok: class<ok>, err: class<err> },
 }
 )BUILTIN_SRC";
 
@@ -551,7 +515,7 @@ std::string getBuiltinDefinitionSource()
 
 bool collectionsLibraryEnabled()
 {
-    return FFlag::LuwuClasses && FFlag::DebugLuwuCollections && FFlag::LuwuNonePrimitive && FFlag::LuwuDeclareStatements;
+    return FFlag::LuwuClasses && FFlag::DebugLuwuCollections && FFlag::LuwuDeclareStatements;
 }
 
 std::string getCollectionsDefinitionSource()

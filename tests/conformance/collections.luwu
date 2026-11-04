@@ -561,157 +561,39 @@ do
     const long = string.rep("\"quoted\"\n", 500)
     assert(#tostring(collections.Vec({ long, long })) > 2 * #long)
     assert(#tostring(collections.Pair(long, long)) > 2 * #long)
-    assert(#tostring(collections.option.some(long)) > #long)
 
     const list = collections.Vec({ Clearing {}, Clearing {}, Clearing {} })
     printing = list
     assert(tostring(list) == "Vec({cleared, nil, nil})")
 end
 
--- option: a `some` object, or `none` itself, which gets `get` and `expect` from collections
-do
-    const option = collections.option
-    assert(option.none == none)
-
-    const hit = option.some("ada")
-    assert(hit:get() == "ada" and hit:expect("missing") == "ada")
-    assert(class.isinstance(hit, option.some) and class.name(hit) == "some")
-    assert(hit == option.some("ada") and hit ~= option.some("bob"))
-    assert(tostring(hit) == `option.some("ada")`)
-
-    assert(none:get() == none)
-    raises(function()
-        none:expect("no user 2")
-    end, "no user 2")
-    raises(function()
-        none:expect()
-    end, "expected a value, but got none")
-
-    -- `none` has only those two: indexing it otherwise raises as it always did
-    raises(function()
-        print(none.foo)
-    end, "attempt to index none with 'foo'")
-    raises(function()
-        none.get = 1
-    end, "none")
-
-    raises(function()
-        option.some(nil)
-    end, "option.some needs a value, but you passed nil")
-    raises(function()
-        option.some(none)
-    end, "option.some needs a value, but you passed none")
-    assert(hit.value == "ada")
-    raises(function()
-        hit.value = 1
-    end, "'value' is a const member of 'some'")
-end
-
--- result: an `ok` or an `err` object
-do
-    const result = collections.result
-    const good = result.ok(5)
-    const bad = result.err("not a number")
-    assert(good:ok() == 5 and good:expect("why") == 5 and good:err() == none)
-    assert(bad:ok() == none and bad:err() == "not a number")
-    assert(tostring(good) == "result.ok(5)" and tostring(bad) == `result.err("not a number")`)
-    assert(good == result.ok(5) and bad ~= result.err("other") and good ~= result.err(5))
-    assert(class.isinstance(bad, result.err) and not class.isinstance(bad, result.ok))
-
-    -- `ok` holds any value, `nil` included
-    assert(result.ok(nil):ok() == nil)
-
-    raises(function()
-        bad:expect("parsing failed")
-    end, "parsing failed: not a number")
-
-    -- without a message, `expect` raises the error itself, so one that isn't a string arrives intact
-    const structured = result.err({ code = 7 })
-    const ok, raised = pcall(function()
-        structured:expect()
-    end)
-    assert(not ok and raised.code == 7)
-end
-
--- an `err` can say where its error was raised, which `try` fills in. Four arguments go through the constructor and
--- fewer through the fastcall: both fill the same fields.
-do
-    const result = collections.result
-    const placed = result.err("boom", "main.luau", 12, "main.luau:12 function f")
-    assert(placed.error == "boom" and placed.module == "main.luau" and placed.line == 12)
-    assert(placed.traceback == "main.luau:12 function f")
-    assert(tostring(placed) == `result.err("boom") at main.luau:12\nmain.luau:12 function f`)
-
-    const bare = result.err("boom")
-    assert(bare.module == nil and bare.line == nil and bare.traceback == nil)
-    assert(tostring(bare) == `result.err("boom")`)
-
-    const unplaced = result.err("boom", "main.luau")
-    assert(unplaced.module == "main.luau" and unplaced.line == nil)
-    assert(tostring(unplaced) == `result.err("boom") at main.luau`)
-end
-
 -- constructors called directly compile to fastcalls, which build what the constructor does
 do
-    const ok = collections.result.ok
-    const result = collections.result
-
     const one = collections.Pair(1)
     assert(one.first == 1 and one.second == nil and class.isinstance(one, collections.Pair))
     const three = collections.Triple(1, 2, 3, 4)
     assert(three.first == 1 and three.third == 3 and tostring(three) == "Triple(1, 2, 3)")
     const four = collections.Quad(1, 2, 3, 4)
     assert(four.second == 2 and four.fourth == 4)
-    const hit = collections.option.some(false)
-    assert(hit:get() == false and class.isinstance(hit, collections.option.some))
-    const good = ok(nil)
-    assert(good:ok() == nil and good:err() == none and class.isinstance(good, result.ok))
-    const bad = result.err("e")
-    assert(bad:err() == "e" and bad:ok() == none and tostring(bad) == `result.err("e")`)
-
-    -- `some` of nothing falls back to the constructor, which raises
-    raises(function()
-        collections.option.some(nil)
-    end, "option.some needs a value, but you passed nil")
 
     -- enough allocation to run the collector between constructions
     const kept = {}
     for i = 1, 20000 do
-        kept[i % 100 + 1] = ok({ i })
+        kept[i % 100 + 1] = collections.Pair({ i })
     end
     collectgarbage()
     for i = 1, 100 do
-        assert(kept[i]:ok()[1] % 100 + 1 == i)
+        assert(kept[i].first[1] % 100 + 1 == i)
     end
 
     -- with `collections` replaced in the environment, the call reaches the replacement
-    const replaced = loadstring("local value = collections.result.ok(1) return value")
-    setfenv(replaced, { collections = { result = { ok = function(value) return `replaced {value}` end } } })
+    const replaced = loadstring("local value = collections.Pair(1) return value")
+    setfenv(replaced, { collections = { Pair = function(value) return `replaced {value}` end } })
     assert(replaced() == "replaced 1")
 end
 
--- a container of an option or a result takes all of its variants: `none` goes in as the empty option
+-- `none` is a value like any other, so a container of strings refuses it
 do
-    const options = collections.Vec()
-    options:push(none)
-    options:push(collections.option.some(1))
-    options:push(collections.option.some("x"))
-    assert(#options == 3 and options:at(1) == none and options:at(2):get() == 1)
-    raises(function()
-        options:push(collections.result.ok(1))
-    end, "this Vec can only accept options, but you passed an 'ok' object")
-    raises(function()
-        options:push(nil)
-    end, "this Vec can only accept options, but you passed nil")
-
-    const results = collections.VecDeque()
-    results:pushback(collections.result.ok(1))
-    results:pushfront(collections.result.err("no"))
-    assert(results:front():err() == "no" and results:back():ok() == 1)
-    raises(function()
-        results:pushback(none)
-    end, "this VecDeque can only accept results, but you passed none")
-
     const strings = collections.Vec()
     strings:push("a")
     raises(function()

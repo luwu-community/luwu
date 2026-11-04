@@ -3569,16 +3569,7 @@ struct Compiler
             Builtin builtin = getBuiltin(expr->func, globals, variables);
             bool lastMult = expr->args.size > 0 && isExprMultRet(expr->args.data[expr->args.size - 1]);
 
-            if (builtin.nestedMethod.value)
-                bytecode.addDebugRemark(
-                    "builtin %s.%s.%s/%d%s",
-                    builtin.object.value,
-                    builtin.method.value,
-                    builtin.nestedMethod.value,
-                    int(expr->args.size),
-                    lastMult ? "+" : ""
-                );
-            else if (builtin.object.value)
+            if (builtin.object.value)
                 bytecode.addDebugRemark("builtin %s.%s/%d%s", builtin.object.value, builtin.method.value, int(expr->args.size), lastMult ? "+" : "");
             else if (builtin.method.value)
                 bytecode.addDebugRemark("builtin %s/%d%s", builtin.method.value, int(expr->args.size), lastMult ? "+" : "");
