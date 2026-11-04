@@ -395,25 +395,25 @@ declare class: {
 // their public members, which the Conformance test `CollectionsDeclarationsMatchTheVm` checks against the VM's classes.
 // The types are the library's exports, not globals (registerBuiltinGlobals).
 static const char* kBuiltinDefinitionCollectionsSrc = R"BUILTIN_SRC(
-class type pair<A, B>(public const first: A, public const second: B)
-    public function __eq(self, other: pair<A, B>): boolean
-    public function __iter(self): ((pair<A, B>, number?) -> (number?, A | B), pair<A, B>, nil)
+class type Pair<A, B>(public const first: A, public const second: B)
+    public function __eq(self, other: Pair<A, B>): boolean
+    public function __iter(self): ((Pair<A, B>, number?) -> (number?, A | B), Pair<A, B>, nil)
     public function __tostring(self): string
 end
 
-class type triple<A, B, C>(public const first: A, public const second: B, public const third: C)
-    public function __eq(self, other: triple<A, B, C>): boolean
-    public function __iter(self): ((triple<A, B, C>, number?) -> (number?, A | B | C), triple<A, B, C>, nil)
+class type Triple<A, B, C>(public const first: A, public const second: B, public const third: C)
+    public function __eq(self, other: Triple<A, B, C>): boolean
+    public function __iter(self): ((Triple<A, B, C>, number?) -> (number?, A | B | C), Triple<A, B, C>, nil)
     public function __tostring(self): string
 end
 
-class type quad<A, B, C, D>(public const first: A, public const second: B, public const third: C, public const fourth: D)
-    public function __eq(self, other: quad<A, B, C, D>): boolean
-    public function __iter(self): ((quad<A, B, C, D>, number?) -> (number?, A | B | C | D), quad<A, B, C, D>, nil)
+class type Quad<A, B, C, D>(public const first: A, public const second: B, public const third: C, public const fourth: D)
+    public function __eq(self, other: Quad<A, B, C, D>): boolean
+    public function __iter(self): ((Quad<A, B, C, D>, number?) -> (number?, A | B | C | D), Quad<A, B, C, D>, nil)
     public function __tostring(self): string
 end
 
-class type orderedmap<K, V>
+class type OrderedMap<K, V>
     public function __init(self)
     public function get(self, key: K): V?
     public function set(self, key: K, value: V)
@@ -428,10 +428,10 @@ class type orderedmap<K, V>
     public function index(self, key: K): number?
     public function at(self, position: number): (K?, V?)
     public function __len(self): number
-    public function __iter(self): ((orderedmap<K, V>, K?) -> (K?, V), orderedmap<K, V>, nil)
+    public function __iter(self): ((OrderedMap<K, V>, K?) -> (K?, V), OrderedMap<K, V>, nil)
 end
 
-class type vec<T>
+class type Vec<T>
     public function __init(self, items: {T}?)
     public function push(self, value: T)
     public function pop(self): T?
@@ -441,11 +441,11 @@ class type vec<T>
     public function remove(self, position: number): T
     public function clear(self)
     public function __len(self): number
-    public function __iter(self): ((vec<T>, number?) -> (number?, T), vec<T>, nil)
+    public function __iter(self): ((Vec<T>, number?) -> (number?, T), Vec<T>, nil)
     public function __tostring(self): string
 end
 
-class type vecdeque<T>
+class type VecDeque<T>
     public function __init(self, items: {T}?)
     public function pushfront(self, value: T)
     public function pushback(self, value: T)
@@ -457,7 +457,7 @@ class type vecdeque<T>
     public function set(self, position: number, value: T)
     public function clear(self)
     public function __len(self): number
-    public function __iter(self): ((vecdeque<T>, number?) -> (number?, T), vecdeque<T>, nil)
+    public function __iter(self): ((VecDeque<T>, number?) -> (number?, T), VecDeque<T>, nil)
     public function __tostring(self): string
 end
 
@@ -495,12 +495,12 @@ export type option<T> = some<T> | none
 export type result<T, E> = ok<T> | err<E>
 
 declare collections: {
-    pair: class<pair>,
-    triple: class<triple>,
-    quad: class<quad>,
-    orderedmap: class<orderedmap>,
-    vec: class<vec>,
-    vecdeque: class<vecdeque>,
+    Pair: class<Pair>,
+    Triple: class<Triple>,
+    Quad: class<Quad>,
+    OrderedMap: class<OrderedMap>,
+    Vec: class<Vec>,
+    VecDeque: class<VecDeque>,
     option: { some: class<some>, none: none },
     result: { ok: class<ok>, err: class<err> },
 }

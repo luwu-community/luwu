@@ -3984,9 +3984,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuGlobalsInLuauFiles")
 {
     // A local named `collections` is the module's own
     fileResolver.source["game/a"] = R"(
-local map = collections.orderedmap()
-local function shadowed(collections: { pair: () -> () })
-    collections.pair()
+local map = collections.OrderedMap()
+local function shadowed(collections: { Pair: () -> () })
+    collections.Pair()
 end
 local maybe: collections.option<number> = none
 return map, shadowed, maybe

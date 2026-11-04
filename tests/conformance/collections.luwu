@@ -17,33 +17,33 @@ end
 
 -- pair, triple and quad hold their values under Kotlin's names
 do
-    const range = collections.pair(1, "x")
+    const range = collections.Pair(1, "x")
     assert(range.first == 1 and range.second == "x")
-    assert(class.isinstance(range, collections.pair))
-    assert(class.name(range) == "pair")
-    assert(range == collections.pair(1, "x"))
-    assert(range ~= collections.pair(1, "y"))
-    assert(range ~= collections.triple(1, "x", nil))
-    assert(tostring(range) == `pair(1, "x")`)
-    assert(tostring(collections.pair("a\"b", nil)) == `pair("a\\"b", nil)`)
+    assert(class.isinstance(range, collections.Pair))
+    assert(class.name(range) == "Pair")
+    assert(range == collections.Pair(1, "x"))
+    assert(range ~= collections.Pair(1, "y"))
+    assert(range ~= collections.Triple(1, "x", nil))
+    assert(tostring(range) == `Pair(1, "x")`)
+    assert(tostring(collections.Pair("a\"b", nil)) == `Pair("a\\"b", nil)`)
 
-    const color = collections.triple(255, 128, 0)
+    const color = collections.Triple(255, 128, 0)
     assert(color.first == 255 and color.second == 128 and color.third == 0)
-    assert(color == collections.triple(255, 128, 0))
-    assert(tostring(color) == "triple(255, 128, 0)")
+    assert(color == collections.Triple(255, 128, 0))
+    assert(tostring(color) == "Triple(255, 128, 0)")
 
-    const margins = collections.quad(1, 2, 3, 4)
+    const margins = collections.Quad(1, 2, 3, 4)
     assert(margins.fourth == 4)
-    assert(margins == collections.quad(1, 2, 3, 4))
-    assert(margins ~= collections.quad(1, 2, 3, 5))
-    assert(tostring(margins) == "quad(1, 2, 3, 4)")
+    assert(margins == collections.Quad(1, 2, 3, 4))
+    assert(margins ~= collections.Quad(1, 2, 3, 5))
+    assert(tostring(margins) == "Quad(1, 2, 3, 4)")
 
     -- the elements compare with ==, so nested bundles compare by value too
-    assert(collections.pair(range, 1) == collections.pair(collections.pair(1, "x"), 1))
+    assert(collections.Pair(range, 1) == collections.Pair(collections.Pair(1, "x"), 1))
 
     raises(function()
         range.first = 2
-    end, "'first' is a const member of 'pair'")
+    end, "'first' is a const member of 'Pair'")
     raises(function()
         print(range.third)
     end, "third")
@@ -52,18 +52,18 @@ end
 -- iterating a bundle gives every slot in order, nil included, and starting a loop allocates nothing
 do
     const seen = {}
-    for i, v in collections.pair("a", nil) do
+    for i, v in collections.Pair("a", nil) do
         seen[i] = if v == nil then "nil" else v
     end
     assert(seen[1] == "a" and seen[2] == "nil" and #seen == 2)
 
     local weighted = 0
-    for i, v in collections.quad(1, 2, 3, 4) do
+    for i, v in collections.Quad(1, 2, 3, 4) do
         weighted += i * v
     end
     assert(weighted == 1 + 4 + 9 + 16)
 
-    const color = collections.triple(255, 128, 0)
+    const color = collections.Triple(255, 128, 0)
     local total = 0
     for _, channel in color do
         for _, again in color do
@@ -97,7 +97,7 @@ do
 
     -- a bundle yields every slot
     table.clear(order)
-    for i, v in collections.triple(note("a"), note(nil), note("c")) do
+    for i, v in collections.Triple(note("a"), note(nil), note("c")) do
         table.insert(order, `{i}={v}`)
     end
     assert(table.concat(order, " ") == "a nil c 1=a 2=nil 3=c")
@@ -117,7 +117,7 @@ do
 
     -- each pass's value is its own, for closures and for writes
     const readers = {}
-    for _, v in collections.pair("x", "y") do
+    for _, v in collections.Pair("x", "y") do
         table.insert(readers, function()
             return v
         end)
@@ -146,7 +146,7 @@ do
     -- nested, and a trailing call that still builds the table
     local cells = 0
     for _, row in { 1, 2 } do
-        for _, column in collections.pair(10, 20) do
+        for _, column in collections.Pair(10, 20) do
             cells += row * column
         end
     end
@@ -154,7 +154,7 @@ do
 
     -- a list of bundles, the last one included, is unfolded too
     local sum = 0
-    for _, entry in { collections.pair(1, 2), collections.pair(3, 4) } do
+    for _, entry in { collections.Pair(1, 2), collections.Pair(3, 4) } do
         sum += entry.first * entry.second
     end
     assert(sum == 14)
@@ -170,7 +170,7 @@ end
 
 -- a new key goes at the end; an existing key doesn't move
 do
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     assert(#map == 0)
     assert(map:get("a") == nil)
     map:set("a", 1)
@@ -186,12 +186,12 @@ do
     assert(key == "b" and value == 2)
     assert(map:at(4) == nil)
     assert(map:at(1.5) == nil)
-    assert(class.isinstance(map, collections.orderedmap))
+    assert(class.isinstance(map, collections.OrderedMap))
 end
 
 -- entries move anywhere, and the positions follow
 do
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     map:set("a", 1)
     map:set("b", 2)
     map:set("c", 3)
@@ -221,7 +221,7 @@ end
 
 -- sort is stable, and survives a comparator that isn't a valid order
 do
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     for i = 1, 50 do
         map:set(i, i % 3)
     end
@@ -256,12 +256,12 @@ do
             end
             return (a or 0) < (b or 0)
         end)
-    end, "orderedmap changed while it was being sorted")
+    end, "OrderedMap changed while it was being sorted")
 end
 
 -- removed entries free their ids for new keys
 do
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     map:set("a", 1)
     map:set("b", 2)
     map:set("c", 3)
@@ -279,7 +279,7 @@ end
 
 -- any value can be a key, and keys are compared like table keys
 do
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     const t = {}
     map:set(t, "table")
     map:set(1, "one")
@@ -296,11 +296,11 @@ end
 
 -- out-of-range positions and missing keys raise at the caller
 do
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     map:set("a", 1)
     raises(function()
         map:move("missing", 1)
-    end, `orderedmap has no key "missing"`)
+    end, `OrderedMap has no key "missing"`)
     raises(function()
         map:move("a", 2)
     end, "position 2 is out of range 1 to 1")
@@ -319,42 +319,42 @@ end
 
 -- iterating stops on a key removed under it
 do
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     map:set("a", 1)
     map:set("b", 2)
     raises(function()
         for key in map do
             map:remove(key)
         end
-    end, `orderedmap lost key "a" while it was being iterated`)
+    end, `OrderedMap lost key "a" while it was being iterated`)
 end
 
 -- private state stays private
 do
-    const map = collections.orderedmap()
+    const map = collections.OrderedMap()
     raises(function()
         print(map.order)
-    end, "'order' is a private member of 'orderedmap'")
+    end, "'order' is a private member of 'OrderedMap'")
     raises(function()
         map.count = 5
-    end, "'count' is a private member of 'orderedmap'")
+    end, "'count' is a private member of 'OrderedMap'")
 end
 
 -- a method called on the wrong receiver names the method and what it got
 do
-    const map = collections.orderedmap()
-    const list = collections.vec()
+    const map = collections.OrderedMap()
+    const list = collections.Vec()
     raises(function()
         map.get(list, 1)
-    end, "attempt to call method 'orderedmap.get' with 'self' of class 'vec'")
+    end, "attempt to call method 'OrderedMap.get' with 'self' of class 'Vec'")
     raises(function()
         map.get(nil, 1)
-    end, "attempt to call method 'orderedmap.get' with 'self' of type 'nil'")
+    end, "attempt to call method 'OrderedMap.get' with 'self' of type 'nil'")
 end
 
 -- vec: a growable array
 do
-    const list = collections.vec()
+    const list = collections.Vec()
     assert(#list == 0 and list:pop() == nil and list:at(1) == nil)
     list:push(10)
     list:push(30)
@@ -383,12 +383,12 @@ do
     -- the element type outlives a clear
     raises(function()
         list:push("x")
-    end, "this vec can only accept numbers, but you passed a string")
+    end, "this Vec can only accept numbers, but you passed a string")
 end
 
 -- vecdeque: both ends, through growth and wrap-around
 do
-    const queue = collections.vecdeque()
+    const queue = collections.VecDeque()
     assert(queue:front() == nil and queue:back() == nil and queue:popfront() == nil and queue:popback() == nil)
     queue:pushback("b")
     queue:pushfront("a")
@@ -411,7 +411,7 @@ do
     assert(queue:popfront() == "a" and queue:popback() == "c" and queue:popfront() == "B" and #queue == 0)
 
     -- a long run in one direction wraps the ring many times
-    const numbers = collections.vecdeque()
+    const numbers = collections.VecDeque()
     for i = 1, 1000 do
         numbers:pushback(i)
         if i % 3 == 0 then
@@ -426,55 +426,55 @@ end
 -- vec and vecdeque take one type of value, and never nil
 do
     raises(function()
-        collections.vecdeque():pushback(nil)
-    end, "this vecdeque can't accept nil")
+        collections.VecDeque():pushback(nil)
+    end, "this VecDeque can't accept nil")
 
-    const queue = collections.vecdeque()
+    const queue = collections.VecDeque()
     queue:pushback("a")
     raises(function()
         queue:pushfront({})
-    end, "this vecdeque can only accept strings, but you passed a table")
+    end, "this VecDeque can only accept strings, but you passed a table")
     raises(function()
         queue:pushback(none)
-    end, "this vecdeque can only accept strings, but you passed none")
+    end, "this VecDeque can only accept strings, but you passed none")
 
-    const bundles = collections.vec()
-    bundles:push(collections.pair(1, 2))
+    const bundles = collections.Vec()
+    bundles:push(collections.Pair(1, 2))
     raises(function()
-        bundles:push(collections.orderedmap())
-    end, "this vec can only accept 'pair' objects, but you passed an 'orderedmap' object")
+        bundles:push(collections.OrderedMap())
+    end, "this Vec can only accept 'Pair' objects, but you passed an 'OrderedMap' object")
     raises(function()
-        bundles:insert(1, collections.triple(1, 2, 3))
-    end, "this vec can only accept 'pair' objects, but you passed a 'triple' object")
+        bundles:insert(1, collections.Triple(1, 2, 3))
+    end, "this Vec can only accept 'Pair' objects, but you passed a 'Triple' object")
 
-    const flags = collections.vec()
+    const flags = collections.Vec()
     flags:push(true)
     raises(function()
         flags:push(1)
-    end, "this vec can only accept booleans, but you passed a number")
+    end, "this Vec can only accept booleans, but you passed a number")
 end
 
 -- vec and vecdeque take an optional list, checked value by value like `push` does, and print as that call
 do
-    const list = collections.vec({ 1, 2, 3 })
+    const list = collections.Vec({ 1, 2, 3 })
     assert(#list == 3 and list:at(1) == 1 and list:at(3) == 3)
-    assert(tostring(list) == "vec({1, 2, 3})")
-    assert(tostring(collections.vec()) == "vec()")
+    assert(tostring(list) == "Vec({1, 2, 3})")
+    assert(tostring(collections.Vec()) == "Vec()")
 
-    const queue = collections.vecdeque({ "a", "b" })
+    const queue = collections.VecDeque({ "a", "b" })
     queue:pushfront("z")
     assert(queue:front() == "z" and queue:back() == "b")
-    assert(tostring(queue) == `vecdeque(\{"z", "a", "b"})`)
+    assert(tostring(queue) == `VecDeque(\{"z", "a", "b"})`)
 
     raises(function()
-        collections.vec({ 1, "two" })
-    end, "this vec can only accept numbers, but you passed a string")
+        collections.Vec({ 1, "two" })
+    end, "this Vec can only accept numbers, but you passed a string")
     raises(function()
-        collections.vecdeque({ 1, nil, 3 })
-    end, "this vecdeque can only accept numbers, but you passed nil")
+        collections.VecDeque({ 1, nil, 3 })
+    end, "this VecDeque can only accept numbers, but you passed nil")
     raises(function()
-        collections.vec(5)
-    end, "vec() takes a list of values, but you passed a number")
+        collections.Vec(5)
+    end, "Vec() takes a list of values, but you passed a number")
 end
 
 -- a generic for loop over a vec or vecdeque visits positions 1 to the count in order, wherever the storage starts
@@ -487,7 +487,7 @@ do
         return table.concat(parts, " ")
     end
 
-    const queue = collections.vecdeque({ 3, 4 })
+    const queue = collections.VecDeque({ 3, 4 })
     queue:pushfront(2)
     queue:pushfront(1)
     queue:pushback(5)
@@ -501,7 +501,7 @@ do
     end
     assert(collect(queue) == "" and queue:front() == nil)
 
-    const list = collections.vec()
+    const list = collections.Vec()
     for i = 1, 100 do
         list:insert(1, i)
     end
@@ -517,7 +517,7 @@ do
     assert(visited == 98)
 
     -- pushing while looping is unspecified but memory safe
-    const growing = collections.vec({ 1 })
+    const growing = collections.Vec({ 1 })
     local steps = 0
     for _, value in growing do
         steps += 1
@@ -541,7 +541,7 @@ class Named
 end
 
 -- what a Clearing object clears when it's printed
-local printing: collections.vec<Clearing>? = nil
+local printing: collections.Vec<Clearing>? = nil
 
 class Clearing
     function __tostring(self)
@@ -551,7 +551,7 @@ class Clearing
 end
 
 do
-    const queue = collections.vecdeque()
+    const queue = collections.VecDeque()
     for i = 1, 200 do
         queue:pushback(Named { name = string.rep("x", i) })
     end
@@ -559,13 +559,13 @@ do
     assert(#shown > 20000 and string.find(shown, "Named(" .. string.rep("x", 200) .. ")", 1, true))
 
     const long = string.rep("\"quoted\"\n", 500)
-    assert(#tostring(collections.vec({ long, long })) > 2 * #long)
-    assert(#tostring(collections.pair(long, long)) > 2 * #long)
+    assert(#tostring(collections.Vec({ long, long })) > 2 * #long)
+    assert(#tostring(collections.Pair(long, long)) > 2 * #long)
     assert(#tostring(collections.option.some(long)) > #long)
 
-    const list = collections.vec({ Clearing {}, Clearing {}, Clearing {} })
+    const list = collections.Vec({ Clearing {}, Clearing {}, Clearing {} })
     printing = list
-    assert(tostring(list) == "vec({cleared, nil, nil})")
+    assert(tostring(list) == "Vec({cleared, nil, nil})")
 end
 
 -- option: a `some` object, or `none` itself, which gets `get` and `expect` from collections
@@ -656,11 +656,11 @@ do
     const ok = collections.result.ok
     const result = collections.result
 
-    const one = collections.pair(1)
-    assert(one.first == 1 and one.second == nil and class.isinstance(one, collections.pair))
-    const three = collections.triple(1, 2, 3, 4)
-    assert(three.first == 1 and three.third == 3 and tostring(three) == "triple(1, 2, 3)")
-    const four = collections.quad(1, 2, 3, 4)
+    const one = collections.Pair(1)
+    assert(one.first == 1 and one.second == nil and class.isinstance(one, collections.Pair))
+    const three = collections.Triple(1, 2, 3, 4)
+    assert(three.first == 1 and three.third == 3 and tostring(three) == "Triple(1, 2, 3)")
+    const four = collections.Quad(1, 2, 3, 4)
     assert(four.second == 2 and four.fourth == 4)
     const hit = collections.option.some(false)
     assert(hit:get() == false and class.isinstance(hit, collections.option.some))
@@ -692,45 +692,45 @@ end
 
 -- a container of an option or a result takes all of its variants: `none` goes in as the empty option
 do
-    const options = collections.vec()
+    const options = collections.Vec()
     options:push(none)
     options:push(collections.option.some(1))
     options:push(collections.option.some("x"))
     assert(#options == 3 and options:at(1) == none and options:at(2):get() == 1)
     raises(function()
         options:push(collections.result.ok(1))
-    end, "this vec can only accept options, but you passed an 'ok' object")
+    end, "this Vec can only accept options, but you passed an 'ok' object")
     raises(function()
         options:push(nil)
-    end, "this vec can only accept options, but you passed nil")
+    end, "this Vec can only accept options, but you passed nil")
 
-    const results = collections.vecdeque()
+    const results = collections.VecDeque()
     results:pushback(collections.result.ok(1))
     results:pushfront(collections.result.err("no"))
     assert(results:front():err() == "no" and results:back():ok() == 1)
     raises(function()
         results:pushback(none)
-    end, "this vecdeque can only accept results, but you passed none")
+    end, "this VecDeque can only accept results, but you passed none")
 
-    const strings = collections.vec()
+    const strings = collections.Vec()
     strings:push("a")
     raises(function()
         strings:push(none)
-    end, "this vec can only accept strings, but you passed none")
+    end, "this Vec can only accept strings, but you passed none")
 end
 
 -- every class's data lives in ordinary values, which collections keep alive
 do
     const maps = {}
     for i = 1, 200 do
-        const map = collections.orderedmap()
+        const map = collections.OrderedMap()
         for j = 1, 20 do
             map:set(`k{j}`, { j })
         end
         map:remove("k5")
         table.insert(maps, map)
 
-        const queue = collections.vecdeque()
+        const queue = collections.VecDeque()
         for j = 1, 20 do
             queue:pushback({ j })
         end

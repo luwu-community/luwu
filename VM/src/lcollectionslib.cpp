@@ -110,7 +110,7 @@ static uint32_t checkposition(lua_State* L, int idx, uint32_t last)
     return uint32_t(position);
 }
 
-// vec and vecdeque hold one type of value: the first value one gets fixes it, and a value of any other type raises.
+// Vec and VecDeque hold one type of value: the first value one gets fixes it, and a value of any other type raises.
 // nil never goes in. A type is a primitive type, an object's class, or a builtin enum.
 //
 // Builtin enums are types whose values come from several variants, classes or primitives: an `option` is a `some`
@@ -275,7 +275,7 @@ static void containerfill(lua_State* L, LuauObject* container, lua_CFunction pus
     }
 }
 
-// `__tostring`: the call that builds an equal container, `vec({1, 2})`, or `vec()` when it's empty. `at` reads an
+// `__tostring`: the call that builds an equal container, `Vec({1, 2})`, or `Vec()` when it's empty. `at` reads an
 // entry by position.
 static int containertostring(lua_State* L, LuauObject* container, uint32_t count, lua_CFunction at)
 {
@@ -306,7 +306,7 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
     return 1;
 }
 
-// pair, triple and quad: `first` to `fourth`, public and const
+// Pair, Triple and Quad: `first` to `fourth`, public and const
 
 template<LuwuBuiltinClass Kind>
 static LuauObject* checkbundle(lua_State* L, const char* method)
@@ -414,7 +414,7 @@ static const luaR_NativeMember kQuadMembers[] = {
     {"__tostring", bundletostring<LUWU_BUILTIN_QUAD>, 0},
 };
 
-// orderedmap: a map in an order the user decides. Every entry has an id that stays the same while it exists, the
+// OrderedMap: a map in an order the user decides. Every entry has an id that stays the same while it exists, the
 // index of its key and value. Lookups go key, id, value. The order is an array of ids and each id's position is kept
 // current, so `index` and `at` take constant time and rearranging moves only 4-byte ids.
 
@@ -478,7 +478,7 @@ static uint32_t* omreserve(lua_State* L, LuauObject* map, OrderedMapField field,
 
     uint32_t grown = capacity * 2 > ids ? capacity * 2 : ids;
     if (size_t(grown) * sizeof(uint32_t) > MAX_BUFFER_SIZE)
-        luaL_error(L, "orderedmap can't hold more than %d entries", int(MAX_BUFFER_SIZE / sizeof(uint32_t)));
+        luaL_error(L, "OrderedMap can't hold more than %d entries", int(MAX_BUFFER_SIZE / sizeof(uint32_t)));
 
     Buffer* replacement = luaB_newbuffer(L, grown * sizeof(uint32_t));
     memcpy(replacement->data, buffer->data, buffer->len);
@@ -506,7 +506,7 @@ static uint32_t omcheckid(lua_State* L, LuauObject* map, int idx)
 {
     uint32_t id = omidof(map, L->base + idx - 1);
     if (id == 0)
-        luaL_error(L, "orderedmap has no key %s", pushshown(L, idx));
+        luaL_error(L, "OrderedMap has no key %s", pushshown(L, idx));
     return id;
 }
 
@@ -789,7 +789,7 @@ static int orderedmapsort(lua_State* L)
     omsortids(L, map, ids, ids + count, count);
 
     if (omnumber(map, OM_COUNT) != count)
-        luaL_error(L, "orderedmap changed while it was being sorted");
+        luaL_error(L, "OrderedMap changed while it was being sorted");
 
     memcpy(omids(map, OM_ORDER), ids, count * sizeof(uint32_t));
     omrenumber(map, 1, count);
@@ -847,7 +847,7 @@ static uint32_t omnextposition(lua_State* L, LuauObject* map, int idx)
 {
     uint32_t id = omidof(map, L->base + idx - 1);
     if (id == 0)
-        luaL_error(L, "orderedmap lost key %s while it was being iterated", pushshown(L, idx));
+        luaL_error(L, "OrderedMap lost key %s while it was being iterated", pushshown(L, idx));
     return omids(map, OM_POSITIONS)[id - 1] + 1;
 }
 
@@ -869,7 +869,7 @@ static int orderedmapiter(lua_State* L)
     return 3;
 }
 
-// orderedmap's fast methods (luaR_FastMethod). `set` leaves a new key to the C method, which may grow the map.
+// OrderedMap's fast methods (luaR_FastMethod). `set` leaves a new key to the C method, which may grow the map.
 
 static int orderedmapgetfast(lua_State* L, LuauObject* map, StkId res, StkId args, int nargs)
 {
@@ -936,9 +936,9 @@ static const luaR_NativeMember kOrderedMapMembers[] = {
     {"__iter", orderedmapiter, 0},
 };
 
-// vec and vecdeque store their entries in a storage block (LuauStorage) from the first value on. Its capacity is a power
+// Vec and VecDeque store their entries in a storage block (LuauStorage) from the first value on. Its capacity is a power
 // of two. The entry `i` places from the front (from 0) is in slot (head + i) & (capacity - 1) (luaR_storageentry): a
-// vecdeque's entries wrap around the block's end, and a vec's start at slot 0 with head 0.
+// VecDeque's entries wrap around the block's end, and a Vec's start at slot 0 with head 0.
 
 // A container holds at most this many entries, as many as a table's array part
 static const uint32_t kMaxEntries = 1u << 26;
@@ -1063,7 +1063,7 @@ static int pushentryat(lua_State* L, LuauObject* container, double position)
     return 1;
 }
 
-// `popback` of a vec or vecdeque: takes the last entry, or nil when there's none
+// `popback` of a Vec or VecDeque: takes the last entry, or nil when there's none
 static int popback(lua_State* L, LuauObject* container)
 {
     LuauStorage* storage = luaR_storage(container);
@@ -1117,7 +1117,7 @@ static bool fitsset(lua_State* L, LuauObject* container, StkId args, int nargs)
            fitselement(L, luaR_storage(container), args + 1);
 }
 
-// vecdeque: a double-ended queue on a ring. Pushing at the front moves the head back one slot.
+// VecDeque: a double-ended queue on a ring. Pushing at the front moves the head back one slot.
 
 static LuauObject* checkdeque(lua_State* L, const char* method)
 {
@@ -1234,7 +1234,7 @@ static int vecdequetostring(lua_State* L)
     return containertostring(L, dq, countof(dq), vecdequeat);
 }
 
-// vecdeque's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or
+// VecDeque's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or
 // mistyped value, growing, a missing argument and a position that isn't a number.
 
 static int vecdequepushbackfast(lua_State* L, LuauObject* dq, StkId res, StkId args, int nargs)
@@ -1260,7 +1260,7 @@ static int vecdequepushfrontfast(lua_State* L, LuauObject* dq, StkId res, StkId 
     return 0;
 }
 
-// `popback` of a vec or vecdeque
+// `popback` of a Vec or VecDeque
 static int popbackfast(lua_State* L, LuauObject* container, StkId res, StkId args, int nargs)
 {
     LuauStorage* storage = luaR_storage(container);
@@ -1332,7 +1332,7 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     {"__tostring", vecdequetostring, 0},
 };
 
-// vec: a growable array. Its head stays 0, so position `p` is slot `p - 1`.
+// Vec: a growable array. Its head stays 0, so position `p` is slot `p - 1`.
 
 static LuauObject* checkvec(lua_State* L, const char* method)
 {
@@ -1436,7 +1436,7 @@ static int vectostring(lua_State* L)
     return containertostring(L, vec, countof(vec), vecat);
 }
 
-// vec's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or mistyped
+// Vec's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or mistyped
 // value, growing, a missing argument and a position that isn't a number.
 
 static int vecpushfast(lua_State* L, LuauObject* vec, StkId res, StkId args, int nargs)
@@ -1819,8 +1819,8 @@ bool luaR_collectionnext(lua_State* L, StkId ra)
     return true;
 }
 
-// Builds a class, records it as builtin `kind` and stores it in the library table on top of the stack. An `orderedmap`
-// passes the field holding its length as `lengthfield`, for `#` to read; `vec` and `vecdeque` read their storage.
+// Builds a class, records it as builtin `kind` and stores it in the library table on top of the stack. An `OrderedMap`
+// passes the field holding its length as `lengthfield`, for `#` to read; `Vec` and `VecDeque` read their storage.
 template<size_t N>
 static void addclass(
     lua_State* L,
@@ -1840,12 +1840,12 @@ static void addclass(
 int luaopen_collections(lua_State* L)
 {
     lua_createtable(L, 0, 8);
-    addclass(L, LUWU_BUILTIN_PAIR, "pair", kPairMembers, bundleinit);
-    addclass(L, LUWU_BUILTIN_TRIPLE, "triple", kTripleMembers, bundleinit);
-    addclass(L, LUWU_BUILTIN_QUAD, "quad", kQuadMembers, bundleinit);
-    addclass(L, LUWU_BUILTIN_ORDEREDMAP, "orderedmap", kOrderedMapMembers, orderedmapinit, OM_COUNT);
-    addclass(L, LUWU_BUILTIN_VEC, "vec", kVecMembers, vecinit);
-    addclass(L, LUWU_BUILTIN_VECDEQUE, "vecdeque", kVecDequeMembers, vecdequeinit);
+    addclass(L, LUWU_BUILTIN_PAIR, "Pair", kPairMembers, bundleinit);
+    addclass(L, LUWU_BUILTIN_TRIPLE, "Triple", kTripleMembers, bundleinit);
+    addclass(L, LUWU_BUILTIN_QUAD, "Quad", kQuadMembers, bundleinit);
+    addclass(L, LUWU_BUILTIN_ORDEREDMAP, "OrderedMap", kOrderedMapMembers, orderedmapinit, OM_COUNT);
+    addclass(L, LUWU_BUILTIN_VEC, "Vec", kVecMembers, vecinit);
+    addclass(L, LUWU_BUILTIN_VECDEQUE, "VecDeque", kVecDequeMembers, vecdequeinit);
 
     lua_createtable(L, 0, 2);
     addclass(L, LUWU_BUILTIN_SOME, "some", kSomeMembers, someinit);

@@ -1001,7 +1001,7 @@ static int luauF_class_isinstance(lua_State* L, StkId res, TValue* arg0, int nre
     return -1;
 }
 
-// Luwu collections: builds a pair, triple, quad, some, ok or err the way its `__init` would, without a call frame. A
+// Luwu collections: builds a Pair, Triple, Quad, some, ok or err the way its `__init` would, without a call frame. A
 // member with no argument for it is nil. `ok()` and `err()` without an argument and `some` of nil or none fall back
 // to the constructor, which raises where it should.
 template<LuwuBuiltinClass Kind>

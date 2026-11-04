@@ -14463,7 +14463,7 @@ TEST_CASE("CollectionsConstructorsCompileToFastcalls")
     ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
 
     const char* fastcalls[] = {
-        "local function f(x) local v = collections.pair(x, x) return v end",
+        "local function f(x) local v = collections.Pair(x, x) return v end",
         "local function f(x) local v = collections.option.some(x) return v end",
         "local function f(x) local v = collections.result.ok(x) return v end",
         "local ok = collections.result.ok local function f(x) local v = ok(x) return v end",
@@ -14495,7 +14495,7 @@ TEST_CASE("CollectionsConstructorsCompileToFastcalls")
     CHECK(compileFunction(fastcalls[2], 0, 1).find("FASTCALL") == std::string::npos);
 }
 
-// Luwu collections: `for i, v in collections.pair(a, b)` constructs no pair. The position is only loaded when the body
+// Luwu collections: `for i, v in collections.Pair(a, b)` constructs no Pair. The position is only loaded when the body
 // reads it.
 TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
 {
@@ -14505,10 +14505,10 @@ TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
         "\n" + compileFunction(
                    R"(
 local function f(t, a, b)
-    for i, v in collections.pair(a, b) do
+    for i, v in collections.Pair(a, b) do
         t[i] = v
     end
-    for _, v in collections.triple(a, b, a) do
+    for _, v in collections.Triple(a, b, a) do
         t[v] = true
     end
 end

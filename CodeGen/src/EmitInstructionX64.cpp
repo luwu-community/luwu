@@ -438,7 +438,7 @@ void emitInstForGLoop(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, in
     build.jcc(ConditionX64::NotZero, loopRepeat);
 }
 
-// Luwu collections: one step of a loop over a `vec` or `vecdeque` (luaR_storagenext), for FORGLOOP_FALLBACK to run
+// Luwu collections: one step of a loop over a `Vec` or `VecDeque` (luaR_storagenext), for FORGLOOP_FALLBACK to run
 // before its call. Anything else falls through.
 void emitInstForGLoopStorage(IrRegAllocX64& regs, AssemblyBuilderX64& build, int ra, int aux, Label& loopRepeat, Label& loopExit)
 {

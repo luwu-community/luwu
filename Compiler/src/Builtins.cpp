@@ -88,11 +88,11 @@ Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, 
 // `collections` might have been replaced.
 static int getCollectionsFunctionId(const Builtin& builtin)
 {
-    if (builtin.isMethod("collections", "pair"))
+    if (builtin.isMethod("collections", "Pair"))
         return LBF_COLLECTIONS_PAIR;
-    if (builtin.isMethod("collections", "triple"))
+    if (builtin.isMethod("collections", "Triple"))
         return LBF_COLLECTIONS_TRIPLE;
-    if (builtin.isMethod("collections", "quad"))
+    if (builtin.isMethod("collections", "Quad"))
         return LBF_COLLECTIONS_QUAD;
     if (builtin.isNestedMethod("collections", "option", "some"))
         return LBF_COLLECTIONS_OPTION_SOME;

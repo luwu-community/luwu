@@ -610,7 +610,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     attachMagicFunction(requireTy, std::make_shared<MagicRequire>());
 
     // Luwu collections: a builtin module. Its types are its exports, filed under `collections` the way a required
-    // module's are, so code imports them (`type .{ option } = collections`, `const .{ orderedmap } = collections`) or
+    // module's are, so code imports them (`type .{ option } = collections`, `const .{ OrderedMap } = collections`) or
     // names them (`collections.option<T>`) instead of finding them as globals. The `collections` value is a global.
     if (collectionsLibraryEnabled())
     {
