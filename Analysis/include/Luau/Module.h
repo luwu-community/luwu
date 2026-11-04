@@ -150,6 +150,8 @@ struct Module
 
     std::unordered_map<Name, TypeId> declaredGlobals;
     ErrorVec errors;
+    // Luwu: remarks that aren't errors, such as each use of a local left without a type by an error elsewhere
+    std::vector<DiagnosticNote> notes;
     LintResult lintResult;
     Mode mode;
     SourceCode::Type type;
