@@ -156,6 +156,18 @@ protected:
         }
     }
 
+    // Luwu: metadata shares its tables, but a type in it belongs to the arena being cloned from (metadataHasTypes)
+    std::shared_ptr<const TypeMetadataTable> cloneMetadata(const std::shared_ptr<const TypeMetadataTable>& metadata)
+    {
+        return mapMetadataTypes(
+            metadata,
+            [&](TypeId ty)
+            {
+                return shallowClone(ty);
+            }
+        );
+    }
+
 public:
     virtual TypeId shallowClone(TypeId ty)
     {
@@ -169,6 +181,7 @@ public:
 
         TypeId target = arena->addType(ty->ty);
         asMutable(target)->documentationSymbol = ty->documentationSymbol;
+        asMutable(target)->metadata = cloneMetadata(ty->metadata);
 
         if (auto generic = getMutable<GenericType>(target))
             generic->scope = nullptr;
@@ -222,6 +235,7 @@ private:
         cloned.tags = p.tags;
         cloned.documentationSymbol = p.documentationSymbol;
         cloned.typeLocation = p.typeLocation;
+        cloned.metadata = cloneMetadata(p.metadata);
         return cloned;
     }
 
@@ -520,6 +534,7 @@ public:
 
         TypeId target = arena->addType(ty->ty);
         asMutable(target)->documentationSymbol = ty->documentationSymbol;
+        asMutable(target)->metadata = cloneMetadata(ty->metadata);
 
         if (auto generic = getMutable<GenericType>(target))
             generic->scope = nullptr;
