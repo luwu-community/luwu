@@ -23,8 +23,8 @@ jobs:
   unix:
     strategy:
       matrix:
-        os: [{name: ubuntu, version: ubuntu-latest}, {name: macos, version: macos-latest}, {name: macos-arm, version: macos-14}]
-        compiler:
+        os: [{name: ubuntu, version: ubuntu-latest}]
+        compiler: &unix-compilers
           - name: Clang
             cc: clang
             cxx: clang++
@@ -33,7 +33,7 @@ jobs:
             cxx: g++
     name: ${{matrix.os.name}} with ${{matrix.compiler.name}}
     runs-on: ${{matrix.os.version}}
-    steps:
+    steps: &unix-steps
     - uses: actions/checkout@v1
     - name: work around ASLR+ASAN compatibility
       run: sudo sysctl -w vm.mmap_rnd_bits=28
@@ -80,6 +80,67 @@ jobs:
          ./luwu tests/conformance/assert.luau
          ./luwu-analyze tests/conformance/assert.luau
          ./luwu-compile tests/conformance/assert.luau
+
+  # GitHub gives the org only a few macOS runners. A job that waits too long for one is cancelled ("not acquired by
+  # Runner of type hosted"), which fails the PR. This gate holds a run's macOS jobs until it can have MACOS_SLOTS of
+  # them running at once. Runs take turns oldest first, and macOS jobs from other workflows count toward the limit.
+  macos-gate:
+    name: macos gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # must match the macos job's max-parallel
+      MACOS_SLOTS: 3
+    steps:
+    - name: wait for free macOS runners
+      shell: bash
+      run: |
+        repo="$GITHUB_REPOSITORY"
+        while :; do
+          used=0
+          for id in $(gh api "repos/$repo/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id') \
+                    $(gh api "repos/$repo/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id'); do
+            if [ "$id" = "$GITHUB_RUN_ID" ]; then
+              continue
+            fi
+            # "<macOS jobs not completed> <gate status or none>"
+            read -r active gate < <(gh api "repos/$repo/actions/runs/$id/jobs?filter=latest&per_page=100" --jq '
+              ([.jobs[] | select(any(.labels[]; test("macos")) and .status != "completed")] | length) as $active
+              | ([.jobs[] | select(.name == "macos gate") | .status] | first // "none") as $gate
+              | "\($active) \($gate)"') || true
+            if [ -z "$gate" ]; then
+              # the API call failed: assume the run holds every slot until the next poll
+              used=$(( used + MACOS_SLOTS ))
+            elif [ "$gate" = "none" ] || [ "$gate" = "completed" ]; then
+              # holds its runners: another workflow, or a run whose gate already let it through
+              used=$(( used + (active < MACOS_SLOTS ? active : MACOS_SLOTS) ))
+            elif [ "$id" -lt "$GITHUB_RUN_ID" ]; then
+              # an older run still waiting at its gate goes first
+              used=$(( used + MACOS_SLOTS ))
+            fi
+          done
+          # this run's max-parallel takes every slot, so it waits until no other run holds one
+          if [ "$used" -eq 0 ]; then
+            echo "macOS runners free, starting"
+            break
+          fi
+          echo "$used macOS runners taken or reserved by other runs, waiting"
+          sleep 120
+        done
+
+  macos:
+    needs: macos-gate
+    strategy:
+      max-parallel: 3
+      matrix:
+        os: [{name: macos, version: macos-latest}, {name: macos-arm, version: macos-14}]
+        compiler: *unix-compilers
+    name: ${{matrix.os.name}} with ${{matrix.compiler.name}}
+    runs-on: ${{matrix.os.version}}
+    steps: *unix-steps
 
   windows:
     runs-on: windows-latest
