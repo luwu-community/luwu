@@ -256,6 +256,7 @@ TEST_CASE_FIXTURE(Fixture, "typeof_variable_type_annotation_should_return_its_ty
 
 TEST_CASE_FIXTURE(Fixture, "infer_type_of_value_a_via_typeof_with_assignment")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         local a
         local b: typeof(a) = 1
