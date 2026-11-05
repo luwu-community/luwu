@@ -34,12 +34,11 @@ do
         none.get = 1
     end, "none")
 
-    raises(function()
-        Some(nil)
-    end, "Some needs a value, but you passed nil")
-    raises(function()
-        Some(None)
-    end, "Some needs a value, but you passed none")
+    -- a `Some` holds any value, nil and `none` included, and is truthy whatever it holds. `Some()` holds nil.
+    const empty = Some(None)
+    assert(empty and empty.value == none and empty:get() == none and empty ~= None and tostring(empty) == "Some(none)")
+    assert(Some(nil).value == nil and Some(nil):expect() == nil and Some().value == nil and Some(nil) == Some())
+    assert(Some(Some(None)):get():get() == none and Some(false) and Some(false):get() == false)
     assert(hit.value == "ada")
     raises(function()
         hit.value = 1
@@ -102,10 +101,21 @@ do
     const bad = Err("e")
     assert(bad:err() == "e" and bad:ok() == none and tostring(bad) == `Err("e")`)
 
-    -- `Some` of nothing falls back to the constructor, which raises
-    raises(function()
-        Some(nil)
-    end, "Some needs a value, but you passed nil")
+    -- the fastcall builds `Some` of nil and `none` too; a call without arguments falls back to the constructor
+    assert(Some(nil).value == nil and Some(None).value == none and Some().value == nil)
+
+    -- without an argument, `Ok` and `Some` hold nil, not the stale value in the stack slot after the object
+    const filler = table.create(200, "stale")
+    local function fill(...)
+        return select("#", ...)
+    end
+    fill(table.unpack(filler))
+    assert(Ok().value == nil)
+    fill(table.unpack(filler))
+    assert(Some().value == nil)
+    fill(table.unpack(filler))
+    const ok, made = pcall(Ok)
+    assert(ok and made.value == nil)
 
     -- enough allocation to run the collector between constructions
     const kept = {}
@@ -129,7 +139,8 @@ do
     options:push(None)
     options:push(Some(1))
     options:push(Some("x"))
-    assert(#options == 3 and options:at(1) == none and options:at(2):get() == 1)
+    options:push(Some(None))
+    assert(#options == 4 and options:at(1) == none and options:at(2):get() == 1 and options:at(4):get() == none)
     raises(function()
         options:push(Ok(1))
     end, "this Vec can only accept options, but you passed an 'Ok' object")

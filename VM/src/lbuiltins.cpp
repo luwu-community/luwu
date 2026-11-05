@@ -1002,14 +1002,13 @@ static int luauF_class_isinstance(lua_State* L, StkId res, TValue* arg0, int nre
 }
 
 // Luwu collections and try expressions: builds a Pair, Triple, Quad, Some, Ok or Err the way its `__init` would,
-// without a call frame. A member with no argument for it is nil. A call without arguments and `Some` of nil or none
-// fall back to the constructor, which raises where it should.
+// without a call frame. A member with no argument for it is nil. A call without arguments falls back to the
+// constructor.
 template<LuwuBuiltinClass Kind>
 static int luauF_collections_construct(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
     LuauClass* classdef = L->global->builtinclasses[Kind];
-    bool payloadMissing = nparams < 1 || (Kind == LUWU_BUILTIN_SOME && (ttisnil(arg0) || ttissymnone(arg0)));
-    if (!classdef || nresults > 1 || payloadMissing)
+    if (!classdef || nresults > 1 || nparams < 1)
         return -1;
 
     if (luaC_needsGC(L))

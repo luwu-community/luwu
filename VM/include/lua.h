@@ -558,7 +558,7 @@ LUA_API int lua_ismemberfinal(lua_State* L, int idx, const char* membername);
 LUA_API const char* lua_getclassname(lua_State* L, int idx);
 
 // Luwu try expressions: options and results for embedders. Building one raises if the result library (luaopen_result)
-// isn't open. lua_pushsome pushes `Some(v)` for the value at `idx` and raises if it is nil or none. An empty option is
+// isn't open. lua_pushsome pushes `Some(v)` for the value at `idx`, which can be nil or none. An empty option is
 // lua_pushsymnone.
 LUA_API void lua_pushsome(lua_State* L, int idx);
 LUA_API void lua_pushresultok(lua_State* L, int idx);

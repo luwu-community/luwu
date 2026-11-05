@@ -228,7 +228,7 @@ LUAI_FUNC int luaR_fieldsinit(lua_State* L);
 LUAI_FUNC void luaR_addshowntop(struct luaL_Strbuf* b);
 
 // Luwu try expressions: a new `Some`, `Ok` or `Err` (`kind`) holding `value`, for the C API and `try`. Raises if the
-// library isn't open or a `Some` gets nil or none.
+// library isn't open.
 LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value);
 
 // Luwu try expressions: LOP_WRAPRESULT. Replaces the value in `ra` with an `Ok` holding it, or with `caught` an `Err`

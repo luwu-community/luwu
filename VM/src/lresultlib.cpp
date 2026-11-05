@@ -25,11 +25,6 @@ static LuauClass* builtinclass(lua_State* L, LuwuBuiltinClass kind)
     return L->global->builtinclasses[kind];
 }
 
-static bool isnovalue(const TValue* value)
-{
-    return ttisnil(value) || ttissymnone(value);
-}
-
 // The value of a `Some`, `Ok` or `Err`, readable as `value` (`error` for `Err`)
 static const uint8_t kPayloadField = LBC_CLASSMEMBER_CONST;
 
@@ -46,30 +41,20 @@ static LuauObject* checkpayload(lua_State* L, const char* method)
     return luaR_checknativeself(L, builtinclass(L, Kind), method);
 }
 
-// `__init` for `Ok`, which holds any value
+// `__init` for `Some` and `Ok`, which hold any value, nil and `none` included. Without an argument they hold nil. The
+// slot after the object isn't an argument then: it's stale stack the collector doesn't mark.
 static int payloadinit(lua_State* L)
 {
     LuauObject* holder = objectvalue(L->base);
+    if (lua_gettop(L) < 2)
+    {
+        setnilvalue(&luaR_members(holder)[kPayload]);
+        return 0;
+    }
+
     setobj(L, &luaR_members(holder)[kPayload], L->base + 1);
     luaC_barrier(L, holder, L->base + 1);
     return 0;
-}
-
-static void formatsomemissing(lua_State* L, char (&message)[LUA_BUFFERSIZE], int type)
-{
-    snprintf(message, sizeof(message), "Some needs a value, but you passed %s", getstr(L->global->ttname[type]));
-}
-
-// `__init` runs under the class's C constructor, so its error is raised at the Lua code constructing
-static int someinit(lua_State* L)
-{
-    if (lua_gettop(L) < 2 || isnovalue(L->base + 1))
-    {
-        char message[LUA_BUFFERSIZE];
-        formatsomemissing(L, message, lua_gettop(L) < 2 ? LUA_TNIL : ttype(L->base + 1));
-        luaG_runerroratlua(L, message);
-    }
-    return payloadinit(L);
 }
 
 LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value)
@@ -77,13 +62,6 @@ LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* v
     LuauClass* classdef = builtinclass(L, kind);
     if (!classdef)
         luaG_runerror(L, "open the result library (luaopen_result) before building an Ok, Err or Some");
-
-    if (kind == LUWU_BUILTIN_SOME && isnovalue(value))
-    {
-        char message[LUA_BUFFERSIZE];
-        formatsomemissing(L, message, ttype(value));
-        luaG_runerror(L, "%s", message);
-    }
 
     // A new object is white, so storing into it needs no barrier
     LuauObject* object = luaR_newobjectuninit(L, classdef);
@@ -333,7 +311,7 @@ static void addclass(lua_State* L, LuwuBuiltinClass kind, const char* name, cons
 
 int luaopen_result(lua_State* L)
 {
-    addclass(L, LUWU_BUILTIN_SOME, "Some", kSomeMembers, someinit);
+    addclass(L, LUWU_BUILTIN_SOME, "Some", kSomeMembers, payloadinit);
     addclass(L, LUWU_BUILTIN_OK, "Ok", kOkMembers, payloadinit);
     addclass(L, LUWU_BUILTIN_ERR, "Err", kErrMembers, luaR_fieldsinit);
 

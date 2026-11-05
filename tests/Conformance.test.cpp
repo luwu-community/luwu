@@ -5253,27 +5253,19 @@ end
         CHECK(std::string(lua_tostring(L, 5)) == "Some(\"payload\")");
     }
 
-    SUBCASE("some needs a value")
+    SUBCASE("some holds nil and none")
     {
-        std::string nilErr = classesCApiProtected(
-            L,
-            [](lua_State* L)
-            {
-                lua_pushnil(L);
-                lua_pushsome(L, -1);
-            }
-        );
-        CHECK(nilErr == "Some needs a value, but you passed nil");
+        lua_pushnil(L);
+        lua_pushsome(L, -1);
+        REQUIRE(lua_issome(L, -1));
+        CHECK(lua_getpayload(L, -1) == LUA_TNIL);
+        lua_pop(L, 3);
 
-        std::string noneErr = classesCApiProtected(
-            L,
-            [](lua_State* L)
-            {
-                lua_pushsymnone(L);
-                lua_pushsome(L, -1);
-            }
-        );
-        CHECK(noneErr == "Some needs a value, but you passed none");
+        lua_pushsymnone(L);
+        lua_pushsome(L, -1);
+        REQUIRE(lua_issome(L, -1));
+        CHECK(lua_getpayload(L, -1) == LUA_TSYMNONE);
+        lua_pop(L, 3);
 
         // ok and err hold any value
         lua_pushnil(L);
