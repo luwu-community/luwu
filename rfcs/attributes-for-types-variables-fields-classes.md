@@ -285,6 +285,27 @@ not known yet when their attributes are parsed: a statement could still turn out
 class or an assignment, and a class member could be a method or a field. There the check happens once the parser knows
 which it is, so exactly one error is reported.
 
+### Luau and Lua files
+
+Upstream parses attributes on functions only. In a Luau or Lua file an attribute anywhere else is a parse error that
+asks for a `--@[...]` comment on the line above:
+
+```luau
+type Fs = {
+    --- Reads a file
+    --@[deprecated { use = "readfile" }]
+    read: (path: string) -> string,
+    readfile: (path: string) -> string,
+}
+```
+
+A `--@[...]` comment means exactly what the attribute would mean written at the start of the next line. It works in
+every file and every position. Text after the closing `]` is ignored. Only `--@[` starts one: `-- @[deprecated]` and
+`---@deprecated` stay ordinary comments.
+
+Static analysis checks the comment like the attribute it stands for. A compiler skips one it can't read or apply: valid
+Luau has to keep compiling. The pretty printer drops these comments like every other comment.
+
 ### Type system
 
 `@deprecated` on a table type's field, a table constructor's entry or a class field marks the property deprecated in
@@ -301,6 +322,9 @@ the parser checks against, so it never suggests one the parser would then reject
 This is purely additive: an attribute in any of these positions is a parse error in Luau 0.730, so no program that is
 valid without the feature changes meaning with it. With `LuwuAttributesEverywhere` off, parsing and every diagnostic
 are the same as without this feature.
+
+Existing Luau code can already contain a `--@[...]` comment. It now reads as an attribute, but it never stops the file
+compiling. At most a `--@[native]` or `--@[noinline]` comment changes how a function is compiled.
 
 Attributes in the new positions have no runtime representation and are not serialized into bytecode, so there is no
 bytecode version bump.
