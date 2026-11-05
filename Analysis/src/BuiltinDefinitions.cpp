@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/BuiltinDefinitions.h"
 
+#include "Luau/ApplyTypeFunction.h"
 #include "Luau/Ast.h"
 #include "Luau/BuiltinTypeFunctions.h"
 #include "Luau/Clone.h"
@@ -12,6 +13,7 @@
 #include "Luau/Frontend.h"
 #include "Luau/Module.h"
 #include "Luau/NotNull.h"
+#include "Luau/Simplify.h"
 #include "Luau/Subtyping.h"
 #include "Luau/Symbol.h"
 #include "Luau/Type.h"
@@ -22,6 +24,7 @@
 #include "Luau/TypeUtils.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string_view>
 
 /** FIXME: Many of these type definitions are not quite completely accurate.
@@ -434,6 +437,224 @@ void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
     persist(*vectorCls->metatable);
 }
 
+// Luwu bundles: the class of each size, as the `bundle` library exports them (kBundleClassNames in lcollectionslib.cpp)
+static const char* const kBundleClassNames[] = {
+    "Bundle0", "Bundle1", "Pair", "Triple", "Quad", "Bundle5", "Bundle6",
+    "Bundle7", "Bundle8", "Bundle9", "Bundle10", "Bundle11", "Bundle12",
+};
+static constexpr size_t kBundleClassCount = sizeof(kBundleClassNames) / sizeof(kBundleClassNames[0]);
+
+// Luwu bundles: the declared class of a bundle of `size` values. It's looked up in the outermost scope, where the
+// builtin library's types are: a module can file its own types under the name `bundle`.
+static std::optional<TypeFun> bundleClass(const Scope* scope, size_t size)
+{
+    while (scope->parent)
+        scope = scope->parent.get();
+    return size < kBundleClassCount ? scope->lookupImportedType("bundle", kBundleClassNames[size]) : std::nullopt;
+}
+
+// Luwu bundles: the type of each position of the bundle type `ty`, or nullopt when it isn't a bundle class instance
+static std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty)
+{
+    ty = follow(ty);
+    const ExternType* etv = get<ExternType>(ty);
+    if (!etv)
+        return std::nullopt;
+
+    for (size_t size = 0; size < kBundleClassCount; size++)
+    {
+        std::optional<TypeFun> declared = bundleClass(scope, size);
+        if (!declared)
+            continue;
+
+        TypeId declaredTy = follow(declared->type);
+        if (size == 0 && ty == declaredTy)
+            return std::vector<TypeId>{};
+        if (etv->genericTemplate && follow(*etv->genericTemplate) == declaredTy && etv->instantiatedTypeParams.size() == size)
+            return etv->instantiatedTypeParams;
+    }
+    return std::nullopt;
+}
+
+// Luwu bundles: the bundle class instance whose positions have the types `positions`, or nullopt past the largest bundle
+static std::optional<TypeId> bundleType(const MagicFunctionCallContext& context, std::vector<TypeId> positions)
+{
+    std::optional<TypeFun> declared = bundleClass(context.constraint->scope.get(), positions.size());
+    if (!declared)
+        return std::nullopt;
+    if (positions.empty())
+        return declared->type;
+
+    std::vector<TypeId> copiedReferences;
+    TypeId instance = instantiateGenericNominal(context.solver->arena, declared->type, std::move(positions), {}, copiedReferences);
+    for (TypeId reference : copiedReferences)
+        context.solver->queueExpansion(reference, context.constraint->scope, context.constraint->location);
+    return instance;
+}
+
+// Luwu bundles: the position a literal number names, or nullopt for anything else
+static std::optional<size_t> literalPosition(const AstExpr* expr)
+{
+    const AstExprConstantNumber* number = expr->as<AstExprConstantNumber>();
+    if (!number || number->value != std::floor(number->value) || number->value < 0 || number->value > double(kBundleClassCount))
+        return std::nullopt;
+    return size_t(number->value);
+}
+
+// Luwu bundles: the range of positions a call's literal arguments `first` and `last` name, defaulting to the whole bundle
+// of `size` values. nullopt when an argument isn't a literal, or the range is out of bounds, which raises at runtime.
+static std::optional<std::pair<size_t, size_t>> literalRange(const AstExprCall* call, size_t firstArg, size_t size)
+{
+    size_t first = 1;
+    size_t last = size;
+    if (call->args.size > firstArg)
+    {
+        std::optional<size_t> position = literalPosition(call->args.data[firstArg]);
+        if (!position)
+            return std::nullopt;
+        first = *position;
+    }
+    if (call->args.size > firstArg + 1)
+    {
+        std::optional<size_t> position = literalPosition(call->args.data[firstArg + 1]);
+        if (!position)
+            return std::nullopt;
+        last = *position;
+    }
+
+    bool inBounds = first >= 1 && last <= size && last + 1 >= first;
+    if (!inBounds)
+        return std::nullopt;
+    return std::make_pair(first, last);
+}
+
+namespace
+{
+
+// Luwu bundles: the types of `bundle.pack`, `bundle.unpack`, `bundle.concat`, `b:sub` and `b:with`. Each position of a
+// bundle keeps its own type, and a literal position picks out one. Without enough to go on (a multiret argument, a
+// position that isn't a literal) the declared types stand.
+struct MagicBundle final : MagicFunction
+{
+    enum class Operation
+    {
+        Pack,
+        Unpack,
+        Concat,
+        Sub,
+        With,
+    };
+
+    explicit MagicBundle(Operation operation)
+        : operation(operation)
+    {
+    }
+
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(TypeChecker&, const ScopePtr&, const AstExprCall&, WithPredicate<TypePackId>) override
+    {
+        return std::nullopt;
+    }
+
+    bool infer(const MagicFunctionCallContext& context) override
+    {
+        const auto& [argTypes, argTail] = flatten(context.arguments);
+        const Scope* scope = context.constraint->scope.get();
+        TypeArena* arena = context.solver->arena;
+
+        std::optional<TypePackId> result;
+        switch (operation)
+        {
+        case Operation::Pack:
+        {
+            if (argTail)
+                return false;
+            if (std::optional<TypeId> bundle = bundleType(context, argTypes))
+                result = arena->addTypePack({*bundle});
+            break;
+        }
+        case Operation::Concat:
+        {
+            if (argTail)
+                return false;
+            std::vector<TypeId> positions;
+            for (TypeId arg : argTypes)
+            {
+                std::optional<std::vector<TypeId>> part = bundlePositions(scope, arg);
+                if (!part)
+                    return false;
+                positions.insert(positions.end(), part->begin(), part->end());
+            }
+            if (std::optional<TypeId> bundle = bundleType(context, std::move(positions)))
+                result = arena->addTypePack({*bundle});
+            break;
+        }
+        case Operation::Unpack:
+        case Operation::Sub:
+        {
+            if (argTypes.empty())
+                return false;
+            std::optional<std::vector<TypeId>> positions = bundlePositions(scope, argTypes[0]);
+            if (!positions)
+                return false;
+
+            // `b:sub(i, j)` doesn't list `b` among the call's arguments; `bundle.unpack(b, i, j)` does
+            size_t firstArg = context.callSite->self ? 0 : 1;
+            std::optional<std::pair<size_t, size_t>> range = literalRange(context.callSite, firstArg, positions->size());
+            if (!range)
+                return false;
+
+            std::vector<TypeId> slice(positions->begin() + (range->first - 1), positions->begin() + range->second);
+            if (operation == Operation::Unpack)
+                result = arena->addTypePack(std::move(slice));
+            else if (std::optional<TypeId> bundle = bundleType(context, std::move(slice)))
+                result = arena->addTypePack({*bundle});
+            break;
+        }
+        case Operation::With:
+        {
+            if (argTypes.size() < 3)
+                return false;
+            std::optional<std::vector<TypeId>> positions = bundlePositions(scope, argTypes[0]);
+            if (!positions)
+                return false;
+
+            // a literal position takes the value's type; any other position could be any of them
+            size_t positionArg = context.callSite->self ? 0 : 1;
+            std::optional<size_t> position;
+            if (context.callSite->args.size > positionArg)
+                position = literalPosition(context.callSite->args.data[positionArg]);
+
+            TypeId value = argTypes[2];
+            bool exact = position && *position >= 1 && *position <= positions->size();
+            if (exact)
+            {
+                (*positions)[*position - 1] = value;
+            }
+            else
+            {
+                for (TypeId& slot : *positions)
+                    slot = simplifyUnion(context.solver->builtinTypes, NotNull{arena}, slot, value).result;
+            }
+
+            if (std::optional<TypeId> bundle = bundleType(context, std::move(*positions)))
+                result = arena->addTypePack({*bundle});
+            break;
+        }
+        }
+
+        if (!result)
+            return false;
+
+        asMutable(context.result)->ty.emplace<BoundTypePack>(*result);
+        return true;
+    }
+
+private:
+    Operation operation;
+};
+
+} // namespace
+
 // Luwu collections and bundles: loads a builtin library's declarations as the exports of a module called `name`
 static void registerBuiltinModule(
     Frontend& frontend,
@@ -452,6 +673,45 @@ static void registerBuiltinModule(
     globals.globalScope->importedModules[name] = "@luau/" + name;
     for (const auto& [symbol, binding] : library->bindings)
         globals.globalScope->bindings[symbol] = binding;
+}
+
+// Luwu bundles: gives the library's functions and each bundle class's `sub` and `with` their exact types (MagicBundle)
+static void attachBundleMagicFunctions(GlobalTypes& globals)
+{
+    using Operation = MagicBundle::Operation;
+
+    if (const TableType* library = get<TableType>(follow(getGlobalBinding(globals, "bundle"))))
+    {
+        const std::pair<const char*, Operation> functions[] = {
+            {"pack", Operation::Pack},
+            {"unpack", Operation::Unpack},
+            {"concat", Operation::Concat},
+        };
+        for (const auto& [name, operation] : functions)
+        {
+            auto prop = library->props.find(name);
+            if (prop != library->props.end() && prop->second.readTy)
+                attachMagicFunction(*prop->second.readTy, std::make_shared<MagicBundle>(operation));
+        }
+    }
+
+    for (const auto& [name, declared] : globals.globalScope->importedTypeBindings["bundle"])
+    {
+        ExternType* etv = getMutable<ExternType>(follow(declared.type));
+        if (!etv)
+            continue;
+
+        const std::pair<const char*, Operation> methods[] = {
+            {"sub", Operation::Sub},
+            {"with", Operation::With},
+        };
+        for (const auto& [method, operation] : methods)
+        {
+            auto prop = etv->props().find(method);
+            if (prop != etv->props().end() && prop->second.readTy)
+                attachMagicFunction(*prop->second.readTy, std::make_shared<MagicBundle>(operation));
+        }
+    }
 }
 
 void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete)
@@ -637,6 +897,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     {
         registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
         registerBuiltinModule(frontend, globals, "bundle", getBundleDefinitionSource(), typeCheckForAutocomplete);
+        attachBundleMagicFunctions(globals);
     }
 
     // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder

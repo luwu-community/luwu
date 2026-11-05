@@ -6616,6 +6616,41 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "none_has_no_keys_without_the_result_library"
     CHECK_EQ(result.errors[1].location.begin.line, 3);
 }
 
+// Luwu bundles: `bundle.pack`, `unpack`, `concat`, `sub` and `with` keep each position's own type. A literal position
+// picks out one; any other position of `with` could be any of them.
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_functions_keep_each_position_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    // an `unknown` would fail to assign to any of these annotations
+    CheckResult result = check(R"(
+        --!strict
+        local function f(n: number, s: string, flag: boolean, i: number)
+            local b: bundle.Triple<number, string, boolean> = bundle.pack(n, s, flag)
+            local x: number, y: string, z: boolean = bundle.unpack(b)
+            local middle: string = bundle.unpack(b, 2, 2)
+            local tail: bundle.Pair<string, boolean> = b:sub(2, 3)
+            local replaced: bundle.Triple<string, string, boolean> = b:with(1, "text")
+            local anywhere: bundle.Triple<number | boolean, string | boolean, boolean> = b:with(i, true)
+            local joined: bundle.Bundle5<number, string, boolean, number, string> = bundle.concat(b, bundle.Pair(1, "x"))
+            local last: number = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12).twelfth
+            local empty: bundle.Bundle0 = bundle.pack()
+            local wrong: bundle.Pair<number, string> = b:sub(2, 3)
+            return x, y, z, middle, tail, replaced, anywhere, joined, last, empty, wrong
+        end
+    )");
+
+    // only `wrong` is: its positions are a string and a boolean
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 12);
+}
+
 // Luwu: `none` has no keys, so indexing an optional `T | none` names its `none` as the problem
 TEST_CASE_FIXTURE(BuiltinsFixture, "indexing_none_by_a_key_is_an_error")
 {
