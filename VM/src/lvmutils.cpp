@@ -203,6 +203,10 @@ void luaV_getpositional(lua_State* L, const TValue* t, int position, StkId val)
         return;
     }
 
+    // a value nothing can index names the pattern instead of an index with a number
+    if (!ttistable(t) && ttisnil(luaT_gettmbyobj(L, t, TM_INDEX)))
+        luaG_runerror(L, "%s may not be destructured", luaT_objtypename(L, t));
+
     TValue key;
     setnvalue(&key, double(position + 1));
     luaV_gettable(L, t, &key, val);

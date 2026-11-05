@@ -300,7 +300,15 @@ do
     fails(function()
         const .(n) = 5
         return n
-    end, "attempt to index number")
+    end, "number may not be destructured")
+    fails(function()
+        const .(.(inner), outer) = { 1, 2 }
+        return inner
+    end, "number may not be destructured")
+    fails(function()
+        const .(n) = nil
+        return n
+    end, "nil may not be destructured")
 end
 
 return "OK"
