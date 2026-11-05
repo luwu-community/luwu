@@ -384,6 +384,11 @@ LUAI_FUNC Closure* luaR_newtraitinitrunner(lua_State* L);
 // Luwu Traits (rfcs/classes/traits.md): whether `classdef` implements `trait`, listed or implied through `needs`.
 LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait);
 
+// Luwu bundles: an object whose class is LuauClass::keybyvalue is a table key by its fields. luaR_keyhash gives equal
+// objects equal hashes, and luaR_keyequal compares the fields raw (no `__eq`), nested bundles by their fields too.
+LUAI_FUNC unsigned int luaR_keyhash(const LuauObject* object);
+LUAI_FUNC bool luaR_keyequal(const LuauObject* a, const LuauObject* b);
+
 // A member's offset is cached in its instruction's 8-bit C operand (the slot the fast paths check). A
 // larger offset doesn't fit: it is never cached, and that member is looked up by name every time.
 #define LUAR_MAX_CACHED_MEMBER_SLOT 0xff

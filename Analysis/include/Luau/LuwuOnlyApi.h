@@ -31,7 +31,7 @@ inline bool isLuwuOnlyGlobal(std::string_view name)
     // Luwu try expressions: options and results
     if (name == "Ok" || name == "Err" || name == "Some" || name == "None")
         return true;
-    return name == "collections";
+    return name == "collections" || name == "bundle";
 }
 
 } // namespace Luau

@@ -64,11 +64,15 @@ void luaL_openlibs(lua_State* L)
         lua_call(L, 1, 0);
     }
 
-    // Luwu collections: builtin classes, so it needs classes on
+    // Luwu collections and bundles: builtin classes, so they need classes on
     if (FFlag::LuwuClasses && FFlag::DebugLuwuCollections)
     {
         lua_pushcfunction(L, luaopen_collections, NULL);
         lua_pushstring(L, LUA_COLLECTIONSLIBNAME);
+        lua_call(L, 1, 0);
+
+        lua_pushcfunction(L, luaopen_bundle, NULL);
+        lua_pushstring(L, LUA_BUNDLELIBNAME);
         lua_call(L, 1, 0);
     }
 

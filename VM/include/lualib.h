@@ -146,6 +146,9 @@ LUALIB_API int luaopen_class(lua_State* L);
 #define LUA_COLLECTIONSLIBNAME "collections"
 LUALIB_API int luaopen_collections(lua_State* L);
 
+#define LUA_BUNDLELIBNAME "bundle"
+LUALIB_API int luaopen_bundle(lua_State* L);
+
 // Luwu try expressions: the `Ok`, `Err`, `Some` and `None` globals
 LUALIB_API int luaopen_result(lua_State* L);
 

@@ -6069,7 +6069,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
         local map = collections.OrderedMap<<string, number>>()
         map:set("a", 1)
         local value = map:get("a")
-        local range = collections.Pair(1, "x")
+        local range = bundle.Pair(1, "x")
         local first = range.first
         local second = range.second
         for key, entry in map do
@@ -6118,18 +6118,18 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_eleme
 
     CheckResult result = check(R"(
         --!strict
-        for position, value in collections.Pair(1, "x") do
+        for position, value in bundle.Pair(1, "x") do
             local p: number = position
             local v: number | string = value
         end
-        local color = collections.Triple(255, true, "red")
+        local color = bundle.Triple(255, true, "red")
         for _, channel in color do
             local c: number | boolean | string = channel
         end
-        for _, side in collections.Quad(1, 2, 3, 4) do
+        for _, side in bundle.Quad(1, 2, 3, 4) do
             local s: number = side
         end
-        for _, value in collections.Pair(1, "x") do
+        for _, value in bundle.Pair(1, "x") do
             local wrong: number = value
         end
     )");

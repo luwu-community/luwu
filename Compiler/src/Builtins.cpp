@@ -19,9 +19,9 @@ namespace Luau
 namespace Compile
 {
 
-// The names `node` reads, rooted at a global that's never assigned: `collections.Pair` is collections, Pair. Locals that
-// are never written stand for their initializer, so `local c = collections` and destructured aliases
-// (`const .{Pair} = collections`) resolve as well. Returns how many names it wrote, or 0.
+// The names `node` reads, rooted at a global that's never assigned: `bundle.Pair` is bundle, Pair. Locals that
+// are never written stand for their initializer, so `local b = bundle` and destructured aliases
+// (`const .{Pair} = bundle`) resolve as well. Returns how many names it wrote, or 0.
 static size_t resolveBuiltinPath(
     AstExpr* node,
     const DenseHashMap<AstName, Global>& globals,
@@ -82,15 +82,15 @@ Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, 
     }
 }
 
-// Luwu collections: constructors of the builtin classes. FASTCALL's safe-env guard falls back to the real call when
-// `collections` might have been replaced.
-static int getCollectionsFunctionId(const Builtin& builtin)
+// Luwu bundles: constructors of the named bundles. FASTCALL's safe-env guard falls back to the real call when `bundle`
+// might have been replaced.
+static int getBundleFunctionId(const Builtin& builtin)
 {
-    if (builtin.isMethod("collections", "Pair"))
+    if (builtin.isMethod("bundle", "Pair"))
         return LBF_COLLECTIONS_PAIR;
-    if (builtin.isMethod("collections", "Triple"))
+    if (builtin.isMethod("bundle", "Triple"))
         return LBF_COLLECTIONS_TRIPLE;
-    if (builtin.isMethod("collections", "Quad"))
+    if (builtin.isMethod("bundle", "Quad"))
         return LBF_COLLECTIONS_QUAD;
 
     return -1;
@@ -98,8 +98,8 @@ static int getCollectionsFunctionId(const Builtin& builtin)
 
 static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& options)
 {
-    if (FFlag::DebugLuwuCollections && builtin.object == "collections")
-        return getCollectionsFunctionId(builtin);
+    if (FFlag::DebugLuwuCollections && builtin.object == "bundle")
+        return getBundleFunctionId(builtin);
 
     // Luwu try expressions: the constructors of options and results. FASTCALL's safe-env guard falls back to the real
     // call when the global might have been replaced.

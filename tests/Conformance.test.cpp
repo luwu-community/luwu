@@ -4762,17 +4762,12 @@ static std::string vmClassMembers(const LuauClass* classdef)
     return joinNames(names);
 }
 
-// The public members the type checker gives the objects of the class value `classValue`: their properties, except
-// `__init`, which can't be read, and the metamethods in their metatable
-static std::string declaredClassMembers(Luau::TypeId classValue)
+// The public members the type checker gives the objects of a declared class: their properties, except `__init`, which
+// can't be read, and the metamethods in their metatable
+static std::string declaredObjectMembers(Luau::TypeId objectType)
 {
     std::set<std::string> names;
-    const Luau::ExternType* value = Luau::get<Luau::ExternType>(Luau::follow(classValue));
-    REQUIRE(value);
-    REQUIRE(value->relation);
-    const Luau::Obj* obj = Luau::get_if<Luau::Obj>(&*value->relation);
-    REQUIRE(obj);
-    const Luau::ExternType* object = Luau::get<Luau::ExternType>(Luau::follow(obj->ty));
+    const Luau::ExternType* object = Luau::get<Luau::ExternType>(Luau::follow(objectType));
     REQUIRE(object);
 
     for (const auto& prop : object->props())
@@ -4791,6 +4786,17 @@ static std::string declaredClassMembers(Luau::TypeId classValue)
     return joinNames(names);
 }
 
+// The public members of the objects of the class value `classValue` (see declaredObjectMembers)
+static std::string declaredClassMembers(Luau::TypeId classValue)
+{
+    const Luau::ExternType* value = Luau::get<Luau::ExternType>(Luau::follow(classValue));
+    REQUIRE(value);
+    REQUIRE(value->relation);
+    const Luau::Obj* obj = Luau::get_if<Luau::Obj>(&*value->relation);
+    REQUIRE(obj);
+    return declaredObjectMembers(obj->ty);
+}
+
 // The declared class value named `name` in the library table
 static std::optional<Luau::TypeId> declaredClassValue(const Luau::TableType* library, const std::string& name)
 {
@@ -4800,8 +4806,9 @@ static std::optional<Luau::TypeId> declaredClassValue(const Luau::TableType* lib
     return declared->second.readTy;
 }
 
-// Luwu collections and try expressions: the builtin definitions declare each class the VM builds, with exactly its
-// public members. The collections classes are in the `collections` table, and `Some`, `Ok` and `Err` are globals.
+// Luwu collections, bundles and try expressions: the builtin definitions declare each class the VM builds, with exactly
+// its public members. The collections classes are in the `collections` table, and `Some`, `Ok` and `Err` are globals.
+// A bundle class is a type the `bundle` library exports, since only Pair, Triple and Quad are in its table.
 TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
 {
     ScopedFastFlag sffs[] = {
@@ -4820,6 +4827,7 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
 
     const Luau::TableType* library = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "collections")));
     REQUIRE(library);
+    const auto& bundleTypes = frontend.globals.globalScope->importedTypeBindings["bundle"];
 
     StateRef state(luaL_newstate(), lua_close);
     luaL_openlibs(state.get());
@@ -4830,6 +4838,14 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
         REQUIRE(classdef);
         std::string name = getstr(classdef->name);
         INFO(name);
+
+        if (kind <= LUWU_BUILTIN_BUNDLE12)
+        {
+            auto declaredBundle = bundleTypes.find(name);
+            REQUIRE(declaredBundle != bundleTypes.end());
+            CHECK_EQ(declaredObjectMembers(declaredBundle->second.type), vmClassMembers(classdef));
+            continue;
+        }
 
         bool isGlobal = kind == LUWU_BUILTIN_SOME || kind == LUWU_BUILTIN_OK || kind == LUWU_BUILTIN_ERR;
         std::optional<Luau::TypeId> declared =

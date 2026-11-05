@@ -434,6 +434,26 @@ void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
     persist(*vectorCls->metatable);
 }
 
+// Luwu collections and bundles: loads a builtin library's declarations as the exports of a module called `name`
+static void registerBuiltinModule(
+    Frontend& frontend,
+    GlobalTypes& globals,
+    const Name& name,
+    const std::string& source,
+    bool typeCheckForAutocomplete
+)
+{
+    ScopePtr library = std::make_shared<Scope>(globals.globalScope);
+    LoadDefinitionFileResult result =
+        frontend.loadDefinitionFile(globals, library, source, "@luau", /* captureComments */ false, typeCheckForAutocomplete);
+    LUAU_ASSERT(result.success);
+
+    globals.globalScope->importedTypeBindings[name] = library->exportedTypeBindings;
+    globals.globalScope->importedModules[name] = "@luau/" + name;
+    for (const auto& [symbol, binding] : library->bindings)
+        globals.globalScope->bindings[symbol] = binding;
+}
+
 void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeCheckForAutocomplete)
 {
     LUAU_ASSERT(!globals.globalTypes.types.isFrozen());
@@ -610,22 +630,13 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     attachTag(requireTy, kRequireTagName);
     attachMagicFunction(requireTy, std::make_shared<MagicRequire>());
 
-    // Luwu collections: a builtin module. Its types are its exports, filed under `collections` the way a required
-    // module's are, so code imports them (`type .{ Vec } = collections`, `const .{ OrderedMap } = collections`) or
-    // names them (`collections.Vec<T>`) instead of finding them as globals. The `collections` value is a global.
+    // Luwu collections and bundles: builtin modules. Their types are their exports, filed under the library's name the way
+    // a required module's are, so code imports them (`type .{ Vec } = collections`, `const .{ Pair } = bundle`) or names
+    // them (`collections.Vec<T>`) instead of finding them as globals. The library value is a global.
     if (collectionsLibraryEnabled())
     {
-        ScopePtr library = std::make_shared<Scope>(globals.globalScope);
-        LoadDefinitionFileResult collections = frontend.loadDefinitionFile(
-            globals, library, getCollectionsDefinitionSource(), "@luau", /* captureComments */ false, typeCheckForAutocomplete
-        );
-        LUAU_ASSERT(collections.success);
-
-        const Name name = "collections";
-        globals.globalScope->importedTypeBindings[name] = library->exportedTypeBindings;
-        globals.globalScope->importedModules[name] = "@luau/collections";
-        for (const auto& [symbol, binding] : library->bindings)
-            globals.globalScope->bindings[symbol] = binding;
+        registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
+        registerBuiltinModule(frontend, globals, "bundle", getBundleDefinitionSource(), typeCheckForAutocomplete);
     }
 
     // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder
