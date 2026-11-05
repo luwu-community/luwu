@@ -25,7 +25,7 @@ inline bool isLuwuOnlyMember(std::string_view library, std::string_view member)
 // reports it in Luau and Lua modules, and autocomplete doesn't offer it there.
 inline bool isLuwuOnlyGlobal(std::string_view name)
 {
-    return name == "collections";
+    return name == "collections" || name == "bundle";
 }
 
 } // namespace Luau

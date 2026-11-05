@@ -3989,7 +3989,8 @@ local function shadowed(collections: { Pair: () -> () })
     collections.Pair()
 end
 local function count(list: collections.Vec<number>): number return #list end
-return map, shadowed, count
+local point = bundle.pack(1, 2)
+return map, shadowed, count, point
 )";
     configResolver.configFiles["game/a"].language = Language::Luau;
 
@@ -3998,10 +3999,12 @@ return map, shadowed, count
         if (warning.code == LintWarning::Code_LuwuOnlyApi)
             found.push_back(warning);
 
-    REQUIRE_EQ(found.size(), 2);
+    REQUIRE_EQ(found.size(), 3);
     CHECK_EQ(found[0].text, "'collections' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
     CHECK_EQ(found[0].location, Location({1, 12}, {1, 23}));
     CHECK_EQ(found[1].text, "'collections.Vec' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+    // `bundle` is a Luwu library too
+    CHECK_EQ(found[2].location, Location({6, 14}, {6, 20}));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")

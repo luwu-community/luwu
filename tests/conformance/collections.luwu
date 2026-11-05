@@ -17,29 +17,29 @@ end
 
 -- pair, triple and quad hold their values under Kotlin's names
 do
-    const range = collections.Pair(1, "x")
+    const range = bundle.Pair(1, "x")
     assert(range.first == 1 and range.second == "x")
-    assert(class.isinstance(range, collections.Pair))
+    assert(class.isinstance(range, bundle.Pair))
     assert(class.name(range) == "Pair")
-    assert(range == collections.Pair(1, "x"))
-    assert(range ~= collections.Pair(1, "y"))
-    assert(range ~= collections.Triple(1, "x", nil))
+    assert(range == bundle.Pair(1, "x"))
+    assert(range ~= bundle.Pair(1, "y"))
+    assert(range ~= bundle.Triple(1, "x", nil))
     assert(tostring(range) == `Pair(1, "x")`)
-    assert(tostring(collections.Pair("a\"b", nil)) == `Pair("a\\"b", nil)`)
+    assert(tostring(bundle.Pair("a\"b", nil)) == `Pair("a\\"b", nil)`)
 
-    const color = collections.Triple(255, 128, 0)
+    const color = bundle.Triple(255, 128, 0)
     assert(color.first == 255 and color.second == 128 and color.third == 0)
-    assert(color == collections.Triple(255, 128, 0))
+    assert(color == bundle.Triple(255, 128, 0))
     assert(tostring(color) == "Triple(255, 128, 0)")
 
-    const margins = collections.Quad(1, 2, 3, 4)
+    const margins = bundle.Quad(1, 2, 3, 4)
     assert(margins.fourth == 4)
-    assert(margins == collections.Quad(1, 2, 3, 4))
-    assert(margins ~= collections.Quad(1, 2, 3, 5))
+    assert(margins == bundle.Quad(1, 2, 3, 4))
+    assert(margins ~= bundle.Quad(1, 2, 3, 5))
     assert(tostring(margins) == "Quad(1, 2, 3, 4)")
 
     -- the elements compare with ==, so nested bundles compare by value too
-    assert(collections.Pair(range, 1) == collections.Pair(collections.Pair(1, "x"), 1))
+    assert(bundle.Pair(range, 1) == bundle.Pair(bundle.Pair(1, "x"), 1))
 
     raises(function()
         range.first = 2
@@ -49,21 +49,77 @@ do
     end, "third")
 end
 
+-- `bundle.pack` holds every value it gets, nil included, up to 12; positions past `fourth` are `fifth` to `twelfth`
+do
+    assert(collections.Pair == nil and bundle.Pair ~= nil)
+
+    const record = bundle.pack("AX1230", nil, 3, true, "e", "f", "g")
+    assert(#record == 7 and class.name(record) == "Bundle7" and record.first == "AX1230" and record.second == nil)
+    assert(record.seventh == "g" and tostring(record) == `Bundle7("AX1230", nil, 3, true, "e", "f", "g")`)
+    assert(class.name(bundle.pack(1, 2)) == "Pair" and class.isinstance(bundle.pack(1, 2), bundle.Pair))
+    assert(#bundle.pack() == 0 and #bundle.pack(nil) == 1)
+    const twelve = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+    assert(twelve.twelfth == 12 and #twelve == 12)
+    raises(function()
+        bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+    end, "bundle.pack takes at most 12 values, but got 13")
+
+    local fields = 0
+    for name, value in class.fields(bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)) do
+        fields += 1
+        assert(value == ({ first = 1, fifth = 5, tenth = 10 })[name] or (name ~= "first" and name ~= "fifth" and name ~= "tenth"))
+    end
+    assert(fields == 10)
+
+    -- `unpack` gives a range of positions, the whole bundle by default
+    const a, b, c = bundle.unpack(bundle.Triple(1, nil, 3))
+    assert(a == 1 and b == nil and c == 3)
+    assert(select("#", bundle.unpack(record)) == 7 and select("#", bundle.unpack(record, 3, 2)) == 0)
+    const third, fourth = bundle.unpack(record, 3, 4)
+    assert(third == 3 and fourth == true)
+    raises(function()
+        bundle.unpack(record, 0, 2)
+    end, "range 0 to 2 is out of range 1 to 7")
+    raises(function()
+        bundle.unpack({ 1, 2 })
+    end, "bundle expected, got table")
+
+    -- `sub` and `with` make new bundles; `concat` joins several
+    assert(record:sub(3, 4) == bundle.Pair(3, true) and record:sub(6) == bundle.Pair("f", "g") and #record:sub(8) == 0)
+    assert(record:with(2, "two").second == "two" and record.second == nil)
+    raises(function()
+        record:with(8, 1)
+    end, "position 8 is out of range 1 to 7")
+    assert(bundle.concat(bundle.Pair(1, 2), bundle.pack(3), bundle.pack()) == bundle.Triple(1, 2, 3))
+    raises(function()
+        bundle.concat(twelve, bundle.pack(1))
+    end, "bundle.concat makes at most 12 values, but these hold 13")
+
+    -- bundles of one size order position by position, so a list of them sorts
+    assert(bundle.Pair(1, 2) < bundle.Pair(1, 3) and bundle.Pair(1, 2) <= bundle.Pair(1, 2) and not (bundle.Pair(2, 0) < bundle.Pair(1, 9)))
+    const list = { bundle.Pair(2, "b"), bundle.Pair(1, "z"), bundle.Pair(1, "a") }
+    table.sort(list)
+    assert(list[1] == bundle.Pair(1, "a") and list[3] == bundle.Pair(2, "b"))
+    raises(function()
+        return bundle.Pair(1, 2) < bundle.Triple(1, 2, 3)
+    end, "attempt to compare")
+end
+
 -- iterating a bundle gives every slot in order, nil included, and starting a loop allocates nothing
 do
     const seen = {}
-    for i, v in collections.Pair("a", nil) do
+    for i, v in bundle.Pair("a", nil) do
         seen[i] = if v == nil then "nil" else v
     end
     assert(seen[1] == "a" and seen[2] == "nil" and #seen == 2)
 
     local weighted = 0
-    for i, v in collections.Quad(1, 2, 3, 4) do
+    for i, v in bundle.Quad(1, 2, 3, 4) do
         weighted += i * v
     end
     assert(weighted == 1 + 4 + 9 + 16)
 
-    const color = collections.Triple(255, 128, 0)
+    const color = bundle.Triple(255, 128, 0)
     local total = 0
     for _, channel in color do
         for _, again in color do
@@ -97,7 +153,7 @@ do
 
     -- a bundle yields every slot
     table.clear(order)
-    for i, v in collections.Triple(note("a"), note(nil), note("c")) do
+    for i, v in bundle.Triple(note("a"), note(nil), note("c")) do
         table.insert(order, `{i}={v}`)
     end
     assert(table.concat(order, " ") == "a nil c 1=a 2=nil 3=c")
@@ -117,7 +173,7 @@ do
 
     -- each pass's value is its own, for closures and for writes
     const readers = {}
-    for _, v in collections.Pair("x", "y") do
+    for _, v in bundle.Pair("x", "y") do
         table.insert(readers, function()
             return v
         end)
@@ -146,7 +202,7 @@ do
     -- nested, and a trailing call that still builds the table
     local cells = 0
     for _, row in { 1, 2 } do
-        for _, column in collections.Pair(10, 20) do
+        for _, column in bundle.Pair(10, 20) do
             cells += row * column
         end
     end
@@ -154,7 +210,7 @@ do
 
     -- a list of bundles, the last one included, is unfolded too
     local sum = 0
-    for _, entry in { collections.Pair(1, 2), collections.Pair(3, 4) } do
+    for _, entry in { bundle.Pair(1, 2), bundle.Pair(3, 4) } do
         sum += entry.first * entry.second
     end
     assert(sum == 14)
@@ -439,12 +495,12 @@ do
     end, "this VecDeque can only accept strings, but you passed none")
 
     const bundles = collections.Vec()
-    bundles:push(collections.Pair(1, 2))
+    bundles:push(bundle.Pair(1, 2))
     raises(function()
         bundles:push(collections.OrderedMap())
     end, "this Vec can only accept 'Pair' objects, but you passed an 'OrderedMap' object")
     raises(function()
-        bundles:insert(1, collections.Triple(1, 2, 3))
+        bundles:insert(1, bundle.Triple(1, 2, 3))
     end, "this Vec can only accept 'Pair' objects, but you passed a 'Triple' object")
 
     const flags = collections.Vec()
@@ -560,7 +616,7 @@ do
 
     const long = string.rep("\"quoted\"\n", 500)
     assert(#tostring(collections.Vec({ long, long })) > 2 * #long)
-    assert(#tostring(collections.Pair(long, long)) > 2 * #long)
+    assert(#tostring(bundle.Pair(long, long)) > 2 * #long)
 
     const list = collections.Vec({ Clearing {}, Clearing {}, Clearing {} })
     printing = list
@@ -569,26 +625,26 @@ end
 
 -- constructors called directly compile to fastcalls, which build what the constructor does
 do
-    const one = collections.Pair(1)
-    assert(one.first == 1 and one.second == nil and class.isinstance(one, collections.Pair))
-    const three = collections.Triple(1, 2, 3, 4)
+    const one = bundle.Pair(1)
+    assert(one.first == 1 and one.second == nil and class.isinstance(one, bundle.Pair))
+    const three = bundle.Triple(1, 2, 3, 4)
     assert(three.first == 1 and three.third == 3 and tostring(three) == "Triple(1, 2, 3)")
-    const four = collections.Quad(1, 2, 3, 4)
+    const four = bundle.Quad(1, 2, 3, 4)
     assert(four.second == 2 and four.fourth == 4)
 
     -- enough allocation to run the collector between constructions
     const kept = {}
     for i = 1, 20000 do
-        kept[i % 100 + 1] = collections.Pair({ i })
+        kept[i % 100 + 1] = bundle.Pair({ i })
     end
     collectgarbage()
     for i = 1, 100 do
         assert(kept[i].first[1] % 100 + 1 == i)
     end
 
-    -- with `collections` replaced in the environment, the call reaches the replacement
-    const replaced = loadstring("local value = collections.Pair(1) return value")
-    setfenv(replaced, { collections = { Pair = function(value) return `replaced {value}` end } })
+    -- with `bundle` replaced in the environment, the call reaches the replacement
+    const replaced = loadstring("local value = bundle.Pair(1) return value")
+    setfenv(replaced, { bundle = { Pair = function(value) return `replaced {value}` end } })
     assert(replaced() == "replaced 1")
 end
 

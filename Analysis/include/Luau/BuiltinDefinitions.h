@@ -146,6 +146,8 @@ std::string getBuiltinDefinitionSource();
 bool collectionsLibraryEnabled();
 // Luwu collections: the library's declarations, a definition file of its own (see registerBuiltinGlobals)
 std::string getCollectionsDefinitionSource();
+// Luwu bundles: the `bundle` library's declarations, opened with `collections` (see registerBuiltinGlobals)
+std::string getBundleDefinitionSource();
 std::string getTypeFunctionDefinitionSource();
 
 void addGlobalBinding(GlobalTypes& globals, const std::string& name, TypeId ty, const std::string& packageName);

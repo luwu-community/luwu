@@ -265,12 +265,71 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
     return 1;
 }
 
-// Pair, Triple and Quad: `first` to `fourth`, public and const
+// Luwu bundles: a fixed number of values, each position with its own type, immutable. One class per size, 0 to
+// LUWU_BUNDLE_MAX; sizes 2 to 4 are named Pair, Triple and Quad. The fields are `first` to `twelfth`, public and const.
 
-template<LuwuBuiltinClass Kind>
+static const char* const kBundleFieldNames[LUWU_BUNDLE_MAX] = {
+    "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth",
+};
+
+static const char* const kBundleClassNames[LUWU_BUNDLE_MAX + 1] = {
+    "Bundle0", "Bundle1", "Pair", "Triple", "Quad", "Bundle5", "Bundle6",
+    "Bundle7", "Bundle8", "Bundle9", "Bundle10", "Bundle11", "Bundle12",
+};
+
+static LuauClass* bundleclass(lua_State* L, int size)
+{
+    return builtinclass(L, LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + size));
+}
+
+// The number of values in the bundle `value`, or -1 when it isn't a bundle
+static int bundlesize(lua_State* L, const TValue* value)
+{
+    if (!ttisobject(value))
+        return -1;
+
+    const LuauObject* object = objectvalue(value);
+    int size = int(object->numberofmembers);
+    return size <= LUWU_BUNDLE_MAX && object->lclass == bundleclass(L, size) ? size : -1;
+}
+
+// The bundle at stack `idx`; raises unless it's one
+static LuauObject* checkbundlearg(lua_State* L, int idx)
+{
+    if (bundlesize(L, luaA_toobject(L, idx)) < 0)
+        luaL_typeerror(L, idx, "bundle");
+    return objectvalue(luaA_toobject(L, idx));
+}
+
+// A new bundle of `size` values, pushed on the stack. Its values are unset: the caller fills all of them before anything
+// can run the collector.
+static LuauObject* pushnewbundle(lua_State* L, int size)
+{
+    luaC_threadbarrier(L);
+    luaD_checkstack(L, 1);
+    LuauObject* bundle = luaR_newobjectuninit(L, bundleclass(L, size));
+    setobjectvalue(L, L->top, bundle);
+    L->top++;
+    return bundle;
+}
+
+// The range of positions `first` to `last` (stack `idx` and `idx + 1`, defaulting to the whole bundle) of a bundle of
+// `size` values. It can be empty, from `n + 1` to `n`; raises when it reaches past either end.
+static void checkrange(lua_State* L, int idx, int size, int* first, int* last)
+{
+    double from = luaL_optnumber(L, idx, 1);
+    double to = luaL_optnumber(L, idx + 1, size);
+    bool whole = from == double(int64_t(from)) && to == double(int64_t(to));
+    if (!whole || from < 1 || to > size || to < from - 1)
+        luaL_error(L, "range %s to %s is out of range 1 to %d", pushshown(L, idx), pushshown(L, idx + 1), size);
+    *first = int(from);
+    *last = int(to);
+}
+
+template<int Size>
 static LuauObject* checkbundle(lua_State* L, const char* method)
 {
-    return luaR_checknativeself(L, builtinclass(L, Kind), method);
+    return luaR_checknativeself(L, bundleclass(L, Size), method);
 }
 
 // `__init` is only ever called by construction, with a new object of the class: it can't be read as a member.
@@ -283,10 +342,10 @@ static int bundleinit(lua_State* L)
     return 0;
 }
 
-template<LuwuBuiltinClass Kind>
+template<int Size>
 static int bundleeq(lua_State* L)
 {
-    LuauObject* bundle = checkbundle<Kind>(L, "__eq");
+    LuauObject* bundle = checkbundle<Size>(L, "__eq");
     const TValue* other = L->base + 1;
     bool equal = ttisobject(other) && objectvalue(other)->lclass == bundle->lclass;
     for (uint32_t i = 0; equal && i < bundle->numberofmembers; i++)
@@ -295,10 +354,44 @@ static int bundleeq(lua_State* L)
     return 1;
 }
 
-template<LuwuBuiltinClass Kind>
+// `<` and `<=` compare position by position: the first pair of values that differ decides, by their own `<`. Equal
+// bundles are `<=` and not `<`. Bundles of different sizes don't compare.
+template<int Size, bool OrEqual>
+static int bundlecompare(lua_State* L)
+{
+    LuauObject* bundle = checkbundle<Size>(L, OrEqual ? "__le" : "__lt");
+    const TValue* other = L->base + 1;
+    if (!ttisobject(other) || objectvalue(other)->lclass != bundle->lclass)
+        luaG_ordererror(L, L->base, other, OrEqual ? TM_LE : TM_LT);
+
+    // a bundle is immutable and the stack anchors both, so pointers to their values stay valid while `<` runs Luau code
+    const TValue* left = luaR_members(bundle);
+    const TValue* right = luaR_members(objectvalue(other));
+    for (int i = 0; i < Size; i++)
+    {
+        if (!equalobj(L, &left[i], &right[i]))
+        {
+            lua_pushboolean(L, luaV_lessthan(L, &left[i], &right[i]));
+            return 1;
+        }
+    }
+
+    lua_pushboolean(L, OrEqual);
+    return 1;
+}
+
+template<int Size>
+static int bundlelen(lua_State* L)
+{
+    checkbundle<Size>(L, "__len");
+    lua_pushinteger(L, Size);
+    return 1;
+}
+
+template<int Size>
 static int bundletostring(lua_State* L)
 {
-    LuauObject* bundle = checkbundle<Kind>(L, "__tostring");
+    LuauObject* bundle = checkbundle<Size>(L, "__tostring");
     luaL_Strbuf b;
     luaL_buffinit(L, &b);
     luaL_addstring(&b, getstr(bundle->lclass->name));
@@ -318,10 +411,10 @@ static int bundletostring(lua_State* L)
 // Every slot in order, `nil` included: a bundle's size is fixed. Starting a loop allocates nothing because `__iter` is
 // also the iterator it returns. The VM calls `__iter` with the bundle alone, and the iterator with the bundle and the
 // previous position.
-template<LuwuBuiltinClass Kind>
+template<int Size>
 static int bundleiter(lua_State* L)
 {
-    LuauObject* bundle = checkbundle<Kind>(L, "__iter");
+    LuauObject* bundle = checkbundle<Size>(L, "__iter");
     if (lua_gettop(L) == 1)
     {
         luaA_pushvalue(L, L->ci->func);
@@ -340,35 +433,135 @@ static int bundleiter(lua_State* L)
     return 2;
 }
 
-static const uint8_t kBundleField = LBC_CLASSMEMBER_CONST;
+// `b:sub(i, j)`: a new bundle of positions `i` to `j`
+template<int Size>
+static int bundlesub(lua_State* L)
+{
+    LuauObject* bundle = checkbundle<Size>(L, "sub");
+    int first, last;
+    checkrange(L, 2, Size, &first, &last);
+
+    LuauObject* result = pushnewbundle(L, last - first + 1);
+    for (int i = first; i <= last; i++)
+        setobj(L, &luaR_members(result)[i - first], &luaR_members(bundle)[i - 1]);
+    luaC_checkGC(L);
+    return 1;
+}
+
+// `b:with(i, v)`: a copy of the bundle with position `i` holding `v`
+template<int Size>
+static int bundlewith(lua_State* L)
+{
+    LuauObject* bundle = checkbundle<Size>(L, "with");
+    uint32_t position = checkposition(L, 2, Size);
+    luaL_checkany(L, 3);
+
+    LuauObject* result = pushnewbundle(L, Size);
+    for (int i = 0; i < Size; i++)
+        setobj(L, &luaR_members(result)[i], &luaR_members(bundle)[i]);
+    setobj(L, &luaR_members(result)[position - 1], L->base + 2);
+    luaC_checkGC(L);
+    return 1;
+}
+
+// The class of `Size` values: its fields, then its methods
+template<int Size>
+static void addbundleclass(lua_State* L)
+{
+    luaR_NativeMember members[LUWU_BUNDLE_MAX + 8] = {};
+    int count = 0;
+    for (int i = 0; i < Size; i++)
+        members[count++] = {kBundleFieldNames[i], NULL, LBC_CLASSMEMBER_CONST, NULL};
+
+    members[count++] = {"sub", bundlesub<Size>, 0, NULL};
+    members[count++] = {"with", bundlewith<Size>, 0, NULL};
+    members[count++] = {"__eq", bundleeq<Size>, 0, NULL};
+    members[count++] = {"__lt", bundlecompare<Size, false>, 0, NULL};
+    members[count++] = {"__le", bundlecompare<Size, true>, 0, NULL};
+    members[count++] = {"__len", bundlelen<Size>, 0, NULL};
+    members[count++] = {"__iter", bundleiter<Size>, 0, NULL};
+    members[count++] = {"__tostring", bundletostring<Size>, 0, NULL};
+
+    L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + Size] = luaR_newnativeclass(L, kBundleClassNames[Size], members, count, bundleinit);
+    lua_pop(L, 1);
+}
+
+static void addbundleclasses(lua_State* L)
+{
+    static_assert(LUWU_BUNDLE_MAX == 12, "add a class for each size");
+    addbundleclass<0>(L);
+    addbundleclass<1>(L);
+    addbundleclass<2>(L);
+    addbundleclass<3>(L);
+    addbundleclass<4>(L);
+    addbundleclass<5>(L);
+    addbundleclass<6>(L);
+    addbundleclass<7>(L);
+    addbundleclass<8>(L);
+    addbundleclass<9>(L);
+    addbundleclass<10>(L);
+    addbundleclass<11>(L);
+    addbundleclass<12>(L);
+}
+
+// `bundle.pack(...)`: a bundle of every argument, nil included
+static int bundlepack(lua_State* L)
+{
+    int size = lua_gettop(L);
+    if (size > LUWU_BUNDLE_MAX)
+        luaL_error(L, "bundle.pack takes at most %d values, but got %d", LUWU_BUNDLE_MAX, size);
+
+    LuauObject* bundle = pushnewbundle(L, size);
+    for (int i = 0; i < size; i++)
+        setobj(L, &luaR_members(bundle)[i], L->base + i);
+    luaC_checkGC(L);
+    return 1;
+}
+
+// `bundle.unpack(b, i, j)`: the values at positions `i` to `j`, the whole bundle by default
+static int bundleunpack(lua_State* L)
+{
+    LuauObject* bundle = checkbundlearg(L, 1);
+    int first, last;
+    checkrange(L, 2, int(bundle->numberofmembers), &first, &last);
+
+    int count = last - first + 1;
+    luaL_checkstack(L, count, "bundle.unpack");
+    for (int i = first; i <= last; i++)
+        luaA_pushvalue(L, &luaR_members(bundle)[i - 1]);
+    return count;
+}
+
+// `bundle.concat(a, b, ...)`: one bundle of every argument's values, in order
+static int bundleconcat(lua_State* L)
+{
+    int nargs = lua_gettop(L);
+    int size = 0;
+    for (int i = 1; i <= nargs; i++)
+        size += int(checkbundlearg(L, i)->numberofmembers);
+    if (size > LUWU_BUNDLE_MAX)
+        luaL_error(L, "bundle.concat makes at most %d values, but these hold %d", LUWU_BUNDLE_MAX, size);
+
+    LuauObject* result = pushnewbundle(L, size);
+    int position = 0;
+    for (int i = 1; i <= nargs; i++)
+    {
+        const LuauObject* part = objectvalue(luaA_toobject(L, i));
+        for (uint32_t j = 0; j < part->numberofmembers; j++)
+            setobj(L, &luaR_members(result)[position++], &luaR_members(part)[j]);
+    }
+    luaC_checkGC(L);
+    return 1;
+}
+
+static const luaL_Reg kBundleFunctions[] = {
+    {"pack", bundlepack},
+    {"unpack", bundleunpack},
+    {"concat", bundleconcat},
+    {NULL, NULL},
+};
+
 static const uint8_t kPrivateField = LBC_CLASSMEMBER_PRIVATE;
-
-static const luaR_NativeMember kPairMembers[] = {
-    {"first", NULL, kBundleField},
-    {"second", NULL, kBundleField},
-    {"__eq", bundleeq<LUWU_BUILTIN_PAIR>, 0},
-    {"__iter", bundleiter<LUWU_BUILTIN_PAIR>, 0},
-    {"__tostring", bundletostring<LUWU_BUILTIN_PAIR>, 0},
-};
-
-static const luaR_NativeMember kTripleMembers[] = {
-    {"first", NULL, kBundleField},
-    {"second", NULL, kBundleField},
-    {"third", NULL, kBundleField},
-    {"__eq", bundleeq<LUWU_BUILTIN_TRIPLE>, 0},
-    {"__iter", bundleiter<LUWU_BUILTIN_TRIPLE>, 0},
-    {"__tostring", bundletostring<LUWU_BUILTIN_TRIPLE>, 0},
-};
-
-static const luaR_NativeMember kQuadMembers[] = {
-    {"first", NULL, kBundleField},
-    {"second", NULL, kBundleField},
-    {"third", NULL, kBundleField},
-    {"fourth", NULL, kBundleField},
-    {"__eq", bundleeq<LUWU_BUILTIN_QUAD>, 0},
-    {"__iter", bundleiter<LUWU_BUILTIN_QUAD>, 0},
-    {"__tostring", bundletostring<LUWU_BUILTIN_QUAD>, 0},
-};
 
 // OrderedMap: a map in an order the user decides. Every entry has an id that stays the same while it exists, the
 // index of its key and value. Lookups go key, id, value. The order is an array of ids and each id's position is kept
@@ -1516,15 +1709,29 @@ static void addclass(
 
 int luaopen_collections(lua_State* L)
 {
-    lua_createtable(L, 0, 6);
-    addclass(L, LUWU_BUILTIN_PAIR, "Pair", kPairMembers, bundleinit);
-    addclass(L, LUWU_BUILTIN_TRIPLE, "Triple", kTripleMembers, bundleinit);
-    addclass(L, LUWU_BUILTIN_QUAD, "Quad", kQuadMembers, bundleinit);
+    lua_createtable(L, 0, 3);
     addclass(L, LUWU_BUILTIN_ORDEREDMAP, "OrderedMap", kOrderedMapMembers, orderedmapinit, OM_COUNT);
     addclass(L, LUWU_BUILTIN_VEC, "Vec", kVecMembers, vecinit);
     addclass(L, LUWU_BUILTIN_VECDEQUE, "VecDeque", kVecDequeMembers, vecdequeinit);
 
     lua_pushvalue(L, -1);
     lua_setglobal(L, LUA_COLLECTIONSLIBNAME);
+    return 1;
+}
+
+int luaopen_bundle(lua_State* L)
+{
+    addbundleclasses(L);
+
+    lua_createtable(L, 0, 6);
+    luaL_register(L, NULL, kBundleFunctions);
+    for (int size = 2; size <= 4; size++)
+    {
+        luaA_pushclass(L, bundleclass(L, size));
+        lua_setfield(L, -2, kBundleClassNames[size]);
+    }
+
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, LUA_BUNDLELIBNAME);
     return 1;
 }

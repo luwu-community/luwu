@@ -14455,19 +14455,19 @@ L1: RETURN R2 1
     }
 }
 
-// Luwu collections: calling a builtin class's constructor directly or through a local compiles to a fastcall. Any chain
-// of locals that are never written resolves, which is what destructuring them out of `collections` desugars to.
-TEST_CASE("CollectionsConstructorsCompileToFastcalls")
+// Luwu bundles: calling a named bundle's constructor directly or through a local compiles to a fastcall. Any chain
+// of locals that are never written resolves, which is what destructuring them out of `bundle` desugars to.
+TEST_CASE("BundleConstructorsCompileToFastcalls")
 {
     ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
 
     const char* fastcalls[] = {
-        "local function f(x) local v = collections.Pair(x, x) return v end",
-        "local function f(x) local v = collections.Triple(x, x, x) return v end",
-        "local Quad = collections.Quad local function f(x) local v = Quad(x, x, x, x) return v end",
-        "local c = collections local p = c.Pair local function f(x) local v = p(x, x) return v end",
-        "local c = collections local function f(x) local v = c.Pair(x, x) return v end",
-        "local c = collections local c2 = c local function f(x) local v = c2.Triple(x, x, x) return v end",
+        "local function f(x) local v = bundle.Pair(x, x) return v end",
+        "local function f(x) local v = bundle.Triple(x, x, x) return v end",
+        "local Quad = bundle.Quad local function f(x) local v = Quad(x, x, x, x) return v end",
+        "local c = bundle local p = c.Pair local function f(x) local v = p(x, x) return v end",
+        "local c = bundle local function f(x) local v = c.Pair(x, x) return v end",
+        "local c = bundle local c2 = c local function f(x) local v = c2.Triple(x, x, x) return v end",
     };
     for (const char* source : fastcalls)
     {
@@ -14476,11 +14476,11 @@ TEST_CASE("CollectionsConstructorsCompileToFastcalls")
     }
 
     const char* calls[] = {
-        "local collections = {} local function f(x) local v = collections.Pair(x, x) return v end",
+        "local bundle = {} local function f(x) local v = bundle.Pair(x, x) return v end",
         "local function f(x) local v = string.Pair(x, x) return v end",
-        "local function f(x) local v = collections.Other(x) return v end",
-        "local c = collections c = {} local function f(x) local v = c.Pair(x, x) return v end",
-        "local p = collections.Pair p = print local function f(x) local v = p(x, x) return v end",
+        "local function f(x) local v = bundle.Other(x) return v end",
+        "local c = bundle c = {} local function f(x) local v = c.Pair(x, x) return v end",
+        "local p = bundle.Pair p = print local function f(x) local v = p(x, x) return v end",
     };
     for (const char* source : calls)
     {
@@ -14492,7 +14492,7 @@ TEST_CASE("CollectionsConstructorsCompileToFastcalls")
     CHECK(compileFunction(fastcalls[0], 0, 1).find("FASTCALL") == std::string::npos);
 }
 
-// Luwu collections: `for i, v in collections.Pair(a, b)` constructs no Pair. The position is only loaded when the body
+// Luwu bundles: `for i, v in bundle.Pair(a, b)` constructs no Pair. The position is only loaded when the body
 // reads it.
 TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
 {
@@ -14502,10 +14502,10 @@ TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
         "\n" + compileFunction(
                    R"(
 local function f(t, a, b)
-    for i, v in collections.Pair(a, b) do
+    for i, v in bundle.Pair(a, b) do
         t[i] = v
     end
-    for _, v in collections.Triple(a, b, a) do
+    for _, v in bundle.Triple(a, b, a) do
         t[v] = true
     end
 end
