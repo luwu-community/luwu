@@ -336,6 +336,10 @@ public:
     AstName refinedParam;
     Location refinedParamLocation;
     AstType* refinedType = nullptr;
+
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): written as a `--@[...]` comment. It means
+    // the same as an attribute in the code, but the pretty printer doesn't print it.
+    bool comment = false;
 };
 
 // The `@deprecated` attribute's payload, or nullopt when the array has no `@deprecated`.
