@@ -6163,7 +6163,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_functions_keep_each_position_type")
             local last: number = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12).twelfth
             local empty: bundle.Bundle0 = bundle.pack()
             local wrong: bundle.Bundle2<number, string> = b:sub(2, 3)
-            return x, y, z, middle, tail, replaced, anywhere, joined, last, empty, wrong
+            local tailFunction: bundle.Bundle2<string, boolean> = bundle.sub(b, 2, 3)
+            local replacedFunction: bundle.Bundle3<string, string, boolean> = bundle.with(b, 1, "text")
+            return x, y, z, middle, tail, replaced, anywhere, joined, last, empty, wrong, tailFunction, replacedFunction
         end
     )");
 

@@ -642,6 +642,8 @@ declare bundle: {
     pack: (...unknown) -> unknown,
     unpack: (b: unknown, first: number?, last: number?) -> ...unknown,
     concat: (...unknown) -> unknown,
+    sub: (b: unknown, first: number?, last: number?) -> unknown,
+    with: (b: unknown, position: number, value: unknown) -> unknown,
 }
 )BUILTIN_SRC";
 

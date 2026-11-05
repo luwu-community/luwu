@@ -89,6 +89,16 @@ do
     raises(function()
         record:with(8, 1)
     end, "position 8 is out of range 1 to 7")
+
+    -- the library has both as functions too, taking the bundle first
+    assert(bundle.sub(record, 3, 4) == record:sub(3, 4) and bundle.sub(record) == record)
+    assert(bundle.with(record, 2, "two") == record:with(2, "two"))
+    raises(function()
+        bundle.sub({}, 1, 2)
+    end, "bundle expected, got table")
+    raises(function()
+        bundle.with(record, 0, 1)
+    end, "position 0 is out of range 1 to 7")
     assert(bundle.concat(bundle.pack(1, 2), bundle.pack(3), bundle.pack()) == bundle.pack(1, 2, 3))
     raises(function()
         bundle.concat(twelve, bundle.pack(1))
