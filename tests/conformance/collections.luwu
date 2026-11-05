@@ -15,35 +15,35 @@ local function raises(f: () -> (), message: string)
     assert(string.find(tostring(err), message, 1, true), `expected '{message}' in '{err}'`)
 end
 
--- pair, triple and quad hold their values under Kotlin's names
+-- a bundle holds its values as `first`, `second` and so on, and prints the way `.(...)` writes it
 do
-    const range = bundle.Pair(1, "x")
+    const range = bundle.Two(1, "x")
     assert(range.first == 1 and range.second == "x")
-    assert(class.isinstance(range, bundle.Pair))
-    assert(class.name(range) == "Pair")
-    assert(range == bundle.Pair(1, "x"))
-    assert(range ~= bundle.Pair(1, "y"))
-    assert(range ~= bundle.Triple(1, "x", nil))
-    assert(tostring(range) == `Pair(1, "x")`)
-    assert(tostring(bundle.Pair("a\"b", nil)) == `Pair("a\\"b", nil)`)
+    assert(class.isinstance(range, bundle.Two))
+    assert(class.name(range) == "Two")
+    assert(range == bundle.Two(1, "x"))
+    assert(range ~= bundle.Two(1, "y"))
+    assert(range ~= bundle.Three(1, "x", nil))
+    assert(tostring(range) == `.(1, "x")`)
+    assert(tostring(bundle.Two("a\"b", nil)) == `.("a\\"b", nil)`)
 
-    const color = bundle.Triple(255, 128, 0)
+    const color = bundle.Three(255, 128, 0)
     assert(color.first == 255 and color.second == 128 and color.third == 0)
-    assert(color == bundle.Triple(255, 128, 0))
-    assert(tostring(color) == "Triple(255, 128, 0)")
+    assert(color == bundle.Three(255, 128, 0))
+    assert(tostring(color) == ".(255, 128, 0)")
 
-    const margins = bundle.Quad(1, 2, 3, 4)
+    const margins = bundle.Four(1, 2, 3, 4)
     assert(margins.fourth == 4)
-    assert(margins == bundle.Quad(1, 2, 3, 4))
-    assert(margins ~= bundle.Quad(1, 2, 3, 5))
-    assert(tostring(margins) == "Quad(1, 2, 3, 4)")
+    assert(margins == bundle.Four(1, 2, 3, 4))
+    assert(margins ~= bundle.Four(1, 2, 3, 5))
+    assert(tostring(margins) == ".(1, 2, 3, 4)")
 
     -- the elements compare with ==, so nested bundles compare by value too
-    assert(bundle.Pair(range, 1) == bundle.Pair(bundle.Pair(1, "x"), 1))
+    assert(bundle.Two(range, 1) == bundle.Two(bundle.Two(1, "x"), 1))
 
     raises(function()
         range.first = 2
-    end, "'first' is a const member of 'Pair'")
+    end, "'first' is a const member of 'Two'")
     raises(function()
         print(range.third)
     end, "third")
@@ -51,12 +51,12 @@ end
 
 -- `bundle.pack` holds every value it gets, nil included, up to 12; positions past `fourth` are `fifth` to `twelfth`
 do
-    assert(collections.Pair == nil and bundle.Pair ~= nil)
+    assert(collections.Pair == nil and bundle.Two ~= nil)
 
     const record = bundle.pack("AX1230", nil, 3, true, "e", "f", "g")
-    assert(#record == 7 and class.name(record) == "Bundle7" and record.first == "AX1230" and record.second == nil)
-    assert(record.seventh == "g" and tostring(record) == `Bundle7("AX1230", nil, 3, true, "e", "f", "g")`)
-    assert(class.name(bundle.pack(1, 2)) == "Pair" and class.isinstance(bundle.pack(1, 2), bundle.Pair))
+    assert(#record == 7 and class.name(record) == "Seven" and record.first == "AX1230" and record.second == nil)
+    assert(record.seventh == "g" and tostring(record) == `.("AX1230", nil, 3, true, "e", "f", "g")`)
+    assert(class.name(bundle.pack(1, 2)) == "Two" and class.isinstance(bundle.pack(1, 2), bundle.Two))
     assert(#bundle.pack() == 0 and #bundle.pack(nil) == 1)
     const twelve = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
     assert(twelve.twelfth == 12 and #twelve == 12)
@@ -72,7 +72,7 @@ do
     assert(fields == 10)
 
     -- `unpack` gives a range of positions, the whole bundle by default
-    const a, b, c = bundle.unpack(bundle.Triple(1, nil, 3))
+    const a, b, c = bundle.unpack(bundle.Three(1, nil, 3))
     assert(a == 1 and b == nil and c == 3)
     assert(select("#", bundle.unpack(record)) == 7 and select("#", bundle.unpack(record, 3, 2)) == 0)
     const third, fourth = bundle.unpack(record, 3, 4)
@@ -85,23 +85,23 @@ do
     end, "bundle expected, got table")
 
     -- `sub` and `with` make new bundles; `concat` joins several
-    assert(record:sub(3, 4) == bundle.Pair(3, true) and record:sub(6) == bundle.Pair("f", "g") and #record:sub(8) == 0)
+    assert(record:sub(3, 4) == bundle.Two(3, true) and record:sub(6) == bundle.Two("f", "g") and #record:sub(8) == 0)
     assert(record:with(2, "two").second == "two" and record.second == nil)
     raises(function()
         record:with(8, 1)
     end, "position 8 is out of range 1 to 7")
-    assert(bundle.concat(bundle.Pair(1, 2), bundle.pack(3), bundle.pack()) == bundle.Triple(1, 2, 3))
+    assert(bundle.concat(bundle.Two(1, 2), bundle.pack(3), bundle.pack()) == bundle.Three(1, 2, 3))
     raises(function()
         bundle.concat(twelve, bundle.pack(1))
     end, "bundle.concat makes at most 12 values, but these hold 13")
 
     -- bundles of one size order position by position, so a list of them sorts
-    assert(bundle.Pair(1, 2) < bundle.Pair(1, 3) and bundle.Pair(1, 2) <= bundle.Pair(1, 2) and not (bundle.Pair(2, 0) < bundle.Pair(1, 9)))
-    const list = { bundle.Pair(2, "b"), bundle.Pair(1, "z"), bundle.Pair(1, "a") }
+    assert(bundle.Two(1, 2) < bundle.Two(1, 3) and bundle.Two(1, 2) <= bundle.Two(1, 2) and not (bundle.Two(2, 0) < bundle.Two(1, 9)))
+    const list = { bundle.Two(2, "b"), bundle.Two(1, "z"), bundle.Two(1, "a") }
     table.sort(list)
-    assert(list[1] == bundle.Pair(1, "a") and list[3] == bundle.Pair(2, "b"))
+    assert(list[1] == bundle.Two(1, "a") and list[3] == bundle.Two(2, "b"))
     raises(function()
-        return bundle.Pair(1, 2) < bundle.Triple(1, 2, 3)
+        return bundle.Two(1, 2) < bundle.Three(1, 2, 3)
     end, "attempt to compare")
 end
 
@@ -111,44 +111,44 @@ do
     flights[bundle.pack("AX1230", "2026-11-04", "A", "C")] = "booked"
     assert(flights[bundle.pack("AX1230", "2026-11-04", "A", "C")] == "booked")
     assert(flights[bundle.pack("AX1230", "2026-11-04", "A", "D")] == nil)
-    assert(not rawequal(bundle.Pair(1, 2), bundle.Pair(1, 2)))
+    assert(not rawequal(bundle.Two(1, 2), bundle.Two(1, 2)))
 
     -- the fields compare raw: zero's sign doesn't matter, a table inside is only itself, nested bundles go by value,
     -- and bundles of different sizes are different keys
     const keys = {}
-    keys[bundle.Pair(0, 1)] = "zero"
-    assert(keys[bundle.Pair(-0, 1)] == "zero")
+    keys[bundle.Two(0, 1)] = "zero"
+    assert(keys[bundle.Two(-0, 1)] == "zero")
     const inner = {}
-    keys[bundle.Pair(inner, 1)] = "inner"
-    assert(keys[bundle.Pair(inner, 1)] == "inner" and keys[bundle.Pair({}, 1)] == nil)
-    keys[bundle.Pair(bundle.Pair(1, 2), "x")] = "nested"
-    assert(keys[bundle.Pair(bundle.Pair(1, 2), "x")] == "nested")
+    keys[bundle.Two(inner, 1)] = "inner"
+    assert(keys[bundle.Two(inner, 1)] == "inner" and keys[bundle.Two({}, 1)] == nil)
+    keys[bundle.Two(bundle.Two(1, 2), "x")] = "nested"
+    assert(keys[bundle.Two(bundle.Two(1, 2), "x")] == "nested")
     keys[bundle.pack(1)] = "one"
     assert(keys[bundle.pack(1, nil)] == nil)
 
     -- assigning through an equal bundle replaces the entry, and nil removes it
-    keys[bundle.Pair(-0, 1)] = "again"
+    keys[bundle.Two(-0, 1)] = "again"
     local count = 0
     for _ in keys do
         count += 1
     end
-    assert(count == 4 and keys[bundle.Pair(0, 1)] == "again")
-    keys[bundle.Pair(0, 1)] = nil
-    assert(keys[bundle.Pair(0, 1)] == nil)
+    assert(count == 4 and keys[bundle.Two(0, 1)] == "again")
+    keys[bundle.Two(0, 1)] = nil
+    assert(keys[bundle.Two(0, 1)] == nil)
 
     -- a NaN field never equals itself, so only the same bundle finds it
     const nan = 0 / 0
-    const withnan = bundle.Pair(nan, 1)
+    const withnan = bundle.Two(nan, 1)
     keys[withnan] = "nan"
-    assert(keys[withnan] == "nan" and keys[bundle.Pair(nan, 1)] == nil)
+    assert(keys[withnan] == "nan" and keys[bundle.Two(nan, 1)] == nil)
 
     -- bundles nested deeper than 32 levels count by identity past that depth
     local shallow, shallowcopy, deep, deepcopy = bundle.pack(), bundle.pack(), bundle.pack(), bundle.pack()
     for i = 1, 20 do
-        shallow, shallowcopy = bundle.Pair(i, shallow), bundle.Pair(i, shallowcopy)
+        shallow, shallowcopy = bundle.Two(i, shallow), bundle.Two(i, shallowcopy)
     end
     for i = 1, 40 do
-        deep, deepcopy = bundle.Pair(i, deep), bundle.Pair(i, deepcopy)
+        deep, deepcopy = bundle.Two(i, deep), bundle.Two(i, deepcopy)
     end
     keys[shallow] = "shallow"
     keys[deep] = "deep"
@@ -157,28 +157,28 @@ do
     -- many keys spread over the hash
     const many = {}
     for i = 1, 5000 do
-        many[bundle.Pair(i, tostring(i))] = i
+        many[bundle.Two(i, tostring(i))] = i
     end
     for i = 1, 5000 do
-        assert(many[bundle.Pair(i, tostring(i))] == i)
+        assert(many[bundle.Two(i, tostring(i))] == i)
     end
 end
 
 -- iterating a bundle gives every slot in order, nil included, and starting a loop allocates nothing
 do
     const seen = {}
-    for i, v in bundle.Pair("a", nil) do
+    for i, v in bundle.Two("a", nil) do
         seen[i] = if v == nil then "nil" else v
     end
     assert(seen[1] == "a" and seen[2] == "nil" and #seen == 2)
 
     local weighted = 0
-    for i, v in bundle.Quad(1, 2, 3, 4) do
+    for i, v in bundle.Four(1, 2, 3, 4) do
         weighted += i * v
     end
     assert(weighted == 1 + 4 + 9 + 16)
 
-    const color = bundle.Triple(255, 128, 0)
+    const color = bundle.Three(255, 128, 0)
     local total = 0
     for _, channel in color do
         for _, again in color do
@@ -212,7 +212,7 @@ do
 
     -- a bundle yields every slot
     table.clear(order)
-    for i, v in bundle.Triple(note("a"), note(nil), note("c")) do
+    for i, v in bundle.Three(note("a"), note(nil), note("c")) do
         table.insert(order, `{i}={v}`)
     end
     assert(table.concat(order, " ") == "a nil c 1=a 2=nil 3=c")
@@ -232,7 +232,7 @@ do
 
     -- each pass's value is its own, for closures and for writes
     const readers = {}
-    for _, v in bundle.Pair("x", "y") do
+    for _, v in bundle.Two("x", "y") do
         table.insert(readers, function()
             return v
         end)
@@ -261,7 +261,7 @@ do
     -- nested, and a trailing call that still builds the table
     local cells = 0
     for _, row in { 1, 2 } do
-        for _, column in bundle.Pair(10, 20) do
+        for _, column in bundle.Two(10, 20) do
             cells += row * column
         end
     end
@@ -269,7 +269,7 @@ do
 
     -- a list of bundles, the last one included, is unfolded too
     local sum = 0
-    for _, entry in { bundle.Pair(1, 2), bundle.Pair(3, 4) } do
+    for _, entry in { bundle.Two(1, 2), bundle.Two(3, 4) } do
         sum += entry.first * entry.second
     end
     assert(sum == 14)
@@ -554,13 +554,13 @@ do
     end, "this VecDeque can only accept strings, but you passed none")
 
     const bundles = collections.Vec()
-    bundles:push(bundle.Pair(1, 2))
+    bundles:push(bundle.Two(1, 2))
     raises(function()
         bundles:push(collections.OrderedMap())
-    end, "this Vec can only accept 'Pair' objects, but you passed an 'OrderedMap' object")
+    end, "this Vec can only accept 'Two' objects, but you passed an 'OrderedMap' object")
     raises(function()
-        bundles:insert(1, bundle.Triple(1, 2, 3))
-    end, "this Vec can only accept 'Pair' objects, but you passed a 'Triple' object")
+        bundles:insert(1, bundle.Three(1, 2, 3))
+    end, "this Vec can only accept 'Two' objects, but you passed a 'Three' object")
 
     const flags = collections.Vec()
     flags:push(true)
@@ -675,7 +675,7 @@ do
 
     const long = string.rep("\"quoted\"\n", 500)
     assert(#tostring(collections.Vec({ long, long })) > 2 * #long)
-    assert(#tostring(bundle.Pair(long, long)) > 2 * #long)
+    assert(#tostring(bundle.Two(long, long)) > 2 * #long)
 
     const list = collections.Vec({ Clearing {}, Clearing {}, Clearing {} })
     printing = list
@@ -684,17 +684,23 @@ end
 
 -- constructors called directly compile to fastcalls, which build what the constructor does
 do
-    const one = bundle.Pair(1)
-    assert(one.first == 1 and one.second == nil and class.isinstance(one, bundle.Pair))
-    const three = bundle.Triple(1, 2, 3, 4)
-    assert(three.first == 1 and three.third == 3 and tostring(three) == "Triple(1, 2, 3)")
-    const four = bundle.Quad(1, 2, 3, 4)
+    const one = bundle.Two(1)
+    assert(one.first == 1 and one.second == nil and class.isinstance(one, bundle.Two))
+    const three = bundle.Three(1, 2, 3, 4)
+    assert(three.first == 1 and three.third == 3 and tostring(three) == ".(1, 2, 3)")
+    const four = bundle.Four(1, 2, 3, 4)
     assert(four.second == 2 and four.fourth == 4)
+    -- every named size has one, padding missing values with nil
+    assert(bundle.One("a").first == "a" and #bundle.One("a") == 1)
+    const seven = bundle.Seven(1, 2)
+    assert(#seven == 7 and seven.second == 2 and seven.seventh == nil)
+    assert(bundle.Twelve(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12).twelfth == 12)
+    assert(#bundle.Zero() == 0 and bundle.Zero() == bundle.pack())
 
     -- enough allocation to run the collector between constructions
     const kept = {}
     for i = 1, 20000 do
-        kept[i % 100 + 1] = bundle.Pair({ i })
+        kept[i % 100 + 1] = bundle.Two({ i })
     end
     collectgarbage()
     for i = 1, 100 do
@@ -702,8 +708,8 @@ do
     end
 
     -- with `bundle` replaced in the environment, the call reaches the replacement
-    const replaced = loadstring("local value = bundle.Pair(1) return value")
-    setfenv(replaced, { bundle = { Pair = function(value) return `replaced {value}` end } })
+    const replaced = loadstring("local value = bundle.Two(1) return value")
+    setfenv(replaced, { bundle = { Two = function(value) return `replaced {value}` end } })
     assert(replaced() == "replaced 1")
 end
 

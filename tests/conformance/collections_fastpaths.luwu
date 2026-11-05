@@ -56,7 +56,7 @@ do
         length(Plain(1))
     end, "attempt to get length of")
     -- a builtin class's `__len` (a bundle's size) goes through the same path
-    assert(length(bundle.Pair(1, 2)) == 2 and length(bundle.pack(1, 2, 3, 4, 5)) == 5)
+    assert(length(bundle.Two(1, 2)) == 2 and length(bundle.pack(1, 2, 3, 4, 5)) == 5)
 end
 
 -- Every method call below goes through one of these. A NAMECALL learns its method's slot on its first run, and only
@@ -147,14 +147,14 @@ do
     end, "this Vec can't accept nil")
 
     const bundles = collections.VecDeque()
-    deques.pushback(bundles, bundle.Pair(1, 2))
-    deques.pushback(bundles, bundle.Pair(3, 4))
+    deques.pushback(bundles, bundle.Two(1, 2))
+    deques.pushback(bundles, bundle.Two(3, 4))
     raises(function()
-        deques.pushback(bundles, bundle.Triple(1, 2, 3))
-    end, "this VecDeque can only accept 'Pair' objects, but you passed a 'Triple' object")
+        deques.pushback(bundles, bundle.Three(1, 2, 3))
+    end, "this VecDeque can only accept 'Two' objects, but you passed a 'Three' object")
     raises(function()
         deques.pushfront(bundles, { 1, 2 })
-    end, "this VecDeque can only accept 'Pair' objects, but you passed a table")
+    end, "this VecDeque can only accept 'Two' objects, but you passed a table")
 end
 
 -- vec: results, positions and arguments the fast methods leave to the C methods

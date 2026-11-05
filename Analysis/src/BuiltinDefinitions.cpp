@@ -439,8 +439,7 @@ void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
 
 // Luwu bundles: the class of each size, as the `bundle` library exports them (kBundleClassNames in lcollectionslib.cpp)
 static const char* const kBundleClassNames[] = {
-    "Bundle0", "Bundle1", "Pair", "Triple", "Quad", "Bundle5", "Bundle6",
-    "Bundle7", "Bundle8", "Bundle9", "Bundle10", "Bundle11", "Bundle12",
+    "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
 };
 static constexpr size_t kBundleClassCount = sizeof(kBundleClassNames) / sizeof(kBundleClassNames[0]);
 
@@ -675,8 +674,9 @@ static void registerBuiltinModule(
         globals.globalScope->bindings[symbol] = binding;
 }
 
-// Luwu bundles: gives the library's functions and each bundle class's `sub` and `with` their exact types (MagicBundle)
-static void attachBundleMagicFunctions(GlobalTypes& globals)
+// Luwu bundles: gives the library's functions and each bundle class's `sub` and `with` their exact types (MagicBundle),
+// and has the classes print as `.(A, B)`
+static void prepareBundleTypes(GlobalTypes& globals)
 {
     using Operation = MagicBundle::Operation;
 
@@ -700,6 +700,8 @@ static void attachBundleMagicFunctions(GlobalTypes& globals)
         ExternType* etv = getMutable<ExternType>(follow(declared.type));
         if (!etv)
             continue;
+
+        etv->printsAsBundle = true;
 
         const std::pair<const char*, Operation> methods[] = {
             {"sub", Operation::Sub},
@@ -897,7 +899,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     {
         registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
         registerBuiltinModule(frontend, globals, "bundle", getBundleDefinitionSource(), typeCheckForAutocomplete);
-        attachBundleMagicFunctions(globals);
+        prepareBundleTypes(globals);
     }
 
     // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder

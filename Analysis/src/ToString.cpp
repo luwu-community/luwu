@@ -1447,6 +1447,15 @@ struct TypeStringifier
     void operator()(TypeId ty, const ExternType& etv)
     {
         const char* valueKind = state.opts.classAndTraitValuesInTypeForm ? nominalValueKind(etv) : nullptr;
+
+        // Luwu bundles: a bundle prints the way `.(A, B)` writes it, rather than by its class's name
+        const ExternType* declared = etv.genericTemplate ? get<ExternType>(follow(*etv.genericTemplate)) : &etv;
+        if (!valueKind && declared && declared->printsAsBundle)
+        {
+            stringifyBundle(etv);
+            return;
+        }
+
         if (valueKind)
         {
             state.emit(valueKind);
@@ -1470,6 +1479,26 @@ struct TypeStringifier
 
         if (valueKind)
             state.emit(">");
+    }
+
+    void stringifyBundle(const ExternType& etv)
+    {
+        if (state.hasSeen(&etv))
+        {
+            state.result.cycle = true;
+            state.emit("*CYCLE*");
+            return;
+        }
+
+        state.emit(".(");
+        for (size_t i = 0; i < etv.instantiatedTypeParams.size(); i++)
+        {
+            if (i > 0)
+                state.emit(", ");
+            stringify(etv.instantiatedTypeParams[i]);
+        }
+        state.emit(")");
+        state.unsee(&etv);
     }
 
     void operator()(TypeId, const AnyType&)

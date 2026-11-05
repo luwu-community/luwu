@@ -306,8 +306,8 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
     return 1;
 }
 
-// Luwu bundles: a fixed number of values, each position with its own type, immutable. One class per size, 0 to
-// LUWU_BUNDLE_MAX; sizes 2 to 4 are named Pair, Triple and Quad. The fields are `first` to `twelfth`, public and const.
+// Luwu bundles: a fixed number of values, each position with its own type, immutable. One class per size, named by it:
+// `bundle.Zero` to `bundle.Twelve`. The fields are `first` to `twelfth`, public and const.
 
 // A bundle's fields are public and const
 static const uint8_t kBundleField = LBC_CLASSMEMBER_CONST;
@@ -317,8 +317,7 @@ static const char* const kBundleFieldNames[LUWU_BUNDLE_MAX] = {
 };
 
 static const char* const kBundleClassNames[LUWU_BUNDLE_MAX + 1] = {
-    "Bundle0", "Bundle1", "Pair", "Triple", "Quad", "Bundle5", "Bundle6",
-    "Bundle7", "Bundle8", "Bundle9", "Bundle10", "Bundle11", "Bundle12",
+    "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
 };
 
 static LuauClass* bundleclass(lua_State* L, int size)
@@ -436,11 +435,11 @@ static int bundlelen(lua_State* L)
 template<int Size>
 static int bundletostring(lua_State* L)
 {
+    // the way `.(1, "x")` writes it
     LuauObject* bundle = checkbundle<Size>(L, "__tostring");
     luaL_Strbuf b;
     luaL_buffinit(L, &b);
-    luaL_addstring(&b, getstr(bundle->lclass->name));
-    luaL_addchar(&b, '(');
+    luaL_addstring(&b, ".(");
     for (uint32_t i = 0; i < bundle->numberofmembers; i++)
     {
         if (i > 0)
@@ -1770,9 +1769,9 @@ int luaopen_bundle(lua_State* L)
 {
     addbundleclasses(L);
 
-    lua_createtable(L, 0, 6);
+    lua_createtable(L, 0, LUWU_BUNDLE_MAX + 4);
     luaL_register(L, NULL, kBundleFunctions);
-    for (int size = 2; size <= 4; size++)
+    for (int size = 0; size <= LUWU_BUNDLE_MAX; size++)
     {
         luaA_pushclass(L, bundleclass(L, size));
         lua_setfield(L, -2, kBundleClassNames[size]);
