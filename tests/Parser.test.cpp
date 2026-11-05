@@ -2,6 +2,7 @@
 #include "Luau/Parser.h"
 
 #include "AstQueryDsl.h"
+#include "Typewriter.h"
 #include "Fixture.h"
 #include "Luau/Ast.h"
 #include "Luau/Common.h"
@@ -10281,6 +10282,198 @@ local function c() end
 
     REQUIRE(1 == result.errors.size());
     CHECK_EQ("@nodiscard takes at most one string, the reason: '@[nodiscard(\"use the returned copy\")]'", result.errors[0].getMessage());
+}
+
+TEST_CASE_FIXTURE(Fixture, "luau_modules_write_attributes_outside_functions_as_comments")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    ParseOptions options;
+    options.language = Language::Luau;
+
+    ParseResult result = tryParse(
+        R"(
+type Fs = {
+    @[deprecated { use = "readfile" }]
+    read: (string) -> string,
+}
+
+@deprecated
+local x = 1
+
+@native
+local function f() end
+)",
+        options
+    );
+
+    // `@native` on a function stays valid Luau: upstream parses attributes on functions
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Attributes on a table type field are Luwu-only; in a Luau file, write it as the comment '--@[deprecated ...]' on the line above"
+    );
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(2, 6));
+    CHECK_EQ(
+        result.errors[1].getMessage(),
+        "Attributes on a local variable are Luwu-only; in a Luau file, write it as the comment '--@[deprecated]' on the line above"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "comment_attributes_mean_the_same_as_written_ones")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    ParseOptions options;
+    options.language = Language::Luau;
+
+    ParseResult result = tryParse(
+        R"(
+type Fs = {
+    --- reads a file
+    --@[deprecated { use = "readfile" }]
+    read: (string) -> string,
+    readfile: (string) -> string,
+}
+
+--@[deprecated] text after the attribute is free
+local x = 1
+
+--@[deprecated]
+y = 2
+)",
+        options
+    );
+
+    REQUIRE_EQ(result.errors.size(), 0);
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    const AstStatTypeAlias* alias = result.root->body.data[0]->as<AstStatTypeAlias>();
+    REQUIRE(alias);
+    const AstTypeTable* table = alias->type->as<AstTypeTable>();
+    REQUIRE(table);
+    REQUIRE_EQ(table->props.size, 2);
+    REQUIRE_EQ(table->props.data[0].attributes.size, 1);
+    const AstAttr* read = table->props.data[0].attributes.data[0];
+    CHECK(read->type == AstAttr::Type::Deprecated);
+    CHECK(read->comment);
+    CHECK(read->deprecatedInfo().use == "readfile");
+    // The location is the attribute's name in the comment
+    CHECK_EQ(read->location.begin, Position(3, 8));
+    CHECK_EQ(table->props.data[1].attributes.size, 0);
+
+    const AstStatLocal* local = result.root->body.data[1]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->attributes.size, 1);
+    CHECK(local->attributes.data[0]->type == AstAttr::Type::Deprecated);
+    // The statement starts at its keyword, not at the comment above it
+    CHECK_EQ(local->location.begin, Position(9, 0));
+
+    const AstStatAssign* assign = result.root->body.data[2]->as<AstStatAssign>();
+    REQUIRE(assign);
+    REQUIRE_EQ(assign->attributes.size, 1);
+    CHECK(assign->attributes.data[0]->type == AstAttr::Type::Deprecated);
+}
+
+TEST_CASE_FIXTURE(Fixture, "comment_attributes_are_checked_like_written_ones")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    const char* source = R"(
+--@[native]
+local x = 1
+
+--@[deprecated]
+print(x)
+
+--@[deprecated(1, 2)]
+local function f() end
+
+--@[deprecated]
+@deprecated
+function g() end
+)";
+
+    ParseOptions analysis;
+    analysis.analysisErrors = true;
+    ParseResult result = tryParse(source, analysis);
+
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(result.errors[0].getMessage(), "Attribute '@native' can only be applied to functions");
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(1, 4));
+    CHECK_EQ(result.errors[1].getMessage(), "Attribute '@deprecated' cannot be applied to this statement");
+    CHECK_EQ(result.errors[1].getLocation().begin, Position(4, 4));
+    CHECK_EQ(result.errors[2].getMessage(), "@deprecated can be parametrized only by 1 argument");
+    CHECK_EQ(result.errors[3].getMessage(), "Cannot duplicate attribute '@deprecated'");
+
+    // A compiler reports none of them: the source is valid Luau
+    ParseOptions compiler;
+    compiler.language = Language::Luau;
+    result = tryParse(source, compiler);
+    CHECK_EQ(result.errors.size(), 0);
+
+    // Only `--@[` starts an attribute
+    result = tryParse(R"(
+--@ the next local
+-- @[deprecated]
+--- @[deprecated]
+local y = 1
+)");
+    CHECK_EQ(result.errors.size(), 0);
+    REQUIRE_EQ(result.root->body.size, 1);
+    CHECK_EQ(result.root->body.data[0]->as<AstStatLocal>()->attributes.size, 0);
+}
+
+TEST_CASE_FIXTURE(Fixture, "lint_comments_are_left_to_the_linter")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    ParseOptions analysis;
+    analysis.analysisErrors = true;
+
+    // The linter applies them to the next statement, whatever it is
+    ParseResult result = tryParse(
+        R"(
+--@[nolint(LocalUnused)]
+if true then
+end
+
+--@[lint(ConstLocal)]
+local x = 1
+)",
+        analysis
+    );
+
+    CHECK_EQ(result.errors.size(), 0);
+    REQUIRE_EQ(result.root->body.size, 2);
+    CHECK_EQ(result.root->body.data[1]->as<AstStatLocal>()->attributes.size, 0);
+}
+
+TEST_CASE_FIXTURE(Fixture, "comment_attributes_are_comments_without_the_flag")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, false};
+
+    ParseResult result = tryParse(R"(
+--@[deprecated]
+local x = 1
+)");
+
+    CHECK_EQ(result.errors.size(), 0);
+}
+
+TEST_CASE_FIXTURE(Fixture, "comment_attributes_typewriting")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+    configResolver.defaultConfig.language = Language::Luau;
+
+    // The `--` is already typed: typing it into a table type cascades without attributes too
+    checkTypewriting(
+        *this,
+        "type Fs = {\n    --",
+        "@[deprecated { use = \"readfile\" }]\n",
+        "    read: (string) -> string,\n    readfile: (string) -> string,\n}\n"
+    );
+    checkTypewriting(*this, "", "--@[deprecated]\n", "type Old = number\n");
 }
 
 // TODO unit tests for various parse errors.

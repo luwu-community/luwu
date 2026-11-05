@@ -3123,4 +3123,18 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "attach_types_to_a_function_whose_generics_ar
     CHECK(decorated.find("local a:") != std::string::npos);
 }
 
+TEST_CASE("prettyPrint_drops_comment_attributes")
+{
+    ScopedFastFlag fflags[] = {{FFlag::LuauCstAttr, true}, {FFlag::LuwuAttributesEverywhere, true}};
+
+    // Printing a `--@[...]` comment back as `@[...]` would turn a Luau file into a Luwu one
+    std::string code = R"(
+        --@[deprecated]
+        local puppy = "whimper"
+    )";
+    std::string printed = prettyPrint(code, {}, true).code;
+    CHECK(printed.find('@') == std::string::npos);
+    CHECK(printed.find("local puppy = \"whimper\"") != std::string::npos);
+}
+
 TEST_SUITE_END();

@@ -208,17 +208,36 @@ private:
     // the position isn't known until after the attributes are consumed, i.e. statements.
     void validateAttributeContexts(const AstArray<AstAttr*>& attributes, AstAttr::Context context);
 
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): for `--@[...]` comments over a statement
+    // no attribute applies to.
+    void reportStatementAttributes(const AstArray<AstAttr*>& attributes);
+
+    // False for an attribute from a `--@[...]` comment when a compiler is parsing: valid Luau has to keep compiling.
+    bool reportsAttributeErrors(const AstAttr* attr) const;
+
     // "Attribute '@x' can only be applied to ..." / "... cannot be applied to ...".
     void reportAttributeNotAllowed(const Location& location, const char* attributeName, const char* allowedPositionsHint, AstAttr::Context context);
 
-    // Attribute arguments must be literals.
-    void reportNonLiteralAttributeArgs(const AstArray<AstExpr*>& args, const Location& argsLocation);
+    // Attribute arguments must be literals. Reports the first argument that isn't one, unless parsing them already
+    // reported an error. Returns whether every argument is a literal.
+    bool checkAttributeArgsAreLiterals(const AstArray<AstExpr*>& args, const Location& argsLocation, size_t errorsBeforeArgs);
 
     // `first` followed by `second`, for attributes written on both sides of an access specifier.
     AstArray<AstAttr*> concatAttributes(const AstArray<AstAttr*>& first, const AstArray<AstAttr*>& second);
 
-    // True if an attribute begins at the current lexeme, i.e. a member/field/parameter is attributed.
+    // True if an attribute begins at the current lexeme, i.e. a member/field/parameter is attributed. A
+    // `--@[...]` comment right before the lexeme counts.
     bool attributesFollow() const;
+
+    // True if the current lexeme is an `@name` or `@[`, not counting comments.
+    bool attributeLexemeFollows() const;
+
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): the attributes in the `--@[...]`
+    // comments right before the current lexeme, parsed as if written there. Empty when there are none.
+    AstArray<AstAttr*> takeCommentAttributes(AstAttr::Context context);
+
+    // Reports an attribute written as `@...` in a Luau or Lua module on a position upstream can't parse attributes on.
+    void checkAttributeLanguage(const Location& location, const char* attributeName, bool hasArguments, AstAttr::Context context);
 
     // attributes local function Name funcbody
     // attributes function funcname funcbody
@@ -726,9 +745,18 @@ private:
 
     Lexer lexer;
     Allocator& allocator;
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): for the parser over a `--@[...]` comment
+    AstNameTable& names;
 
     std::vector<Comment> commentLocations;
     std::vector<HotComment> hotcomments;
+
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): the `--@[...]` comments between the
+    // previous lexeme and the current one, for takeCommentAttributes.
+    std::vector<Lexeme> pendingCommentAttributes;
+
+    // True in the parser takeCommentAttributes runs over a comment's text. Its attributes skip checkAttributeLanguage.
+    bool parsingCommentAttributes = false;
 
     bool hotcommentHeader = true;
 

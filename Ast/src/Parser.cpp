@@ -616,6 +616,7 @@ Parser::Parser(const char* buffer, size_t bufferSize, AstNameTable& names, Alloc
     : options(options)
     , lexer(buffer, bufferSize, names, options.parseFragment ? options.parseFragment->resumePosition : Position(0, 0))
     , allocator(allocator)
+    , names(names)
     , recursionCounter(0)
     , endMismatchSuspect(Lexeme(Location(), Lexeme::Eof))
     , localMap(AstName())
@@ -842,29 +843,43 @@ AstStatBlock* Parser::parseBlockNoScope(bool doExprBody)
 // laststat ::= return [explist] | break
 AstStat* Parser::parseStat()
 {
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): `--@[...]` comments over a statement
+    // are its attributes. parseAttributeStat takes them itself when the statement also has written ones.
+    AstArray<AstAttr*> commentAttributes{nullptr, 0};
+    if (!attributeLexemeFollows())
+        commentAttributes = takeCommentAttributes(AstAttr::Context::Statement);
+
     // guess the type from the token type
     switch (lexer.current().type)
     {
     case Lexeme::ReservedIf:
+        reportStatementAttributes(commentAttributes);
         return parseIf();
     case Lexeme::ReservedWhile:
+        reportStatementAttributes(commentAttributes);
         return parseWhile();
     case Lexeme::ReservedDo:
+        reportStatementAttributes(commentAttributes);
         return parseDo();
     case Lexeme::ReservedFor:
+        reportStatementAttributes(commentAttributes);
         return parseFor();
     case Lexeme::ReservedRepeat:
+        reportStatementAttributes(commentAttributes);
         return parseRepeat();
     case Lexeme::ReservedFunction:
-        return parseFunctionStat(AstArray<AstAttr*>({nullptr, 0}));
+        validateAttributeContexts(commentAttributes, AstAttr::Context::Function);
+        return parseFunctionStat(commentAttributes);
     case Lexeme::ReservedLocal:
     {
         Location start = lexer.current().location;
-        return parseLocal(start, start, {nullptr, 0}, false);
+        return parseLocal(start, start, commentAttributes, false);
     }
     case Lexeme::ReservedReturn:
+        reportStatementAttributes(commentAttributes);
         return parseReturn();
     case Lexeme::ReservedBreak:
+        reportStatementAttributes(commentAttributes);
         return parseBreak();
     case Lexeme::Attribute:
     case Lexeme::AttributeOpen:
@@ -922,28 +937,51 @@ AstStat* Parser::parseStat()
         return parseOrLeaveStatement(expr, errorsBeforeExpr);
 
     if (expr->is<AstExprCall>())
+    {
+        reportStatementAttributes(commentAttributes);
         return allocator.alloc<AstStatExpr>(expr->location, expr);
+    }
 
     // if the next token is , or =, it's an assignment (, means it's an assignment with multiple variables)
     if (lexer.current().type == ',' || lexer.current().type == '=')
-        return parseAssignment(expr);
+    {
+        validateAttributeContexts(commentAttributes, AstAttr::Context::Assignment);
+
+        AstStat* node = parseAssignment(expr);
+        if (AstStatAssign* assign = node->as<AstStatAssign>())
+            assign->attributes = commentAttributes;
+        return node;
+    }
 
     // if the next token is a compound assignment operator, it's a compound assignment (these don't support multiple variables)
     if (std::optional<AstExprBinary::Op> op = parseCompoundOp(lexer.current()))
+    {
+        reportStatementAttributes(commentAttributes);
         return parseCompoundAssignment(expr, *op);
+    }
 
     // we know this isn't a call or an assignment; therefore it must be a context-sensitive keyword such as `type` or `continue`
     AstName ident = getIdentifier(expr);
 
     if (ident == "type")
-        return parseTypeAlias(expr->location, /* exported= */ false, expr->location.begin, expr->location);
+    {
+        if (lexer.current().type == Lexeme::ReservedFunction)
+            reportStatementAttributes(commentAttributes);
+        else
+            validateAttributeContexts(commentAttributes, AstAttr::Context::TypeAlias);
+
+        return parseTypeAlias(expr->location, /* exported= */ false, expr->location.begin, expr->location, commentAttributes);
+    }
 
     if (ident == "class")
     {
         if (FFlag::LuwuClasses && startsClassType())
             return parseClassType(start, expr->location, /* exported= */ false);
         if (FFlag::LuwuClasses)
-            return parseClassStat(start, /*exported*/ false, start);
+        {
+            validateAttributeContexts(commentAttributes, AstAttr::Context::Class);
+            return parseClassStat(start, /*exported*/ false, start, commentAttributes);
+        }
 
         // Without the feature, `class` is an ordinary identifier, so only diagnose the shape a class
         // declaration actually has (`class Name`); anything else is someone's variable named `class`.
@@ -1008,14 +1046,16 @@ AstStat* Parser::parseStat()
             {
                 // `export class` routes here with the classes feature off too, so that it reports the
                 // feature being disabled rather than 'export' wanting an identifier.
-                return parseExportValue(expr->location, expr->location, AstArray<AstAttr*>({nullptr, 0}));
+                return parseExportValue(expr->location, expr->location, commentAttributes);
             }
             else if (current.type == Lexeme::Name && AstName(current.name) == "type")
             {
+                validateAttributeContexts(commentAttributes, AstAttr::Context::TypeAlias);
+
                 Position typeKeywordPosition = current.location.begin;
                 Location typeKeywordLocation = current.location;
                 nextLexeme();
-                return parseTypeAlias(expr->location, /* exported= */ true, typeKeywordPosition, typeKeywordLocation);
+                return parseTypeAlias(expr->location, /* exported= */ true, typeKeywordPosition, typeKeywordLocation, commentAttributes);
             }
             // Luwu: `export value = y` is `export const value = y`
             else if (current.type == Lexeme::Name)
@@ -1050,14 +1090,18 @@ AstStat* Parser::parseStat()
     {
         // The statement keyword, which parsePrimaryExpr counted as a use of the name
         continueNameUses--;
+        reportStatementAttributes(commentAttributes);
         return parseContinue(expr->location);
     }
 
     if (ident == "const")
-        return parseLocal(expr->location, expr->location, AstArray<AstAttr*>({nullptr, 0}), true);
+        return parseLocal(expr->location, expr->location, commentAttributes, true);
 
     if (ident == "declare" && declarationsAllowed())
-        return parseDeclaration(expr->location, AstArray<AstAttr*>({nullptr, 0}));
+    {
+        validateAttributeContexts(commentAttributes, AstAttr::Context::Function);
+        return parseDeclaration(expr->location, commentAttributes);
+    }
 
     // skip unexpected symbol if lexer couldn't advance at all (statements are parsed in a loop)
     if (start == lexer.current().location)
@@ -1876,11 +1920,13 @@ std::optional<AstAttr::Type> Parser::validateAttribute(
         // check that the attribute means something where it was written
         if (AstAttr::isSingleContext(context) && !AstAttr::contextAllows(allowedContexts, context))
             reportAttributeNotAllowed(loc, attributeName, allowedPositionsHint, context);
+        else if (AstAttr::isSingleContext(context))
+            checkAttributeLanguage(loc, attributeName, args.size != 0, context);
 
         // check that attribute is not duplicated
         for (const AstAttr* attr : attributes)
         {
-            if (attr->type == *type)
+            if (attr->type == *type && reportsAttributeErrors(attr))
                 report(loc, "Cannot duplicate attribute '@%s'", attributeName);
         }
         if (argsValidator)
@@ -1969,13 +2015,15 @@ void Parser::parseAttrList(TempVector<AstAttr*>& attributes, TempVector<CstAttrL
                 TempVector<Position> argCommaPositions(scratchPosition2);
                 Position closeParenPosition = Position::missing();
 
+                const size_t errorsBeforeArgs = parseErrors.size();
                 auto [args, argsLocation, _exprLocation] =
                     options.storeCstData ? parseCallList(&argCommaPositions, &closeParenPosition) : parseCallList(nullptr, nullptr);
 
-                if (!takesNameArguments(attrName))
-                    reportNonLiteralAttributeArgs(args, argsLocation);
+                // A mistake in the arguments gets one error: the validator only checks literal arguments, or names for an
+                // attribute that takes names
+                const bool literalArgs = takesNameArguments(attrName) || checkAttributeArgsAreLiterals(args, argsLocation, errorsBeforeArgs);
 
-                std::optional<AstAttr::Type> type = validateAttribute(nameLoc, attrName, attributes, args, context);
+                std::optional<AstAttr::Type> type = validateAttribute(nameLoc, attrName, attributes, literalArgs ? args : empty, context);
 
                 AstAttr* node =
                     allocator.alloc<AstAttr>(Location(nameLoc, argsLocation), type.value_or(AstAttr::Type::Unknown), args, AstName(attrName));
@@ -2068,8 +2116,9 @@ bool Parser::parseMisplacedBareAttributeArgs(const char* name, AstAttr::Context 
 
     report(lexer.current().location, "Attribute arguments must be written as '@[%s ...]'; a bare '@%s' cannot take arguments", name, name);
 
+    const size_t errorsBeforeArgs = parseErrors.size();
     std::tie(args, argsLocation, std::ignore) = parseCallList(nullptr);
-    reportNonLiteralAttributeArgs(args, argsLocation);
+    checkAttributeArgsAreLiterals(args, argsLocation, errorsBeforeArgs);
 
     return true;
 }
@@ -2124,12 +2173,12 @@ void Parser::parseAttribute_DEPRECATED(TempVector<AstAttr*>& attributes, AstAttr
                     lexer.current().type == '(')
                 {
 
+                    const size_t errorsBeforeArgs = parseErrors.size();
                     auto [args, argsLocation, _exprLocation] = parseCallList(nullptr);
 
-                    if (!takesNameArguments(attrName))
-                        reportNonLiteralAttributeArgs(args, argsLocation);
+                    const bool literalArgs = takesNameArguments(attrName) || checkAttributeArgsAreLiterals(args, argsLocation, errorsBeforeArgs);
 
-                    std::optional<AstAttr::Type> type = validateAttribute(nameLoc, attrName, attributes, args, context);
+                    std::optional<AstAttr::Type> type = validateAttribute(nameLoc, attrName, attributes, literalArgs ? args : empty, context);
 
                     attributes.push_back(
                         allocator.alloc<AstAttr>(Location(nameLoc, argsLocation), type.value_or(AstAttr::Type::Unknown), args, AstName(attrName))
@@ -2206,11 +2255,15 @@ AstArray<AstAttr*> Parser::parseAttributes(AstAttr::Context context, TempVector<
 {
     LUAU_ASSERT(cstAttrLists != nullptr ? FFlag::LuauCstAttr : true);
 
-    Lexeme::Type type = lexer.current().type;
+    LUAU_ASSERT(attributesFollow());
 
-    LUAU_ASSERT(type == Lexeme::Attribute || type == Lexeme::AttributeOpen);
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): `--@[...]` comments go first: they're
+    // written above the code's attributes.
+    AstArray<AstAttr*> commentAttributes = takeCommentAttributes(context);
 
     TempVector<AstAttr*> attributes(scratchAttr);
+    for (AstAttr* attribute : commentAttributes)
+        attributes.push_back(attribute);
 
     while (lexer.current().type == Lexeme::Attribute || lexer.current().type == Lexeme::AttributeOpen)
     {
@@ -2252,9 +2305,29 @@ void Parser::validateAttributeContexts(const AstArray<AstAttr*>& attributes, Ast
         if (attr->type == AstAttr::Type::Unknown)
             continue;
 
+        if (!reportsAttributeErrors(attr))
+            continue;
+
         const AttributeEntry* entry = findAttributeEntry(attr->name.value);
         if (entry && !AstAttr::contextAllows(entry->allowedContexts, context))
             reportAttributeNotAllowed(attr->location, attr->name.value, entry->allowedPositionsHint, context);
+        else if (!attr->comment)
+            checkAttributeLanguage(attr->location, attr->name.value, attr->args.size != 0, context);
+    }
+}
+
+bool Parser::reportsAttributeErrors(const AstAttr* attr) const
+{
+    return !attr->comment || options.analysisErrors;
+}
+
+void Parser::reportStatementAttributes(const AstArray<AstAttr*>& attributes)
+{
+    for (const AstAttr* attr : attributes)
+    {
+        // An unknown attribute was already reported when it was parsed
+        if (attr->type != AstAttr::Type::Unknown && reportsAttributeErrors(attr))
+            report(attr->location, "Attribute '@%s' cannot be applied to this statement", attr->name.value);
     }
 }
 
@@ -2266,18 +2339,92 @@ void Parser::reportAttributeNotAllowed(const Location& location, const char* att
         report(location, "Attribute '@%s' cannot be applied to %s", attributeName, attributeContextName(context));
 }
 
-void Parser::reportNonLiteralAttributeArgs(const AstArray<AstExpr*>& args, const Location& argsLocation)
+bool Parser::checkAttributeArgsAreLiterals(const AstArray<AstExpr*>& args, const Location& argsLocation, size_t errorsBeforeArgs)
 {
+    // A half-typed argument has already reported why it doesn't parse
+    if (parseErrors.size() != errorsBeforeArgs)
+        return false;
+
     for (const AstExpr* arg : args)
     {
         if (!isConstantLiteral(arg) && !isLiteralTable(arg))
+        {
             report(argsLocation, "Only literals can be passed as arguments for attributes");
+            return false;
+        }
     }
+
+    return true;
 }
 
 bool Parser::attributesFollow() const
 {
+    return attributeLexemeFollows() || !pendingCommentAttributes.empty();
+}
+
+bool Parser::attributeLexemeFollows() const
+{
     return lexer.current().type == Lexeme::Attribute || lexer.current().type == Lexeme::AttributeOpen;
+}
+
+AstArray<AstAttr*> Parser::takeCommentAttributes(AstAttr::Context context)
+{
+    if (pendingCommentAttributes.empty())
+        return {nullptr, 0};
+
+    TempVector<AstAttr*> attributes(scratchAttr);
+    for (const Lexeme& comment : pendingCommentAttributes)
+    {
+        // Parsing the text after `--` at the comment's position makes every location point into the comment.
+        const Position textStart(comment.location.begin.line, comment.location.begin.column + 2);
+        FragmentParseResumeSettings resume{DenseHashMap<AstName, AstLocal*>{AstName()}, {}, textStart};
+
+        ParseOptions commentOptions = options;
+        commentOptions.parseFragment = resume;
+        commentOptions.captureComments = false;
+        commentOptions.storeCstData = false;
+
+        Parser parser(comment.data, comment.getLength(), names, allocator, commentOptions);
+        parser.parsingCommentAttributes = true;
+
+        // Text after the closing `]` is ignored.
+        AstArray<AstAttr*> parsed = parser.parseAttributes(context);
+
+        // A compiler skips a comment it can't read: valid Luau has to keep compiling. reportsAttributeErrors does the same
+        // for the checks made after parsing.
+        if (!parser.parseErrors.empty() && !options.analysisErrors)
+            continue;
+
+        for (AstAttr* attribute : parsed)
+        {
+            attribute->comment = true;
+            attributes.push_back(attribute);
+        }
+
+        for (const ParseError& error : parser.parseErrors)
+            parseErrors.push_back(error);
+    }
+
+    pendingCommentAttributes.clear();
+    return copy(attributes);
+}
+
+void Parser::checkAttributeLanguage(const Location& location, const char* attributeName, bool hasArguments, AstAttr::Context context)
+{
+    // Attributes on functions are valid Luau: upstream parses those.
+    const bool onFunction = AstAttr::contextAllows(AstAttr::Context::AnyFunction, context);
+    if (parsingCommentAttributes || options.language == Language::Luwu || onFunction)
+        return;
+
+    const char* language = options.language == Language::Lua ? "Lua" : "Luau";
+    report(
+        location,
+        "Attributes on %s are Luwu-only; in a %s file, write it as the comment '--@[%s%s]' on the line above",
+        attributeContextName(context),
+        language,
+        attributeName,
+        hasArguments ? " ..." : ""
+    );
 }
 
 Location Parser::getAttributeStartLocation(
@@ -3245,17 +3392,12 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         AstArray<AstAttr*> attributes{nullptr, 0};
         TempVector<CstAttrList*> cstAttrLists(scratchCstAttrList);
 
-        auto memberAttributesFollow = [&]()
-        {
-            return lexer.current().type == Lexeme::Attribute || lexer.current().type == Lexeme::AttributeOpen;
-        };
-
         auto parseMemberAttributes = [&]()
         {
             attributes = parseAttributes(AstAttr::Context::ClassMember, FFlag::LuauCstAttr ? &cstAttrLists : nullptr);
         };
 
-        if (memberAttributesFollow())
+        if (attributesFollow())
             parseMemberAttributes();
 
         // Luwu Traits (rfcs/classes/traits.md): `expect` leads a trait member that implementing classes must declare
@@ -3327,7 +3469,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         }
 
         // `public @native function` -- the attributes may equally well follow the access specifier.
-        if (qualifierLocation && memberAttributesFollow())
+        if (qualifierLocation && attributesFollow())
         {
             if (attributes.size > 0)
             {
@@ -10174,8 +10316,23 @@ AstTypeError* Parser::reportMissingTypeError(const Location& parseErrorLocation,
     return allocator.alloc<AstTypeError>(astErrorLocation, AstArray<AstType*>{}, true, unsigned(parseErrors.size() - 1));
 }
 
+// Luwu: a `--@[nolint...]` or `--@[lint...]` comment
+static bool isLintScopeComment(const Lexeme& comment)
+{
+    const std::string_view text(comment.data, comment.getLength());
+    for (std::string_view name : {"@[nolint", "@[lint"})
+    {
+        const bool nameEnds = text.size() == name.size() || !(isalnum(static_cast<unsigned char>(text[name.size()])) || text[name.size()] == '_');
+        if (text.substr(0, name.size()) == name && nameEnds)
+            return true;
+    }
+    return false;
+}
+
 void Parser::nextLexeme()
 {
+    pendingCommentAttributes.clear();
+
     Lexeme::Type type = lexer.next(/* skipComments= */ false, true).type;
 
     while (type == Lexeme::BrokenComment || type == Lexeme::Comment || type == Lexeme::BlockComment)
@@ -10207,6 +10364,12 @@ void Parser::nextLexeme()
             const unsigned int start = directive ? 1 : 0;
             hotcomments.push_back({hotcommentHeader, lexeme.location, std::string(text + start, text + end), attribute});
         }
+
+        // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): `--@[...]` is an attribute written
+        // as a comment. Luau and Lua files need it outside functions, where upstream can't parse attributes. The linter
+        // applies `--@[nolint(...)]` and `--@[lint(...)]` to the next statement itself, whatever statement it is.
+        if (FFlag::LuwuAttributesEverywhere && attribute && !isLintScopeComment(lexeme))
+            pendingCommentAttributes.push_back(lexeme);
 
         type = lexer.next(/* skipComments= */ false, /* updatePrevLocation= */ false).type;
     }
