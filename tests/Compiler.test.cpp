@@ -14679,3 +14679,20 @@ RETURN R0 0
 )"
     );
 }
+
+// Luwu bundles: a loop over `bundle.pack` with a fixed count unfolds like one over a named bundle, up to four elements;
+// a larger bundle is built and iterated
+TEST_CASE("LoopOverBundlePackUnfoldsUpToFourElements")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+
+    std::string small = compileFunction("local function f(t, a, b) for _, v in bundle.pack(a, b) do t[v] = true end end", 0, 1);
+    CHECK(small.find("FASTCALL") == std::string::npos);
+    CHECK(small.find("FORGLOOP") == std::string::npos);
+
+    std::string large = compileFunction("local function f(t, a) for _, v in bundle.pack(a, a, a, a, a) do t[v] = true end end", 0, 1);
+    CHECK(large.find("FORGLOOP") != std::string::npos);
+
+    std::string spread = compileFunction("local function f(t, ...) for _, v in bundle.pack(...) do t[v] = true end end", 0, 1);
+    CHECK(spread.find("FORGLOOP") != std::string::npos);
+}

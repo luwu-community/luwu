@@ -7931,8 +7931,11 @@ struct Compiler
         loops.pop_back();
     }
 
+    // Luwu bundles: the most values a bundle holds (LUWU_BUNDLE_MAX in the VM)
+    static constexpr unsigned kMaxBundleValues = 12;
+
     // Luwu bundles: the size of the bundle `expr` constructs, a `bundle.Pair`, `Triple` or `Quad` call with one
-    // argument per element, or 0 for anything else
+    // argument per element, or a `bundle.pack` call whose last argument isn't a multiret. 0 for anything else.
     unsigned bundleConstructionSize(AstExpr* expr)
     {
         AstExprCall* call = expr->as<AstExprCall>();
@@ -7947,11 +7950,17 @@ struct Compiler
             size = 3;
         else if (builtin.isMethod("bundle", "Quad"))
             size = 4;
+        else if (builtin.isMethod("bundle", "pack") && call->args.size <= kMaxBundleValues)
+        {
+            bool spreads = call->args.size > 0 && isExprMultRet(call->args.data[call->args.size - 1]);
+            size = spreads ? 0 : unsigned(call->args.size);
+        }
 
         return call->args.size == size ? size : 0;
     }
 
-    // Luwu collections: the largest table literal in a loop header (`for _, v in { a, b }`) that is unfolded
+    // Luwu collections: the most elements a loop header unfolds, from a table literal (`for _, v in { a, b }`) or a
+    // bundle's construction
     static constexpr size_t kMaxUnfoldedLoopItems = 4;
 
     // Luwu collections: the elements of the value a `for ... in` loop unfolds instead of building it (see
@@ -7966,7 +7975,8 @@ struct Compiler
     UnfoldedLoopValue unfoldedLoopValue(AstExpr* value)
     {
         UnfoldedLoopValue unfolded;
-        if (bundleConstructionSize(value) > 0)
+        unsigned bundleSize = bundleConstructionSize(value);
+        if (bundleSize > 0 && bundleSize <= kMaxUnfoldedLoopItems)
         {
             AstExprCall* call = value->as<AstExprCall>();
             unfolded.elements.assign(call->args.begin(), call->args.end());
