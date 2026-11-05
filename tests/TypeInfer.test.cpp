@@ -697,7 +697,10 @@ function hello(x: number, y: number): number
     return x + y
 end)");
 
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    // Luwu: one error for the non-literal argument. Upstream also reports "Only constant string allowed as value for
+    // 'reason'" from @deprecated's validator about the same argument.
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<SyntaxError>(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "index_expr_should_be_checked")

@@ -5358,4 +5358,28 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "LuaStringHelperTypewriting")
     );
 }
 
+TEST_CASE_FIXTURE(Fixture, "DeprecatedCommentAttributeInLuauModule")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuAttributesEverywhere, true},
+    };
+    configResolver.defaultConfig.language = Language::Luau;
+
+    LintResult result = lint(R"(
+type Fs = {
+    --@[deprecated { use = "readfile" }]
+    read: (string) -> string,
+    readfile: (string) -> string,
+}
+
+local fs: Fs = { read = function(path) return path end, readfile = function(path) return path end }
+print(fs.read("x"))
+)");
+
+    REQUIRE_EQ(1, result.warnings.size());
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_DeprecatedApi);
+    CHECK_EQ(result.warnings[0].location.begin, Position(8, 6));
+}
+
 TEST_SUITE_END();
