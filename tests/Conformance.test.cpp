@@ -7163,3 +7163,51 @@ TEST_CASE("ClassesInterpreterMemberSlotCacheSkipsWideOffsets")
 }
 
 TEST_SUITE_END();
+
+// Luwu bundles: an embedder packs and unpacks bundles with no Lua frame
+TEST_CASE("BundleCApi")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    lua_pushnumber(L, 1);
+    lua_pushstring(L, "x");
+    lua_packbundle(L, 2);
+    REQUIRE(lua_gettop(L) == 1);
+    CHECK(std::string(lua_getclassname(L, -1)) == "Bundle2");
+    CHECK(std::string(luaL_tolstring(L, -1, nullptr)) == ".(1, \"x\")");
+    lua_pop(L, 1);
+
+    REQUIRE(lua_unpackbundle(L, -1) == 2);
+    CHECK(lua_tonumber(L, -2) == 1);
+    CHECK(std::string(lua_tostring(L, -1)) == "x");
+    lua_settop(L, 0);
+
+    // anything else isn't a bundle, and pushes nothing
+    lua_newtable(L);
+    CHECK(lua_unpackbundle(L, -1) == -1);
+    CHECK(lua_gettop(L) == 1);
+    lua_settop(L, 0);
+
+    lua_packbundle(L, 0);
+    CHECK(lua_unpackbundle(L, -1) == 0);
+    lua_settop(L, 0);
+
+    std::string tooMany = classesCApiProtected(
+        L,
+        [](lua_State* L)
+        {
+            for (int i = 0; i < 13; i++)
+                lua_pushnumber(L, i);
+            lua_packbundle(L, 13);
+        }
+    );
+    CHECK(tooMany == "a bundle holds at most 12 values, but got 13");
+}

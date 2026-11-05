@@ -286,8 +286,7 @@ static LuauClass* bundleclass(lua_State* L, int size)
     return builtinclass(L, LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + size));
 }
 
-// The number of values in the bundle `value`, or -1 when it isn't a bundle
-static int bundlesize(lua_State* L, const TValue* value)
+int luaR_bundlesize(lua_State* L, const TValue* value)
 {
     if (!ttisobject(value))
         return -1;
@@ -300,7 +299,7 @@ static int bundlesize(lua_State* L, const TValue* value)
 // The bundle at stack `idx`; raises unless it's one
 static LuauObject* checkbundlearg(lua_State* L, int idx)
 {
-    if (bundlesize(L, luaA_toobject(L, idx)) < 0)
+    if (luaR_bundlesize(L, luaA_toobject(L, idx)) < 0)
         luaL_typeerror(L, idx, "bundle");
     return objectvalue(luaA_toobject(L, idx));
 }
