@@ -365,7 +365,10 @@ void luaR_checkconstassign(lua_State* L, const TValue* key, const LuauObject* ob
     // allowing such could lead to UB in future const optimizations.
     // also if you're using `const` just to have embedder-only-assignable fields please just use userdata
     if (!cl || (!isfinal && !luaR_closureisinit(classdef, cl)))
+    {
+        luaR_checkbundleassign(L, object, key);
         luaG_constassignerror(L, key, classdef->name);
+    }
 
     // `__init` constructs the object in its `self` parameter, which is register 0 of its frame. This
     // holds for a vararg `__init` too: its fixed parameters are moved up, and its frame base moves with

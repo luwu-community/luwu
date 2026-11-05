@@ -391,6 +391,9 @@ LUAI_FUNC bool luaR_keyequal(const LuauObject* a, const LuauObject* b);
 
 // Luwu bundles: the number of values in the bundle `value`, or -1 when it isn't a bundle
 LUAI_FUNC int luaR_bundlesize(lua_State* L, const TValue* value);
+// Luwu bundles: raises for an assignment to a bundle's field, naming `with` instead of a constructor nothing can call.
+// Returns when the object isn't a bundle.
+LUAI_FUNC void luaR_checkbundleassign(lua_State* L, const LuauObject* object, const TValue* key);
 
 // A member's offset is cached in its instruction's 8-bit C operand (the slot the fast paths check). A
 // larger offset doesn't fit: it is never cached, and that member is looked up by name every time.

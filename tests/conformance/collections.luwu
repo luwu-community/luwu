@@ -42,7 +42,7 @@ do
 
     raises(function()
         range.first = 2
-    end, "'first' is a const member of 'Bundle2'")
+    end, "a bundle can't be changed; b:with(1, value) makes a copy with 'first' replaced")
     raises(function()
         print(range.third)
     end, "third")
