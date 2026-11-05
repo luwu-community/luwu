@@ -1629,6 +1629,8 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_OPTION_SOME:
     case LBF_RESULT_OK:
     case LBF_RESULT_ERR:
+    case LBF_BUNDLE_PACK:
+    case LBF_BUNDLE_UNPACK:
         break;
     case LBF_BUFFER_WRITEU8:
     case LBF_BUFFER_WRITEU16:

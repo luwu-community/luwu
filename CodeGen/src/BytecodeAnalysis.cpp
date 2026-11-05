@@ -405,8 +405,10 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
     case LBF_OPTION_SOME:
     case LBF_RESULT_OK:
     case LBF_RESULT_ERR:
-        // Luwu collections and try expressions: an object when the builtin runs, but FASTCALL's fallback calls whatever
-        // the global holds
+    case LBF_BUNDLE_PACK:
+    case LBF_BUNDLE_UNPACK:
+        // Luwu collections, bundles and try expressions: FASTCALL's fallback calls whatever the library or global holds,
+        // so the result could be anything
         types.result = LBC_TYPE_ANY;
         break;
     case LBF_TABLE_UNPACK:

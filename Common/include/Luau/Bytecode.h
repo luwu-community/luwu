@@ -77,6 +77,7 @@
 //   Luwu try expressions: LBF_OPTION_SOME to LBF_RESULT_ERR.
 //   Luwu try expressions: WRAPRESULT, RESULTGET, and each function's protected ranges after its inlining cost: a varint count,
 //   then per range the varints start pc, end pc (exclusive) and handler pc, and a byte for the target register.
+//   Luwu bundles: LBF_BUNDLE_PACK and LBF_BUNDLE_UNPACK.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -1018,6 +1019,10 @@ enum LuauBuiltinFunction
     LBF_OPTION_SOME,
     LBF_RESULT_OK,
     LBF_RESULT_ERR,
+
+    // Luwu bundles: `bundle.pack` and `bundle.unpack` without a call frame
+    LBF_BUNDLE_PACK,
+    LBF_BUNDLE_UNPACK,
 };
 
 // Capture type, used in LOP_CAPTURE

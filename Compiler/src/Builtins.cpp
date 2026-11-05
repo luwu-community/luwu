@@ -92,6 +92,10 @@ static int getBundleFunctionId(const Builtin& builtin)
         return LBF_COLLECTIONS_TRIPLE;
     if (builtin.isMethod("bundle", "Quad"))
         return LBF_COLLECTIONS_QUAD;
+    if (builtin.isMethod("bundle", "pack"))
+        return LBF_BUNDLE_PACK;
+    if (builtin.isMethod("bundle", "unpack"))
+        return LBF_BUNDLE_UNPACK;
 
     return -1;
 }
@@ -662,6 +666,10 @@ BuiltinInfo getBuiltinInfo(int bfid)
         return {1, 1};
     case LBF_RESULT_ERR:
         return {-1, 1}; // the error, then optionally where it was raised
+    case LBF_BUNDLE_PACK:
+        return {-1, 1}; // 0 to 12 parameters
+    case LBF_BUNDLE_UNPACK:
+        return {-1, -1}; // 1 to 3 parameters
 
     case LBF_TABLE_INSERT:
         return {-1, 0}; // 2 or 3 parameters

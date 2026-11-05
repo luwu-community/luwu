@@ -923,6 +923,8 @@ struct TypeMapVisitor : AstVisitor
             case LBF_OPTION_SOME:
             case LBF_RESULT_OK:
             case LBF_RESULT_ERR:
+            case LBF_BUNDLE_PACK:
+            case LBF_BUNDLE_UNPACK:
                 break;
             case LBF_MATH_ABS:
             case LBF_MATH_ACOS:
