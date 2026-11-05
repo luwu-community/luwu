@@ -309,6 +309,9 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
 // Luwu bundles: a fixed number of values, each position with its own type, immutable. One class per size, 0 to
 // LUWU_BUNDLE_MAX; sizes 2 to 4 are named Pair, Triple and Quad. The fields are `first` to `twelfth`, public and const.
 
+// A bundle's fields are public and const
+static const uint8_t kBundleField = LBC_CLASSMEMBER_CONST;
+
 static const char* const kBundleFieldNames[LUWU_BUNDLE_MAX] = {
     "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth",
 };
@@ -513,7 +516,7 @@ static void addbundleclass(lua_State* L)
     luaR_NativeMember members[LUWU_BUNDLE_MAX + 8] = {};
     int count = 0;
     for (int i = 0; i < Size; i++)
-        members[count++] = {kBundleFieldNames[i], NULL, LBC_CLASSMEMBER_CONST, NULL};
+        members[count++] = {kBundleFieldNames[i], NULL, kBundleField, NULL};
 
     members[count++] = {"sub", bundlesub<Size>, 0, NULL};
     members[count++] = {"with", bundlewith<Size>, 0, NULL};
