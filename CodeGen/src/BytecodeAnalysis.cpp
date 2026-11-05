@@ -402,7 +402,10 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
     case LBF_COLLECTIONS_PAIR:
     case LBF_COLLECTIONS_TRIPLE:
     case LBF_COLLECTIONS_QUAD:
-        // Luwu collections: an object when the builtin runs, but FASTCALL's fallback calls whatever `collections` holds
+    case LBF_BUNDLE_PACK:
+    case LBF_BUNDLE_UNPACK:
+        // Luwu collections and bundles: FASTCALL's fallback calls whatever the library holds, so the result could be
+        // anything
         types.result = LBC_TYPE_ANY;
         break;
     case LBF_TABLE_UNPACK:

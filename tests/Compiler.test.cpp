@@ -14468,6 +14468,9 @@ TEST_CASE("BundleConstructorsCompileToFastcalls")
         "local c = bundle local p = c.Pair local function f(x) local v = p(x, x) return v end",
         "local c = bundle local function f(x) local v = c.Pair(x, x) return v end",
         "local c = bundle local c2 = c local function f(x) local v = c2.Triple(x, x, x) return v end",
+        "local function f(x) local v = bundle.pack(x, x, x, x, x) return v end",
+        "local function f(...) local v = bundle.pack(...) return v end",
+        "local function f(b) return bundle.unpack(b) end",
     };
     for (const char* source : fastcalls)
     {

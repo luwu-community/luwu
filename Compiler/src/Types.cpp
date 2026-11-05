@@ -920,6 +920,8 @@ struct TypeMapVisitor : AstVisitor
             case LBF_COLLECTIONS_PAIR:
             case LBF_COLLECTIONS_TRIPLE:
             case LBF_COLLECTIONS_QUAD:
+            case LBF_BUNDLE_PACK:
+            case LBF_BUNDLE_UNPACK:
                 break;
             case LBF_MATH_ABS:
             case LBF_MATH_ACOS:

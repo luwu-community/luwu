@@ -1626,6 +1626,8 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_COLLECTIONS_PAIR:
     case LBF_COLLECTIONS_TRIPLE:
     case LBF_COLLECTIONS_QUAD:
+    case LBF_BUNDLE_PACK:
+    case LBF_BUNDLE_UNPACK:
         break;
     case LBF_BUFFER_WRITEU8:
     case LBF_BUFFER_WRITEU16:
