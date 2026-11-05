@@ -14598,25 +14598,21 @@ L1: RETURN R2 1
     }
 }
 
-// Luwu bundles: calling a named bundle's constructor directly or through a local compiles to a fastcall. Any chain
+// Luwu bundles: calling `bundle.pack` or `bundle.unpack` directly or through a local compiles to a fastcall. Any chain
 // of locals that are never written resolves, which is what destructuring them out of `bundle` desugars to.
-TEST_CASE("BundleConstructorsCompileToFastcalls")
+TEST_CASE("BundleFunctionsCompileToFastcalls")
 {
     ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
 
     const char* fastcalls[] = {
-        "local function f(x) local v = bundle.Two(x, x) return v end",
-        "local function f(x) local v = bundle.Three(x, x, x) return v end",
-        "local Four = bundle.Four local function f(x) local v = Four(x, x, x, x) return v end",
-        "local c = bundle local p = c.Two local function f(x) local v = p(x, x) return v end",
-        "local c = bundle local function f(x) local v = c.Two(x, x) return v end",
-        "local c = bundle local c2 = c local function f(x) local v = c2.Three(x, x, x) return v end",
+        "local function f(x) local v = bundle.pack(x, x) return v end",
+        "local pack = bundle.pack local function f(x) local v = pack(x, x, x, x) return v end",
+        "local c = bundle local p = c.pack local function f(x) local v = p(x, x) return v end",
+        "local c = bundle local function f(x) local v = c.pack(x, x) return v end",
+        "local c = bundle local c2 = c local function f(x) local v = c2.pack(x, x, x) return v end",
         "local function f(x) local v = bundle.pack(x, x, x, x, x) return v end",
         "local function f(...) local v = bundle.pack(...) return v end",
         "local function f(b) return bundle.unpack(b) end",
-        "local function f(x) local v = bundle.One(x) return v end",
-        "local function f(x) local v = bundle.Seven(x, x, x, x, x, x, x) return v end",
-        "local function f(x) local v = bundle.Twelve(x, x, x, x, x, x, x, x, x, x, x, x) return v end",
     };
     for (const char* source : fastcalls)
     {
@@ -14625,11 +14621,11 @@ TEST_CASE("BundleConstructorsCompileToFastcalls")
     }
 
     const char* calls[] = {
-        "local bundle = {} local function f(x) local v = bundle.Two(x, x) return v end",
-        "local function f(x) local v = string.Two(x, x) return v end",
+        "local bundle = {} local function f(x) local v = bundle.pack(x, x) return v end",
+        "local function f(x) local v = string.pick(x, x) return v end",
         "local function f(x) local v = bundle.Other(x) return v end",
-        "local c = bundle c = {} local function f(x) local v = c.Two(x, x) return v end",
-        "local p = bundle.Two p = print local function f(x) local v = p(x, x) return v end",
+        "local c = bundle c = {} local function f(x) local v = c.pack(x, x) return v end",
+        "local p = bundle.pack p = print local function f(x) local v = p(x, x) return v end",
     };
     for (const char* source : calls)
     {
@@ -14641,7 +14637,7 @@ TEST_CASE("BundleConstructorsCompileToFastcalls")
     CHECK(compileFunction(fastcalls[0], 0, 1).find("FASTCALL") == std::string::npos);
 }
 
-// Luwu bundles: `for i, v in bundle.Two(a, b)` constructs no bundle. The position is only loaded when the body
+// Luwu bundles: `for i, v in bundle.pack(a, b)` constructs no bundle. The position is only loaded when the body
 // reads it.
 TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
 {
@@ -14651,10 +14647,10 @@ TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
         "\n" + compileFunction(
                    R"(
 local function f(t, a, b)
-    for i, v in bundle.Two(a, b) do
+    for i, v in bundle.pack(a, b) do
         t[i] = v
     end
-    for _, v in bundle.Three(a, b, a) do
+    for _, v in bundle.pack(a, b, a) do
         t[v] = true
     end
 end

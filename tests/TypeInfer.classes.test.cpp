@@ -6069,7 +6069,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
         local map = collections.OrderedMap<<string, number>>()
         map:set("a", 1)
         local value = map:get("a")
-        local range = bundle.Two(1, "x")
+        local range = bundle.pack(1, "x")
         local first = range.first
         local second = range.second
         for key, entry in map do
@@ -6118,18 +6118,18 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_eleme
 
     CheckResult result = check(R"(
         --!strict
-        for position, value in bundle.Two(1, "x") do
+        for position, value in bundle.pack(1, "x") do
             local p: number = position
             local v: number | string = value
         end
-        local color = bundle.Three(255, true, "red")
+        local color = bundle.pack(255, true, "red")
         for _, channel in color do
             local c: number | boolean | string = channel
         end
-        for _, side in bundle.Four(1, 2, 3, 4) do
+        for _, side in bundle.pack(1, 2, 3, 4) do
             local s: number = side
         end
-        for _, value in bundle.Two(1, "x") do
+        for _, value in bundle.pack(1, "x") do
             local wrong: number = value
         end
     )");
@@ -6632,16 +6632,16 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_functions_keep_each_position_type")
     CheckResult result = check(R"(
         --!strict
         local function f(n: number, s: string, flag: boolean, i: number)
-            local b: bundle.Three<number, string, boolean> = bundle.pack(n, s, flag)
+            local b: bundle.Bundle3<number, string, boolean> = bundle.pack(n, s, flag)
             local x: number, y: string, z: boolean = bundle.unpack(b)
             local middle: string = bundle.unpack(b, 2, 2)
-            local tail: bundle.Two<string, boolean> = b:sub(2, 3)
-            local replaced: bundle.Three<string, string, boolean> = b:with(1, "text")
-            local anywhere: bundle.Three<number | boolean, string | boolean, boolean> = b:with(i, true)
-            local joined: bundle.Five<number, string, boolean, number, string> = bundle.concat(b, bundle.Two(1, "x"))
+            local tail: bundle.Bundle2<string, boolean> = b:sub(2, 3)
+            local replaced: bundle.Bundle3<string, string, boolean> = b:with(1, "text")
+            local anywhere: bundle.Bundle3<number | boolean, string | boolean, boolean> = b:with(i, true)
+            local joined: bundle.Bundle5<number, string, boolean, number, string> = bundle.concat(b, bundle.pack(1, "x"))
             local last: number = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12).twelfth
-            local empty: bundle.Zero = bundle.pack()
-            local wrong: bundle.Two<number, string> = b:sub(2, 3)
+            local empty: bundle.Bundle0 = bundle.pack()
+            local wrong: bundle.Bundle2<number, string> = b:sub(2, 3)
             return x, y, z, middle, tail, replaced, anywhere, joined, last, empty, wrong
         end
     )");
@@ -6664,17 +6664,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_types_print_as_dot_positional")
 
     CheckResult result = check(R"(
         --!strict
-        local pair = bundle.Two(1, "x")
-        local nested = bundle.Two(bundle.One(true), pair)
+        local pair = bundle.pack(1, "x")
+        local nested = bundle.pack(bundle.pack(true), pair)
         local empty = bundle.pack()
-        local class_ = bundle.Two
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ(toString(requireType("pair")), ".(number, string)");
     CHECK_EQ(toString(requireType("nested")), ".(.(boolean), .(number, string))");
     CHECK_EQ(toString(requireType("empty")), ".()");
-    CHECK_EQ(toString(requireType("class_")), "Two");
 }
 
 // Luwu: `none` has no keys, so indexing an optional `T | none` names its `none` as the problem

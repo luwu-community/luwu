@@ -157,10 +157,10 @@ do
     end, "this VecDeque can only accept results, but you passed none")
 
     const pairs = collections.VecDeque()
-    pairs:pushback(bundle.Two(1, 2))
+    pairs:pushback(bundle.pack(1, 2))
     raises(function()
         pairs:pushback(Some(1))
-    end, "this VecDeque can only accept 'Two' objects, but you passed a 'Some' object")
+    end, "this VecDeque can only accept 'Bundle2' objects, but you passed a 'Some' object")
 end
 
 -- `Some`, `Ok` and `Err` keep `expect` at the same offset, so one call site serves all three

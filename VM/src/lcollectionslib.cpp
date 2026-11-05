@@ -306,8 +306,9 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
     return 1;
 }
 
-// Luwu bundles: a fixed number of values, each position with its own type, immutable. One class per size, named by it:
-// `bundle.Zero` to `bundle.Twelve`. The fields are `first` to `twelfth`, public and const.
+// Luwu bundles: a fixed number of values, each position with its own type, immutable. One class per size, `Bundle0` to
+// `Bundle12`, which code reaches through `.(...)` and `bundle.pack` rather than by name. The fields are `first` to
+// `twelfth`, public and const.
 
 // A bundle's fields are public and const
 static const uint8_t kBundleField = LBC_CLASSMEMBER_CONST;
@@ -317,7 +318,8 @@ static const char* const kBundleFieldNames[LUWU_BUNDLE_MAX] = {
 };
 
 static const char* const kBundleClassNames[LUWU_BUNDLE_MAX + 1] = {
-    "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
+    "Bundle0", "Bundle1", "Bundle2", "Bundle3", "Bundle4", "Bundle5", "Bundle6",
+    "Bundle7", "Bundle8", "Bundle9", "Bundle10", "Bundle11", "Bundle12",
 };
 
 static LuauClass* bundleclass(lua_State* L, int size)
@@ -1769,13 +1771,8 @@ int luaopen_bundle(lua_State* L)
 {
     addbundleclasses(L);
 
-    lua_createtable(L, 0, LUWU_BUNDLE_MAX + 4);
+    lua_createtable(L, 0, 3);
     luaL_register(L, NULL, kBundleFunctions);
-    for (int size = 0; size <= LUWU_BUNDLE_MAX; size++)
-    {
-        luaA_pushclass(L, bundleclass(L, size));
-        lua_setfield(L, -2, kBundleClassNames[size]);
-    }
 
     lua_pushvalue(L, -1);
     lua_setglobal(L, LUA_BUNDLELIBNAME);

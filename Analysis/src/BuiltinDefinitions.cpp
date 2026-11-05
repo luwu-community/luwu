@@ -439,7 +439,8 @@ void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
 
 // Luwu bundles: the class of each size, as the `bundle` library exports them (kBundleClassNames in lcollectionslib.cpp)
 static const char* const kBundleClassNames[] = {
-    "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
+    "Bundle0", "Bundle1", "Bundle2", "Bundle3", "Bundle4", "Bundle5", "Bundle6",
+    "Bundle7", "Bundle8", "Bundle9", "Bundle10", "Bundle11", "Bundle12",
 };
 static constexpr size_t kBundleClassCount = sizeof(kBundleClassNames) / sizeof(kBundleClassNames[0]);
 

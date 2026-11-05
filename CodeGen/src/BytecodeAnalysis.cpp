@@ -399,18 +399,6 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
         types.result = LBC_TYPE_BOOLEAN;
         types.b = LBC_TYPE_CLASS;
         break;
-    case LBF_BUNDLE_ONE:
-    case LBF_BUNDLE_TWO:
-    case LBF_BUNDLE_THREE:
-    case LBF_BUNDLE_FOUR:
-    case LBF_BUNDLE_FIVE:
-    case LBF_BUNDLE_SIX:
-    case LBF_BUNDLE_SEVEN:
-    case LBF_BUNDLE_EIGHT:
-    case LBF_BUNDLE_NINE:
-    case LBF_BUNDLE_TEN:
-    case LBF_BUNDLE_ELEVEN:
-    case LBF_BUNDLE_TWELVE:
     case LBF_OPTION_SOME:
     case LBF_RESULT_OK:
     case LBF_RESULT_ERR:
