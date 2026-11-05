@@ -9313,14 +9313,14 @@ TEST_CASE_FIXTURE(Fixture, "comment_attributes_typewriting")
     ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
     configResolver.defaultConfig.language = Language::Luau;
 
-    // The `--` is already typed: typing it into a table type cascades without attributes too
+    // The `--` is already typed: typing a lone `-` above code cascades without attributes too
     checkTypewriting(
         *this,
         "type Fs = {\n    --",
-        "@[deprecated { use = \"readfile\" }]\n",
-        "    read: (string) -> string,\n    readfile: (string) -> string,\n}\n"
+        "@[deprecated { use = \"readfile\" }]",
+        "\n    read: (string) -> string,\n    readfile: (string) -> string,\n}\n"
     );
-    checkTypewriting(*this, "", "--@[deprecated]\n", "type Old = number\n");
+    checkTypewriting(*this, "--", "@[deprecated]", "\ntype Old = number\n");
 }
 
 // TODO unit tests for various parse errors.
