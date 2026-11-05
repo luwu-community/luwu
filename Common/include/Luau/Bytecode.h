@@ -73,7 +73,7 @@
 //   LBF_CLASS_ISINSTANCE.
 //   Luwu Traits (rfcs/classes/traits.md): the shape flags varint in LBC_CONSTANT_CLASS_SHAPE (LBC_CLASSSHAPE_TRAIT,
 //   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, and NEWCLASSMEMBER's IMPLEMENTS form.
-//   Luwu bundles: LBF_BUNDLE_ONE to LBF_BUNDLE_TWELVE, LBF_BUNDLE_PACK and LBF_BUNDLE_UNPACK.
+//   Luwu bundles: LBF_BUNDLE_PACK and LBF_BUNDLE_UNPACK.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -973,26 +973,9 @@ enum LuauBuiltinFunction
     // Luwu Classes (rfcs/classes): class.isinstance(value, class) -> boolean
     LBF_CLASS_ISINSTANCE,
 
-    // Luwu bundles: constructing `bundle.Two` to `bundle.Four` without a call frame (the other sizes follow
-    // LBF_BUNDLE_UNPACK)
-    LBF_BUNDLE_TWO,
-    LBF_BUNDLE_THREE,
-    LBF_BUNDLE_FOUR,
-
     // Luwu bundles: `bundle.pack` and `bundle.unpack` without a call frame
     LBF_BUNDLE_PACK,
     LBF_BUNDLE_UNPACK,
-
-    // Luwu bundles: constructing `bundle.One` and `bundle.Five` to `bundle.Twelve` without a call frame
-    LBF_BUNDLE_ONE,
-    LBF_BUNDLE_FIVE,
-    LBF_BUNDLE_SIX,
-    LBF_BUNDLE_SEVEN,
-    LBF_BUNDLE_EIGHT,
-    LBF_BUNDLE_NINE,
-    LBF_BUNDLE_TEN,
-    LBF_BUNDLE_ELEVEN,
-    LBF_BUNDLE_TWELVE,
 };
 
 // Capture type, used in LOP_CAPTURE

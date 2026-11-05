@@ -7604,25 +7604,20 @@ struct Compiler
     // Luwu bundles: the most values a bundle holds (LUWU_BUNDLE_MAX in the VM)
     static constexpr unsigned kMaxBundleValues = 12;
 
-    // Luwu bundles: the size of the bundle `expr` constructs, a `bundle.One` to `bundle.Twelve` call with one argument per
-    // element, or a `bundle.pack` call whose last argument isn't a multiret. 0 for anything else.
+    // Luwu bundles: the size of the bundle `expr` constructs, a `bundle.pack` call (which `.(a, b)` is) whose last argument
+    // isn't a multiret. 0 for anything else.
     unsigned bundleConstructionSize(AstExpr* expr)
     {
         AstExprCall* call = expr->as<AstExprCall>();
-        if (!FFlag::DebugLuwuCollections || !call || call->self)
+        if (!FFlag::DebugLuwuCollections || !call || call->self || call->args.size > kMaxBundleValues)
             return 0;
 
         Builtin builtin = getBuiltin(call->func, globals, variables);
-        unsigned size = 0;
-        if (int named = getBundleClassSize(builtin); named > 0)
-            size = unsigned(named);
-        else if (builtin.isMethod("bundle", "pack") && call->args.size <= kMaxBundleValues)
-        {
-            bool spreads = call->args.size > 0 && isExprMultRet(call->args.data[call->args.size - 1]);
-            size = spreads ? 0 : unsigned(call->args.size);
-        }
+        if (!builtin.isMethod("bundle", "pack"))
+            return 0;
 
-        return call->args.size == size ? size : 0;
+        bool spreads = call->args.size > 0 && isExprMultRet(call->args.data[call->args.size - 1]);
+        return spreads ? 0 : unsigned(call->args.size);
     }
 
     // Luwu collections: the most elements a loop header unfolds, from a table literal (`for _, v in { a, b }`) or a
