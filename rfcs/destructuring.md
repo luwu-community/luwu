@@ -143,16 +143,16 @@ The `.` isn't needed to tell a pattern apart in this position, but we require it
 pattern, and so `Ok.(content)` can't be read as calling `Ok`. A type test written as a call whose arguments are all
 names nothing in scope has (`is Ok(content)`) is a syntax error that suggests the `.`.
 
-#### Building pairs, triples and quads with `.(...)`
+#### Building bundles with `.(...)`
 
-Where a value goes, `.(a, b)` builds a `collections.Pair`, the way `.{x, y}` builds a table. Three values make a
-`collections.Triple` and four a `collections.Quad`. More than four is a syntax error that suggests a table or a
-function returning multiple values instead.
+Where a value goes, `.(a, b)` builds a `bundle.Pair`, the way `.{x, y}` builds a table. Three values make a
+`bundle.Triple`, four a `bundle.Quad`, and five to twelve the bundle of that size (`bundle.pack`). More than twelve is a
+syntax error that suggests a table or a function returning multiple values instead.
 
 ```luwu
 const .(name, age) = do
     -- ... a bunch of logic
-    give .(got_name, got_age) -- a collections.Pair
+    give .(got_name, got_age) -- a bundle.Pair
 ```
 
 A pair that's destructured right where it's built, like this one, is never created. The compiler keeps each value in a
