@@ -6651,6 +6651,30 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_functions_keep_each_position_type")
     CHECK_EQ(result.errors[0].location.begin.line, 12);
 }
 
+// Luwu bundles: two bundles of the same size compare with their metamethods, whatever their position types
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_compare_with_their_metamethods")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local a = bundle.pack(1, 2)
+        local b = bundle.pack(1, 3)
+        local less: boolean = a < b
+        local atMost: boolean = a <= b
+        local same: boolean = a == b
+        local mixed: boolean = bundle.pack(1, "x") == bundle.pack(2, "y")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 // Luwu bundles: a bundle type prints the way `.(A, B)` writes it, whatever its class is called
 TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_types_print_as_dot_positional")
 {
