@@ -482,7 +482,9 @@ static void addbundleclass(lua_State* L)
     members[count++] = {"__iter", bundleiter<Size>, 0, NULL};
     members[count++] = {"__tostring", bundletostring<Size>, 0, NULL};
 
-    L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + Size] = luaR_newnativeclass(L, kBundleClassNames[Size], members, count, bundleinit);
+    LuauClass* classdef = luaR_newnativeclass(L, kBundleClassNames[Size], members, count, bundleinit);
+    classdef->keybyvalue = true;
+    L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + Size] = classdef;
     lua_pop(L, 1);
 }
 

@@ -753,6 +753,11 @@ typedef struct LuauClass
     // calling its `__len`, which returns the same number. LUAR_NO_LENGTH_FIELD for every other class.
     uint32_t lengthfield;
 
+    // Luwu bundles: an object of this class is a table key by the values of its fields, not by its identity, so equal
+    // bundles index the same entry (luaR_keyhash, luaR_keyequal). Only the bundle classes set it: their objects can't
+    // change.
+    bool keybyvalue;
+
     // Luwu collections: a builtin class's fast methods by member offset, with NULL for the members that have none. NULL
     // for every other class. Owned by this class.
     luaR_FastMethod* fastmethods;

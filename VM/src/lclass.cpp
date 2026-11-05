@@ -73,6 +73,7 @@ LuauClass* luaR_newclass(
     classdef->traitdefaults = NULL;
     classdef->compiledtraitcopies = NULL;
     classdef->lengthfield = LUAR_NO_LENGTH_FIELD;
+    classdef->keybyvalue = false;
     classdef->fastmethods = NULL;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
@@ -2456,6 +2457,108 @@ bool luaR_implements(const LuauClass* classdef, const LuauClass* trait)
             return true;
 
     return false;
+}
+
+// Luwu bundles: how deep bundles nest inside a key before an inner one counts by identity. It bounds the C stack a table
+// lookup uses: a chain of pairs can be as deep as a list.
+static const int kKeyByValueDepth = 32;
+
+// Mixes `value` into the hash `h`
+static unsigned int mixkeyhash(unsigned int h, unsigned int value)
+{
+    return (h ^ value) * 0x01000193u;
+}
+
+static unsigned int keyhash(const LuauObject* object, int depth);
+
+// A field's hash. Values that are raw equal hash the same: the sign of a zero is dropped, and a vector hashes to nothing
+// rather than reproduce its comparison.
+static unsigned int keyfieldhash(const TValue* value, int depth)
+{
+    switch (ttype(value))
+    {
+    case LUA_TNUMBER:
+    {
+        double n = nvalue(value);
+        uint64_t bits;
+        memcpy(&bits, &n, sizeof(bits));
+        bits &= ~(uint64_t(1) << 63);
+        return unsigned(bits) ^ unsigned(bits >> 32);
+    }
+    case LUA_TINTEGER:
+    {
+        uint64_t bits = uint64_t(lvalue(value));
+        return unsigned(bits) ^ unsigned(bits >> 32);
+    }
+    case LUA_TBOOLEAN:
+        return unsigned(bvalue(value));
+    case LUA_TSTRING:
+        return tsvalue(value)->hash;
+    case LUA_TLIGHTUSERDATA:
+        return unsigned(uintptr_t(pvalue(value)));
+    case LUA_TOBJECT:
+        if (objectvalue(value)->lclass->keybyvalue)
+            return keyhash(objectvalue(value), depth - 1);
+        return unsigned(uintptr_t(gcvalue(value)));
+    case LUA_TVECTOR:
+        return 0;
+    default:
+        return iscollectable(value) ? unsigned(uintptr_t(gcvalue(value))) : unsigned(ttype(value));
+    }
+}
+
+static unsigned int keyhash(const LuauObject* object, int depth)
+{
+    unsigned int h = mixkeyhash(0x811c9dc5u, object->numberofmembers);
+    if (depth == 0)
+        return h;
+
+    const TValue* fields = luaR_members(object);
+    for (uint32_t i = 0; i < object->numberofmembers; i++)
+        h = mixkeyhash(h, keyfieldhash(&fields[i], depth));
+    return h;
+}
+
+unsigned int luaR_keyhash(const LuauObject* object)
+{
+    unsigned int h = keyhash(object, kKeyByValueDepth);
+
+    // MurmurHash3 32-bit finalizer, as table keys use for pointers
+    h ^= h >> 16;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16;
+    return h;
+}
+
+// Past kKeyByValueDepth an object is only equal to itself
+static bool keyequal(const LuauObject* a, const LuauObject* b, int depth)
+{
+    if (a == b)
+        return true;
+    if (a->lclass != b->lclass || !a->lclass->keybyvalue || depth == 0)
+        return false;
+
+    const TValue* left = luaR_members(a);
+    const TValue* right = luaR_members(b);
+    for (uint32_t i = 0; i < a->numberofmembers; i++)
+    {
+        bool equal;
+        if (ttisobject(&left[i]) && ttisobject(&right[i]))
+            equal = keyequal(objectvalue(&left[i]), objectvalue(&right[i]), depth - 1);
+        else
+            equal = luaO_rawequalObj(&left[i], &right[i]);
+
+        if (!equal)
+            return false;
+    }
+    return true;
+}
+
+bool luaR_keyequal(const LuauObject* a, const LuauObject* b)
+{
+    return keyequal(a, b, kKeyByValueDepth);
 }
 
 static void luaR_addnativemethod(lua_State* L, LuauClass* classdef, const char* name, lua_CFunction method)

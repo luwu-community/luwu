@@ -105,6 +105,65 @@ do
     end, "attempt to compare")
 end
 
+-- a bundle is a table key by its values: an equal bundle finds the entry, though the two aren't rawequal
+do
+    const flights = {}
+    flights[bundle.pack("AX1230", "2026-11-04", "A", "C")] = "booked"
+    assert(flights[bundle.pack("AX1230", "2026-11-04", "A", "C")] == "booked")
+    assert(flights[bundle.pack("AX1230", "2026-11-04", "A", "D")] == nil)
+    assert(not rawequal(bundle.Pair(1, 2), bundle.Pair(1, 2)))
+
+    -- the fields compare raw: zero's sign doesn't matter, a table inside is only itself, nested bundles go by value,
+    -- and bundles of different sizes are different keys
+    const keys = {}
+    keys[bundle.Pair(0, 1)] = "zero"
+    assert(keys[bundle.Pair(-0, 1)] == "zero")
+    const inner = {}
+    keys[bundle.Pair(inner, 1)] = "inner"
+    assert(keys[bundle.Pair(inner, 1)] == "inner" and keys[bundle.Pair({}, 1)] == nil)
+    keys[bundle.Pair(bundle.Pair(1, 2), "x")] = "nested"
+    assert(keys[bundle.Pair(bundle.Pair(1, 2), "x")] == "nested")
+    keys[bundle.pack(1)] = "one"
+    assert(keys[bundle.pack(1, nil)] == nil)
+
+    -- assigning through an equal bundle replaces the entry, and nil removes it
+    keys[bundle.Pair(-0, 1)] = "again"
+    local count = 0
+    for _ in keys do
+        count += 1
+    end
+    assert(count == 4 and keys[bundle.Pair(0, 1)] == "again")
+    keys[bundle.Pair(0, 1)] = nil
+    assert(keys[bundle.Pair(0, 1)] == nil)
+
+    -- a NaN field never equals itself, so only the same bundle finds it
+    const nan = 0 / 0
+    const withnan = bundle.Pair(nan, 1)
+    keys[withnan] = "nan"
+    assert(keys[withnan] == "nan" and keys[bundle.Pair(nan, 1)] == nil)
+
+    -- bundles nested deeper than 32 levels count by identity past that depth
+    local shallow, shallowcopy, deep, deepcopy = bundle.pack(), bundle.pack(), bundle.pack(), bundle.pack()
+    for i = 1, 20 do
+        shallow, shallowcopy = bundle.Pair(i, shallow), bundle.Pair(i, shallowcopy)
+    end
+    for i = 1, 40 do
+        deep, deepcopy = bundle.Pair(i, deep), bundle.Pair(i, deepcopy)
+    end
+    keys[shallow] = "shallow"
+    keys[deep] = "deep"
+    assert(keys[shallowcopy] == "shallow" and keys[deep] == "deep" and keys[deepcopy] == nil)
+
+    -- many keys spread over the hash
+    const many = {}
+    for i = 1, 5000 do
+        many[bundle.Pair(i, tostring(i))] = i
+    end
+    for i = 1, 5000 do
+        assert(many[bundle.Pair(i, tostring(i))] == i)
+    end
+end
+
 -- iterating a bundle gives every slot in order, nil included, and starting a loop allocates nothing
 do
     const seen = {}
