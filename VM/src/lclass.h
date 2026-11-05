@@ -389,6 +389,9 @@ LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait
 LUAI_FUNC unsigned int luaR_keyhash(const LuauObject* object);
 LUAI_FUNC bool luaR_keyequal(const LuauObject* a, const LuauObject* b);
 
+// Luwu bundles: the number of values in the bundle `value`, or -1 when it isn't a bundle
+LUAI_FUNC int luaR_bundlesize(lua_State* L, const TValue* value);
+
 // A member's offset is cached in its instruction's 8-bit C operand (the slot the fast paths check). A
 // larger offset doesn't fit: it is never cached, and that member is looked up by name every time.
 #define LUAR_MAX_CACHED_MEMBER_SLOT 0xff

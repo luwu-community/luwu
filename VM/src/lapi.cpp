@@ -1739,6 +1739,49 @@ int lua_istrait(lua_State* L, int idx)
     return ttisclass(o) && classvalue(o)->istrait;
 }
 
+void lua_packbundle(lua_State* L, int n)
+{
+    api_checknelems(L, n);
+    if (n > LUWU_BUNDLE_MAX)
+        luaG_runerror(L, "a bundle holds at most %d values, but got %d", LUWU_BUNDLE_MAX, n);
+
+    LuauClass* classdef = L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + n];
+    if (!classdef)
+        luaG_runerror(L, "open the bundle library (luaopen_bundle) before building a bundle");
+
+    luaC_checkGC(L);
+    luaC_threadbarrier(L);
+
+    // A new object is white, so storing into it needs no barrier
+    LuauObject* bundle = luaR_newobjectuninit(L, classdef);
+    TValue* members = luaR_members(bundle);
+    for (int i = 0; i < n; i++)
+        setobj(L, &members[i], L->top - n + i);
+
+    L->top -= n;
+    setobjectvalue(L, L->top, bundle);
+    api_incr_top(L);
+}
+
+int lua_unpackbundle(lua_State* L, int idx)
+{
+    const TValue* value = index2addr(L, idx);
+    int size = luaR_bundlesize(L, value);
+    if (size < 0)
+        return -1;
+
+    // the bundle is on the heap, so growing the stack doesn't move it
+    const LuauObject* bundle = objectvalue(value);
+    lua_rawcheckstack(L, size);
+    luaC_threadbarrier(L);
+    for (int i = 0; i < size; i++)
+    {
+        setobj2s(L, L->top, &luaR_members(bundle)[i]);
+        api_incr_top(L);
+    }
+    return size;
+}
+
 void lua_newobject(lua_State* L, int idx)
 {
     StkId cls = index2addr(L, idx);
