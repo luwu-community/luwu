@@ -37,6 +37,9 @@ struct Builtin
 
 Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, const DenseHashMap<AstLocal*, Variable>& variables);
 
+// Luwu bundles: the size of the bundle class `builtin` names (`bundle.Two` is 2), or -1 when it names none
+int getBundleClassSize(const Builtin& builtin);
+
 void analyzeBuiltins(
     DenseHashMap<AstExprCall*, int>& result,
     const DenseHashMap<AstName, Global>& globals,

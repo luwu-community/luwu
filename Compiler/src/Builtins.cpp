@@ -18,9 +18,9 @@ namespace Luau
 namespace Compile
 {
 
-// The names `node` reads, rooted at a global that's never assigned: `bundle.Pair` is bundle, Pair. Locals that
+// The names `node` reads, rooted at a global that's never assigned: `bundle.Two` is bundle, Two. Locals that
 // are never written stand for their initializer, so `local b = bundle` and destructured aliases
-// (`const .{Pair} = bundle`) resolve as well. Returns how many names it wrote, or 0.
+// (`const .{Two} = bundle`) resolve as well. Returns how many names it wrote, or 0.
 static size_t resolveBuiltinPath(
     AstExpr* node,
     const DenseHashMap<AstName, Global>& globals,
@@ -81,16 +81,46 @@ Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, 
     }
 }
 
-// Luwu bundles: constructors of the named bundles. FASTCALL's safe-env guard falls back to the real call when `bundle`
-// might have been replaced.
+int getBundleClassSize(const Builtin& builtin)
+{
+    static const char* const kNames[] = {
+        "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
+    };
+    if (builtin.object != "bundle")
+        return -1;
+
+    for (int size = 0; size < int(sizeof(kNames) / sizeof(kNames[0])); size++)
+    {
+        if (builtin.method == kNames[size])
+            return size;
+    }
+    return -1;
+}
+
+// Luwu bundles: the bundle constructors and functions. FASTCALL's safe-env guard falls back to the real call when
+// `bundle` might have been replaced.
 static int getBundleFunctionId(const Builtin& builtin)
 {
-    if (builtin.isMethod("bundle", "Pair"))
-        return LBF_COLLECTIONS_PAIR;
-    if (builtin.isMethod("bundle", "Triple"))
-        return LBF_COLLECTIONS_TRIPLE;
-    if (builtin.isMethod("bundle", "Quad"))
-        return LBF_COLLECTIONS_QUAD;
+    // the fastcall that constructs each size; `bundle.Zero()` has nothing to build from, so it stays a call
+    static const int kConstructors[] = {
+        -1,
+        LBF_BUNDLE_ONE,
+        LBF_BUNDLE_TWO,
+        LBF_BUNDLE_THREE,
+        LBF_BUNDLE_FOUR,
+        LBF_BUNDLE_FIVE,
+        LBF_BUNDLE_SIX,
+        LBF_BUNDLE_SEVEN,
+        LBF_BUNDLE_EIGHT,
+        LBF_BUNDLE_NINE,
+        LBF_BUNDLE_TEN,
+        LBF_BUNDLE_ELEVEN,
+        LBF_BUNDLE_TWELVE,
+    };
+    int size = getBundleClassSize(builtin);
+    if (size >= 0)
+        return kConstructors[size];
+
     if (builtin.isMethod("bundle", "pack"))
         return LBF_BUNDLE_PACK;
     if (builtin.isMethod("bundle", "unpack"))
@@ -645,12 +675,30 @@ BuiltinInfo getBuiltinInfo(int bfid)
     case LBF_CLASS_ISINSTANCE:
         return {2, 1};
 
-    case LBF_COLLECTIONS_PAIR:
+    case LBF_BUNDLE_ONE:
+        return {1, 1};
+    case LBF_BUNDLE_TWO:
         return {2, 1};
-    case LBF_COLLECTIONS_TRIPLE:
+    case LBF_BUNDLE_THREE:
         return {3, 1};
-    case LBF_COLLECTIONS_QUAD:
+    case LBF_BUNDLE_FOUR:
         return {4, 1};
+    case LBF_BUNDLE_FIVE:
+        return {5, 1};
+    case LBF_BUNDLE_SIX:
+        return {6, 1};
+    case LBF_BUNDLE_SEVEN:
+        return {7, 1};
+    case LBF_BUNDLE_EIGHT:
+        return {8, 1};
+    case LBF_BUNDLE_NINE:
+        return {9, 1};
+    case LBF_BUNDLE_TEN:
+        return {10, 1};
+    case LBF_BUNDLE_ELEVEN:
+        return {11, 1};
+    case LBF_BUNDLE_TWELVE:
+        return {12, 1};
     case LBF_BUNDLE_PACK:
         return {-1, 1}; // 0 to 12 parameters
     case LBF_BUNDLE_UNPACK:

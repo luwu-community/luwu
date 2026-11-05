@@ -1019,8 +1019,8 @@ static void buildnative(lua_State* L, StkId res, LuauClass* classdef, TValue* ar
     setobjectvalue(L, res, object);
 }
 
-// Luwu collections: builds a Pair, Triple or Quad the way its `__init` would, without a call frame. A member with no
-// argument for it is nil. A call without arguments falls back to the constructor.
+// Luwu collections: builds a bundle (`bundle.One` to `bundle.Twelve`) the way its `__init` would, without a call frame. A
+// member with no argument for it is nil. A call without arguments falls back to the constructor.
 template<LuwuBuiltinClass Kind>
 static int luauF_collections_construct(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
@@ -2889,12 +2889,22 @@ const luau_FastFunction luauF_table[256] = {
 
     luauF_class_isinstance,
 
-    luauF_collections_construct<LUWU_BUILTIN_PAIR>,
-    luauF_collections_construct<LUWU_BUILTIN_TRIPLE>,
-    luauF_collections_construct<LUWU_BUILTIN_QUAD>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 2)>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 3)>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 4)>,
 
     luauF_bundlepack,
     luauF_bundleunpack,
+
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 1)>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 5)>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 6)>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 7)>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 8)>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 9)>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 10)>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 11)>,
+    luauF_collections_construct<LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + 12)>,
 
 // When adding builtins, add them above this line; what follows is 64 "dummy" entries with luauF_missing fallback.
 // This is important so that older versions of the runtime that don't support newer builtins automatically fall back via luauF_missing.
