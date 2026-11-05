@@ -4707,18 +4707,26 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
     }
     if (auto it = kBinaryOpMetamethods.find(expr->op); it != kBinaryOpMetamethods.end())
     {
-        std::optional<TypeId> leftMt = getMetatable(leftType, builtinTypes);
-        std::optional<TypeId> rightMt = getMetatable(rightType, builtinTypes);
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): each instantiation of a generic class holds a copy of
+        // its template's metatable, so `.(1, 2) < .(1, 3)` compares the template's
+        auto metatableOf = [builtinTypes = this->builtinTypes](TypeId ty)
+        {
+            const ExternType* externType = get<ExternType>(follow(ty));
+            return getMetatable(externType && externType->genericTemplate ? *externType->genericTemplate : ty, builtinTypes);
+        };
+
+        std::optional<TypeId> leftMt = metatableOf(leftType);
+        std::optional<TypeId> rightMt = metatableOf(rightType);
         bool matches = leftMt == rightMt;
 
 
         if (isEquality && !matches)
         {
-            auto testUnion = [&matches, builtinTypes = this->builtinTypes](const UnionType* utv, std::optional<TypeId> otherMt)
+            auto testUnion = [&matches, &metatableOf](const UnionType* utv, std::optional<TypeId> otherMt)
             {
                 for (TypeId option : utv)
                 {
-                    if (getMetatable(follow(option), builtinTypes) == otherMt)
+                    if (metatableOf(option) == otherMt)
                     {
                         matches = true;
                         break;
