@@ -687,6 +687,8 @@ static void prepareBundleTypes(GlobalTypes& globals)
             {"pack", Operation::Pack},
             {"unpack", Operation::Unpack},
             {"concat", Operation::Concat},
+            {"sub", Operation::Sub},
+            {"with", Operation::With},
         };
         for (const auto& [name, operation] : functions)
         {

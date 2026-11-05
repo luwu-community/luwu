@@ -491,13 +491,11 @@ static int bundleiter(lua_State* L)
     return 2;
 }
 
-// `b:sub(i, j)`: a new bundle of positions `i` to `j`
-template<int Size>
-static int bundlesub(lua_State* L)
+// `b:sub(i, j)` and `bundle.sub(b, i, j)`: a new bundle of positions `i` to `j`
+static int subbundle(lua_State* L, const LuauObject* bundle, int size)
 {
-    LuauObject* bundle = checkbundle<Size>(L, "sub");
     int first, last;
-    checkrange(L, 2, Size, &first, &last);
+    checkrange(L, 2, size, &first, &last);
 
     LuauObject* result = pushnewbundle(L, last - first + 1);
     for (int i = first; i <= last; i++)
@@ -506,20 +504,30 @@ static int bundlesub(lua_State* L)
     return 1;
 }
 
-// `b:with(i, v)`: a copy of the bundle with position `i` holding `v`
-template<int Size>
-static int bundlewith(lua_State* L)
+// `b:with(i, v)` and `bundle.with(b, i, v)`: a copy of the bundle with position `i` holding `v`
+static int withbundle(lua_State* L, const LuauObject* bundle, int size)
 {
-    LuauObject* bundle = checkbundle<Size>(L, "with");
-    uint32_t position = checkposition(L, 2, Size);
+    uint32_t position = checkposition(L, 2, size);
     luaL_checkany(L, 3);
 
-    LuauObject* result = pushnewbundle(L, Size);
-    for (int i = 0; i < Size; i++)
+    LuauObject* result = pushnewbundle(L, size);
+    for (int i = 0; i < size; i++)
         setobj(L, &luaR_members(result)[i], &luaR_members(bundle)[i]);
     setobj(L, &luaR_members(result)[position - 1], L->base + 2);
     luaC_checkGC(L);
     return 1;
+}
+
+template<int Size>
+static int bundlesub(lua_State* L)
+{
+    return subbundle(L, checkbundle<Size>(L, "sub"), Size);
+}
+
+template<int Size>
+static int bundlewith(lua_State* L)
+{
+    return withbundle(L, checkbundle<Size>(L, "with"), Size);
 }
 
 // The class of `Size` values: its fields, then its methods
@@ -614,10 +622,24 @@ static int bundleconcat(lua_State* L)
     return 1;
 }
 
+static int bundlesubfunction(lua_State* L)
+{
+    LuauObject* bundle = checkbundlearg(L, 1);
+    return subbundle(L, bundle, int(bundle->numberofmembers));
+}
+
+static int bundlewithfunction(lua_State* L)
+{
+    LuauObject* bundle = checkbundlearg(L, 1);
+    return withbundle(L, bundle, int(bundle->numberofmembers));
+}
+
 static const luaL_Reg kBundleFunctions[] = {
     {"pack", bundlepack},
     {"unpack", bundleunpack},
     {"concat", bundleconcat},
+    {"sub", bundlesubfunction},
+    {"with", bundlewithfunction},
     {NULL, NULL},
 };
 
@@ -1783,7 +1805,7 @@ int luaopen_bundle(lua_State* L)
 {
     addbundleclasses(L);
 
-    lua_createtable(L, 0, 3);
+    lua_createtable(L, 0, 5);
     luaL_register(L, NULL, kBundleFunctions);
 
     lua_pushvalue(L, -1);
