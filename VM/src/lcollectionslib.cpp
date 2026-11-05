@@ -286,6 +286,19 @@ static LuauClass* bundleclass(lua_State* L, int size)
     return builtinclass(L, LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + size));
 }
 
+void luaR_checkbundleassign(lua_State* L, const LuauObject* object, const TValue* key)
+{
+    int size = int(object->numberofmembers);
+    if (size > LUWU_BUNDLE_MAX || object->lclass != bundleclass(L, size) || !ttisstring(key))
+        return;
+
+    for (int i = 0; i < size; i++)
+    {
+        if (strcmp(svalue(key), kBundleFieldNames[i]) == 0)
+            luaG_runerror(L, "a bundle can't be changed; b:with(%d, value) makes a copy with '%s' replaced", i + 1, kBundleFieldNames[i]);
+    }
+}
+
 int luaR_bundlesize(lua_State* L, const TValue* value)
 {
     if (!ttisobject(value))
