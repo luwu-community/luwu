@@ -6196,6 +6196,28 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_compare_with_their_metamethods")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+// Luwu bundles: assigning a bundle's field names the `with` call that makes a changed copy
+TEST_CASE_FIXTURE(BuiltinsFixture, "assigning_a_bundle_field_points_at_with")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local b = bundle.pack(1, 2)
+        b.second = 3
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<ConstPropertyAssignment>(result.errors[0]));
+    CHECK(toString(result.errors[0]).find("b:with(2, value)") != std::string::npos);
+}
+
 // Luwu bundles: a bundle type prints the way `.(A, B)` writes it, whatever its class is called
 TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_types_print_as_dot_positional")
 {
