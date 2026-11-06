@@ -9606,6 +9606,8 @@ TEST_CASE_FIXTURE(LoweringFixture, "TryRangeHandlerIsABlockOnlyTheVmEnters")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::DebugLuwuTryExpressions, true},
+        // the saved pcs below are for a CALL; CALLFB takes one more word
+        {FFlag::LuauEmitCallFeedback, false},
     };
 
     // The handler (bb_bytecode_1) has no uses but stays. Inside the range, savedpc names the call before it runs.
