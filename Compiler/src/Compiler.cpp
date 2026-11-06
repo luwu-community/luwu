@@ -421,7 +421,7 @@ struct Compiler
 
             return getFunctionExpr(lv->init);
         }
-        else if (AstExprIndexName* expr = node->as<AstExprIndexName>())
+        else if (AstExprIndexName* expr = node->as<AstExprIndexName>(); expr && !expr->qualifiedTrait)
         {
             if (AstExpr* value = tryIndexConstantTable(expr))
                 return getFunctionExpr(value);
@@ -1557,7 +1557,7 @@ struct Compiler
             if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
                 return prop->visibility == AstClassMemberVisibility::Private;
 
-            if (const AstClassMethod* m = member.get_if<AstClassMethod>(); m && m->functionName == name)
+            if (const AstClassMethod* m = member.get_if<AstClassMethod>(); m && m->functionName == name && !m->qualifiedTrait)
                 return m->visibility == AstClassMemberVisibility::Private;
         }
 
@@ -1900,7 +1900,7 @@ struct Compiler
             if (AstExprTypeAssertion* t = expr->as<AstExprTypeAssertion>())
                 return isTableTyped(t->annotation);
 
-            if (AstExprIndexName* idx = expr->as<AstExprIndexName>())
+            if (AstExprIndexName* idx = expr->as<AstExprIndexName>(); idx && !idx->qualifiedTrait)
                 return isProvenSelf(idx->expr) && isTableTyped(self->findClassFieldType(cls, idx->index));
 
             if (AstExprLocal* le = expr->as<AstExprLocal>())
@@ -1913,7 +1913,7 @@ struct Compiler
         bool callsKnownMethod(AstExprCall* call) override
         {
             AstExprIndexName* idx = call->func->as<AstExprIndexName>();
-            return idx && isProvenSelf(idx->expr) && self->findInstanceMethod(cls, idx->index);
+            return idx && !idx->qualifiedTrait && isProvenSelf(idx->expr) && self->findInstanceMethod(cls, idx->index);
         }
 
         bool isPrivatelyConstructed(AstExprCall* call)
@@ -2465,7 +2465,7 @@ struct Compiler
         {
             if (const AstClassMethod* m = member.get_if<AstClassMethod>())
             {
-                if (m->functionName == name && classMethodOwner.contains(m->function))
+                if (m->functionName == name && classMethodOwner.contains(m->function) && !m->qualifiedTrait)
                     return m->function;
             }
         }
@@ -2554,7 +2554,7 @@ struct Compiler
 
             return {};
         }
-        else if (AstExprIndexName* idx = recv->as<AstExprIndexName>())
+        else if (AstExprIndexName* idx = recv->as<AstExprIndexName>(); idx && !idx->qualifiedTrait)
         {
             // a declared field type is an annotation, however well the base it was read from is known:
             // nothing checks what a field actually holds
@@ -2578,8 +2578,9 @@ struct Compiler
         if (!expr->self)
             return nullptr;
 
+        // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name()` reaches a member the class's body may not hold
         AstExprIndexName* idx = expr->func->as<AstExprIndexName>();
-        if (!idx)
+        if (!idx || idx->qualifiedTrait)
             return nullptr;
 
         ReceiverClass receiver = resolveReceiverClass(idx->expr);
@@ -3646,6 +3647,13 @@ struct Compiler
             {
                 selfreg = uint8_t(reg);
             }
+            else if (fi->qualifiedTrait)
+            {
+                // Luwu Traits (rfcs/classes/traits.md): GETQUALIFIED reads the trait from `regs`, so the receiver goes
+                // where the call takes it
+                selfreg = uint8_t(regs + 1);
+                compileExprTempTop(fi->expr, selfreg);
+            }
             else
             {
                 // Note: to be able to compile very deeply nested self call chains (obj:method1():method2():...), we need to be able to do this in
@@ -3655,6 +3663,10 @@ struct Compiler
 
                 compileExprTempTop(fi->expr, selfreg);
             }
+
+            // Luwu Traits (rfcs/classes/traits.md): the trait of `obj:Trait:name(...)` goes in the function's register
+            if (fi->qualifiedTrait)
+                compileExprTemp(fi->qualifiedTrait, regs);
         }
         else if (bfid < 0)
         {
@@ -3683,10 +3695,22 @@ struct Compiler
             if (cid < 0)
                 CompileError::raise(fi->location, "Exceeded constant limit; simplify the code to compile");
 
-            bytecode.emitABC(LOP_NAMECALL, regs, selfreg, uint8_t(BytecodeBuilder::getStringHash(iname)));
-            bytecode.emitAux(cid);
+            if (fi->qualifiedTrait)
+            {
+                // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name(...)`; the trait is in `regs`
+                bytecode.emitABC(LOP_GETQUALIFIED, regs, selfreg, regs);
+                bytecode.emitAux(cid);
 
-            hintTemporaryExprRegType(fi->expr, selfreg, LBC_TYPE_TABLE, /* instLength */ 2);
+                if (selfreg != regs + 1)
+                    bytecode.emitABC(LOP_MOVE, uint8_t(regs + 1), selfreg, 0);
+            }
+            else
+            {
+                bytecode.emitABC(LOP_NAMECALL, regs, selfreg, uint8_t(BytecodeBuilder::getStringHash(iname)));
+                bytecode.emitAux(cid);
+
+                hintTemporaryExprRegType(fi->expr, selfreg, LBC_TYPE_TABLE, /* instLength */ 2);
+            }
         }
         else if (bfid >= 0)
         {
@@ -4059,7 +4083,7 @@ struct Compiler
         {
             if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
                 plan->fieldSlots[prop->name] = ownFields++;
-            else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+            else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && !method->qualifiedTrait)
                 ownMethods.insert(method->functionName);
         }
 
@@ -4601,6 +4625,11 @@ struct Compiler
                     },
                     [&](const AstClassMethod& method)
                     {
+                        // Luwu Traits (rfcs/classes/traits.md): a qualified implementation isn't a member of the class; it
+                        // is registered with its trait below
+                        if (method.qualifiedTrait)
+                            return;
+
                         // Luwu Traits (rfcs/classes/traits.md): an expected function has a slot in the trait's shape, so
                         // the VM knows what implementing classes must define, but no value.
                         if (method.expectLocation)
@@ -4614,6 +4643,8 @@ struct Compiler
                                 flags |= LBC_CLASSMEMBER_PRIVATE;
                             if (method.isOptional)
                                 flags |= LBC_CLASSMEMBER_OPTIONAL;
+                            if (method.scopeLocation)
+                                flags |= LBC_CLASSMEMBER_SCOPED;
                             shape.methodFlags.emplace_back(flags);
                             return;
                         }
@@ -4641,6 +4672,8 @@ struct Compiler
                         bool takesSelf = method.function->args.size > 0 && method.function->args.data[0]->name == "self";
                         if (decl->isTrait && takesSelf)
                             flags |= LBC_CLASSMEMBER_TAKESSELF;
+                        if (method.scopeLocation)
+                            flags |= LBC_CLASSMEMBER_SCOPED;
                         shape.methodFlags.emplace_back(flags);
 
                         bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, 0, temp);
@@ -4768,6 +4801,28 @@ struct Compiler
                 checkConstant(nameCid, copy.function->location);
 
                 bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_TRAITCOPY, copyRegs);
+                bytecode.emitAux(nameCid);
+            }
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementations, `function Json.name`, each with its trait
+        {
+            RegScope rsQualified(this);
+            uint8_t qualifiedRegs = allocReg(decl, 2u);
+
+            for (const AstClassMember& member : decl->members)
+            {
+                const AstClassMethod* method = member.get_if<AstClassMethod>();
+                if (!method || !method->qualifiedTrait)
+                    continue;
+
+                compileExprFunction(method->function, qualifiedRegs);
+                compileExprTemp(method->qualifiedTrait, uint8_t(qualifiedRegs + 1));
+
+                int nameCid = bytecode.addConstantString(sref(method->functionName));
+                checkConstant(nameCid, method->nameLocation);
+
+                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_QUALIFIED, qualifiedRegs);
                 bytecode.emitAux(nameCid);
             }
         }
@@ -6229,9 +6284,28 @@ struct Compiler
         return options.optimizationLevel >= 1 && getGlobalState(globals, expr->name) == Global::Default;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): `Class:Trait.name`
+    void compileExprQualifiedIndex(AstExprIndexName* expr, uint8_t target)
+    {
+        RegScope rs(this);
+        uint8_t receiver = compileExprAuto(expr->expr, rs);
+        uint8_t trait = compileExprAuto(expr->qualifiedTrait, rs);
+
+        int32_t cid = bytecode.addConstantString(sref(expr->index));
+        if (cid < 0)
+            CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+
+        setDebugLine(expr->indexLocation);
+        bytecode.emitABC(LOP_GETQUALIFIED, target, receiver, trait);
+        bytecode.emitAux(cid);
+    }
+
     void compileExprIndexName(AstExprIndexName* expr, uint8_t target, bool targetTemp = false)
     {
         setDebugLine(expr); // normally compileExpr sets up line info, but compileExprIndexName can be called directly
+
+        if (expr->qualifiedTrait)
+            return compileExprQualifiedIndex(expr, target);
 
         // Optimization: index chains that start from global variables can be compiled into GETIMPORT statement
         AstExprGlobal* importRoot = 0;
@@ -6240,7 +6314,8 @@ struct Compiler
 
         if (AstExprIndexName* index = expr->expr->as<AstExprIndexName>())
         {
-            importRoot = index->expr->as<AstExprGlobal>();
+            // Luwu Traits (rfcs/classes/traits.md): `(Class:Trait.name).x` is no import chain
+            importRoot = index->qualifiedTrait ? nullptr : index->expr->as<AstExprGlobal>();
             import1 = index;
             import2 = expr;
         }

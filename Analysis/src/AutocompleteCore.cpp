@@ -2352,7 +2352,7 @@ static void autocompleteMissingFunctions(
     std::unordered_set<std::string> defined;
     for (const auto& member : classStat->members)
     {
-        if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method != typing)
+        if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method != typing && !method->qualifiedTrait)
             defined.insert(method->functionName.value);
         else if (const AstClassProperty* field = member.get_if<AstClassProperty>(); field && field->name.value != name)
             defined.insert(field->name.value);

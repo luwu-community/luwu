@@ -1078,4 +1078,142 @@ do
     assert(next(leaked) == nil, `leaked {next(leaked)}`)
 end
 
+-- scoped functions (`function Self.name`) and qualified implementations (`function Trait.name`)
+trait Encoder
+    public function Self.encode(value): string
+        return `encoded {value}`
+    end
+
+    public function Self.write(self): string
+        return `default {self.label}`
+    end
+
+    expect public function Self.tag(self): string
+    expect public function Self.extra?(self)
+
+    private function Self.secret(self)
+        return "secret"
+    end
+
+    public function plain(self): string
+        return "plain"
+    end
+end
+
+trait Printer
+    function Self.write(self): string
+        return "printed"
+    end
+end
+
+class Label(public label: string) implements Encoder, Printer
+    public function Encoder.write(self): string
+        return `label {self.label}`
+    end
+
+    public function Encoder.tag(self): string
+        return "L"
+    end
+
+    public function reveal(self)
+        return self:Encoder:secret()
+    end
+end
+
+do
+    local l = Label("a")
+
+    -- the trait's own static, through the trait and through the class
+    assert(Encoder.encode(1) == "encoded 1")
+    assert(Label:Encoder.encode(2) == "encoded 2")
+
+    -- each trait's version, and the trait's default through `Trait.method(obj)`
+    assert(l:Encoder:write() == "label a")
+    assert(l:Printer:write() == "printed")
+    assert(Encoder.write(l) == "default a")
+    assert(l:Encoder:tag() == "L")
+    assert(Label:Encoder.tag(l) == "L")
+
+    -- an optional expected function nobody defines reads as nil, and a flat member still reads through the trait
+    assert(Label:Encoder.extra == nil)
+    assert(l:Encoder:plain() == "plain")
+
+    -- scoped functions aren't members of the class
+    expectfail("scoped method", "do not have a field named 'write'", function()
+        return l.write
+    end)
+    expectfail("scoped static", "does not have a member named 'encode'", function()
+        return Label.encode
+    end)
+
+    -- a private scoped function is for the trait's code and the class's
+    assert(l:reveal() == "secret")
+    expectfail("private scoped", "'Encoder.secret' is private", function()
+        return l:Encoder:secret()
+    end)
+
+    -- reading through something that isn't a trait, or that the class doesn't implement
+    expectfail("unimplemented trait", "'Label' doesn't implement 'Greeter'", function()
+        return l:Greeter:greet()
+    end)
+    expectfail("not a trait", "the name before it must be a trait", function()
+        local notatrait = 1
+        return l:notatrait:write()
+    end)
+    expectfail("not an object", "it needs an object or a class", function()
+        local value = 1
+        return value:Encoder:write()
+    end)
+    expectfail("unknown function", "trait 'Encoder' has no function 'missing'", function()
+        return l:Encoder:missing()
+    end)
+end
+
+-- a class gets a copy of the scoped defaults of the traits it reaches through `needs`
+trait Pretty needs Encoder
+    function Self.tag(self): string
+        return "pretty"
+    end
+end
+
+class Doc(public label: string) implements Pretty
+end
+
+do
+    local d = Doc("d")
+    assert(d:Encoder:write() == "default d")
+    assert(d:Pretty:tag() == "pretty")
+    expectfail("needed trait's expected function", "'Doc' doesn't implement 'Encoder.tag'", function()
+        return d:Encoder:tag()
+    end)
+end
+
+-- what the class statement refuses
+expectfail("missing expected scoped function", "missing function 'Encoder.tag' required for 'Bare' to implement 'Encoder'", chunk, [[
+    local Encoder = ...
+    class Bare() implements Encoder end
+]], Encoder)
+expectfail("trait not implemented", "class 'Stray' implements functions of 'Printer', so it has to implement 'Printer'", chunk, [[
+    local Encoder, Printer = ...
+    class Stray() implements Encoder
+        function Encoder.tag(self) return "" end
+        function Printer.write(self) return "" end
+    end
+]], Encoder, Printer)
+expectfail("no such function", "trait 'Encoder' has no function 'nope' for class 'Typo' to implement", chunk, [[
+    local Encoder = ...
+    class Typo() implements Encoder
+        function Encoder.tag(self) return "" end
+        function Encoder.nope(self) end
+    end
+]], Encoder)
+expectfail("qualified with a value", "'tag' in class 'Odd' is qualified with a number instead of a trait", chunk, [[
+    local Encoder = ...
+    local n = 1
+    class Odd() implements Encoder
+        function Encoder.tag(self) return "" end
+        function n.tag(self) return "" end
+    end
+]], Encoder)
+
 return 'OK'

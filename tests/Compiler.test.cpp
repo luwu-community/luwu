@@ -11852,6 +11852,48 @@ end
 // Luwu Traits (rfcs/classes/traits.md): constructing a class whose traits are all declared in this file initializes the
 // trait fields inline, with no INITTRAITS, when their initializers mean the same at the construction site. One that names
 // a local (an upvalue of the trait's code, which the site can't name) keeps INITTRAITS.
+// Luwu Traits (rfcs/classes/traits.md): a qualified implementation is registered with its trait, and a qualified read is one
+// GETQUALIFIED: `obj:Trait:name(...)` reads into the call's function register, with the receiver moved into `self`'s
+TEST_CASE("ClassTraitQualifiedReads")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    const char* source = R"(
+trait Json
+    function Self.write(self) end
+end
+
+class Cat() implements Json
+    function Json.write(self) end
+end
+
+function call(c, x)
+    return c:Json:write(x)
+end
+
+function read()
+    return Cat:Json.write
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+    Luau::compileOrThrow(bcb, source);
+
+    std::string all = bcb.dumpEverything();
+    CHECK(all.find("NEWCLASSMEMBER R1 QUALIFIED R3 R4 ['write']") != std::string::npos);
+    CHECK(all.find(R"(GETUPVAL R2 0
+MOVE R4 R1
+GETQUALIFIED R2 R0 R2 K0 ['write']
+MOVE R3 R0
+)") != std::string::npos);
+    CHECK(all.find(R"(GETUPVAL R1 0
+GETUPVAL R2 1
+GETQUALIFIED R0 R1 R2 K0 ['write']
+)") != std::string::npos);
+}
+
 TEST_CASE("ClassTraitInitializersInline")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};

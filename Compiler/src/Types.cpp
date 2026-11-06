@@ -537,7 +537,7 @@ struct TypeMapVisitor : AstVisitor
     {
         for (const AstClassMember& member : decl->members)
         {
-            if (const AstClassMethod* method = Luau::get_if<AstClassMethod>(&member); method && method->functionName == name)
+            if (const AstClassMethod* method = Luau::get_if<AstClassMethod>(&member); method && method->functionName == name && !method->qualifiedTrait)
                 return method;
         }
 
@@ -1086,7 +1086,7 @@ struct TypeMapVisitor : AstVisitor
                 // return type names a class returns an object. Nothing checks that declared type. If it is
                 // wrong, codegen's guard on the hint fails and the rest of each calling function runs
                 // interpreted. So the result is only typed when annotations are trusted.
-                AstExprGlobal* classGlobal = indexName->expr->as<AstExprGlobal>();
+                AstExprGlobal* classGlobal = indexName->qualifiedTrait ? nullptr : indexName->expr->as<AstExprGlobal>();
 
                 if (classGlobal && trustsTypeAnnotations)
                 {

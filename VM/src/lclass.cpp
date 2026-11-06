@@ -72,6 +72,7 @@ LuauClass* luaR_newclass(
     classdef->numoverriddenconsts = 0;
     classdef->traitdefaults = NULL;
     classdef->compiledtraitcopies = NULL;
+    classdef->qualified = NULL;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -384,6 +385,39 @@ static void luaR_stampownerclass(lua_State* L, Proto* p, LuauClass* classdef)
         luaR_stampownerclass(L, p->p[i], classdef);
 }
 
+// Whether a trait's member at `off` is a function scoped to the trait (`function Self.name`), which implementing classes
+// don't get as members
+static bool luaR_isscoped(const LuauClass* trait, uint32_t off)
+{
+    return off >= trait->numberofinstancemembers && (trait->memberflags[off] & LBC_CLASSMEMBER_SCOPED) != 0;
+}
+
+// Raises unless the running code may read the trait's private member `name`: the trait's own code, or the class's
+static void luaR_checkscopedaccess(lua_State* L, const LuauClass* trait, const LuauClass* cls, uint32_t traitoffset, TString* name)
+{
+    if (!(trait->memberflags[traitoffset] & LBC_CLASSMEMBER_PRIVATE))
+        return;
+
+    const Closure* caller = luaR_callinglua(L);
+    bool owner = caller && !caller->isC && (caller->l.p->ownerclass == trait || caller->l.p->ownerclass == cls);
+    if (!owner)
+        luaG_runerror(L, "'%s.%s' is private to '%s' and the classes implementing it", getstr(trait->name), getstr(name), getstr(trait->name));
+}
+
+// Calls `fn` with the dispatcher's arguments, for luaR_traitmethod
+static int luaR_calltraitmethod(lua_State* L, const TValue* fn, int nargs)
+{
+    luaL_checkstack(L, 1, "trait method call");
+    luaC_threadbarrier(L);
+
+    for (StkId arg = L->top; arg > L->base; arg--)
+        setobj2s(L, arg, arg - 1);
+    setobj2s(L, L->base, fn);
+    L->top++;
+
+    return luaL_callyieldable(L, nargs, LUA_MULTRET);
+}
+
 // Luwu Traits (rfcs/classes/traits.md): the function `Trait.method` reads as. Its upvalues are the trait, the method's name and the trait's
 // own closure (which luaR_implementtraits copies into implementing classes). It calls the receiver's class's copy of
 // the trait's method, even when the class overrides it: `Trait.method(obj)` is how an override reaches the default.
@@ -407,9 +441,27 @@ static int luaR_traitmethod(lua_State* L)
             receiver ? luaT_objtypename(L, receiver) : "no value"
         );
 
+    const LuauClass* cls = objectvalue(receiver)->lclass;
+
+    // A scoped default's copy is the class's version unless the class implements it: then the copy is in traitdefaults
+    uint32_t traitoffset = uint32_t(nvalue(luaH_getstr(trait->memberstooffset, name)));
+    if (luaR_isscoped(trait, traitoffset))
+    {
+        luaR_checkscopedaccess(L, trait, cls, traitoffset, name);
+
+        const TValue* fn = cls->traitdefaults ? luaH_get(cls->traitdefaults, &dispatcher->c.upvals[2]) : luaO_nilobject;
+        if (ttisnil(fn))
+        {
+            TValue key;
+            setclassvalue(L, &key, const_cast<LuauClass*>(trait));
+            fn = luaH_getstr(hvalue(luaH_get(cls->qualified, &key)), name);
+        }
+
+        return luaR_calltraitmethod(L, fn, nargs);
+    }
+
     // The class implements the trait, so it has a function of this name: its own, or its copy of the trait's
     // (luaR_implementtraits refuses a class field that clashes with it).
-    const LuauClass* cls = objectvalue(receiver)->lclass;
     const TValue* offset = luaH_getstr(cls->memberstooffset, name);
     LUAU_ASSERT(!ttisnil(offset) && uint32_t(nvalue(offset)) >= cls->numberofinstancemembers);
     uint32_t memberoffset = uint32_t(nvalue(offset));
@@ -435,15 +487,7 @@ static int luaR_traitmethod(lua_State* L)
             fn = overridden;
     }
 
-    luaL_checkstack(L, 1, "trait method call");
-    luaC_threadbarrier(L);
-
-    for (StkId arg = L->top; arg > L->base; arg--)
-        setobj2s(L, arg, arg - 1);
-    setobj2s(L, L->base, fn);
-    L->top++;
-
-    return luaL_callyieldable(L, nargs, LUA_MULTRET);
+    return luaR_calltraitmethod(L, fn, nargs);
 }
 
 static int luaR_traitmethodcont(lua_State* L, int status)
@@ -1702,7 +1746,8 @@ static void luaR_checktraitexpectations(lua_State* L, LuauClass* classdef, StkId
             TString* name = trait->offsettomember[off];
             uint8_t expected = trait->memberflags[off];
 
-            if (!name || !(expected & LBC_CLASSMEMBER_EXPECTED))
+            // a scoped expectation is met by a qualified implementation (luaR_implementqualified)
+            if (!name || !(expected & LBC_CLASSMEMBER_EXPECTED) || luaR_isscoped(trait, off))
                 continue;
 
             bool isfield = off < trait->numberofinstancemembers;
@@ -1749,6 +1794,52 @@ static void luaR_checktraitexpectations(lua_State* L, LuauClass* classdef, StkId
                 luaR_traitrequirementerror(L, name, (expected & LBC_CLASSMEMBER_CONST) ? "const" : "non-const", classdef, trait);
         }
     }
+}
+
+// The class's table of its versions of `trait`'s members (LuauClass::qualified), or NULL when it has none and `create`
+// is false
+static LuaTable* luaR_qualifiedtable(lua_State* L, LuauClass* classdef, const LuauClass* trait, bool create)
+{
+    if (!classdef->qualified)
+    {
+        if (!create)
+            return NULL;
+
+        classdef->qualified = luaH_new(L, 0, 1);
+        luaC_objbarrier(L, classdef, classdef->qualified);
+    }
+
+    TValue key;
+    setclassvalue(L, &key, const_cast<LuauClass*>(trait));
+    const TValue* entry = luaH_get(classdef->qualified, &key);
+    if (ttistable(entry))
+        return hvalue(entry);
+    if (!create)
+        return NULL;
+
+    LuaTable* names = luaH_new(L, 0, 2);
+    sethvalue(L, luaH_set(L, classdef->qualified, &key), names);
+    luaC_barriert(L, classdef->qualified, &key);
+    luaC_objbarrier(L, classdef->qualified, names);
+    return names;
+}
+
+void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* fn)
+{
+    LUAU_ASSERT(!classdef->istrait && ttisfunction(fn) && !clvalue(fn)->isC);
+
+    // The chunk that declares the class ran again. The class constant is shared, and already implements its traits.
+    if (!classdef->traitspending)
+        return;
+
+    if (!ttisclass(trait) || !classvalue(trait)->istrait)
+        luaG_runerror(L, "'%s' in class '%s' is qualified with a %s instead of a trait", getstr(name), getstr(classdef->name), luaT_objtypename(L, trait));
+
+    luaR_stampownerclass(L, clvalue(fn)->l.p, classdef);
+
+    LuaTable* names = luaR_qualifiedtable(L, classdef, classvalue(trait), true);
+    setobj2t(L, luaH_setstr(L, names, name), fn);
+    luaC_barriert(L, names, fn);
 }
 
 void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, const LuauClass* trait, TString* name, const TValue* copy)
@@ -1811,6 +1902,132 @@ static void luaR_pushtraitinitorder(lua_State* L, LuaTable* edges, LuaTable* don
     luaD_checkstack(L, 1);
     setclassvalue(L, L->top, trait);
     L->top++;
+}
+
+// Records the class's copy of the default at `off` of `trait`, for `Trait.method(obj)` to run when the class overrides it
+// (LuauClass::traitdefaults)
+static void luaR_addtraitdefaultcopy(lua_State* L, LuauClass* classdef, const LuauClass* trait, uint32_t off)
+{
+    const TValue* traitfn = luaR_traitownfunction(trait, off);
+
+    if (!classdef->traitdefaults)
+    {
+        classdef->traitdefaults = luaH_new(L, 0, 1);
+        luaC_objbarrier(L, classdef, classdef->traitdefaults);
+    }
+
+    Closure* copy = luaR_classtraitfunction(L, classdef, traitfn);
+    luaD_checkstack(L, 1);
+    setclvalue(L, L->top, copy);
+    L->top++;
+    luaR_stampownerclass(L, copy->l.p, classdef);
+
+    TValue* slot = luaH_set(L, classdef->traitdefaults, traitfn);
+    setclvalue(L, slot, copy);
+    luaC_barriert(L, classdef->traitdefaults, L->top - 1);
+    L->top--;
+}
+
+// Checks the class's qualified implementations against the traits it now implements, and gives it a copy of every scoped
+// default it doesn't implement itself. `traits` holds the `numtraits` traits, the `nlisted` listed ones first.
+static void luaR_implementqualified(lua_State* L, LuauClass* classdef, StkId traits, int numtraits, uint32_t nlisted)
+{
+    auto implemented = [&](const LuauClass* trait)
+    {
+        for (int i = 0; i < numtraits; i++)
+            if (classvalue(traits + i) == trait)
+                return true;
+
+        return false;
+    };
+
+    // The qualified implementations: each names a function of a trait the class implements
+    for (int i = 0; classdef->qualified && i < sizenode(classdef->qualified); i++)
+    {
+        LuaNode* node = gnode(classdef->qualified, i);
+        if (ttisnil(gval(node)))
+            continue;
+
+        TValue key;
+        getnodekey(L, &key, node);
+        const LuauClass* trait = classvalue(&key);
+        LuaTable* names = hvalue(gval(node));
+
+        if (!implemented(trait))
+            luaG_runerror(L, "class '%s' implements functions of '%s', so it has to implement '%s'", getstr(classdef->name), getstr(trait->name), getstr(trait->name));
+
+        for (int j = 0; j < sizenode(names); j++)
+        {
+            LuaNode* entry = gnode(names, j);
+            if (ttisnil(gval(entry)))
+                continue;
+
+            TValue namekey;
+            getnodekey(L, &namekey, entry);
+            TString* name = tsvalue(&namekey);
+
+            const TValue* offset = luaH_getstr(trait->memberstooffset, name);
+            bool isfunction = !ttisnil(offset) && uint32_t(nvalue(offset)) >= trait->numberofinstancemembers && !luaR_istraitinternal(L, name);
+            if (!isfunction)
+                luaG_runerror(L, "trait '%s' has no function '%s' for class '%s' to implement", getstr(trait->name), getstr(name), getstr(classdef->name));
+
+            if (trait->memberflags[uint32_t(nvalue(offset))] & LBC_CLASSMEMBER_FINAL)
+                luaG_runerror(L, "'%s' is final in trait '%s' and can't be overridden", getstr(name), getstr(trait->name));
+        }
+    }
+
+    // The scoped members: the class's implementation, or else its copy of the default
+    for (int i = 0; i < numtraits; i++)
+    {
+        LuauClass* trait = classvalue(traits + i);
+
+        for (uint32_t off = trait->numberofinstancemembers; off < trait->numberofallmembers; off++)
+        {
+            TString* name = trait->offsettomember[off];
+            if (!name || !luaR_isscoped(trait, off))
+                continue;
+
+            uint8_t flags = trait->memberflags[off];
+            bool expected = (flags & LBC_CLASSMEMBER_EXPECTED) != 0;
+            LuaTable* names = luaR_qualifiedtable(L, classdef, trait, false);
+            bool implementedhere = names && !ttisnil(luaH_getstr(names, name));
+
+            if (implementedhere)
+            {
+                // `Trait.method(obj)` still runs the default
+                if (!expected)
+                    luaR_addtraitdefaultcopy(L, classdef, trait, off);
+                continue;
+            }
+
+            // A trait the class reaches through `needs` leaves its scoped expectations to the traits that need it
+            if (expected)
+            {
+                bool listed = uint32_t(i) < nlisted;
+                if (listed && !(flags & LBC_CLASSMEMBER_OPTIONAL))
+                    luaG_runerror(
+                        L,
+                        "missing function '%s.%s' required for '%s' to implement '%s'",
+                        getstr(trait->name),
+                        getstr(name),
+                        getstr(classdef->name),
+                        getstr(trait->name)
+                    );
+                continue;
+            }
+
+            Closure* copy = luaR_classtraitfunction(L, classdef, luaR_traitownfunction(trait, off));
+            luaD_checkstack(L, 1);
+            setclvalue(L, L->top, copy);
+            L->top++;
+            luaR_stampownerclass(L, copy->l.p, classdef);
+
+            names = luaR_qualifiedtable(L, classdef, trait, true);
+            setclvalue(L, luaH_setstr(L, names, name), copy);
+            luaC_barriert(L, names, L->top - 1);
+            L->top--;
+        }
+    }
 }
 
 void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint32_t n)
@@ -1878,7 +2095,7 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             // a factory's `__create` and the `__implemented` hook belong to the trait alone
             bool traitonly = name && luaR_hasreservedprefix(name) &&
                              (name == luaS_newliteral(L, "__create") || name == luaS_newliteral(L, "__implemented"));
-            bool provided = name && !(flags & LBC_CLASSMEMBER_EXPECTED) && !luaR_istraitinternal(L, name) && !traitonly;
+            bool provided = name && !(flags & LBC_CLASSMEMBER_EXPECTED) && !luaR_istraitinternal(L, name) && !traitonly && !luaR_isscoped(trait, off);
             if (!provided)
                 continue;
 
@@ -1974,7 +2191,7 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
         {
             TString* name = trait->offsettomember[off];
             uint8_t flags = trait->memberflags[off];
-            bool optional = name && (flags & LBC_CLASSMEMBER_EXPECTED) && (flags & LBC_CLASSMEMBER_OPTIONAL);
+            bool optional = name && (flags & LBC_CLASSMEMBER_EXPECTED) && (flags & LBC_CLASSMEMBER_OPTIONAL) && !luaR_isscoped(trait, off);
 
             bool definedElsewhere = optional && (!ttisnil(luaH_getstr(classdef->memberstooffset, name)) || !ttisnil(luaH_getstr(added, name)));
             if (!optional || definedElsewhere)
@@ -2201,31 +2418,17 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             if (!ttisfunction(fn) || !clvalue(fn)->isC)
                 continue;
 
-            // pass 1 credits the trait with every default the class doesn't define itself
+            // pass 1 credits the trait with every default the class doesn't define itself; a scoped one is
+            // luaR_implementqualified's
             const TValue* provider = luaH_getstr(added, name);
-            if (ttisclass(provider) && classvalue(provider) == trait)
+            if ((ttisclass(provider) && classvalue(provider) == trait) || luaR_isscoped(trait, off))
                 continue;
 
-            const TValue* traitfn = luaR_traitownfunction(trait, off);
-
-            if (!classdef->traitdefaults)
-            {
-                classdef->traitdefaults = luaH_new(L, 0, 1);
-                luaC_objbarrier(L, classdef, classdef->traitdefaults);
-            }
-
-            Closure* copy = luaR_classtraitfunction(L, classdef, traitfn);
-            luaD_checkstack(L, 1);
-            setclvalue(L, L->top, copy);
-            L->top++;
-            luaR_stampownerclass(L, copy->l.p, classdef);
-
-            TValue* slot = luaH_set(L, classdef->traitdefaults, traitfn);
-            setclvalue(L, slot, copy);
-            luaC_barriert(L, classdef->traitdefaults, L->top - 1);
-            L->top--;
+            luaR_addtraitdefaultcopy(L, classdef, trait, off);
         }
     }
+
+    luaR_implementqualified(L, classdef, L->base + first, numtraits, n);
 
     classdef->traits = luaM_newarray(L, numtraits, LuauClass*, classdef->memcat);
     classdef->numtraits = uint32_t(numtraits);
@@ -2448,4 +2651,62 @@ bool luaR_implements(const LuauClass* classdef, const LuauClass* trait)
             return true;
 
     return false;
+}
+
+void luaR_getqualified(lua_State* L, StkId ra, const TValue* receiver, const TValue* traitvalue, TString* name)
+{
+    if (!ttisclass(traitvalue) || !classvalue(traitvalue)->istrait)
+        luaG_runerror(L, "attempt to read '%s' through a %s; the name before it must be a trait", getstr(name), luaT_objtypename(L, traitvalue));
+
+    LuauClass* trait = classvalue(traitvalue);
+
+    LuauClass* cls = NULL;
+    if (ttisobject(receiver))
+        cls = objectvalue(receiver)->lclass;
+    else if (ttisclass(receiver) && !classvalue(receiver)->istrait)
+        cls = classvalue(receiver);
+    else
+        luaG_runerror(L, "attempt to read '%s.%s' of a %s; it needs an object or a class", getstr(trait->name), getstr(name), luaT_objtypename(L, receiver));
+
+    if (!luaR_implements(cls, trait))
+        luaG_runerror(L, "'%s' doesn't implement '%s'", getstr(cls->name), getstr(trait->name));
+
+    const TValue* traitoffset = luaH_getstr(trait->memberstooffset, name);
+    bool isfunction = !ttisnil(traitoffset) && uint32_t(nvalue(traitoffset)) >= trait->numberofinstancemembers && !luaR_istraitinternal(L, name);
+    if (!isfunction)
+        luaG_runerror(L, "trait '%s' has no function '%s'", getstr(trait->name), getstr(name));
+
+    uint32_t off = uint32_t(nvalue(traitoffset));
+
+    // The class's qualified implementation, or its copy of a scoped default
+    if (LuaTable* names = luaR_qualifiedtable(L, cls, trait, false))
+    {
+        const TValue* fn = luaH_getstr(names, name);
+        if (!ttisnil(fn))
+        {
+            luaR_checkscopedaccess(L, trait, cls, off, name);
+            setobj2s(L, ra, fn);
+            return;
+        }
+    }
+
+    // A scoped function the class doesn't have is an optional expected one, or one a needing trait was to implement
+    if (luaR_isscoped(trait, off))
+    {
+        if (!(trait->memberflags[off] & LBC_CLASSMEMBER_OPTIONAL))
+            luaG_runerror(L, "'%s' doesn't implement '%s.%s'", getstr(cls->name), getstr(trait->name), getstr(name));
+
+        setnilvalue(ra);
+        return;
+    }
+
+    // Otherwise it's the class's member of that name, which implementing the trait gave it
+    const TValue* classoffset = luaH_getstr(cls->memberstooffset, name);
+    LUAU_ASSERT(!ttisnil(classoffset) && uint32_t(nvalue(classoffset)) >= cls->numberofinstancemembers);
+    uint32_t memberoffset = uint32_t(nvalue(classoffset));
+
+    TValue key;
+    setsvalue(L, &key, name);
+    luaR_checkprivateaccess(L, &key, cls, luaR_callinglua(L), memberoffset);
+    setobj2s(L, ra, &cls->staticmembers[memberoffset - cls->numberofinstancemembers]);
 }
