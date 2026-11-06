@@ -1988,7 +1988,7 @@ void BytecodeBuilder::validateInstructions() const
             {
                 VREGRANGE(LUAU_INSN_C(insn), int(insns[i + 1]) * 2);
             }
-            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
             {
                 VREGRANGE(LUAU_INSN_C(insn), 2);
                 VCONST(insns[i + 1], String);
@@ -2065,6 +2065,13 @@ void BytecodeBuilder::validateInstructions() const
             LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_RESULTGET_ERR);
             VREG(LUAU_INSN_A(insn));
             VREG(LUAU_INSN_B(insn) + LBC_TRYRESULT_OKFLAG);
+            break;
+
+        case LOP_GETQUALIFIED:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            VREG(LUAU_INSN_C(insn));
+            VCONST(insns[i + 1], String);
             break;
 
         default:
@@ -2839,9 +2846,10 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         {
             formatAppend(result, "NEWCLASSMEMBER R%d IMPLEMENTS R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_C(insn), int(*code));
         }
-        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
         {
-            formatAppend(result, "NEWCLASSMEMBER R%d TRAITCOPY R%d R%d [", LUAU_INSN_A(insn), LUAU_INSN_C(insn), LUAU_INSN_C(insn) + 1);
+            const char* form = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY ? "TRAITCOPY" : "QUALIFIED";
+            formatAppend(result, "NEWCLASSMEMBER R%d %s R%d R%d [", LUAU_INSN_A(insn), form, LUAU_INSN_C(insn), LUAU_INSN_C(insn) + 1);
             dumpConstant(result, *code, false);
             result.append("]\n");
         }
@@ -2907,6 +2915,13 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         formatAppend(
             result, "RESULTGET R%d R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn) == LBC_RESULTGET_ERR ? "ERR" : "OK"
         );
+        break;
+
+    case LOP_GETQUALIFIED:
+        formatAppend(result, "GETQUALIFIED R%d R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), *code);
+        dumpConstant(result, *code, false);
+        result.append("]\n");
+        code++;
         break;
 
     default:

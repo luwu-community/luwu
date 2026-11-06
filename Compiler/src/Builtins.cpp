@@ -47,6 +47,10 @@ static size_t resolveBuiltinPath(
     }
     else if (AstExprIndexName* expr = node->as<AstExprIndexName>())
     {
+        // Luwu Traits (rfcs/classes/traits.md): `math:Trait.floor` reads a trait's function, not the library's
+        if (expr->qualifiedTrait)
+            return 0;
+
         size_t length = resolveBuiltinPath(expr->expr, globals, variables, /* isLibrary= */ true, path);
         if (length != 1)
             return 0;

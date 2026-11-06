@@ -399,6 +399,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
     case IrCmd::FALLBACK_INITTRAITS:
     case IrCmd::FALLBACK_WRAPRESULT:
+    case IrCmd::FALLBACK_GETQUALIFIED:
         return IrValueKind::None;
     case IrCmd::SUBSTITUTE:
         return IrValueKind::Unknown;

@@ -5790,7 +5790,9 @@ TEST_CASE_FIXTURE(ClassesFixture, "typing_trait_declarations")
                          "        return self.on\n"
                          "    end\n"
                          "end";
-    checkTypewriting(*this, before, access, kTraitTypewriterAfter);
+    // `self.` with no name yet is also an incomplete statement, a plain-Luau cascade that fix-existing-cascades (#63)
+    // removes
+    checkTypewriting(*this, before, access, kTraitTypewriterAfter, {"Incomplete statement"});
 }
 
 // Luwu Traits (rfcs/classes/traits.md): an unannotated `__implemented` is given a `class<Trait>`, the hook isn't a member of
@@ -5827,6 +5829,122 @@ TEST_CASE_FIXTURE(ClassesFixture, "implemented_hook_is_given_the_class")
     CHECK_EQ(toString(tm->givenType), "class<Component>");
     CHECK_EQ(result.errors[1].location.begin.line, 18);
     CHECK(get<UnknownProperty>(result.errors[1]));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a scoped function is read through the trait, and a class implements it with
+// `function Trait.name`; neither is a member of the class
+TEST_CASE_FIXTURE(ClassesFixture, "trait_scoped_functions_and_qualified_implementations")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Json
+            function Self.encode(value: unknown): string
+                return "json"
+            end
+
+            function Self.serialize(self): string
+                return "default"
+            end
+
+            expect function Self.tag(self): string
+        end
+
+        class Cat(public name: string) implements Json
+            public function Json.serialize(self): string
+                return self.name
+            end
+
+            public function Json.tag(self)
+                return self.name
+            end
+        end
+
+        local c = Cat("tom")
+        local a = Json.encode(1)
+        local b = c:Json:serialize()
+        local d = c:Json:tag()
+        local e = Cat:Json.encode(2)
+        local f: number = c:Json:tag()
+        local g = c:serialize()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(toString(requireType("a")), "string");
+    CHECK_EQ(toString(requireType("b")), "string");
+    CHECK_EQ(toString(requireType("d")), "string");
+    CHECK_EQ(toString(requireType("e")), "string");
+    CHECK_EQ(result.errors[0].location.begin.line, 28);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK_EQ(result.errors[1].location.begin.line, 29);
+    CHECK(get<UnknownProperty>(result.errors[1]));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): what a class's qualified implementations and a trait's `needs` have to agree with
+TEST_CASE_FIXTURE(ClassesFixture, "trait_qualified_implementations_are_checked")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Json
+            expect function Self.tag(self): string
+        end
+
+        trait Other
+        end
+
+        class Missing() implements Json
+        end
+
+        class Typo() implements Json
+            function Json.tag(self): string return "" end
+            function Json.nope(self) end
+        end
+
+        class Stray() implements Json
+            function Json.tag(self): string return "" end
+            function Other.x(self) end
+        end
+
+        trait Format needs Json
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    // a listed trait's scoped expectation, on the `implements` entry
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+    CHECK(toString(result.errors[0]).find("Json.tag") != std::string::npos);
+    // a function the trait doesn't have, on its name
+    CHECK_EQ(result.errors[1].location.begin.line, 13);
+    CHECK(toString(result.errors[1]).find("nope") != std::string::npos);
+    // a trait the class doesn't implement, on the qualifier
+    CHECK_EQ(result.errors[2].location.begin.line, 18);
+    CHECK(toString(result.errors[2]).find("Other") != std::string::npos);
+    // a needing trait declares the scoped functions the trait it needs expects
+    CHECK_EQ(result.errors[3].location.begin.line, 21);
+    CHECK(toString(result.errors[3]).find("Self.tag") != std::string::npos);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): typing scoped functions, qualified implementations and qualified reads
+TEST_CASE_FIXTURE(ClassesFixture, "typing_trait_scoped_functions")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+    const char* before = "local a = 1\n";
+
+    const char* scoped = "trait Json\n"
+                         "    function Self.encode(value: unknown): string\n"
+                         "        return \"json\"\n"
+                         "    end\n"
+                         "    expect function Self.tag(self): string\n"
+                         "end\n"
+                         "class Cat() implements Json\n"
+                         "    function Json.tag(self): string\n"
+                         "        return \"cat\"\n"
+                         "    end\n"
+                         "end\n"
+                         "local tag = Cat():Json:tag()\n"
+                         "local encode = Cat:Json.encode";
+    checkTypewriting(*this, before, scoped, kTraitTypewriterAfter);
 }
 
 // Luwu Traits (rfcs/classes/traits.md): typing a trait's `__implemented` hook

@@ -468,6 +468,8 @@ enum LuauOpcode
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_IMPLEMENTS for a class's `implements` list, emitted once,
     // after every member of the class is registered. AUX is the number of entries N; registers C..C+N-1 hold the
     // listed trait values, and C+N..C+2N-1 how many trait arguments each entry passes, as numbers.
+    // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_QUALIFIED for a qualified implementation, `function
+    // Json.name`: C holds the function, C+1 the trait, and AUX names it. Emitted before the IMPLEMENTS form, which checks it.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_TRAITCOPY for the class's own copy of a trait's
     // function, which the compiler made because the trait is declared in the same file. C holds the copy, C+1 the trait,
     // and AUX names the trait's function as a constant string. Emitted before the IMPLEMENTS form, which uses the copy
@@ -596,6 +598,15 @@ enum LuauOpcode
     // B: the result's first register
     // C: LBC_RESULTGET_OK (the value of an ok, else none) or LBC_RESULTGET_ERR (the error of an err, else none)
     LOP_RESULTGET,
+
+    // GETQUALIFIED: Luwu Traits (rfcs/classes/traits.md): reads the class's version of a trait's member, for
+    // `obj:Trait:name(...)` and `Class:Trait.name`: the class's qualified implementation, its copy of a scoped default, or
+    // else the class's member of that name (luaR_getqualified). Raises when B's class doesn't implement the trait.
+    // A: target register
+    // B: register holding the object or class
+    // C: register holding the trait
+    // AUX: the member's name as a constant string
+    LOP_GETQUALIFIED,
 
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
@@ -737,6 +748,10 @@ enum LuwuBytecodeTag
 // straight into each new instance, instead of being produced by the synthesized `__defaults` closure.
 // Implies LBC_CLASSMEMBER_HASDEFAULT.
 #define LBC_CLASSMEMBER_CONSTDEFAULT (1 << 3)
+// Luwu Traits (rfcs/classes/traits.md): set on a trait's function declared `function Self.name`, which implementing
+// classes don't get as a member: they read it through the trait (luaR_getqualified). Shares its bit with
+// LBC_CLASSMEMBER_CONSTDEFAULT, which only fields carry.
+#define LBC_CLASSMEMBER_SCOPED (1 << 3)
 // Set on the `__init` a primary constructor implies (`class Cat(name: string)`). Such an `__init`
 // only assigns fields from its parameters, which is what lets a construction site initialize the
 // instance positionally (LOP_NEWOBJECT's FIELDS form) instead of calling it: the VM checks this bit
@@ -761,6 +776,9 @@ enum LuwuBytecodeTag
 #define LBC_NEWCLASSMEMBER_IMPLEMENTS 1
 // Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's compiled copy of a trait's function
 #define LBC_NEWCLASSMEMBER_TRAITCOPY 2
+// Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's qualified implementation of a trait's
+// function, `function Json.name`: C holds the function, C+1 the trait, and AUX names the function as a constant string
+#define LBC_NEWCLASSMEMBER_QUALIFIED 3
 
 // Luwu Traits (rfcs/classes/traits.md): bits of the shape flags varint of LBC_CONSTANT_CLASS_SHAPE, written after the member
 // counts.

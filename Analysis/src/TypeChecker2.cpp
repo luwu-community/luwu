@@ -1762,7 +1762,7 @@ static std::optional<Location> classMemberLocation(AstStatClass* stat, const Nam
     {
         if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && name == prop->name.value)
             return prop->nameLocation;
-        if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && name == method->functionName.value)
+        if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && name == method->functionName.value && !method->qualifiedTrait)
             return method->nameLocation;
     }
 
@@ -2447,7 +2447,7 @@ void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
     {
         if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && !prop->expectLocation)
             declared.push_back({prop->name.value, prop->nameLocation, /* isField */ true});
-        else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && !method->expectLocation)
+        else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && !method->expectLocation && !method->qualifiedTrait)
             declared.push_back({method->functionName.value, method->nameLocation, /* isField */ false});
     }
 
@@ -4137,8 +4137,38 @@ void TypeChecker2::visitExprName(
     checkConstPropertyAssignment(leftType, expr, propName, context, location);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): the type of the function `name` scoped to the trait whose value has type
+// `traitValue` (`function Self.name`)
+static std::optional<TypeId> scopedFunctionOf(TypeId traitValue, const std::string& name)
+{
+    const ExternType* value = get<ExternType>(follow(traitValue));
+    const Obj* object = value && value->relation ? get_if<Obj>(&*value->relation) : nullptr;
+    const ExternType* trait = object ? get<ExternType>(follow(object->ty)) : nullptr;
+    if (!trait || !trait->traitInfo)
+        return std::nullopt;
+
+    auto scoped = trait->traitInfo->scopedFunctions.find(name);
+    if (scoped == trait->traitInfo->scopedFunctions.end())
+        return std::nullopt;
+
+    return scoped->second;
+}
+
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
 {
+    // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name` reads `Trait.name`, or the trait's scoped function `name`, which
+    // the trait's value may not have
+    if (indexName->qualifiedTrait)
+    {
+        visit(indexName->expr, ValueContext::RValue);
+
+        if (scopedFunctionOf(lookupType(indexName->qualifiedTrait), indexName->index.value))
+            visit(indexName->qualifiedTrait, ValueContext::RValue);
+        else
+            visitExprName(indexName->qualifiedTrait, indexName->location, indexName->index.value, context, builtinTypes->stringType, '.');
+        return;
+    }
+
     // If we're indexing like _.foo - foo could either be a prop or a string.
     visitExprName(indexName->expr, indexName->location, indexName->index.value, context, builtinTypes->stringType, indexName->op);
 }

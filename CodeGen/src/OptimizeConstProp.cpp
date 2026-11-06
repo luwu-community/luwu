@@ -3704,6 +3704,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.invalidate(OP_B(inst));
         state.invalidateHeapTableData();
         break;
+    case IrCmd::FALLBACK_GETQUALIFIED:
+        // writes the function, and runs nothing
+        state.invalidate(OP_B(inst));
+        break;
     case IrCmd::FALLBACK_NEWOBJECT:
         // Construction writes the instance (and, for a user __init, the frame it lays out above it),
         // and applying fields can run an __index metamethod, i.e. arbitrary Lua.

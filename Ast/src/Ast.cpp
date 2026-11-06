@@ -308,7 +308,12 @@ AstExprIndexName::AstExprIndexName(
 void AstExprIndexName::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
+    {
         expr->visit(visitor);
+
+        if (qualifiedTrait)
+            qualifiedTrait->visit(visitor);
+    }
 }
 
 AstExprIndexExpr::AstExprIndexExpr(const Location& location, AstExpr* expr, AstExpr* index)
@@ -1209,6 +1214,9 @@ void AstStatClass::visit(AstVisitor* visitor)
                     },
                     [&](const AstClassMethod& method)
                     {
+                        if (method.qualifiedTrait)
+                            method.qualifiedTrait->visit(visitor);
+
                         method.function->visit(visitor);
                     }
                 },
