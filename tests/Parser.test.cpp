@@ -5390,6 +5390,86 @@ TEST_CASE_FIXTURE(Fixture, "class_self_cannot_be_annotated")
     );
 }
 
+// Luwu Traits (rfcs/classes/traits.md): `function Self.name` in a trait, `function Trait.name` in a class, and the
+// qualified reads `obj:Trait:name()` and `Class:Trait.name`
+TEST_CASE_FIXTURE(Fixture, "trait_scoped_functions_and_qualified_reads_parse")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait Json
+            function Self.encode(value) end
+            expect function Self.tag?(self)
+        end
+
+        class Cat() implements Json, mod.Toml
+            function Json.tag(self) end
+            function mod.Toml.tag(self) end
+            function tag(self) end
+        end
+
+        local a = Cat():Json:tag()
+        local b = Cat:Json.encode
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 4);
+
+    AstStatClass* json = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(json);
+    REQUIRE(json->members.size == 2);
+    for (const AstClassMember& member : json->members)
+    {
+        const AstClassMethod* method = member.get_if<AstClassMethod>();
+        REQUIRE(method);
+        CHECK(method->scopeLocation);
+        CHECK(!method->qualifiedTrait);
+    }
+
+    AstStatClass* cat = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(cat);
+    REQUIRE(cat->members.size == 3);
+    const AstClassMethod* forJson = cat->members.data[0].get_if<AstClassMethod>();
+    const AstClassMethod* forToml = cat->members.data[1].get_if<AstClassMethod>();
+    const AstClassMethod* own = cat->members.data[2].get_if<AstClassMethod>();
+    REQUIRE(forJson);
+    REQUIRE(forToml);
+    REQUIRE(own);
+    REQUIRE(forJson->qualifiedTrait);
+    CHECK(forJson->qualifiedTrait->is<AstExprGlobal>());
+    REQUIRE(forToml->qualifiedTrait);
+    CHECK(forToml->qualifiedTrait->is<AstExprIndexName>());
+    CHECK_EQ(std::string(forToml->functionName.value), "tag");
+    CHECK(!own->qualifiedTrait);
+
+    AstStatLocal* call = block->body.data[2]->as<AstStatLocal>();
+    REQUIRE(call);
+    AstExprCall* callExpr = call->values.data[0]->as<AstExprCall>();
+    REQUIRE(callExpr);
+    CHECK(callExpr->self);
+    AstExprIndexName* method = callExpr->func->as<AstExprIndexName>();
+    REQUIRE(method);
+    CHECK(method->qualifiedTrait);
+    CHECK_EQ(method->op, ':');
+
+    AstStatLocal* read = block->body.data[3]->as<AstStatLocal>();
+    REQUIRE(read);
+    AstExprIndexName* value = read->values.data[0]->as<AstExprIndexName>();
+    REQUIRE(value);
+    CHECK(value->qualifiedTrait);
+    CHECK_EQ(value->op, '.');
+}
+
+TEST_CASE_FIXTURE(Fixture, "trait_scoped_functions_and_qualified_reads_parse_errors")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    matchParseError("trait T function Other.f(self) end end", "A trait can only scope a function to itself: write 'function Self.f'");
+    matchParseError("trait T function Self.__tostring(self) end end", "'__tostring' can't be scoped to a trait: the VM looks it up as a member of the class");
+    matchParseError("class C() function T.f(self) end end", "Class 'C' implements no traits, so it can't implement 'T.f'");
+    matchParseError("class C() implements T function T.f(self) end function T.f(self) end end", "Duplicate class member 'T.f'");
+    matchParseError("local x = C:T.f\nC:T.f = 1", "Assigned expression must be a variable or a field");
+}
+
 // Luwu Traits (rfcs/classes/traits.md)
 TEST_CASE_FIXTURE(Fixture, "trait_declarations_parse")
 {

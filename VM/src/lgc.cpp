@@ -486,6 +486,8 @@ static void traverseclass(global_State* g, LuauClass* classdef)
         markobject(g, classdef->traitdefaults);
     if (classdef->compiledtraitcopies)
         markobject(g, classdef->compiledtraitcopies);
+    if (classdef->qualified)
+        markobject(g, classdef->qualified);
 }
 
 static void traverseobject(global_State* g, LuauObject* object)

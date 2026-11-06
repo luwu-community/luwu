@@ -450,6 +450,8 @@ private:
 
     // NAME
     AstExpr* parseNameExpr(const char* context = nullptr);
+    AstExpr* nameExpr(const Name& name);
+    std::string printedQualifier(AstExpr* qualifier);
 
     // prefixexp -> NAME | '(' expr ')'
     AstExpr* parsePrefixExpr();

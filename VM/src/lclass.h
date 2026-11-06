@@ -350,6 +350,20 @@ LUAI_FUNC void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, cons
  */
 LUAI_FUNC Closure* luaR_newtraitinitrunner(lua_State* L);
 
+/**
+ * Luwu Traits (rfcs/classes/traits.md): records `fn` as `classdef`'s qualified implementation of the member `name` of
+ * the trait `trait` (`function Json.name`, LBC_NEWCLASSMEMBER_QUALIFIED). luaR_implementtraits checks it. Ignored once
+ * the class has implemented its traits.
+ */
+LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* fn);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): sets `ra` to the class's version of the member `name` of `trait`, for
+ * `obj:Trait:name()` and `Class:Trait.name` (LOP_GETQUALIFIED). `receiver` is an object or a class. Raises when it
+ * doesn't implement the trait, or the trait has no such function.
+ */
+LUAI_FUNC void luaR_getqualified(lua_State* L, StkId ra, const TValue* receiver, const TValue* trait, TString* name);
+
 // Luwu Traits (rfcs/classes/traits.md): whether `classdef` implements `trait`, listed or implied through `needs`.
 LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait);
 
