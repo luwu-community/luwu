@@ -2264,7 +2264,7 @@ void ConstraintGenerator::checkQualifiedImplementation(
     NotNull<Scope> constraintScope{sig.signatureScope ? sig.signatureScope.get() : sig.bodyScope.get()};
     std::unique_ptr<Constraint> c =
         std::make_unique<Constraint>(constraintScope, method.function->location, GeneralizationConstraint{functionType, sig.signature});
-    addAllAsDependenciesAndChainReturns(start, end, this, NotNull{c.get()});
+    addAllAsDependencies(start, end, this, NotNull{c.get()});
 
     NotNull<Constraint> generalization = addConstraint(scope, std::move(c));
     getMutable<BlockedType>(functionType)->setOwner(generalization);
