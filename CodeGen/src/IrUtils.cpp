@@ -63,6 +63,7 @@ int getOpLength(LuauOpcode op)
     case LOP_NEWOBJECT:
     case LOP_GETOBJECTMEMBER:
     case LOP_SETOBJECTMEMBER:
+    case LOP_GETQUALIFIED:
         return 2;
 
     default:
