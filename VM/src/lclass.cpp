@@ -76,6 +76,7 @@ LuauClass* luaR_newclass(
     classdef->keybyvalue = false;
     classdef->fastmethods = NULL;
     classdef->qualified = NULL;
+    classdef->reflection = NULL;
     classdef->positionalmembers = NULL;
     classdef->numberofpositional = -1;
 

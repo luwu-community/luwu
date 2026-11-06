@@ -4866,18 +4866,18 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
             continue;
         }
 
-        // Luwu class reflection (rfcs/classes): `ClassMember` is in the `class` table
-        const Luau::TableType* classLibrary = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "class")));
-        REQUIRE(classLibrary);
+        // Luwu class reflection (rfcs/classes): `ClassMember` is only a type
+        if (kind == LUWU_BUILTIN_CLASSMEMBER)
+        {
+            std::optional<Luau::TypeFun> declaredType = frontend.globals.globalScope->lookupType(name);
+            REQUIRE(declaredType);
+            CHECK_EQ(declaredObjectMembers(declaredType->type), vmClassMembers(classdef));
+            continue;
+        }
 
         bool isGlobal = kind == LUWU_BUILTIN_SOME || kind == LUWU_BUILTIN_OK || kind == LUWU_BUILTIN_ERR;
-        std::optional<Luau::TypeId> declared;
-        if (isGlobal)
-            declared = Luau::getGlobalBinding(frontend.globals, name.c_str());
-        else if (kind == LUWU_BUILTIN_CLASSMEMBER)
-            declared = declaredClassValue(classLibrary, name);
-        else
-            declared = declaredClassValue(library, name);
+        std::optional<Luau::TypeId> declared =
+            isGlobal ? std::optional<Luau::TypeId>(Luau::getGlobalBinding(frontend.globals, name.c_str())) : declaredClassValue(library, name);
         REQUIRE(declared);
         CHECK_EQ(declaredClassMembers(*declared), vmClassMembers(classdef));
     }

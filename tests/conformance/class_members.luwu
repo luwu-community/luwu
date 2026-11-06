@@ -39,15 +39,24 @@ assert(fields[1].positional and fields[2].positional and not fields[3].positiona
 assert(fields[1].value:get() == 1 and fields[3].value:get() == "p")
 assert(table.isfrozen(fields))
 
--- modifiers are a bundle, or none
-assert(fields[1].modifiers == bundle.pack("const"))
-assert(fields[2].modifiers == none)
+assert(fields[1].isconst and not fields[1].isfinal and not fields[2].isconst)
 assert(fields[1].visibility == "public")
 
 -- through the class, a field has no value
 local x = class.member(Point, "x")
 assert(x.value == none)
 assert(x:get(p) == 1 and x:get(Point(5, 6)) == 5)
+
+-- through the class, members and lists are made once
+assert(class.member(Point, "x") == x and class.fields(Point) == class.fields(Point))
+assert(class.fields(Point)[1] == x)
+assert(class.fields(p)[1] ~= x)
+
+-- a member prints as its declaration, without the type
+assert(tostring(x) == "public const x")
+assert(tostring(class.member(p, "x")) == "public const x = 1")
+assert(tostring(class.member(p, "label")) == 'public label = "p"')
+assert(tostring(class.member(Point, "norm")) == "public function norm")
 
 -- a function has its value either way
 assert(class.member(Point, "norm").value:get()(p) == 3)
@@ -70,8 +79,18 @@ end)
 expectfail("private field of a member", "'owner' is a private member", function()
     return x.owner
 end)
-expectfail("construction", "ClassMember objects come from class.member and class.fields", class.ClassMember)
-assert(class.isinstance(x, class.ClassMember))
+-- its class is reachable, not constructible
+assert(class.ClassMember == nil)
+assert(class.isinstance(x, class.of(x)) and class.name(x) == "ClassMember")
+expectfail("construction", "private", class.of(x))
+
+-- a reference value can be changed through the member, but not replaced
+local tags = class.member(Point({ 1 }, 2), "x").value:get()
+assert(tags[1] == 1)
+tags[1] = 2
+expectfail("replacing the value", "const", function()
+    x.value = none
+end)
 
 -- members are immutable
 expectfail("const field", "const", function()

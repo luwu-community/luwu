@@ -394,19 +394,18 @@ declare class: {
 )CLASS_SRC";
 
 // Luwu class reflection (rfcs/classes): the class library with `class.member`, and `class.fields` listing ClassMembers
-// (lclasslib.cpp). `modifiers` is a bundle (`.("const")`) or `none`. It's `unknown` here: the bundle classes are types of
-// the `bundle` module, which these definitions can't name.
+// (lclasslib.cpp). ClassMember is only a type: the VM makes them, and its constructor is private.
 static const char* kBuiltinDefinitionClassReflectionSrc = R"CLASS_SRC(
-export type ClassModifier = "const" | "final"
-
 class type ClassMember<T>(
     public const name: string,
     public const value: Option<T>,
-    public const modifiers: unknown,
+    public const isconst: boolean,
+    public const isfinal: boolean,
     public const visibility: "public" | "private",
     public const positional: boolean
 )
     public function get(self, object: unknown): T
+    public function __tostring(self): string
 end
 
 declare class: {
@@ -416,7 +415,6 @@ declare class: {
     name: @checked (o: class | object | trait) -> string,
     member: @checked (o: class | object, name: string) -> ClassMember<unknown>,
     fields: @checked (o: class | object) -> { ClassMember<unknown> },
-    ClassMember: class<ClassMember>,
 }
 )CLASS_SRC";
 
