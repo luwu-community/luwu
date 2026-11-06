@@ -1020,6 +1020,14 @@ enum class IrCmd : uint8_t
     // D: int (form, LBC_PRESIZE_*)
     FALLBACK_PRESIZETABLE,
 
+    // Luwu Traits (rfcs/classes/traits.md): LOP_GETQUALIFIED, the class's version of a trait's member. Runs no Luau code,
+    // but raises when the class doesn't implement the trait.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (target, written)
+    // C: Rn (object or class)
+    // D: Rn (trait)
+    FALLBACK_GETQUALIFIED,
+
     // Instruction that passes value through, it is produced by constant folding and users substitute it with the value
     // A: operand of any type
     SUBSTITUTE,

@@ -143,7 +143,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
-        VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE),
+        VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_GETQUALIFIED),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -3775,6 +3775,15 @@ reentry:
                     VM_NEXT();
                 }
 
+                // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function
+                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+                {
+                    TValue* name = VM_KV(aux);
+                    LUAU_ASSERT(ttisstring(name));
+                    VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc));
+                    VM_NEXT();
+                }
+
                 // Luwu Traits (rfcs/classes/traits.md): the class's compiled copy of a trait's function
                 if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
                 {
@@ -4101,6 +4110,21 @@ reentry:
                 }
 
                 luaC_barriert(L, h, rb);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_GETQUALIFIED)
+            {
+                // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name`, `Class:Trait.name`
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                StkId rc = VM_REG(LUAU_INSN_C(insn));
+                TValue* name = VM_KV(aux);
+                LUAU_ASSERT(ttisstring(name));
+
+                VM_PROTECT(luaR_getqualified(L, ra, rb, rc, tsvalue(name)));
                 VM_NEXT();
             }
 

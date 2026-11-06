@@ -999,6 +999,10 @@ void DataFlowGraphBuilder::visitClassShape(AstStatClass* d)
                 },
                 [&](const AstClassMethod& method)
                 {
+                    // Luwu Traits (rfcs/classes/traits.md): the trait of `function Json.name`, read by the class statement
+                    if (method.qualifiedTrait)
+                        visitExpr(method.qualifiedTrait);
+
                     visitExpr(method.function);
                 }
             },
@@ -1234,6 +1238,14 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprCall* c)
 
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIndexName* i)
 {
+    // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name` reads the trait's member, which nothing refines
+    if (i->qualifiedTrait)
+    {
+        visitExpr(i->expr);
+        visitExpr(i->qualifiedTrait);
+        return {defArena->freshCell(Symbol{}, i->location), nullptr};
+    }
+
     auto [parentDef, parentKey] = visitExpr(i->expr);
     std::string index = i->index.value;
 

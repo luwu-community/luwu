@@ -109,6 +109,7 @@ void initFunctions(NativeContext& context)
     context.executeNEWCLASSMEMBER = executeNEWCLASSMEMBER;
     context.executeINITTRAITS = executeINITTRAITS;
     context.executePRESIZETABLE = executePRESIZETABLE;
+    context.executeGETQUALIFIED = executeGETQUALIFIED;
     context.executeGETVARARGSMultRet = executeGETVARARGSMultRet;
     context.executeGETVARARGSConst = executeGETVARARGSConst;
     context.executeDUPCLOSURE = executeDUPCLOSURE;

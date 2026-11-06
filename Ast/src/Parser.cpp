@@ -1843,9 +1843,11 @@ AstStatClass* Parser::getMatchingClass(AstExpr* expr)
 
 bool Parser::isExprLValue(AstExpr* expr)
 {
+    // Luwu Traits (rfcs/classes/traits.md): `Class:Trait.name` reads a function, and nothing writes one
+    AstExprIndexName* index = expr->as<AstExprIndexName>();
     return (expr->is<AstExprLocal>() && !expr->as<AstExprLocal>()->local->isConst) ||
            (expr->is<AstExprGlobal>() && !(FFlag::LuwuClasses && getMatchingClass(expr) != nullptr)) ||
-           expr->is<AstExprIndexExpr>() || expr->is<AstExprIndexName>();
+           expr->is<AstExprIndexExpr>() || (index && !index->qualifiedTrait);
 }
 
 // function funcname funcbody
@@ -3348,6 +3350,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     // ... must fail. This gets the job done but maybe we can do something
     // slightly more performant here (e.g.: a "scratch" set).
     DenseHashSet<AstName> classMemberNamespace{{}};
+    // Luwu Traits (rfcs/classes/traits.md): the qualified implementations, `Json.encode`, which don't share the class's names
+    std::unordered_set<std::string> qualifiedMemberNamespace;
 
     // Members without an access specifier, collected while parsing the body. Whether they are errors
     // depends on whether any other member has a specifier, which is only known once the whole class is
@@ -3742,6 +3746,55 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
             Name name = parseName("method name");
 
+            // Luwu Traits (rfcs/classes/traits.md): `function Self.name` in a trait scopes the function to the trait, and
+            // `function Json.name` in a class implements trait Json's `name` for Json alone
+            std::optional<Location> scopeLocation;
+            AstExpr* qualifiedTrait = nullptr;
+            if (FFlag::LuwuTraits && lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+            {
+                Location qualifierStart = name.location;
+                AstExpr* qualifier = isTrait ? nullptr : nameExpr(name);
+                bool selfOnly = name.name == "Self";
+
+                while (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+                {
+                    Position opPosition = lexer.current().location.begin;
+                    nextLexeme();
+                    Name next = parseName("method name");
+
+                    if (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+                    {
+                        selfOnly = false;
+                        if (qualifier)
+                            qualifier = allocator.alloc<AstExprIndexName>(
+                                Location(qualifierStart, next.location), qualifier, next.name, next.location, opPosition, '.'
+                            );
+                    }
+
+                    if (lexer.current().type != '.')
+                        name = next;
+                }
+
+                if (isTrait)
+                {
+                    if (!selfOnly)
+                        report(qualifierStart, "A trait can only scope a function to itself: write 'function Self.%s'", name.name.value);
+                    scopeLocation = qualifierStart;
+                }
+                else
+                {
+                    if (implements.size == 0)
+                        report(
+                            qualifierStart,
+                            "Class '%s' implements no traits, so it can't implement '%s.%s'",
+                            nameLocal->name.value,
+                            printedQualifier(qualifier).c_str(),
+                            name.name.value
+                        );
+                    qualifiedTrait = qualifier;
+                }
+            }
+
             // Luwu Traits (rfcs/classes/traits.md): `expect function name?(self)` is an expected function a class may leave out
             bool isOptional = false;
             if (lexer.current().type == '?')
@@ -3791,7 +3844,18 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             if (body->args.size > 0 && body->args.data[0]->name == "self" && body->args.data[0]->annotation != nullptr)
                 report(body->args.data[0]->annotation->location, "The 'self' parameter cannot have a type annotation");
 
-            if (strncmp(name.name.value, "__", 2) == 0)
+            bool scopedOrQualified = scopeLocation || qualifiedTrait;
+            bool specialName = name.name == "__init" || name.name == "__create" || name.name == "__implemented" ||
+                               ALLOWED_METAMETHODS.count(name.name.value) > 0 || EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0;
+
+            // Luwu Traits (rfcs/classes/traits.md): a scoped or qualified function is only reached through its trait, so
+            // any `__` name is free except the ones the VM looks up on the class
+            if (scopedOrQualified)
+            {
+                if (specialName)
+                    report(name.location, "'%s' can't be scoped to a trait: the VM looks it up as a member of the class", name.name.value);
+            }
+            else if (strncmp(name.name.value, "__", 2) == 0)
             {
                 if (name.name == "__create")
                 {
@@ -3862,13 +3926,25 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 hasSemicolon = true;
             }
 
-            if (classMemberNamespace.contains(name.name) || primaryConstructorParams.contains(name.name))
+            // Luwu Traits (rfcs/classes/traits.md): qualified implementations are named by their trait as written
+            std::string qualifiedName;
+            if (qualifiedTrait)
+                qualifiedName = printedQualifier(qualifiedTrait) + "." + name.name.value;
+
+            if (qualifiedTrait && qualifiedMemberNamespace.count(qualifiedName))
+            {
+                report(name.location, "Duplicate %s member '%s'", kind, qualifiedName.c_str());
+            }
+            else if (!qualifiedTrait && (classMemberNamespace.contains(name.name) || primaryConstructorParams.contains(name.name)))
             {
                 report(name.location, "Duplicate %s member '%s'", kind, name.name.value);
             }
             else
             {
-                classMemberNamespace.insert(name.name);
+                if (qualifiedTrait)
+                    qualifiedMemberNamespace.insert(qualifiedName);
+                else
+                    classMemberNamespace.insert(name.name);
 
                 if (!qualifierLocation)
                     unqualifiedMemberLocations.push_back({name.location, /* isFunction */ true});
@@ -3885,6 +3961,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                         expectLocation,
                         isOptional,
                         finalLocation,
+                        scopeLocation,
+                        qualifiedTrait,
                     }
                 );
             }
@@ -6897,12 +6975,17 @@ AstExpr* Parser::parseNameExpr(const char* context)
     if (!name)
         return allocator.alloc<AstExprError>(lexer.current().location, copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
 
-    checkDoExprKeywordAsName(*name);
+    return nameExpr(*name);
+}
 
-    if (name->name == "continue")
+AstExpr* Parser::nameExpr(const Name& name)
+{
+    checkDoExprKeywordAsName(name);
+
+    if (name.name == "continue")
         continueNameUses++;
 
-    AstLocal* const* value = localMap.find(name->name);
+    AstLocal* const* value = localMap.find(name.name);
 
     if (value && *value)
     {
@@ -6911,10 +6994,23 @@ AstExpr* Parser::parseNameExpr(const char* context)
         if (local->functionDepth < typeFunctionDepth)
             return reportExprError(lexer.current().location, {}, "Type function cannot reference outer local '%s'", local->name.value);
 
-        return allocator.alloc<AstExprLocal>(name->location, local, local->functionDepth != functionStack.size() - 1);
+        return allocator.alloc<AstExprLocal>(name.location, local, local->functionDepth != functionStack.size() - 1);
     }
 
-    return allocator.alloc<AstExprGlobal>(name->location, name->name);
+    return allocator.alloc<AstExprGlobal>(name.location, name.name);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a qualifier as written, `Json` or `mod.Json`, for messages
+std::string Parser::printedQualifier(AstExpr* qualifier)
+{
+    if (AstExprIndexName* index = qualifier->as<AstExprIndexName>())
+        return printedQualifier(index->expr) + "." + index->index.value;
+    if (AstExprLocal* local = qualifier->as<AstExprLocal>())
+        return local->local->name.value;
+    if (AstExprGlobal* global = qualifier->as<AstExprGlobal>())
+        return global->name.value;
+
+    return "?";
 }
 
 // prefixexp -> NAME | '(' expr ')'
@@ -7053,7 +7149,38 @@ AstExpr* Parser::parseMethodCall(Position start, AstExpr* expr)
     nextLexeme();
 
     Name index = parseIndexName("method name", opPosition);
-    AstExpr* func = allocator.alloc<AstExprIndexName>(Location(start, index.location.end), expr, index.name, index.location, opPosition, ':');
+
+    // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name(...)` calls the class's version of a trait's method, and
+    // `Class:Trait.name` reads the class's version of a trait's static
+    Lexeme::Type afterName = lexer.current().type;
+    bool qualified = FFlag::LuwuTraits && index.name != nameError && (afterName == ':' || afterName == '.');
+
+    AstExprIndexName* func = nullptr;
+    if (qualified)
+    {
+        AstExpr* trait = nameExpr(index);
+        char op = char(afterName);
+        opPosition = lexer.current().location.begin;
+        nextLexeme();
+
+        index = parseIndexName("method name", opPosition);
+        func = allocator.alloc<AstExprIndexName>(Location(start, index.location.end), expr, index.name, index.location, opPosition, op);
+        func->qualifiedTrait = trait;
+
+        // `Class:Trait.` with no name yet reported that, and reads as an error node like `obj:` below
+        if (op == '.' && index.name == nameError)
+        {
+            Location location(func->location.begin, lexer.current().location.begin);
+            return allocator.alloc<AstExprError>(location, copy<AstExpr*>({func}), unsigned(parseErrors.size() - 1));
+        }
+
+        if (op == '.')
+            return func;
+    }
+    else
+    {
+        func = allocator.alloc<AstExprIndexName>(Location(start, index.location.end), expr, index.name, index.location, opPosition, ':');
+    }
 
     AstArray<AstTypeOrPack> typeArguments;
     CstTypeInstantiation* cstTypeArguments = options.storeCstData ? allocator.alloc<CstTypeInstantiation>() : nullptr;
@@ -7071,7 +7198,7 @@ AstExpr* Parser::parseMethodCall(Position start, AstExpr* expr)
     if (index.name == nameError && !argumentsFollow)
     {
         Location location(func->location.begin, lexer.current().location.begin);
-        return allocator.alloc<AstExprError>(location, copy({func}), unsigned(parseErrors.size() - 1));
+        return allocator.alloc<AstExprError>(location, copy<AstExpr*>({func}), unsigned(parseErrors.size() - 1));
     }
 
     expr = parseFunctionArgs(func, true);
