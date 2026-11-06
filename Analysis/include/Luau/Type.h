@@ -780,6 +780,13 @@ struct ExternType
         std::vector<Parameter> parameters;
         // The trait's `final` functions, which implementing classes can't define.
         std::set<Name> finals;
+        // The functions scoped to the trait (`function Self.name`) and their types. Implementing classes don't get them as
+        // members: code reads them through the trait (`obj:Trait:name()`, `Class:Trait.name`). The trait's value has the
+        // ones with a body. An optional expected function's type is `F?`.
+        std::map<Name, TypeId> scopedFunctions;
+        // The scoped functions the trait expects (`expect function Self.name`), and whether each is optional. A class
+        // that lists the trait implements them (`function Trait.name`); a trait that needs it declares them.
+        std::map<Name, bool> scopedExpectations;
         // The members `props` has from the traits this one needs (directly or not): every implementing class implements
         // those too, so a trait-typed value has their members. They stay those traits' members everywhere else.
         std::set<Name> fromNeeds;

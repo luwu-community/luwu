@@ -609,6 +609,9 @@ public:
     Location indexLocation;
     Position opPosition;
     char op = '.';
+    // Luwu Traits (rfcs/classes/traits.md): the trait in a qualified read, `obj:Trait:name` or `Class:Trait.name`, which
+    // reads the class's version of the trait's member `name`. `op` is the second operator. nullptr for a plain index.
+    AstExpr* qualifiedTrait = nullptr;
 };
 
 class AstExprIndexExpr : public AstExpr
@@ -1380,6 +1383,12 @@ struct AstClassMethod
     // Luwu Traits (rfcs/classes/traits.md): location of `final` in a trait's `final function`, which no implementing class may
     // define itself. nullopt in a class.
     std::optional<Location> finalLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): location of `Self` in a trait's `function Self.name`, a member scoped to the
+    // trait. Implementing classes don't get it as a member; `obj:Trait:name()` and `Class:Trait.name()` reach it.
+    std::optional<Location> scopeLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): the trait in a class's `function Json.name`, a qualified implementation of that
+    // trait's member `name`. It isn't a member of the class. nullptr otherwise.
+    AstExpr* qualifiedTrait = nullptr;
 };
 
 using AstClassMember = Variant<AstClassProperty, AstClassMethod>;
