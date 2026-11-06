@@ -743,6 +743,13 @@ typedef struct LuauClass
     // those functions. Only set while the class statement runs: implementing drops it. Marked in traverseclass.
     struct LuaTable* compiledtraitcopies;
 
+    // Luwu Traits (rfcs/classes/traits.md): the class's version of trait members read through a trait (luaR_getqualified),
+    // keyed by the trait, each a table from a member's name to its function: the class's qualified implementations
+    // (`function Json.name`) and its copies of the defaults of scoped members (`function Self.name`). Until the class
+    // implements its traits, it holds only the qualified implementations, unchecked. NULL when there are none. Marked in
+    // traverseclass.
+    struct LuaTable* qualified;
+
 } LuauClass;
 
 typedef struct LuauObject

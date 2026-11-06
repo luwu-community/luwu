@@ -1109,6 +1109,15 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
         return pc;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function
+    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+    {
+        TValue* name = VM_KV(aux);
+        LUAU_ASSERT(ttisstring(name));
+        VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc));
+        return pc;
+    }
+
     // Luwu Traits (rfcs/classes/traits.md): the class's compiled copy of a trait's function
     if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
     {
@@ -1126,6 +1135,23 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
     VM_PROTECT_PC();
     luaR_addclassmember(L, classvalue(ra), tsvalue(membername), rc);
 
+    return pc;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): LOP_GETQUALIFIED for native code (see FALLBACK_GETQUALIFIED). Kept in step with
+// VM_CASE(LOP_GETQUALIFIED) in lvmexecute.cpp.
+const Instruction* executeGETQUALIFIED(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    uint32_t aux = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = VM_REG(LUAU_INSN_B(insn));
+    StkId rc = VM_REG(LUAU_INSN_C(insn));
+    TValue* name = VM_KV(aux);
+    LUAU_ASSERT(ttisstring(name));
+
+    VM_PROTECT(luaR_getqualified(L, ra, rb, rc, tsvalue(name)));
     return pc;
 }
 

@@ -417,6 +417,12 @@ private:
     // Luwu Traits (rfcs/classes/traits.md): checks the arguments of each `implements` entry against its trait's parameters,
     // in the scope the class's field initializers are checked in
     void checkTraitArguments(const ScopePtr& initializerScope, AstStatClass* cls);
+    // Luwu Traits (rfcs/classes/traits.md): a class's `function Json.name`, checked like an override of trait Json's `name`
+    // with `self` the class
+    void checkQualifiedImplementation(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record, const AstClassMethod& method, bool declared);
+    // Luwu Traits (rfcs/classes/traits.md): the scoped functions the class's listed traits expect, which it implements as
+    // `function Trait.name`, and the ones its needed traits expect, which a trait declares as `function Self.name`
+    void checkScopedExpectations(const ScopePtr& scope, AstStatClass* cls);
     void prototypeClass(
         const ScopePtr& scope,
         AstStatClass* classDecl,

@@ -27,6 +27,10 @@ Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, 
     }
     else if (AstExprIndexName* expr = node->as<AstExprIndexName>())
     {
+        // Luwu Traits (rfcs/classes/traits.md): `math:Trait.floor` reads a trait's function, not the library's
+        if (expr->qualifiedTrait)
+            return Builtin();
+
         if (AstExprLocal* object = expr->expr->as<AstExprLocal>())
         {
             const Variable* v = variables.find(object->local);
