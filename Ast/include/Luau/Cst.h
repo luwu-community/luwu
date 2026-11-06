@@ -224,6 +224,11 @@ public:
     explicit CstExprTable(const AstArray<Item>& items);
 
     AstArray<Item> items;
+
+    // Luwu Destructuring (rfcs/destructuring.md): the `.` and `{` of a `.{x, y}` table, missing for an ordinary one. In
+    // a `.{...}` table, a Record item whose key and value share a location is a bare name (`x`, not `x = x`).
+    Position dotPosition = Position::missing();
+    Position openBracePosition = Position::missing();
 };
 
 // TODO: Shared between unary and binary, should we split?

@@ -26,6 +26,7 @@ LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
@@ -6294,5 +6295,220 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
 }
 
 // The value is a call, so its type is a pack (astTypePacks), not a single type
+TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_complete_the_properties_of_the_value")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local value = { alpha = 1, beta = "b", inner = { deep = true } }
+        local .{@1} = value
+        local .{alpha, @2} = value
+        local .{inner as .{@3}} = value
+        local .{@4}: { annotated: number } = value
+        local .{alpha as @5} = value
+        local .{@6}
+    )");
+
+    // An empty slot: the value's properties, and nothing else
+    AutocompleteResult ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("alpha"));
+    CHECK(ac.entryMap.count("beta"));
+    CHECK(ac.entryMap.count("inner"));
+    CHECK(!ac.entryMap.count("value"));
+    CHECK(!ac.entryMap.count("local"));
+
+    // Keys already written aren't offered again
+    ac = autocomplete('2');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(!ac.entryMap.count("alpha"));
+    CHECK(ac.entryMap.count("beta"));
+
+    // A nested pattern completes the field it destructures
+    ac = autocomplete('3');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("deep"));
+    CHECK(!ac.entryMap.count("alpha"));
+
+    // An annotated value completes from the annotation
+    ac = autocomplete('4');
+    CHECK(ac.entryMap.count("annotated"));
+
+    // The name after `as` declares a local
+    ac = autocomplete('5');
+    CHECK(ac.entryMap.empty());
+    CHECK_EQ(ac.context, AutocompleteContext::Unknown);
+
+    // With no value yet there is nothing to offer, and still no locals or keywords
+    ac = autocomplete('6');
+    CHECK(ac.entryMap.empty());
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): every element of a positional pattern declares a local, and a field pattern
+// nested in one completes the element it destructures
+TEST_CASE_FIXTURE(ACFixture, "positional_patterns_complete_only_nested_keys")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local points = { { x = 1, y = 2 } }
+        local .(@1) = points
+        local .(first, @2) = points
+        local .(p.{@3}) = points
+        local .{inner as .(@4)} = { inner = points }
+        for _, .(@5) in { points } do end
+    )");
+
+    for (char marker : {'1', '2', '4', '5'})
+    {
+        INFO(marker);
+        AutocompleteResult ac = autocomplete(marker);
+        CHECK(ac.entryMap.empty());
+        CHECK_EQ(ac.context, AutocompleteContext::Unknown);
+    }
+
+    AutocompleteResult ac = autocomplete('3');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(ac.entryMap.count("y"));
+    CHECK(!ac.entryMap.count("points"));
+}
+
+TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_in_loop_bindings_complete_the_elements_properties")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local people = { { name = "a", age = 1, pos = { x = 1 } } }
+        for _, .{@1} in people do end
+        for _, p.{name, @2} in people do end
+        for _, .{pos as .{@3}} in people do end
+    )");
+
+    AutocompleteResult ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("name"));
+    CHECK(ac.entryMap.count("age"));
+    CHECK(!ac.entryMap.count("people"));
+
+    ac = autocomplete('2');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(!ac.entryMap.count("name"));
+    CHECK(ac.entryMap.count("age"));
+
+    ac = autocomplete('3');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(!ac.entryMap.count("name"));
+}
+
+// The value is a call, so its type is a pack (astTypePacks), not a single type
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "destructuring_keys_complete_a_required_modules_exports")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["Module/A"] = R"(
+export trait Path end
+export class FilePath implements Path end
+export const PathSeparator = "/"
+)";
+    getFrontend().check("Module/A");
+
+    fileResolver.source["Module/B"] = R"(
+local .{Pa} = require(script.Parent.A)
+local .{} = require(script.Parent.A)
+)";
+
+    // after `Pa`, and in the empty pattern
+    for (Position position : {Position{1, 10}, Position{2, 8}})
+    {
+        AutocompleteResult ac = autocomplete("Module/B", position);
+        CHECK_EQ(ac.context, AutocompleteContext::Property);
+        CHECK(ac.entryMap.count("Path"));
+        CHECK(ac.entryMap.count("FilePath"));
+        CHECK(ac.entryMap.count("PathSeparator"));
+    }
+}
+
+TEST_CASE_FIXTURE(ACFixture, "type_destructuring_keys_complete_the_modules_exported_types")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["Module/A"] = R"(
+export type Point = { x: number }
+export type Size = number
+return {}
+    )";
+    getFrontend().check("Module/A");
+
+    fileResolver.source["Module/B"] = R"(
+local A = require(script.Parent.A)
+type .{} = A
+type .{Point, } = A
+type .{Point as } = A
+    )";
+
+    AutocompleteResult ac = autocomplete("Module/B", Position{2, 7});
+    CHECK_EQ(ac.context, AutocompleteContext::Type);
+    CHECK(ac.entryMap.count("Point"));
+    CHECK(ac.entryMap.count("Size"));
+    CHECK(!ac.entryMap.count("A"));
+
+    ac = autocomplete("Module/B", Position{3, 14});
+    CHECK(!ac.entryMap.count("Point"));
+    CHECK(ac.entryMap.count("Size"));
+
+    // a name after `as` declares a type
+    ac = autocomplete("Module/B", Position{4, 16});
+    CHECK_EQ(ac.context, AutocompleteContext::Unknown);
+    CHECK(ac.entryMap.empty());
+}
+
+TEST_CASE_FIXTURE(ACFixture, "destructuring_hidden_local_is_not_suggested")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local .{alpha} = { alpha = 1 }
+        local _ = @1
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("alpha"));
+    CHECK(!ac.entryMap.count(kDestructuredLocalName));
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a `.` alone where an expression goes starts a `.{...}` table, so nothing
+// is offered after it, not every global
+TEST_CASE_FIXTURE(ACFixture, "a_bare_dot_in_an_expression_completes_nothing")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    check(R"(
+        local alpha = 1
+        local cat = .@1
+        local unrelated = 2
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.empty());
+
+    // inside the braces, names are offered again
+    check(R"(
+        local alpha = 1
+        local cat = .{@1}
+    )");
+
+    ac = autocomplete('1');
+    CHECK(ac.entryMap.count("alpha"));
+}
+
 TEST_SUITE_END();
 

@@ -1665,6 +1665,12 @@ void TypeChecker2::visit(AstStatTypeAlias* stat)
     }
 
     visitGenerics(stat->generics, stat->genericPacks);
+
+    // Luwu Destructuring (rfcs/destructuring.md): a destructured alias of a generic type has its generics, so its
+    // reference, written without type arguments, isn't checked against them
+    if (const Scope* scope = findInnermostScope(stat->location); scope && importedGenericOfDestructuredAlias(*scope, stat))
+        return;
+
     visit(stat->type);
     if (stat->errorHint)
         visit(stat->errorHint);
@@ -2627,8 +2633,9 @@ void TypeChecker2::visit(AstStatClass* stat)
             if (paramDefault)
                 visit(paramDefault, ValueContext::RValue);
 
+            // A default is checked like a local's value: `{}` fits a table type whose fields are all optional
             if (paramDefault && param->annotation)
-                testIsSubtype(lookupType(paramDefault), lookupAnnotation(param->annotation), paramDefault->location);
+                testPotentialLiteralIsSubtype(paramDefault, lookupAnnotation(param->annotation));
         }
 
         // A class with a primary constructor has no table constructor, so a field the body gives no
@@ -3904,6 +3911,59 @@ TypeId TypeChecker2::stripFromNilAndReport(TypeId ty, const Location& location)
     return ty;
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern on an object, or a union of objects,
+// reads the field each class's primary constructor takes at that position. Returns false for any other value, whose
+// element is checked like `t[i]`.
+bool TypeChecker2::checkPositionalElement(AstExprIndexExpr* indexExpr)
+{
+    const AstExprConstantNumber* number = indexExpr->index->as<AstExprConstantNumber>();
+    if (!number || number->value < 1)
+        return false;
+
+    size_t position = size_t(number->value) - 1;
+
+    std::vector<TypeId> options;
+    TypeId exprType = follow(lookupType(indexExpr->expr));
+    if (const UnionType* union_ = get<UnionType>(exprType))
+    {
+        for (TypeId option : union_)
+            options.push_back(follow(option));
+    }
+    else
+    {
+        options.push_back(exprType);
+    }
+
+    for (TypeId option : options)
+    {
+        if (!getClassFieldUserData(option))
+            return false;
+    }
+
+    visit(indexExpr->expr, ValueContext::RValue);
+
+    for (TypeId option : options)
+    {
+        const ExternType* cls = get<ExternType>(option);
+        const ClassFieldUserData* data = getClassFieldUserData(option);
+        LUAU_ASSERT(cls && data);
+
+        bool hasPosition = data->positionalFields && position < data->positionalFields->size();
+        if (hasPosition)
+        {
+            checkPrivatePropertyAccess(option, (*data->positionalFields)[position], indexExpr->location);
+            continue;
+        }
+
+        // A class without a primary constructor can't be destructured at any position: one error for the pattern
+        bool reportsPattern = data->positionalFields || position == 0;
+        if (reportsPattern)
+            reportError(PositionalDestructuring{cls->name, position, data->positionalFields}, indexExpr->location);
+    }
+
+    return true;
+}
+
 void TypeChecker2::checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location)
 {
     if (!FFlag::LuwuClasses)
@@ -4202,6 +4262,9 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
         return;
     }
 
+    if (indexExpr->positional && checkPositionalElement(indexExpr))
+        return;
+
     visit(indexExpr->expr, ValueContext::RValue);
     visit(indexExpr->index, ValueContext::RValue);
 
@@ -4357,7 +4420,7 @@ void TypeChecker2::visit(AstExprFunction* fn)
                     testIsSubtype(argTy, annotatedArgTy, arg->location);
 
                     if (AstExpr* defaultValue = fn->argsDefaults.data[i])
-                        testIsSubtype(lookupType(defaultValue), annotatedArgTy, defaultValue->location);
+                        testPotentialLiteralIsSubtype(defaultValue, annotatedArgTy);
                 }
                 else
                 {

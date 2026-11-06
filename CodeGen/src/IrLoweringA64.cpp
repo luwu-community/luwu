@@ -3734,6 +3734,13 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeWRAPRESULT), uintOp(OP_A(inst)));
         break;
+    case IrCmd::FALLBACK_GETPOSITIONAL:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executeGETPOSITIONAL), uintOp(OP_A(inst)));
+        break;
     case IrCmd::FALLBACK_FORGPREP:
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeFORGPREP), uintOp(OP_A(inst)));

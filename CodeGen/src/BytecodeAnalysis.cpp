@@ -1627,6 +1627,18 @@ static void analyzeBytecodeTypesPass(
                 bcType.result = regTags[ra];
                 break;
             }
+            case LOP_GETPOSITIONAL:
+            {
+                // Luwu Destructuring (rfcs/destructuring.md): any element, like GETTABLEN's result
+                int ra = LUAU_INSN_A(*pc);
+                int rb = LUAU_INSN_B(*pc);
+
+                bcType.a = getRegTag(regTags, bcTypeInfo, rb, i);
+
+                regTags[ra] = LBC_TYPE_ANY;
+                bcType.result = regTags[ra];
+                break;
+            }
             case LOP_GETOBJECTMEMBER:
             {
                 // Luwu Classes (rfcs/classes): the member's type is unknown here, like GETTABLEKS's result
@@ -1719,6 +1731,7 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
     case LOP_MINUS:
     case LOP_LENGTH:
     case LOP_GETOBJECTMEMBER:
+    case LOP_GETPOSITIONAL:
         visit(ra, function.bcTypes[pc].result);
         break;
     case LOP_NEWOBJECT:

@@ -39,6 +39,7 @@ LUAU_FASTFLAGVARIABLE(LuwuAttributesEverywhere)
 // Luwu Declare Statements (rfcs/declare-statements.md): `declare` in ordinary source, where upstream only accepts it
 // in definition files. Still in progress.
 LUAU_FASTFLAGVARIABLE(LuwuDeclareStatements)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAGVARIABLE(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAGVARIABLE(LuauDisallowExternClassInTypeDefinitions)
 LUAU_FASTFLAGVARIABLE(LuauTableEntriesDontNeedToMatchIndent)
@@ -55,6 +56,47 @@ bool luau_telemetry_parsed_return_type_variadic_with_type_suffix = false;
 
 namespace Luau
 {
+
+static bool isCompoundAssignment(const Lexeme& l)
+{
+    switch (l.type)
+    {
+    case Lexeme::AddAssign:
+    case Lexeme::SubAssign:
+    case Lexeme::MulAssign:
+    case Lexeme::DivAssign:
+    case Lexeme::FloorDivAssign:
+    case Lexeme::ModAssign:
+    case Lexeme::PowAssign:
+    case Lexeme::ConcatAssign:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Luwu: after a name that would be a value (`x =` above `total += 1`), only a new statement goes on with these
+static bool cantFollowValueName(const Lexeme& l)
+{
+    return l.type == '=' || isCompoundAssignment(l);
+}
+
+// Luwu: after a name that would be a variable being declared (`local` above `print(x)`), only a new statement goes on
+// with these: a call, an index or an update
+static bool cantFollowBindingName(const Lexeme& l)
+{
+    bool callOrIndex = l.type == '(' || l.type == '.' || l.type == '[' || l.type == '{';
+    bool stringCall = l.type == Lexeme::QuotedString || l.type == Lexeme::RawString || l.type == Lexeme::InterpStringBegin ||
+                      l.type == Lexeme::InterpStringSimple;
+    return callOrIndex || stringCall || isCompoundAssignment(l);
+}
+
+// Luwu: after a name that would be a type annotation (`local a:` above `print(a)`), only a new statement goes on with
+// these. A type goes on with `.`, `<`, `|`, `?` and the like, and the declaration with `=`.
+static bool cantFollowTypeName(const Lexeme& l)
+{
+    return l.type != '.' && cantFollowBindingName(l);
+}
 
 namespace
 {
@@ -93,6 +135,13 @@ const char* const kDeclareClassTypeError =
 const char* const kDeclareTraitTypeError =
     "Write 'trait type %s' for the type alone, or 'declare trait %s' for the trait and its type: 'declare' declares a value";
 const char* const kDeclareExportOrderError = "'export' goes before 'declare': write 'export declare'";
+
+// Luwu Destructuring (rfcs/destructuring.md): destructuring always declares new locals, never assigns existing ones.
+const char* const kDestructuringNeedsKeywordError = "Destructuring declares new locals; start it with 'local' or 'const'";
+const LuwuFeature kDestructuringFeature{"destructuring", /* plural= */ false, "LuwuDestructuring"};
+const LuwuFeature kDotTableFeature{"'.{...}' table constructors", /* plural= */ true, "LuwuDestructuring"};
+const char* const kDotTableMissingBraceError = "Expected '{' after '.': '.{x, y}' builds a table from the locals 'x' and 'y'";
+const char* const kDotTableFieldError = "Fields in '.{...}' are names or 'key = value'; use '{...}' for list items and '[key]' fields";
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
 // class header or in front of a member. This keeps those positions unambiguous, and leaves room to give
@@ -553,6 +602,7 @@ Parser::Parser(const char* buffer, size_t bufferSize, AstNameTable& names, Alloc
     nameNumber = names.getOrAdd("number");
     nameAny = names.getOrAdd("any");
     nameError = names.getOrAdd(kParseNameError);
+    nameDestructured = names.getOrAdd(kDestructuredLocalName);
     nameNil = names.getOrAdd("nil"); // nil is a reserved keyword
     nameClass = names.getOrAdd("class");
     nameTrait = names.getOrAdd("trait");
@@ -671,15 +721,23 @@ AstStatBlock* Parser::parseBlockNoScope()
 
         incrementRecursionCounter("block");
 
+        Position outerStatementStart = statementStart;
+        statementStart = lexer.current().location.begin;
+
         AstStat* stat = parseStat();
 
+        statementStart = outerStatementStart;
         recursionCounter = oldRecursionCount;
+
+        // Luwu Destructuring (rfcs/destructuring.md): a trailing `;` belongs to the last statement a
+        // destructuring declaration desugared to.
+        AstStat* last = pendingStatements.empty() ? stat : pendingStatements.back();
 
         if (lexer.current().type == ';')
         {
             nextLexeme();
-            stat->hasSemicolon = true;
-            stat->location.end = lexer.previousLocation().end;
+            last->hasSemicolon = true;
+            last->location.end = lexer.previousLocation().end;
         }
 
         body.push_back(stat);
@@ -764,8 +822,32 @@ AstStat* Parser::parseStat()
 
     Location start = lexer.current().location;
 
+    // Luwu Destructuring (rfcs/destructuring.md): `.{x} = t` with no `local`/`const`. Parsed as a `local` so the
+    // rest of the file still sees its names.
+    if (destructurePatternFollows())
+    {
+        report(start, "%s", kDestructuringNeedsKeywordError);
+        return parseDestructuring(start, start, /* isConst= */ false);
+    }
+
     // we need to disambiguate a few cases, primarily assignment (lvalue = ...) vs statements-that-are calls
+    size_t errorsBeforeExpr = parseErrors.size();
     AstExpr* expr = parsePrimaryExpr(/* asStatement= */ true);
+
+    // Luwu Destructuring (rfcs/destructuring.md): `name.{x} = t` with no `local`/`const`, see parsePrimaryExpr.
+    // `type .{A} = module` is a type destructuring (parseTypeDestructuring).
+    AstName leading = getIdentifier(expr);
+
+    // Luwu Destructuring (rfcs/destructuring.md): `export .{x, y} = v` is `export const .{x, y} = v`
+    if (FFlag::LuauExportValueSyntax && destructurePatternFollows() && leading == "export")
+        return parseExportValue(expr->location, expr->location, AstArray<AstAttr*>({nullptr, 0}));
+
+    bool destructuringWithoutKeyword = destructurePatternFollows() && leading != "const" && leading != "type";
+    if (destructuringWithoutKeyword)
+    {
+        report(expr->location, "%s", kDestructuringNeedsKeywordError);
+        return parseDestructuring(start, start, /* isConst= */ false, Name(getIdentifier(expr), expr->location));
+    }
 
     if (expr->is<AstExprCall>())
     {
@@ -936,6 +1018,14 @@ AstStat* Parser::parseStat()
     if (start == lexer.current().location)
         nextLexeme();
 
+    // Luwu: an expression that already reported an error (`obj.` with no name yet) is incomplete for that reason, so
+    // the statement doesn't report it again, and neither does a second incomplete statement on the same line (`n o`).
+    // Upstream reports "Incomplete statement" for each.
+    bool alreadyReported = parseErrors.size() > errorsBeforeExpr || incompleteStatementLine == expr->location.begin.line;
+    if (alreadyReported)
+        return allocator.alloc<AstStatError>(expr->location, copy({expr}), AstArray<AstStat*>{}, unsigned(parseErrors.size() - 1));
+
+    incompleteStatementLine = expr->location.begin.line;
     return reportStatError(expr->location, copy({expr}), {}, "Incomplete statement: expected assignment or a function call");
 }
 
@@ -1120,6 +1210,167 @@ AstStat* Parser::parseContinue(const Location& start)
     return allocator.alloc<AstStatContinue>(start);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): `body` with a loop's destructured fields (pushLoopLocals) in front of it.
+AstStatBlock* Parser::prependLoopFields(const std::vector<AstStat*>& fields, AstStatBlock* body)
+{
+    if (fields.empty())
+        return body;
+
+    std::vector<AstStat*> statements = fields;
+    statements.insert(statements.end(), body->body.begin(), body->body.end());
+
+    // The block starts at the fields, in the loop's header: its scope holds them, and the editor finds them by position
+    // (hover, go to definition), so both have to reach back to where they're written
+    Location location(fields.front()->location.begin, body->location.end);
+    return allocator.alloc<AstStatBlock>(location, copy(statements.data(), statements.size()), body->hasEnd);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{` or `name.{` where a loop variable goes. In Luwu code with
+// destructuring on, also `.` or `name.` with no `{` yet, while the pattern is being typed: a loop variable can't be
+// followed by `.` otherwise.
+bool Parser::loopPatternFollows()
+{
+    if (destructurePatternFollows() || dotTableMissingBraceFollows())
+        return true;
+
+    bool namedPattern = lexer.current().type == Lexeme::Name && lexer.lookahead().type == '.' && !nextLineStartsUnpatternedStatement();
+    Lexeme::Type afterDot = lexer.lookaheadSecond().type;
+    return namedPattern && (afterDot == '{' || afterDot == '(' || destructuringAvailable());
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a loop binding written as a pattern, `[name].{fields}` or `[name].(elements)`. Appends
+// the pattern to `patterns` and returns the binding for the loop variable: the name, or a hidden one for `.{...}`.
+Parser::Binding Parser::parseLoopPattern(std::vector<std::optional<DestructureTarget>>& patterns)
+{
+    Location start = lexer.current().location;
+    DestructureTarget target;
+
+    if (lexer.current().type == Lexeme::Name)
+        target.name = parseName("variable name");
+
+    parseDestructurePattern(target);
+
+    Position colonPosition = Position::missing();
+    if (lexer.current().type == ':')
+    {
+        colonPosition = lexer.current().location.begin;
+        nextLexeme();
+        target.annotation = parseType();
+    }
+
+    checkLuwuFeature(Location(start, lexer.previousLocation()), kDestructuringFeature, FFlag::LuwuDestructuring);
+
+    Name name = target.name ? *target.name : Name(nameDestructured, target.patternLocation.value_or(start));
+    Binding binding(name, target.annotation, colonPosition);
+    patterns.push_back(std::move(target));
+    return binding;
+}
+
+// The bindings after a `for` loop's first one, where any can be a pattern. Like parseBindingList otherwise.
+void Parser::parseLoopBindings(
+    TempVector<Binding>& names,
+    std::vector<std::optional<DestructureTarget>>& patterns,
+    AstArray<Position>* commaPositions,
+    Position* initialCommaPosition
+)
+{
+    TempVector<Position> localCommaPositions(scratchPosition);
+
+    if (commaPositions && initialCommaPosition)
+        localCommaPositions.push_back(*initialCommaPosition);
+
+    while (true)
+    {
+        if (loopPatternFollows())
+        {
+            names.push_back(parseLoopPattern(patterns));
+        }
+        else
+        {
+            names.push_back(parseBinding());
+            patterns.push_back(std::nullopt);
+        }
+
+        if (lexer.current().type != ',')
+            break;
+        if (commaPositions)
+            localCommaPositions.push_back(lexer.current().location.begin);
+        nextLexeme();
+    }
+
+    if (commaPositions)
+        *commaPositions = copy(localCommaPositions);
+}
+
+// Declares a `for ... in` loop's variables, after its values are parsed. A pattern's loop variable is its name, or a
+// hidden local that code can't name; the pattern's fields go to `fields` as the `local`s the loop body starts with,
+// and every pattern (null for a plain name) to `destructure`, which stays empty when there are none.
+AstArray<AstLocal*> Parser::pushLoopLocals(
+    const TempVector<Binding>& names,
+    const std::vector<std::optional<DestructureTarget>>& patterns,
+    std::vector<AstStat*>& fields,
+    AstArray<AstDestructurePattern*>& destructure
+)
+{
+    LUAU_ASSERT(names.size() == patterns.size());
+
+    TempVector<AstLocal*> vars(scratchLocal);
+    bool anyPattern = false;
+
+    for (size_t i = 0; i < names.size(); ++i)
+    {
+        if (patterns[i] && !patterns[i]->name)
+        {
+            // as in desugarDestructuring: the hidden local never enters the scope
+            vars.push_back(allocator.alloc<AstLocal>(
+                nameDestructured,
+                names[i].name.location,
+                /* shadow= */ nullptr,
+                functionStack.size() - 1,
+                functionStack.back().loopDepth,
+                names[i].annotation
+            ));
+        }
+        else
+        {
+            vars.push_back(pushLocal(names[i]));
+        }
+
+        anyPattern |= patterns[i].has_value();
+    }
+
+    AstArray<AstLocal*> result = copy(vars);
+
+    if (!anyPattern)
+        return result;
+
+    std::vector<AstDestructurePattern*> sources;
+
+    // Fields are pushed after every loop variable, so a field can shadow a loop variable but not the other way around
+    for (size_t i = 0; i < names.size(); ++i)
+    {
+        if (!patterns[i])
+        {
+            sources.push_back(nullptr);
+            continue;
+        }
+
+        size_t first = fields.size();
+        sources.push_back(allocator.alloc<AstDestructurePattern>(desugarDestructureFields(*patterns[i], result.data[i], false, fields)));
+
+        for (size_t j = first; j < fields.size(); ++j)
+        {
+            AstStatLocal* field = fields[j]->as<AstStatLocal>();
+            LUAU_ASSERT(field);
+            field->destructuredFromLoop = true;
+            field->luwuOnly = true;
+        }
+    }
+
+    destructure = copy(sources.data(), sources.size());
+    return result;
+}
+
 // for binding `=' exp `,' exp [`,' exp] do block end |
 // for bindinglist in explist do block end |
 AstStat* Parser::parseFor()
@@ -1129,19 +1380,53 @@ AstStat* Parser::parseFor()
     Lexeme matchFor = lexer.current();
     nextLexeme(); // for
 
-    Binding varname = parseBinding();
+    // Luwu: once the header has reported an error and the code goes on to the next line, the header is still being
+    // typed (`for` above `total += 1`). Its remaining parts are left missing instead of reported against that line.
+    size_t errorsBefore = parseErrors.size();
+    auto headerStopped = [&]()
+    {
+        return parseErrors.size() > errorsBefore && !continuesOnSameLine();
+    };
+    // At the next token, not the end of the header: the cursor is there, and autocomplete wants the node before it
+    auto missingValue = [&]()
+    {
+        Position at = lexer.current().location.begin;
+        return allocator.alloc<AstExprError>(Location(at, at), copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
+    };
+    // The next part of the header: a missing one is reported at the end of its own line, once
+    auto expectHeaderPart = [&](Lexeme::Type type, const char* context)
+    {
+        if (lexer.current().type == type || continuesOnSameLine())
+            return expectAndConsume(type, context);
+
+        if (!headerStopped())
+            report(lexer.previousLocation(), "Expected %s when parsing %s", Lexeme(Location(), type).toString().c_str(), context);
+        return false;
+    };
+
+    // Luwu Destructuring (rfcs/destructuring.md): `for _, p.{x, y} in ps`
+    size_t errorsBeforeBindings = parseErrors.size();
+    std::vector<std::optional<DestructureTarget>> patterns;
+    bool firstIsPattern = loopPatternFollows();
+    Binding varname = firstIsPattern ? parseLoopPattern(patterns) : parseBinding();
+    if (!firstIsPattern)
+        patterns.push_back(std::nullopt);
 
     if (lexer.current().type == '=')
     {
+        if (firstIsPattern)
+            report(varname.name.location, "A numeric 'for' loop's variable is a number; only 'for ... in' bindings can be destructured");
+
         Position equalsPosition = lexer.current().location.begin;
         nextLexeme();
 
         AstExpr* from = parseExpr();
 
-        bool hasEndComma = expectAndConsume(',', "index range");
+        bool hasEndComma = expectHeaderPart(Lexeme::Type(','), "index range");
+        bool stopped = headerStopped();
         Position endCommaPosition = hasEndComma ? lexer.previousLocation().begin : Position::missing();
 
-        AstExpr* to = parseExpr();
+        AstExpr* to = stopped ? missingValue() : parseExpr();
 
         Position stepCommaPosition = Position::missing();
         AstExpr* step = nullptr;
@@ -1155,7 +1440,7 @@ AstStat* Parser::parseFor()
         }
 
         Lexeme matchDo = lexer.current();
-        bool hasDo = expectAndConsume(Lexeme::ReservedDo, "for loop");
+        bool hasDo = expectHeaderPart(Lexeme::ReservedDo, "for loop");
         const Lexeme& matchEnd = blockOpener(matchFor, matchDo, hasDo);
 
         unsigned int localsBegin = saveLocals();
@@ -1193,35 +1478,49 @@ AstStat* Parser::parseFor()
             {
                 Position initialCommaPosition = lexer.current().location.begin;
                 nextLexeme();
-                parseBindingList(names, false, false, &varsCommaPosition, &initialCommaPosition);
+                parseLoopBindings(names, patterns, &varsCommaPosition, &initialCommaPosition);
             }
             else
             {
                 nextLexeme();
 
-                parseBindingList(names);
+                parseLoopBindings(names, patterns, nullptr, nullptr);
             }
         }
 
         Location inLocation = lexer.current().location;
-        bool hasIn = expectAndConsume(Lexeme::ReservedIn, "for loop");
-
         TempVector<AstExpr*> values(scratchExpr);
         TempVector<Position> valuesCommaPositions(scratchPosition);
-        parseExprList(values, options.storeCstData ? &valuesCommaPositions : nullptr);
+        bool hasIn = false;
+
+        // Luwu Destructuring (rfcs/destructuring.md): a pattern still being typed (`for _, .{`) already reported what's
+        // wrong with it, so a missing `in` and values aren't reported on top
+        bool patternInProgress = parseErrors.size() > errorsBeforeBindings && lexer.current().type != Lexeme::ReservedIn;
+        if (patternInProgress)
+        {
+            Position at = lexer.previousLocation().end;
+            values.push_back(allocator.alloc<AstExprError>(Location(at, at), copy<AstExpr*>({}), unsigned(parseErrors.size() - 1)));
+        }
+        else
+        {
+            hasIn = expectHeaderPart(Lexeme::ReservedIn, "for loop");
+            if (headerStopped())
+                values.push_back(missingValue());
+            else
+                parseExprList(values, options.storeCstData ? &valuesCommaPositions : nullptr);
+        }
 
         Lexeme matchDo = lexer.current();
-        bool hasDo = expectAndConsume(Lexeme::ReservedDo, "for loop");
+        bool hasDo = expectHeaderPart(Lexeme::ReservedDo, "for loop");
         const Lexeme& matchEnd = blockOpener(matchFor, matchDo, hasDo);
 
         unsigned int localsBegin = saveLocals();
 
         functionStack.back().loopDepth++;
 
-        TempVector<AstLocal*> vars(scratchLocal);
-
-        for (size_t i = 0; i < names.size(); ++i)
-            vars.push_back(pushLocal(names[i]));
+        std::vector<AstStat*> fields;
+        AstArray<AstDestructurePattern*> destructure{nullptr, 0};
+        AstArray<AstLocal*> vars = pushLoopLocals(names, patterns, fields, destructure);
 
         AstStatBlock* body = parseBlock();
 
@@ -1234,9 +1533,14 @@ AstStat* Parser::parseFor()
         bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
         body->hasEnd = hasEnd;
 
+        // Destructured fields are read at the start of every iteration
+        AstStatBlock* loopBody = prependLoopFields(fields, body);
+
         AstStatForIn* node = allocator.alloc<AstStatForIn>(
-            Location(start, end), copy(vars), copy(values), body, hasIn, inLocation, hasDo, matchDo.location, start
+            Location(start, end), vars, copy(values), loopBody, hasIn, inLocation, hasDo, matchDo.location, start
         );
+        node->destructure = destructure;
+        node->luwuOnly = destructure.size != 0;
         if (options.storeCstData)
         {
             cstNodeMap[node] = allocator.alloc<CstStatForIn>(extractAnnotationColonPositions(names), varsCommaPosition, copy(valuesCommaPositions));
@@ -2125,6 +2429,14 @@ AstStat* Parser::parseLocal(
     {
         // The attributes were parsed before we knew this was a plain binding rather than a local
         // function, so this is where they get checked against the position they landed on.
+        if (destructuringFollows())
+        {
+            if (attributes.size != 0)
+                report(attributes.data[0]->location, "Attributes can't be applied to a destructuring declaration");
+
+            return parseDestructuring(start, start, isConst);
+        }
+
         if (attributes.size != 0)
         {
             if (!FFlag::LuwuAttributesEverywhere)
@@ -2145,10 +2457,12 @@ AstStat* Parser::parseLocal(
 
         TempVector<Binding> names(scratchBinding);
         AstArray<Position> varsCommaPositions;
+        size_t errorsBeforeNames = parseErrors.size();
         if (options.storeCstData)
             parseBindingList(names, false, false, &varsCommaPositions, nullptr, nullptr, isConst);
         else
             parseBindingList(names, false, false, nullptr, nullptr, nullptr, isConst);
+        bool namesReportedError = parseErrors.size() > errorsBeforeNames;
 
         matchRecoveryStopOnToken['=']--;
 
@@ -2192,7 +2506,9 @@ AstStat* Parser::parseLocal(
         // Both error as there's probably user error (`foo` and `baz` can
         // only ever be `nil`). We report an error but return the
         // declaration as-is, as it's still reasonable syntactically.
-        bool missingValue = isConst && !isEnoughValues(values, vars.size());
+        // Luwu: a name that's still being typed (`const` alone) already reported that, so the missing value isn't
+        // reported too. Upstream reports both.
+        bool missingValue = isConst && !isEnoughValues(values, vars.size()) && !namesReportedError;
         if (missingValue && parsingExport)
             valuelessExports.push_back({node->location, node, /* writtenAsLocal= */ false});
         else if (missingValue)
@@ -2200,6 +2516,550 @@ AstStat* Parser::parseLocal(
 
         return node;
     }
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{` or `name.{` right after `local`/`const`. Neither `name.` nor
+// `{` can start anything else there, so both are parsed as a (malformed) destructuring for a useful error. So is a `.`
+// with no `{` yet, while the pattern is being typed.
+bool Parser::destructuringFollows()
+{
+    if (lexer.current().type == '{')
+        return true;
+
+    if (lexer.current().type == '.')
+        return destructurePatternFollows() || dotTableMissingBraceFollows();
+
+    return lexer.current().type == Lexeme::Name && lexer.lookahead().type == '.' && !nextLineStartsUnpatternedStatement();
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `name.` on the next line, which starts a statement of its own (`local`
+// above `total.x = 1`), not a pattern. A `.{` after the name is still a pattern however it's indented.
+bool Parser::nextLineStartsUnpatternedStatement()
+{
+    Lexeme::Type afterDot = lexer.lookaheadSecond().type;
+    return afterDot != '{' && afterDot != '(' && nextLineStartsStatement(cantFollowBindingName);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{` or `.(`, which start a pattern where a binding goes
+bool Parser::destructurePatternFollows()
+{
+    return dotTableFollows() || positionalPatternFollows();
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `.(`, a positional pattern where a binding goes
+bool Parser::positionalPatternFollows()
+{
+    return lexer.current().type == '.' && lexer.lookahead().type == '(';
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{`, which starts a pattern where a binding goes and a `.{x}` table
+// (parseDotTableConstructor) where an expression goes.
+bool Parser::dotTableFollows()
+{
+    return lexer.current().type == '.' && lexer.lookahead().type == '{';
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a `.` where an expression goes, with no `{` after it yet. Only in Luwu
+// code with destructuring on; anywhere else it's the stray `.` it always was.
+bool Parser::dotTableMissingBraceFollows()
+{
+    return destructuringAvailable() && lexer.current().type == '.' && lexer.lookahead().type != '{';
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): whether this code can use destructuring, so that a `.` with no `{` after
+// it can be read as a pattern or table still being typed
+bool Parser::destructuringAvailable()
+{
+    return FFlag::LuwuDestructuring && options.language == Language::Luwu;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): whether the `.{...}` at the current token is followed by `=`, `:` or `,`,
+// i.e. `name.{x} = t` is a declaration missing its keyword rather than the call `name.{x}`. Only a statement that starts
+// with `name.{` asks, and it scans a copy of the lexer, so the parser itself never backtracks.
+bool Parser::destructuringAssignmentFollows()
+{
+    Lexer scan = lexer;
+    scan.next(); // .
+
+    int depth = 0;
+    for (Lexeme::Type type = scan.current().type; type != Lexeme::Eof; type = scan.next().type)
+    {
+        if (type == '{')
+            depth++;
+        else if (type == '}')
+            depth--;
+
+        if (depth == 0)
+            break;
+    }
+
+    Lexeme::Type after = scan.next().type;
+    return after == '=' || after == ':' || after == ',';
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): the declaration desugars to one `local`/`const` per binding, in
+// source order. The value goes to the named local, or to a hidden one, and each field is read from there:
+//
+//   const fs.{readfile as rf, path} = require("@std/fs")
+//
+//   const fs = require("@std/fs")
+//   const rf = fs.readfile
+//   const path = fs.path
+//
+// The first statement is returned; the rest are left in pendingStatements for parseBlockNoScope.
+AstStat* Parser::parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name)
+{
+    size_t errorsBeforePattern = parseErrors.size();
+    DestructureTarget target;
+    target.name = name;
+    if (!target.name && lexer.current().type == Lexeme::Name)
+        target.name = parseName("variable name");
+
+    // JavaScript's `local {x, y} = t`
+    if (lexer.current().type == '{')
+        report(lexer.current().location, "Destructuring needs a '.' before '{': 'local .{x, y} = t'");
+
+    parseDestructurePattern(target);
+
+    if (lexer.current().type == ':')
+    {
+        nextLexeme();
+        target.annotation = parseType();
+    }
+
+    Location equalsLocation = lexer.current().location;
+    AstExpr* value = nullptr;
+
+    // A pattern still being typed already reported what's wrong with it; the missing value isn't reported on top
+    bool patternReportedError = parseErrors.size() > errorsBeforePattern;
+
+    if (lexer.current().type == '=')
+    {
+        nextLexeme();
+        value = parseExpr();
+    }
+    else if (patternReportedError)
+    {
+        value = allocator.alloc<AstExprError>(Location(lexer.previousLocation().end, 0), copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
+    }
+    else
+    {
+        value = reportExprError(lexer.current().location, {}, "Expected '=' and a value after the destructuring pattern");
+    }
+
+    if (lexer.current().type == ',')
+    {
+        Location extra = lexer.current().location;
+        TempVector<AstExpr*> rest(scratchExpr);
+        nextLexeme();
+        parseExprList(rest);
+        report(Location(extra, lexer.previousLocation()), "A destructuring declaration takes exactly one value");
+    }
+
+    Location location(start, value->location);
+
+    checkLuwuFeature(location, kDestructuringFeature, FFlag::LuwuDestructuring);
+
+    std::vector<AstStat*> statements;
+    AstDestructurePattern pattern = desugarDestructuring(target, value, location, equalsLocation, isConst, statements);
+
+    AstStatLocal* first = statements.front()->as<AstStatLocal>();
+    LUAU_ASSERT(first);
+    first->keywordLocation = keywordLocation;
+    first->destructure = allocator.alloc<AstDestructurePattern>(pattern);
+
+    // Upstream's destructuring RFC (luau-lang/rfcs#260) is still open, so none of this is Luau syntax yet.
+    for (AstStat* statement : statements)
+    {
+        statement->luwuOnly = true;
+
+        if (statement != first)
+            statement->as<AstStatLocal>()->destructuredFrom = first;
+    }
+
+    pendingStatements.insert(pendingStatements.end(), statements.begin() + 1, statements.end());
+
+    return first;
+}
+
+// Parses `.{ fieldlist }` into `target`, starting at the `.` (or at the `{`, when the caller already reported
+// the missing `.`). A malformed field gets one error that names the form that works, and parsing resumes at the
+// next field so the rest of the pattern still binds.
+void Parser::parseDestructurePattern(DestructureTarget& target)
+{
+    unsigned int oldRecursionCount = recursionCounter;
+    incrementRecursionCounter("destructuring");
+
+    Location begin = lexer.current().location;
+    if (lexer.current().type == '.')
+        nextLexeme();
+
+    if (lexer.current().type == '(')
+    {
+        parseDestructureElements(target);
+        target.patternLocation = Location(begin, *target.patternLocation);
+        recursionCounter = oldRecursionCount;
+        return;
+    }
+
+    Lexeme open = lexer.current();
+
+    // `name.` with no `{` yet: the fields aren't parsed from the code after it, which is usually the next line
+    if (!consumeExpected(Lexeme::Type('{'), "destructuring"))
+    {
+        target.patternLocation = Location(begin, lexer.previousLocation());
+        target.closed = false;
+        recursionCounter = oldRecursionCount;
+        return;
+    }
+
+    if (lexer.current().type == '}')
+        report(Location(begin, lexer.current().location), "A destructuring pattern needs at least one field");
+
+    while (lexer.current().type != '}' && lexer.current().type != Lexeme::Eof)
+    {
+        if (lexer.current().type != Lexeme::Name)
+        {
+            reportDestructureKeyError();
+            skipDestructureField();
+        }
+        else
+        {
+            target.fields.push_back(parseDestructureField());
+        }
+
+        if (lexer.current().type == ',')
+        {
+            nextLexeme();
+            continue;
+        }
+
+        if (lexer.current().type == '}' || lexer.current().type == Lexeme::Eof)
+            break;
+
+        // Two fields with no comma between them: report it and carry on with the next field
+        if (lexer.current().type == Lexeme::Name)
+        {
+            report(lexer.current().location, "Expected ',' between destructured fields, got '%s'", lexer.current().name);
+            continue;
+        }
+
+        report(lexer.current().location, "Expected ',' or '}' after a destructured field, got %s", lexer.current().toString().c_str());
+        skipDestructureField();
+
+        if (lexer.current().type == ',')
+            nextLexeme();
+    }
+
+    target.patternLocation = Location(begin, lexer.current().location);
+    target.closed = expectMatchAndConsume('}', open);
+
+    recursionCounter = oldRecursionCount;
+}
+
+// `( elementlist )` of a positional pattern, after its `.`. Each element is a binding of its own, read by position.
+void Parser::parseDestructureElements(DestructureTarget& target)
+{
+    Lexeme open = lexer.current();
+    nextLexeme(); // (
+
+    target.positional = true;
+
+    if (lexer.current().type == ')')
+        report(Location(open.location, lexer.current().location), "A positional pattern needs at least one element");
+
+    while (lexer.current().type != ')' && lexer.current().type != Lexeme::Eof)
+    {
+        bool startsElement = lexer.current().type == Lexeme::Name || lexer.current().type == '.';
+        if (startsElement)
+        {
+            DestructureField element{Name(AstName(), lexer.current().location), std::nullopt, {}};
+            parseDestructureTarget(element.target);
+            target.fields.push_back(std::move(element));
+        }
+        else if (lexer.current().type == Lexeme::Dot3)
+        {
+            report(lexer.current().location, "Destructuring has no rest pattern; bind the value with a name to keep the rest: 'local t.(x) = ...'");
+            skipDestructureField();
+        }
+        else
+        {
+            report(lexer.current().location, "Expected a name or a pattern in the positional pattern, got %s", lexer.current().toString().c_str());
+            skipDestructureField();
+        }
+
+        if (lexer.current().type == ',')
+        {
+            nextLexeme();
+            continue;
+        }
+
+        if (lexer.current().type == ')' || lexer.current().type == Lexeme::Eof)
+            break;
+
+        if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "as")
+        {
+            // `.(a as b)`: an element is a binding already and has nothing to rename
+            Location as = lexer.current().location;
+            skipDestructureField();
+            report(
+                Location(as, lexer.previousLocation()),
+                "Positional elements are bound to the name written in their place; 'as' only renames fields of '.{...}'"
+            );
+        }
+        else if (lexer.current().type == '=')
+        {
+            Location equals = lexer.current().location;
+            skipDestructureField();
+            report(
+                Location(equals, lexer.previousLocation()),
+                "Destructured elements can't have default values; a missing element reads as whatever indexing the value gives"
+            );
+        }
+        else
+        {
+            report(lexer.current().location, "Expected ',' or ')' after a positional element, got %s", lexer.current().toString().c_str());
+            skipDestructureField();
+        }
+
+        if (lexer.current().type == ',')
+            nextLexeme();
+    }
+
+    target.patternLocation = Location(open.location, lexer.current().location);
+    target.closed = expectMatchAndConsume(')', open);
+}
+
+// target ::= Name [pattern] [`:' Type] | pattern [`:' Type]
+void Parser::parseDestructureTarget(DestructureTarget& target)
+{
+    if (lexer.current().type == Lexeme::Name)
+        target.name = parseName("variable name");
+
+    if (lexer.current().type == '.')
+        parseDestructurePattern(target);
+
+    if (lexer.current().type == ':')
+    {
+        nextLexeme();
+        target.annotation = parseType();
+    }
+}
+
+// field ::= Name [`.' `{' fieldlist `}'] | Name `as' target
+Parser::DestructureField Parser::parseDestructureField()
+{
+    DestructureField field{parseName("field name"), std::nullopt, {}};
+    const char* key = field.key.name.value;
+
+    if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "as")
+    {
+        field.asLocation = lexer.current().location;
+        nextLexeme();
+
+        if (lexer.current().type == Lexeme::Name)
+        {
+            field.target.name = parseName("variable name");
+        }
+        else if (lexer.current().type != '.')
+        {
+            report(lexer.current().location, "Expected a name or '.{' after 'as', got %s", lexer.current().toString().c_str());
+            // Bind the field under its own name so the rest of the declaration still parses, placed in the gap after
+            // `as` where the name will be written, so tools see a cursor there as being on a binding name
+            field.target.name = Name(field.key.name, Location(field.asLocation->end, lexer.current().location.begin));
+        }
+    }
+    else
+    {
+        field.target.name = field.key;
+    }
+
+    if (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+    {
+        // `key.inner`: a path, which a pattern doesn't have
+        const char* inner = lexer.lookahead().name;
+        report(
+            Location(field.key.location, lexer.lookahead().location),
+            "To take '%s' out of '%s', write '%s.{%s}' to bind both, or '%s as .{%s}' to bind only '%s'",
+            inner,
+            key,
+            key,
+            inner,
+            key,
+            inner,
+            inner
+        );
+        skipDestructureField();
+
+        // `key as .inner` reaches here with nothing to bind the field to
+        if (!field.target.name)
+            field.target.name = field.key;
+
+        return field;
+    }
+
+    if (lexer.current().type == '.')
+        parseDestructurePattern(field.target);
+
+    if (lexer.current().type == ':')
+    {
+        nextLexeme();
+        field.target.annotation = parseType();
+
+        // `key: T as name`: the annotation types what `as` binds, so it goes after it
+        bool asAfterAnnotation = !field.asLocation && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "as";
+        if (asAfterAnnotation)
+        {
+            Location as = lexer.current().location;
+            nextLexeme();
+            std::optional<Name> renamed = parseNameOpt("variable name");
+            report(
+                Location(as, lexer.previousLocation()),
+                "An annotation goes after the name it types: '%s as %s: T'",
+                key,
+                renamed ? renamed->name.value : "name"
+            );
+            if (renamed)
+                field.target.name = renamed;
+        }
+    }
+
+    if (lexer.current().type == '=')
+    {
+        // A default value, which destructuring doesn't have: parse it so it doesn't cascade into more errors
+        Location equals = lexer.current().location;
+        nextLexeme();
+        AstExpr* defaultValue = parseExpr();
+        report(
+            Location(equals, defaultValue->location),
+            "Destructured fields can't have default values; a missing field reads as whatever indexing the value gives"
+        );
+    }
+
+    return field;
+}
+
+// Something other than a name where a field's key goes.
+void Parser::reportDestructureKeyError()
+{
+    const Lexeme& current = lexer.current();
+
+    bool nestedWithoutField = current.type == '{' || current.type == '.';
+    bool otherKey =
+        current.type == '[' || current.type == Lexeme::QuotedString || current.type == Lexeme::RawString || current.type == Lexeme::Number;
+
+    if (current.type == Lexeme::Dot3)
+        report(current.location, "Destructuring has no rest pattern; bind the value with a name to keep the rest: 'local t.{x} = ...'");
+    else if (nestedWithoutField)
+        report(current.location, "A nested pattern needs the field it destructures: 'field.{...}' or 'field as .{...}'");
+    else if (otherKey)
+        report(current.location, "Destructured fields are names; read any other key by indexing the value: 'local v = t[key]'");
+    else
+        report(current.location, "Expected a field name in the destructuring pattern, got %s", current.toString().c_str());
+}
+
+// Skips to the `,`, `}` or `)` that ends the current field or element, stepping over anything bracketed inside it.
+void Parser::skipDestructureField()
+{
+    int depth = 0;
+
+    while (lexer.current().type != Lexeme::Eof)
+    {
+        Lexeme::Type type = lexer.current().type;
+
+        if (depth == 0 && (type == ',' || type == '}' || type == ')'))
+            return;
+
+        if (type == '{' || type == '(' || type == '[')
+            depth++;
+        else if (type == '}' || type == ')' || type == ']')
+            depth--;
+
+        nextLexeme();
+    }
+}
+
+AstDestructurePattern Parser::desugarDestructuring(
+    const DestructureTarget& target,
+    AstExpr* value,
+    const Location& location,
+    const Location& equalsLocation,
+    bool isConst,
+    std::vector<AstStat*>& out
+)
+{
+    AstLocal* local = nullptr;
+
+    if (target.name)
+    {
+        local = pushLocal(Binding(*target.name, target.annotation, Position{0, 0}, isConst));
+    }
+    else
+    {
+        // Code can't name the hidden local, so it never enters the scope: nothing can shadow it or be
+        // shadowed by it, and the linter has nothing to report about it.
+        local = allocator.alloc<AstLocal>(
+            nameDestructured,
+            target.patternLocation.value_or(location),
+            /* shadow= */ nullptr,
+            functionStack.size() - 1,
+            functionStack.back().loopDepth,
+            target.annotation,
+            isConst
+        );
+    }
+
+    out.push_back(allocator.alloc<AstStatLocal>(location, copy({local}), copy({value}), equalsLocation, isConst));
+
+    return desugarDestructureFields(target, local, isConst, out);
+}
+
+// The fields of `target`'s pattern, read from `local` (already declared): one `local`/`const` per binding, appended
+// to `out`. Returns the pattern's source form.
+AstDestructurePattern Parser::desugarDestructureFields(const DestructureTarget& target, AstLocal* local, bool isConst, std::vector<AstStat*>& out)
+{
+    AstDestructurePattern pattern;
+    pattern.local = local;
+    pattern.location = target.patternLocation;
+    pattern.closed = target.closed;
+    pattern.positional = target.positional;
+
+    TempVector<AstDestructureField> fields(scratchDestructureField);
+
+    for (size_t i = 0; i < target.fields.size(); ++i)
+    {
+        const DestructureField& field = target.fields[i];
+        Location keyLocation = field.key.location;
+        AstExpr* object = allocator.alloc<AstExprLocal>(keyLocation, local, /* upvalue= */ false);
+        AstExpr* read = nullptr;
+
+        if (target.positional)
+        {
+            // The position isn't written in the source, so its location is empty
+            AstExpr* position = allocator.alloc<AstExprConstantNumber>(Location(keyLocation.end, 0), double(i + 1));
+            AstExprIndexExpr* element = allocator.alloc<AstExprIndexExpr>(keyLocation, object, position);
+            element->positional = true;
+            read = element;
+        }
+        else
+        {
+            read = allocator.alloc<AstExprIndexName>(keyLocation, object, field.key.name, keyLocation, keyLocation.begin, '.');
+        }
+
+        Position end = keyLocation.end;
+        if (field.target.annotation)
+            end = field.target.annotation->location.end;
+        else if (field.target.patternLocation)
+            end = field.target.patternLocation->end;
+        else if (field.target.name)
+            end = field.target.name->location.end;
+
+        AstDestructurePattern fieldTarget = desugarDestructuring(field.target, read, Location(keyLocation.begin, end), keyLocation, isConst, out);
+        fields.push_back(AstDestructureField{field.key.name, keyLocation, field.asLocation, fieldTarget});
+    }
+
+    pattern.fields = copy(fields);
+    return pattern;
 }
 
 // return [explist]
@@ -2245,11 +3105,25 @@ AstStat* Parser::parseTypeAlias(
     if (lexer.current().type == Lexeme::ReservedFunction)
         return parseTypeFunction(start, exported, typeKeywordPosition);
 
+    // Luwu Destructuring (rfcs/destructuring.md): `type .{A, B} = module`
+    if (dotTableFollows())
+        return parseTypeDestructuring(start, exported, typeKeywordLocation);
+
+    bool namedTypeDestructuring = lexer.current().type == Lexeme::Name && lexer.lookahead().type == '.' && lexer.lookaheadSecond().type == '{';
+    if (namedTypeDestructuring)
+    {
+        Lexeme name = lexer.current();
+        report(name.location, "A type destructuring declares only the types; drop '%s' before '.{'", name.name);
+        nextLexeme();
+        return parseTypeDestructuring(start, exported, typeKeywordLocation);
+    }
+
     // parsing a type alias
 
     // note: `type` token is already parsed for us, so we just need to parse the rest
 
     std::optional<Name> name = parseNameOpt("type name");
+    bool hasName = name.has_value();
 
     // Use error name if the name is missing
     if (!name)
@@ -2266,10 +3140,17 @@ AstStat* Parser::parseTypeAlias(
                                           )
                                         : parseGenericTypeList(/* withDefaultValues= */ true);
 
-    bool equalsFound = expectAndConsume('=', "type alias");
+    // Luwu: `type` with no name yet reports only the name, and `type T` with no `=` yet only the `=`. Unless the line goes
+    // on (`type T number`), the missing type isn't reported too, and it sits where the alias stops, not on the next line's
+    // code. Upstream parses the next line's code as the type, reporting a second error and spanning the alias into the
+    // next statement.
+    bool equalsFound = false;
+    if (hasName || lexer.current().type == '=')
+        equalsFound = consumeExpected(Lexeme::Type('='), "type alias");
     Position equalsPosition = equalsFound ? lexer.previousLocation().begin : Position::missing();
 
-    AstType* type = parseType();
+    bool typeFollows = equalsFound || continuesOnSameLine();
+    AstType* type = typeFollows ? parseType() : missingTypeHere();
 
     // Luwu try expressions: `type Result<T> = T ! IoError`
     Position errorHintPosition = Position::missing();
@@ -2291,6 +3172,160 @@ AstStat* Parser::parseTypeAlias(
         cstNodeMap[node] = cst;
     }
     return node;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): the module a type destructuring reads from, parsed as a type so a mistake
+// is one error: a required module's name, or a dotted path to a module it exports (`hub.t`), read as one name.
+// Nothing when the type isn't one.
+std::optional<Parser::Name> Parser::parseModulePath()
+{
+    AstType* value = parseType();
+    AstTypeReference* reference = value->as<AstTypeReference>();
+    if (!reference || reference->hasParameterList)
+    {
+        report(value->location, "A type destructuring reads types from a required module: 'type .{A, B} = module'");
+        return std::nullopt;
+    }
+
+    if (!reference->prefix)
+        return Name(reference->name, reference->location);
+
+    std::string path = std::string(reference->prefix->value) + "." + reference->name.value;
+    Location location = reference->location;
+
+    while (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+    {
+        nextLexeme();
+        Name field = parseName("module name");
+        path += ".";
+        path += field.name.value;
+        location = Location(location, field.location);
+    }
+
+    // No code can spell a name with a dot in it, so the path names nothing but the module
+    return Name(AstName(copy(path).data), location);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `type .{A, B as C} = module` desugars to one alias per field, each reading
+// the module's exported type of that name:
+//
+//   type .{FsMetadata, FileEntry as Entry} = fs
+//
+//   type FsMetadata = fs.FsMetadata
+//   type Entry = fs.FileEntry
+//
+// A generic type still has its generics: ConstraintGenerator binds the alias to the imported type function itself. The
+// first alias is returned; the rest are left in pendingStatements for parseBlockNoScope.
+//
+// The module can be a field of one, `type .{Age} = hub.t`. Its aliases read from a prefix spelled `hub.t`, which
+// ConstraintGenerator registers for every module a required module exports.
+AstStat* Parser::parseTypeDestructuring(const Location& start, bool exported, const Location& typeKeywordLocation)
+{
+    DestructureTarget target;
+    parseDestructurePattern(target);
+
+    Name module(nameError, lexer.current().location);
+    std::optional<Location> equalsLocation;
+
+    if (lexer.current().type == '=')
+    {
+        equalsLocation = lexer.current().location;
+        nextLexeme();
+
+        if (std::optional<Name> path = parseModulePath())
+            module = *path;
+    }
+    else
+    {
+        report(lexer.current().location, "Expected '=' and a module after the destructuring pattern: 'type .{A, B} = module'");
+    }
+
+    Location location(start, lexer.previousLocation());
+
+    checkLuwuFeature(location, kDestructuringFeature, FFlag::LuwuDestructuring);
+
+    // A module path (`hub.t`) is no local's name, so it finds none
+    AstLocal* moduleLocal = nullptr;
+    if (FFlag::LuauTrackPrefixLocal)
+    {
+        AstLocal* const* found = localMap.find(module.name);
+        moduleLocal = (found && *found) ? *found : nullptr;
+    }
+
+    std::vector<AstStatTypeAlias*> aliases;
+    TempVector<AstTypeDestructureField> fields(scratchTypeDestructureField);
+
+    for (const DestructureField& field : target.fields)
+    {
+        if (field.target.patternLocation)
+            report(*field.target.patternLocation, "A type destructuring can't nest; list the module's types directly: 'type .{A, B} = module'");
+
+        if (field.target.annotation)
+            report(field.target.annotation->location, "A destructured type takes no annotation: 'type .{A, B} = module'");
+
+        // `key as .{...}` has no name of its own; the key names the type
+        Name name = field.target.name ? *field.target.name : field.key;
+        Location keyLocation = field.key.location;
+
+        AstTypeReference* reference = allocator.alloc<AstTypeReference>(
+            keyLocation,
+            module.name,
+            field.key.name,
+            module.location,
+            keyLocation,
+            /* hasParameterList= */ false,
+            AstArray<AstTypeOrPack>{},
+            moduleLocal
+        );
+        AstStatTypeAlias* alias = allocator.alloc<AstStatTypeAlias>(
+            Location(keyLocation.begin, name.location.end),
+            name.name,
+            name.location,
+            AstArray<AstGenericType*>{},
+            AstArray<AstGenericTypePack*>{},
+            reference,
+            exported,
+            typeKeywordLocation
+        );
+
+        aliases.push_back(alias);
+        fields.push_back(AstTypeDestructureField{alias, field.asLocation});
+    }
+
+    // A pattern with no fields still needs a statement to hold it; an alias with the error name is skipped by
+    // everything that checks aliases
+    if (aliases.empty())
+    {
+        AstTypeReference* reference = allocator.alloc<AstTypeReference>(location, module.name, nameError, module.location, location);
+        aliases.push_back(allocator.alloc<AstStatTypeAlias>(
+            location, nameError, location, AstArray<AstGenericType*>{}, AstArray<AstGenericTypePack*>{}, reference, exported, typeKeywordLocation
+        ));
+    }
+
+    AstStatTypeAlias* first = aliases.front();
+    first->location = location;
+
+    AstTypeDestructure* destructure = allocator.alloc<AstTypeDestructure>();
+    destructure->location = target.patternLocation.value_or(location);
+    destructure->closed = target.closed;
+    destructure->equalsLocation = equalsLocation;
+    destructure->module = module.name;
+    destructure->moduleLocation = module.location;
+    destructure->fields = copy(fields);
+    first->destructure = destructure;
+
+    // Upstream's destructuring RFC (luau-lang/rfcs#260) is still open, so none of this is Luau syntax yet.
+    for (AstStatTypeAlias* alias : aliases)
+    {
+        alias->luwuOnly = true;
+
+        if (alias != first)
+            alias->destructuredFrom = first;
+    }
+
+    pendingStatements.insert(pendingStatements.end(), aliases.begin() + 1, aliases.end());
+
+    return first;
 }
 
 namespace
@@ -4573,24 +5608,42 @@ AstStat* Parser::parseExportValue(
         return true;
     };
 
+    auto exportLocals = [&](AstStatLocal* localStat)
+    {
+        for (AstLocal* local : localStat->vars)
+        {
+            // Luwu Destructuring (rfcs/destructuring.md): an unnamed pattern's hidden local isn't a binding to export
+            if (local->name == kDestructuredLocalName)
+                continue;
+
+            if (!checkDuplicateExport(local->name, local->location))
+            {
+                report(local->location, "Duplicate exported identifier '%s'", local->name.value);
+                continue;
+            }
+
+            local->isExported = true;
+        }
+    };
+
     auto exportLocalStat = [&](AstStat* stat, const Location& keywordLocation) -> AstStat*
     {
         if (AstStatLocal* localStat = stat->as<AstStatLocal>())
         {
             localStat->isExported = true;
-
-            for (AstLocal* local : localStat->vars)
-            {
-                if (!checkDuplicateExport(local->name, local->location))
-                {
-                    report(local->location, "Duplicate exported identifier '%s'", local->name.value);
-                    continue;
-                }
-
-                local->isExported = true;
-            }
-
+            exportLocals(localStat);
             localStat->keywordLocation = keywordLocation;
+
+            // Luwu Destructuring (rfcs/destructuring.md): `export const .{A, B} = t` exports every name it binds,
+            // which the desugared statements after this one declare
+            for (AstStat* desugared : pendingStatements)
+            {
+                if (AstStatLocal* field = desugared->as<AstStatLocal>())
+                {
+                    field->isExported = true;
+                    exportLocals(field);
+                }
+            }
         }
         else
             LUAU_ASSERT(!"Expected export local/const to parse as AstStatLocal");
@@ -4728,6 +5781,15 @@ AstStat* Parser::parseExportValue(
             localStat->keywordLocation = std::nullopt;
         return stat;
     }
+    else if (destructurePatternFollows())
+    {
+        // Luwu Destructuring (rfcs/destructuring.md): `export .{x, y} = v` is `export const .{x, y} = v`. It has no
+        // `const` keyword to point at.
+        AstStat* stat = exportLocalStat(parseDestructuring(start, start, /* isConst= */ true), start);
+        if (AstStatLocal* localStat = stat->as<AstStatLocal>())
+            localStat->keywordLocation = std::nullopt;
+        return stat;
+    }
 
     return reportStatError(start, {}, {}, "'export' must be followed by an identifier or 'function'");
 }
@@ -4805,7 +5867,14 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
             : parseGenericTypeList(/* withDefaultValues= */ false);
 
     MatchLexeme matchParen = lexer.current();
-    expectAndConsume('(', "function");
+
+    // Luwu: `function` ending its line above code that isn't its parameter list (`local f = function` above
+    // `total += 1`): one error, on its own line, and no parameters, instead of reading the next line as them
+    bool paramsMissing = lexer.current().type != '(' && !continuesOnSameLine();
+    if (paramsMissing && !statementReportedError())
+        report(lexer.previousLocation(), "Expected '(' when parsing function");
+    else
+        expectAndConsume('(', "function");
 
     // NOTE: This was added in conjunction with passing `searchForMissing` to
     // `expectMatchAndConsume` inside `parseTableType` so that the behavior of
@@ -4825,7 +5894,7 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
     Location varargLocation;
     AstTypePack* varargAnnotation = nullptr;
 
-    if (lexer.current().type != ')')
+    if (!paramsMissing && lexer.current().type != ')')
     {
         std::optional<DeclaredParameters> declaredParameters;
         if (signatureOnly)
@@ -4860,7 +5929,8 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
     if (matchParen.type == Lexeme::Type('(') && lexer.current().type == Lexeme::Type(')'))
         argLocation = Location(matchParen.position, lexer.current().location.end);
 
-    expectMatchAndConsume(')', matchParen, true);
+    if (!paramsMissing)
+        expectMatchAndConsume(')', matchParen, true);
 
     matchRecoveryStopOnToken[')']--;
 
@@ -4974,7 +6044,13 @@ Parser::Binding Parser::parseBinding(bool isConst, bool allowDefault, bool allow
     if (FFlag::LuwuAttributesEverywhere && allowAttributes && attributesFollow())
         attributes = parseAttributes(AstAttr::Context::Parameter);
 
-    std::optional<Name> name = parseNameOpt("variable name");
+    std::optional<Name> name;
+
+    // Luwu: `local` above `total += 1`, read by upstream as `local total` and a stray `+= 1`
+    if (nextLineStartsStatement(cantFollowBindingName))
+        report(lexer.previousLocation(), "Expected a variable name; the next line starts a new statement");
+    else
+        name = parseNameBeforeDeclaration("variable name");
 
     // Use placeholder if the name is missing
     if (!name)
@@ -5076,7 +6152,26 @@ LUAU_NOINLINE std::tuple<bool, Location, AstTypePack*> Parser::parseBindingList(
             return {true, varargLocation, tailAnnotation};
         }
 
-        result.push_back(parseBinding(isConst, allowDefault, allowAttributes));
+        // Luwu Destructuring (rfcs/destructuring.md): a pattern where only names are allowed. Parsed and dropped,
+        // so the error is the only one.
+        if (destructurePatternFollows())
+        {
+            Location patternStart = lexer.current().location;
+            DestructureTarget ignored;
+            parseDestructurePattern(ignored);
+
+            // Only parameter lists allow `...`
+            const char* message = "A destructuring pattern has to be the only binding in its declaration";
+            if (allowDot3)
+                message = "Destructuring isn't supported in function parameters; destructure the parameter in the body";
+
+            report(Location(patternStart, lexer.previousLocation()), "%s", message);
+            result.push_back(Binding(Name(nameError, patternStart)));
+        }
+        else
+        {
+            result.push_back(parseBinding(isConst, allowDefault, allowAttributes));
+        }
 
         if (lexer.current().type != ',')
             break;
@@ -5096,6 +6191,14 @@ AstType* Parser::parseOptionalType()
     if (lexer.current().type == ':')
     {
         nextLexeme();
+
+        // Luwu: `local a:` above `total += 1`, read by upstream as the type `total` and a stray `+= 1`
+        if (nextLineStartsStatement(cantFollowTypeName))
+        {
+            report(lexer.previousLocation(), "Expected a type; the next line starts a new statement");
+            return missingTypeHere();
+        }
+
         return parseType();
     }
     else
@@ -5692,10 +6795,19 @@ AstType* Parser::parseFunctionTypeTail(
 {
     incrementRecursionCounter("type annotation");
 
+    bool returnTypeFollows = true;
     if (lexer.current().type == ':')
     {
         report(lexer.current().location, "Return types in function type annotations are written after '->' instead of ':'");
         lexer.next();
+    }
+    else if (lexer.current().type == '-')
+    {
+        // Luwu: `(number) -` is an arrow half typed: report the arrow, and take the `-` so it doesn't start a statement.
+        // Upstream also reports the missing return type and the stray `-`.
+        expectAndConsumeFail(Lexeme::SkinnyArrow, "function type");
+        nextLexeme();
+        returnTypeFollows = false;
     }
     // Users occasionally write '()' as the 'unit' type when they actually want to use 'nil', here we'll try to give a more specific error
     else if (lexer.current().type != Lexeme::SkinnyArrow && generics.size == 0 && genericPacks.size == 0 && params.size == 0)
@@ -5706,10 +6818,24 @@ AstType* Parser::parseFunctionTypeTail(
     }
     else
     {
-        expectAndConsume(Lexeme::SkinnyArrow, "function type");
+        // Luwu: `(number, string` with no `->` yet reports only the arrow; unless the line goes on, the return type
+        // isn't parsed from the next line's code. Upstream reports a second error there and spans the type into the
+        // next statement.
+        returnTypeFollows = consumeExpected(Lexeme::SkinnyArrow, "function type") || continuesOnSameLine();
     }
 
-    auto returnType = parseReturnType();
+    AstTypePack* returnType = nullptr;
+    if (returnTypeFollows)
+    {
+        returnType = parseReturnType();
+    }
+    else
+    {
+        AstType* missing = missingTypeHere();
+        returnType = allocator.alloc<AstTypePackExplicit>(missing->location, AstTypeList{copy(&missing, 1), nullptr});
+        if (options.storeCstData)
+            cstNodeMap[returnType] = allocator.alloc<CstTypePackExplicit>();
+    }
     LUAU_ASSERT(returnType);
     AstType* errorHint = parseOptionalErrorHint(errorHintPosition);
     Location end = errorHint ? errorHint->location : returnType->location;
@@ -6426,7 +7552,27 @@ AstExpr* Parser::parsePrimaryExpr(bool asStatement)
 
     while (true)
     {
-        if (lexer.current().type == '.')
+        if (dotTableFollows())
+        {
+            // Luwu Destructuring (rfcs/destructuring.md): `f.{x}` calls `f` with a `.{x}` table, like `f{x = x}`. At the
+            // start of a statement, `const .{` starts a destructuring declaration, and `name.{x} = t` is one missing
+            // its keyword.
+            AstName name = getIdentifier(expr);
+            bool bareName = expr->is<AstExprGlobal>() || expr->is<AstExprLocal>();
+            bool declarationKeyword = name == "const" || name == "type";
+            bool startsDestructuring = asStatement && bareName && (declarationKeyword || destructuringAssignmentFollows());
+            if (startsDestructuring)
+                break;
+
+            expr = parseFunctionArgs(expr, false);
+        }
+        else if (positionalPatternFollows() && asStatement && (expr->is<AstExprGlobal>() || expr->is<AstExprLocal>()))
+        {
+            // Luwu Destructuring (rfcs/destructuring.md): `name.(` can't continue an expression, so at the start of a
+            // statement it's `const .(a, b)` or a positional destructuring missing its keyword
+            break;
+        }
+        else if (lexer.current().type == '.')
         {
             Position opPosition = lexer.current().location.begin;
             nextLexeme();
@@ -6825,6 +7971,10 @@ AstExpr* Parser::parseSimpleExpr()
     {
         return parseTableConstructor();
     }
+    else if (dotTableFollows() || dotTableMissingBraceFollows())
+    {
+        return parseDotTableConstructor();
+    }
     else if (lexer.current().type == Lexeme::ReservedIf)
     {
         return parseIfElseExpr();
@@ -6832,6 +7982,22 @@ AstExpr* Parser::parseSimpleExpr()
     else if (tryExpressionFollows())
     {
         return parseTryExpr();
+    }
+    else if (startsConstDeclaration() || startsTypeAliasDeclaration())
+    {
+        // Luwu: the value is missing, and the next line declares a constant or a type (`local x =` above `const y = 1`
+        // or `type Line = {`). Upstream reads `const` or `type` as a global and the rest of the line as a second
+        // statement, which cascades into type errors and lints on code the user hasn't touched. The statement loop
+        // parses the declaration.
+        reportNameError("expression");
+        return allocator.alloc<AstExprError>(start, copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
+    }
+    else if (nextLineStartsStatement(cantFollowValueName))
+    {
+        // Luwu: `total =` above `total += 1`, read by upstream as `total = total` and a stray `+= 1`
+        Location before = lexer.previousLocation();
+        report(before, "Expected a value; the next line starts a new statement");
+        return allocator.alloc<AstExprError>(Location(before.end, before.end), copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
     }
     else
     {
@@ -6962,10 +8128,10 @@ AstExpr* Parser::parseFunctionArgs(AstExpr* func, bool self)
             );
         return node;
     }
-    else if (lexer.current().type == '{')
+    else if (lexer.current().type == '{' || dotTableFollows())
     {
         Position argStart = lexer.current().location.end;
-        AstExpr* expr = parseTableConstructor();
+        AstExpr* expr = lexer.current().type == '{' ? parseTableConstructor() : parseDotTableConstructor();
         Position argEnd = lexer.previousLocation().end;
 
         AstExprCall* node = allocator.alloc<AstExprCall>(
@@ -7146,12 +8312,18 @@ AstExpr* Parser::parseTableConstructor()
             }
         }
 
+        // Luwu: a new line declaring a constant or a type ends an unclosed table, so the statement loop parses the
+        // declaration. Read as the next element, it would loop forever: parseExpr reports it without consuming it.
+        // Upstream has no such recovery and reads `const` as a global.
+        bool declarationFollows = startsConstDeclaration() || startsTypeAliasDeclaration();
+        bool elementFollows = (lexer.current().type == '[' || lexer.current().type == Lexeme::Name) &&
+                              (FFlag::LuauTableEntriesDontNeedToMatchIndent ? true : lexer.current().location.begin.column == lastElementIndent_DEPRECATED);
+
         if (lexer.current().type == ',' || lexer.current().type == ';')
         {
             nextLexeme();
         }
-        else if ((lexer.current().type == '[' || lexer.current().type == Lexeme::Name) &&
-                 (FFlag::LuauTableEntriesDontNeedToMatchIndent ? true : lexer.current().location.begin.column == lastElementIndent_DEPRECATED))
+        else if (elementFollows && !declarationFollows)
         {
             report(lexer.current().location, "Expected ',' after table constructor element");
         }
@@ -7172,6 +8344,155 @@ AstExpr* Parser::parseTableConstructor()
     return node;
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): `.{x, y = v}` is `{x = x, y = v}`, building a table the way
+// `local .{x, y} = t` takes one apart. A bare name is a field named after it, so `.{x}` is never an array.
+AstExpr* Parser::parseDotTableConstructor()
+{
+    Location start = lexer.current().location;
+    nextLexeme(); // .
+
+    Position openBracePosition = lexer.current().location.begin;
+    checkLuwuFeature(Location(start, lexer.current().location), kDotTableFeature, FFlag::LuwuDestructuring);
+
+    // A `.` alone where an expression goes is a `.{...}` table whose `{` isn't typed yet. It becomes an empty table at
+    // the `.`, so the rest of the statement still parses and autocomplete knows not to offer expressions there.
+    if (lexer.current().type != '{')
+    {
+        report(start, "%s", kDotTableMissingBraceError);
+
+        AstExprTable* node = allocator.alloc<AstExprTable>(start, AstArray<AstExprTable::Item>{nullptr, 0});
+        node->luwuOnly = true;
+        if (options.storeCstData)
+        {
+            CstExprTable* cstNode = allocator.alloc<CstExprTable>(AstArray<CstExprTable::Item>{nullptr, 0});
+            cstNode->dotPosition = start.begin;
+            cstNodeMap[node] = cstNode;
+        }
+        return node;
+    }
+
+    TempVector<AstExprTable::Item> items(scratchItem);
+    TempVector<CstExprTable::Item> cstItems(scratchCstItem);
+
+    auto fieldKey = [this](AstName name, const Location& location) -> AstExpr*
+    {
+        AstArray<char> nameString{const_cast<char*>(name.value), strlen(name.value)};
+        return allocator.alloc<AstExprConstantString>(location, nameString, AstExprConstantString::QuoteStyle::Unquoted);
+    };
+
+    MatchLexeme matchBrace = lexer.current();
+    expectAndConsume('{', "table literal");
+
+    while (lexer.current().type != '}')
+    {
+        Position elementStart = lexer.current().location.begin;
+        bool nameFollows = lexer.current().type == Lexeme::Name;
+        bool explicitValue = nameFollows && lexer.lookahead().type == '=';
+        bool renaming = nameFollows && lexer.lookahead().type == Lexeme::Name && AstName(lexer.lookahead().name) == "as";
+        Position equalsPosition = Position::missing();
+
+        if (explicitValue || renaming)
+        {
+            Name name = parseName("table field");
+
+            AstExpr* value = nullptr;
+            if (explicitValue)
+            {
+                equalsPosition = lexer.current().location.begin;
+                nextLexeme();
+                value = parseExpr();
+            }
+            else
+            {
+                nextLexeme(); // as
+                Name target = parseName("table field");
+                report(
+                    Location(name.location, target.location),
+                    "'as' renames only when destructuring; to build the field '%s' from '%s', write '%s = %s'",
+                    target.name.value,
+                    name.name.value,
+                    target.name.value,
+                    name.name.value
+                );
+                value = allocator.alloc<AstExprError>(name.location, AstArray<AstExpr*>{}, unsigned(parseErrors.size() - 1));
+            }
+
+            AstExpr* key = fieldKey(name.name, name.location);
+
+            if (AstExprFunction* func = value->as<AstExprFunction>())
+                func->debugname = name.name;
+
+            items.push_back({AstExprTable::Item::Kind::Record, key, value});
+        }
+        else if (lexer.current().type == '[')
+        {
+            Position keyStart = lexer.current().location.begin;
+            MatchLexeme matchBracket = lexer.current();
+            nextLexeme();
+
+            AstExpr* key = parseExpr();
+            expectMatchAndConsume(']', matchBracket);
+            expectAndConsume('=', "table field");
+            AstExpr* value = parseExpr();
+
+            report(Location(keyStart, value->location.end), "%s", kDotTableFieldError);
+            items.push_back({AstExprTable::Item::Kind::General, key, value});
+        }
+        else
+        {
+            AstExpr* value = parseExpr();
+
+            if (nameFollows && (value->is<AstExprLocal>() || value->is<AstExprGlobal>()))
+            {
+                items.push_back({AstExprTable::Item::Kind::Record, fieldKey(getIdentifier(value), value->location), value});
+            }
+            else
+            {
+                report(value->location, "%s", kDotTableFieldError);
+                items.push_back({AstExprTable::Item::Kind::List, nullptr, value});
+            }
+        }
+
+        if (options.storeCstData)
+        {
+            CstExprTable::Separator separator = tableSeparator();
+            Position separatorPosition = separator == CstExprTable::Separator::Missing ? Position::missing() : lexer.current().location.begin;
+            cstItems.push_back({Position::missing(), Position::missing(), equalsPosition, separator, separatorPosition});
+        }
+
+        // A new line declaring a constant ends an unclosed table, so the statement loop parses it. So does any element
+        // that consumed nothing: parseExpr reports a declaration without consuming it, and reading it as the next element
+        // would loop forever.
+        bool consumedNothing = lexer.current().location.begin == elementStart;
+        bool tableEnds = consumedNothing || startsConstDeclaration();
+
+        if (lexer.current().type == ',' || lexer.current().type == ';')
+            nextLexeme();
+        else if (lexer.current().type == Lexeme::Name && !tableEnds)
+            report(lexer.current().location, "Expected ',' after table constructor element");
+        else if (lexer.current().type != '}')
+            break;
+    }
+
+    Location end = lexer.current().location;
+
+    if (!expectMatchAndConsume('}', matchBrace))
+        end = lexer.previousLocation();
+
+    AstExprTable* node = allocator.alloc<AstExprTable>(Location(start, end), copy(items));
+    node->luwuOnly = true;
+
+    if (options.storeCstData)
+    {
+        CstExprTable* cstNode = allocator.alloc<CstExprTable>(copy(cstItems));
+        cstNode->dotPosition = start.begin;
+        cstNode->openBracePosition = openBracePosition;
+        cstNodeMap[node] = cstNode;
+    }
+
+    return node;
+}
+
 AstExpr* Parser::parseIfElseExpr()
 {
     bool hasElse = false;
@@ -7179,7 +8500,11 @@ AstExpr* Parser::parseIfElseExpr()
 
     nextLexeme(); // skip if / elseif
 
+    size_t errorsBefore = parseErrors.size();
     AstExpr* condition = parseExpr();
+
+    if (lexer.current().type != Lexeme::ReservedThen && !continuesOnSameLine())
+        return unfinishedIfElseExpr(start, condition, errorsBefore, "then", /* hasThen= */ false);
 
     bool hasThen = expectAndConsume(Lexeme::ReservedThen, "if then else expression");
     std::optional<Location> thenLocation = hasThen ? std::optional<Location>(lexer.previousLocation()) : std::nullopt;
@@ -7187,6 +8512,10 @@ AstExpr* Parser::parseIfElseExpr()
 
     AstExpr* trueExpr = parseExpr();
     AstExpr* falseExpr = nullptr;
+
+    bool elseFollows = lexer.current().type == Lexeme::ReservedElse || lexer.current().type == Lexeme::ReservedElseif;
+    if (!elseFollows && !continuesOnSameLine())
+        return unfinishedIfElseExpr(start, condition, errorsBefore, "else", hasThen, trueExpr, thenLocation);
 
     Position elsePosition = lexer.current().location.begin;
     // An `elseif` clause parses into a nested AstExprIfElse whose own ifLocation is the `elseif`
@@ -7219,6 +8548,33 @@ AstExpr* Parser::parseIfElseExpr()
     return node;
 }
 
+// Luwu: an if-else expression still being typed above the next statement (`local a = if c` above `total += 1`). It gets
+// one error, on its own line, and stops there; upstream reports each missing part on the next line's code. `keyword`
+// is the first part missing; nothing is reported when its parts already did.
+AstExpr* Parser::unfinishedIfElseExpr(
+    const Location& start,
+    AstExpr* condition,
+    size_t errorsBefore,
+    const char* keyword,
+    bool hasThen,
+    AstExpr* trueExpr,
+    std::optional<Location> thenLocation
+)
+{
+    if (parseErrors.size() == errorsBefore)
+        report(lexer.previousLocation(), "Expected '%s' when parsing if then else expression", keyword);
+
+    Position stop = lexer.previousLocation().end;
+    AstExpr* missing = allocator.alloc<AstExprError>(Location(stop, stop), copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
+
+    AstExprIfElse* node = allocator.alloc<AstExprIfElse>(
+        Location(start.begin, stop), condition, hasThen, trueExpr ? trueExpr : missing, false, missing, start, thenLocation, std::nullopt
+    );
+    if (options.storeCstData)
+        cstNodeMap[node] = allocator.alloc<CstExprIfElse>(thenLocation ? thenLocation->begin : Position::missing(), Position::missing(), false);
+    return node;
+}
+
 // Name
 std::optional<Parser::Name> Parser::parseNameOpt(const char* context)
 {
@@ -7247,9 +8603,23 @@ Parser::Name Parser::parseName(const char* context)
     return Name(nameError, location);
 }
 
+// Luwu: parseNameOpt for a name that may not be typed yet. A new line starting with `const name` or a type alias is the
+// next declaration, so the name is reported missing instead of read as `const` or `type` (`t.` or `local` above
+// `const y = 1`).
+std::optional<Parser::Name> Parser::parseNameBeforeDeclaration(const char* context)
+{
+    if (startsConstDeclaration() || startsTypeAliasDeclaration())
+    {
+        reportNameError(context);
+        return {};
+    }
+
+    return parseNameOpt(context);
+}
+
 Parser::Name Parser::parseIndexName(const char* context, const Position& previous)
 {
-    if (std::optional<Name> name = parseNameOpt(context))
+    if (std::optional<Name> name = parseNameBeforeDeclaration(context))
         return *name;
 
     // If we have a reserved keyword next at the same line, assume it's an incomplete name
@@ -7880,6 +9250,116 @@ bool Parser::expectAndConsume(Lexeme::Type type, const char* context)
 
     nextLexeme();
     return true;
+}
+
+// Luwu: a type the user hasn't written yet, for an error already reported. It sits where the code so far stops, so the
+// node doesn't reach into the next line's code.
+AstTypeError* Parser::missingTypeHere()
+{
+    Position stop = lexer.previousLocation().end;
+    return allocator.alloc<AstTypeError>(Location(stop, stop), AstArray<AstType*>{}, /* isMissing= */ true, unsigned(parseErrors.size() - 1));
+}
+
+// Luwu: whether the next token is on the line where the code so far stops
+bool Parser::continuesOnSameLine()
+{
+    return lexer.current().location.begin.line == lexer.previousLocation().end.line;
+}
+
+// Luwu: whether a new line starts with `const name` where a value or name was expected. Valid Luau <= 0.730 could read
+// that as a global named `const` followed by a statement on its line; Luwu reads it as a declaration, as KeywordShadow
+// already warns it will.
+bool Parser::startsConstDeclaration()
+{
+    // called for every name the parser meets, so it only looks ahead past a `const`
+    Lexeme current = lexer.current();
+    bool isConst = current.type == Lexeme::Name && AstName(current.name) == "const";
+    if (!isConst)
+        return false;
+
+    Lexeme next = lexer.lookahead();
+    bool nameFollows = next.type == Lexeme::Name && next.location.begin.line == current.location.end.line;
+
+    return nameFollows && !continuesOnSameLine();
+}
+
+// Luwu: whether a new line starts a type alias (`type Name =`, `type Name<`, `type function`, `export type`) where a
+// value or name was expected. Valid Luau <= 0.730 could read `type` there as the global function followed by a
+// statement on its line (`Name = {}`); Luwu reads it as the declaration it looks like, as for `const`.
+bool Parser::startsTypeAliasDeclaration()
+{
+    // called for every name the parser meets, so it only looks ahead past a `type` or `export`
+    const Lexeme& current = lexer.current();
+    if (current.type != Lexeme::Name)
+        return false;
+
+    AstName word(current.name);
+    if ((word != "type" && word != "export") || continuesOnSameLine())
+        return false;
+
+    Lexer probe = lexer;
+    auto advance = [&probe]() -> const Lexeme&
+    {
+        const Lexeme* next = &probe.next();
+        while (next->type == Lexeme::Comment || next->type == Lexeme::BlockComment)
+            next = &probe.next();
+        return *next;
+    };
+
+    unsigned int line = current.location.begin.line;
+    const Lexeme* next = &advance();
+    if (word == "export")
+    {
+        if (next->type != Lexeme::Name || AstName(next->name) != "type" || next->location.begin.line != line)
+            return false;
+        next = &advance();
+    }
+
+    if (next->location.begin.line != line)
+        return false;
+    if (next->type == Lexeme::ReservedFunction)
+        return true;
+    if (next->type != Lexeme::Name)
+        return false;
+
+    Lexeme::Type after = advance().type;
+    return after == '=' || after == '<';
+}
+
+// Luwu: the statement being parsed already reported an error (`local function` with no name yet), so what follows
+// from it isn't reported again
+bool Parser::statementReportedError()
+{
+    return !parseErrors.empty() && statementStart <= parseErrors.back().getLocation().begin;
+}
+
+// Luwu: the next line is a statement of its own, though the one being parsed still needs a value or name. It starts
+// with a name, isn't indented past the statement being parsed, and the token after the name can't continue this
+// statement. Code like that fails to parse either way: this only decides where the error goes, so the next line parses
+// on its own instead of being read into the unfinished one. Valid code parses the same however it's indented.
+bool Parser::nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName))
+{
+    const Lexeme& current = lexer.current();
+    if (current.type != Lexeme::Name || continuesOnSameLine())
+        return false;
+
+    bool indentedPastStatement = current.location.begin.column > statementStart.column;
+    if (indentedPastStatement)
+        return false;
+
+    Lexeme afterName = lexer.lookahead();
+    bool sameLine = afterName.location.begin.line == current.location.end.line;
+    return sameLine && cantContinue(afterName);
+}
+
+// Luwu: expectAndConsume, returning whether the token was consumed: true also when it came after one stray token, which
+// expectAndConsume skips but reports as false. A caller that stops parsing at a missing token uses this to tell whether
+// what follows the token is there to parse.
+bool Parser::consumeExpected(Lexeme::Type type, const char* context)
+{
+    bool present = lexer.current().type == type || lexer.lookahead().type == type;
+    expectAndConsume(type, context);
+    return present;
 }
 
 // LUAU_NOINLINE is used to limit the stack cost due to std::string objects, and to increase caller performance since this code is cold

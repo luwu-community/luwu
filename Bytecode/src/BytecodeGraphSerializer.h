@@ -597,6 +597,10 @@ struct BytecodeGraphSerializer
             // Luwu try expressions: the parser refuses functions with protected ranges
             LUAU_UNREACHABLE();
 
+        case LOP_GETPOSITIONAL:
+            bcb.emitABC(LOP_GETPOSITIONAL, getRegister(insnOp), getRegInput(insn, 0), getImmInt(insn, 1));
+            break;
+
         case LOP__COUNT:
             LUAU_UNREACHABLE();
         }

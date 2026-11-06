@@ -115,6 +115,7 @@ struct NativeContext
     const Instruction* (*executeINITTRAITS)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeWRAPRESULT)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeGETQUALIFIED)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
+    const Instruction* (*executeGETPOSITIONAL)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     void (*executeGETVARARGSMultRet)(lua_State* L, const Instruction* pc, StkId base, int rai) = nullptr;
     void (*executeGETVARARGSConst)(lua_State* L, StkId base, int rai, int b) = nullptr;
     const Instruction* (*executeDUPCLOSURE)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;

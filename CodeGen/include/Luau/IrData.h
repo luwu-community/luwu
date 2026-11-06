@@ -1068,6 +1068,13 @@ enum class IrCmd : uint8_t
     // D: Rn (trait)
     FALLBACK_GETQUALIFIED,
 
+    // Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL, through the interpreter's implementation. It can call
+    // an __index metamethod.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (dest)
+    // C: Rn (value)
+    FALLBACK_GETPOSITIONAL,
+
     // Instruction that passes value through, it is produced by constant folding and users substitute it with the value
     // A: operand of any type
     SUBSTITUTE,

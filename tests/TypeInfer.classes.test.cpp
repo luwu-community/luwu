@@ -9,6 +9,7 @@
 #include "Luau/Error.h"
 #include "Luau/StringUtils.h"
 #include "ScopedFlags.h"
+#include "Typewriter.h"
 #include "doctest.h"
 
 #include <algorithm>
@@ -17,6 +18,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(LuauHigherOrderGenericInference)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
@@ -2866,6 +2868,174 @@ end
     CHECK_EQ(missing->key, "name");
     REQUIRE_EQ(missing->missing.size(), 1);
     CHECK_EQ(toString(missing->missing[0]), "Dog");
+}
+
+// Luwu Classes (rfcs/classes): a field holding `nil` shows up as `none` in `class.fields`, so `nil` in its type is `none`
+TEST_CASE_FIXTURE(ClassesFixture, "class_fields_types_nil_as_none")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    CheckResult result = check(R"(
+class Profile
+    name = "Ada"
+    nickname: string? = nil
+    gone: nil = nil
+end
+local fields = class.fields(Profile())
+local nickname = fields.nickname
+local name = fields.name
+local gone = fields.gone
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("nickname")), "none | string");
+    CHECK_EQ(toString(requireType("name")), "string");
+    CHECK_EQ(toString(requireType("gone")), "none");
+}
+
+// Luwu: a table in the union that the class can't fit (its `display` method against a `display` field) doesn't take the
+// class out of the true branch
+TEST_CASE_FIXTURE(ClassesFixture, "isinstance_keeps_the_class_beside_a_disjoint_table")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    CheckResult result = check(R"(
+type Input = { padding: string?, display: ("flex" | "grid")? }
+type Other = { margin: string? }
+class Box
+    names: { string } = {}
+    function display(self): string
+        return "box"
+    end
+end
+local function merge(v: Box | Input)
+    if class.isinstance(v, Box) then
+        local x = v
+    end
+end
+local function merge_many(v: Box | Input | Other)
+    if class.isinstance(v, Box) then
+        local y = v
+    end
+end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireTypeAtPosition({11, 18})), "Box");
+    CHECK_EQ(toString(requireTypeAtPosition({16, 18})), "Box");
+}
+
+// Luwu: a default is checked like a local's value, so `{}` fits a table type whose fields are all optional
+TEST_CASE_FIXTURE(ClassesFixture, "empty_table_default_for_an_all_optional_record")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag defaultArguments{FFlag::LuwuDefaultArguments, true};
+    CheckResult result = check(R"(
+type Input = { padding: string?, margin: string? }
+local function plain(_x: Input = {}) end
+class Box() end
+local function either(_x: Box | Input = {}) end
+class Rule(public selector: string, public style: Box | Input = {}) end
+local function wrong(_x: Input = { padding = 1 }) end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 6);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a positional pattern on an object reads its primary constructor's fields
+TEST_CASE_FIXTURE(ClassesFixture, "positional_destructuring_binds_the_primary_constructors_fields")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}, {FFlag::LuwuGenericNominals, true}};
+    CheckResult result = check(R"(
+class Cat(name: string, age: number) end
+class Box<T>(item: T, count: number) end
+class Dog(barks: boolean) end
+class Frame(name, size)
+    public size: number
+    public name: string
+end
+
+const .(cat_name, cat_age) = Cat("Taz", 12)
+const .(item) = Box("hello", 2)
+const .(frame_name, frame_size) = Frame("f", 2)
+const .(a, b) = { "hi", "there" }
+local function first(v: Cat | Dog)
+    const .(f) = v
+    return f
+end
+local either = first(Dog(true))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("cat_name")), "string");
+    CHECK_EQ(toString(requireType("cat_age")), "number");
+    CHECK_EQ(toString(requireType("item")), "string");
+    CHECK_EQ(toString(requireType("frame_name")), "string");
+    CHECK_EQ(toString(requireType("frame_size")), "number");
+    CHECK_EQ(toString(requireType("a")), "string");
+    CHECK_EQ(toString(requireType("either")), "boolean | string");
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "positional_destructuring_needs_a_primary_constructor_with_that_position")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+    CheckResult result = check(R"(
+class Pod
+    x: number = 0
+end
+class Custom
+    x: number
+    function __init(self, x: number)
+        self.x = x
+    end
+end
+class Cat(name: string, age: number) end
+
+const .(p1, p2) = Pod()
+const .(c1) = Custom(1)
+const .(n, a, extra) = Cat("Taz", 12)
+    )");
+
+    // one error per pattern on a class without a primary constructor, at its first element
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    for (const TypeError& error : result.errors)
+        REQUIRE(get<PositionalDestructuring>(error));
+
+    CHECK_EQ(result.errors[0].location.begin.line, 12);
+    CHECK_FALSE(get<PositionalDestructuring>(result.errors[0])->parameters);
+    CHECK_EQ(result.errors[1].location.begin.line, 13);
+    CHECK_EQ(result.errors[2].location.begin.line, 14);
+    CHECK_EQ(get<PositionalDestructuring>(result.errors[2])->position, 2);
+    CHECK_EQ(get<PositionalDestructuring>(result.errors[2])->parameters->size(), 2);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "positional_destructuring_respects_private_fields")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+    CheckResult result = check(R"(
+class Key(public label: string, private secret: string)
+    public function both(self): string
+        const .(l, s) = self
+        return l .. s
+    end
+end
+
+const .(label, secret) = Key("a", "b")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<PrivatePropertyAccess>(result.errors[0]));
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typing_positional_destructuring")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+    const char* before = "class Cat(name: string, age: number) end\nlocal cats = { Cat(\"Taz\", 12) }\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+
+    checkTypewriting(*this, before, "const .(name, age) = Cat(\"Taz\", 12)", after);
+    checkTypewriting(*this, before, "local cat.(name, age: number) = Cat(\"Taz\", 12)", after);
+    checkTypewriting(*this, before, "for _, .(name, age) in cats do\n    print(name, age)\nend", after);
 }
 
 // Luwu: a callee with one `__call` signature is called like a function type, so a call with a wrong argument reports

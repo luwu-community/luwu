@@ -2869,6 +2869,13 @@ bool ConstraintSolver::tryDispatch(const HasIndexerConstraint& c, NotNull<const 
 
     if (btf.blocked)
         return block(*btf.blocked, constraint);
+
+    if (c.position)
+    {
+        if (std::optional<bool> dispatched = tryDispatchPositional(constraint, subjectType, *c.position, c.resultType))
+            return *dispatched;
+    }
+
     int recursionDepth = 0;
 
     Set<TypeId> seen{nullptr};
@@ -2881,6 +2888,63 @@ bool ConstraintSolver::tryDispatch(const HasIndexerConstraint& c, NotNull<const 
         unblock(subjectType, Location{});
 
     return result;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern on an object, or on a union of objects,
+// is the field each class's primary constructor takes at that position. A class without one, or without that position,
+// gives an error type here and an error from TypeChecker2. Returns nullopt when `subjectType` isn't made only of objects:
+// the element is then read like `t[i]`.
+std::optional<bool> ConstraintSolver::tryDispatchPositional(
+    NotNull<const Constraint> constraint,
+    TypeId subjectType,
+    size_t position,
+    TypeId resultType
+)
+{
+    std::vector<TypeId> options;
+    if (const UnionType* union_ = get<UnionType>(subjectType))
+    {
+        for (TypeId option : union_)
+            options.push_back(follow(option));
+    }
+    else
+    {
+        options.push_back(subjectType);
+    }
+
+    std::vector<TypeId> results;
+    for (TypeId option : options)
+    {
+        const ClassFieldUserData* data = getClassFieldUserData(option);
+        if (!data)
+            return std::nullopt;
+
+        if (!data->positionalFields || position >= data->positionalFields->size())
+        {
+            results.push_back(builtinTypes->errorType);
+            continue;
+        }
+
+        auto [blocked, result, _isIndex] = lookupTableProp(constraint, option, (*data->positionalFields)[position], ValueContext::RValue);
+        if (!blocked.empty())
+        {
+            for (TypeId blockedTy : blocked)
+                block(blockedTy, constraint);
+
+            return false;
+        }
+
+        results.push_back(result.value_or(builtinTypes->anyType));
+    }
+
+    TypeId result = results[0];
+    for (size_t i = 1; i < results.size(); ++i)
+        result = simplifyUnion(constraint->scope, constraint->location, result, results[i]);
+
+    bind(constraint, resultType, result);
+
+    unblock(subjectType, Location{});
+    return true;
 }
 
 bool ConstraintSolver::tryDispatch(const AssignPropConstraint& c, NotNull<const Constraint> constraint)
@@ -3817,6 +3881,44 @@ bool ConstraintSolver::tryDispatchIterableTable(TypeId iteratorTy, const Iterabl
     {
         unpack(builtinTypes->neverType);
         return true;
+    }
+
+    // Luwu: a local given a table in more than one place is a union of table types where those assignments join
+    // (`data = {}` in one branch of an `if` and `data = { ... }` in the other makes `{ R } | { R }`). When every member
+    // has an indexer, iterating the union gives the union of their keys and of their values. Upstream binds the loop's
+    // variables to the error type, which hides every mistake made with them.
+    if (const UnionType* options = get<UnionType>(iteratorTy))
+    {
+        TypeId keyTy = builtinTypes->neverType;
+        TypeId valueTy = builtinTypes->neverType;
+        bool indexed = true;
+
+        for (TypeId option : options)
+        {
+            option = follow(option);
+            if (isBlocked(option) && !force)
+                return block(option, constraint);
+
+            const TableType* table = get<TableType>(option);
+            if (table && table->state == TableState::Free && !force)
+                return block(option, constraint);
+
+            if (!table || !table->indexer)
+            {
+                indexed = false;
+                break;
+            }
+
+            keyTy = simplifyUnion(constraint->scope, constraint->location, keyTy, table->indexer->indexType);
+            valueTy = simplifyUnion(constraint->scope, constraint->location, valueTy, table->indexer->indexResultType);
+        }
+
+        if (indexed)
+        {
+            TypeId joined =
+                arena->addType(TableType{TableType::Props{}, TableIndexer{keyTy, valueTy}, TypeLevel{}, constraint->scope, TableState::Sealed});
+            return tryDispatchIterableTable(joined, c, constraint, force);
+        }
     }
 
     // Irksome: I don't think we have any way to guarantee that this table
