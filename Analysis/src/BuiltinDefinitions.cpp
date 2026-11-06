@@ -878,8 +878,11 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     {
         if (TableType* ctv = getMutable<TableType>(getGlobalBinding(globals, "class")))
         {
-            if (auto it = ctv->props.find("fields"); it != ctv->props.end() && it->second.readTy)
+            // Luwu class reflection (rfcs/classes): `class.fields` lists ClassMembers then, as declared
+            if (auto it = ctv->props.find("fields"); it != ctv->props.end() && it->second.readTy && !classReflectionEnabled())
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassFields>());
+            if (auto it = ctv->props.find("member"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassMember>());
             if (auto it = ctv->props.find("name"); it != ctv->props.end() && it->second.readTy)
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassName>());
             if (auto it = ctv->props.find("of"); it != ctv->props.end() && it->second.readTy)
@@ -2309,6 +2312,96 @@ bool MagicClassFields::infer(const MagicFunctionCallContext& context)
     asMutable(context.result)->ty.emplace<BoundTypePack>(resultPack);
 
     return true;
+}
+
+// Luwu class reflection (rfcs/classes): the object type of a class or object type, and the member `name` it has: a
+// field, or a function the class or its objects have. nullopt when either isn't known.
+static std::optional<Property> classMemberProperty(NotNull<BuiltinTypes> builtinTypes, TypeId classOrObject, const std::string& name)
+{
+    const ExternType* etv = get<ExternType>(follow(classOrObject));
+    if (!etv)
+        return std::nullopt;
+
+    const ExternType* instance = etv;
+    bool isClassValue = etv->root == builtinTypes->classType || etv->root == builtinTypes->traitType;
+    if (isClassValue && etv->relation)
+    {
+        if (const Obj* obj = get_if<Obj>(&*etv->relation))
+            instance = get<ExternType>(follow(obj->ty));
+    }
+
+    if (instance)
+    {
+        if (const Property* prop = findNominalMember(instance, name))
+            return *prop;
+    }
+
+    if (isClassValue)
+    {
+        if (const Property* prop = findNominalMember(etv, name))
+            return *prop;
+    }
+
+    return std::nullopt;
+}
+
+// The string a call's second argument is written as, when it's a literal
+static std::optional<std::string> literalMemberName(const AstExprCall* call)
+{
+    if (!call || call->args.size < 2)
+        return std::nullopt;
+
+    const AstExprConstantString* name = call->args.data[1]->as<AstExprConstantString>();
+    if (!name)
+        return std::nullopt;
+
+    return std::string(name->value.data, name->value.size);
+}
+
+std::optional<WithPredicate<TypePackId>> MagicClassMember::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicClassMember::infer(const MagicFunctionCallContext& context)
+{
+    const auto& [paramTypes, paramTail] = flatten(context.arguments);
+    std::optional<std::string> name = literalMemberName(context.callSite);
+    if (paramTypes.empty() || !name)
+        return false;
+
+    std::optional<Property> prop = classMemberProperty(context.solver->builtinTypes, paramTypes[0], *name);
+    std::optional<TypeFun> classMember = context.solver->rootScope->lookupType("ClassMember");
+    if (!prop || !prop->readTy || !classMember)
+        return false;
+
+    std::vector<TypeId> copiedReferences;
+    TypeId result = instantiateGenericNominal(context.solver->arena, classMember->type, {*prop->readTy}, {}, copiedReferences);
+    if (!copiedReferences.empty())
+        return false;
+
+    asMutable(context.result)->ty.emplace<BoundTypePack>(context.solver->arena->addTypePack({result}));
+    return true;
+}
+
+bool MagicClassMember::typeCheck(const MagicFunctionTypeCheckContext& context)
+{
+    // `arguments` has the parameters' declared types; the receiver's own type is the argument's
+    std::optional<std::string> name = literalMemberName(context.callSite);
+    TypeId* receiver = name ? context.typechecker->module->astTypes.find(context.callSite->args.data[0]) : nullptr;
+    if (!receiver)
+        return false;
+
+    bool known = get<ExternType>(follow(*receiver)) != nullptr;
+    if (known && !classMemberProperty(context.builtinTypes, *receiver, *name))
+        context.typechecker->reportError(UnknownProperty{*receiver, *name}, context.callSite->args.data[1]->location);
+
+    return false;
 }
 
 std::optional<WithPredicate<TypePackId>> MagicClassName::handleOldSolver(

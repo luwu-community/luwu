@@ -393,6 +393,33 @@ declare class: {
 }
 )CLASS_SRC";
 
+// Luwu class reflection (rfcs/classes): the class library with `class.member`, and `class.fields` listing ClassMembers
+// (lclasslib.cpp). `modifiers` is a bundle (`.("const")`) or `none`. It's `unknown` here: the bundle classes are types of
+// the `bundle` module, which these definitions can't name.
+static const char* kBuiltinDefinitionClassReflectionSrc = R"CLASS_SRC(
+export type ClassModifier = "const" | "final"
+
+class type ClassMember<T>(
+    public const name: string,
+    public const value: Option<T>,
+    public const modifiers: unknown,
+    public const visibility: "public" | "private",
+    public const positional: boolean
+)
+    public function get(self, object: unknown): T
+end
+
+declare class: {
+    isinstance: @checked (o: unknown, c: class) -> boolean,
+    implements: @checked (o: unknown, t: trait) -> boolean,
+    of: @checked (o: unknown) -> class?,
+    name: @checked (o: class | object | trait) -> string,
+    member: @checked (o: class | object, name: string) -> ClassMember<unknown>,
+    fields: @checked (o: class | object) -> { ClassMember<unknown> },
+    ClassMember: class<ClassMember>,
+}
+)CLASS_SRC";
+
 // Luwu collections: the `collections` library's classes. The VM builds them in C++ (lcollectionslib.cpp); these are
 // their public members, which the Conformance test `BuiltinClassDeclarationsMatchTheVm` checks against the VM's
 // classes. The types are the library's exports, not globals (registerBuiltinGlobals).
@@ -530,7 +557,8 @@ std::string getBuiltinDefinitionSource()
         result += kBuiltinDefinitionIntegerSrc;
     }
 
-    if (FFlag::LuwuClasses && FFlag::LuauAllowGlobalDeclarationToBeCalledClass)
+    bool classes = FFlag::LuwuClasses && FFlag::LuauAllowGlobalDeclarationToBeCalledClass;
+    if (classes && !classReflectionEnabled())
     {
         result += FFlag::LuwuTraits ? kBuiltinDefinitionClassTraitsSrc : kBuiltinDefinitionClassSrc;
     }
@@ -538,7 +566,16 @@ std::string getBuiltinDefinitionSource()
     if (resultLibraryEnabled())
         result += kBuiltinDefinitionResultSrc;
 
+    // Luwu class reflection (rfcs/classes): `ClassMember` holds an `Option`, so the class library comes after it
+    if (classes && classReflectionEnabled())
+        result += kBuiltinDefinitionClassReflectionSrc;
+
     return result;
+}
+
+bool classReflectionEnabled()
+{
+    return FFlag::LuwuTraits && FFlag::DebugLuwuCollections && resultLibraryEnabled();
 }
 
 bool resultLibraryEnabled()

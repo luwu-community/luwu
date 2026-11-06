@@ -6001,6 +6001,40 @@ TEST_CASE_FIXTURE(ClassesFixture, "implemented_hook_is_given_the_class")
     CHECK(get<UnknownProperty>(result.errors[1]));
 }
 
+// Luwu class reflection (rfcs/classes): `class.member` with a literal name has the member's type, and reports a name the
+// class doesn't have; `class.fields` lists ClassMembers
+TEST_CASE_FIXTURE(BuiltinsFixture, "class_member_has_the_members_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    CheckResult result = check(R"(
+        class Point(public const x: number, public y: string)
+        end
+
+        local p = Point(1, "a")
+        local x = class.member(Point, "x")
+        local n = x:get(p)
+        local name = class.fields(p)[1].name
+        local nope = class.member(p, "nope")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+    CHECK(get<UnknownProperty>(result.errors[0]));
+    CHECK_EQ(toString(requireType("x")), "ClassMember<number>");
+    CHECK_EQ(toString(requireType("n")), "number");
+    CHECK_EQ(toString(requireType("name")), "string");
+}
+
 // Luwu Traits (rfcs/classes/traits.md): a scoped function is read through the trait, and a class implements it with
 // `function Trait.name`; neither is a member of the class
 TEST_CASE_FIXTURE(ClassesFixture, "trait_scoped_functions_and_qualified_implementations")

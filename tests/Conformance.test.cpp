@@ -86,6 +86,7 @@ LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
@@ -4658,6 +4659,21 @@ TEST_CASE("UserdataDirectAccess")
 }
 
 // Luwu Traits (rfcs/classes/traits.md)
+// Luwu class reflection (rfcs/classes): class.member, class.fields and ClassMember
+TEST_CASE("ClassMembers")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    runConformance("class_members.luwu");
+}
+
 TEST_CASE("Traits")
 {
     ScopedFastFlag sffs[] = {
@@ -4819,6 +4835,8 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true},
     };
 
     Luau::NullFileResolver fileResolver;
@@ -4848,9 +4866,18 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
             continue;
         }
 
+        // Luwu class reflection (rfcs/classes): `ClassMember` is in the `class` table
+        const Luau::TableType* classLibrary = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "class")));
+        REQUIRE(classLibrary);
+
         bool isGlobal = kind == LUWU_BUILTIN_SOME || kind == LUWU_BUILTIN_OK || kind == LUWU_BUILTIN_ERR;
-        std::optional<Luau::TypeId> declared =
-            isGlobal ? std::optional<Luau::TypeId>(Luau::getGlobalBinding(frontend.globals, name.c_str())) : declaredClassValue(library, name);
+        std::optional<Luau::TypeId> declared;
+        if (isGlobal)
+            declared = Luau::getGlobalBinding(frontend.globals, name.c_str());
+        else if (kind == LUWU_BUILTIN_CLASSMEMBER)
+            declared = declaredClassValue(classLibrary, name);
+        else
+            declared = declaredClassValue(library, name);
         REQUIRE(declared);
         CHECK_EQ(declaredClassMembers(*declared), vmClassMembers(classdef));
     }

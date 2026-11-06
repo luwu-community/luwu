@@ -123,6 +123,9 @@ LUAI_FUNC bool luaR_isvminternalfunction(lua_State* L, const Closure* cl);
  */
 LUAI_FUNC bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl);
 
+// Luwu Classes (rfcs/classes): the closure of the Luwu code a VM-internal C function acts for, or NULL
+LUAI_FUNC const Closure* luaR_callinglua(lua_State* L);
+
 /**
  * Errors (via luaG_privateaccesserror) if the member at `offset` is private and `cl` is not one
  * of `classdef`'s own methods, or (via luaG_blockedinitaccesserror) if it is `__init`
