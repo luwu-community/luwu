@@ -98,9 +98,10 @@ struct LintWarning
         Code_DuplicateKey = 63,            // Luwu: a key or index repeated in a table literal (part of TableLiteral)
         Code_DuplicateProperty = 64,       // Luwu: a property declared twice in a table type (part of TableLiteral)
         Code_DuplicateReadWrite = 65,      // Luwu: a table type property given its read or write type twice (part of TableLiteral)
+        Code_ExtraArguments = 66,          // Luwu: a call to a written function passing more arguments than it takes
 
-        Code_LuaStringHelper = 66,         // Luwu: `s:sub(1, #p) == p` and the like, which `s:startswith(p)` and friends do
-        Code_StringOperations = 67,        // Luwu: a string library call that `""` makes pointless or wrong (`s:startswith("")`)
+        Code_LuaStringHelper = 67,         // Luwu: `s:sub(1, #p) == p` and the like, which `s:startswith(p)` and friends do
+        Code_StringOperations = 68,        // Luwu: a string library call that `""` makes pointless or wrong (`s:startswith("")`)
 
         Code__Count
     };
@@ -216,6 +217,7 @@ inline constexpr const char* kWarningNames[] = {
     "DuplicateKey",
     "DuplicateProperty",
     "DuplicateReadWrite",
+    "ExtraArguments",
     "LuaStringHelper",
     "StringOperations",
 };
