@@ -6299,12 +6299,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements
         list:extend({ 6, 7 })
         local queue = collections.VecDeque("a", "b")
         queue:pushfront("y", "z")
-        queue:extendback({ "c" })
+        queue:extend({ "c" })
         local map = collections.OrderedMap(bundle.pack("a", 1), bundle.pack("b", 2))
         local listed = collections.OrderedMap({ bundle.pack(true, "x") })
         local value = map:get("a")
         list:push(6, "seven")
-        queue:extendfront({ 1 })
+        queue:prepend({ 1 })
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
