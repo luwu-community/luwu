@@ -1468,17 +1468,17 @@ static int vecdequepushfront(lua_State* L)
     return 0;
 }
 
-static int vecdequeextendback(lua_State* L)
+static int vecdequeextend(lua_State* L)
 {
-    LuauObject* dq = checkdeque(L, "extendback");
-    addback(L, dq, listentries(L, dq, "extendback", 2));
+    LuauObject* dq = checkdeque(L, "extend");
+    addback(L, dq, listentries(L, dq, "extend", 2));
     return 0;
 }
 
-static int vecdequeextendfront(lua_State* L)
+static int vecdequeprepend(lua_State* L)
 {
-    LuauObject* dq = checkdeque(L, "extendfront");
-    addfront(L, dq, listentries(L, dq, "extendfront", 2));
+    LuauObject* dq = checkdeque(L, "prepend");
+    addfront(L, dq, listentries(L, dq, "prepend", 2));
     return 0;
 }
 
@@ -1657,8 +1657,8 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     {"storage", NULL, kPrivateField},
     {"pushfront", vecdequepushfront, 0, vecdequepushfrontfast},
     {"pushback", vecdequepushback, 0, vecdequepushbackfast},
-    {"extendfront", vecdequeextendfront, 0},
-    {"extendback", vecdequeextendback, 0},
+    {"extend", vecdequeextend, 0},
+    {"prepend", vecdequeprepend, 0},
     {"popfront", vecdequepopfront, 0, vecdequepopfrontfast},
     {"popback", vecdequepopback, 0, popbackfast},
     {"front", vecdequefront, 0, vecdequefrontfast},
