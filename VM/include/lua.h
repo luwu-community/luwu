@@ -565,6 +565,12 @@ LUA_API int lua_ismemberconst(lua_State* L, int idx, const char* membername);
 // if the member doesn't exist. Raises if the value at `idx` isn't a trait, class or object.
 LUA_API int lua_ismemberfinal(lua_State* L, int idx, const char* membername);
 LUA_API const char* lua_getclassname(lua_State* L, int idx);
+// Luwu Classes (rfcs/classes): `class.of` for embedders. Pushes the class of the object at `idx` and returns 1. Returns 0
+// and pushes nothing for any other value, a class included.
+LUA_API int lua_classof(lua_State* L, int idx);
+// Luwu Classes (rfcs/classes): `class.is` for embedders. Returns 1 if the value at `idx` is an object of exactly the class
+// at `classidx`, 0 otherwise. Raises if the value at `classidx` isn't a class.
+LUA_API int lua_classis(lua_State* L, int idx, int classidx);
 
 // Luwu bundles: lua_packbundle pops `n` values and pushes a bundle of them, as `bundle.pack` does; it raises past 12
 // values or when the bundle library (luaopen_bundle) isn't open. lua_unpackbundle pushes the values of the bundle at
