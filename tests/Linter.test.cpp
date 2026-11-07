@@ -5065,15 +5065,18 @@ local a = Paragraph("a", "b", "c")
 words("d", "e")
 -- already a table: the extras aren't more of the array
 words({ "f" }, "g")
-return a
+-- a call last counts as one argument
+local b = Paragraph("h", tostring(1))
+return a, b
 )");
 
     std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_ExtraArguments);
-    REQUIRE(3 == found.size());
+    REQUIRE(4 == found.size());
     CHECK_EQ(found[0].text, "'Paragraph' takes 1 argument but this call passes 3. Write 'Paragraph({ ... })' to pass them as one array");
     CHECK_EQ(found[0].location, Location(Position(11, 20), Position(11, 33)));
     CHECK_EQ(found[1].text, "'words' takes 1 argument but this call passes 2. Write 'words({ ... })' to pass them as one array");
     CHECK_EQ(found[2].text, "'words' takes 1 argument but this call passes 2");
+    CHECK_EQ(found[3].location, Location(Position(16, 20), Position(16, 36)));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "ExtraArgumentsLeavesUncountedCallsAlone")
@@ -5094,9 +5097,8 @@ local function forward(...: number)
 end
 local typed: (number?) -> () = one
 
--- `...` and a call last pass as many values as they give
+-- `...` passes whatever the caller passed
 forward(1, 2)
-one(1, any(2))
 any(1, 2, 3)
 -- a function passed as a value can be given more arguments: that's arity subtyping
 table.sort({ 3, 1 }, function(a: number, b: number): boolean
