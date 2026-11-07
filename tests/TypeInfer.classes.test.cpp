@@ -5730,6 +5730,40 @@ TEST_CASE_FIXTURE(ClassesFixture, "class_self_is_the_class")
     CHECK_EQ("Box<number>", toString(requireType("b")));
 }
 
+// Luwu Traits (rfcs/classes/traits.md): the value `Self` constructs the class in a class, and the receiver's class in a
+// trait method (through the trait's expected constructor)
+TEST_CASE_FIXTURE(ClassesFixture, "self_class_value_constructs")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    CheckResult result = check(R"(
+        trait Cloner
+            expect value: number
+            expect function __init(self, value: number)
+            function clone(self)
+                return Self(self.value)
+            end
+            function wrong(self)
+                return Self("one")
+            end
+        end
+
+        class Plain(value: number) implements Cloner
+            function twin(self)
+                return Self(self.value)
+            end
+        end
+
+        local cloned = Plain(1):clone()
+        local twin = Plain(1):twin()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+    CHECK_EQ("Plain", toString(requireType("cloned")));
+    CHECK_EQ("Plain", toString(requireType("twin")));
+}
+
 // Luwu Traits (rfcs/classes/traits.md): a type the code names `Self` itself, like a trait parameter, isn't replaced
 TEST_CASE_FIXTURE(ClassesFixture, "trait_parameter_named_self_wins")
 {
@@ -5791,6 +5825,29 @@ TEST_CASE_FIXTURE(ClassesFixture, "typing_trait_declarations")
     // `self.` with no name yet is also an incomplete statement, a plain-Luau cascade that fix-existing-cascades (#63)
     // removes
     checkTypewriting(*this, before, access, kTraitTypewriterAfter, {"Incomplete statement"});
+}
+
+// Luwu Traits (rfcs/classes/traits.md): typing `Self` values doesn't cascade
+TEST_CASE_FIXTURE(ClassesFixture, "typing_self_class_values")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+    const char* before = "local a = 1\n";
+
+    const char* inTrait = "trait Cloner\n"
+                          "    expect value: number\n"
+                          "    expect function __init(self, value: number)\n"
+                          "    function clone(self)\n"
+                          "        return Self(self.value)\n"
+                          "    end\n"
+                          "end";
+    checkTypewriting(*this, before, inTrait, kTraitTypewriterAfter);
+
+    const char* inClass = "class Point(x: number)\n"
+                          "    function copy(self): Point\n"
+                          "        return Self(self.x)\n"
+                          "    end\n"
+                          "end";
+    checkTypewriting(*this, before, inClass, kTraitTypewriterAfter);
 }
 
 // Luwu Traits (rfcs/classes/traits.md): an unannotated `__implemented` is given a `class<Trait>`, the hook isn't a member of

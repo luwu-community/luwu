@@ -9,6 +9,8 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 
 struct DocumentationSymbolFixture : BuiltinsFixture
 {
@@ -199,6 +201,33 @@ TEST_CASE_FIXTURE(DocumentationSymbolFixture, "parent_class_method")
     );
 
     CHECK_EQ(symbol, "@test/globaltype/Foo.bar");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is found as itself, not as the `class.of(self)` call it holds
+TEST_CASE_FIXTURE(Fixture, "self_class_value_is_found_as_itself")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    check(R"(
+trait Cloner
+    function kind(self)
+        return Self
+    end
+end
+    )");
+
+    Position position(3, 16);
+    AstNode* node = findNodeAtPosition(*getMainSourceModule(), position);
+    REQUIRE(node);
+    CHECK(node->is<AstExprSelfClass>());
+
+    AstExpr* expr = findExprAtPosition(*getMainSourceModule(), position);
+    REQUIRE(expr);
+    CHECK(expr->is<AstExprSelfClass>());
+
+    std::vector<AstNode*> ancestry = findAstAncestryOfPosition(*getMainSourceModule(), position);
+    REQUIRE(!ancestry.empty());
+    CHECK(ancestry.back()->is<AstExprSelfClass>());
 }
 
 TEST_SUITE_END();

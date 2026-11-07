@@ -220,6 +220,10 @@ struct CostVisitor : AstVisitor
         {
             return model(expr->expr);
         }
+        else if (AstExprSelfClass* expr = node->as<AstExprSelfClass>())
+        {
+            return model(expr->classOf);
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");

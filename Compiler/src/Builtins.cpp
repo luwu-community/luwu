@@ -425,6 +425,10 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
     if (FFlag::LuwuClasses && builtin.isMethod("class", "isinstance"))
         return LBF_CLASS_ISINSTANCE;
 
+    // Luwu Traits (rfcs/classes/traits.md): class.of(value), which `Self` in a trait method calls
+    if (FFlag::LuwuTraits && builtin.isMethod("class", "of"))
+        return LBF_CLASS_OF;
+
     return -1;
 }
 
@@ -642,6 +646,9 @@ BuiltinInfo getBuiltinInfo(int bfid)
 
     case LBF_CLASS_ISINSTANCE:
         return {2, 1};
+
+    case LBF_CLASS_OF:
+        return {1, 1};
 
     case LBF_BUNDLE_PACK:
         return {-1, 1}; // 0 to 12 parameters

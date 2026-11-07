@@ -451,6 +451,7 @@ private:
     // NAME
     AstExpr* parseNameExpr(const char* context = nullptr);
     AstExpr* nameExpr(const Name& name);
+    AstExpr* selfClassExpr(const Location& location);
     std::string printedQualifier(AstExpr* qualifier);
 
     // prefixexp -> NAME | '(' expr ')'
@@ -689,6 +690,8 @@ private:
     unsigned int recursionCounter;
 
     AstName nameSelf;
+    AstName nameSelfClass;
+    AstName nameOf;
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;
@@ -704,6 +707,23 @@ private:
     DenseHashMap<AstName, AstLocal*> localMap;
     std::vector<AstLocal*> localStack;
     DenseHashMap<AstName, AstStatClass*> classesWithinModule{{}};
+
+    // Luwu Traits (rfcs/classes/traits.md): the class or trait whose body is being parsed, which `Self` refers to
+    struct SelfClassContext
+    {
+        AstName name;
+        bool isTrait = false;
+        // The class statement's function depth. A local named `Self` declared deeper, inside the body, shadows `Self`.
+        size_t functionDepth = 0;
+        // Set while parsing one of the body's functions, together with that function's `self` if it takes one.
+        bool inFunction = false;
+        AstLocal* self = nullptr;
+        // A trait's AstStatClass::initSelf, made by the first `Self` in a field default
+        AstLocal* initSelf = nullptr;
+        // Set while parsing a trait's parameters, where `Self` is an error
+        bool inParameters = false;
+    };
+    std::optional<SelfClassContext> selfClass;
 
     std::vector<ParseError> parseErrors;
 

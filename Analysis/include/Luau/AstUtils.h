@@ -48,7 +48,7 @@ bool returnsSelf(AstExprFunction* fn, AstLocal* self);
 // self's class, and its body ends in one (so it never returns nothing)
 bool returnsOnlySelf(AstExprFunction* fn, AstLocal* self);
 
-// Luwu Traits (rfcs/classes/traits.md): `class.of(self)` called, the `self` it is the class of
+// Luwu Traits (rfcs/classes/traits.md): `class.of(self)` or `Self` called in a trait method, the `self` it is the class of
 AstLocal* newOfClassOf(AstExprCall* call);
 
 } // namespace Luau
