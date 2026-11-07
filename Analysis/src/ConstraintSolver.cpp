@@ -3087,6 +3087,13 @@ bool ConstraintSolver::tryDispatch(const HasIndexerConstraint& c, NotNull<const 
 
     if (btf.blocked)
         return block(*btf.blocked, constraint);
+
+    if (c.position)
+    {
+        if (std::optional<bool> dispatched = tryDispatchPositional(constraint, subjectType, *c.position, c.resultType))
+            return *dispatched;
+    }
+
     int recursionDepth = 0;
 
     Set<TypeId> seen{nullptr};
@@ -3099,6 +3106,63 @@ bool ConstraintSolver::tryDispatch(const HasIndexerConstraint& c, NotNull<const 
         unblock(subjectType, Location{});
 
     return result;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern on an object, or on a union of objects,
+// is the field each class's primary constructor takes at that position. A class without one, or without that position,
+// gives an error type here and an error from TypeChecker2. Returns nullopt when `subjectType` isn't made only of objects:
+// the element is then read like `t[i]`.
+std::optional<bool> ConstraintSolver::tryDispatchPositional(
+    NotNull<const Constraint> constraint,
+    TypeId subjectType,
+    size_t position,
+    TypeId resultType
+)
+{
+    std::vector<TypeId> options;
+    if (const UnionType* union_ = get<UnionType>(subjectType))
+    {
+        for (TypeId option : union_)
+            options.push_back(follow(option));
+    }
+    else
+    {
+        options.push_back(subjectType);
+    }
+
+    std::vector<TypeId> results;
+    for (TypeId option : options)
+    {
+        const ClassFieldUserData* data = getClassFieldUserData(option);
+        if (!data)
+            return std::nullopt;
+
+        if (!data->positionalFields || position >= data->positionalFields->size())
+        {
+            results.push_back(builtinTypes->errorType);
+            continue;
+        }
+
+        auto [blocked, result, _isIndex] = lookupTableProp(constraint, option, (*data->positionalFields)[position], ValueContext::RValue);
+        if (!blocked.empty())
+        {
+            for (TypeId blockedTy : blocked)
+                block(blockedTy, constraint);
+
+            return false;
+        }
+
+        results.push_back(result.value_or(builtinTypes->anyType));
+    }
+
+    TypeId result = results[0];
+    for (size_t i = 1; i < results.size(); ++i)
+        result = simplifyUnion(constraint->scope, constraint->location, result, results[i]);
+
+    bind(constraint, resultType, result);
+
+    unblock(subjectType, Location{});
+    return true;
 }
 
 bool ConstraintSolver::tryDispatch(const AssignPropConstraint& c, NotNull<const Constraint> constraint)

@@ -114,6 +114,7 @@ inline bool canInvalidateSafeEnv(IrCmd cmd)
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
     case IrCmd::FALLBACK_INITTRAITS:
     case IrCmd::FALLBACK_GETQUALIFIED:
+    case IrCmd::FALLBACK_GETPOSITIONAL:
         return true;
     default:
         break;

@@ -606,6 +606,9 @@ struct ClassUserData
 struct ClassFieldUserData final : ClassUserData
 {
     std::set<Name> fieldNames;
+    // Luwu Destructuring (rfcs/destructuring.md): the fields a positional pattern `.(a, b)` reads, the primary
+    // constructor's parameters in order. Unset when the class has no primary constructor.
+    std::optional<std::vector<Name>> positionalFields;
 };
 
 struct Obj

@@ -4723,6 +4723,18 @@ struct Compiler
                 shape.propertyFlags.emplace_back(flags);
                 shape.propertyDefaults.emplace_back(-1);
             }
+
+            // Luwu Destructuring (rfcs/destructuring.md): a positional pattern reads the parameters' fields in parameter
+            // order, which differs from member order when the body restates a parameter
+            shape.propertyPositions.assign(shape.propertyNames.size(), -1);
+
+            for (size_t i = 0; i < decl->primaryConstructor->args.size; ++i)
+            {
+                int offset = classInstanceMemberOffset(decl, decl->primaryConstructor->args.data[i]->name, /* forWrite= */ false);
+                LUAU_ASSERT(offset >= 0 && size_t(offset) < shape.propertyNames.size());
+                shape.propertyFlags[offset] |= LBC_CLASSMEMBER_POSITIONAL;
+                shape.propertyPositions[offset] = int32_t(i);
+            }
         }
 
         if (AstExprFunction* const* primaryInitFn = classPrimaryInitFn.find(decl))
@@ -6350,26 +6362,31 @@ struct Compiler
         }
 
         RegScope rs(this);
+        compileFieldRead(expr->expr, expr->index, expr->indexLocation, target, targetTemp, rs);
+    }
 
+    // `object.name`: everything compileExprIndexName does after trying an import chain
+    void compileFieldRead(AstExpr* object, AstName name, const Location& nameLocation, uint8_t target, bool targetTemp, RegScope& rs)
+    {
         uint8_t reg = target;
 
-        if (int localReg = getExprLocalReg(expr->expr); localReg >= 0) // Locals can be indexed directly
+        if (int localReg = getExprLocalReg(object); localReg >= 0) // Locals can be indexed directly
             reg = uint8_t(localReg);
         else if (targetTemp) // If target is a temp register, we can clobber it which allows us to compute the result directly into it
-            compileExprTemp(expr->expr, target);
+            compileExprTemp(object, target);
         else
-            reg = compileExprAuto(expr->expr, rs);
+            reg = compileExprAuto(object, rs);
 
-        setDebugLine(expr->indexLocation);
+        setDebugLine(nameLocation);
 
-        BytecodeBuilder::StringRef iname = sref(expr->index);
+        BytecodeBuilder::StringRef iname = sref(name);
         int32_t cid = bytecode.addConstantString(iname);
         if (cid < 0)
-            CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+            CompileError::raise(nameLocation, "Exceeded constant limit; simplify the code to compile");
 
         // Luwu Classes (rfcs/classes): a field of a proven receiver (see provenSelfMemberOffset) needs
         // none of GETTABLEKS's per-access work -- the class is proven, so the member's offset is a constant.
-        if (int offset = provenSelfMemberOffset(expr->expr, expr->index, /* forWrite= */ false); offset >= 0)
+        if (int offset = provenSelfMemberOffset(object, name, /* forWrite= */ false); offset >= 0)
         {
             bytecode.emitABC(LOP_GETOBJECTMEMBER, target, reg, 0);
             bytecode.emitAux(uint32_t(offset));
@@ -6379,7 +6396,47 @@ struct Compiler
         bytecode.emitABC(LOP_GETTABLEKS, target, reg, uint8_t(BytecodeBuilder::getStringHash(iname)));
         bytecode.emitAux(cid);
 
-        hintTemporaryExprRegType(expr->expr, reg, LBC_TYPE_TABLE, /* instLength */ 2);
+        hintTemporaryExprRegType(object, reg, LBC_TYPE_TABLE, /* instLength */ 2);
+    }
+
+    struct ProvenPositionalField
+    {
+        // The expression whose class is proven, which holds the same value as the pattern's
+        AstExpr* object = nullptr;
+        AstName field;
+    };
+
+    // Luwu Destructuring (rfcs/destructuring.md): the field a positional pattern reads from `object`, when this code
+    // proves its class (a method's `self`, a `class.isinstance` check, its construction) and that class's primary
+    // constructor has the position. Reading the field by name then does exactly what LOP_GETPOSITIONAL would.
+    std::optional<ProvenPositionalField> provenPositionalField(AstExpr* object, size_t position)
+    {
+        if (!FFlag::LuwuClasses || options.optimizationLevel < 1)
+            return std::nullopt;
+
+        ReceiverClass receiver = resolveReceiverClass(object);
+
+        // An unnamed pattern reads from a hidden local that holds the value, so a proof about the value's own local
+        // (`if class.isinstance(x, Cat) then const .(name) = x`) is a proof about it
+        AstExprLocal* hidden = object->as<AstExprLocal>();
+        if (!receiver.proven && hidden && hidden->local->name == kDestructuredLocalName)
+        {
+            const Variable* variable = variables.find(hidden->local);
+            if (variable && !variable->written && variable->init && variable->init->is<AstExprLocal>())
+            {
+                object = variable->init;
+                receiver = resolveReceiverClass(object);
+            }
+        }
+
+        if (!receiver.proven || !receiver.cls->primaryConstructor)
+            return std::nullopt;
+
+        const AstArray<AstLocal*>& params = receiver.cls->primaryConstructor->args;
+        if (position >= params.size)
+            return std::nullopt;
+
+        return ProvenPositionalField{object, params.data[position]->name};
     }
 
     void compileExprIndexExpr(AstExprIndexExpr* expr, uint8_t target)
@@ -6387,6 +6444,27 @@ struct Compiler
         RegScope rs(this);
 
         Constant cv = getConstant(expr->index);
+
+        if (expr->positional)
+        {
+            // Luwu Destructuring (rfcs/destructuring.md): the parser writes the position as a constant, and a pattern has
+            // fewer elements than a function has registers
+            LUAU_ASSERT(cv.type == Constant::Type_Number && cv.valueNumber >= 1 && cv.valueNumber <= 256);
+            size_t position = size_t(cv.valueNumber) - 1;
+
+            if (std::optional<ProvenPositionalField> proven = provenPositionalField(expr->expr, position))
+            {
+                compileFieldRead(proven->object, proven->field, expr->location, target, /* targetTemp= */ false, rs);
+                return;
+            }
+
+            uint8_t rt = compileExprAuto(expr->expr, rs);
+
+            setDebugLine(expr);
+
+            bytecode.emitABC(LOP_GETPOSITIONAL, target, rt, uint8_t(position));
+            return;
+        }
 
         if (cv.type == Constant::Type_Number && cv.valueNumber >= 1 && cv.valueNumber <= 256 && double(int(cv.valueNumber)) == cv.valueNumber)
         {

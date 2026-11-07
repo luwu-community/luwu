@@ -9,6 +9,7 @@
 #include "Luau/Error.h"
 #include "Luau/StringUtils.h"
 #include "ScopedFlags.h"
+#include "Typewriter.h"
 #include "doctest.h"
 
 #include <algorithm>
@@ -16,6 +17,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
@@ -2933,6 +2935,103 @@ local function wrong(_x: Input = { padding = 1 }) end
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(result.errors[0].location.begin.line, 6);
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a positional pattern on an object reads its primary constructor's fields
+TEST_CASE_FIXTURE(ClassesFixture, "positional_destructuring_binds_the_primary_constructors_fields")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}, {FFlag::LuwuGenericNominals, true}};
+    CheckResult result = check(R"(
+class Cat(name: string, age: number) end
+class Box<T>(item: T, count: number) end
+class Dog(barks: boolean) end
+class Frame(name, size)
+    public size: number
+    public name: string
+end
+
+const .(cat_name, cat_age) = Cat("Taz", 12)
+const .(item) = Box("hello", 2)
+const .(frame_name, frame_size) = Frame("f", 2)
+const .(a, b) = { "hi", "there" }
+local function first(v: Cat | Dog)
+    const .(f) = v
+    return f
+end
+local either = first(Dog(true))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("cat_name")), "string");
+    CHECK_EQ(toString(requireType("cat_age")), "number");
+    CHECK_EQ(toString(requireType("item")), "string");
+    CHECK_EQ(toString(requireType("frame_name")), "string");
+    CHECK_EQ(toString(requireType("frame_size")), "number");
+    CHECK_EQ(toString(requireType("a")), "string");
+    CHECK_EQ(toString(requireType("either")), "boolean | string");
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "positional_destructuring_needs_a_primary_constructor_with_that_position")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+    CheckResult result = check(R"(
+class Pod
+    x: number = 0
+end
+class Custom
+    x: number
+    function __init(self, x: number)
+        self.x = x
+    end
+end
+class Cat(name: string, age: number) end
+
+const .(p1, p2) = Pod()
+const .(c1) = Custom(1)
+const .(n, a, extra) = Cat("Taz", 12)
+    )");
+
+    // one error per pattern on a class without a primary constructor, at its first element
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    for (const TypeError& error : result.errors)
+        REQUIRE(get<PositionalDestructuring>(error));
+
+    CHECK_EQ(result.errors[0].location.begin.line, 12);
+    CHECK_FALSE(get<PositionalDestructuring>(result.errors[0])->parameters);
+    CHECK_EQ(result.errors[1].location.begin.line, 13);
+    CHECK_EQ(result.errors[2].location.begin.line, 14);
+    CHECK_EQ(get<PositionalDestructuring>(result.errors[2])->position, 2);
+    CHECK_EQ(get<PositionalDestructuring>(result.errors[2])->parameters->size(), 2);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "positional_destructuring_respects_private_fields")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+    CheckResult result = check(R"(
+class Key(public label: string, private secret: string)
+    public function both(self): string
+        const .(l, s) = self
+        return l .. s
+    end
+end
+
+const .(label, secret) = Key("a", "b")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<PrivatePropertyAccess>(result.errors[0]));
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typing_positional_destructuring")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+    const char* before = "class Cat(name: string, age: number) end\nlocal cats = { Cat(\"Taz\", 12) }\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+
+    checkTypewriting(*this, before, "const .(name, age) = Cat(\"Taz\", 12)", after);
+    checkTypewriting(*this, before, "local cat.(name, age: number) = Cat(\"Taz\", 12)", after);
+    checkTypewriting(*this, before, "for _, .(name, age) in cats do\n    print(name, age)\nend", after);
 }
 
 // Luwu: a callee with one `__call` signature is called like a function type, so a call with a wrong argument reports
