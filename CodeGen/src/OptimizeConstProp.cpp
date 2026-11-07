@@ -1545,6 +1545,7 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_RAWGET:
     case LBF_RAWEQUAL:
     case LBF_CLASS_ISINSTANCE:
+    case LBF_CLASS_OF:
     case LBF_TABLE_UNPACK:
     case LBF_VECTOR:
     case LBF_BIT32_COUNTLZ:

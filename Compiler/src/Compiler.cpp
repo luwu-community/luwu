@@ -6710,6 +6710,11 @@ struct Compiler
         {
             compileExpr(expr->expr, target, targetTemp);
         }
+        // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
+        else if (AstExprSelfClass* expr = node->as<AstExprSelfClass>())
+        {
+            compileExpr(expr->classOf, target, targetTemp);
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");
@@ -9021,7 +9026,8 @@ struct Compiler
         {
             AstClassPrimaryConstructor* params = node->primaryConstructor;
             size_t functionDepth = node->name->functionDepth + 1;
-            AstLocal* self = buildSynthesizedLocal("self", node->location, functionDepth);
+            // `Self` in a default reads the parser's initSelf
+            AstLocal* self = node->initSelf ? node->initSelf : buildSynthesizedLocal("self", node->location, functionDepth);
             std::vector<AstStat*> body;
             DenseHashSet<AstName> restated{AstName()};
 

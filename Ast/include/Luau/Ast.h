@@ -550,6 +550,9 @@ public:
     void visit(AstVisitor* visitor) override;
 
     AstName name;
+    // Luwu Traits (rfcs/classes/traits.md): written `Self` in a class's body, or in a trait function without `self`.
+    // `name` is the class or trait, so `Self` compiles and type checks exactly like its name.
+    bool writtenAsSelf = false;
 };
 
 class AstExprVarargs : public AstExpr
@@ -832,6 +835,23 @@ public:
     /// `strings` will always have one more element than `expressions`.
     AstArray<AstArray<char>> strings;
     AstArray<AstExpr*> expressions;
+};
+
+// Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method or a trait's field default, the class of the
+// object it's called on or initializes. `Self` everywhere else in a class or trait body is the class or trait itself
+// (AstExprGlobal::writtenAsSelf).
+class AstExprSelfClass : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprSelfClass)
+
+    AstExprSelfClass(const Location& location, AstExprCall* classOf);
+
+    void visit(AstVisitor* visitor) override;
+
+    // `class.of(self)`, with the method's `self` or the trait's AstStatClass::initSelf. Everything past the parser compiles
+    // and type checks this call.
+    AstExprCall* classOf;
 };
 
 // f<<T>>
@@ -1486,6 +1506,9 @@ public:
     // Luwu Traits (rfcs/classes/traits.md): `trait Name ... end` is parsed as a class with this set. A trait's primary
     // constructor holds its trait parameters (`trait Element(tag: string)`), and `keywordLocation` is its `trait`.
     bool isTrait = false;
+    // Luwu Traits (rfcs/classes/traits.md): the object a trait's field defaults initialize, when one of them uses `Self`
+    // (the class of this object). The compiler's `__traitinit` takes it as its `self`.
+    AstLocal* initSelf = nullptr;
     // Luwu Traits (rfcs/classes/traits.md): a class's `implements` list. Always empty on a trait.
     AstArray<AstClassTraitRef> implements{nullptr, 0};
     // Luwu Traits (rfcs/classes/traits.md): the `implements` and `needs` keywords; nullopt when the list is absent
@@ -1957,6 +1980,10 @@ public:
         return visit(static_cast<AstExpr*>(node));
     }
     virtual bool visit(class AstExprInterpString* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
+    virtual bool visit(class AstExprSelfClass* node)
     {
         return visit(static_cast<AstExpr*>(node));
     }
