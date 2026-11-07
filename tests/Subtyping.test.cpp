@@ -21,6 +21,7 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauImproveUniqueTableWidthSubtyping)
 LUAU_FASTFLAG(LuauSubtypingMissingPropertiesAsNil)
 LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
+LUAU_FASTFLAG(LuauSubtypingSkipUnreadReasoning)
 
 using namespace Luau;
 
@@ -49,7 +50,7 @@ std::ostream& operator<<(std::ostream& lhs, const SubtypingReasoning& reasoning)
     return lhs << toString(reasoning.subPath) << " </: " << toString(reasoning.superPath) << " (" << reasoning.variance << ")";
 }
 
-bool operator==(const DenseHashSet<SubtypingReasoning, SubtypingReasoningHash>& set, const std::vector<SubtypingReasoning>& items)
+bool operator==(const DenseHashSet2<SubtypingReasoning, SubtypingReasoningHash>& set, const std::vector<SubtypingReasoning>& items)
 {
     if (items.size() != set.size())
         return false;
@@ -1878,6 +1879,15 @@ TEST_CASE_FIXTURE(SubtypeFixture, "negation")
                                 /* superPath */ Path(TypePath::TypeField::Negated),
                             }}
     );
+}
+
+TEST_CASE_FIXTURE(SubtypeFixture, "successful_subtyping_has_no_reasoning")
+{
+    ScopedFastFlag sff{FFlag::LuauSubtypingSkipUnreadReasoning, true};
+
+    SubtypingResult result = isSubtype(getBuiltins()->numberType, negate(getBuiltins()->stringType));
+    CHECK(result.isSubtype);
+    CHECK(result.reasoning.empty());
 }
 
 TEST_CASE_FIXTURE(SubtypeFixture, "multiple_reasonings")
