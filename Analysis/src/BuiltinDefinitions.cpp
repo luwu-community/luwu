@@ -1912,6 +1912,29 @@ bool MagicFreeze::typeCheck(const MagicFunctionTypeCheckContext& ctx)
     return true;
 }
 
+// Luwu Classes (rfcs/classes): a field's type as `class.fields` returns it. A field holding `nil` shows up as `none` there,
+// so `nil` in its type is `none` (`string?` is `string | none`).
+static TypeId nilAsNone(TypeArena* arena, NotNull<BuiltinTypes> builtinTypes, TypeId fieldTy)
+{
+    fieldTy = follow(fieldTy);
+    if (isNil(fieldTy))
+        return builtinTypes->noneType;
+
+    const UnionType* options = get<UnionType>(fieldTy);
+    if (!options)
+        return fieldTy;
+
+    bool hasNil = false;
+    std::vector<TypeId> replaced;
+    for (TypeId option : options)
+    {
+        bool nil = isNil(option);
+        hasNil = hasNil || nil;
+        replaced.push_back(nil ? builtinTypes->noneType : option);
+    }
+    return hasNil ? arena->addType(UnionType{std::move(replaced)}) : fieldTy;
+}
+
 // MagicClassFields overrides `class.fields`'s declared `({ [string]: unknown }, boolean)` return
 // with the precise per-field type map (and a literal `complete` boolean) when the argument is a
 // known class or object type, per rfcs/classes/classes.md's "Type System" section.
@@ -1979,7 +2002,7 @@ bool MagicClassFields::infer(const MagicFunctionCallContext& context)
             continue;
         }
 
-        resultProps[name] = Property::readonly(*prop.readTy);
+        resultProps[name] = Property::readonly(nilAsNone(arena, builtinTypes, *prop.readTy));
     }
 
     TypeId resultTableTy =
