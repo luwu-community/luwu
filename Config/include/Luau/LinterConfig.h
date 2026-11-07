@@ -116,6 +116,9 @@ struct LintWarning
         Code_AmbiguousContinuation = 80,   // Luwu: a line starting with `-` or a string that continues the expression above it
         Code_UnflippedGuard = 81,          // Luwu: `x == nil or return` followed by code using `x`, which is always nil there
 
+        Code_LuaStringHelper = 82,         // Luwu: `s:sub(1, #p) == p` and the like, which `s:startswith(p)` and friends do
+        Code_StringOperations = 83,        // Luwu: a string library call that `""` makes pointless or wrong (`s:startswith("")`)
+
         Code__Count
     };
 
@@ -246,6 +249,8 @@ inline constexpr const char* kWarningNames[] = {
     "MisleadingIndentation",
     "AmbiguousContinuation",
     "UnflippedGuard",
+    "LuaStringHelper",
+    "StringOperations",
 };
 // clang-format on
 
