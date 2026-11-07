@@ -17,6 +17,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuwuLuauClassCompat)
+LUAU_FASTFLAG(LuauHigherOrderGenericInference)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -33,6 +34,7 @@ LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 
 
@@ -6554,6 +6556,483 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_eleme
     // only the last loop is wrong: its value can be a string
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(result.errors[0].location.begin.line, 14);
+}
+
+// Luwu try expressions: options and results are global classes, and an empty option is `none`, which gets `get` and
+// `expect` while the library exists
+TEST_CASE_FIXTURE(BuiltinsFixture, "option_and_result_types")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local empty = none:get()
+        local function fail(): number
+            return none:expect("no value")
+        end
+        local hit = Some(5)
+        local value = hit:get()
+        local good = Ok("x")
+        local text = good:expect()
+        local bad = Err(42)
+        local code = bad:err()
+        local missing = bad:ok()
+        local typed: Option<number> = None
+        local typedhit: Option<number> = hit
+        local either: Result<string, number> = if value > 1 then good else bad
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("empty")), "none");
+    CHECK_EQ(toString(requireType("value")), "number");
+    CHECK_EQ(toString(requireType("text")), "string");
+    CHECK_EQ(toString(requireType("code")), "number");
+    CHECK_EQ(toString(requireType("missing")), "none");
+}
+
+// Luwu try expressions: `try expr` is a Result of expr's type, with an unknown error
+TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function read(path: string): string
+            return path
+        end
+        local text = try read("x")
+        local sum = try 1 + 2
+        local typed: Result<string, unknown> = try read("y")
+        local wrong: number = try 1
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+    CHECK_EQ(toString(requireType("text")), toString(requireType("typed")));
+    CHECK(toString(requireType("sum")).find("Ok<number>") != std::string::npos);
+}
+
+// Luwu try expressions: `try` gives a Result, which isn't declared without `none`
+TEST_CASE_FIXTURE(BuiltinsFixture, "try_needs_the_result_types")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuNonePrimitive, false},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        local r = try tostring(1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location, Location{{1, 18}, {1, 21}});
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_try_expressions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+    const char* before = "local function read(path: string): string\n    return path\nend\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+
+    checkTypewriting(*this, before, "local text = try read(\"x\")", after);
+    checkTypewriting(*this, before, "local sum = try #\"ab\" + 1", after);
+}
+
+// Luwu try expressions: the error of `try f()` is f's hints and weakunknown, printed `unknown`
+TEST_CASE_FIXTURE(BuiltinsFixture, "try_types_its_error_from_the_callees_hint")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type NotFound = { kind: "NotFound" }
+        local function read(path: string): string ! NotFound
+            return path
+        end
+        local function meow(): ! string
+            error("unreachable")
+        end
+        local function parse(s: string)
+            if s == "" then
+                error({ line = 1 })
+            end
+            assert(#s < 10)
+            if s == "x" then
+                error("meow" :: "meow")
+            end
+            return s
+        end
+        local r = try read("x")
+        local m = try meow()
+        local p = try parse("x")
+        local s = try 1 + 1
+        local function wrap(): string
+            return "x"
+        end
+        local w = try wrap()
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("read")), "(string) -> string ! NotFound");
+    CHECK_EQ(toString(requireType("wrap")), "() -> string");
+
+    // the last statement's `error` doesn't count
+    std::string meow = toString(requireType("meow"));
+    CHECK_MESSAGE(meow.find("! string") != std::string::npos, meow);
+    CHECK_MESSAGE(meow.find("unreachable") == std::string::npos, meow);
+
+    // `error(v)` raises v's type as a local would hold it, and `assert` a string
+    std::string parse = toString(requireType("parse"));
+    CHECK_MESSAGE(parse.find("{ line: number }") != std::string::npos, parse);
+    CHECK_MESSAGE(parse.find("\"meow\"") != std::string::npos, parse);
+    CHECK_MESSAGE(parse.find("| string") != std::string::npos, parse);
+
+    CHECK_EQ(toString(requireType("r")), "Err<NotFound | unknown> | Ok<string>");
+    CHECK_EQ(toString(requireType("s")), "Err<unknown> | Ok<number>");
+    CHECK_EQ(toString(requireType("w")), "Err<unknown> | Ok<string>");
+}
+
+// Luwu try expressions: `raises<F>` and `types.raises(f)` give what `try f()` would hold as its error
+TEST_CASE_FIXTURE(BuiltinsFixture, "raises_gives_a_functions_error_hints")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type NotFound = { kind: "NotFound" }
+        type Reader = (string) -> string ! NotFound
+        type Plain = (string) -> string
+        type function errorsof(fn)
+            return types.raises(fn)
+        end
+        local a: raises<Reader> = { kind = "NotFound" }
+        local b: raises<Plain> = 1
+        local c: errorsof<Reader> = { kind = "NotFound" }
+        local d: errorsof<Plain> = "x"
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("a")), "NotFound | unknown");
+    CHECK_EQ(toString(requireType("b")), "unknown");
+    std::string c = toString(requireType("c"));
+    CHECK_MESSAGE(c.find("NotFound") != std::string::npos, c);
+    CHECK_MESSAGE(c.find("unknown") != std::string::npos, c);
+    CHECK_EQ(toString(requireType("d")), "unknown");
+}
+
+// Luwu try expressions: `X | unknown` keeps X's members. The unknown part is weakunknown, which accepts anything but
+// doesn't absorb X.
+TEST_CASE_FIXTURE(BuiltinsFixture, "weakunknown_keeps_the_rest_of_its_union")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        type NotFound = { kind: "NotFound", path: string }
+        local function handle(e: NotFound | unknown)
+            local kind = e.kind
+            local path: string = e.path
+            return kind
+        end
+        local anything: NotFound | unknown = 1
+        local plain: unknown = 1
+        local optional: unknown? = 1
+        local k = handle(2)
+        local function pick(c: boolean, e: NotFound | unknown)
+            return if c then e else 1
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("handle")), "(NotFound | unknown) -> \"NotFound\"");
+    CHECK_EQ(toString(requireType("k")), "\"NotFound\"");
+    CHECK_EQ(toString(requireType("plain")), "unknown");
+
+    // a join keeps NotFound
+    std::string pick = toString(requireType("pick"));
+    CHECK_MESSAGE(pick.find("-> NotFound | ") != std::string::npos, pick);
+}
+
+// Luwu try expressions: weakunknown is found inside a nested union. `protect` returns `(Failure | weakunknown) | Failure`,
+// and joining it must finish instead of recursing until the simplifier's limit raises an internal compiler error.
+TEST_CASE_FIXTURE(BuiltinsFixture, "weakunknown_in_a_nested_union_simplifies")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        type Failure = { message: string }
+        local function protect<T>(f: () -> T): T | Failure
+            return f()
+        end
+        local function g(): Failure | unknown
+            return nil
+        end
+        local r = protect(g)
+        local s = tostring(r)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("s")), "string");
+}
+
+// Luwu try expressions: a function whose return type is exactly an alias with a hint raises the hint, expanded with the
+// alias's arguments and defaults
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_aliases_with_error_hints_are_return_types")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type NotFound = { kind: "NotFound" }
+        type Lookup = string ! NotFound
+        type Result<T, E = string> = T ! E
+        type Checked<T> = T ! { bad: T }
+        local function read(path: string): Lookup
+            return path
+        end
+        local function parse(s: string): Result<number>
+            return #s
+        end
+        local function load(s: string): (Result<boolean, NotFound>)
+            return s == ""
+        end
+        local function check(n: number): Checked<number>
+            return n
+        end
+        local function both(s: string): Lookup ! number
+            return s
+        end
+        type Reader = (string) -> Result<string, NotFound>
+        local reader: Reader = read
+        declare function open(path: string): Result<number, NotFound>
+        local r = try read("x")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("read")), "(string) -> string ! NotFound");
+    CHECK_EQ(toString(requireType("parse")), "(string) -> number ! string");
+    CHECK_EQ(toString(requireType("load")), "(string) -> boolean ! NotFound");
+    CHECK_EQ(toString(requireType("check")), "(number) -> number ! { bad: number }");
+    CHECK_EQ(toString(requireType("both")), "(string) -> string ! NotFound | number");
+    CHECK_EQ(toString(requireType("reader")), "(string) -> string ! NotFound");
+    CHECK_EQ(toString(requireType("open")), "(string) -> number ! NotFound");
+    CHECK_EQ(toString(requireType("r")), "Err<NotFound | unknown> | Ok<string>");
+}
+
+// Luwu try expressions: the hint would be lost anywhere but a function's whole return type, so any other use is an error
+TEST_CASE_FIXTURE(BuiltinsFixture, "type_aliases_with_error_hints_are_only_return_types")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        type Lookup = string ! number
+        type Result<T, E = string> = T ! E
+        local v: Lookup = "x"
+        type Holder = { value: Lookup }
+        local f: () -> (Lookup, number)
+        local list: { Result<string> }
+        type Alias = Lookup
+        local function take(x: Lookup) end
+        local function returns(): Result<string>?
+            return nil
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(7, result);
+    for (size_t i = 0; i < result.errors.size(); ++i)
+    {
+        INFO(i);
+        CHECK(get<GenericError>(result.errors[i]));
+        CHECK_EQ(result.errors[i].location.begin.line, i + 4);
+    }
+}
+
+// Luwu try expressions: a generic in a function parameter's hint is inferred from the argument's hint, so a pcall-like
+// function can say what its failure value holds. An argument without a hint can raise anything.
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_generic_error_hint_is_inferred_from_the_arguments_hint")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuauHigherOrderGenericInference, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type BadCat = { kind: "BadCat" }
+        local function protect<R, E, A...>(f: (A...) -> R ! E, ...: A...): (boolean, R | E | unknown)
+            return true, f(...)
+        end
+        local function rethrow<R, E, A...>(f: (A...) -> R ! E, ...: A...): R | E
+            return f(...)
+        end
+        local function meow(name: string): string ! BadCat
+            return name
+        end
+        local function purr<T>(name: T): T ! BadCat
+            return name
+        end
+        local function plain(n: number): number
+            return n
+        end
+        local cat_name = "Taz"
+        local succ, response = protect(meow, cat_name)
+        local ok, plain_response = protect(plain, 1)
+        local purred = rethrow(purr, cat_name)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    std::string response = toString(requireType("response"));
+    CHECK_MESSAGE(response.find("string") != std::string::npos, response);
+    CHECK_MESSAGE(response.find("BadCat") != std::string::npos, response);
+    CHECK_MESSAGE(response.find("unknown") != std::string::npos, response);
+    std::string plainResponse = toString(requireType("plain_response"));
+    CHECK_MESSAGE(plainResponse.find("number") != std::string::npos, plainResponse);
+    CHECK_MESSAGE(plainResponse.find("BadCat") == std::string::npos, plainResponse);
+
+    // a generic function's hint too
+    CHECK_EQ(toString(requireType("purred")), "BadCat | string");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_error_hints")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+    const char* before = "type NotFound = { kind: \"NotFound\" }\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+
+    checkTypewriting(*this, before, "local function read(path: string): string ! NotFound | string\n    return path\nend", after);
+    checkTypewriting(*this, before, "local function meow(): ! NotFound\n    return 1\nend", after);
+    checkTypewriting(*this, before, "local function apply(read: (string) -> string ! NotFound)\n    return read(\"x\")\nend", after);
+    checkTypewriting(*this, "type NotFound = { kind: \"NotFound\" }\ntype Lookup = string", " ! NotFound", after);
+    const char* withLookup = "type NotFound = { kind: \"NotFound\" }\ntype Lookup = string ! NotFound\n";
+    checkTypewriting(*this, withLookup, "local function read(path: string): Lookup\n    return path\nend", after);
+}
+
+// Luwu try expressions: an `Err` can say where its error was raised, with optional fields after the error
+TEST_CASE_FIXTURE(BuiltinsFixture, "err_has_optional_position_fields")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local bare = Err("boom")
+        local placed = Err("boom", "main.luau", 12, "trace")
+        local module = placed.module
+        local line = placed.line
+        local traceback = placed.traceback
+        local wrong = Err("boom", 12)
+    )");
+
+    // the module has to be a string
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+    CHECK_EQ(toString(requireType("module")), "string?");
+    CHECK_EQ(toString(requireType("line")), "number?");
+    CHECK_EQ(toString(requireType("traceback")), "string?");
+}
+
+// Luwu try expressions: `none` has only the methods the result library gives it, so any other key is missing
+TEST_CASE_FIXTURE(BuiltinsFixture, "indexing_none_by_an_unknown_key_is_an_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local empty = none:get()
+        local a = none.foo
+        local b = none["bar"]
+        local function f(x: number | none)
+            return x.baz
+        end
+        none.get = none.get
+        local function g(s: string | none)
+            return s.len
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 3);
+    CHECK_EQ(result.errors[1].location.begin.line, 4);
+    CHECK_EQ(result.errors[2].location.begin.line, 6);
+    CHECK_EQ(result.errors[3].location.begin.line, 8);
+    CHECK(get<PropertyAccessViolation>(result.errors[3]));
+    // only `none` lacks `len`
+    CHECK_EQ(toString(result.errors[4]), "this 'string' value is optional and may be 'none', use an if condition to check");
+    CHECK_EQ(toString(requireType("empty")), "none");
+}
+
+// Luwu: without the result library `none` has no methods at all
+TEST_CASE_FIXTURE(BuiltinsFixture, "none_has_no_keys_without_the_result_library")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuTryExpressions, false},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local a = none.foo
+        local b = none:get()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 2);
+    CHECK_EQ(result.errors[1].location.begin.line, 3);
 }
 
 // Luwu bundles: `bundle.pack`, `unpack`, `concat`, `sub` and `with` keep each position's own type. A literal position

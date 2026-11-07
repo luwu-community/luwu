@@ -1021,7 +1021,7 @@ static int luauF_class_of(lua_State* L, StkId res, TValue* arg0, int nresults, S
     return -1;
 }
 
-// Luwu bundles: a new object of the builtin class `classdef` in `res`, its members set from the
+// Luwu bundles and try expressions: a new object of the builtin class `classdef` in `res`, its members set from the
 // arguments in order and nil past them. The caller has checked that the collector doesn't need a step.
 static void buildnative(lua_State* L, StkId res, LuauClass* classdef, TValue* arg0, StkId args, int nparams)
 {
@@ -1037,6 +1037,25 @@ static void buildnative(lua_State* L, StkId res, LuauClass* classdef, TValue* ar
         setnilvalue(&members[i]);
 
     setobjectvalue(L, res, object);
+}
+
+// Luwu collections and try expressions: builds a bundle (`bundle.One` to `bundle.Twelve`), Some, Ok or Err the way its
+// `__init` would, without a call frame. A member with no argument for it is nil. A call without arguments falls back
+// to the constructor.
+// Luwu try expressions: builds a `Some`, `Ok` or `Err` the way its `__init` would, without a call frame. A member with
+// no argument for it is nil. A call without arguments falls back to the constructor.
+template<LuwuBuiltinClass Kind>
+static int luauF_payloadconstruct(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    LuauClass* classdef = L->global->builtinclasses[Kind];
+    if (!classdef || nresults > 1 || nparams < 1)
+        return -1;
+
+    if (luaC_needsGC(L))
+        return -1; // we can't call luaC_checkGC so fall back to C implementation
+
+    buildnative(L, res, classdef, arg0, args, nparams);
+    return 1;
 }
 
 // Luwu bundles: `bundle.pack(...)` without a call frame. More values than a bundle holds fall back to the function,
@@ -2950,6 +2969,10 @@ const luau_FastFunction luauF_table[256] = {
     luauF_startswith,
     luauF_endswith,
     luauF_contains,
+
+    luauF_payloadconstruct<LUWU_BUILTIN_SOME>,
+    luauF_payloadconstruct<LUWU_BUILTIN_OK>,
+    luauF_payloadconstruct<LUWU_BUILTIN_ERR>,
 
     luauF_bundlepack,
     luauF_bundleunpack,

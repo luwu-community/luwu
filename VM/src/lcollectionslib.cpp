@@ -87,7 +87,7 @@ static const char* pushshown(lua_State* L, int idx)
 
 // Pops the value on top of the stack and adds it to `b` as addshown writes it. The value is turned into its text
 // first, so `b`'s storage is right below what's added.
-static void addshowntop(luaL_Strbuf* b)
+void luaR_addshowntop(luaL_Strbuf* b)
 {
     lua_State* L = b->L;
     pushshown(L, -1);
@@ -111,23 +111,58 @@ static uint32_t checkposition(lua_State* L, int idx, uint32_t last)
 }
 
 // Vec and VecDeque hold one type of value: the first value one gets fixes it, and a value of any other type raises.
-// nil never goes in. A type is a primitive type or an object's class.
+// nil never goes in. A type is a primitive type, an object's class, or a builtin enum.
+//
+// Luwu try expressions: builtin enums are types whose values come from several variants, classes or primitives: an
+// option is a `Some` object or `none`, a result an `Ok` or an `Err` object. A container of an enum takes all of its
+// variants. Enums aren't user facing yet.
+
+enum BuiltinEnum
+{
+    NOT_AN_ENUM,
+    ENUM_OPTION,
+    ENUM_RESULT,
+};
+
+// How an error names the values of each enum, by BuiltinEnum
+static const char* const kEnumPlurals[] = {NULL, "options", "results"};
 
 static bool isnovalue(const TValue* value)
 {
     return ttisnil(value) || ttissymnone(value);
 }
 
-// Fixes the element type of `storage` to the type of `value`: its class, or its type tag
-static void setelementtype(lua_State* L, LuauStorage* storage, const TValue* value)
+static BuiltinEnum enumof(lua_State* L, const TValue* value)
 {
-    storage->elementtag = uint8_t(ttype(value));
-    storage->elementclass = ttisobject(value) ? objectvalue(value)->lclass : NULL;
+    if (ttissymnone(value))
+        return ENUM_OPTION;
+    if (!ttisobject(value))
+        return NOT_AN_ENUM;
+
+    const LuauClass* classdef = objectvalue(value)->lclass;
+    if (classdef == builtinclass(L, LUWU_BUILTIN_SOME))
+        return ENUM_OPTION;
+    if (classdef == builtinclass(L, LUWU_BUILTIN_OK) || classdef == builtinclass(L, LUWU_BUILTIN_ERR))
+        return ENUM_RESULT;
+    return NOT_AN_ENUM;
 }
 
-// Whether `value` is of the element type of `storage`. It takes one compare unless the type is an object's class.
+// Fixes the element type of `storage` to the type of `value`: its builtin enum, its class, or its type tag
+static void setelementtype(lua_State* L, LuauStorage* storage, const TValue* value)
+{
+    BuiltinEnum builtinenum = enumof(L, value);
+    storage->elementtag = builtinenum != NOT_AN_ENUM ? LUAR_STORAGE_ENUM : uint8_t(ttype(value));
+    storage->elementenum = uint8_t(builtinenum);
+    storage->elementclass = builtinenum == NOT_AN_ENUM && ttisobject(value) ? objectvalue(value)->lclass : NULL;
+}
+
+// Whether `value` is of the element type of `storage`. It takes one compare unless the type is an object's class or a
+// builtin enum. An enum's variants never match a class or a primitive element type, since setelementtype gives their
+// values the enum and `none` is an option.
 static bool hastype(lua_State* L, const LuauStorage* storage, const TValue* value)
 {
+    if (storage->elementtag == LUAR_STORAGE_ENUM)
+        return enumof(L, value) == BuiltinEnum(storage->elementenum);
     return ttype(value) == storage->elementtag && (storage->elementtag != LUA_TOBJECT || objectvalue(value)->lclass == storage->elementclass);
 }
 
@@ -138,7 +173,7 @@ static bool fitselement(lua_State* L, const LuauStorage* storage, const TValue* 
     return storage && hastype(L, storage, value);
 }
 
-// Writes how an error names the values of the element type of `storage`: "strings", "'Player' objects"
+// Writes how an error names the values of the element type of `storage`: "strings", "'Player' objects", "options"
 static void addtypeplural(luaL_Strbuf* b, const LuauStorage* storage)
 {
     if (storage->elementclass)
@@ -146,6 +181,12 @@ static void addtypeplural(luaL_Strbuf* b, const LuauStorage* storage)
         luaL_addchar(b, '\'');
         luaL_addstring(b, getstr(storage->elementclass->name));
         luaL_addstring(b, "' objects");
+        return;
+    }
+
+    if (storage->elementtag == LUAR_STORAGE_ENUM)
+    {
+        luaL_addstring(b, kEnumPlurals[storage->elementenum]);
         return;
     }
 
@@ -222,7 +263,7 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
         lua_pushvalue(L, 1);
         lua_pushnumber(L, i);
         lua_call(L, 2, 1);
-        addshowntop(&b);
+        luaR_addshowntop(&b);
     }
     luaL_addchar(&b, ')');
     luaL_pushresult(&b);
@@ -312,8 +353,9 @@ static LuauObject* checkbundle(lua_State* L, const char* method)
     return luaR_checknativeself(L, bundleclass(L, Size), method);
 }
 
-// `__init` is only ever called by construction, with a new object of the class: it can't be read as a member.
-static int bundleinit(lua_State* L)
+// `__init` is only ever called by construction, with a new object of the class: it can't be read as a member. `Err`
+// uses it too, for its error and position fields.
+int luaR_fieldsinit(lua_State* L)
 {
     LuauObject* bundle = objectvalue(L->base);
     int nargs = lua_gettop(L) - 1;
@@ -381,7 +423,7 @@ static int bundletostring(lua_State* L)
         if (i > 0)
             luaL_addstring(&b, ", ");
         luaA_pushvalue(L, &luaR_members(bundle)[i]);
-        addshowntop(&b);
+        luaR_addshowntop(&b);
     }
     luaL_addchar(&b, ')');
     luaL_pushresult(&b);
@@ -470,7 +512,7 @@ static void addbundleclass(lua_State* L)
     members[count++] = {"__iter", bundleiter<Size>, 0, NULL};
     members[count++] = {"__tostring", bundletostring<Size>, 0, NULL};
 
-    LuauClass* classdef = luaR_newnativeclass(L, kBundleClassNames[Size], members, count, bundleinit);
+    LuauClass* classdef = luaR_newnativeclass(L, kBundleClassNames[Size], members, count, luaR_fieldsinit);
     classdef->keybyvalue = true;
     L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + Size] = classdef;
     lua_pop(L, 1);
@@ -1183,7 +1225,7 @@ static LuauStorage* newstorage(lua_State* L, LuauObject* container, const TValue
     storage->count = 0;
     storage->capacity = kInitialSlots;
     storage->head = 0;
-    memset(storage->padding, 0, sizeof(storage->padding));
+    storage->padding = 0;
     setelementtype(L, storage, first);
     setstorage(container, storage);
     if (storage->elementclass)

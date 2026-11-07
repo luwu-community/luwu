@@ -3756,6 +3756,12 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executePOP), uintOp(OP_A(inst)));
         break;
+    case IrCmd::FALLBACK_WRAPRESULT:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executeWRAPRESULT), uintOp(OP_A(inst)));
+        break;
     case IrCmd::FALLBACK_FORGPREP:
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeFORGPREP), uintOp(OP_A(inst)));
@@ -3767,6 +3773,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     case IrCmd::SUBSTITUTE:
     case IrCmd::MARK_USED:
     case IrCmd::MARK_DEAD:
+    case IrCmd::MARK_TRY_READS:
         CODEGEN_ASSERT(!"Pseudo instructions should not be lowered");
         break;
 

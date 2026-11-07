@@ -54,6 +54,7 @@ LUAU_FASTINTVARIABLE(LuwuCompileInlineBudget, 4096)
 LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
@@ -832,6 +833,10 @@ struct Compiler
         if (!expr)
             return node->is<AstExprVarargs>();
 
+        // Luwu try expressions: compiled to one value (compileTryResultMethod, compileTryResultVariantTest)
+        if (isTryResultCall(expr))
+            return false;
+
         // conservative version, optimized for compilation throughput
         if (options.optimizationLevel <= 1)
             return true;
@@ -872,6 +877,13 @@ struct Compiler
     {
         if (AstExprCall* expr = node->as<AstExprCall>())
         {
+            // Luwu try expressions: compiled to one value (compileTryResultMethod, compileTryResultVariantTest)
+            if (isTryResultCall(expr))
+            {
+                compileExprTemp(node, target);
+                return false;
+            }
+
             // Optimization: convert multret calls that always return one value to fixedret calls; this facilitates inlining/constant folding
             if (options.optimizationLevel >= 2 && !isExprMultRet(node))
             {
@@ -4072,6 +4084,33 @@ struct Compiler
                 return compileExprCall(functionForm, target, targetCount, targetTop, multRet);
         }
 
+        // Luwu try expressions: a result kept in registers answers its own `ok`, `err` and `expect`, always with one value
+        AstExprLocal* resultLocal = nullptr;
+        AstExprIndexName* resultMethod = tryResultMethodCall(expr, resultLocal);
+        if (resultMethod && tryResultLocals.contains(resultLocal->local))
+        {
+            LUAU_ASSERT(!multRet);
+            RegScope rs(this);
+
+            uint8_t value = targetCount > 0 ? target : allocReg(expr, 1u);
+            compileTryResultMethod(expr, resultMethod, getLocalReg(resultLocal->local), value);
+            for (unsigned i = 1; i < targetCount; ++i)
+                bytecode.emitABC(LOP_LOADNIL, uint8_t(target + i), 0, 0);
+            return;
+        }
+
+        if (std::optional<bool> testsOk = tryResultVariantTest(expr, resultLocal); testsOk && tryResultLocals.contains(resultLocal->local))
+        {
+            LUAU_ASSERT(!multRet);
+            if (targetCount == 0)
+                return;
+
+            compileTryResultVariantTest(*testsOk, getLocalReg(resultLocal->local), target);
+            for (unsigned i = 1; i < targetCount; ++i)
+                bytecode.emitABC(LOP_LOADNIL, uint8_t(target + i), 0, 0);
+            return;
+        }
+
         // try inlining the function
         if (options.optimizationLevel >= 2 && !expr->self)
         {
@@ -5691,7 +5730,7 @@ struct Compiler
             condition = group->expr;
 
         AstExprCall* isinstance = condition->as<AstExprCall>();
-        if (!isinstance || isinstance->args.size != 2)
+        if (!isinstance || isinstance->args.size != 2 || isTryResultCall(isinstance))
             return nullptr;
 
         auto isRereadable = [&](AstExpr* arg)
@@ -5747,6 +5786,25 @@ struct Compiler
         const int* bfid = builtins.find(call);
         if (!bfid || *bfid != LBF_CLASS_ISINSTANCE || call->args.size != 2)
             return false;
+
+        // Luwu try expressions: a result kept in registers is tested by its flag
+        AstExprLocal* resultLocal = nullptr;
+        if (std::optional<bool> testsOk = tryResultVariantTest(call, resultLocal); testsOk && tryResultLocals.contains(resultLocal->local))
+        {
+            uint8_t reg = getLocalReg(resultLocal->local);
+            uint8_t tested = uint8_t(reg + kTryResultOkFlag);
+            bool jumpIfTruthy = *testsOk == onlyTruth;
+            if (target)
+            {
+                compileTryResultVariantTest(*testsOk, reg, *target);
+                tested = *target;
+                jumpIfTruthy = onlyTruth;
+            }
+
+            skipJump.push_back(bytecode.emitLabel());
+            bytecode.emitAD(jumpIfTruthy ? LOP_JUMPIF : LOP_JUMPIFNOT, tested, 0);
+            return true;
+        }
 
         bool classIsKnown = isClassBoundAt(call->args.data[1]);
 
@@ -7235,6 +7293,263 @@ struct Compiler
         }
     }
 
+    // Luwu try expressions: a result kept in registers (see tryResultLocals) holds its value or error at the first, where
+    // an error was raised in the next three, and in the last whether it's an `ok`
+    static constexpr unsigned kTryResultRegisters = 5;
+    static constexpr uint8_t kTryResultOkFlag = LBC_TRYRESULT_OKFLAG;
+
+    // Luwu try expressions: evaluates expr into reg in a protected range. An error raised there resumes at the handler,
+    // with the error in reg and where it was raised in the three registers after it. The result is an `Ok` or `Err`
+    // object (see LOP_WRAPRESULT), or with `inRegisters` the flag in reg + kTryResultOkFlag.
+    void compileTryRange(AstExprTry* expr, uint8_t reg, bool inRegisters)
+    {
+        // The registers after reg are free while expr runs: the VM writes them only once expr has raised, and the flag
+        // is written once it hasn't. So expr computes at reg as if it were the top, which spares a call's result a move.
+        size_t startLabel = bytecode.emitLabel();
+        compileExprTempTop(expr->expr, reg);
+        size_t endLabel = bytecode.emitLabel();
+
+        if (inRegisters)
+        {
+            // LOADB's jump skips the handler, which is the next instruction
+            bytecode.emitABC(LOP_LOADB, uint8_t(reg + kTryResultOkFlag), 1, 1);
+            size_t handlerLabel = bytecode.emitLabel();
+            bytecode.emitABC(LOP_LOADB, uint8_t(reg + kTryResultOkFlag), 0, 0);
+            bytecode.pushTryRange(uint32_t(startLabel), uint32_t(endLabel), uint32_t(handlerLabel), reg);
+            return;
+        }
+
+        bytecode.emitABC(LOP_WRAPRESULT, reg, LBC_WRAPRESULT_OK, 0);
+        size_t jumpLabel = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMP, 0, 0);
+
+        size_t handlerLabel = bytecode.emitLabel();
+        bytecode.emitABC(LOP_WRAPRESULT, reg, LBC_WRAPRESULT_ERR, 0);
+
+        size_t doneLabel = bytecode.emitLabel();
+        patchJump(expr, jumpLabel, doneLabel);
+        bytecode.pushTryRange(uint32_t(startLabel), uint32_t(endLabel), uint32_t(handlerLabel), reg);
+    }
+
+    // Luwu try expressions: `try expr` evaluates expr in fresh registers, so that nothing the range writes is live outside
+    // it
+    void compileExprTry(AstExprTry* expr, uint8_t target)
+    {
+        RegScope rs(this);
+
+        // the value or the caught error, then where an error was raised
+        uint8_t reg = allocReg(expr, 4u);
+        compileTryRange(expr, reg, /* inRegisters= */ false);
+
+        if (target != reg)
+            bytecode.emitABC(LOP_MOVE, target, reg, 0);
+    }
+
+    // Luwu try expressions: `local r = try expr` for a result only ever read through its fields (see tryResultLocals)
+    void compileStatLocalTryInRegisters(AstStatLocal* stat, AstExprTry* expr)
+    {
+        // note: allocReg in this case allocates into parent block register, as compileStatLocal does
+        uint8_t reg = allocReg(stat, kTryResultRegisters);
+        uint32_t allocpc = bytecode.getDebugPC();
+
+        compileTryRange(expr, reg, /* inRegisters= */ true);
+        pushLocal(stat->vars.data[0], reg, allocpc);
+    }
+
+    // The field of a result a try result's register holds: value and error at 0, then module, line and
+    // traceback. -1 for a name that isn't a field.
+    static int tryResultField(AstName name)
+    {
+        if (name == "value" || name == "error")
+            return 0;
+        if (name == "module")
+            return 1;
+        if (name == "line")
+            return 2;
+        if (name == "traceback")
+            return 3;
+        return -1;
+    }
+
+    // Luwu try expressions: `r:ok()`, `r:err()`, and `r:expect()` with no message or a constant one: the methods a result
+    // kept in registers answers itself. Gives the method and sets `local` to r.
+    static AstExprIndexName* tryResultMethodCall(AstExprCall* call, AstExprLocal*& local)
+    {
+        AstExprIndexName* method = call->self ? call->func->as<AstExprIndexName>() : nullptr;
+        local = method ? method->expr->as<AstExprLocal>() : nullptr;
+        if (!local || local->upvalue)
+            return nullptr;
+
+        if (method->index == "ok" || method->index == "err")
+            return call->args.size == 0 ? method : nullptr;
+
+        // skipping the message on an ok can't skip anything it does
+        bool constantMessage = call->args.size == 1 && call->args.data[0]->is<AstExprConstantString>();
+        if (method->index == "expect" && (call->args.size == 0 || constantMessage))
+            return method;
+
+        return nullptr;
+    }
+
+    // Luwu try expressions: which result class `cls` names, when it certainly names one: true for `Ok`, false for `Err`.
+    // A result kept in registers has no object to test against a class, so this is where the compiler assumes `cls` is
+    // the builtin class. It only does where it folds builtins (optimization level 2), which assumes the same of `math`.
+    // `cls` resolves through aliases (getBuiltin), so `local Success = Ok` works. Renaming or moving `Ok` and `Err`
+    // changes the names here and in getBuiltinFunctionId (Builtins.cpp), and nothing else.
+    std::optional<bool> builtinResultVariant(AstExpr* cls)
+    {
+        if (!builtinsFold)
+            return std::nullopt;
+
+        Builtin builtin = getBuiltin(cls, globals, variables);
+        if (builtin.isGlobal("Ok"))
+            return true;
+        if (builtin.isGlobal("Err"))
+            return false;
+        return std::nullopt;
+    }
+
+    // Luwu try expressions: `class.isinstance(r, Ok)` or `class.isinstance(r, Err)`, which a result kept in registers
+    // answers from its flag. `is Ok.(value)` desugars to it. Gives whether it tests for Ok and sets `local` to r.
+    std::optional<bool> tryResultVariantTest(AstExprCall* call, AstExprLocal*& local)
+    {
+        const int* bfid = builtins.find(call);
+        if (!bfid || *bfid != LBF_CLASS_ISINSTANCE || call->args.size != 2)
+            return std::nullopt;
+
+        local = call->args.data[0]->as<AstExprLocal>();
+        if (!local || local->upvalue)
+            return std::nullopt;
+
+        return builtinResultVariant(call->args.data[1]);
+    }
+
+    // Luwu try expressions: a method call or a variant test that a result kept in registers answers itself
+    bool isTryResultCall(AstExprCall* call)
+    {
+        AstExprLocal* local = nullptr;
+        if (tryResultMethodCall(call, local) && tryResultLocals.contains(local->local))
+            return true;
+
+        return tryResultVariantTest(call, local) && tryResultLocals.contains(local->local);
+    }
+
+    // Luwu try expressions: the result of a variant test (tryResultVariantTest) into `target`. The flag is true for an
+    // ok, so testing for err negates it.
+    void compileTryResultVariantTest(bool testsOk, uint8_t reg, uint8_t target)
+    {
+        bytecode.emitABC(testsOk ? LOP_MOVE : LOP_NOT, target, uint8_t(reg + kTryResultOkFlag), 0);
+    }
+
+    // Luwu try expressions: a method of a try result kept in registers. `ok` and `err` are a RESULTGET. `expect` gives an
+    // ok's value, and on an err builds the object and calls its `expect`, which raises.
+    void compileTryResultMethod(AstExprCall* call, AstExprIndexName* method, uint8_t reg, uint8_t target)
+    {
+        if (method->index != "expect")
+        {
+            bytecode.emitABC(LOP_RESULTGET, target, reg, method->index == "ok" ? LBC_RESULTGET_OK : LBC_RESULTGET_ERR);
+            return;
+        }
+
+        size_t errJump = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMPIFNOT, uint8_t(reg + kTryResultOkFlag), 0);
+        bytecode.emitABC(LOP_MOVE, target, reg, 0);
+        size_t doneJump = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMP, 0, 0);
+
+        size_t errLabel = bytecode.emitLabel();
+        {
+            RegScope rs(this);
+
+            uint8_t object = allocReg(call, 4u);
+            for (uint8_t i = 0; i < 4; ++i)
+                bytecode.emitABC(LOP_MOVE, uint8_t(object + i), uint8_t(reg + i), 0);
+            bytecode.emitABC(LOP_WRAPRESULT, object, LBC_WRAPRESULT_ERR, 0);
+
+            uint8_t func = allocReg(call, unsigned(2 + call->args.size));
+            BytecodeBuilder::StringRef name = sref(method->index);
+            int32_t cid = bytecode.addConstantString(name);
+            if (cid < 0)
+                CompileError::raise(call->location, "Exceeded constant limit; simplify the code to compile");
+
+            // the CALL has to follow NAMECALL directly, so the message goes first
+            if (call->args.size == 1)
+                compileExprTemp(call->args.data[0], uint8_t(func + 2));
+            bytecode.emitABC(LOP_NAMECALL, func, object, uint8_t(BytecodeBuilder::getStringHash(name)));
+            bytecode.emitAux(cid);
+            bytecode.emitABC(LOP_CALL, func, uint8_t(call->args.size + 2), 2);
+            bytecode.emitABC(LOP_MOVE, target, func, 0);
+        }
+
+        size_t doneLabel = bytecode.emitLabel();
+        patchJump(call, errJump, errLabel);
+        patchJump(call, doneJump, doneLabel);
+    }
+
+    // Luwu try expressions: a field of a try result kept in registers
+    void compileTryResultField(AstExprIndexName* expr, uint8_t reg, uint8_t target, bool targetTemp)
+    {
+        int field = tryResultField(expr->index);
+        LUAU_ASSERT(field >= 0);
+
+        auto readObject = [&](uint8_t object)
+        {
+            BytecodeBuilder::StringRef name = sref(expr->index);
+            int32_t cid = bytecode.addConstantString(name);
+            if (cid < 0)
+                CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+            bytecode.emitABC(LOP_GETTABLEKS, target, object, uint8_t(BytecodeBuilder::getStringHash(name)));
+            bytecode.emitAux(cid);
+        };
+        compileTryResultRead(expr, field, /* okField= */ expr->index == "value", reg, target, targetTemp, readObject);
+    }
+
+    // Luwu try expressions: register `field` of a try result kept in registers, which holds a field of the ok variant or
+    // of the err one. The other variant doesn't have it, so reading it there builds the real object and reads from that
+    // with `readObject`, which raises what reading the object would.
+    template<typename ReadObject>
+    void compileTryResultRead(AstExpr* expr, int field, bool okField, uint8_t reg, uint8_t target, bool targetTemp, ReadObject readObject)
+    {
+        uint8_t okFlag = uint8_t(reg + kTryResultOkFlag);
+
+        // The field is read before the check when target is a temporary, so the right variant takes one jump. A local's
+        // register must still hold its value when the read raises.
+        size_t otherVariantJump = 0;
+        size_t doneJump = 0;
+        if (targetTemp)
+        {
+            bytecode.emitABC(LOP_MOVE, target, uint8_t(reg + field), 0);
+            doneJump = bytecode.emitLabel();
+            bytecode.emitAD(okField ? LOP_JUMPIF : LOP_JUMPIFNOT, okFlag, 0);
+        }
+        else
+        {
+            otherVariantJump = bytecode.emitLabel();
+            bytecode.emitAD(okField ? LOP_JUMPIFNOT : LOP_JUMPIF, okFlag, 0);
+            bytecode.emitABC(LOP_MOVE, target, uint8_t(reg + field), 0);
+            doneJump = bytecode.emitLabel();
+            bytecode.emitAD(LOP_JUMP, 0, 0);
+        }
+
+        size_t otherVariantLabel = bytecode.emitLabel();
+        {
+            RegScope rs(this);
+
+            // `value` is missing from an err, the other fields from an ok
+            unsigned count = okField ? 4u : 1u;
+            uint8_t object = allocReg(expr, count);
+            for (unsigned i = 0; i < count; ++i)
+                bytecode.emitABC(LOP_MOVE, uint8_t(object + i), uint8_t(reg + i), 0);
+            bytecode.emitABC(LOP_WRAPRESULT, object, okField ? LBC_WRAPRESULT_ERR : LBC_WRAPRESULT_OK, 0);
+            readObject(object);
+        }
+
+        size_t doneLabel = bytecode.emitLabel();
+        if (!targetTemp)
+            patchJump(expr, otherVariantJump, otherVariantLabel);
+        patchJump(expr, doneJump, doneLabel);
+    }
+
     void compileExprInterpString(AstExprInterpString* expr, uint8_t target, bool targetTemp)
     {
         size_t formatCapacity = 0;
@@ -7589,6 +7904,10 @@ struct Compiler
     void compileExprIndexName(AstExprIndexName* expr, uint8_t target, bool targetTemp = false)
     {
         setDebugLine(expr); // normally compileExpr sets up line info, but compileExprIndexName can be called directly
+
+        // Luwu try expressions: a field of a result kept in registers
+        if (AstExprLocal* local = expr->expr->as<AstExprLocal>(); local && tryResultLocals.contains(local->local))
+            return compileTryResultField(expr, getLocalReg(local->local), target, targetTemp);
 
         if (expr->qualifiedTrait)
             return compileExprQualifiedIndex(expr, target);
@@ -8078,6 +8397,10 @@ struct Compiler
         else if (AstExprSelfClass* expr = node->as<AstExprSelfClass>())
         {
             compileExpr(expr->classOf, target, targetTemp);
+        }
+        else if (AstExprTry* expr = node->as<AstExprTry>())
+        {
+            compileExprTry(expr, target);
         }
         else
         {
@@ -8963,6 +9286,13 @@ struct Compiler
 
     void compileStatLocal(AstStatLocal* stat)
     {
+        // Luwu try expressions: a result only ever read through its fields stays in registers
+        if (stat->vars.size == 1 && stat->values.size == 1 && tryResultLocals.contains(stat->vars.data[0]))
+        {
+            if (AstExprTry* expr = stat->values.data[0]->as<AstExprTry>())
+                return compileStatLocalTryInRegisters(stat, expr);
+        }
+
         // Optimization: we don't need to allocate and assign const locals, since their uses will be constant-folded
         if (options.optimizationLevel >= 1 && options.debugLevel <= 1 && areLocalsRedundant(stat))
             return;
@@ -10378,6 +10708,83 @@ struct Compiler
         }
     };
 
+    // Luwu try expressions: finds the locals holding a `try` result that are only ever read as `r.value`, `r.error`,
+    // `r.module`, `r.line` or `r.traceback`, used as `r:ok()`, `r:err()` or `r:expect()` (tryResultMethodCall), or tested
+    // with `class.isinstance(r, Ok)` (tryResultVariantTest). Such a result needs no object: its registers hold all of it.
+    // Any other use of the local (passing it, a method call, writing through it, a closure capturing it) needs the object.
+    struct TryResultLocalsVisitor : AstVisitor
+    {
+        Compiler& compiler;
+        DenseHashSet<AstLocal*> candidates{nullptr};
+        DenseHashSet<AstLocal*> escaped{nullptr};
+
+        explicit TryResultLocalsVisitor(Compiler& compiler)
+            : compiler(compiler)
+        {
+        }
+
+        bool visit(AstStatLocal* node) override
+        {
+            bool plain = node->vars.size == 1 && node->values.size == 1 && !node->vars.data[0]->annotation;
+            if (plain && node->values.data[0]->is<AstExprTry>())
+                candidates.insert(node->vars.data[0]);
+            return true;
+        }
+
+        bool visit(AstExprIndexName* node) override
+        {
+            AstExprLocal* local = node->expr->as<AstExprLocal>();
+            bool fieldRead = local && !local->upvalue && node->op == '.' && tryResultField(node->index) >= 0;
+
+            // the local itself isn't visited, so it doesn't count as escaping
+            return !fieldRead;
+        }
+
+        bool visit(AstExprCall* node) override
+        {
+            // the class names a builtin, so it reads no local, and the tested local doesn't escape
+            AstExprLocal* local = nullptr;
+            if (compiler.tryResultVariantTest(node, local))
+                return false;
+
+            if (!tryResultMethodCall(node, local))
+                return true;
+
+            // the local itself isn't visited, so it doesn't count as escaping
+            for (AstExpr* arg : node->args)
+                arg->visit(this);
+            return false;
+        }
+
+        bool visit(AstExprLocal* node) override
+        {
+            escaped.insert(node->local);
+            return false;
+        }
+
+        bool visit(AstStatAssign* node) override
+        {
+            for (AstExpr* var : node->vars)
+                escapeWrittenThrough(var);
+            return true;
+        }
+
+        bool visit(AstStatCompoundAssign* node) override
+        {
+            escapeWrittenThrough(node->var);
+            return true;
+        }
+
+        void escapeWrittenThrough(AstExpr* var)
+        {
+            if (AstExprIndexName* index = var->as<AstExprIndexName>())
+            {
+                if (AstExprLocal* local = index->expr->as<AstExprLocal>())
+                    escaped.insert(local->local);
+            }
+        }
+    };
+
     struct FunctionVisitor : AstVisitor
     {
         std::vector<AstExprFunction*>& functions;
@@ -11541,6 +11948,9 @@ struct Compiler
     bool getfenvUsed = false;
     bool setfenvUsed = false;
 
+    // Luwu try expressions: locals whose `try` result is kept in registers (TryResultLocalsVisitor)
+    DenseHashSet<AstLocal*> tryResultLocals{nullptr};
+
     std::vector<AstLocal*> localStack;
     // Registers holding a local that a closure captures by reference (compileExprAutoTemp doesn't drop their MOVEs)
     std::array<bool, kMaxRegisterCount> regCaptured{};
@@ -11752,6 +12162,20 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
     {
         // this pass tracks which calls are builtins and can be compiled more efficiently
         analyzeBuiltins(compiler.builtins, compiler.globals, compiler.variables, options, root, names);
+
+        // Luwu try expressions: needs `variables` and `builtins`
+        if (FFlag::DebugLuwuTryExpressions)
+        {
+            Compiler::TryResultLocalsVisitor visitor(compiler);
+            root->visit(&visitor);
+            for (AstLocal* local : visitor.candidates)
+            {
+                const Variable* variable = compiler.variables.find(local);
+                bool written = variable && variable->written;
+                if (!written && !local->isExported && !visitor.escaped.contains(local))
+                    compiler.tryResultLocals.insert(local);
+            }
+        }
 
         // this pass determines which locals hold constant tables that are never mutated
         buildTableConstantMap(compiler.tableConstants, compiler.variables, root);

@@ -630,7 +630,8 @@ static size_t propagatemark(global_State* g)
         traverseproto(g, p);
 
         return sizeof(Proto) + sizeof(Instruction) * p->sizecode + sizeof(Proto*) * p->sizep + sizeof(TValue) * p->sizek + p->sizelineinfo +
-               sizeof(LocVar) * p->sizelocvars + sizeof(TString*) * p->sizeupvalues + p->sizetypeinfo;
+               sizeof(LocVar) * p->sizelocvars + sizeof(TString*) * p->sizeupvalues + p->sizetypeinfo +
+               sizeof(LuauTryRange) * p->sizetryranges;
     }
     case LUA_TCLASS:
     {

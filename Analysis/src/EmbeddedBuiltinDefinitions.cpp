@@ -14,6 +14,9 @@ LUAU_FASTFLAG(LuwuBufferMemcmp)
 LUAU_FASTFLAG(LuwuTableDrop)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuDeclareStatements)
+LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau
 {
@@ -461,8 +464,8 @@ declare class: {
 )CLASS_SRC";
 
 // Luwu collections: the `collections` library's classes. The VM builds them in C++ (lcollectionslib.cpp); these are
-// their public members, which the Conformance test `CollectionsDeclarationsMatchTheVm` checks against the VM's classes.
-// The types are the library's exports, not globals (registerBuiltinGlobals).
+// their public members, which the Conformance test `BuiltinClassDeclarationsMatchTheVm` checks against the VM's
+// classes. The types are the library's exports, not globals (registerBuiltinGlobals).
 static const char* kBuiltinDefinitionCollectionsSrc = R"BUILTIN_SRC(
 class type OrderedMap<K, V>
     public function __init(self, ...: bundle.Bundle2<K, V> | {bundle.Bundle2<K, V>})
@@ -520,6 +523,49 @@ declare collections: {
     Vec: class<Vec>,
     VecDeque: class<VecDeque>,
 }
+)BUILTIN_SRC";
+
+// Luwu try expressions: options and results, global classes the VM builds in C++ (lresultlib.cpp). These are their
+// public members, which the Conformance test `BuiltinClassDeclarationsMatchTheVm` checks against the VM's classes.
+// Capitalized names read as classes, and leave the common names `option`, `result`, `ok` and `err` to locals.
+static const char* kBuiltinDefinitionResultSrc = R"BUILTIN_SRC(
+class type Some<T>(public const value: T)
+    public function get(self): T
+    public function expect(self, message: string?): T
+    public function __eq(self, other: Some<T>): boolean
+    public function __tostring(self): string
+end
+
+class type Ok<T>(public const value: T)
+    public function ok(self): T
+    public function expect(self, message: string?): T
+    public function err(self): none
+    public function __eq(self, other: Ok<T>): boolean
+    public function __tostring(self): string
+end
+
+-- `module`, `line` and `traceback` say where the error was raised. A `try` expression fills them in.
+class type Err<E>(
+    public const error: E,
+    public const module: string?,
+    public const line: number?,
+    public const traceback: string?
+)
+    public function ok(self): none
+    public function expect(self, message: string?): never
+    public function err(self): E
+    public function __eq(self, other: Err<E>): boolean
+    public function __tostring(self): string
+end
+
+-- An empty option is `none` itself, which has `get` and `expect` (makeNoneMetatable). `None` is the same value.
+export type Option<T> = Some<T> | none
+export type Result<T, E> = Ok<T> | Err<E>
+
+declare Some: class<Some>
+declare Ok: class<Ok>
+declare Err: class<Err>
+declare None: none
 )BUILTIN_SRC";
 
 std::string getBuiltinDefinitionSource()
@@ -587,7 +633,16 @@ std::string getBuiltinDefinitionSource()
         result += kBuiltinDefinitionClassSrcClose;
     }
 
+    if (resultLibraryEnabled())
+        result += kBuiltinDefinitionResultSrc;
+
     return result;
+}
+
+bool resultLibraryEnabled()
+{
+    return FFlag::LuwuClasses && FFlag::LuwuGenericNominals && FFlag::LuwuNonePrimitive && FFlag::LuwuDeclareStatements &&
+           FFlag::DebugLuwuTryExpressions;
 }
 
 // Luwu bundles: the `bundle` library's functions, and its classes, one per size (lcollectionslib.cpp). The classes are

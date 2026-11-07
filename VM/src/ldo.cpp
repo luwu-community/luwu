@@ -7,6 +7,7 @@
 #include "lgc.h"
 #include "lmem.h"
 #include "lvm.h"
+#include "ldebug.h"
 
 #if LUA_USE_LONGJMP
 #include <setjmp.h>
@@ -838,6 +839,168 @@ int lua_break(lua_State* L)
 int lua_isyieldable(lua_State* L)
 {
     return (L->nCcalls <= L->baseCcalls);
+}
+
+/*
+** Luwu try expressions: an error raised in a function's protected range resumes the function at the range's handler.
+** Errors unwind the C stack to a catch, so the catch has to be where execution can continue: each luau_execute run.
+** A `pcall` deeper on the C stack catches its callee's errors first, and a run with no range around the error rethrows
+** to the catch below it.
+*/
+
+// What a run restores when it resumes at a handler
+struct TryRun
+{
+    // the first frame the run owns (saveci)
+    ptrdiff_t start;
+    unsigned short nCcalls;
+    unsigned short baseCcalls;
+    bool isactive;
+};
+
+// The first frame of the run starting at L->ci: the frame a C caller entered (flagged LUA_CALLINFO_RETURN), or, when
+// the run resumes a coroutine's frames, the lowest Lua frame above a C one
+static CallInfo* runstart(lua_State* L)
+{
+    CallInfo* ci = L->ci;
+    while (!(ci->flags & LUA_CALLINFO_RETURN) && ci - 1 > L->base_ci && isLua(ci - 1))
+        ci--;
+    return ci;
+}
+
+// The innermost protected range around pc
+static const LuauTryRange* findtryrange(Proto* p, int pc)
+{
+    for (int i = 0; i < p->sizetryranges; i++)
+    {
+        const LuauTryRange& range = p->tryranges[i];
+        if (uint32_t(pc) >= range.startpc && uint32_t(pc) < range.endpc)
+            return &range;
+    }
+    return NULL;
+}
+
+// Resumes ci at the range's handler, with the error and where it was raised in the handler's registers. A native frame
+// stays native: the run's next luau_execute enters its code at the handler.
+static void resumeintry(lua_State* L, CallInfo* ci, const LuauTryRange& range, const TryRun& run)
+{
+    // where the error was raised, read while the frames that raised it are still there
+    TString* module = NULL;
+    int line = 0;
+    lua_Debug ar;
+    for (int level = 0; lua_getinfo(L, level, "sl", &ar); ++level)
+    {
+        if (strcmp(ar.what, "C") != 0)
+        {
+            module = luaS_new(L, ar.short_src);
+            line = ar.currentline;
+            break;
+        }
+    }
+    TString* traceback = luaG_traceback(L, int(L->ci - ci) + 1);
+
+    TValue error;
+    setobj(L, &error, L->top - 1);
+
+    StkId target = ci->base + range.target;
+    luaF_close(L, target);
+    L->ci = ci;
+    L->base = ci->base;
+    L->top = ci->top;
+
+    // the rest of the range's registers can be half written, and the GC is about to traverse them
+    for (StkId reg = target + 4; reg < L->top; reg++)
+        setnilvalue(reg);
+
+    setobj2s(L, target, &error);
+    setnilvalue(target + 1);
+    setnilvalue(target + 2);
+    if (module)
+    {
+        setsvalue(L, target + 1, module);
+    }
+    if (line > 0)
+    {
+        setnvalue(target + 2, line);
+    }
+    setsvalue(L, target + 3, traceback);
+
+    ci->savedpc = clvalue(ci->func)->l.p->code + range.handlerpc;
+
+    L->nCcalls = run.nCcalls;
+    L->baseCcalls = run.baseCcalls;
+    L->isactive = run.isactive;
+    restore_stack_limit(L);
+}
+
+// Resumes at the handler of the innermost range around the error, when one of the run's frames has one
+static bool catchintry(lua_State* L, const TryRun& run, int status)
+{
+    // runtime errors only: running out of memory, or an error while handling one, isn't something to recover from here
+    if (status != LUA_ERRRUN)
+        return false;
+
+    CallInfo* start = restoreci(L, run.start);
+    if (start > L->ci)
+        return false;
+
+    // the run owns the frames up to the first one another run or a C function owns
+    CallInfo* last = start;
+    while (last < L->ci && isLua(last + 1) && !((last + 1)->flags & LUA_CALLINFO_RETURN))
+        last++;
+
+    for (CallInfo* ci = last; ci >= start; ci--)
+    {
+        Proto* p = clvalue(ci->func)->l.p;
+        const LuauTryRange* range = p->tryranges ? findtryrange(p, pcRel(ci->savedpc, p)) : NULL;
+        if (range)
+        {
+            resumeintry(L, ci, *range, run);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+#if LUA_USE_LONGJMP
+struct TryExecute
+{
+    void (*execute)(lua_State* L);
+};
+
+static void runexecute(lua_State* L, void* ud)
+{
+    static_cast<TryExecute*>(ud)->execute(L);
+}
+#endif
+
+void luaD_executetry(lua_State* L, void (*execute)(lua_State* L))
+{
+    TryRun run = {saveci(L, runstart(L)), L->nCcalls, L->baseCcalls, L->isactive};
+
+    for (;;)
+    {
+#if LUA_USE_LONGJMP
+        TryExecute ud = {execute};
+        int status = luaD_rawrunprotected(L, runexecute, &ud);
+        if (status == 0)
+            return;
+        if (!catchintry(L, run, status))
+            luaD_throw(L, status);
+#else
+        try
+        {
+            execute(L);
+            return;
+        }
+        catch (lua_exception& e)
+        {
+            if (e.getThread() != L || !catchintry(L, run, e.getStatus()))
+                throw;
+        }
+#endif
+    }
 }
 
 int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t ef)

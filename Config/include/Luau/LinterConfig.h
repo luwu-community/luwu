@@ -118,6 +118,7 @@ struct LintWarning
 
         Code_LuaStringHelper = 82,         // Luwu: `s:sub(1, #p) == p` and the like, which `s:startswith(p)` and friends do
         Code_StringOperations = 83,        // Luwu: a string library call that `""` makes pointless or wrong (`s:startswith("")`)
+        Code_UncaughtErrors = 84,          // Luwu: a call to a function with error hints outside a `try`. Off by default.
 
         Code__Count
     };
@@ -251,6 +252,7 @@ inline constexpr const char* kWarningNames[] = {
     "UnflippedGuard",
     "LuaStringHelper",
     "StringOperations",
+    "UncaughtErrors",
 };
 // clang-format on
 

@@ -89,6 +89,18 @@ struct IrBuilder
 
     std::vector<uint32_t> instIndexToBlock; // Block index at the bytecode instruction
 
+    // Luwu try expressions: where the instructions run relative to the function's protected ranges
+    static constexpr int16_t kNoTryRange = -1;
+    // per instruction: the target register of the innermost range around it, or kNoTryRange
+    std::vector<int16_t> tryRangeTargets;
+    // per instruction: whether control can reach it from inside a range it isn't in
+    std::vector<uint8_t> leavesTryRange;
+    // per instruction: the target register of a range that ends just before it, or kNoTryRange
+    std::vector<int16_t> tryRangeEndTargets;
+
+    void analyzeTryRanges(Proto* proto);
+    void beforeInstWithTryRanges(LuauOpcode op, int i);
+
     struct LoopInfo
     {
         IrOp step;

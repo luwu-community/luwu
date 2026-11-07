@@ -109,6 +109,7 @@ LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuwuBufferBatched)
@@ -4935,9 +4936,10 @@ static std::optional<Luau::TypeId> declaredClassValue(const Luau::TableType* lib
     return declared->second.readTy;
 }
 
-// Luwu collections and bundles: the builtin definitions declare each class the VM builds, with exactly its public members.
+// Luwu collections, bundles and try expressions: the builtin definitions declare each class the VM builds, with exactly
+// its public members. The collections classes are in the `collections` table, and `Some`, `Ok` and `Err` are globals.
 // A bundle class is a type the `bundle` library exports, since only Pair, Triple and Quad are in its table.
-TEST_CASE("CollectionsDeclarationsMatchTheVm")
+TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
@@ -4945,6 +4947,7 @@ TEST_CASE("CollectionsDeclarationsMatchTheVm")
         {FFlag::DebugLuwuCollections, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
     };
 
     Luau::NullFileResolver fileResolver;
@@ -4974,7 +4977,9 @@ TEST_CASE("CollectionsDeclarationsMatchTheVm")
             continue;
         }
 
-        std::optional<Luau::TypeId> declared = declaredClassValue(library, name);
+        bool isGlobal = kind == LUWU_BUILTIN_SOME || kind == LUWU_BUILTIN_OK || kind == LUWU_BUILTIN_ERR;
+        std::optional<Luau::TypeId> declared =
+            isGlobal ? std::optional<Luau::TypeId>(Luau::getGlobalBinding(frontend.globals, name.c_str())) : declaredClassValue(library, name);
         REQUIRE(declared);
         CHECK_EQ(declaredClassMembers(*declared), vmClassMembers(classdef));
     }
@@ -4990,6 +4995,32 @@ TEST_CASE("Collections")
     };
 
     runConformance("collections.luwu");
+}
+
+TEST_CASE("TryExpressions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    runConformance("try.luwu");
+    runConformance("try_variants.luwu");
+}
+
+TEST_CASE("OptionAndResult")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    runConformance("option_result.luwu");
 }
 
 TEST_CASE("CollectionsFastPaths")
@@ -5346,6 +5377,111 @@ return "OK"
     REQUIRE(loadResult == 0);
     REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
     CHECK_EQ(std::string(lua_tostring(L, -1)), "OK");
+}
+
+// Luwu try expressions: options and results built and read by an embedder, with no Lua frame
+TEST_CASE("OptionAndResultCApi")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    SUBCASE("built values are the library's own and work from Luwu code")
+    {
+        const char* source = R"(
+return function(some, ok, err)
+    return some:get(), ok:ok(), err:err(), ok:err(), tostring(some)
+end
+)";
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+        int loadResult = luau_load(L, "=OptionAndResultCApi", bytecode, bytecodeSize, 0);
+        free(bytecode);
+        REQUIRE(loadResult == 0);
+        REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+
+        lua_pushliteral(L, "payload");
+        lua_pushsome(L, -1);
+        lua_pushnumber(L, 42);
+        lua_pushresultok(L, -1);
+        lua_remove(L, -2);
+        lua_pushliteral(L, "failed");
+        lua_pushresulterr(L, -1);
+        lua_remove(L, -2);
+        lua_remove(L, 2); // the "payload" string, so only the some holds it
+        // stack: function, some, ok, err
+
+        lua_gc(L, LUA_GCCOLLECT, 0);
+
+        CHECK(lua_issome(L, 2) == 1);
+        CHECK(lua_isresultok(L, 3) == 1);
+        CHECK(lua_isresulterr(L, 4) == 1);
+        CHECK(lua_issome(L, 3) == 0);
+        CHECK(lua_isresultok(L, 4) == 0);
+        CHECK(lua_isresulterr(L, 1) == 0);
+
+        REQUIRE(lua_getpayload(L, 2) == LUA_TSTRING);
+        CHECK(std::string(lua_tostring(L, -1)) == "payload");
+        lua_pop(L, 1);
+        REQUIRE(lua_getpayload(L, 4) == LUA_TSTRING);
+        CHECK(std::string(lua_tostring(L, -1)) == "failed");
+        lua_pop(L, 1);
+        CHECK(lua_getpayload(L, 1) == LUA_TNONE);
+        CHECK(lua_gettop(L) == 4);
+
+        REQUIRE(lua_pcall(L, 3, 5, 0) == LUA_OK);
+        CHECK(std::string(lua_tostring(L, 1)) == "payload");
+        CHECK(lua_tonumber(L, 2) == 42);
+        CHECK(std::string(lua_tostring(L, 3)) == "failed");
+        CHECK(lua_issymnone(L, 4));
+        CHECK(std::string(lua_tostring(L, 5)) == "Some(\"payload\")");
+    }
+
+    SUBCASE("some holds nil and none")
+    {
+        lua_pushnil(L);
+        lua_pushsome(L, -1);
+        REQUIRE(lua_issome(L, -1));
+        CHECK(lua_getpayload(L, -1) == LUA_TNIL);
+        lua_pop(L, 3);
+
+        lua_pushsymnone(L);
+        lua_pushsome(L, -1);
+        REQUIRE(lua_issome(L, -1));
+        CHECK(lua_getpayload(L, -1) == LUA_TSYMNONE);
+        lua_pop(L, 3);
+
+        // ok and err hold any value
+        lua_pushnil(L);
+        lua_pushresultok(L, -1);
+        CHECK(lua_getpayload(L, -1) == LUA_TNIL);
+    }
+
+    SUBCASE("building raises when the library isn't open")
+    {
+        StateRef bareState(luaL_newstate(), lua_close);
+        lua_State* bare = bareState.get();
+
+        std::string err = classesCApiProtected(
+            bare,
+            [](lua_State* L)
+            {
+                lua_pushnumber(L, 1);
+                lua_pushresultok(L, -1);
+            }
+        );
+        CHECK(err == "open the result library (luaopen_result) before building an Ok, Err or Some");
+
+        lua_pushnumber(bare, 1);
+        CHECK(lua_isresultok(bare, -1) == 0);
+        CHECK(lua_getpayload(bare, -1) == LUA_TNONE);
+    }
 }
 
 TEST_CASE("ClassesCApi")

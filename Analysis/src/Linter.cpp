@@ -8730,6 +8730,96 @@ private:
     }
 };
 
+// Luwu try expressions: calls outside a `try` to a function whose error hints say it can raise. Off by default: a
+// scope that should handle every error it can expect turns it on with `@[lint(UncaughtErrors)]`. weakunknown, which any
+// call can raise, doesn't count.
+class LintUncaughtErrors : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        if (!context.module)
+            return;
+
+        LintUncaughtErrors pass;
+        pass.context = &context;
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+    // `try` expressions around the code being visited, within the innermost function
+    int tryDepth = 0;
+
+    bool visit(AstExprTry* node) override
+    {
+        tryDepth++;
+        node->expr->visit(this);
+        tryDepth--;
+        return false;
+    }
+
+    // A function's body runs when it's called, not where it's written, so a `try` around it doesn't cover it
+    bool visit(AstExprFunction* node) override
+    {
+        int outer = tryDepth;
+        tryDepth = 0;
+        node->body->visit(this);
+        tryDepth = outer;
+        return false;
+    }
+
+    bool visit(AstExprCall* node) override
+    {
+        if (tryDepth > 0)
+            return true;
+
+        std::optional<std::string> hints = hintedErrors(node);
+        if (!hints)
+            return true;
+
+        std::string callee = describe(node->func, "This call");
+        emitWarning(
+            *context,
+            LintWarning::Code_UncaughtErrors,
+            node->location,
+            "%s can raise %s; write 'try' before the call to handle it",
+            callee.c_str(),
+            hints->c_str()
+        );
+        return true;
+    }
+
+    // The callee's error hints without weakunknown, or nullopt when it has none
+    std::optional<std::string> hintedErrors(AstExprCall* call)
+    {
+        const TypeId* callee = context->module->astOriginalCallTypes.find(call->func);
+        const FunctionType* function = callee ? get<FunctionType>(follow(*callee)) : nullptr;
+        if (!function || !function->errorHint)
+            return std::nullopt;
+
+        std::vector<TypeId> hints;
+        TypeId hint = follow(*function->errorHint);
+        if (const UnionType* options = get<UnionType>(hint))
+            hints.assign(options->options.begin(), options->options.end());
+        else
+            hints.push_back(hint);
+
+        std::string names;
+        for (TypeId option : hints)
+        {
+            if (get<UnknownType>(follow(option)))
+                continue;
+            if (!names.empty())
+                names += " | ";
+            names += toString(option);
+        }
+        if (names.empty())
+            return std::nullopt;
+        return names;
+    }
+};
+
 // Luwu: `xs[#xs / 2]`. `/` always gives a float, so an index computed with it reads `nil` whenever the result isn't
 // whole, which for `#xs / 2` is every odd length.
 class LintFloatIndex : AstVisitor
@@ -11283,6 +11373,9 @@ std::vector<LintWarning> lint(
 
     if (context.warningEnabled(LintWarning::Code_ConstLocal))
         LintConstLocal::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_UncaughtErrors))
+        LintUncaughtErrors::process(context);
 
     if (context.warningEnabled(LintWarning::Code_FloatIndex))
         LintFloatIndex::process(context);

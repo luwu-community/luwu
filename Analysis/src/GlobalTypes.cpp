@@ -51,6 +51,8 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     asMutable(builtinTypes->stringType)->ty.emplace<PrimitiveType>(PrimitiveType::String, stringMetatableTy);
     persist(stringMetatableTy);
     makeVectorMetatable(builtinTypes);
+    if (resultLibraryEnabled())
+        makeNoneMetatable(builtinTypes);
     freeze(*builtinTypes->arena);
 }
 

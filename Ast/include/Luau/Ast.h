@@ -678,6 +678,8 @@ public:
     AstArray<AstLocal*> args;
     AstArray<AstExpr*> argsDefaults;
     AstTypePack* returnAnnotation = nullptr;
+    // Luwu try expressions: the errors `! E` says the function raises, or nullptr
+    AstType* errorHint = nullptr;
     bool vararg = false;
     Location varargLocation;
     AstTypePack* varargAnnotation;
@@ -897,6 +899,21 @@ public:
     // `class.of(self)`, with the method's `self` or the trait's AstStatClass::initSelf. Everything past the parser compiles
     // and type checks this call.
     AstExprCall* classOf;
+};
+
+// Luwu try expressions: `try expr`, an `Ok` holding expr's value, or an `Err` holding the error evaluating it raised
+class AstExprTry : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprTry)
+
+    AstExprTry(const Location& location, const Location& tryLocation, AstExpr* expr);
+
+    void visit(AstVisitor* visitor) override;
+
+    // The `try` keyword
+    Location tryLocation;
+    AstExpr* expr;
 };
 
 // f<<T>>
@@ -1418,6 +1435,8 @@ public:
     AstArray<AstGenericType*> generics;
     AstArray<AstGenericTypePack*> genericPacks;
     AstType* type;
+    // Luwu try expressions: `type Result<T> = T ! IoError`. Only a function's return type may name an alias with a hint.
+    AstType* errorHint = nullptr;
     bool exported;
 
     // Location of the leading 'type' keyword token only.
@@ -1536,6 +1555,8 @@ public:
     bool vararg = false;
     Location varargLocation;
     AstTypePack* retTypes;
+    // Luwu try expressions: the errors `! E` says the function raises, or nullptr
+    AstType* errorHint = nullptr;
 
     // Location of the leading 'declare' keyword token only.
     Location declareLocation;
@@ -1914,6 +1935,8 @@ public:
     AstTypeList argTypes;
     AstArray<std::optional<AstArgumentName>> argNames;
     AstTypePack* returnTypes;
+    // Luwu try expressions: the errors `! E` says the function raises, or nullptr
+    AstType* errorHint = nullptr;
 };
 
 class AstTypeTypeof : public AstType
@@ -2299,6 +2322,10 @@ public:
         return visit(static_cast<AstExpr*>(node));
     }
     virtual bool visit(class AstExprInstantiate* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
+    virtual bool visit(class AstExprTry* node)
     {
         return visit(static_cast<AstExpr*>(node));
     }

@@ -46,6 +46,7 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
         else if constexpr (std::is_same_v<T, PendingExpansionType>)
         {
             PendingExpansionType clone = PendingExpansionType{a.prefix, a.name, a.typeArguments, a.packArguments};
+            clone.errorHint = a.errorHint;
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, AnyType>)
@@ -104,6 +105,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.truthyRefinement = a.truthyRefinement;
             // Luwu literal types
             clone.literalParameters = a.literalParameters;
+            // Luwu try expressions
+            clone.errorHint = a.errorHint;
             clone.name = a.name;
             clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
@@ -273,6 +276,10 @@ void Tarjan::visitChildren(TypeId ty, int index)
             visitChild(ftv->truthyRefinement->type);
         for (const FunctionType::LiteralParameter& literal : ftv->literalParameters)
             visitLiteralCheck(literal);
+
+        // Luwu try expressions
+        if (ftv->errorHint)
+            visitChild(*ftv->errorHint);
     }
     else if (const TableType* ttv = get<TableType>(ty))
     {
@@ -976,6 +983,10 @@ void Substitution::replaceChildren(TypeId ty)
         // `V<literal<string>, T>`)
         for (FunctionType::LiteralParameter& literal : ftv->literalParameters)
             replaceLiteralCheck(literal);
+
+        // Luwu try expressions: a hint can name the function's generics
+        if (ftv->errorHint)
+            ftv->errorHint = replace(*ftv->errorHint);
     }
     else if (TableType* ttv = getMutable<TableType>(ty))
     {

@@ -1993,6 +1993,66 @@ int lua_classis(lua_State* L, int idx, int classidx)
     return ttisobject(o) && objectvalue(o)->lclass == classvalue(cls);
 }
 
+static void pushpayload(lua_State* L, LuwuBuiltinClass kind, int idx)
+{
+    luaC_checkGC(L);
+    luaC_threadbarrier(L);
+    ensure_stack(L, 1);
+    LuauObject* object = luaR_newpayload(L, kind, index2addr(L, idx));
+    setobjectvalue(L, L->top, object);
+    api_incr_top(L);
+}
+
+void lua_pushsome(lua_State* L, int idx)
+{
+    pushpayload(L, LUWU_BUILTIN_SOME, idx);
+}
+
+void lua_pushresultok(lua_State* L, int idx)
+{
+    pushpayload(L, LUWU_BUILTIN_OK, idx);
+}
+
+void lua_pushresulterr(lua_State* L, int idx)
+{
+    pushpayload(L, LUWU_BUILTIN_ERR, idx);
+}
+
+static bool isbuiltinobject(lua_State* L, int idx, LuwuBuiltinClass kind)
+{
+    const TValue* o = index2addr(L, idx);
+    return ttisobject(o) && objectvalue(o)->lclass == L->global->builtinclasses[kind];
+}
+
+int lua_issome(lua_State* L, int idx)
+{
+    return isbuiltinobject(L, idx, LUWU_BUILTIN_SOME);
+}
+
+int lua_isresultok(lua_State* L, int idx)
+{
+    return isbuiltinobject(L, idx, LUWU_BUILTIN_OK);
+}
+
+int lua_isresulterr(lua_State* L, int idx)
+{
+    return isbuiltinobject(L, idx, LUWU_BUILTIN_ERR);
+}
+
+int lua_getpayload(lua_State* L, int idx)
+{
+    const TValue* payload = luaR_payload(L, index2addr(L, idx));
+    if (!payload)
+        return LUA_TNONE;
+
+    luaC_threadbarrier(L);
+    ensure_stack(L, 1);
+    setobj2s(L, L->top, payload);
+    api_incr_top(L);
+    return ttype(payload);
+
+}
+
 static const char* aux_upvalue(StkId fi, int n, TValue** val)
 {
     Closure* f;
