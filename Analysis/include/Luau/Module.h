@@ -167,6 +167,11 @@ struct Module
 
     DenseHashMap<TypeId, std::vector<std::pair<Location, TypeId>>> upperBoundContributors{nullptr};
 
+    // Luwu: the return packs of functions whose return type was inferred value by value from their `return` statements
+    // (ConstraintSolver::dispatchInferredReturn). A `return` that gives fewer values than the others gives `nil` for
+    // the rest.
+    DenseHashSet<TypePackId> inferredReturnPacks{nullptr};
+
     // Map AST nodes to the scope they create.  Cannot be NotNull<Scope> because
     // we need a sentinel value for the map.
     DenseHashMap<const AstNode*, Scope*> astScopes{nullptr};
