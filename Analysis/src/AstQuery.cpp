@@ -20,6 +20,20 @@ namespace Luau
 namespace
 {
 
+// Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): a function's attributes are written
+// before the function, outside its own location, so a finder that only enters nodes containing the position
+// has to check them separately.
+AstAttr* findAttributeContaining(const AstArray<AstAttr*>& attributes, Position pos)
+{
+    for (AstAttr* attr : attributes)
+    {
+        if (attr->location.contains(pos))
+            return attr;
+    }
+
+    return nullptr;
+}
+
 struct AutocompleteNodeFinder : public AstVisitor
 {
     const Position pos;
@@ -159,9 +173,25 @@ struct FindNode : public AstVisitor
         visit(static_cast<AstNode*>(node));
         if (node->name->location.contains(pos))
             node->name->visit(this);
-        else if (node->func->location.contains(pos))
+        else if (node->func->location.contains(pos) || findAttributeContaining(node->func->attributes, pos))
             node->func->visit(this);
         return false;
+    }
+
+    bool visit(AstAttr* attr) override
+    {
+        return visit(static_cast<AstNode*>(attr));
+    }
+
+    bool visit(AstExprFunction* node) override
+    {
+        if (AstAttr* attr = findAttributeContaining(node->attributes, pos))
+        {
+            attr->visit(this);
+            return false;
+        }
+
+        return visit(static_cast<AstNode*>(node));
     }
 
     bool visit(AstStatBlock* block) override
@@ -204,9 +234,27 @@ bool FindFullAncestry::visit(AstStatFunction* node)
     visit(static_cast<AstNode*>(node));
     if (node->name->location.contains(pos))
         node->name->visit(this);
-    else if (node->func->location.contains(pos))
+    else if (node->func->location.contains(pos) || findAttributeContaining(node->func->attributes, pos))
         node->func->visit(this);
     return false;
+}
+
+bool FindFullAncestry::visit(AstAttr* attr)
+{
+    return visit(static_cast<AstNode*>(attr));
+}
+
+bool FindFullAncestry::visit(AstExprFunction* node)
+{
+    // The function itself stays in the ancestry, so a caller can tell what the attribute is on.
+    if (AstAttr* attr = findAttributeContaining(node->attributes, pos))
+    {
+        nodes.push_back(node);
+        attr->visit(this);
+        return false;
+    }
+
+    return visit(static_cast<AstNode*>(node));
 }
 
 bool FindFullAncestry::visit(AstNode* node)
