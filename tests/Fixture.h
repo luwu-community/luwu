@@ -22,6 +22,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <optional>
 #include <vector>
 
@@ -107,6 +108,8 @@ struct TestFileResolver
 
     std::unordered_map<ModuleName, std::string> source;
     std::unordered_map<ModuleName, SourceCode::Type> sourceTypes;
+    // Luwu object notation: modules read as `.luwon` data files, besides any module whose name ends in `.luwon`.
+    std::unordered_set<ModuleName> luwonModules;
     std::unordered_map<ModuleName, std::string> environments;
     // Luwu: `require("game/A")` names the module `game/A` directly (doc comment bindings' tests)
     bool resolveStringRequires = false;

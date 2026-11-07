@@ -10,10 +10,11 @@
 #include <string>
 #include <string_view>
 
-// Luwu: `.luwu` files are Luwu code, which isn't guaranteed to run in upstream Luau. Two candidates for
-// one module are ambiguous whatever their extensions, so `a.luwu` next to `a.luau` is an error.
-const std::array<std::string_view, 3> kSuffixes = {".luwu", ".luau", ".lua"};
-const std::array<std::string_view, 3> kInitSuffixes = {"/init.luwu", "/init.luau", "/init.lua"};
+// Luwu: `.luwu` files are Luwu code, which isn't guaranteed to run in upstream Luau, and `.luwon` files are data
+// (Luwu object notation). Two candidates for one module are ambiguous whatever their extensions, so `a.luwu` next to
+// `a.luau` or `a.luwon` is an error.
+const std::array<std::string_view, 4> kSuffixes = {".luwu", ".luau", ".lua", ".luwon"};
+const std::array<std::string_view, 4> kInitSuffixes = {"/init.luwu", "/init.luau", "/init.lua", "/init.luwon"};
 
 struct ResolvedRealPath
 {

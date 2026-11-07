@@ -172,6 +172,11 @@ Luau::Language languageOfPath(std::string_view path)
     return Luau::Language::Luwu;
 }
 
+bool isLuwonPath(std::string_view path)
+{
+    return hasFileExtension(path, {".luwon"});
+}
+
 bool hasFileExtension(std::string_view name, const std::vector<std::string>& extensions)
 {
     for (const std::string& extension : extensions)
