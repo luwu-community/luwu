@@ -233,6 +233,10 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
     {
         return similar(le->expr, re->expr);
     }
+    CASE(AstExprSelfClass)
+    {
+        return similar(le->classOf, re->classOf);
+    }
     else
     {
         LUAU_ASSERT(!"Unknown expression type");
