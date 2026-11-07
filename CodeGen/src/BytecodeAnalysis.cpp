@@ -1592,7 +1592,15 @@ static void analyzeBytecodeTypesPass(
             case LOP_CHECKSELFCLASS:
             case LOP_JUMPXISA:
             case LOP_SETOBJECTMEMBER:
+            case LOP_PRESIZETABLE:
                 break;
+            case LOP_APPENDTABLE:
+            {
+                // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the count stays a number
+                int rc = LUAU_INSN_C(*pc);
+                regTags[rc] = LBC_TYPE_NUMBER;
+                break;
+            }
             case LOP_GETQUALIFIED:
             case LOP_INITTRAITS:
             {
@@ -1718,6 +1726,9 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
     case LOP_INITTRAITS:
     case LOP_GETQUALIFIED:
         visit(ra, uint8_t(LBC_TYPE_ANY));
+        break;
+    case LOP_APPENDTABLE:
+        visit(LUAU_INSN_C(*code), uint8_t(LBC_TYPE_NUMBER));
         break;
     case LOP_NAMECALL:
     case LOP_NAMECALLUDATA:

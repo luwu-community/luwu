@@ -365,7 +365,10 @@ void CFGBuilder::lower(AstStatIf* statIf)
     Block* currBlock = currentBlock.get();
 
     Block* thenBlock = newBlock(BlockKind::Linear, "then branch", currBlock);
-    auto ref = resolveCondition(statIf->condition);
+
+    // Luwu If Local (rfcs/if-local.md): a `when` chain's bindings are declared at the top of the then branch.
+    // Neither they nor its plain conditions refine anything here yet.
+    auto ref = statIf->clauses.size == 0 ? resolveCondition(statIf->condition) : std::nullopt;
     if (ref)
         emitRefineInstruction(thenBlock, *ref);
 
@@ -374,6 +377,11 @@ void CFGBuilder::lower(AstStatIf* statIf)
     Block* thenExit;
     {
         BlockScope scope(*this, thenBlock);
+
+        for (const AstIfClause& clause : statIf->clauses)
+            if (clause.declaration)
+                lower(clause.declaration);
+
         lower(statIf->thenbody);
         thenExit = currentBlock.get();
     }
@@ -415,7 +423,9 @@ void CFGBuilder::lower(AstStatWhile* statWhile)
     std::optional<CFGRefinement::RefinementId> ref;
     {
         BlockScope scope(*this, loopHeader);
-        ref = resolveCondition(statWhile->condition);
+        // Luwu If Local (rfcs/if-local.md): as for `if`, a `when` chain refines nothing here yet
+        if (statWhile->clauses.size == 0)
+            ref = resolveCondition(statWhile->condition);
     }
 
     Block* bodyBlock = newBlock(BlockKind::Linear, "while-loop body", loopHeader);
@@ -425,6 +435,11 @@ void CFGBuilder::lower(AstStatWhile* statWhile)
     Block* bodyExit;
     {
         BlockScope scope(*this, bodyBlock);
+
+        for (const AstIfClause& clause : statWhile->clauses)
+            if (clause.declaration)
+                lower(clause.declaration);
+
         lower(statWhile->body);
         bodyExit = currentBlock.get();
     }

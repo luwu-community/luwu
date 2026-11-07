@@ -11,6 +11,7 @@
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
 
@@ -1492,6 +1493,10 @@ uint8_t BytecodeBuilder::getVersion()
     if (FFlag::LuwuDestructuring)
         return LWBC_VERSION_WIP;
 
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): LOP_PRESIZETABLE is WIP bytecode too
+    if (FFlag::LuwuTableComprehensions)
+        return LWBC_VERSION_WIP;
+
     return LWBC_VERSION_TARGET;
 }
 
@@ -2023,6 +2028,24 @@ void BytecodeBuilder::validateInstructions() const
             // the runner goes in A and the object is in A + 1; the CALL that follows covers the arguments
             VREG(LUAU_INSN_A(insn) + 1);
             VJUMP(LUAU_INSN_D(insn));
+            break;
+
+        case LOP_APPENDTABLE:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            VREG(LUAU_INSN_C(insn));
+            break;
+
+        case LOP_PRESIZETABLE:
+            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_PRESIZE_TRIM);
+            VREG(LUAU_INSN_A(insn));
+            // the iterator forms read B and B + 1, the range forms B to B + 2
+            if (LUAU_INSN_C(insn) == LBC_PRESIZE_TRIM)
+                VREG(LUAU_INSN_B(insn));
+            else if (LUAU_INSN_C(insn) <= LBC_PRESIZE_ITER_HASH)
+                VREG(LUAU_INSN_B(insn) + 1);
+            else
+                VREG(LUAU_INSN_B(insn) + 2);
             break;
 
         case LOP_GETQUALIFIED:
@@ -2868,6 +2891,18 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
     case LOP_INITTRAITS:
         formatAppend(result, "INITTRAITS R%d L%d\n", LUAU_INSN_A(insn), targetLabel);
         break;
+
+    case LOP_APPENDTABLE:
+        formatAppend(result, "APPENDTABLE R%d R%d R%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn));
+        break;
+
+    case LOP_PRESIZETABLE:
+    {
+        static const char* const kForms[] = {"ITER_ARRAY", "ITER_HASH", "RANGE_ARRAY", "RANGE_HASH", "TRIM"};
+        LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_PRESIZE_TRIM);
+        formatAppend(result, "PRESIZETABLE R%d R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), kForms[LUAU_INSN_C(insn)]);
+        break;
+    }
 
     case LOP_GETQUALIFIED:
         formatAppend(result, "GETQUALIFIED R%d R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), *code);

@@ -14,3 +14,7 @@ LUAU_FASTFLAGVARIABLE(LuwuTraits)
 // Luwu Destructuring (rfcs/destructuring.md): `.{x, y}` and `.(x, y)` patterns. The parser gates the syntax, and while it
 // is on the compiler emits WIP bytecode (version 200), which positional patterns need for LOP_GETPOSITIONAL.
 LUAU_FASTFLAGVARIABLE(LuwuDestructuring)
+
+// Luwu Table Comprehensions (rfcs/table-comprehensions.md): `{ for ... in ... when ... give item }` (in progress). While it
+// is on, the compiler emits WIP bytecode (version 200), which has LOP_PRESIZETABLE.
+LUAU_FASTFLAGVARIABLE(LuwuTableComprehensions)

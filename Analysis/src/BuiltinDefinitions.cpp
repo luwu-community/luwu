@@ -1554,8 +1554,105 @@ static bool reportLuwuNominalFirstArgument(const MagicFunctionTypeCheckContext& 
     return true;
 }
 
+// Luwu: the metamethods that get the table they're set on as their first argument
+static constexpr const char* kSelfFirstMetamethods[] = {"__call", "__index", "__newindex", "__tostring", "__len", "__iter", "__unm"};
+
+static bool getsSelfFirst(std::string_view name)
+{
+    for (const char* metamethod : kSelfFirstMetamethods)
+    {
+        if (name == metamethod)
+            return true;
+    }
+    return false;
+}
+
+// A primitive other than `table`, a singleton, or a union of them. The table passed to setmetatable is often `{}` with
+// its fields set later, so a table type that doesn't fit it yet isn't reported.
+static bool cannotBeATable(TypeId ty, int depth = 0)
+{
+    // types can be cyclic, and nested unions this deep aren't worth the walk
+    constexpr int kMaxDepth = 8;
+    if (depth > kMaxDepth)
+        return false;
+
+    ty = follow(ty);
+    if (const PrimitiveType* primitive = get<PrimitiveType>(ty))
+        return primitive->type != PrimitiveType::Table;
+
+    if (get<SingletonType>(ty))
+        return true;
+
+    const UnionType* unionType = get<UnionType>(ty);
+    if (!unionType)
+        return false;
+
+    for (TypeId option : unionType->options)
+    {
+        if (!cannotBeATable(option, depth + 1))
+            return false;
+    }
+    return true;
+}
+
+// Luwu: `setmetatable(t, { __call = function(name: string) ... end })` where the annotated first parameter can't hold
+// `t`. Lua passes the table itself first, so the parameter meant for the first argument is the second one.
+static void reportMetamethodsMissingSelf(const MagicFunctionTypeCheckContext& context)
+{
+    if (context.callSite->args.size < 2)
+        return;
+
+    AstExprTable* literal = context.callSite->args.data[1]->as<AstExprTable>();
+    const auto& [argumentTypes, _] = flatten(context.arguments);
+    if (!literal || argumentTypes.size() < 2)
+        return;
+
+    TypeId table = follow(argumentTypes[0]);
+    const TableType* metatable = get<TableType>(follow(argumentTypes[1]));
+    if (!metatable)
+        return;
+
+    for (const AstExprTable::Item& item : literal->items)
+    {
+        AstExprConstantString* key = item.key ? item.key->as<AstExprConstantString>() : nullptr;
+        AstExprFunction* function = item.value->as<AstExprFunction>();
+        bool annotatedFirstParameter = function && function->args.size > 0 && function->args.data[0]->annotation;
+        if (!key || !annotatedFirstParameter)
+            continue;
+
+        std::string name(key->value.data, key->value.size);
+        auto prop = metatable->props.find(name);
+        if (!getsSelfFirst(name) || prop == metatable->props.end() || !prop->second.readTy)
+            continue;
+
+        const FunctionType* functionType = get<FunctionType>(follow(*prop->second.readTy));
+        if (!functionType)
+            continue;
+
+        const auto& [parameterTypes, _tail] = flatten(functionType->argTypes);
+        if (parameterTypes.empty() || !cannotBeATable(parameterTypes[0]))
+            continue;
+
+        SubtypingResult fits = context.typechecker->subtyping->isSubtype(table, parameterTypes[0], context.checkScope);
+        if (fits.isSubtype || fits.isErrorSuppressing)
+            continue;
+
+        AstLocal* parameter = function->args.data[0];
+        if (parameter->name == "self")
+            context.typechecker->reportError(
+                GenericError{format("'self' here is the table, which isn't a '%s'", toString(parameterTypes[0]).c_str())}, parameter->location
+            );
+        else
+            context.typechecker->reportError(
+                GenericError{format("Add 'self' before '%s': '%s' gets the table as its first argument", parameter->name.value, name.c_str())},
+                parameter->location
+            );
+    }
+}
+
 bool MagicSetMetatable::typeCheck(const MagicFunctionTypeCheckContext& ctx)
 {
+    reportMetamethodsMissingSelf(ctx);
     return reportLuwuNominalFirstArgument(ctx);
 }
 

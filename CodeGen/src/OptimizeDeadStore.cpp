@@ -1286,6 +1286,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_NEWOBJECT:
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
     case IrCmd::FALLBACK_INITTRAITS:
+    case IrCmd::FALLBACK_PRESIZETABLE:
     case IrCmd::FALLBACK_GETQUALIFIED:
     case IrCmd::FALLBACK_GETPOSITIONAL:
         if (state.hasGcoToClear)
@@ -1334,6 +1335,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_NEWOBJECT:
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
     case IrCmd::FALLBACK_INITTRAITS:
+    case IrCmd::FALLBACK_PRESIZETABLE:
     case IrCmd::FALLBACK_GETQUALIFIED:
     case IrCmd::FALLBACK_GETPOSITIONAL:
         // CALL directly executes a Luau function on the same native stack frame

@@ -1012,6 +1012,14 @@ enum class IrCmd : uint8_t
     // C: Rn (object)
     FALLBACK_INITTRAITS,
 
+    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): LOP_PRESIZETABLE, through the same C implementation the
+    // interpreter uses. It runs once per comprehension (twice with TRIM), and resizing a table allocates anyway.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (the table)
+    // C: Rn (the first register the form reads)
+    // D: int (form, LBC_PRESIZE_*)
+    FALLBACK_PRESIZETABLE,
+
     // Luwu Traits (rfcs/classes/traits.md): LOP_GETQUALIFIED, the class's version of a trait's member. Runs no Luau code,
     // but raises when the class doesn't implement the trait.
     // A: unsigned int (bytecode instruction index)
