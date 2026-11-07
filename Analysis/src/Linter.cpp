@@ -7670,9 +7670,10 @@ private:
         if (call->args.size == 0)
             return true;
 
-        // the lint can't count the values a call or `...` passes in the last position
+        // `f(x, ...)` forwards whatever the caller passed. A call in the last position is counted as one argument: it's
+        // extra even when it gives no values.
         AstExpr* last = call->args.data[call->args.size - 1];
-        if (last->is<AstExprCall>() || last->is<AstExprVarargs>())
+        if (last->is<AstExprVarargs>())
             return true;
 
         std::optional<Callee> callee = calleeOf(call);
