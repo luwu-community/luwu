@@ -370,6 +370,36 @@ static int pushLoadError(lua_State* L, const char* chunkname, const char* fmt, .
     return 1;
 }
 
+// Luwu table presizing: gives `p` one TableSite per NEWTABLE instruction, in code order, so luaH_newatsite can size each
+// one's tables from what the last of them grew to. Fills `sites` with their pcs when it isn't NULL, and returns how many.
+static int findtablesites(Proto* p, TableSite* sites)
+{
+    int count = 0;
+    for (int pc = 0; pc < p->sizecode; pc += Luau::getOpLength(LuauOpcode(LUAU_INSN_OP(p->code[pc]))))
+    {
+        if (LUAU_INSN_OP(p->code[pc]) != LOP_NEWTABLE)
+            continue;
+        if (sites)
+        {
+            sites[count].pc = uint32_t(pc);
+            sites[count].arrayhint = 0;
+            sites[count].last = NULL;
+        }
+        count++;
+    }
+    return count;
+}
+
+static void maketablesites(lua_State* L, Proto* p)
+{
+    int count = findtablesites(p, NULL);
+    if (count == 0)
+        return;
+    p->tablesites = luaM_newarray(L, count, TableSite, p->memcat);
+    p->sizetablesites = count;
+    findtablesites(p, p->tablesites);
+}
+
 static int loadsafe(
     lua_State* L,
     TempBuffer<TString*>& strings,
@@ -586,6 +616,8 @@ static int loadsafe(
             p->code[j] = read<uint32_t>(data, size, offset);
 
         p->codeentry = p->code;
+
+        maketablesites(L, p);
 
         if (features.legacy)
         {

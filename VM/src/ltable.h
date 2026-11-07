@@ -24,6 +24,10 @@ LUAI_FUNC const TValue* luaH_get(LuaTable* t, const TValue* key);
 LUAI_FUNC TValue* luaH_set(lua_State* L, LuaTable* t, const TValue* key);
 LUAI_FUNC TValue* luaH_newkey(lua_State* L, LuaTable* t, const TValue* key);
 LUAI_FUNC LuaTable* luaH_new(lua_State* L, int narray, int lnhash);
+// Luwu table presizing: a table for the NEWTABLE at `pc`, sized from what the last table it made grew to
+LUAI_FUNC LuaTable* luaH_newatsite(lua_State* L, Proto* p, uint32_t pc, int narray, int nhash);
+// Luwu table presizing: luaH_newatsite for native code, which finds the NEWTABLE from the frame's saved pc
+LUAI_FUNC LuaTable* luaH_newatsavedpc(lua_State* L, int narray, int nhash);
 LUAI_FUNC void luaH_resizearray(lua_State* L, LuaTable* t, int nasize);
 LUAI_FUNC void luaH_resizehash(lua_State* L, LuaTable* t, int nhsize);
 LUAI_FUNC void luaH_free(lua_State* L, LuaTable* t, struct lua_Page* page);
