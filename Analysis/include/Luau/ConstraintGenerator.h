@@ -634,6 +634,14 @@ private:
         std::optional<LiteralCheck> check;
     };
     ResolvedAnnotation resolveLiteralCheckAnnotation(const ScopePtr& scope, AstType* annotation, bool inTypeArguments, bool replaceErrorWithFresh);
+    // A local's annotation, resolved once: an element of a positional pattern on a `.(...)` value has it resolved
+    // early, for the bundle's expected type (expectedBundleType)
+    ResolvedAnnotation resolveLocalAnnotation(const ScopePtr& scope, AstLocal* local);
+    DenseHashMap<AstLocal*, ResolvedAnnotation> bundleElementAnnotations{nullptr};
+    std::optional<TypeId> expectedBundleType(const ScopePtr& scope, AstStatLocal* statLocal);
+    // The element annotations of the positional pattern a `.(...)` value is destructured by: each value's expected type
+    DenseHashMap<const AstExprCall*, std::vector<TypeId>> dotPositionalElementTypes{nullptr};
+    void expectDotPositionalElements(AstExpr* expr, const std::vector<TypeId>& elements);
     // Luwu literal types: an alias of a union with a literal member (`type Length = CssLength | Token | number`), as
     // resolveLiteralCheckAnnotation resolves the union written out
     std::optional<ResolvedAnnotation> literalUnionOfType(TypeId ty);

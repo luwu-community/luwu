@@ -1,0 +1,50 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+-- `try e case ...` matches on the result of `try e`, like `match try e case ...`
+print("testing try with case arms")
+
+local function read(path: string): string
+    if path == "" then
+        error({ kind = "NotFound" })
+    end
+    if path == "?" then
+        error("broken")
+    end
+    return `contents of {path}`
+end
+
+local function load(path: string): string
+    return try read(path)
+        case is Ok.(content) then content
+        case is Err.(.{kind}) when kind == "NotFound" then "missing"
+        case .(other) then `other: {other.error}`
+end
+
+assert(load("a") == "contents of a")
+assert(load("") == "missing")
+assert(string.find(load("?"), "broken", 1, true))
+
+-- `match try e`: the arms are the match's, not the try's
+local function first(path: string): string
+    return match try read(path)
+        case is Ok.(content) then content
+        else "failed"
+end
+assert(first("b") == "contents of b")
+assert(first("") == "failed")
+
+-- a statement assigning a variable named `case` after a `try` is still a statement
+local case = 1
+local r = try read("c")
+case = 2
+assert(case == 2 and r:ok() == "contents of c")
+
+-- `try` before a bundle or a `.{x}` table, while `try.x` would read a field
+const spread = try .(1, table.unpack({ 2, 3 }))
+assert(class.name(spread:ok()) == "Bundle3" and spread:ok().third == 3)
+const too_many = try .(1, 2, table.unpack({ 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 }))
+assert(too_many:err() ~= nil)
+const x = 4
+const record = try .{x}
+assert(record:ok().x == 4)
+
+return "OK"

@@ -274,8 +274,8 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
 // `Bundle12`, which code reaches through `.(...)` and `bundle.pack` rather than by name. The fields are `first` to
 // `twelfth`, public and const.
 
-// A bundle's fields are public and const
-static const uint8_t kBundleField = LBC_CLASSMEMBER_CONST;
+// A bundle's fields are public and const. Luwu Destructuring (rfcs/destructuring.md): `.(a, b)` reads them by position.
+static const uint8_t kBundleField = LBC_CLASSMEMBER_CONST | LBC_CLASSMEMBER_POSITIONAL;
 
 static const char* const kBundleFieldNames[LUWU_BUNDLE_MAX] = {
     "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth",

@@ -1,0 +1,126 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing try expressions around do expressions")
+
+-- a local the range writes before a call raises keeps that value: native code doesn't drop the store
+do
+    local function written(g: () -> (), i: number)
+        local log = 0
+        local r = try do
+            log = i
+            g()
+            log = -i
+            give 1
+        return log, r
+    end
+    local function fail()
+        error("failed", 0)
+    end
+    for i = 1, 20 do
+        local log, r = written(if i % 2 == 0 then fail else function() end, i)
+        if i % 2 == 0 then
+            assert(log == i and class.isinstance(r, Err) and r.error == "failed")
+        else
+            assert(log == -i and class.isinstance(r, Ok))
+        end
+    end
+end
+
+-- the same around a table read, which raises from native code's fallback
+do
+    local function indexed(n: number)
+        local log = 0
+        local tables = { { k = 1 }, false }
+        for i = 1, n do
+            local t = tables[i % 2 + 1]
+            local r = try do
+                log = i
+                local v = t.k
+                log = -i
+                give v
+            if class.isinstance(r, Err) then
+                assert(log == i)
+            else
+                assert(log == -i and r.value == 1)
+            end
+        end
+    end
+    indexed(40)
+end
+
+-- leaving a range by `continue`, `break` or `return` leaves its handler behind: a later error isn't caught by it
+do
+    local function leaves(n: number)
+        local count = 0
+        for i = 1, n do
+            local r = try do
+                if i % 3 == 0 then
+                    continue
+                end
+                if i == 10 then
+                    break
+                end
+                give i
+            count += r.value
+        end
+        local t = nil
+        return count + t.x
+    end
+    const ok, message = pcall(leaves, 20)
+    assert(not ok and string.find(message, "attempt to index nil", 1, true))
+
+    local function returns(early: boolean)
+        local r = try do
+            if early then
+                return "early"
+            end
+            give "late"
+        return r.value
+    end
+    assert(returns(true) == "early" and returns(false) == "late")
+end
+
+-- a closure sees a local the range wrote before it raised
+do
+    local function captured()
+        local x = 0
+        local function get()
+            return x
+        end
+        local r = try do
+            x = 5
+            error("e", 0)
+            give 1
+        assert(class.isinstance(r, Err) and r.error == "e")
+        return get()
+    end
+    assert(captured() == 5)
+end
+
+-- a range inside another, with the inner one's result raising again in the outer range
+do
+    local function nested(i: number)
+        local r = try do
+            local inner = try if i % 2 == 0 then error("inner", 0) else i
+            if class.isinstance(inner, Err) then
+                error("outer: " .. inner.error, 0)
+            end
+            give inner.value
+        return if class.isinstance(r, Err) then r.error else r.value
+    end
+    for i = 1, 20 do
+        const v = nested(i)
+        assert(if i % 2 == 0 then v == "outer: inner" else v == i)
+    end
+end
+
+-- a table comprehension raising part way through a range
+do
+    local function rows(n: number)
+        local list = { { x = 1 }, { x = 2 }, false, { x = 4 } }
+        local r = try do give { for i = 1, n give list[i].x }; local line = debug.info(1, "l")
+        return if class.isinstance(r, Ok) then #r.value else r.line == line
+    end
+    assert(rows(2) == 2 and rows(4) == true)
+end
+
+return "OK"

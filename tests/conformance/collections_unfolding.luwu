@@ -1,0 +1,152 @@
+--!nocheck
+-- Luwu collections: destructuring a bundle the code constructs creates no object at -O1 and -O2. Every level must give
+-- the same results, the fallbacks included.
+
+local function direct(a: number, b: number): number
+    const .{ first, second } = bundle.pack(a + 1, b * 2)
+    return first + second
+end
+assert(direct(1, 2) == 6)
+
+-- every `give` builds a pair, so the `do` expression unfolds; arguments still run in order
+local function branches(x: number): (number, number)
+    const .{ first as lo, second as hi } = do
+        if x < 0 then
+            give bundle.pack(x, 0)
+        end
+        const doubled = x * 2
+        give bundle.pack(0, doubled)
+    return lo, hi
+end
+local lo, hi = branches(-3)
+assert(lo == -3 and hi == 0)
+lo, hi = branches(4)
+assert(lo == 0 and hi == 8)
+
+local order = {}
+local function note(value: number): number
+    table.insert(order, value)
+    return value
+end
+const .{ third } = bundle.pack(note(1), note(2), note(3))
+assert(third == 3 and #order == 3 and order[1] == 1 and order[3] == 3)
+
+-- a written binding gets its own register, so another binding of the same element keeps its value
+do
+    local .{ first, first as again } = bundle.pack(1, 2)
+    first += 10
+    assert(first == 11 and again == 1)
+end
+
+-- closures capture the bindings like any locals
+do
+    const .{ first, fourth } = bundle.pack("a", "b", "c", "d")
+    local function both(): string
+        return first .. fourth
+    end
+    assert(both() == "ad")
+end
+
+-- a nested pattern reads an element that is itself an object
+do
+    const .{ first as .{ second as inner } } = bundle.pack(bundle.pack(1, 2), 3)
+    assert(inner == 2)
+end
+
+-- these keep the object: a mixed `give`, bundles of different sizes, and a field that isn't an element
+local function mixed(flag: boolean)
+    const .{ first } = do
+        if flag then
+            give bundle.pack(1, 2)
+        end
+        give bundle.pack(3, 4, 5)
+    return first
+end
+assert(mixed(true) == 1 and mixed(false) == 3)
+
+local ok, err = pcall(function()
+    const .{ first, fifth } = bundle.pack(1, 2, 3, 4)
+    return first, fifth
+end)
+assert(not ok and string.find(err, "fifth", 1, true))
+
+-- `bundle.pack` with a fixed count unfolds too, to `twelfth`
+do
+    const .{ first, fifth } = bundle.pack("a", "b", "c", "d", "e")
+    assert(first == "a" and fifth == "e")
+    const .{ twelfth } = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+    assert(twelfth == 12)
+end
+
+-- `.(a, b)` builds a bundle of its values, and destructuring one by position builds nothing
+do
+    local p = .(1, "x")
+    assert(class.name(p) == "Bundle2" and p.second == "x")
+    assert(class.name(.(1, 2, 3)) == "Bundle3" and class.name(.(1, 2, 3, 4)) == "Bundle4")
+
+    -- five to twelve values make the bundle of that size, which a positional pattern takes apart
+    const record = .("AX1230", "A", "C", 4, 5)
+    assert(class.name(record) == "Bundle5" and record.fifth == 5)
+    const .(flight, _, _, _, last) = record
+    assert(flight == "AX1230" and last == 5)
+    const .(a, b, c, d, e, f, g, h, i, j, k, l) = .(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+    assert(a + b + c + d + e + f + g + h + i + j + k + l == 78)
+
+    -- a last value that's a call or `...` adds all of its values, and past 12 raises
+    const unpacked = .(table.unpack({ 1, 2, 3 }))
+    assert(class.name(unpacked) == "Bundle3" and unpacked.third == 3)
+    const nothing = function() end
+    assert(#.(nothing()) == 0 and #.(1, nothing()) == 1)
+    local function spread(...)
+        return .(...)
+    end
+    assert(spread("a", "b") == bundle.pack("a", "b"))
+    const ok, message = pcall(function()
+        return .(table.unpack(table.create(13, 0)))
+    end)
+    assert(not ok and string.find(message, "at most 12 values", 1, true))
+
+    local function lookup(id: number)
+        const .(name, age) = do
+            if id < 0 then
+                give .("nobody", 0)
+            end
+            give .(`user{id}`, id * 2)
+        return name, age
+    end
+    local name, age = lookup(3)
+    assert(name == "user3" and age == 6)
+    name, age = lookup(-1)
+    assert(name == "nobody" and age == 0)
+
+    const .(a, .(b, c)) = .(1, .(2, 3))
+    assert(a == 1 and b == 2 and c == 3)
+
+    -- a position past the bundle's end keeps the object, and raises
+    local ok2, err2 = pcall(function()
+        const .(x, y, z) = .(1, 2)
+        return z
+    end)
+    assert(not ok2 and string.find(err2, "at position 3", 1, true))
+end
+
+-- `.()` and `.(x)` build bundles of 0 and 1 values; `.((f()))` keeps one of a call's values
+do
+    local function two()
+        return 1, 2
+    end
+
+    const empty = .()
+    assert(class.name(empty) == "Bundle0" and #empty == 0 and tostring(empty) == ".()")
+    const holds_nil = .(nil)
+    assert(class.name(holds_nil) == "Bundle1" and #holds_nil == 1 and holds_nil.first == nil)
+    assert(#.(two()) == 2 and #.((two())) == 1)
+
+    const .(only) = .("x")
+    assert(only == "x")
+
+    -- a `.(...)` value takes suffixes like a parenthesized expression
+    assert(.(1, 2, 3):sub(1, 2) == .(1, 2) and .(1, 2).second == 2 and #.(1, 2, 3):with(1, 0) == 3)
+end
+
+return "OK"

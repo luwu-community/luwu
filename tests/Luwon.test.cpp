@@ -18,6 +18,8 @@ LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
+LUAU_FASTFLAG(LuwuDeclareStatements)
+LUAU_FASTFLAG(DebugLuwuCollections)
 
 using namespace Luau;
 
@@ -236,6 +238,22 @@ TEST_CASE("luwon_reads_class_constructors_as_objects")
     CHECK(origin.bytes == "Point");
     REQUIRE(origin.args.size() == 2);
     CHECK(origin.args[1].number == 2);
+}
+
+TEST_CASE("luwon_reads_bundles")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+    ScopedFastFlag destructuring{FFlag::LuwuDestructuring, true};
+
+    LuwonValue value = evaluate("const .(low, high) = .(1, 10)\nreturn { range = .(low, high), color = .(255, 128, 0, 255) }");
+
+    const LuwonValue& range = field(value, "range");
+    REQUIRE(range.kind == LuwonValue::Kind::Bundle);
+    REQUIRE(range.args.size() == 2);
+    CHECK(range.args[1].number == 10);
+
+    CHECK(writeLuwon(value).text == "return { range = .(1, 10), color = .(255, 128, 0, 255) }\n");
+    CHECK(firstError("return bundle.pack(1, 2)") == "Only 'vector.create', 'buffer.fromstring' and classes can be called in a data file");
 }
 
 TEST_CASE("luwon_attaches_comments_to_items")
@@ -635,6 +653,31 @@ local text: string = luwon.encode<<Config>>(config)
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK(result.errors[0].location.begin.line == 5);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "luwon_declarations_type_a_data_file")
+{
+    ScopedFastFlag flags[] = {
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    const std::string source = R"(
+declare class Semver(public const major: number, public const minor: number, public const patch: number)
+end
+
+return { version = Semver(0, 2, 0), wrong = Semver("a", 2, 0) }
+)";
+
+    // The reader skips declarations: they're types only
+    CHECK(readLuwon(source).errors.empty());
+
+    fileResolver.source["game/package.luwon"] = source;
+    CheckResult result = getFrontend().check("game/package.luwon");
+
+    // The constructor's arguments are checked through the declaration
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(result.errors[0].location.begin.line == 4);
 }
 
 // `luwon.reader`'s check is attached when the builtins are registered, so classes are on before the fixture is built

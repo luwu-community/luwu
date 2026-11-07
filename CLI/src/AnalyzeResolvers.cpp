@@ -57,7 +57,9 @@ std::optional<Luau::SourceCode> CliFileResolver::readSource(const Luau::ModuleNa
     if (!source)
         return std::nullopt;
 
-    return Luau::SourceCode{*source, sourceType};
+    Luau::SourceCode code{*source, sourceType};
+    code.luwon = isLuwonPath(name);
+    return code;
 }
 
 std::optional<Luau::ModuleInfo> CliFileResolver::resolveModule(
@@ -213,8 +215,13 @@ static AnalyzeDiagnostic describeTypeError(const Luau::Frontend& frontend, const
     }
 
     // Luwu (helpful subtyping errors): a misspelled name is labeled as one, so it isn't read as a broken type.
+    // Luwu doc references: errors in doc comments are labeled apart, so they don't read as broken code
     if (Luau::isTypo(error))
         diagnostic.kind = "Typo";
+    else if (Luau::get_if<Luau::DocSyntaxError>(&error.data))
+        diagnostic.kind = "DocSyntaxError";
+    else if (error.inDocComment)
+        diagnostic.kind = "DocTypeError";
     else
         diagnostic.kind = "TypeError";
 

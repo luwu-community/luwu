@@ -6630,6 +6630,111 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "option_and_result_types")
     CHECK_EQ(toString(requireType("missing")), "none");
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): `.(a, b)` builds a Pair, Triple or Quad, and those destructure by position
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_destructure_by_position")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        const .(name, age, alive) = .("Taz", 12, true)
+        const .(first, second) = bundle.pack(1, "x")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("name")), "string");
+    CHECK_EQ(toString(requireType("age")), "number");
+    CHECK_EQ(toString(requireType("alive")), "boolean");
+    CHECK_EQ(toString(requireType("first")), "number");
+    CHECK_EQ(toString(requireType("second")), "string");
+}
+
+// Luwu bundles: `.(A, B)` is the bundle type of those positions, and `.(...)` spreading a call takes that call's values
+TEST_CASE_FIXTURE(BuiltinsFixture, "dot_positional_types_and_spread_values")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function two(): (number, string)
+            return 1, "x"
+        end
+        local pair: .(number, string) = .(1, "x")
+        local row: .(string, number, boolean, string, number, boolean) = .("a", 1, true, "b", 2, false)
+        local spread: .(boolean, number, string) = .(true, two())
+        local empty: .() = bundle.pack()
+        local wrong: .(string, string) = pair
+        return pair, row, spread, empty, wrong
+    )");
+
+    // only `wrong` is: the pair's first position is a number
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 9);
+}
+
+// The elements' annotations are the `.(...)` value's expected type, so a literal element keeps its singleton type
+TEST_CASE_FIXTURE(BuiltinsFixture, "annotated_positional_pattern_checks_dot_positional_elements")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type Format = "TarGz" | "Zip"
+        local is_unix = math.random() > 0.5
+        const .(format: Format, extension: string) = if is_unix then .("TarGz", "tar.gz") else .("Zip", "zip")
+        const .(level: Format, count: number, ok: boolean) = .("Zip", 1, true)
+        const .(wrong: Format, other: string) = .("Rar", "rar")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 6);
+    CHECK_EQ(toString(requireType("format")), "\"TarGz\" | \"Zip\"");
+    CHECK_EQ(toString(requireType("extension")), "string");
+    CHECK_EQ(toString(requireType("level")), "\"TarGz\" | \"Zip\"");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_dot_positional_values")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+    const char* before = "local a, b = 1, \"x\"\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+
+    checkTypewriting(*this, before, "local t = .(a, b)", after);
+    checkTypewriting(*this, before, "const .(x, y) = .(a + 1, b)", after);
+    checkTypewriting(*this, before, "const .(x: number, y: \"x\" | \"y\") = .(a, \"y\")", after);
+    checkTypewriting(*this, before, "local p: .(number, string) = .(a, b)", after);
+    checkTypewriting(*this, before, "type Row = .(number, string, boolean)", after);
+    checkTypewriting(*this, before, "local s = .(table.unpack({ a }))", after);
+}
+
 // Luwu try expressions: `try expr` is a Result of expr's type, with an unknown error
 TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
 {

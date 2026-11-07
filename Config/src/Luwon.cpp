@@ -43,6 +43,8 @@ const char* luwonKindName(LuwonValue::Kind kind)
         return "table";
     case LuwonValue::Kind::Object:
         return "object";
+    case LuwonValue::Kind::Bundle:
+        return "bundle";
     }
 
     LUAU_UNREACHABLE();
@@ -202,6 +204,8 @@ bool luwonEquals(const LuwonValue& a, const LuwonValue& b)
         return a.table == b.table || sameTables(*a.table, *b.table);
     case LuwonValue::Kind::Object:
         return a.bytes == b.bytes && sameArgs(a.args, b.args);
+    case LuwonValue::Kind::Bundle:
+        return sameArgs(a.args, b.args);
     }
 
     LUAU_UNREACHABLE();
@@ -525,7 +529,7 @@ private:
         const void* identity = nullptr;
         if (value.kind == LuwonValue::Kind::Table)
             identity = value.table.get();
-        else if (value.kind == LuwonValue::Kind::Object)
+        else if (value.kind == LuwonValue::Kind::Object || value.kind == LuwonValue::Kind::Bundle)
             identity = value.args.data();
         else
             return 0;
@@ -651,11 +655,11 @@ private:
 
     // Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern `.(a, b)`. An object gives the
     // argument its call wrote at that position: the reader knows no classes, so it can't tell a primary constructor's
-    // parameters from the table the default constructor takes.
+    // parameters from the table the default constructor takes. A bundle gives its value at that position.
     LuwonValue readElement(AstExpr* objectExpr, const LuwonValue& position, const Location& location)
     {
         LuwonValue object = evaluate(objectExpr);
-        if (object.kind != LuwonValue::Kind::Object)
+        if (object.kind != LuwonValue::Kind::Object && object.kind != LuwonValue::Kind::Bundle)
             return readFieldOf(object, position, location);
 
         LUAU_ASSERT(position.kind == LuwonValue::Kind::Number && position.number >= 1);
@@ -689,6 +693,8 @@ private:
             return createBuffer(call, args);
         case LuwonConstructor::Class:
             return createObject(call, std::move(args));
+        case LuwonConstructor::Bundle:
+            return createBundle(call, std::move(args));
         case LuwonConstructor::None:
             break;
         }
@@ -735,6 +741,15 @@ private:
         result.bytes = luwonClassNameOf(call);
         result.args = std::move(args);
         recordDepth(depth, result.args.data(), call->location);
+        return result;
+    }
+
+    // The parser already refuses more values than a bundle holds.
+    LuwonValue createBundle(AstExprCall* call, std::vector<LuwonValue> args)
+    {
+        LuwonValue result = createObject(call, std::move(args));
+        result.kind = LuwonValue::Kind::Bundle;
+        result.bytes.clear();
         return result;
     }
 

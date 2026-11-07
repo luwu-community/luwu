@@ -61,6 +61,7 @@ LUAU_FASTFLAGVARIABLE(LuwuTableFunctionFields)
 // in definition files. Still in progress.
 LUAU_FASTFLAGVARIABLE(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAGVARIABLE(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAGVARIABLE(LuauDisallowExternClassInTypeDefinitions)
 LUAU_FASTFLAGVARIABLE(LuauTableEntriesDontNeedToMatchIndent)
@@ -670,6 +671,14 @@ Parser::Parser(const char* buffer, size_t bufferSize, AstNameTable& names, Alloc
     nameMatched = names.getOrAdd(kMatchedLocalName);
     nameNone = names.getOrAdd("none");
     nameNoneGlobal = names.getOrAdd("None");
+    nameBundle = names.getOrAdd("bundle");
+    const char* const bundleClasses[] = {
+        "Bundle0", "Bundle1", "Bundle2", "Bundle3", "Bundle4", "Bundle5", "Bundle6",
+        "Bundle7", "Bundle8", "Bundle9", "Bundle10", "Bundle11", "Bundle12",
+    };
+    for (size_t size = 0; size < 13; size++)
+        nameBundleClasses[size] = names.getOrAdd(bundleClasses[size]);
+    nameBundlePack = names.getOrAdd("pack");
     nameContinue = names.getOrAdd("continue");
     nameNumber = names.getOrAdd("number");
     nameAny = names.getOrAdd("any");
@@ -927,14 +936,6 @@ AstStat* Parser::parseStat()
 
     Location start = lexer.current().location;
 
-    // Luwu Destructuring (rfcs/destructuring.md): `.{x} = t` with no `local`/`const`. Parsed as a `local` so the
-    // rest of the file still sees its names.
-    if (destructurePatternFollows())
-    {
-        report(start, "%s", kDestructuringNeedsKeywordError);
-        return parseDestructuring(start, start, /* isConst= */ false);
-    }
-
     // Luwu Do Expressions (rfcs/do-expressions.md): inside a `do` expression, `give` and `continue` are hard keywords,
     // decided on the token. Parsing a primary expression first, as for contextual keywords, would read
     // `give (f)(x)` or `continue` followed by a line starting with `(` as a call.
@@ -959,6 +960,14 @@ AstStat* Parser::parseStat()
         Location keyword = lexer.current().location;
         AstExpr* match = parseMatchExpr(/* inStatement= */ true);
         return reportStatError(keyword, copy({match}), {}, "'match' only supports expressions, use an 'if' statement instead");
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): `.{x} = t` with no `local`/`const`. Parsed as a `local` so the
+    // rest of the file still sees its names.
+    if (destructurePatternFollows())
+    {
+        report(start, "%s", kDestructuringNeedsKeywordError);
+        return parseDestructuring(start, start, /* isConst= */ false);
     }
 
     // we need to disambiguate a few cases, primarily assignment (lvalue = ...) vs statements-that-are calls
@@ -1295,7 +1304,7 @@ AstStat* Parser::parseIf()
 // chain of one clause.
 //
 // condition ::= exp | clause {`when' clause}
-// clause ::= (`local' | `const') binding `=' exp | exp
+// clause ::= (`local' | `const') (binding | destructuring) `=' exp | exp
 AstExpr* Parser::parseIfCondition(AstArray<AstIfClause>& clauses, const char* head)
 {
     Location start = lexer.current().location;
@@ -1315,27 +1324,28 @@ AstExpr* Parser::parseIfCondition(AstArray<AstIfClause>& clauses, const char* he
 // Luwu If Local (rfcs/if-local.md): parseIfCondition's clauses, with `start` the condition's first token
 AstExpr* Parser::parseIfConditionClauses(AstArray<AstIfClause>& clauses, const char* head, const Location& start)
 {
-    AstExpr* plainFirst = nullptr;
+    std::vector<AstIfClause> chain;
+    bool firstParsed = false;
 
     if (!ifBindingFollows())
     {
-        plainFirst = parseExpr();
+        TypeTestBindingsFrame outer = allowTypeTestBindings();
+        appendConditionClauses(chain, parseExpr(), std::nullopt, std::move(outer));
+        firstParsed = true;
 
-        if (!whenFollows() && !andBeforeBinding)
-            return plainFirst;
+        // a plain condition, unless a type test's `.{...}` made it a chain
+        if (chain.size() == 1 && !whenFollows() && !andBeforeBinding)
+            return chain.front().expr;
     }
 
-    std::vector<AstIfClause> chain;
     std::optional<Location> whenLocation;
+    bool usesIfLocal = !firstParsed || whenFollows() || andBeforeBinding;
 
     while (true)
     {
-        if (plainFirst)
+        if (firstParsed)
         {
-            AstIfClause clause;
-            clause.expr = plainFirst;
-            chain.push_back(clause);
-            plainFirst = nullptr;
+            firstParsed = false;
         }
         else if (ifBindingFollows())
         {
@@ -1343,10 +1353,8 @@ AstExpr* Parser::parseIfConditionClauses(AstArray<AstIfClause>& clauses, const c
         }
         else
         {
-            AstIfClause clause;
-            clause.expr = parseExpr();
-            clause.whenLocation = whenLocation;
-            chain.push_back(clause);
+            TypeTestBindingsFrame outer = allowTypeTestBindings();
+            appendConditionClauses(chain, parseExpr(), whenLocation, std::move(outer));
         }
 
         // An `and` meant as `when` was reported and consumed by the expression before it
@@ -1373,21 +1381,60 @@ AstExpr* Parser::parseIfConditionClauses(AstArray<AstIfClause>& clauses, const c
     else if (chain.size() > 1 && chain[1].whenLocation)
         keyword = *chain[1].whenLocation;
 
-    std::string name = format("'%s local' and 'when'", head);
-    checkLuwuFeature(keyword, LuwuFeature{name.c_str(), /* plural= */ true, "LuwuIfLocal"}, FFlag::LuwuIfLocal);
+    if (usesIfLocal)
+    {
+        std::string name = format("'%s local' and 'when'", head);
+        checkLuwuFeature(keyword, LuwuFeature{name.c_str(), /* plural= */ true, "LuwuIfLocal"}, FFlag::LuwuIfLocal);
+    }
 
     clauses = copy(chain.data(), chain.size());
     return clauses.data[0].expr;
 }
 
 // Luwu If Local (rfcs/if-local.md): parses one `local`/`const` clause, from the keyword through its value, and
-// appends it to `chain`.
+// appends it to `chain`. A destructuring clause appends one clause per name it binds.
 void Parser::parseIfBindingClause(std::vector<AstIfClause>& chain, const std::optional<Location>& whenLocation)
 {
     bool isConst = lexer.current().type != Lexeme::ReservedLocal;
     const char* keyword = isConst ? "const" : "local";
     Location keywordLocation = lexer.current().location;
     nextLexeme(); // local / const
+
+    if (destructuringFollows())
+    {
+        DestructureTarget target;
+        Location equalsLocation;
+        AstExpr* value = parseDestructuringDeclaration(keywordLocation, target, equalsLocation);
+        Location location(keywordLocation, value->location);
+
+        std::vector<AstStat*> statements;
+        AstDestructurePattern pattern = desugarDestructuring(target, value, location, equalsLocation, isConst, statements);
+
+        AstStatLocal* first = statements.front()->as<AstStatLocal>();
+        LUAU_ASSERT(first);
+        first->keywordLocation = keywordLocation;
+        first->destructure = allocator.alloc<AstDestructurePattern>(pattern);
+
+        // Each desugared `local name = read` becomes a clause, so every name has to be truthy for the branch to run.
+        for (AstStat* statement : statements)
+        {
+            AstStatLocal* declaration = statement->as<AstStatLocal>();
+            LUAU_ASSERT(declaration && declaration->vars.size == 1 && declaration->values.size == 1);
+
+            declaration->luwuOnly = true;
+            if (declaration != first)
+                declaration->destructuredFrom = first;
+
+            AstIfClause clause;
+            clause.declaration = declaration;
+            clause.local = declaration->vars.data[0];
+            clause.expr = declaration->values.data[0];
+            clause.whenLocation = declaration == first ? whenLocation : std::nullopt;
+            chain.push_back(clause);
+        }
+
+        return;
+    }
 
     Binding binding = parseBinding(isConst);
     bool extraNames = lexer.current().type == ',';
@@ -1560,124 +1607,6 @@ AstStatBlock* Parser::wrapInWhenGuard(const AstArray<AstIfClause>& when, const L
     return allocator.alloc<AstStatBlock>(guard->location, copy({static_cast<AstStat*>(guard)}), body->hasEnd);
 }
 
-// while exp do block end
-AstStat* Parser::parseWhile()
-{
-    Location start = lexer.current().location;
-
-    Lexeme matchWhile = lexer.current();
-    nextLexeme(); // while
-
-    // Luwu If Local (rfcs/if-local.md): `while local x = f() when x.ok do`; the chain's bindings are fresh on every
-    // iteration and end with the loop
-    unsigned int localsBegin = saveLocals();
-    AstArray<AstIfClause> clauses{nullptr, 0};
-    AstExpr* cond = parseIfCondition(clauses, "while");
-
-    Lexeme matchDo = lexer.current();
-    bool hasDo = expectAndConsume(Lexeme::ReservedDo, "while loop");
-    const Lexeme& matchEnd = blockOpener(matchWhile, matchDo, hasDo);
-
-    functionStack.back().loopDepth++;
-
-    AstStatBlock* body = parseBlock();
-
-    functionStack.back().loopDepth--;
-
-    restoreLocals(localsBegin);
-
-    Location end = lexer.current().location;
-
-    bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
-    body->hasEnd = hasEnd;
-
-    AstStatWhile* node = allocator.alloc<AstStatWhile>(Location(start, end), cond, body, hasDo, matchDo.location, start);
-    node->clauses = clauses;
-    node->luwuOnly = clauses.size != 0;
-    return node;
-}
-
-// repeat block until exp
-AstStat* Parser::parseRepeat()
-{
-    Location start = lexer.current().location;
-
-    Lexeme matchRepeat = lexer.current();
-    nextLexeme(); // repeat
-
-    unsigned int localsBegin = saveLocals();
-
-    functionStack.back().loopDepth++;
-
-    AstStatBlock* body = parseBlockNoScope();
-
-    functionStack.back().loopDepth--;
-
-    Lexeme matchUntil = lexer.current();
-    bool hasUntil = expectMatchEndAndConsume(Lexeme::ReservedUntil, matchRepeat);
-    body->hasEnd = hasUntil;
-    Position untilPosition = hasUntil ? lexer.previousLocation().begin : Position::missing();
-
-    AstExpr* cond = parseExpr();
-
-    restoreLocals(localsBegin);
-
-    AstStatRepeat* node = allocator.alloc<AstStatRepeat>(Location(start, cond->location), cond, body, hasUntil, start, matchUntil.location);
-    if (options.storeCstData)
-        cstNodeMap[node] = allocator.alloc<CstStatRepeat>(untilPosition);
-    return node;
-}
-
-// do block end
-AstStat* Parser::parseDo()
-{
-    Location start = lexer.current().location;
-
-    Lexeme matchDo = lexer.current();
-    nextLexeme(); // do
-
-    Position statsStart = lexer.current().location.begin;
-
-    nextBlockAllowsDeclarations = blockAllowsDeclarations;
-    AstStatBlock* body = parseBlock();
-
-    body->location.begin = start.begin;
-
-    Location endLocation = lexer.current().location;
-    body->hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchDo);
-    if (body->hasEnd)
-        body->location.end = endLocation.end;
-
-    if (options.storeCstData)
-        cstNodeMap[body] = allocator.alloc<CstStatDo>(statsStart, body->hasEnd ? endLocation.begin : Position::missing());
-
-    return body;
-}
-
-// break
-AstStat* Parser::parseBreak()
-{
-    Location start = lexer.current().location;
-
-    nextLexeme(); // break
-
-    if (functionStack.back().loopDepth == 0)
-        return reportStatError(start, {}, copy<AstStat*>({allocator.alloc<AstStatBreak>(start)}), "break statement must be inside a loop");
-
-    return allocator.alloc<AstStatBreak>(start);
-}
-
-// continue
-AstStat* Parser::parseContinue(const Location& start)
-{
-    if (functionStack.back().loopDepth == 0)
-        return reportStatError(start, {}, copy<AstStat*>({allocator.alloc<AstStatContinue>(start)}), "continue statement must be inside a loop");
-
-    // note: the token is already parsed for us!
-
-    return allocator.alloc<AstStatContinue>(start);
-}
-
 // Luwu Destructuring (rfcs/destructuring.md): `body` with a loop's destructured fields (pushLoopLocals) in front of it.
 AstStatBlock* Parser::prependLoopFields(const std::vector<AstStat*>& fields, AstStatBlock* body)
 {
@@ -1837,6 +1766,124 @@ AstArray<AstLocal*> Parser::pushLoopLocals(
 
     destructure = copy(sources.data(), sources.size());
     return result;
+}
+
+// while exp do block end
+AstStat* Parser::parseWhile()
+{
+    Location start = lexer.current().location;
+
+    Lexeme matchWhile = lexer.current();
+    nextLexeme(); // while
+
+    // Luwu If Local (rfcs/if-local.md): `while local x = f() when x.ok do`; the chain's bindings are fresh on every
+    // iteration and end with the loop
+    unsigned int localsBegin = saveLocals();
+    AstArray<AstIfClause> clauses{nullptr, 0};
+    AstExpr* cond = parseIfCondition(clauses, "while");
+
+    Lexeme matchDo = lexer.current();
+    bool hasDo = expectAndConsume(Lexeme::ReservedDo, "while loop");
+    const Lexeme& matchEnd = blockOpener(matchWhile, matchDo, hasDo);
+
+    functionStack.back().loopDepth++;
+
+    AstStatBlock* body = parseBlock();
+
+    functionStack.back().loopDepth--;
+
+    restoreLocals(localsBegin);
+
+    Location end = lexer.current().location;
+
+    bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
+    body->hasEnd = hasEnd;
+
+    AstStatWhile* node = allocator.alloc<AstStatWhile>(Location(start, end), cond, body, hasDo, matchDo.location, start);
+    node->clauses = clauses;
+    node->luwuOnly = clauses.size != 0;
+    return node;
+}
+
+// repeat block until exp
+AstStat* Parser::parseRepeat()
+{
+    Location start = lexer.current().location;
+
+    Lexeme matchRepeat = lexer.current();
+    nextLexeme(); // repeat
+
+    unsigned int localsBegin = saveLocals();
+
+    functionStack.back().loopDepth++;
+
+    AstStatBlock* body = parseBlockNoScope();
+
+    functionStack.back().loopDepth--;
+
+    Lexeme matchUntil = lexer.current();
+    bool hasUntil = expectMatchEndAndConsume(Lexeme::ReservedUntil, matchRepeat);
+    body->hasEnd = hasUntil;
+    Position untilPosition = hasUntil ? lexer.previousLocation().begin : Position::missing();
+
+    AstExpr* cond = parseExpr();
+
+    restoreLocals(localsBegin);
+
+    AstStatRepeat* node = allocator.alloc<AstStatRepeat>(Location(start, cond->location), cond, body, hasUntil, start, matchUntil.location);
+    if (options.storeCstData)
+        cstNodeMap[node] = allocator.alloc<CstStatRepeat>(untilPosition);
+    return node;
+}
+
+// do block end
+AstStat* Parser::parseDo()
+{
+    Location start = lexer.current().location;
+
+    Lexeme matchDo = lexer.current();
+    nextLexeme(); // do
+
+    Position statsStart = lexer.current().location.begin;
+
+    nextBlockAllowsDeclarations = blockAllowsDeclarations;
+    AstStatBlock* body = parseBlock();
+
+    body->location.begin = start.begin;
+
+    Location endLocation = lexer.current().location;
+    body->hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchDo);
+    if (body->hasEnd)
+        body->location.end = endLocation.end;
+
+    if (options.storeCstData)
+        cstNodeMap[body] = allocator.alloc<CstStatDo>(statsStart, body->hasEnd ? endLocation.begin : Position::missing());
+
+    return body;
+}
+
+// break
+AstStat* Parser::parseBreak()
+{
+    Location start = lexer.current().location;
+
+    nextLexeme(); // break
+
+    if (functionStack.back().loopDepth == 0)
+        return reportStatError(start, {}, copy<AstStat*>({allocator.alloc<AstStatBreak>(start)}), "break statement must be inside a loop");
+
+    return allocator.alloc<AstStatBreak>(start);
+}
+
+// continue
+AstStat* Parser::parseContinue(const Location& start)
+{
+    if (functionStack.back().loopDepth == 0)
+        return reportStatError(start, {}, copy<AstStat*>({allocator.alloc<AstStatContinue>(start)}), "continue statement must be inside a loop");
+
+    // note: the token is already parsed for us!
+
+    return allocator.alloc<AstStatContinue>(start);
 }
 
 // for binding `=' exp `,' exp [`,' exp] do block end |
@@ -2015,19 +2062,18 @@ AstStat* Parser::parseFor()
         bool hasEnd = expectMatchEndAndConsume(Lexeme::ReservedEnd, matchEnd);
         body->hasEnd = hasEnd;
 
-        // Destructured fields are read at the start of every iteration
-        AstStatBlock* loopBody = prependLoopFields(fields, body);
-
         AstStatIf* guard = nullptr;
         AstStatBlock* loopBody = when.size ? wrapInWhenGuard(when, whenLocation, body, guard) : body;
+
+        // Destructured fields are read at the start of every iteration, before the `when` chain
+        loopBody = prependLoopFields(fields, loopBody);
 
         AstStatForIn* node = allocator.alloc<AstStatForIn>(
             Location(start, end), vars, copy(values), loopBody, hasIn, inLocation, hasDo, matchDo.location, start
         );
-        node->destructure = destructure;
-        node->luwuOnly = destructure.size != 0;
         node->whenGuard = guard;
-        node->luwuOnly = guard != nullptr;
+        node->destructure = destructure;
+        node->luwuOnly = guard != nullptr || destructure.size != 0;
         if (options.storeCstData)
         {
             cstNodeMap[node] = allocator.alloc<CstStatForIn>(extractAnnotationColonPositions(names), varsCommaPosition, copy(valuesCommaPositions));
@@ -3097,9 +3143,41 @@ bool Parser::destructuringAssignmentFollows()
 // The first statement is returned; the rest are left in pendingStatements for parseBlockNoScope.
 AstStat* Parser::parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name)
 {
-    size_t errorsBeforePattern = parseErrors.size();
     DestructureTarget target;
     target.name = name;
+
+    Location equalsLocation;
+    AstExpr* value = parseDestructuringDeclaration(start, target, equalsLocation);
+    Location location(start, value->location);
+
+    std::vector<AstStat*> statements;
+    AstDestructurePattern pattern = desugarDestructuring(target, value, location, equalsLocation, isConst, statements);
+
+    AstStatLocal* first = statements.front()->as<AstStatLocal>();
+    LUAU_ASSERT(first);
+    first->keywordLocation = keywordLocation;
+    first->destructure = allocator.alloc<AstDestructurePattern>(pattern);
+
+    // Upstream's destructuring RFC (luau-lang/rfcs#260) is still open, so none of this is Luau syntax yet.
+    for (AstStat* statement : statements)
+    {
+        statement->luwuOnly = true;
+
+        if (statement != first)
+            statement->as<AstStatLocal>()->destructuredFrom = first;
+    }
+
+    pendingStatements.insert(pendingStatements.end(), statements.begin() + 1, statements.end());
+
+    return first;
+}
+
+// Parses everything after the `local`/`const` keyword of a destructuring binding: the optional name (unless the
+// caller already parsed it into `target`), the pattern, an optional annotation, `=` and the value. Returns the
+// value. `start` is where the declaration starts. Shared by destructuring declarations and `if local` clauses.
+AstExpr* Parser::parseDestructuringDeclaration(const Location& start, DestructureTarget& target, Location& equalsLocation)
+{
+    size_t errorsBeforePattern = parseErrors.size();
     if (!target.name && lexer.current().type == Lexeme::Name)
         target.name = parseName("variable name");
 
@@ -3115,7 +3193,7 @@ AstStat* Parser::parseDestructuring(const Location& start, const Location& keywo
         target.annotation = parseType();
     }
 
-    Location equalsLocation = lexer.current().location;
+    equalsLocation = lexer.current().location;
     AstExpr* value = nullptr;
 
     // A pattern still being typed already reported what's wrong with it; the missing value isn't reported on top
@@ -3144,30 +3222,9 @@ AstStat* Parser::parseDestructuring(const Location& start, const Location& keywo
         report(Location(extra, lexer.previousLocation()), "A destructuring declaration takes exactly one value");
     }
 
-    Location location(start, value->location);
+    checkLuwuFeature(Location(start, value->location), kDestructuringFeature, FFlag::LuwuDestructuring);
 
-    checkLuwuFeature(location, kDestructuringFeature, FFlag::LuwuDestructuring);
-
-    std::vector<AstStat*> statements;
-    AstDestructurePattern pattern = desugarDestructuring(target, value, location, equalsLocation, isConst, statements);
-
-    AstStatLocal* first = statements.front()->as<AstStatLocal>();
-    LUAU_ASSERT(first);
-    first->keywordLocation = keywordLocation;
-    first->destructure = allocator.alloc<AstDestructurePattern>(pattern);
-
-    // Upstream's destructuring RFC (luau-lang/rfcs#260) is still open, so none of this is Luau syntax yet.
-    for (AstStat* statement : statements)
-    {
-        statement->luwuOnly = true;
-
-        if (statement != first)
-            statement->as<AstStatLocal>()->destructuredFrom = first;
-    }
-
-    pendingStatements.insert(pendingStatements.end(), statements.begin() + 1, statements.end());
-
-    return first;
+    return value;
 }
 
 // Parses `.{ fieldlist }` into `target`, starting at the `.` (or at the `{`, when the caller already reported
@@ -4094,6 +4151,7 @@ bool Parser::classBodyLooksLikeStatement()
     return ident == "class" || ident == "export" || ident == "type" || (ident == "trait" && traitsEnabled());
 }
 
+
 // Luwu Classes (rfcs/classes): the grammar is also in the RFC's "Class definition syntax" section.
 // classStatement ::= [`export'] `class' Name [`<' GenericTypeListWithDefaults `>'] [primaryCtor] [`implements' traitRefList]
 //                    {classMember} `end'
@@ -4927,6 +4985,13 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                     bool takesSelf = body->args.size > 0 && body->args.data[0]->name == "self";
                     if (!takesSelf && body->argLocation)
                         report(name.location, "'__init' must take 'self' as its first parameter");
+                }
+                // Luwu object notation: how a data file writes the class's objects and builds them back, for
+                // classes that implement `luwon.data`. The names are placeholders.
+                else if (name.name == "__todata" || name.name == "__fromdata")
+                {
+                    if (!implementsLuwonData(implements))
+                        report(name.location, "'%s' is only for classes that implement luwon.data", name.name.value);
                 }
                 else if (EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0)
                     report(name.location, "%s cannot define '%s' as a metamethod", isTrait ? "Traits" : "Classes", name.name.value);
@@ -7748,6 +7813,17 @@ AstTypeOrPack Parser::parseSimpleType(bool allowPack, bool inDeclarationContext)
         nextLexeme();
         return {reportTypeError(start, {}, "Malformed string; did you forget to finish it?")};
     }
+    else if (positionalPatternFollows() && destructuringAvailable())
+    {
+        return {parseDotPositionalType()};
+    }
+    else if (lexer.current().type == '.' && destructuringAvailable())
+    {
+        // Luwu bundles: a bundle type still being typed (`local p: .`); taking the `.` keeps the rest of the line from
+        // reporting errors of its own
+        nextLexeme();
+        return {reportTypeError(start, {}, "Expected '(' after '.' in a bundle type, like '.(number, string)'")};
+    }
     else if (lexer.current().type == Lexeme::Name)
     {
         std::optional<AstName> prefix;
@@ -8281,9 +8357,13 @@ std::string Parser::printedQualifier(AstExpr* qualifier)
     return "?";
 }
 
-// prefixexp -> NAME | '(' expr ')'
+// prefixexp -> NAME | '(' expr ')' | '.(' explist ')'
 AstExpr* Parser::parsePrefixExpr()
 {
+    // Luwu bundles: `.(a, b)` is delimited like a parenthesized expression, so it takes suffixes too: `.(a, b):sub(1)`
+    if (positionalPatternFollows() && destructuringAvailable())
+        return parseDotPositional();
+
     if (lexer.current().type == '(')
     {
         Position start = lexer.current().location.begin;
@@ -8336,6 +8416,11 @@ AstExpr* Parser::parsePrimaryExpr(bool asStatement)
 {
     Position start = lexer.current().location.begin;
 
+    // Luwu match expressions: a type test's class (`x is Point.{x, y}`) ends before its pattern. Only this expression's
+    // own suffixes stop there, not an expression nested in its brackets or arguments.
+    bool stopsBeforePattern = typeTestOperand;
+    typeTestOperand = false;
+
     AstExpr* expr = parsePrefixExpr();
 
     unsigned int oldRecursionCount = recursionCounter;
@@ -8344,6 +8429,9 @@ AstExpr* Parser::parsePrimaryExpr(bool asStatement)
     {
         if (dotTableFollows())
         {
+            if (stopsBeforePattern)
+                break;
+
             // Luwu Destructuring (rfcs/destructuring.md): `f.{x}` calls `f` with a `.{x}` table, like `f{x = x}`. At the
             // start of a statement, `const .{` starts a destructuring declaration, and `name.{x} = t` is one missing
             // its keyword.
@@ -8360,6 +8448,11 @@ AstExpr* Parser::parsePrimaryExpr(bool asStatement)
         {
             // Luwu Destructuring (rfcs/destructuring.md): `name.(` can't continue an expression, so at the start of a
             // statement it's `const .(a, b)` or a positional destructuring missing its keyword
+            break;
+        }
+        else if (positionalPatternFollows() && stopsBeforePattern)
+        {
+            // Luwu match expressions: `x is ok.(value)`
             break;
         }
         else if (lexer.current().type == '.')
@@ -8764,6 +8857,10 @@ AstExpr* Parser::parseSimpleExpr()
     {
         return parseTableConstructor();
     }
+    else if (positionalPatternFollows() && destructuringAvailable())
+    {
+        return parsePrimaryExpr(/* asStatement= */ false);
+    }
     else if (dotTableFollows() || dotTableMissingBraceFollows())
     {
         return parseDotTableConstructor();
@@ -8837,12 +8934,22 @@ bool Parser::tryExpressionFollows()
     case Lexeme::ReservedIf:
     case Lexeme::ReservedDo:
         return luwuFile;
+    case '.':
+    {
+        // Luwu Destructuring (rfcs/destructuring.md): `try .(a, b)` and `try .{x}`, where `try.x` reads a field
+        if (!luwuFile || !destructuringAvailable())
+            return false;
+        Lexeme second = lexer.lookaheadSecond();
+        return second.type == '(' || second.type == '{';
+    }
     default:
         return false;
     }
 }
 
 // Luwu try expressions: `try` takes the whole expression after it, so `try a + b` protects both operands
+static bool caseStartsArm(const Lexeme& next, const Lexeme& second);
+
 AstExpr* Parser::parseTryExpr()
 {
     Location tryLocation = lexer.current().location;
@@ -8850,7 +8957,15 @@ AstExpr* Parser::parseTryExpr()
     nextLexeme();
 
     AstExpr* expr = parseExpr();
-    return allocator.alloc<AstExprTry>(Location(tryLocation, expr->location), tryLocation, expr);
+    AstExprTry* node = allocator.alloc<AstExprTry>(Location(tryLocation, expr->location), tryLocation, expr);
+
+    // Luwu try expressions: `try e case ...` matches on the result, as `match try e case ...` does
+    const Lexeme& next = lexer.current();
+    bool armFollows = matchExpressionsAvailable() && !inMatchSubject && next.type == Lexeme::Name && AstName(next.name) == "case" &&
+                      caseStartsArm(lexer.lookahead(), lexer.lookaheadSecond());
+    if (armFollows)
+        return parseMatchExpr(/* inStatement= */ false, node);
+    return node;
 }
 
 std::tuple<AstArray<AstExpr*>, Location, Location> Parser::parseCallList(TempVector<Position>* commaPositions, Position* closeParenPosition)
@@ -9207,6 +9322,105 @@ AstExpr* Parser::parseTableConstructor()
     return node;
 }
 
+const LuwuFeature kDotPositionalFeature{"'.(...)' bundles", /* plural= */ true, "DebugLuwuCollections"};
+const char* const kDotPositionalTooManyError =
+    "'.(...)' makes a bundle of at most 12 values. Consider giving a table here or factoring this logic into a function that "
+    "returns multiple values";
+// Luwu bundles: the most values a bundle holds (LUWU_BUNDLE_MAX in the VM)
+static constexpr size_t kMaxBundleValues = 12;
+
+const char* const kDotPositionalTypeTooManyError = "A '.(...)' bundle type holds at most 12 types";
+
+// Luwu bundles: `.(a, b)` where a value goes builds a bundle of its values, the way `local .(a, b) = t` takes one apart.
+// It's the call `bundle.pack(a, b)` on the global, so a local named `bundle` doesn't change it. A last value that's a
+// call or `...` adds all of its values, as in a table constructor, so `.(table.unpack(t))` works up to 12 values and
+// `.((f()))` keeps one. `.()` is the empty bundle.
+AstExpr* Parser::parseDotPositional()
+{
+    Location start = lexer.current().location;
+    nextLexeme(); // .
+
+    Lexeme open = lexer.current();
+    nextLexeme(); // (
+
+    size_t errorsBefore = parseErrors.size();
+    TempVector<AstExpr*> args(scratchExpr);
+    TempVector<Position> commaPositions(scratchPosition);
+    if (lexer.current().type != ')')
+        parseExprList(args, options.storeCstData ? &commaPositions : nullptr);
+
+    Location argLocation(open.location, lexer.current().location);
+    bool closed = expectMatchAndConsume(')', open);
+    Location location(start, lexer.previousLocation());
+
+    checkLuwuFeature(location, kDotPositionalFeature, FFlag::DebugLuwuCollections);
+
+    // The values still type check with nothing built from them. A list still being typed (`.(a, `) already reported
+    // what's wrong with it.
+    bool multret = !args.empty() && (args[args.size() - 1]->is<AstExprCall>() || args[args.size() - 1]->is<AstExprVarargs>());
+    size_t fixedValues = multret ? args.size() - 1 : args.size();
+    if (fixedValues > kMaxBundleValues)
+    {
+        if (parseErrors.size() == errorsBefore)
+            return reportExprError(location, copy(args), "%s", kDotPositionalTooManyError);
+        return allocator.alloc<AstExprError>(location, copy(args), unsigned(parseErrors.size() - 1));
+    }
+
+    AstExpr* library = allocator.alloc<AstExprGlobal>(start, nameBundle);
+    AstExpr* callee = allocator.alloc<AstExprIndexName>(start, library, nameBundlePack, start, start.begin, '.');
+
+    AstExprCall* call = allocator.alloc<AstExprCall>(location, callee, copy(args), false, AstArray<AstTypeOrPack>{nullptr, 0}, argLocation);
+    call->fromDotPositional = true;
+    call->luwuOnly = true;
+    if (options.storeCstData)
+        cstNodeMap[call] = allocator.alloc<CstExprCall>(open.location.begin, closed ? lexer.previousLocation().begin : Position::missing(), copy(commaPositions));
+
+    return call;
+}
+
+// Luwu bundles: `.(A, B)` where a type goes is the bundle type of those positions, `bundle.Bundle2<A, B>`: the class of
+// its size, from `bundle.Bundle0` for `.()` to `bundle.Bundle12`
+AstType* Parser::parseDotPositionalType()
+{
+    Location start = lexer.current().location;
+    nextLexeme(); // .
+
+    Lexeme open = lexer.current();
+    nextLexeme(); // (
+
+    TempVector<AstTypeOrPack> parameters(scratchTypeOrPack);
+    TempVector<Position> commaPositions(scratchPosition);
+    while (lexer.current().type != ')' && lexer.current().type != Lexeme::Eof)
+    {
+        parameters.push_back({parseType(), nullptr});
+        if (lexer.current().type != ',')
+            break;
+        if (options.storeCstData)
+            commaPositions.push_back(lexer.current().location.begin);
+        nextLexeme();
+    }
+
+    Position closePosition = lexer.current().location.begin;
+    bool closed = expectMatchAndConsume(')', open);
+    Location location(start, lexer.previousLocation());
+
+    checkLuwuFeature(location, kDotPositionalFeature, FFlag::DebugLuwuCollections);
+    if (parameters.size() > kMaxBundleValues)
+        return reportTypeError(location, {}, "%s", kDotPositionalTypeTooManyError);
+
+    AstTypeReference* node = allocator.alloc<AstTypeReference>(
+        location, nameBundle, nameBundleClasses[parameters.size()], start, start, !parameters.empty(), copy(parameters)
+    );
+    node->fromDotPositional = true;
+    if (options.storeCstData)
+    {
+        cstNodeMap[node] = allocator.alloc<CstTypeReference>(
+            start.begin, open.location.begin, copy(commaPositions), closed ? closePosition : Position::missing()
+        );
+    }
+    return node;
+}
+
 // Luwu Destructuring (rfcs/destructuring.md): `.{x, y = v}` is `{x = x, y = v}`, building a table the way
 // `local .{x, y} = t` takes one apart. A bare name is a field named after it, so `.{x}` is never an array.
 AstExpr* Parser::parseDotTableConstructor()
@@ -9386,6 +9600,9 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
         // The `when` chain: clauses and where it starts. Empty without one.
         AstArray<AstIfClause> when{nullptr, 0};
         Location whenLocation;
+        // Destructured loop bindings: the fields the body starts with, and the patterns (see AstStatForIn::destructure).
+        std::vector<AstStat*> fields;
+        AstArray<AstDestructurePattern*> destructure{nullptr, 0};
         // The loop's CST node, when CST data is stored.
         CstNode* cst = nullptr;
     };
@@ -9408,10 +9625,17 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
         clause.forLocation = lexer.current().location;
         nextLexeme(); // for
 
-        Binding varname = parseBinding();
+        std::vector<std::optional<DestructureTarget>> patterns;
+        bool firstIsPattern = loopPatternFollows();
+        Binding varname = firstIsPattern ? parseLoopPattern(patterns) : parseBinding();
+        if (!firstIsPattern)
+            patterns.push_back(std::nullopt);
 
         if (lexer.current().type == '=')
         {
+            if (firstIsPattern)
+                report(varname.name.location, "A numeric 'for' clause's variable is a number; only 'for ... in' bindings can be destructured");
+
             Position equalsPosition = lexer.current().location.begin;
             nextLexeme();
             clause.from = parseExpr();
@@ -9445,12 +9669,12 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
                 {
                     Position initialCommaPosition = lexer.current().location.begin;
                     nextLexeme();
-                    parseBindingList(names, false, false, &varsCommaPosition, &initialCommaPosition);
+                    parseLoopBindings(names, patterns, &varsCommaPosition, &initialCommaPosition);
                 }
                 else
                 {
                     nextLexeme();
-                    parseBindingList(names);
+                    parseLoopBindings(names, patterns, nullptr, nullptr);
                 }
             }
 
@@ -9462,10 +9686,7 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
             parseExprList(values, options.storeCstData ? &valuesCommaPositions : nullptr);
             clause.values = copy(values);
 
-            TempVector<AstLocal*> vars(scratchLocal);
-            for (const Binding& name : names)
-                vars.push_back(pushLocal(name));
-            clause.vars = copy(vars);
+            clause.vars = pushLoopLocals(names, patterns, clause.fields, clause.destructure);
 
             if (options.storeCstData)
                 clause.cst =
@@ -9580,6 +9801,8 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
         if (clause.when.size != 0)
             body = wrapInWhenGuard(clause.when, clause.whenLocation, body, guard);
 
+        body = prependLoopFields(clause.fields, body);
+
         if (clause.var)
         {
             AstStatFor* loop = allocator.alloc<AstStatFor>(
@@ -9594,6 +9817,7 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
                 loopLocation, clause.vars, clause.values, body, clause.hasIn, clause.inLocation, true, doLocation, clause.forLocation
             );
             loop->whenGuard = guard;
+            loop->destructure = clause.destructure;
             inner = loop;
         }
 
@@ -9675,8 +9899,11 @@ bool Parser::typeTestFollows()
     const Lexeme& next = lexer.lookahead();
     bool literal = next.type == Lexeme::QuotedString || next.type == Lexeme::RawString || next.type == Lexeme::Number ||
                    next.type == Lexeme::ReservedTrue || next.type == Lexeme::ReservedFalse || next.type == '-';
-    return literal || next.type == Lexeme::Name || next.type == Lexeme::ReservedNot || next.type == Lexeme::ReservedFunction ||
-           next.type == Lexeme::ReservedNil;
+    // Luwu Destructuring (rfcs/destructuring.md): `x is .(value)` binds the whole value. `is.(` can't be a field of a
+    // variable named `is`.
+    bool wholeValuePattern = next.type == '.' && lexer.lookaheadSecond().type == '(';
+    return literal || wholeValuePattern || next.type == Lexeme::Name || next.type == Lexeme::ReservedNot ||
+           next.type == Lexeme::ReservedFunction || next.type == Lexeme::ReservedNil;
 }
 
 // Luwu match expressions: `library.function(args)` on the global `library`, never a local that shadows it
@@ -9827,6 +10054,9 @@ AstExpr* Parser::parseTypeTestAlternative(AstExpr* value, const Location& start,
 {
     AstExprBinary::Op compare = negated ? AstExprBinary::CompareNe : AstExprBinary::CompareEq;
 
+    if (positionalPatternFollows())
+        return bindWholeValue(value, negated, start);
+
     // `x is nil` and `x is none` compare with the value; type() can't tell `none` from other symbols
     if (std::optional<AstExpr*> nothing = parseNothingValue())
         return allocator.alloc<AstExprBinary>(Location(start, (*nothing)->location), compare, value, *nothing);
@@ -9847,23 +10077,390 @@ AstExpr* Parser::parseTypeTestAlternative(AstExpr* value, const Location& start,
         return allocator.alloc<AstExprBinary>(location, compare, makeGlobalCall(nameType, std::nullopt, location, {value}), typeName);
     }
 
+    typeTestOperand = true;
     AstExpr* type = parseExpr(binaryPriority[AstExprBinary::CompareEq].right);
+    typeTestOperand = false;
+
+    if (destructurePatternFollows())
+        return parseTypeTestBindings(value, type, negated, start);
+
+    if (AstExpr* recovered = recoverTypeTestCall(value, type, negated, start))
+        return recovered;
+
     Location location(start, type->location);
     AstExpr* test = makeGlobalCall(nameClass, nameIsinstance, location, {value, type});
 
     return negated ? allocator.alloc<AstExprUnary>(location, AstExprUnary::Op::Not, test) : test;
 }
 
+// Luwu match expressions: how a message names a pattern's form
+static const char* patternForm(bool positional)
+{
+    return positional ? ".(...)" : ".{...}";
+}
+
+// Luwu match expressions: a type test's `.{...}` or `.(...)` in a condition it isn't the whole of, with the pattern's form
+static const char* const kMisplacedTypeTestPatternError =
+    "A '%s' after a type test binds names only when the test is the whole condition; join other conditions with 'when'";
+
+// Luwu match expressions: a type test's `.{...}` or `.(...)` outside any condition, with the pattern's form
+static const char* const kTypeTestPatternOutsideConditionError =
+    "Can't bind names in this position; a type test's '%s' binds only as the condition of an 'if', 'while', 'when' or 'case'";
+
+// Luwu match expressions: `value is Class.{fields}` or `value is Class.(elements)`, from the `.`: tests `value` like
+// `value is Class` and binds for the branch the test guards, as `const .{fields} = value` would after it. The bindings go to
+// typeTestBindings for the condition's parser to add as clauses (appendConditionClauses), so they only exist where
+// the test is a whole condition. Unlike an `if const` binding, a field binds whatever its value, `false` and `nil`
+// included: the pattern tests the class, not the fields.
+AstExpr* Parser::parseTypeTestBindings(AstExpr* value, AstExpr* type, bool negated, const Location& start)
+{
+    DestructureTarget target;
+    parseDestructurePattern(target);
+    return bindTypeTestPattern(value, type, target, negated, Location(start, lexer.previousLocation()));
+}
+
+// The text of `expr` when it's a name or a chain of fields of one (`result.err`)
+static std::optional<std::string> dottedName(AstExpr* expr)
+{
+    if (AstExprGlobal* global = expr->as<AstExprGlobal>())
+        return std::string(global->name.value);
+    if (AstExprLocal* local = expr->as<AstExprLocal>())
+        return std::string(local->local->name.value);
+    if (AstExprIndexName* index = expr->as<AstExprIndexName>(); index && index->op == '.')
+    {
+        if (std::optional<std::string> base = dottedName(index->expr))
+            return *base + "." + index->index.value;
+    }
+    return std::nullopt;
+}
+
+// Luwu match expressions: `x is ok(value)`, where `value` names nothing in scope, is almost certainly a positional
+// pattern missing its `.`. It's reported and bound like `x is ok.(value)`; nullptr for any other class expression.
+AstExpr* Parser::recoverTypeTestCall(AstExpr* value, AstExpr* type, bool negated, const Location& start)
+{
+    AstExprCall* call = type->as<AstExprCall>();
+    if (!call || call->self || call->args.size == 0)
+        return nullptr;
+
+    std::optional<std::string> callee = dottedName(call->func);
+    if (!callee)
+        return nullptr;
+
+    DestructureTarget target;
+    target.positional = true;
+    target.patternLocation = call->argLocation;
+
+    std::string elements;
+    for (AstExpr* arg : call->args)
+    {
+        // a class declared above is a value a call can take, not a name to bind
+        AstExprGlobal* name = arg->as<AstExprGlobal>();
+        if (!name || classesWithinModule.find(name->name))
+            return nullptr;
+
+        DestructureField element{Name(AstName(), name->location), std::nullopt, {}};
+        element.target.name = Name(name->name, name->location);
+        target.fields.push_back(std::move(element));
+        elements += (elements.empty() ? "" : ", ") + std::string(name->name.value);
+    }
+
+    report(
+        call->location,
+        "Write '%s.(%s)' to bind by position; without the '.', '%s(%s)' is a call",
+        callee->c_str(),
+        elements.c_str(),
+        callee->c_str(),
+        elements.c_str()
+    );
+
+    return bindTypeTestPattern(value, call->func, target, negated, Location(start, call->location));
+}
+
+AstExpr* Parser::bindTypeTestPattern(AstExpr* value, AstExpr* type, const DestructureTarget& target, bool negated, const Location& location)
+{
+    auto makeTest = [&](AstExpr* tested)
+    {
+        AstExpr* test = makeGlobalCall(nameClass, nameIsinstance, location, {tested, type});
+        return negated ? allocator.alloc<AstExprUnary>(location, AstExprUnary::Op::Not, test) : test;
+    };
+
+    if (negated)
+    {
+        if (target.positional)
+            report(location, "'is not' has no elements to bind; remove the '.(...)'");
+        else
+            report(location, "'is not' has no fields to bind; remove the '.{...}'");
+        return makeTest(value);
+    }
+
+    if (!typeTestBindings.allowed || typeTestBindings.bindings)
+    {
+        const char* error = typeTestBindings.allowed ? kMisplacedTypeTestPatternError : kTypeTestPatternOutsideConditionError;
+        report(location, error, patternForm(target.positional));
+        return makeTest(value);
+    }
+
+    std::vector<AstStat*> statements;
+    AstDestructurePattern pattern;
+    AstLocal* tested = nullptr;
+    if (AstExprLocal* local = value->as<AstExprLocal>())
+    {
+        tested = local->local;
+        pattern = desugarDestructureFields(target, tested, /* isConst= */ true, statements);
+    }
+    else
+    {
+        pattern = desugarDestructuring(target, value, value->location, value->location, /* isConst= */ true, statements);
+        tested = statements.front()->as<AstStatLocal>()->vars.data[0];
+    }
+
+    AstExpr* test = makeTest(allocator.alloc<AstExprLocal>(value->location, tested, /* upvalue= */ false));
+    AstDestructurePattern* storedPattern = allocator.alloc<AstDestructurePattern>(pattern);
+    test->as<AstExprCall>()->typeTestPattern = storedPattern;
+
+    // a pattern with no fields already reported that
+    if (statements.empty())
+        return test;
+
+    AstStatLocal* first = statements.front()->as<AstStatLocal>();
+    first->destructure = storedPattern;
+
+    TypeTestBindings bindings{test, location, patternForm(target.positional), {}};
+    AstIfClause testClause;
+    testClause.expr = test;
+
+    // the hidden local holding the value, when there is one, comes before the test, and the fields after it
+    bool testAdded = false;
+    for (AstStat* statement : statements)
+    {
+        AstStatLocal* declaration = statement->as<AstStatLocal>();
+        LUAU_ASSERT(declaration && declaration->vars.size == 1 && declaration->values.size == 1);
+
+        declaration->luwuOnly = true;
+        if (declaration != first)
+            declaration->destructuredFrom = first;
+
+        AstIfClause clause;
+        clause.declaration = declaration;
+        clause.local = declaration->vars.data[0];
+        clause.expr = declaration->values.data[0];
+        clause.tested = false;
+
+        if (clause.local != tested && !testAdded)
+        {
+            bindings.clauses.push_back(testClause);
+            testAdded = true;
+        }
+        bindings.clauses.push_back(clause);
+    }
+    if (!testAdded)
+        bindings.clauses.push_back(testClause);
+
+    typeTestBindings.bindings = std::move(bindings);
+    return test;
+}
+
+// Luwu match expressions: `.(name)` with no type before it, after `is` or `case`: binds the whole value and matches
+// every value, `nil`, `none` and `false` included. It's an always-true test whose binding goes to typeTestBindings, like
+// a type test's pattern (bindTypeTestPattern). The element can be a pattern itself (`.(.{kind})`).
+AstExpr* Parser::bindWholeValue(AstExpr* value, bool negated, const Location& start)
+{
+    DestructureTarget target;
+    parseDestructurePattern(target);
+    Location location(start, lexer.previousLocation());
+
+    AstExpr* test = allocator.alloc<AstExprConstantBool>(location, !negated);
+    if (negated)
+    {
+        report(location, "Remove 'not': '.(...)' with no type before it matches every value, so 'is not' never does");
+        return test;
+    }
+
+    // an empty `.()` already reported that
+    if (target.fields.size() != 1)
+    {
+        if (target.fields.size() > 1)
+            report(location, "Write one name in '.(...)' here: with no type before it, it binds the whole value");
+        return test;
+    }
+
+    if (!typeTestBindings.allowed || typeTestBindings.bindings)
+    {
+        const char* error = typeTestBindings.allowed ? kMisplacedTypeTestPatternError : kTypeTestPatternOutsideConditionError;
+        report(location, error, patternForm(/* positional= */ true));
+        return test;
+    }
+
+    std::vector<AstStat*> statements;
+    desugarDestructuring(target.fields.front().target, value, location, location, /* isConst= */ true, statements);
+
+    TypeTestBindings bindings{test, location, patternForm(/* positional= */ true), {}};
+    AstIfClause testClause;
+    testClause.expr = test;
+    bindings.clauses.push_back(testClause);
+
+    AstStatLocal* first = statements.front()->as<AstStatLocal>();
+    for (AstStat* statement : statements)
+    {
+        AstStatLocal* declaration = statement->as<AstStatLocal>();
+        LUAU_ASSERT(declaration && declaration->vars.size == 1 && declaration->values.size == 1);
+
+        declaration->luwuOnly = true;
+        if (declaration != first)
+            declaration->destructuredFrom = first;
+
+        AstIfClause clause;
+        clause.declaration = declaration;
+        clause.local = declaration->vars.data[0];
+        clause.expr = declaration->values.data[0];
+        clause.tested = false;
+        bindings.clauses.push_back(clause);
+    }
+
+    typeTestBindings.bindings = std::move(bindings);
+    wholeValueTest = test;
+    return test;
+}
+
+// Luwu try expressions: the source of a tested value or class for a message, `...` when it's more than a name or a call
+// of one
+static std::string describeTestOperand(AstExpr* expr)
+{
+    if (AstExprCall* call = expr->as<AstExprCall>())
+    {
+        if (std::optional<std::string> callee = dottedName(call->func))
+            return *callee + "(...)";
+    }
+    return dottedName(expr).value_or("...");
+}
+
+// Luwu try expressions: `if try f() is Ok.(x) then`, where `try` takes the whole test, so the test isn't the condition
+// and can't bind. The fix is parentheses around the `try`.
+void Parser::reportTryAroundTypeTest(AstExprTry* tryExpr, const TypeTestBindings& bindings)
+{
+    // A tested value that isn't a local was read into a hidden local, whose declaration holds the code as written. A
+    // bare `.(name)` binds the value itself.
+    AstExpr* tested = nullptr;
+    std::string names;
+    for (const AstIfClause& clause : bindings.clauses)
+    {
+        if (!clause.declaration || !clause.local)
+            continue;
+        if (clause.local->name == nameDestructured)
+        {
+            tested = clause.expr;
+            continue;
+        }
+        if (!tested && !clause.declaration->destructuredFrom)
+            tested = clause.expr;
+        names += (names.empty() ? "" : ", ") + std::string(clause.local->name.value);
+    }
+
+    // the pattern as written, with its names in order (`.(content)`, `.{kind, path}`)
+    bool positional = std::string_view(bindings.form) == ".(...)";
+    std::string pattern = std::string(positional ? ".(" : ".{") + names + (positional ? ")" : "}");
+    AstExprCall* test = bindings.test->as<AstExprCall>();
+    if (test && test->args.size == 2)
+    {
+        tested = test->args.data[0]->as<AstExprLocal>() && test->args.data[0]->as<AstExprLocal>()->local->name != nameDestructured
+                     ? test->args.data[0]
+                     : tested;
+        pattern = describeTestOperand(test->args.data[1]) + pattern;
+    }
+    std::string value = tested ? describeTestOperand(tested) : "...";
+
+    report(
+        tryExpr->location,
+        "Put the 'try' in parentheses: '(try %s) is %s'. Without them, 'try' takes the whole test",
+        value.c_str(),
+        pattern.c_str()
+    );
+}
+
+// Luwu match expressions: lets the condition about to be parsed bind with a type test's `.{...}`. Returns the
+// enclosing condition's state, for appendConditionClauses to put back.
+Parser::TypeTestBindingsFrame Parser::allowTypeTestBindings()
+{
+    TypeTestBindingsFrame outer = std::move(typeTestBindings);
+    typeTestBindings = TypeTestBindingsFrame{};
+    typeTestBindings.allowed = true;
+    return outer;
+}
+
+// Luwu match expressions: appends `condition` to `chain`, as the clauses its type test's `.{...}` binds when it has
+// one (see parseTypeTestBindings), and puts back the enclosing condition's state
+void Parser::appendConditionClauses(
+    std::vector<AstIfClause>& chain,
+    AstExpr* condition,
+    const std::optional<Location>& whenLocation,
+    TypeTestBindingsFrame outer
+)
+{
+    std::optional<TypeTestBindings> bindings = std::move(typeTestBindings.bindings);
+    typeTestBindings = std::move(outer);
+
+    AstIfClause plain;
+    plain.expr = condition;
+    plain.whenLocation = whenLocation;
+
+    if (!bindings)
+    {
+        chain.push_back(plain);
+        return;
+    }
+
+    if (bindings->test == condition)
+    {
+        bindings->clauses.front().whenLocation = whenLocation;
+        chain.insert(chain.end(), bindings->clauses.begin(), bindings->clauses.end());
+        return;
+    }
+
+    // The names are already in scope, so their declarations stay, ahead of the condition that holds the test
+    AstExprTry* tryExpr = condition->as<AstExprTry>();
+    bool tryTakesTest = tryExpr && tryExpr->expr == bindings->test;
+    if (tryTakesTest)
+        reportTryAroundTypeTest(tryExpr, *bindings);
+    else
+        report(bindings->location, kMisplacedTypeTestPatternError, bindings->form);
+    size_t firstAdded = chain.size();
+    for (AstIfClause clause : bindings->clauses)
+    {
+        if (!clause.declaration)
+            continue;
+
+        // Luwu try expressions: the names read a value `try` wrapped, so they'd only add errors to the one above. The
+        // value as written is still checked: the hidden local's, or a bare `.(name)`'s own.
+        if (tryTakesTest)
+        {
+            AstExpr* value = clause.declaration->values.data[0];
+            bool hidden = clause.local && clause.local->name == nameDestructured;
+            bool bareBinding = !bindings->test->is<AstExprCall>() && !clause.declaration->destructuredFrom;
+            bool written = hidden || bareBinding;
+            AstArray<AstExpr*> checked = written ? copy({value}) : AstArray<AstExpr*>{nullptr, 0};
+            AstExpr* error = allocator.alloc<AstExprError>(value->location, checked, unsigned(parseErrors.size() - 1));
+            clause.declaration->values.data[0] = error;
+            clause.expr = error;
+        }
+        chain.push_back(clause);
+    }
+    plain.whenLocation.reset();
+    chain.push_back(plain);
+    chain[firstAdded].whenLocation = whenLocation;
+}
+
 // Luwu match expressions: whether `lexeme`, a `case` after a `match` subject, starts an arm rather than a statement
 // using a variable named `case` (`case = 1`, `case(x)`, `case.x`)
-static bool caseStartsArm(const Lexeme& next)
+static bool caseStartsArm(const Lexeme& next, const Lexeme& second)
 {
     // Single-character tokens are their character, which isn't a named Lexeme::Type
     switch (int(next.type))
     {
+    case '.':
+        // Luwu Destructuring (rfcs/destructuring.md): `case .(other)` binds the whole value; `case.(` can't be a field
+        return second.type == '(';
     case '=':
     case '(':
-    case '.':
     case '[':
     case ':':
     case '{':
@@ -9908,7 +10505,7 @@ bool Parser::matchExpressionFollows()
     {
         bool isCase = token->type == Lexeme::Name && AstName(token->name) == "case";
         if (depth == 0 && subjectStarted && isCase)
-            return caseStartsArm(probe.lookahead());
+            return caseStartsArm(probe.lookahead(), probe.lookaheadSecond());
 
         if (depth == 0 && subjectStarted && token->location.begin.line > previousLine)
         {
@@ -9943,17 +10540,19 @@ bool Parser::matchExpressionFollows()
 // is parsed as the `do` expression it means: the subject bound to a local, then an if-else expression with one arm per
 // `case`, each arm's condition the pattern's test of the subject followed by its `when` clauses. Every pass that handles
 // `do` and if-else expressions (scopes, narrowing per arm, the compiler's fused class checks) handles a `match`.
-AstExpr* Parser::parseMatchExpr(bool inStatement)
+// Luwu try expressions: `tried` is the `try` expression of `try e case ...`, already parsed, which this matches on
+AstExpr* Parser::parseMatchExpr(bool inStatement, AstExprTry* tried)
 {
-    Location start = lexer.current().location;
-    checkLuwuFeature(start, kMatchFeature, FFlag::DebugLuwuMatchExpressions);
-    nextLexeme(); // match
+    Location start = tried ? tried->location : lexer.current().location;
+    checkLuwuFeature(lexer.current().location, kMatchFeature, FFlag::DebugLuwuMatchExpressions);
+    if (!tried)
+        nextLexeme(); // match
 
     unsigned int localsBegin = saveLocals();
     size_t errorsBefore = parseErrors.size();
 
     // `match const name = value` names the subject for every arm; otherwise it gets a name nothing can read
-    bool named = lexer.current().type == Lexeme::ReservedLocal || ifBindingFollows();
+    bool named = !tried && (lexer.current().type == Lexeme::ReservedLocal || ifBindingFollows());
     bool isConst = lexer.current().type != Lexeme::ReservedLocal;
     std::optional<Location> keywordLocation;
     std::optional<Location> equalsLocation;
@@ -9969,7 +10568,14 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
         expectAndConsume('=', "match subject");
     }
 
-    AstExpr* value = parseExpr();
+    AstExpr* value = tried;
+    if (!value)
+    {
+        bool outerSubject = inMatchSubject;
+        inMatchSubject = true;
+        value = parseExpr();
+        inMatchSubject = outerSubject;
+    }
 
     // A local is tested as itself, so each arm narrows it. Anything else is evaluated once, into the subject's local.
     AstLocal* subject = nullptr;
@@ -9997,6 +10603,8 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
         AstArray<AstIfClause> clauses{nullptr, 0};
         std::optional<Location> thenLocation;
         AstExpr* value = nullptr;
+        // `case .(name)` with no `when`, which matches every value
+        bool catchAll = false;
     };
     std::vector<Arm> arms;
 
@@ -10010,9 +10618,10 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
         unsigned int armLocalsBegin = saveLocals();
 
         std::vector<AstIfClause> chain;
-        AstIfClause first;
-        first.expr = parseMatchPattern(subject);
-        chain.push_back(first);
+        TypeTestBindingsFrame outer = allowTypeTestBindings();
+        AstExpr* pattern = parseMatchPattern(subject);
+        appendConditionClauses(chain, pattern, std::nullopt, std::move(outer));
+        arm.catchAll = pattern == wholeValueTest && !whenFollows();
 
         while (whenFollows())
         {
@@ -10025,10 +10634,8 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
                 continue;
             }
 
-            AstIfClause clause;
-            clause.expr = parseExpr();
-            clause.whenLocation = whenLocation;
-            chain.push_back(clause);
+            TypeTestBindingsFrame outerWhen = allowTypeTestBindings();
+            appendConditionClauses(chain, parseExpr(), whenLocation, std::move(outerWhen));
         }
 
         arm.condition = chain.front().expr;
@@ -10049,7 +10656,8 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
     // missing, so it gets no second error.
     const char* missingArm = arms.empty() ? "Expected 'case' after the value 'match' tests"
                                           : "A 'match' expression must be exhaustive; add an 'else' branch to handle all unhandled cases";
-    bool reportMissingArm = parseErrors.size() == errorsBefore && !inStatement;
+    bool endsInCatchAll = !arms.empty() && arms.back().catchAll;
+    bool reportMissingArm = parseErrors.size() == errorsBefore && !inStatement && !endsInCatchAll;
     if (const Lexeme& next = lexer.current(); next.type == Lexeme::Name && next.location.begin.line > lexer.previousLocation().end.line)
     {
         std::string_view typed = next.name;
@@ -10072,6 +10680,24 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
         elseLocation = lexer.current().location;
         nextLexeme();
         result = parseExpr();
+    }
+    else if (endsInCatchAll)
+    {
+        // A last `case .(name)` is the `else`: its bindings, then its value
+        const Arm& last = arms.back();
+        std::vector<AstStat*> statements;
+        for (const AstIfClause& clause : last.clauses)
+        {
+            if (clause.declaration)
+                statements.push_back(clause.declaration);
+        }
+        Location location(last.caseLocation, last.value->location);
+        statements.push_back(allocator.alloc<AstStatGive>(last.value->location, last.value));
+        AstExprDo* arm = allocator.alloc<AstExprDo>(location, allocator.alloc<AstStatBlock>(location, copy(statements.data(), statements.size())));
+        arm->luwuOnly = true;
+        arm->fromMatch = true;
+        result = arm;
+        arms.pop_back();
     }
     else
     {
@@ -10137,6 +10763,9 @@ AstExpr* Parser::parseMatchAlternative(AstLocal* subject)
 
     if (isTypeTestKeyword(lexer.current()))
         return parseTypeTest(subjectValue, start);
+
+    if (positionalPatternFollows())
+        return bindWholeValue(subjectValue, /* negated= */ false, start);
 
     if (std::optional<AstExpr*> nothing = parseNothingValue())
         return allocator.alloc<AstExprBinary>(Location(start, (*nothing)->location), AstExprBinary::CompareEq, subjectValue, *nothing);
@@ -10703,9 +11332,11 @@ AstStat* Parser::parseGive()
     Name keyword(AstName(lexer.current().name), start);
     nextLexeme(); // give
 
-    // `give.x = 1`, `give = 1`, `give, a = ...`: code using a variable named `give`, which a `do` expression can't
+    // `give.x = 1`, `give = 1`, `give, a = ...`: code using a variable named `give`, which a `do` expression can't.
+    // `give .{x}` gives a dot table.
     Lexeme::Type next = lexer.current().type;
-    bool usedAsName = next == '.' || next == ':' || next == '[' || next == '=' || next == ',';
+    bool givesDotTable = destructurePatternFollows();
+    bool usedAsName = (next == '.' && !givesDotTable) || next == ':' || next == '[' || next == '=' || next == ',';
 
     AstExpr* value = nullptr;
 

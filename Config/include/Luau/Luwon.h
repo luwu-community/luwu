@@ -33,8 +33,10 @@ struct LuwonValue
         Vector,
         Buffer,
         Table,
-        // A constructor call the reader builds: `Point(1, 2)`, or `collections.pair(1, 2)` for a builtin class.
+        // A constructor call the reader builds: `Point(1, 2)`.
         Object,
+        // A Luwu bundle, `.(1, "a")`, whose values are in `args`.
+        Bundle,
     };
 
     Kind kind = Kind::Nil;
@@ -45,7 +47,7 @@ struct LuwonValue
     float vector[4] = {};
     // Every reference to the same const shares it the way code shares a table.
     std::shared_ptr<const LuwonTable> table;
-    // An object's constructor arguments.
+    // An object's constructor arguments, or a bundle's values.
     std::vector<LuwonValue> args;
 };
 

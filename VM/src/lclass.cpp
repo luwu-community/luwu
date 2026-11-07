@@ -2834,6 +2834,24 @@ LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_Native
     classdef->memberflags[count] = 0;
     setnvalue(luaH_setstr(L, classdef->memberstooffset, initname), double(count));
 
+    // Luwu Destructuring (rfcs/destructuring.md): fields flagged LBC_CLASSMEMBER_POSITIONAL are read by `.(a, b)`, in
+    // the order of their offsets
+    int numpositional = 0;
+    for (uint32_t idx = 0; idx < numfields; idx++)
+        numpositional += (members[idx].flags & LBC_CLASSMEMBER_POSITIONAL) != 0;
+
+    if (numpositional > 0)
+    {
+        luaR_newpositionalmembers(L, classdef, numpositional);
+
+        int position = 0;
+        for (uint32_t idx = 0; idx < numfields; idx++)
+        {
+            if (members[idx].flags & LBC_CLASSMEMBER_POSITIONAL)
+                classdef->positionalmembers[position++] = idx;
+        }
+    }
+
     luaR_sealclassshape(L, classdef);
 
     for (uint32_t idx = numfields; idx < uint32_t(count); idx++)

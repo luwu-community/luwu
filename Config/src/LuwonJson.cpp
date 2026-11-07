@@ -231,6 +231,9 @@ public:
         case LuwonValue::Kind::Object:
             writeObject(value, depth);
             return;
+        case LuwonValue::Kind::Bundle:
+            writeBundle(value, depth);
+            return;
         }
     }
 
@@ -408,6 +411,20 @@ private:
         writeList(args, depth + 1);
         newline(depth);
         out += "}";
+    }
+
+    // A list of the values, under `$bundle` when lossless
+    void writeBundle(const LuwonValue& bundle, int depth)
+    {
+        std::vector<const LuwonValue*> values;
+        for (const LuwonValue& value : bundle.args)
+            values.push_back(&value);
+
+        if (lossless)
+            out += "{ \"$bundle\": ";
+        writeList(values, depth);
+        if (lossless)
+            out += " }";
     }
 };
 
@@ -784,6 +801,18 @@ private:
                 value.number = -HUGE_VAL;
             else
                 return fail("'$number' is \"nan\", \"inf\" or \"-inf\"");
+            return value;
+        }
+
+        if (const LuwonValue* bundle = only("$bundle"); isList(bundle))
+        {
+            const std::vector<LuwonEntry>& values = bundle->table->array;
+            if (values.size() > 12)
+                return fail("'$bundle' holds at most 12 values");
+
+            LuwonValue value{LuwonValue::Kind::Bundle};
+            for (const LuwonEntry& entry : values)
+                value.args.push_back(entry.value);
             return value;
         }
 

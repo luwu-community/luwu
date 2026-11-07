@@ -503,8 +503,6 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_POP";
     case IrCmd::FALLBACK_WRAPRESULT:
         return "FALLBACK_WRAPRESULT";
-    case IrCmd::FALLBACK_GETQUALIFIED:
-        return "FALLBACK_GETQUALIFIED";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:

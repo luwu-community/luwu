@@ -13,6 +13,9 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuauSolverV2)
 
 struct DocumentationSymbolFixture : BuiltinsFixture
@@ -304,6 +307,33 @@ local .(first, second) = value
         ExprOrLocal found = findExprOrLocalAtPosition(*getMainSourceModule(), position);
         REQUIRE(found.getLocal());
         CHECK_EQ(std::string(position.column < 15 ? "first" : "second"), std::string(found.getLocal()->name.value));
+    }
+}
+
+// Luwu match expressions: a type test's binding is the local it declares, never the tested value its read is placed at
+TEST_CASE_FIXTURE(Fixture, "expr_or_local_in_a_type_test_pattern")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    check(R"(
+class Pair(public const first: number, public const second: number)
+local value = Pair(1, 2)
+if value is Pair.(one, two) then
+    print(one, two)
+end
+    )");
+
+    for (Position position : {Position(3, 18), Position(3, 23)})
+    {
+        INFO(position.column);
+        ExprOrLocal found = findExprOrLocalAtPosition(*getMainSourceModule(), position);
+        REQUIRE(found.getLocal());
+        CHECK_EQ(std::string(position.column < 21 ? "one" : "two"), std::string(found.getLocal()->name.value));
     }
 }
 

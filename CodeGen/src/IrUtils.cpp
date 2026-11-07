@@ -405,7 +405,6 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FALLBACK_PUSH:
     case IrCmd::FALLBACK_POP:
     case IrCmd::FALLBACK_WRAPRESULT:
-    case IrCmd::FALLBACK_GETQUALIFIED:
         return IrValueKind::None;
     case IrCmd::SUBSTITUTE:
         return IrValueKind::Unknown;

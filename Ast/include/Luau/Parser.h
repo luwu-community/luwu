@@ -275,6 +275,7 @@ private:
     bool dotTableMissingBraceFollows();
     bool destructuringAvailable();
     AstStat* parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name = {});
+    AstExpr* parseDestructuringDeclaration(const Location& start, DestructureTarget& target, Location& equalsLocation);
     void parseDestructurePattern(DestructureTarget& target);
     struct DestructureField;
     DestructureField parseDestructureField();
@@ -576,6 +577,8 @@ private:
     // dottable ::= `.' `{' [dotfield {fieldsep dotfield} [fieldsep]] `}'
     // dotfield ::= Name | Name `=' exp
     AstExpr* parseDotTableConstructor();
+    AstExpr* parseDotPositional();
+    AstType* parseDotPositionalType();
 
     // TODO: Add grammar rules here?
     AstExpr* parseIfElseExpr();
@@ -587,8 +590,24 @@ private:
     AstExpr* parseTypeTestAlternative(AstExpr* value, const Location& start, bool negated);
     bool literalPatternFollows();
     std::optional<AstExpr*> parseNothingValue();
+    AstExpr* parseTypeTestBindings(AstExpr* value, AstExpr* type, bool negated, const Location& start);
+    AstExpr* recoverTypeTestCall(AstExpr* value, AstExpr* type, bool negated, const Location& start);
+    AstExpr* bindTypeTestPattern(AstExpr* value, AstExpr* type, const DestructureTarget& target, bool negated, const Location& location);
+    AstExpr* bindWholeValue(AstExpr* value, bool negated, const Location& start);
+    struct TypeTestBindings;
+    struct TypeTestBindingsFrame;
+    void reportTryAroundTypeTest(AstExprTry* tryExpr, const TypeTestBindings& bindings);
+    TypeTestBindingsFrame allowTypeTestBindings();
+    void appendConditionClauses(
+        std::vector<AstIfClause>& chain,
+        AstExpr* condition,
+        const std::optional<Location>& whenLocation,
+        TypeTestBindingsFrame outer
+    );
     bool matchExpressionFollows();
-    AstExpr* parseMatchExpr(bool inStatement = false);
+    AstExpr* parseMatchExpr(bool inStatement = false, AstExprTry* tried = nullptr);
+    // Luwu try expressions: set while a `match` subject is parsed, so a `try` there leaves the `case` arms to the `match`
+    bool inMatchSubject = false;
     AstExpr* parseMatchPattern(AstLocal* subject);
     AstExpr* parseMatchAlternative(AstLocal* subject);
     AstExprCall* makeGlobalCall(AstName library, std::optional<AstName> function, const Location& location, std::initializer_list<AstExpr*> args);
@@ -944,6 +963,31 @@ private:
     AstName nameMatched;
     AstName nameNone;
     AstName nameNoneGlobal;
+
+    // Luwu match expressions: the clauses a `.{}` after a type test (`x is Point.{x, y}`) adds to the condition it's
+    // in: a hidden local holding the tested value when it isn't a local already, the test, then one untested binding
+    // per name. `test` is the expression the condition must be for the bindings to apply.
+    struct TypeTestBindings
+    {
+        AstExpr* test = nullptr;
+        Location location;
+        // `.{...}` or `.(...)`, for messages
+        const char* form = nullptr;
+        std::vector<AstIfClause> clauses;
+    };
+    // Whether a type test here may bind (the condition being parsed is a whole `if`, `when` or `case` condition), and
+    // the bindings it made. Saved and restored around each condition, so a nested one has its own.
+    struct TypeTestBindingsFrame
+    {
+        bool allowed = false;
+        std::optional<TypeTestBindings> bindings;
+    };
+    TypeTestBindingsFrame typeTestBindings;
+    // Luwu match expressions: the always-true test the last bare `.(name)` pattern made (bindWholeValue), so a `case`
+    // that is only that pattern can be told apart as a catch-all
+    AstExpr* wholeValueTest = nullptr;
+    // Set while parsing the class after `is`, so `Point.{x, y}` stops before the `.{` instead of calling `Point`
+    bool typeTestOperand = false;
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;
@@ -952,6 +996,10 @@ private:
     AstName nameNil;
     AstName nameContinue;
     AstName nameTrait;
+    // Luwu bundles: `.(a, b)` calls `bundle.pack`, and a `.(A, B)` type names the bundle class of its size
+    AstName nameBundle;
+    AstName nameBundleClasses[13];
+    AstName nameBundlePack;
 
     MatchLexeme endMismatchSuspect;
 
