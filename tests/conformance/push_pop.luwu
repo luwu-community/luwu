@@ -1,0 +1,331 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing push and pop operators")
+
+local function same(a, b)
+    if #a ~= #b then
+        return false
+    end
+    for i = 1, #a do
+        if a[i] ~= b[i] then
+            return false
+        end
+    end
+    return true
+end
+
+local function none() end
+local function two() return "x", "y" end
+local function holes() return 1, nil, 2, nil end
+
+-- pushing
+do
+    const t = {}
+    t <+ 1
+    t <+ 2, 3
+    assert(same(t, { 1, 2, 3 }))
+
+    -- nil pushes nothing, wherever it is
+    t <+ nil
+    t <+ nil, 4, nil, 5
+    t <+ holes()
+    assert(same(t, { 1, 2, 3, 4, 5, 1, 2 }))
+
+    -- a call or `...` last pushes all of its values; anywhere else, only its first
+    t <+ two()
+    t <+ two(), "z"
+    t <+ none()
+    assert(same(t, { 1, 2, 3, 4, 5, 1, 2, "x", "y", "x", "z" }))
+
+    local function varargs(...)
+        local r = {}
+        r <+ "first", ...
+        return r
+    end
+    assert(same(varargs(), { "first" }))
+    assert(same(varargs(1, nil, 3), { "first", 1, 3 }))
+end
+
+-- push targets: locals (const included), upvalues, fields, indexes and globals
+do
+    const holder = { items = {}, [2] = {} }
+    holder.items <+ "a"
+    holder[2] <+ "b"
+    local key = "items"
+    holder[key] <+ "c"
+    assert(same(holder.items, { "a", "c" }) and same(holder[2], { "b" }))
+
+    local captured = {}
+    local function add(v)
+        captured <+ v
+    end
+    add(1)
+    add(2)
+    assert(same(captured, { 1, 2 }))
+
+    pushpopglobal = {}
+    pushpopglobal <+ 7
+    assert(pushpopglobal[1] == 7)
+    pushpopglobal = nil
+end
+
+-- the target is evaluated before the values
+do
+    local order = {}
+    local function target()
+        order <+ "target"
+        return {}
+    end
+    local function value()
+        order <+ "value"
+        return 1
+    end
+    local box = { t = {} }
+    local function get()
+        order <+ "get"
+        return box
+    end
+    get().t <+ value()
+    assert(same(order, { "get", "value" }))
+    local t2 = target()
+    t2 <+ value()
+    assert(same(order, { "get", "value", "target", "value" }))
+end
+
+-- many values, and multret lists longer than the frame
+do
+    const t = {}
+    t <+ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30
+    assert(#t == 30 and t[30] == 30)
+
+    local big = table.create(1000, 0)
+    for i = 1, 1000 do
+        big[i] = i
+    end
+    const copy = {}
+    copy <+ table.unpack(big)
+    assert(#copy == 1000 and copy[1000] == 1000)
+end
+
+-- popping
+do
+    const t = { 1, 2, 3 }
+    assert(<-t == 3)
+    assert(#t == 2)
+    assert(<-t + 10 == 12)
+    assert(<-t == 1)
+    assert(<-t == nil)
+    assert(<-t == nil)
+    assert(#t == 0)
+
+    -- an operand like `#`'s: a field, a call result, another pop
+    local box = { items = { "a", "b" } }
+    assert(<-box.items == "b" and #box.items == 1)
+    assert(<-(function() return { 9 } end)() == 9)
+    const nested = { { 1, 2 }, { 3, 4 } }
+    assert(<-<-nested == 4)
+
+    -- popping into the register that holds the container
+    local stack = { { "inner" } }
+    stack = <-stack
+    assert(stack[1] == "inner")
+
+    -- in conditions and loops
+    const queue = { 1, 2, 3 }
+    local total = 0
+    while true do
+        local v = <-queue
+        if v == nil then
+            break
+        end
+        total += v
+    end
+    assert(total == 6 and #queue == 0)
+end
+
+-- `<-` between operands is still a comparison
+do
+    local x = 5
+    assert((x<-1) == false)
+    assert((x <- 1) == false)
+    assert((-6 <-5) == true)
+    -- `< <` opens explicit type arguments everywhere but before a `-`
+    local t = { 1, 9 }
+    assert((x < <-t) == true)
+    assert((x < <-t) == false)
+end
+
+-- tables push and pop raw, like table.insert and table.remove
+do
+    local log = {}
+    local t = setmetatable({}, {
+        __newindex = function(self, k, v)
+            log <+ k
+            rawset(self, k, v)
+        end,
+        __len = function()
+            return 100
+        end,
+        __index = function()
+            return "missing"
+        end,
+    })
+    t <+ "a", "b"
+    assert(#log == 0 and rawget(t, 1) == "a" and rawget(t, 2) == "b")
+    assert(<-t == "b" and rawget(t, 2) == nil)
+
+    -- the border is the raw length
+    local sparse = { 1, 2, nil, 4 }
+    local n = #sparse
+    sparse <+ "end"
+    assert(sparse[n + 1] == "end")
+end
+
+-- frozen tables can't change, but pushing nothing and popping an empty one are fine
+do
+    local frozen = table.freeze({ 1 })
+    assert(not pcall(function()
+        frozen <+ 2
+    end))
+    assert(not pcall(function()
+        return <-frozen
+    end))
+    assert(#frozen == 1)
+
+    local empty = table.freeze({})
+    empty <+ nil
+    assert(<-empty == nil)
+end
+
+-- errors
+do
+    local ok, err = pcall(function()
+        local n = 1
+        n <+ 2
+    end)
+    assert(not ok and string.find(err, "attempt to push to a number value", 1, true))
+
+    ok, err = pcall(function()
+        local missing = nil
+        return <-missing
+    end)
+    assert(not ok and string.find(err, "attempt to pop from a nil value", 1, true))
+
+    ok, err = pcall(function()
+        local s = "abc"
+        s <+ "d"
+    end)
+    assert(not ok and string.find(err, "attempt to push to a string value", 1, true))
+end
+
+-- metamethods
+do
+    local calls = {}
+    local container = setmetatable({}, {
+        __push = function(self, ...)
+            calls <+ select("#", ...) .. ":" .. table.concat({ ... }, ",")
+        end,
+        __pop = function(self)
+            return "popped", "ignored"
+        end,
+    })
+
+    -- one call per push, with the non-nil values in order
+    container <+ 1
+    container <+ 1, nil, 2
+    container <+ holes()
+    assert(same(calls, { "1:1", "2:1,2", "2:1,2" }))
+
+    -- nothing to push: no call
+    container <+ nil
+    container <+ nil, nil
+    container <+ none()
+    assert(#calls == 3)
+
+    -- the container itself is left alone
+    assert(rawget(container, 1) == nil)
+
+    local a, b = <-container
+    assert(a == "popped" and b == nil)
+    assert(select("#", <-container) == 1)
+
+    -- __pop returning nothing pops nil
+    local silent = setmetatable({}, { __pop = function() end })
+    assert(<-silent == nil)
+
+    -- a metamethod's error propagates
+    local failing = setmetatable({}, {
+        __push = function()
+            error("push failed")
+        end,
+    })
+    local ok, err = pcall(function()
+        failing <+ 1
+    end)
+    assert(not ok and string.find(err, "push failed", 1, true))
+
+    -- a metamethod with many values and a frame of its own
+    local count = 0
+    local deep = setmetatable({}, {
+        __push = function(self, ...)
+            count = select("#", ...)
+            local inner = {}
+            inner <+ ...
+            assert(#inner == count)
+        end,
+    })
+    local big = table.create(500, "v")
+    deep <+ table.unpack(big)
+    assert(count == 500)
+end
+
+-- the GC sees pushed values
+do
+    const t = {}
+    for i = 1, 200 do
+        t <+ tostring(i) .. "x"
+    end
+    collectgarbage()
+    assert(t[200] == "200x" and <-t == "200x")
+end
+
+-- classes, declared at the top level
+class History(limit: number)
+    entries: { number } = {}
+
+    function __push(self, ...: number)
+        self.entries <+ ...
+        while #self.entries > self.limit do
+            table.remove(self.entries, 1)
+        end
+    end
+
+    function __pop(self): number?
+        return <-self.entries
+    end
+
+    function __len(self): number
+        return #self.entries
+    end
+end
+
+class Plain()
+    x: number = 1
+end
+
+do
+    const undo = History(3)
+    undo <+ 1, 2
+    undo <+ 3, 4, 5
+    assert(#undo == 3)
+    assert(<-undo == 5 and #undo == 2)
+
+    const plain = Plain()
+    assert(not pcall(function()
+        plain <+ 1
+    end))
+    assert(not pcall(function()
+        return <-plain
+    end))
+end
+
+return "OK"

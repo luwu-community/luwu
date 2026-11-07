@@ -69,6 +69,8 @@ void translateInstGetTableN(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstSetTableN(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstGetPositional(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstAppendTable(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstPush(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstPop(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstGetTable(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstSetTable(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstGetImport(IrBuilder& build, const Instruction* pc, int pcpos);
