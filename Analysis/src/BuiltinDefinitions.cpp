@@ -874,8 +874,9 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     // them (`collections.Vec<T>`) instead of finding them as globals. The library value is a global.
     if (collectionsLibraryEnabled())
     {
-        registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
+        // `bundle` goes first: `collections` declarations name its types
         registerBuiltinModule(frontend, globals, "bundle", getBundleDefinitionSource(), typeCheckForAutocomplete);
+        registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
         prepareBundleTypes(globals);
     }
 

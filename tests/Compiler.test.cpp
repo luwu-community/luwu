@@ -14536,6 +14536,65 @@ TEST_CASE("BundleFunctionsCompileToFastcalls")
     CHECK(compileFunction(fastcalls[0], 0, 1).find("FASTCALL") == std::string::npos);
 }
 
+// Luwu collections: an OrderedMap built from `.(key, value)` bundles, as arguments or as a list, builds neither: it's
+// an empty map and a `set` call per entry. Anything else is an ordinary call.
+TEST_CASE("OrderedMapFromBundlesBuildsNoBundle")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(a, b)
+    local m = collections.OrderedMap({ bundle.pack("x", a), bundle.pack(b, 2) })
+    return m
+end
+)",
+                   0,
+                   1
+               ),
+        R"(
+GETIMPORT R3 2 [collections.OrderedMap]
+CALL R3 0 1
+LOADK R6 K4 ['x']
+MOVE R7 R0
+NAMECALL R4 R3 K3 ['set']
+CALL R4 3 0
+MOVE R6 R1
+LOADN R7 2
+NAMECALL R4 R3 K3 ['set']
+CALL R4 3 0
+MOVE R2 R3
+RETURN R2 1
+)"
+    );
+
+    const char* lowered[] = {
+        "local function f(a) local m = collections.OrderedMap(bundle.pack(1, a), bundle.pack(2, a)) return m end",
+        "local function f(a) local m = collections.OrderedMap({ bundle.pack(1, a) }) return m end",
+    };
+    for (const char* source : lowered)
+    {
+        INFO(source);
+        std::string bytecode = compileFunction(source, 0, 1);
+        CHECK(bytecode.find("NAMECALL") != std::string::npos);
+        CHECK(bytecode.find("FASTCALL") == std::string::npos);
+    }
+
+    const char* calls[] = {
+        "local function f(a) local m = collections.OrderedMap(bundle.pack(1, a), a) return m end",
+        "local function f(a) local m = collections.OrderedMap({ bundle.pack(1, a), k = bundle.pack(2, a) }) return m end",
+        "local function f(a) local m = collections.OrderedMap(bundle.pack(1, a, a)) return m end",
+        "local function f(a) local m = collections.OrderedMap({ bundle.pack(1, a) }, bundle.pack(2, a)) return m end",
+        "local collections = {} local function f(a) local m = collections.OrderedMap(bundle.pack(1, a)) return m end",
+    };
+    for (const char* source : calls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("NAMECALL") == std::string::npos);
+    }
+}
+
 // Luwu bundles: `for i, v in bundle.pack(a, b)` constructs no bundle. The position is only loaded when the body
 // reads it.
 TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")

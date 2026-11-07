@@ -395,7 +395,7 @@ declare class: {
 // The types are the library's exports, not globals (registerBuiltinGlobals).
 static const char* kBuiltinDefinitionCollectionsSrc = R"BUILTIN_SRC(
 class type OrderedMap<K, V>
-    public function __init(self)
+    public function __init(self, ...: bundle.Bundle2<K, V> | {bundle.Bundle2<K, V>})
     public function get(self, key: K): V?
     public function set(self, key: K, value: V)
     public function has(self, key: K): boolean
@@ -413,8 +413,9 @@ class type OrderedMap<K, V>
 end
 
 class type Vec<T>
-    public function __init(self, items: {T}?)
-    public function push(self, value: T)
+    public function __init(self, ...: T)
+    public function push(self, value: T, ...: T)
+    public function extend(self, items: {T})
     public function pop(self): T?
     public function at(self, position: number): T?
     public function set(self, position: number, value: T)
@@ -427,9 +428,11 @@ class type Vec<T>
 end
 
 class type VecDeque<T>
-    public function __init(self, items: {T}?)
-    public function pushfront(self, value: T)
-    public function pushback(self, value: T)
+    public function __init(self, ...: T)
+    public function pushfront(self, value: T, ...: T)
+    public function pushback(self, value: T, ...: T)
+    public function extendfront(self, items: {T})
+    public function extendback(self, items: {T})
     public function popfront(self): T?
     public function popback(self): T?
     public function front(self): T?
