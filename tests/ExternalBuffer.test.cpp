@@ -11,6 +11,7 @@
 
 LUAU_FASTFLAG(LuwuExternallyManagedBuffers)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(LuwuBufferBatched)
 
 static int s_externalBufferFreeCount = 0;
 static void test_buffer_free_cb(lua_State* L, void* data, size_t sz, void* userdata)
@@ -149,6 +150,94 @@ TEST_CASE("ExternalBufferImmutable")
     CHECK(my_memory[0] == 55);
 
     // Free the state to trigger GC which should call the free_cb
+    state.reset();
+    CHECK(s_externalBufferFreeCount == 1);
+}
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): pack* shares buffer.write*'s mutability rule, so a
+// mutable external buffer takes a whole batch in one call and reads it back with unpack*
+TEST_CASE("ExternalBufferBatchedMutable")
+{
+    ScopedFastFlag sff{FFlag::LuwuExternallyManagedBuffers, true};
+    ScopedFastFlag sff2{FFlag::LuwuBufferIsFrozen, true};
+    ScopedFastFlag sff3{FFlag::LuwuBufferBatched, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
+    lua_State* L = state.get();
+    luaL_openlibs(L);
+
+    s_externalBufferFreeCount = 0;
+
+    char my_memory[32];
+    memset(my_memory, 0, sizeof(my_memory));
+    my_memory[0] = 55;
+
+    lua_newexternalbuffer(L, sizeof(my_memory), my_memory, nullptr, test_buffer_free_cb, LUA_BHOST_MUTABLE);
+    lua_setglobal(L, "ext_buf");
+
+    const char* lua_code = R"(
+        local before = buffer.unpacku8(ext_buf, 0, 1)
+        assert(before == 55)
+
+        buffer.packu8(ext_buf, 0, 1, 2, 3)
+        local a, b, c = buffer.unpacku8(ext_buf, 0, 3)
+        assert(a == 1 and b == 2 and c == 3)
+
+        assert(select('#', buffer.unpacku8(ext_buf, 0, 32)) == 32)
+    )";
+
+    CHECK(dostring(L, lua_code) == 0);
+    CHECK(my_memory[0] == 1);
+    CHECK(my_memory[1] == 2);
+    CHECK(my_memory[2] == 3);
+
+    state.reset();
+    CHECK(s_externalBufferFreeCount == 1);
+}
+
+// a frozen external buffer refuses the whole batch, before any value is looked at, and leaves host memory alone
+TEST_CASE("ExternalBufferBatchedImmutable")
+{
+    ScopedFastFlag sff{FFlag::LuwuExternallyManagedBuffers, true};
+    ScopedFastFlag sff2{FFlag::LuwuBufferIsFrozen, true};
+    ScopedFastFlag sff3{FFlag::LuwuBufferBatched, true};
+
+    std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
+    lua_State* L = state.get();
+    luaL_openlibs(L);
+
+    s_externalBufferFreeCount = 0;
+
+    char my_memory[32];
+    memset(my_memory, 0, sizeof(my_memory));
+    my_memory[0] = 55;
+
+    lua_newexternalbuffer(L, sizeof(my_memory), my_memory, nullptr, test_buffer_free_cb, LUA_BHOST_IMMUTABLE);
+    lua_setglobal(L, "ext_buf");
+
+    const char* lua_read_code = R"(
+        local a, b = buffer.unpacku8(ext_buf, 0, 2)
+        assert(a == 55 and b == 0)
+        assert(select('#', buffer.unpacku8(ext_buf, 0, 32)) == 32)
+    )";
+
+    CHECK(dostring(L, lua_read_code) == 0);
+
+    const char* lua_write_code = R"(
+        buffer.packu8(ext_buf, 0, 1, 2, 3)
+    )";
+
+    CHECK(dostring(L, lua_write_code) != 0);
+
+    // an empty batch is still a write attempt, so it is refused as well
+    const char* lua_empty_write_code = R"(
+        buffer.packu8(ext_buf, 0)
+    )";
+
+    CHECK(dostring(L, lua_empty_write_code) != 0);
+
+    CHECK(my_memory[0] == 55);
+
     state.reset();
     CHECK(s_externalBufferFreeCount == 1);
 }
