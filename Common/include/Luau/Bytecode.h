@@ -1060,6 +1060,11 @@ enum LuauBuiltinFunction
 
     // Luwu Traits (rfcs/classes/traits.md): class.of(value) -> class?, which `Self` in a trait method calls
     LBF_CLASS_OF,
+
+    // Luwu String Extensions (rfcs/string-extensions.md): string.startswith/endswith/contains(s, needle, ...) -> boolean
+    LBF_STRING_STARTSWITH,
+    LBF_STRING_ENDSWITH,
+    LBF_STRING_CONTAINS,
 };
 
 // Capture type, used in LOP_CAPTURE
