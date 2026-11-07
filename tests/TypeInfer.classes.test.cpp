@@ -965,7 +965,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_imported_class_but_not_a_c
             public x: number
         end
 
-        export const notAPoint = nil
+        export notAPoint = nil
     )";
 
     fileResolver.source["game/B"] = R"(

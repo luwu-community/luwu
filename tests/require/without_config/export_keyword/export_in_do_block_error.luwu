@@ -1,4 +1,4 @@
 -- export inside do end should error
 do
-    export local inside = "do block"
+    export inside = "do block"
 end

@@ -5,7 +5,7 @@ local table = {
     end,
 }
 
-export local value = 42
+export value = 42
 
 local table = {
     freeze = function(t)

@@ -366,18 +366,11 @@ void ConstraintGenerator::visitModuleRoot(AstStatBlock* block)
     Checkpoint end = checkpoint(this);
 
     TypeId result = arena->addType(BlockedType{});
-    NotNull<Constraint> genConstraint = addConstraint(
-        scope,
-        block->location,
-        GeneralizationConstraint{
-            result,
-            moduleFnTy,
-            /*interiorTypes*/ std::vector<TypeId>{},
-            /*hasDeprecatedAttribute*/ false,
-            /*deprecatedInfo*/ {},
-            /*noGenerics*/ true
-        }
-    );
+    // Luwu: `noGenerics` is set by name. Luwu's fields come before it in GeneralizationConstraint, so a positional
+    // initializer sets one of those instead, and the module's free types escape as unbound generics (`leaky_generics`).
+    GeneralizationConstraint moduleGeneralization{result, moduleFnTy};
+    moduleGeneralization.noGenerics = true;
+    NotNull<Constraint> genConstraint = addConstraint(scope, block->location, std::move(moduleGeneralization));
 
     scope->interiorFreeTypes = std::move(interiorFreeTypes.back().types);
     scope->interiorFreeTypePacks = std::move(interiorFreeTypes.back().typePacks);
@@ -2038,6 +2031,16 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatRepeat* rep
     return ControlFlow::None;
 }
 
+// Luwu: the reason `@[nodiscard("reason")]` gives, or empty
+static std::string nodiscardReasonOf(const AstAttr* attr)
+{
+    if (attr->args.size == 0)
+        return {};
+
+    const AstExprConstantString* reason = attr->args.data[0]->as<AstExprConstantString>();
+    return reason ? std::string(reason->value.data, reason->value.size) : std::string();
+}
+
 static void propagateDeprecatedAttributeToConstraint(ConstraintV& c, const AstExprFunction* func)
 {
     if (GeneralizationConstraint* genConstraint = c.get_if<GeneralizationConstraint>())
@@ -2047,6 +2050,13 @@ static void propagateDeprecatedAttributeToConstraint(ConstraintV& c, const AstEx
         if (deprecatedAttribute)
         {
             genConstraint->deprecatedInfo = deprecatedAttribute->deprecatedInfo();
+        }
+
+        // Luwu: `@nodiscard` travels the same way
+        if (AstAttr* nodiscard = func->getAttribute(AstAttr::Type::Nodiscard))
+        {
+            genConstraint->hasNodiscardAttribute = true;
+            genConstraint->nodiscardReason = nodiscardReasonOf(nodiscard);
         }
     }
 }
@@ -2863,6 +2873,13 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunc
         ftv->deprecatedInfo = std::make_shared<AstAttr::DeprecatedInfo>(deprecatedAttr->deprecatedInfo());
     }
 
+    // Luwu: `@nodiscard declare function ...`
+    if (AstAttr* nodiscard = global->getAttribute(AstAttr::Type::Nodiscard))
+    {
+        ftv->isNodiscard = true;
+        ftv->nodiscardReason = nodiscardReasonOf(nodiscard);
+    }
+
     ftv->argNames.reserve(global->paramNames.size);
     for (const auto& el : global->paramNames)
         ftv->argNames.emplace_back(FunctionArgument{el.first.value, el.second});
@@ -3371,7 +3388,12 @@ InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall*
 
     Checkpoint funcEndCheckpoint = checkpoint(this);
 
-    return checkExprCall(scope, call, fnType, funcBeginCheckpoint, funcEndCheckpoint, expectedType);
+    InferencePack result = checkExprCall(scope, call, fnType, funcBeginCheckpoint, funcEndCheckpoint, expectedType);
+
+    // Luwu: every call's values, not only those of a call in a place that takes them all, so the DiscardedValues lint
+    // can see what a call that keeps one value drops.
+    module->astTypePacks[call] = result.tp;
+    return result;
 }
 
 InferencePack ConstraintGenerator::checkExprCall(

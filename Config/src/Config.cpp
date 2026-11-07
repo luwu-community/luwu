@@ -116,6 +116,17 @@ static Error parseLintRuleStringForCode(
     bool compat
 )
 {
+    // Luwu: a group whose parts don't depend on it being on sets them too (LintWarning::withGroupParts)
+    LintMask parts = LintWarning::withGroupParts(LintMask().set(code)).reset(code);
+    for (int part = 0; part < LintWarning::Code__Count; ++part)
+    {
+        if (parts.test(part))
+        {
+            if (Error error = parseLintRuleStringForCode(enabledLints, fatalLints, LintWarning::Code(part), value, compat))
+                return error;
+        }
+    }
+
     if (value == "true")
     {
         enabledLints.enableWarning(code);
