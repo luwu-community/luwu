@@ -4948,6 +4948,175 @@ end
     CHECK(freeFunction.errors.empty());
 }
 
+// Luwu Traits (rfcs/classes/traits.md): `Self` is const like `self`, in a class and in a trait, nested closures included
+TEST_CASE_FIXTURE(Fixture, "self_class_value_is_const")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    const char* writes[] = {
+        "Self = nil",
+        "local a; Self, a = nil, nil",
+        "Self ..= 'x'",
+        "function Self() end",
+        "local f = function() Self = nil end",
+    };
+
+    for (const char* write : writes)
+    {
+        for (const char* declaration : {"class C\n    function m(self)", "trait T\n    function m(self)"})
+        {
+            std::string code = std::string(declaration) + "\n        " + write + "\n    end\nend\n";
+            ParseResult result = tryParse(code);
+            REQUIRE_MESSAGE(result.errors.size() == 1, code);
+            CHECK_EQ(result.errors[0].getMessage(), "'Self' is constant and may not be reassigned");
+        }
+    }
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `Self` is the class's name in a class and `class.of(self)` in a trait method. A
+// trait function without `self` can't use it. A local the body declares shadows it, and outside a body it's a name.
+TEST_CASE_FIXTURE(Fixture, "self_class_value_shapes")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait Cloner
+            function clone(self)
+                return Self
+            end
+            function shadowed(self)
+                local Self = 1
+                return Self
+            end
+        end
+        class Point
+            function copy(self)
+                return function() return Self end
+            end
+        end
+        return Self
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 3);
+
+    AstStatClass* cloner = block->body.data[0]->as<AstStatClass>();
+    AstStatClass* point = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(cloner);
+    REQUIRE(point);
+    REQUIRE(cloner->members.size == 2);
+    REQUIRE(point->members.size == 1);
+
+    auto returned = [](const AstClassMember& member) -> AstExpr*
+    {
+        const AstClassMethod* method = member.get_if<AstClassMethod>();
+        REQUIRE(method);
+        AstStatBlock* body = method->function->body;
+        REQUIRE(body->body.size > 0);
+        AstStatReturn* ret = body->body.data[body->body.size - 1]->as<AstStatReturn>();
+        REQUIRE(ret);
+        REQUIRE(ret->list.size == 1);
+        return ret->list.data[0];
+    };
+
+    AstExprSelfClass* inMethod = returned(cloner->members.data[0])->as<AstExprSelfClass>();
+    REQUIRE(inMethod);
+    REQUIRE(inMethod->classOf->args.size == 1);
+    AstExprLocal* self = inMethod->classOf->args.data[0]->as<AstExprLocal>();
+    REQUIRE(self);
+    CHECK_EQ(self->local, cloner->members.data[0].get_if<AstClassMethod>()->function->args.data[0]);
+
+    CHECK(returned(cloner->members.data[1])->is<AstExprLocal>());
+
+    AstExprFunction* closure = returned(point->members.data[0])->as<AstExprFunction>();
+    REQUIRE(closure);
+    REQUIRE(closure->body->body.size == 1);
+    AstStatReturn* closureReturn = closure->body->body.data[0]->as<AstStatReturn>();
+    REQUIRE(closureReturn);
+    AstExprGlobal* inClass = closureReturn->list.data[0]->as<AstExprGlobal>();
+    REQUIRE(inClass);
+    CHECK(inClass->writtenAsSelf);
+    CHECK_EQ(inClass->name, "Point");
+
+    AstStatReturn* outside = block->body.data[2]->as<AstStatReturn>();
+    REQUIRE(outside);
+    AstExprGlobal* global = outside->list.data[0]->as<AstExprGlobal>();
+    REQUIRE(global);
+    CHECK(!global->writtenAsSelf);
+    CHECK_EQ(global->name, "Self");
+
+    ParseResult inStatic = tryParse("trait Cloner\n    function make()\n        return Self\n    end\nend\n");
+    REQUIRE(inStatic.errors.size() == 1);
+    CHECK_EQ(
+        inStatic.errors[0].getMessage(), "Write 'Cloner' here: 'Self' is the class of 'self', and this trait function doesn't take 'self'"
+    );
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `Self` in a trait's field defaults is the class of the object they initialize, the
+// trait's initSelf, which every `Self` there shares. A trait's parameters can't use it.
+TEST_CASE_FIXTURE(Fixture, "self_class_value_in_trait_defaults")
+{
+    ScopedFastFlag flags[3]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}, {FFlag::LuwuDefaultArguments, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait T
+            x = Self
+            y = function() return Self end
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 1);
+    AstStatClass* trait = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(trait);
+    REQUIRE(trait->initSelf);
+    REQUIRE(trait->members.size == 2);
+
+    const AstClassProperty* field = trait->members.data[0].get_if<AstClassProperty>();
+    const AstClassProperty* closureField = trait->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(field);
+    REQUIRE(closureField);
+    AstExprFunction* closure = closureField->defaultValue->as<AstExprFunction>();
+    REQUIRE(closure);
+    REQUIRE(closure->body->body.size == 1);
+    AstStatReturn* closureReturn = closure->body->body.data[0]->as<AstStatReturn>();
+    REQUIRE(closureReturn);
+
+    for (AstExpr* value : {field->defaultValue, closureReturn->list.data[0]})
+    {
+        REQUIRE(value);
+        AstExprSelfClass* selfClass = value->as<AstExprSelfClass>();
+        REQUIRE(selfClass);
+        REQUIRE(selfClass->classOf->args.size == 1);
+        AstExprLocal* object = selfClass->classOf->args.data[0]->as<AstExprLocal>();
+        REQUIRE(object);
+        CHECK_EQ(object->local, trait->initSelf);
+    }
+
+    AstStatBlock* noSelf = parse("trait U\n    x = 1\nend");
+    REQUIRE(noSelf);
+    AstStatClass* plain = noSelf->body.data[0]->as<AstStatClass>();
+    REQUIRE(plain);
+    CHECK(!plain->initSelf);
+
+    ParseResult inParameters = tryParse("trait V(a = Self)\nend");
+    REQUIRE(inParameters.errors.size() == 1);
+    CHECK_EQ(inParameters.errors[0].getMessage(), "'Self' can't be used in a trait's parameters");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait can't take a class or trait keyword as its name
+TEST_CASE_FIXTURE(Fixture, "trait_names_are_not_class_keywords")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    for (const char* name : {"class", "trait", "public", "private", "const", "extends", "implements", "needs", "expect", "final"})
+    {
+        std::string code = std::string("trait ") + name + "\nend";
+        ParseResult result = tryParse(code);
+        REQUIRE_MESSAGE(result.errors.size() == 1, code);
+        CHECK_EQ(result.errors[0].getMessage(), std::string("A trait can't be named '") + name + "': it's a keyword in classes and traits");
+    }
+
+    CHECK(tryParse("trait Needs\nend").errors.empty());
+}
 TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_variadic")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};

@@ -72,7 +72,8 @@
 //   and constant field defaults in LBC_CONSTANT_CLASS_SHAPE, LBC_TYPE_CLASS/LBC_TYPE_OBJECT and
 //   LBF_CLASS_ISINSTANCE.
 //   Luwu Traits (rfcs/classes/traits.md): the shape flags varint in LBC_CONSTANT_CLASS_SHAPE (LBC_CLASSSHAPE_TRAIT,
-//   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, and NEWCLASSMEMBER's IMPLEMENTS form.
+//   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, NEWCLASSMEMBER's IMPLEMENTS form and
+//   LBF_CLASS_OF.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -1026,6 +1027,9 @@ enum LuauBuiltinFunction
 
     // Luwu Classes (rfcs/classes): class.isinstance(value, class) -> boolean
     LBF_CLASS_ISINSTANCE,
+
+    // Luwu Traits (rfcs/classes/traits.md): class.of(value) -> class?, which `Self` in a trait method calls
+    LBF_CLASS_OF,
 };
 
 // Capture type, used in LOP_CAPTURE

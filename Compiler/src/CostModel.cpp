@@ -225,6 +225,10 @@ struct CostVisitor : AstVisitor
         {
             return model(expr->expr);
         }
+        else if (AstExprSelfClass* expr = node->as<AstExprSelfClass>())
+        {
+            return model(expr->classOf);
+        }
         else if (AstExprTableComprehension* expr = node->as<AstExprTableComprehension>())
         {
             // Luwu Table Comprehensions (rfcs/table-comprehensions.md): an allocation plus the loop, modeled like any loop

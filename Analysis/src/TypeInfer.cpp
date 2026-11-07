@@ -2166,6 +2166,9 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
         result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInstantiate>())
         result = checkExpr(scope, *a);
+    // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
+    else if (auto a = expr.as<AstExprSelfClass>())
+        result = checkExpr(scope, *a->classOf);
     else
         ice("Unhandled AstExpr?");
 

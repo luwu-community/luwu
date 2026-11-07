@@ -1082,6 +1082,10 @@ struct ConstantVisitor : AstVisitor
         {
             result = analyze(expr->expr);
         }
+        else if (AstExprSelfClass* expr = node->as<AstExprSelfClass>())
+        {
+            analyze(expr->classOf);
+        }
         else if (AstExprTableComprehension* expr = node->as<AstExprTableComprehension>())
         {
             // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop's expressions are folded like any other,

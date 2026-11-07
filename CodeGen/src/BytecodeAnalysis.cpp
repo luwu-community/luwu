@@ -232,6 +232,7 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
     {
     case LBF_NONE:
     case LBF_ASSERT:
+    case LBF_CLASS_OF:
         types.result = LBC_TYPE_ANY;
         break;
     case LBF_MATH_ABS:

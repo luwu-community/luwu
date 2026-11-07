@@ -611,6 +611,9 @@ struct NonStrictTypeChecker
             return visit(e);
         else if (auto e = expr->as<AstExprInstantiate>())
             return visit(e);
+        // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
+        else if (auto e = expr->as<AstExprSelfClass>())
+            return visit(e->classOf);
         else if (auto e = expr->as<AstExprDo>())
             return visit(e);
         else if (auto e = expr->as<AstExprTableComprehension>())
