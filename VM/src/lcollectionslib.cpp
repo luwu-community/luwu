@@ -219,17 +219,16 @@ static void addvaluetype(luaL_Strbuf* b, const TValue* value)
         luaL_addstring(b, "' object");
 }
 
-// Checks the value at stack `idx` can be the first in `container`: anything but nil
-static void checkfirstelement(lua_State* L, LuauObject* container, int idx)
+// Checks `value` can be the first in `container`: anything but nil
+static void checkfirstelement(lua_State* L, LuauObject* container, const TValue* value)
 {
-    if (ttisnil(L->base + idx - 1))
+    if (ttisnil(value))
         luaL_error(L, "this %s can't accept nil", getstr(container->lclass->name));
 }
 
-// Checks the value at stack `idx` can go in `container`, whose block is `storage`
-static void checkelement(lua_State* L, LuauObject* container, const LuauStorage* storage, int idx)
+// Checks `value` can go in `container`, whose block is `storage`
+static void checkelement(lua_State* L, LuauObject* container, const LuauStorage* storage, const TValue* value)
 {
-    const TValue* value = L->base + idx - 1;
     if (hastype(L, storage, value))
         return;
 
@@ -247,35 +246,7 @@ static void checkelement(lua_State* L, LuauObject* container, const LuauStorage*
     luaL_error(L, "%s", lua_tostring(L, -1));
 }
 
-// The constructor's optional list: an `__init` adds entries 1 to #items of a table in its argument 2, each with `push`
-// so it's checked like any other value
-static void containerfill(lua_State* L, LuauObject* container, lua_CFunction push, const char* pushname)
-{
-    if (lua_isnoneornil(L, 2))
-        return;
-
-    if (!lua_istable(L, 2))
-    {
-        luaL_Strbuf b;
-        luaL_buffinit(L, &b);
-        luaL_addstring(&b, getstr(container->lclass->name));
-        luaL_addstring(&b, "() takes a list of values, but you passed ");
-        addvaluetype(&b, L->base + 1);
-        luaL_pushresult(&b);
-        luaL_error(L, "%s", lua_tostring(L, -1));
-    }
-
-    int count = lua_objlen(L, 2);
-    for (int i = 1; i <= count; i++)
-    {
-        lua_pushcfunction(L, push, pushname);
-        lua_pushvalue(L, 1);
-        lua_rawgeti(L, 2, i);
-        lua_call(L, 2, 0);
-    }
-}
-
-// `__tostring`: the call that builds an equal container, `Vec({1, 2})`, or `Vec()` when it's empty. `at` reads an
+// `__tostring`: the call that builds an equal container, `Vec(1, 2)`, or `Vec()` when it's empty. `at` reads an
 // entry by position.
 static int containertostring(lua_State* L, LuauObject* container, uint32_t count, lua_CFunction at)
 {
@@ -283,14 +254,7 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
     luaL_Strbuf b;
     luaL_buffinit(L, &b);
     luaL_addstring(&b, name);
-    if (count == 0)
-    {
-        luaL_addstring(&b, "()");
-        luaL_pushresult(&b);
-        return 1;
-    }
-
-    luaL_addstring(&b, "({");
+    luaL_addchar(&b, '(');
     for (uint32_t i = 1; i <= count; i++)
     {
         if (i > 1)
@@ -301,7 +265,7 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
         lua_call(L, 2, 1);
         luaR_addshowntop(&b);
     }
-    luaL_addstring(&b, "})");
+    luaL_addchar(&b, ')');
     luaL_pushresult(&b);
     return 1;
 }
@@ -750,14 +714,22 @@ static void omrenumber(LuauObject* map, uint32_t first, uint32_t last)
         positions[order[position - 1] - 1] = position;
 }
 
+// What's wrong with `key` as a map key, or NULL when it can be one
+static const char* omkeyproblem(const TValue* key)
+{
+    if (ttisnil(key))
+        return "key can't be nil";
+    if (ttisnumber(key) && nvalue(key) != nvalue(key))
+        return "key can't be NaN";
+    return NULL;
+}
+
 // Gives the key at stack `idx` an id, reusing a freed one when there is one. The caller places it in the order.
 static uint32_t omnewentry(lua_State* L, LuauObject* map, int idx)
 {
     const TValue* key = L->base + idx - 1;
-    if (ttisnil(key))
-        luaL_argerror(L, idx, "key can't be nil");
-    if (ttisnumber(key) && nvalue(key) != nvalue(key))
-        luaL_argerror(L, idx, "key can't be NaN");
+    if (const char* problem = omkeyproblem(key))
+        luaL_argerror(L, idx, problem);
 
     uint32_t id;
     uint32_t freecount = omnumber(map, OM_FREECOUNT);
@@ -818,6 +790,42 @@ static void omsetvalue(lua_State* L, LuauObject* map, uint32_t id, const TValue*
     luaC_barriert(L, values, value);
 }
 
+// Sets the key at stack `idx` to the value after it. A new key goes at the end.
+static void omset(lua_State* L, LuauObject* map, int idx)
+{
+    uint32_t id = omidof(map, L->base + idx - 1);
+    if (id == 0)
+    {
+        id = omnewentry(L, map, idx);
+        omplace(L, map, id, omnumber(map, OM_COUNT) + 1);
+    }
+    omsetvalue(L, map, id, L->base + idx);
+}
+
+// Sets the entry the `.(key, value)` bundle `entry` holds, as `set` does. `describe` and `n` name where the bundle came
+// from in an error, "argument 1" or "item 1".
+static void omsetbundle(lua_State* L, LuauObject* map, const TValue* entry, const char* describe, int n)
+{
+    if (!ttisobject(entry) || objectvalue(entry)->lclass != bundleclass(L, 2))
+    {
+        luaL_Strbuf b;
+        luaL_buffinit(L, &b);
+        addvaluetype(&b, entry);
+        luaL_pushresult(&b);
+        luaL_error(L, "OrderedMap() takes .(key, value) bundles, but %s %d is %s", describe, n, lua_tostring(L, -1));
+    }
+
+    const TValue* fields = luaR_members(objectvalue(entry));
+    if (const char* problem = omkeyproblem(&fields[0]))
+        luaL_error(L, "%s in %s %d of OrderedMap()", problem, describe, n);
+
+    luaA_pushvalue(L, &fields[0]);
+    luaA_pushvalue(L, &fields[1]);
+    omset(L, map, lua_gettop(L) - 1);
+    lua_pop(L, 2);
+}
+
+// `OrderedMap(.(k, v), ...)` and `OrderedMap({ .(k, v), ... })` add the bundles' entries in order
 static int orderedmapinit(lua_State* L)
 {
     LuauObject* map = objectvalue(L->base);
@@ -830,6 +838,18 @@ static int orderedmapinit(lua_State* L)
     omsetnumber(map, OM_COUNT, 0);
     omsetnumber(map, OM_FREECOUNT, 0);
     omsetnumber(map, OM_NEXTID, 1);
+
+    int top = lua_gettop(L);
+    if (top == 2 && lua_istable(L, 2))
+    {
+        int count = lua_objlen(L, 2);
+        for (int i = 1; i <= count; i++)
+            omsetbundle(L, map, luaH_getnum(hvalue(L->base + 1), i), "item", i);
+        return 0;
+    }
+
+    for (int idx = 2; idx <= top; idx++)
+        omsetbundle(L, map, L->base + idx - 1, "argument", idx - 1);
     return 0;
 }
 
@@ -848,13 +868,7 @@ static int orderedmapset(lua_State* L)
 {
     LuauObject* map = checkmap(L, "set");
     luaL_checkany(L, 3);
-    uint32_t id = omidof(map, L->base + 1);
-    if (id == 0)
-    {
-        id = omnewentry(L, map, 2);
-        omplace(L, map, id, omnumber(map, OM_COUNT) + 1);
-    }
-    omsetvalue(L, map, id, L->base + 2);
+    omset(L, map, 2);
     return 0;
 }
 
@@ -1202,17 +1216,17 @@ static void initstorage(LuauObject* container, LuwuStorageKind kind)
     container->storagekind = uint8_t(kind);
 }
 
-// The block of an empty container, made for its first value at stack `idx`, which fixes the element type
-static LuauStorage* newstorage(lua_State* L, LuauObject* container, int idx)
+// The block of an empty container, made for its first value, which fixes the element type
+static LuauStorage* newstorage(lua_State* L, LuauObject* container, const TValue* first)
 {
-    checkfirstelement(L, container, idx);
+    checkfirstelement(L, container, first);
 
     LuauStorage* storage = static_cast<LuauStorage*>(luaM_new_(L, luaR_storagesize(kInitialSlots), container->memcat));
     storage->count = 0;
     storage->capacity = kInitialSlots;
     storage->head = 0;
     storage->padding = 0;
-    setelementtype(L, storage, L->base + idx - 1);
+    setelementtype(L, storage, first);
     setstorage(container, storage);
     if (storage->elementclass)
         luaC_objbarrier(L, container, storage->elementclass);
@@ -1257,11 +1271,12 @@ static LuauStorage* reservestorage(lua_State* L, LuauObject* container, uint32_t
 // Checks the value at stack `idx` can go in `container`, and returns its block with room for one more entry
 static LuauStorage* storageforone(lua_State* L, LuauObject* container, int idx)
 {
+    const TValue* value = L->base + idx - 1;
     LuauStorage* storage = luaR_storage(container);
     if (!storage)
-        return newstorage(L, container, idx);
+        return newstorage(L, container, value);
 
-    checkelement(L, container, storage, idx);
+    checkelement(L, container, storage, value);
     return reservestorage(L, container, storage->count + 1);
 }
 
@@ -1269,6 +1284,87 @@ static void storeentry(lua_State* L, LuauObject* container, TValue* slot, const 
 {
     setobj(L, slot, value);
     luaC_barrier(L, container, value);
+}
+
+// The values one call adds to a container: the arguments from stack index `first` on (`v:push(a, b)`), or the items of
+// the list at `first` (`v:extend(items)`)
+struct NewEntries
+{
+    int first;
+    bool fromlist;
+    int count;
+};
+
+static NewEntries argumententries(lua_State* L, int first)
+{
+    return {first, false, lua_gettop(L) - first + 1};
+}
+
+static NewEntries listentries(lua_State* L, LuauObject* container, const char* method, int idx)
+{
+    if (!lua_istable(L, idx))
+    {
+        luaL_Strbuf b;
+        luaL_buffinit(L, &b);
+        luaL_addstring(&b, getstr(container->lclass->name));
+        luaL_addchar(&b, ':');
+        luaL_addstring(&b, method);
+        luaL_addstring(&b, "() takes a list of values, but you passed ");
+        addvaluetype(&b, L->base + idx - 1);
+        luaL_pushresult(&b);
+        luaL_error(L, "%s", lua_tostring(L, -1));
+    }
+    return {idx, true, lua_objlen(L, idx)};
+}
+
+// The `i`th value of `entries`, from 0
+static const TValue* newentry(lua_State* L, const NewEntries& entries, int i)
+{
+    if (entries.fromlist)
+        return luaH_getnum(hvalue(L->base + entries.first - 1), i + 1);
+    return L->base + entries.first - 1 + i;
+}
+
+// Checks every value of `entries` can go in `container` before any goes in, and returns its block with room for all of
+// them
+static LuauStorage* storageforall(lua_State* L, LuauObject* container, const NewEntries& entries)
+{
+    LuauStorage* storage = luaR_storage(container);
+    if (!storage)
+        storage = newstorage(L, container, newentry(L, entries, 0));
+
+    for (int i = 0; i < entries.count; i++)
+        checkelement(L, container, storage, newentry(L, entries, i));
+    return reservestorage(L, container, storage->count + uint32_t(entries.count));
+}
+
+// Adds `entries` after the last entry, in order
+static void addback(lua_State* L, LuauObject* container, const NewEntries& entries)
+{
+    if (entries.count == 0)
+        return;
+
+    LuauStorage* storage = storageforall(L, container, entries);
+    for (int i = 0; i < entries.count; i++)
+    {
+        storeentry(L, container, storageslot(storage, storage->count), newentry(L, entries, i));
+        storage->count++;
+    }
+}
+
+// Adds `entries` before the first entry, in order: the first of them becomes the front
+static void addfront(lua_State* L, LuauObject* container, const NewEntries& entries)
+{
+    if (entries.count == 0)
+        return;
+
+    LuauStorage* storage = storageforall(L, container, entries);
+    for (int i = entries.count - 1; i >= 0; i--)
+    {
+        storage->head = (storage->head - 1) & (storage->capacity - 1);
+        storeentry(L, container, storageslot(storage, 0), newentry(L, entries, i));
+        storage->count++;
+    }
 }
 
 // Empties `container` without changing its element type, and shrinks a grown block back
@@ -1334,11 +1430,12 @@ static int entryatfast(lua_State* L, LuauObject* container, double position, Stk
     return 1;
 }
 
-// Whether a fast method can add `value` to `container`: it has the element type, and there's room without growing
+// Whether a fast method can add the one value in `args` to `container`: it has the element type, and there's room without
+// growing. Pushing several values goes through the C method.
 static bool fitsonemore(lua_State* L, LuauObject* container, StkId args, int nargs)
 {
     const LuauStorage* storage = luaR_storage(container);
-    return nargs >= 1 && fitselement(L, storage, args) && storage->count < storage->capacity;
+    return nargs == 1 && fitselement(L, storage, args) && storage->count < storage->capacity;
 }
 
 // Whether a fast method can store `args + 1` at the position `args`
@@ -1359,9 +1456,7 @@ static int vecdequepushback(lua_State* L)
 {
     LuauObject* dq = checkdeque(L, "pushback");
     luaL_checkany(L, 2);
-    LuauStorage* storage = storageforone(L, dq, 2);
-    storeentry(L, dq, storageslot(storage, storage->count), L->base + 1);
-    storage->count++;
+    addback(L, dq, argumententries(L, 2));
     return 0;
 }
 
@@ -1369,10 +1464,21 @@ static int vecdequepushfront(lua_State* L)
 {
     LuauObject* dq = checkdeque(L, "pushfront");
     luaL_checkany(L, 2);
-    LuauStorage* storage = storageforone(L, dq, 2);
-    storage->head = (storage->head - 1) & (storage->capacity - 1);
-    storeentry(L, dq, storageslot(storage, 0), L->base + 1);
-    storage->count++;
+    addfront(L, dq, argumententries(L, 2));
+    return 0;
+}
+
+static int vecdequeextendback(lua_State* L)
+{
+    LuauObject* dq = checkdeque(L, "extendback");
+    addback(L, dq, listentries(L, dq, "extendback", 2));
+    return 0;
+}
+
+static int vecdequeextendfront(lua_State* L)
+{
+    LuauObject* dq = checkdeque(L, "extendfront");
+    addfront(L, dq, listentries(L, dq, "extendfront", 2));
     return 0;
 }
 
@@ -1420,7 +1526,7 @@ static int vecdequeset(lua_State* L)
     luaL_checkany(L, 3);
     uint32_t position = checkposition(L, 2, countof(dq));
     LuauStorage* storage = luaR_storage(dq);
-    checkelement(L, dq, storage, 3);
+    checkelement(L, dq, storage, L->base + 2);
     storeentry(L, dq, luaR_storageentry(storage, position - 1), L->base + 2);
     return 0;
 }
@@ -1455,7 +1561,7 @@ static int vecdequeinit(lua_State* L)
 {
     LuauObject* dq = objectvalue(L->base);
     initstorage(dq, LUAR_STORAGE_RING);
-    containerfill(L, dq, vecdequepushback, "pushback");
+    addback(L, dq, argumententries(L, 2));
     return 0;
 }
 
@@ -1551,6 +1657,8 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     {"storage", NULL, kPrivateField},
     {"pushfront", vecdequepushfront, 0, vecdequepushfrontfast},
     {"pushback", vecdequepushback, 0, vecdequepushbackfast},
+    {"extendfront", vecdequeextendfront, 0},
+    {"extendback", vecdequeextendback, 0},
     {"popfront", vecdequepopfront, 0, vecdequepopfrontfast},
     {"popback", vecdequepopback, 0, popbackfast},
     {"front", vecdequefront, 0, vecdequefrontfast},
@@ -1574,9 +1682,14 @@ static int vecpush(lua_State* L)
 {
     LuauObject* vec = checkvec(L, "push");
     luaL_checkany(L, 2);
-    LuauStorage* storage = storageforone(L, vec, 2);
-    storeentry(L, vec, &storage->items[storage->count], L->base + 1);
-    storage->count++;
+    addback(L, vec, argumententries(L, 2));
+    return 0;
+}
+
+static int vecextend(lua_State* L)
+{
+    LuauObject* vec = checkvec(L, "extend");
+    addback(L, vec, listentries(L, vec, "extend", 2));
     return 0;
 }
 
@@ -1597,7 +1710,7 @@ static int vecset(lua_State* L)
     luaL_checkany(L, 3);
     uint32_t position = checkposition(L, 2, countof(vec));
     LuauStorage* storage = luaR_storage(vec);
-    checkelement(L, vec, storage, 3);
+    checkelement(L, vec, storage, L->base + 2);
     storeentry(L, vec, &storage->items[position - 1], L->base + 2);
     return 0;
 }
@@ -1657,7 +1770,7 @@ static int vecinit(lua_State* L)
 {
     LuauObject* vec = objectvalue(L->base);
     initstorage(vec, LUAR_STORAGE_VEC);
-    containerfill(L, vec, vecpush, "push");
+    addback(L, vec, argumententries(L, 2));
     return 0;
 }
 
@@ -1684,6 +1797,7 @@ static int vecpushfast(lua_State* L, LuauObject* vec, StkId res, StkId args, int
 static const luaR_NativeMember kVecMembers[] = {
     {"storage", NULL, kPrivateField},
     {"push", vecpush, 0, vecpushfast},
+    {"extend", vecextend, 0},
     {"pop", vecpop, 0, popbackfast},
     {"at", vecat, 0, containeratfast},
     {"set", vecset, 0, containersetfast},
