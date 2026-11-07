@@ -805,6 +805,9 @@ private:
     void collectNestedTypeDeclarations(AstStatBlock* block, std::vector<AstStat*>& out);
     std::unordered_map<Name, TypeFun>& externTypeBindings(Scope& scope, const AstStatDeclareExternType* declaration);
 
+    // Luwu forwarded module types: a module root returning another module's value exports that module's types too
+    void forwardRequiredTypes(AstStatBlock* block);
+
     bool recordPropertyAssignment(TypeId ty);
 
     // Record the fact that a particular local has a particular type in at least

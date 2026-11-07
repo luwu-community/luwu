@@ -322,6 +322,106 @@ static std::optional<AstExpr*> matchRequire(const AstExprCall& call)
     return call.args.data[0];
 }
 
+// Whether `local` is assigned anywhere in the tree a visit starts from, by `=`, a compound assignment or a function
+// statement
+struct LocalAssignmentFinder : AstVisitor
+{
+    const AstLocal* local;
+    bool assigned = false;
+
+    explicit LocalAssignmentFinder(const AstLocal* local)
+        : local(local)
+    {
+    }
+
+    void check(const AstExpr* target)
+    {
+        const AstExprLocal* name = target->as<AstExprLocal>();
+        if (name && name->local == local)
+            assigned = true;
+    }
+
+    bool visit(AstStatAssign* node) override
+    {
+        for (AstExpr* var : node->vars)
+            check(var);
+        return !assigned;
+    }
+
+    bool visit(AstStatCompoundAssign* node) override
+    {
+        check(node->var);
+        return !assigned;
+    }
+
+    bool visit(AstStatFunction* node) override
+    {
+        check(node->name);
+        return !assigned;
+    }
+
+    bool visit(AstNode* node) override
+    {
+        return !assigned;
+    }
+};
+
+// The `require(...)` call that `local` is declared with by a statement of `block`, if it is
+static const AstExprCall* requireInitializer(AstStatBlock* block, const AstLocal* local)
+{
+    for (AstStat* statement : block->body)
+    {
+        const AstStatLocal* declaration = statement->as<AstStatLocal>();
+        if (!declaration)
+            continue;
+
+        for (size_t i = 0; i < declaration->vars.size && i < declaration->values.size; ++i)
+        {
+            if (declaration->vars.data[i] != local)
+                continue;
+
+            const AstExprCall* call = declaration->values.data[i]->as<AstExprCall>();
+            if (call && matchRequire(*call))
+                return call;
+            return nullptr;
+        }
+    }
+    return nullptr;
+}
+
+// Luwu forwarded module types: the path of the module a module root returns unchanged, if it does. That's
+// `return require(path)`, or `return m` for an `m` declared by `local m = require(path)` and never assigned again.
+static std::optional<AstExpr*> forwardedRequirePath(AstStatBlock* block)
+{
+    if (block->body.size == 0)
+        return std::nullopt;
+
+    const AstStatReturn* ret = block->body.data[block->body.size - 1]->as<AstStatReturn>();
+    if (!ret || ret->list.size != 1)
+        return std::nullopt;
+
+    AstExpr* value = ret->list.data[0];
+    while (const AstExprGroup* group = value->as<AstExprGroup>())
+        value = group->expr;
+
+    if (const AstExprCall* call = value->as<AstExprCall>())
+        return matchRequire(*call);
+
+    const AstExprLocal* returned = value->as<AstExprLocal>();
+    if (!returned)
+        return std::nullopt;
+
+    const AstExprCall* initializer = requireInitializer(block, returned->local);
+    if (!initializer)
+        return std::nullopt;
+
+    LocalAssignmentFinder finder{returned->local};
+    block->visit(&finder);
+    if (finder.assigned)
+        return std::nullopt;
+    return matchRequire(*initializer);
+}
+
 
 namespace
 {
@@ -670,6 +770,8 @@ void ConstraintGenerator::visitModuleRoot(AstStatBlock* block)
     if (cf == ControlFlow::None)
         addConstraint(scope, block->location, PackSubtypeConstraint{builtinTypes->emptyTypePack, rootScope->returnType});
 
+    forwardRequiredTypes(block);
+
     Checkpoint end = checkpoint(this);
 
     TypeId result = arena->addType(BlockedType{});
@@ -712,6 +814,33 @@ void ConstraintGenerator::visitModuleRoot(AstStatBlock* block)
 
     for (TypeId ty : unionsToSimplify)
         addConstraint(scope, block->location, SimplifyConstraint{ty});
+}
+
+// Luwu forwarded module types: a module whose root returns another module's value unchanged (`return require(path)`)
+// exports that module's types as well. A link file then needs nothing more. A type the forwarding module exports
+// itself wins over a forwarded one of the same name. Upstream exports only the types a module declares.
+void ConstraintGenerator::forwardRequiredTypes(AstStatBlock* block)
+{
+    std::optional<AstExpr*> path = forwardedRequirePath(block);
+    if (!path)
+        return;
+
+    std::optional<ModuleInfo> moduleInfo = moduleResolver->resolveModuleInfo(module->name, **path);
+    if (!moduleInfo)
+        return;
+
+    // a module in a require cycle with this one isn't checked yet
+    for (const RequireCycle& cycle : requireCycles)
+    {
+        if (!cycle.path.empty() && cycle.path.front() == moduleInfo->name)
+            return;
+    }
+
+    ModulePtr required = moduleResolver->getModule(moduleInfo->name);
+    if (!required)
+        return;
+
+    module->forwardedTypeBindings = required->exportedTypeBindings;
 }
 
 void ConstraintGenerator::visitFragmentRoot(const ScopePtr& resumeScope, AstStatBlock* block)
