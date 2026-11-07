@@ -578,27 +578,121 @@ do
     end, "this Vec can only accept booleans, but you passed a number")
 end
 
--- vec and vecdeque take an optional list, checked value by value like `push` does, and print as that call
+-- vec and vecdeque take their values as arguments, checked value by value like `push` does, and print as that call
 do
-    const list = collections.Vec({ 1, 2, 3 })
+    const list = collections.Vec(1, 2, 3)
     assert(#list == 3 and list:at(1) == 1 and list:at(3) == 3)
-    assert(tostring(list) == "Vec({1, 2, 3})")
+    assert(tostring(list) == "Vec(1, 2, 3)")
     assert(tostring(collections.Vec()) == "Vec()")
 
-    const queue = collections.VecDeque({ "a", "b" })
+    const queue = collections.VecDeque("a", "b")
     queue:pushfront("z")
     assert(queue:front() == "z" and queue:back() == "b")
-    assert(tostring(queue) == `VecDeque(\{"z", "a", "b"})`)
+    assert(tostring(queue) == `VecDeque("z", "a", "b")`)
+
+    -- one table is a value like any other
+    const rows = collections.Vec({ 1, 2 })
+    assert(#rows == 1 and type(rows:at(1)) == "table")
 
     raises(function()
-        collections.Vec({ 1, "two" })
+        collections.Vec(1, "two")
     end, "this Vec can only accept numbers, but you passed a string")
     raises(function()
-        collections.VecDeque({ 1, nil, 3 })
+        collections.VecDeque(1, nil, 3)
     end, "this VecDeque can only accept numbers, but you passed nil")
     raises(function()
-        collections.Vec(5)
-    end, "Vec() takes a list of values, but you passed a number")
+        collections.Vec(nil)
+    end, "this Vec can't accept nil")
+end
+
+-- push, pushfront and pushback take several values; extend, extendfront and extendback take a list. A value of the
+-- wrong type adds none of them. Values added at the front keep their order.
+do
+    const list = collections.Vec()
+    list:push(1, 2)
+    list:extend({ 3, 4 })
+    list:extend({})
+    assert(tostring(list) == "Vec(1, 2, 3, 4)")
+    raises(function()
+        list:push(5, "six")
+    end, "this Vec can only accept numbers, but you passed a string")
+    raises(function()
+        list:extend({ 5, "six" })
+    end, "this Vec can only accept numbers, but you passed a string")
+    raises(function()
+        list:extend(5)
+    end, "Vec:extend() takes a list of values, but you passed a number")
+    assert(#list == 4)
+
+    const queue = collections.VecDeque(3)
+    queue:pushfront(1, 2)
+    queue:pushback(4, 5)
+    queue:extendfront({ -1, 0 })
+    queue:extendback({ 6, 7 })
+    assert(tostring(queue) == "VecDeque(-1, 0, 1, 2, 3, 4, 5, 6, 7)")
+
+    -- more values than the first block holds, at both ends, wrapping around the ring
+    const items = {}
+    for i = 1, 10000 do
+        items[i] = i
+    end
+    const big = collections.VecDeque()
+    big:extendback(items)
+    big:extendfront(items)
+    big:pushfront(table.unpack(items, 1, 100))
+    assert(#big == 20100 and big:front() == 1 and big:at(101) == 1 and big:at(10101) == 1 and big:back() == 10000)
+    for position = 1, 100 do
+        assert(big:popfront() == position)
+    end
+    assert(big:popback() == 10000 and big:popfront() == 1)
+end
+
+-- OrderedMap takes `.(key, value)` bundles as arguments or as a list, and adds their entries in order like `set`
+do
+    const function collect(map): string
+        const parts = {}
+        for key, value in map do
+            table.insert(parts, `{key}={value}`)
+        end
+        return table.concat(parts, " ")
+    end
+
+    -- a key given twice keeps its first place and its last value
+    assert(collect(collections.OrderedMap(bundle.pack("b", 2), bundle.pack("a", 1), bundle.pack("b", 3))) == "b=3 a=1")
+    assert(collect(collections.OrderedMap({ bundle.pack("x", 1), bundle.pack("y", 2) })) == "x=1 y=2")
+
+    -- bundles the compiler can't see being built go through the constructor
+    const entries = { bundle.pack("p", 1), bundle.pack("q", 2) }
+    const entry = bundle.pack("z", 9)
+    assert(collect(collections.OrderedMap(entries)) == "p=1 q=2")
+    assert(collect(collections.OrderedMap(entry, bundle.pack("w", 0))) == "z=9 w=0")
+    assert(#collections.OrderedMap({}) == 0)
+
+    -- arguments are evaluated before the map gets any entry
+    local evaluated = 0
+    const function count(value: number): number
+        evaluated += 1
+        return value
+    end
+    const counted = collections.OrderedMap(bundle.pack(1, count(1)), bundle.pack(2, count(2)))
+    assert(evaluated == 2 and collect(counted) == "1=1 2=2")
+
+    raises(function()
+        collections.OrderedMap(1)
+    end, "OrderedMap() takes .(key, value) bundles, but argument 1 is a number")
+    raises(function()
+        collections.OrderedMap({ entry, bundle.pack(1, 2, 3) })
+    end, "OrderedMap() takes .(key, value) bundles, but item 2 is a 'Bundle3' object")
+    raises(function()
+        collections.OrderedMap(entries, entry)
+    end, "OrderedMap() takes .(key, value) bundles, but argument 1 is a table")
+    raises(function()
+        local key = nil
+        collections.OrderedMap(bundle.pack(key, 1))
+    end, "key can't be nil")
+    raises(function()
+        collections.OrderedMap({ bundle.pack(0 / 0, 1) })
+    end, "key can't be NaN")
 end
 
 -- a generic for loop over a vec or vecdeque visits positions 1 to the count in order, wherever the storage starts
@@ -611,7 +705,7 @@ do
         return table.concat(parts, " ")
     end
 
-    const queue = collections.VecDeque({ 3, 4 })
+    const queue = collections.VecDeque(3, 4)
     queue:pushfront(2)
     queue:pushfront(1)
     queue:pushback(5)
@@ -641,7 +735,7 @@ do
     assert(visited == 98)
 
     -- pushing while looping is unspecified but memory safe
-    const growing = collections.Vec({ 1 })
+    const growing = collections.Vec(1)
     local steps = 0
     for _, value in growing do
         steps += 1
@@ -683,12 +777,12 @@ do
     assert(#shown > 20000 and string.find(shown, "Named(" .. string.rep("x", 200) .. ")", 1, true))
 
     const long = string.rep("\"quoted\"\n", 500)
-    assert(#tostring(collections.Vec({ long, long })) > 2 * #long)
+    assert(#tostring(collections.Vec(long, long)) > 2 * #long)
     assert(#tostring(bundle.pack(long, long)) > 2 * #long)
 
-    const list = collections.Vec({ Clearing {}, Clearing {}, Clearing {} })
+    const list = collections.Vec(Clearing {}, Clearing {}, Clearing {})
     printing = list
-    assert(tostring(list) == "Vec({cleared, nil, nil})")
+    assert(tostring(list) == "Vec(cleared, nil, nil)")
 end
 
 -- `bundle.pack` compiles to a fastcall, which builds what the function does

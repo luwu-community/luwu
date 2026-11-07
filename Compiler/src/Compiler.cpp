@@ -3488,6 +3488,78 @@ struct Compiler
         return true;
     }
 
+    // Luwu collections: the `.(key, value)` bundles an `OrderedMap(...)` call builds for its entries, passed as its
+    // arguments or as the items of a list literal. Empty when the call passes anything else.
+    std::vector<AstExprCall*> orderedMapEntryBundles(AstExprCall* expr)
+    {
+        if (!FFlag::DebugLuwuCollections || expr->self)
+            return {};
+
+        Builtin builtin = getBuiltin(expr->func, globals, variables);
+        if (!builtin.isMethod("collections", "OrderedMap"))
+            return {};
+
+        std::vector<AstExpr*> entries(expr->args.begin(), expr->args.end());
+        AstExprTable* list = expr->args.size == 1 ? expr->args.data[0]->as<AstExprTable>() : nullptr;
+        if (list)
+        {
+            entries.clear();
+            for (const AstExprTable::Item& item : list->items)
+            {
+                if (item.kind != AstExprTable::Item::Kind::List)
+                    return {};
+                entries.push_back(item.value);
+            }
+        }
+
+        std::vector<AstExprCall*> bundles;
+        for (AstExpr* entry : entries)
+        {
+            if (bundleConstructionSize(entry) != 2)
+                return {};
+            bundles.push_back(entry->as<AstExprCall>());
+        }
+        return bundles;
+    }
+
+    // Luwu collections: `OrderedMap(.(k, v), ...)` and `OrderedMap({ .(k, v), ... })` compile to `OrderedMap()` and a
+    // `set` call per entry, so neither the bundles nor the list are built
+    bool tryCompileOrderedMapFromBundles(AstExprCall* expr, uint8_t target)
+    {
+        if (options.optimizationLevel < 1)
+            return false;
+
+        std::vector<AstExprCall*> bundles = orderedMapEntryBundles(expr);
+        if (bundles.empty())
+            return false;
+
+        RegScope rs(this);
+        uint8_t map = allocReg(expr, 1u);
+        compileExprTemp(expr->func, map);
+        bytecode.emitABC(LOP_CALL, map, 1, 2);
+
+        BytecodeBuilder::StringRef setName = sref(AstName("set"));
+        int32_t setId = bytecode.addConstantString(setName);
+        if (setId < 0)
+            CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+
+        for (AstExprCall* bundle : bundles)
+        {
+            RegScope entryScope(this);
+            uint8_t regs = allocReg(bundle, 4u);
+            compileExprTempTop(bundle->args.data[0], uint8_t(regs + 2));
+            compileExprTempTop(bundle->args.data[1], uint8_t(regs + 3));
+
+            setDebugLine(bundle);
+            bytecode.emitABC(LOP_NAMECALL, regs, map, uint8_t(BytecodeBuilder::getStringHash(setName)));
+            bytecode.emitAux(setId);
+            bytecode.emitABC(LOP_CALL, regs, 4, 1);
+        }
+
+        bytecode.emitABC(LOP_MOVE, target, map, 0);
+        return true;
+    }
+
     void compileExprCall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop = false, bool multRet = false)
     {
         LUAU_ASSERT(targetCount < 255);
@@ -3559,6 +3631,9 @@ struct Compiler
             if (tryCompileNewObject(expr, target))
                 return;
         }
+
+        if (!expr->self && !multRet && targetCount == 1 && tryCompileOrderedMapFromBundles(expr, target))
+            return;
 
         // Luwu Classes (rfcs/classes): inline `obj:method()` calls whose receiver class is
         // statically known and whose body can be inlined here (see tryResolveMethodCall).

@@ -6484,6 +6484,43 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
     CHECK_EQ(toString(requireType("front")), "string?");
 }
 
+// Luwu collections: Vec and VecDeque take their values as arguments, OrderedMap takes `.(key, value)` bundles, and the
+// element types come from them
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements_from_their_arguments")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local list = collections.Vec(1, 2, 3)
+        list:push(4, 5)
+        list:extend({ 6, 7 })
+        local queue = collections.VecDeque("a", "b")
+        queue:pushfront("y", "z")
+        queue:extendback({ "c" })
+        local map = collections.OrderedMap(bundle.pack("a", 1), bundle.pack("b", 2))
+        local listed = collections.OrderedMap({ bundle.pack(true, "x") })
+        local value = map:get("a")
+        list:push(6, "seven")
+        queue:extendfront({ 1 })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 11);
+    CHECK_EQ(result.errors[1].location.begin.line, 12);
+    CHECK_EQ(toString(requireType("list")), "Vec<number>");
+    CHECK_EQ(toString(requireType("queue")), "VecDeque<string>");
+    CHECK_EQ(toString(requireType("map")), "OrderedMap<string, number>");
+    CHECK_EQ(toString(requireType("listed")), "OrderedMap<boolean, string>");
+    CHECK_EQ(toString(requireType("value")), "number?");
+}
+
 // Luwu collections: a bundle iterates over its slots, so the value is any of its element types
 TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_elements")
 {

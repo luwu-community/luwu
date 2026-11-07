@@ -26,7 +26,7 @@ do
     list:clear()
     assert(length(list) == 0)
 
-    const queue = collections.VecDeque({ "a", "b" })
+    const queue = collections.VecDeque("a", "b")
     queue:pushfront("z")
     assert(length(queue) == 3)
     queue:popback()
@@ -333,10 +333,10 @@ end
 
 do
     assert(visit(collections.Vec()) == "" and visit(collections.VecDeque()) == "")
-    assert(visit(collections.Vec({ "a", "b" })) == "1=a 2=b ")
+    assert(visit(collections.Vec("a", "b")) == "1=a 2=b ")
 
     -- a ring that wraps around its end
-    const queue = collections.VecDeque({ 3, 4 })
+    const queue = collections.VecDeque(3, 4)
     queue:pushfront(2)
     queue:pushfront(1)
     queue:popback()
@@ -344,7 +344,7 @@ do
     assert(visit(queue) == "1=1 2=2 3=3 4=9 ")
 
     -- an entry added during a loop is visited, and a removed one isn't
-    const list = collections.Vec({ 1, 2, 3 })
+    const list = collections.Vec(1, 2, 3)
     local seen = {}
     for position, value in list do
         table.insert(seen, value)
@@ -452,7 +452,7 @@ do
     for i = 1, 3 do
         vecs.push(stack, i)
     end
-    assert(vecs.at(stack, 2) == 2 and vecs.at(collections.Vec({ 7 }), 1) == 7 and vecs.at(stack, 3) == 3)
+    assert(vecs.at(stack, 2) == 2 and vecs.at(collections.Vec(7), 1) == 7 and vecs.at(stack, 3) == 3)
 end
 
 -- names with a builtin fast method on a user class, and on a builtin one, at the same call sites
