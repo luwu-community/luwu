@@ -1216,4 +1216,94 @@ expectfail("qualified with a value", "'tag' in class 'Odd' is qualified with a n
     end
 ]], Encoder)
 
+-- `Self` is the class in a class and the class of `self` in a trait method
+trait Cloner
+    expect value: number
+    function clone(self)
+        return Self(self.value)
+    end
+    function clone_later(self)
+        return function()
+            return Self(self.value + 1)
+        end
+    end
+    function kind(self)
+        return class.name(Self)
+    end
+    function shadowed(self)
+        local Self = "local"
+        return Self
+    end
+    function __create(value: number)
+        return Doubled(value * 2)
+    end
+end
+
+class Plain(value: number) implements Cloner
+    function is_plain(self)
+        return Self == Plain
+    end
+    function twin(self)
+        return Self(self.value)
+    end
+    function make_plain(value: number)
+        return Self(value)
+    end
+end
+
+class Doubled private (public value: number) implements Cloner end
+
+class Defaulted
+    kind = Self
+end
+
+do
+    local plain = Plain(1)
+    assert(class.isinstance(plain:clone(), Plain) and plain:clone().value == 1)
+    assert(class.isinstance(plain:clone_later()(), Plain) and plain:clone_later()().value == 2)
+    assert(plain:kind() == "Plain" and plain:is_plain())
+    assert(class.isinstance(plain:twin(), Plain) and class.isinstance(Plain.make_plain(5), Plain))
+    assert(plain:shadowed() == "local")
+
+    -- the copy of a trait method in a class with a private constructor runs as that class, so it may construct it
+    local doubled = Cloner(3)
+    assert(class.isinstance(doubled, Doubled) and doubled.value == 6)
+    assert(class.isinstance(doubled:clone(), Doubled) and doubled:clone().value == 6)
+    assert(doubled:kind() == "Doubled")
+
+    -- `Trait.method(obj)` still has obj's class
+    assert(class.isinstance(Cloner.clone(plain), Plain))
+
+    assert(Defaulted().kind == Defaulted)
+end
+
+-- a trait function without `self` has no class for `Self`
+assert(string.find(select(2, loadstring("trait T function make() return Self() end end")), "Write 'T' here: 'Self' is the class of 'self'", 1, true))
+
+-- outside a class or trait, `Self` is an ordinary name
+assert(Self == nil)
+assert(chunk("local Self = 1 return Self") == 1)
+
+-- `Self` is const
+assert(not loadstring("class C function f(self) Self = 1 end end"))
+assert(string.find(select(2, loadstring("trait T function f(self) Self = 1 end end")), "'Self' is constant and may not be reassigned", 1, true))
+
+-- in a trait's field defaults, `Self` is the class of the object being built, and its parameters can't use it
+trait Tagged
+    kind = Self
+    later = function()
+        return Self
+    end
+end
+
+class Tag implements Tagged end
+class Other implements Tagged end
+
+do
+    local tag, other = Tag(), Other()
+    assert(tag.kind == Tag and tag.later() == Tag)
+    assert(other.kind == Other)
+end
+assert(string.find(select(2, loadstring("trait T(a = Self) end")), "'Self' can't be used in a trait's parameters", 1, true))
+
 return 'OK'

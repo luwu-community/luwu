@@ -73,6 +73,16 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_a_call_in_an_if_else_branch")
     checkTypewriting(*this, before, "local x = if a > 0 then two() else 0", kAfter);
 }
 
+// Luwu: the ExtraArguments lint, while a call's arguments are typed
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_call_arguments")
+{
+    const char* before = "local a = 1\n"
+                         "local function add(x: number, y: number): number return x + y end\n"
+                         "local function show(items: number | { number }) print(items) end\n";
+    checkTypewriting(*this, before, "local sum = add(a, a)", kAfter);
+    checkTypewriting(*this, before, "show({ a, a })", kAfter);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_field_assignments_and_constants")
 {
     const char* before = "local t = { x = 1 }\n";
