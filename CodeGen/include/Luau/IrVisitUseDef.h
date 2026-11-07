@@ -203,9 +203,18 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
 
         visitor.defRange(vmRegOp(OP_B(inst)), 3);
         break;
+    case IrCmd::FALLBACK_INITTRAITS:
+        visitor.use(OP_C(inst));
+        visitor.def(OP_B(inst));
+        break;
+    case IrCmd::FALLBACK_GETQUALIFIED:
+        visitor.use(OP_C(inst));
+        visitor.use(OP_D(inst));
+        visitor.def(OP_B(inst));
+        break;
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         visitor.use(OP_B(inst));
-        visitor.use(OP_C(inst));
+        visitor.useRange(vmRegOp(OP_C(inst)), function.intOp(OP_D(inst)));
         break;
     case IrCmd::FALLBACK_NEWOBJECT:
     {
@@ -243,6 +252,10 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         break;
     case IrCmd::GET_TYPEOF:
         visitor.use(OP_A(inst));
+        break;
+    case IrCmd::GET_TYPE:
+        if (OP_B(inst).kind == IrOpKind::VmReg)
+            visitor.use(OP_B(inst));
         break;
 
     case IrCmd::FINDUPVAL:

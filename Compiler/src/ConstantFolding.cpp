@@ -878,6 +878,12 @@ struct ConstantVisitor : AstVisitor
                     analyze(expr->args.data[i]);
             }
         }
+        else if (AstExprIndexName* expr = node->as<AstExprIndexName>(); expr && expr->qualifiedTrait)
+        {
+            // Luwu Traits (rfcs/classes/traits.md): `Class:Trait.name` is the class's version of a trait's function
+            analyze(expr->expr);
+            analyze(expr->qualifiedTrait);
+        }
         else if (AstExprIndexName* expr = node->as<AstExprIndexName>())
         {
             Constant value = analyze(expr->expr);
@@ -1065,6 +1071,10 @@ struct ConstantVisitor : AstVisitor
         else if (AstExprInstantiate* expr = node->as<AstExprInstantiate>())
         {
             result = analyze(expr->expr);
+        }
+        else if (AstExprSelfClass* expr = node->as<AstExprSelfClass>())
+        {
+            analyze(expr->classOf);
         }
         else
         {

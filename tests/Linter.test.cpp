@@ -12,6 +12,7 @@ LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -844,6 +845,21 @@ local _o03 = typeof(game) == "Part"
     CHECK_EQ(result.warnings[0].text, "Unknown type 'Part' (expected primitive type)");
     CHECK_EQ(result.warnings[1].location.begin.line, 3);
     CHECK_EQ(result.warnings[1].text, "Unknown type 'Bar'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "UnknownTypeKnowsClassesAndTraits")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    LintResult result = lint(R"(
+local x = ...
+local _a = type(x) == "class"
+local _b = type(x) == "object"
+local _c = type(x) == "trait"
+local _d = typeof(x) == "trait"
+)");
+
+    REQUIRE(0 == result.warnings.size());
 }
 
 TEST_CASE_FIXTURE(Fixture, "ForRangeTable")
@@ -1778,7 +1794,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "DeprecatedApiTyped")
     persist(instanceType);
     getFrontend().globals.globalScope->exportedTypeBindings["Instance"] = TypeFun{{}, instanceType};
 
-    getMutable<ExternType>(instanceType)->props = {
+    getMutable<ExternType>(instanceType)->props() = {
         {"Name", {getBuiltins()->stringType}},
         {"DataCost", {getBuiltins()->numberType, /* deprecated= */ true}},
         {"Wait", {getBuiltins()->anyType, /* deprecated= */ true}},
@@ -5114,6 +5130,75 @@ return ok, p
     CHECK(warningsWithCode(result, LintWarning::Code_ExtraArguments).empty());
 }
 
+// Luwu Traits (rfcs/classes/traits.md): calling a trait runs its `__create`, which may hand its arguments on
+TEST_CASE_FIXTURE(BuiltinsFixture, "ExtraArgumentsLeavesTraitFactoriesAlone")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    LintResult result = lint(R"(
+--!strict
+trait Component
+    expect function render(self): string
+    function __create(name: string): Component
+        return Button(name)
+    end
+end
+class Button(label: string) implements Component
+    function render(self): string
+        return self.label
+    end
+end
+return Component("submit", 1)
+)");
+
+    CHECK(warningsWithCode(result, LintWarning::Code_ExtraArguments).empty());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ReturnSelfFlagsSelfReturnedAsTheTrait")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    LintResult result = lint(R"(
+trait Aliased
+    public function annotated(self): Aliased
+        return self
+    end
+    public function unannotated(self)
+        return (self)
+    end
+    public function copy(self): Aliased
+        return class.of(self)()
+    end
+    public function good(self): Self
+        return self
+    end
+    public function nested(self): Aliased
+        local f = function()
+            return self
+        end
+        return f()
+    end
+end
+)");
+
+    std::vector<LintWarning> found;
+    for (const LintWarning& warning : result.warnings)
+        if (warning.code == LintWarning::Code_ReturnSelf)
+            found.push_back(warning);
+
+    // on the return type, which is what's wrong, not on `return self`; a method without one already returns `Self`
+    REQUIRE_EQ(found.size(), 2);
+    CHECK_EQ(found[0].location, Location{{2, 37}, {2, 44}});
+    CHECK_EQ(found[1].location, Location{{8, 32}, {8, 39}});
+    CHECK_EQ(
+        found[0].text,
+        "Did you mean to return 'Self' here?\n\n"
+        "Help (method returns trait instead of Self):\n"
+        "  - Returning 'Aliased' here loses self's class and any other traits on it\n"
+        "  - Callers rely on knowing self's class to pass into other functions\n"
+        "  - Return 'Self' here so the type checker knows to use the class type instead of the trait type"
+    );
+}
 TEST_CASE_FIXTURE(Fixture, "DeprecatedCommentAttributeInLuauModule")
 {
     ScopedFastFlag sffs[] = {

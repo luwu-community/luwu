@@ -174,6 +174,8 @@ private:
 
     // attrlist = '@[' parattr {',' parattr} ']'
     void parseAttrList(TempVector<AstAttr*>& attributes, TempVector<CstAttrList*>* cstAttrLists, AstAttr::Context context);
+    // Luwu user-defined refinements: `truthy(param, Type)` in an attribute list
+    AstAttr* parseTruthyAttribute(const TempVector<AstAttr*>& attributes, const Name& name, AstAttr::Context context);
 
     // A bare `@name` cannot take arguments; `@[name ...]` is the form that does. When arguments
     // follow one anyway this reports precisely and parses them, so the attribute still means what was
@@ -253,13 +255,18 @@ private:
     );
 
     // `declared` parses the shape of a `declare class` (see AstStatDeclareClass) and returns the AstStatClass for it.
+    // Luwu Traits (rfcs/classes/traits.md): `isTrait` parses `trait Name ... end`, which is a class with trait members.
     AstStat* parseClassStat(
         const Location& start,
         bool exported,
         const Location& classKeywordLocation,
         const AstArray<AstAttr*>& classAttributes = {nullptr, 0},
-        bool declared = false
+        bool declared = false,
+        bool isTrait = false
     );
+
+    // Luwu Traits (rfcs/classes/traits.md): the entries of an `implements` or `needs` list, after the keyword.
+    AstArray<AstClassTraitRef> parseClassTraitRefs(bool allowArgs, AstClassPrimaryConstructor* primaryConstructor);
 
     // True when the class body is looking at something that reads as a statement rather than a class
     // member, which means the class was never closed. See its definition.
@@ -270,7 +277,8 @@ private:
     AstClassPrimaryConstructor* parseClassPrimaryConstructor(
         const std::optional<Location>& qualifierLocation,
         AstClassMemberVisibility visibility,
-        bool declared
+        bool declared,
+        bool isTrait
     );
 
     // Brings a primary constructor's parameters into scope; the caller takes a saveLocals() offset
@@ -291,9 +299,13 @@ private:
     void checkDuplicateDeclaration(const Name& name);
     void checkTypeName(const Name& name, bool declared);
     bool declaresClass();
+    bool declaresTrait();
+
+    // Luwu Traits (rfcs/classes/traits.md): whether `trait` declarations parse.
+    bool traitsEnabled() const;
     void declareClassValue(AstStatClass* shape, AstName valueType, const Location& declareLocation);
     bool startsClassType();
-    AstStat* parseClassType(const Location& start, const Location& classKeywordLocation, bool exported);
+    AstStat* parseClassType(const Location& start, const Location& classKeywordLocation, bool exported, bool isTrait = false);
     bool legacyDeclareClass();
     void skipClassOnlyExternTypeKeywords();
     AstType* untypedDeclarationType(const Location& location);
@@ -438,6 +450,9 @@ private:
 
     // NAME
     AstExpr* parseNameExpr(const char* context = nullptr);
+    AstExpr* nameExpr(const Name& name);
+    AstExpr* selfClassExpr(const Location& location);
+    std::string printedQualifier(AstExpr* qualifier);
 
     // prefixexp -> NAME | '(' expr ')'
     AstExpr* parsePrefixExpr();
@@ -548,6 +563,8 @@ private:
     AstArray<char> copy(const std::string& data);
 
     void incrementRecursionCounter(const char* context);
+
+    void checkTraitsDeclaredBeforeUse(AstStatBlock* chunk);
 
     void report(const Location& location, const char* format, va_list args);
     void report(const Location& location, const char* format, ...) LUAU_PRINTF_ATTR(3, 4);
@@ -673,11 +690,14 @@ private:
     unsigned int recursionCounter;
 
     AstName nameSelf;
+    AstName nameSelfClass;
+    AstName nameOf;
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;
     AstName nameNil;
     AstName nameClass;
+    AstName nameTrait;
 
     MatchLexeme endMismatchSuspect;
 
@@ -687,6 +707,23 @@ private:
     DenseHashMap<AstName, AstLocal*> localMap;
     std::vector<AstLocal*> localStack;
     DenseHashMap<AstName, AstStatClass*> classesWithinModule{{}};
+
+    // Luwu Traits (rfcs/classes/traits.md): the class or trait whose body is being parsed, which `Self` refers to
+    struct SelfClassContext
+    {
+        AstName name;
+        bool isTrait = false;
+        // The class statement's function depth. A local named `Self` declared deeper, inside the body, shadows `Self`.
+        size_t functionDepth = 0;
+        // Set while parsing one of the body's functions, together with that function's `self` if it takes one.
+        bool inFunction = false;
+        AstLocal* self = nullptr;
+        // A trait's AstStatClass::initSelf, made by the first `Self` in a field default
+        AstLocal* initSelf = nullptr;
+        // Set while parsing a trait's parameters, where `Self` is an error
+        bool inParameters = false;
+    };
+    std::optional<SelfClassContext> selfClass;
 
     std::vector<ParseError> parseErrors;
 

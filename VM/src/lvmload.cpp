@@ -795,6 +795,7 @@ static int loadsafe(
                 uint32_t numProperties = readVarInt(data, size, offset);
                 uint32_t numMethods = readVarInt(data, size, offset);
                 uint32_t numMembers = numMethods + numProperties;
+                uint32_t shapeFlags = readVarInt(data, size, offset);
 
                 TString* initName = luaS_newlstr(L, "__init", 6);
                 bool hasCustomInit = false;
@@ -807,8 +808,9 @@ static int loadsafe(
                     uint32_t flags = readVarInt(data, size, peekOffset);
                     hasCustomInit |= tsvalue(&p->k[mid]) == initName;
 
-                    // a constant default is stored inline right after its member's flags
-                    if (flags & LBC_CLASSMEMBER_CONSTDEFAULT)
+                    // a constant default is stored inline right after its field's flags; a function's bit 3 is
+                    // LBC_CLASSMEMBER_SCOPED
+                    if (idx < numProperties && (flags & LBC_CLASSMEMBER_CONSTDEFAULT))
                     {
                         readVarInt(data, size, peekOffset);
                         hasConstDefaults = true;
@@ -821,6 +823,9 @@ static int loadsafe(
 
                 // The class owns its shape buffers from here on, so nothing leaks if a later allocation fails.
                 LuauClass* lco = luaR_newclass(L, tsvalue(classname), numProperties, numStaticWithInit, hasConstDefaults);
+                // Luwu Traits (rfcs/classes/traits.md): read by luaR_sealclassshape below
+                lco->istrait = (shapeFlags & LBC_CLASSSHAPE_TRAIT) != 0;
+                lco->traitspending = (shapeFlags & LBC_CLASSSHAPE_IMPLEMENTS) != 0;
 
                 // Members are written properties-first, so index idx here is exactly the member's runtime
                 // offset.
@@ -832,7 +837,7 @@ static int loadsafe(
                     lco->offsettomember[idx] = tsvalue(memberName);
                     lco->memberflags[idx] = uint8_t(readVarInt(data, size, offset));
 
-                    if (lco->memberflags[idx] & LBC_CLASSMEMBER_CONSTDEFAULT)
+                    if (idx < numProperties && (lco->memberflags[idx] & LBC_CLASSMEMBER_CONSTDEFAULT))
                     {
                         uint32_t did = readVarInt(data, size, offset);
                         LUAU_ASSERT(lco->memberdefaults && idx < numProperties);

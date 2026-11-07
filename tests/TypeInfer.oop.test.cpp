@@ -983,6 +983,45 @@ TEST_CASE_FIXTURE(Fixture, "fuzzer_duplicate_class_definition")
     CHECK_EQ("A class named 'l0' has already been declared in this module", err->message);
 }
 
+TEST_CASE_FIXTURE(Fixture, "duplicate_class_or_trait_with_methods_is_only_the_syntax_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::DebugLuauForceOldSolver, false},
+    };
+
+    // the second declaration's methods were checked without types: "Lambda has non-function type any"
+    CheckResult result = check(R"(
+        trait OptionalArgument
+            private _required = false
+            expect public phrase: string
+            public function required(self)
+                self._required = true
+                return self
+            end
+        end
+        trait OptionalArgument
+            private _required = false
+            expect public phrase: string
+            public function required(self)
+                self._required = true
+                return self
+            end
+        end
+        class C
+            function f(self) return 1 end
+        end
+        class C
+            function f(self) return 1 end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<SyntaxError>(result.errors[0]));
+    CHECK(get<SyntaxError>(result.errors[1]));
+}
+
 TEST_CASE_FIXTURE(Fixture, "repeat_props")
 {
     ScopedFastFlag sffs[] = {
@@ -1280,20 +1319,21 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_class_object_properties_are_forbid
     CHECK(pav1->key == "zero");
     CHECK(pav1->context == PropertyAccessViolation::CannotWrite);
 
-    auto* pav2 = get<PropertyAccessViolation>(result.errors[2]);
-    REQUIRE(pav2);
-    CHECK(pav2->key == "one");
-    CHECK(pav2->context == PropertyAccessViolation::CannotWrite);
+    // Luwu: upstream reports a write to a member the class doesn't have (`one`, `__index`) as read-only, the way it
+    // treats an extern type. Luwu reports the member as not found, so a misspelled name isn't called read-only.
+    auto* up2 = get<UnknownProperty>(result.errors[2]);
+    REQUIRE(up2);
+    CHECK(up2->key == "one");
 
-    auto* pav3 = get<PropertyAccessViolation>(result.errors[3]);
-    REQUIRE(pav3);
-    CHECK(pav3->key == "__index");
-    CHECK(pav3->context == PropertyAccessViolation::CannotWrite);
+    auto* up3 = get<UnknownProperty>(result.errors[3]);
+    REQUIRE(up3);
+    CHECK(up3->key == "__index");
 
-    auto* pav4 = get<PropertyAccessViolation>(result.errors[4]);
-    REQUIRE(pav4);
-    CHECK(pav4->key == "__call");
-    CHECK(pav4->context == PropertyAccessViolation::CannotWrite);
+    // Luwu: `getmetatable` of a class is nil, as at runtime, so writing `__call` into it indexes nil. Upstream types it
+    // as the class's metatable and reports `__call` as read-only.
+    auto* nat4 = get<NotATable>(result.errors[4]);
+    REQUIRE(nat4);
+    CHECK_EQ("nil", toString(nat4->ty));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_unknown_class_instance_properties_are_forbidden")
@@ -1338,15 +1378,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_unknown_class_instance_properties_
     CHECK(pav1->key == "zero");
     CHECK(pav1->context == PropertyAccessViolation::CannotWrite);
 
-    auto* pav2 = get<PropertyAccessViolation>(result.errors[2]);
-    REQUIRE(pav2);
-    CHECK(pav2->key == "one");
-    CHECK(pav2->context == PropertyAccessViolation::CannotWrite);
+    // Luwu: upstream reports writing a member an object doesn't have as read-only (see the test above)
+    auto* up2 = get<UnknownProperty>(result.errors[2]);
+    REQUIRE(up2);
+    CHECK(up2->key == "one");
 
-    auto* pav3 = get<PropertyAccessViolation>(result.errors[3]);
-    REQUIRE(pav3);
-    CHECK(pav3->key == "__index");
-    CHECK(pav3->context == PropertyAccessViolation::CannotWrite);
+    auto* up3 = get<UnknownProperty>(result.errors[3]);
+    REQUIRE(up3);
+    CHECK(up3->key == "__index");
 }
 
 TEST_SUITE_END();

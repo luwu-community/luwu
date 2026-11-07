@@ -23,6 +23,7 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
@@ -4934,6 +4935,175 @@ end
     CHECK(freeFunction.errors.empty());
 }
 
+// Luwu Traits (rfcs/classes/traits.md): `Self` is const like `self`, in a class and in a trait, nested closures included
+TEST_CASE_FIXTURE(Fixture, "self_class_value_is_const")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    const char* writes[] = {
+        "Self = nil",
+        "local a; Self, a = nil, nil",
+        "Self ..= 'x'",
+        "function Self() end",
+        "local f = function() Self = nil end",
+    };
+
+    for (const char* write : writes)
+    {
+        for (const char* declaration : {"class C\n    function m(self)", "trait T\n    function m(self)"})
+        {
+            std::string code = std::string(declaration) + "\n        " + write + "\n    end\nend\n";
+            ParseResult result = tryParse(code);
+            REQUIRE_MESSAGE(result.errors.size() == 1, code);
+            CHECK_EQ(result.errors[0].getMessage(), "'Self' is constant and may not be reassigned");
+        }
+    }
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `Self` is the class's name in a class and `class.of(self)` in a trait method. A
+// trait function without `self` can't use it. A local the body declares shadows it, and outside a body it's a name.
+TEST_CASE_FIXTURE(Fixture, "self_class_value_shapes")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait Cloner
+            function clone(self)
+                return Self
+            end
+            function shadowed(self)
+                local Self = 1
+                return Self
+            end
+        end
+        class Point
+            function copy(self)
+                return function() return Self end
+            end
+        end
+        return Self
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 3);
+
+    AstStatClass* cloner = block->body.data[0]->as<AstStatClass>();
+    AstStatClass* point = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(cloner);
+    REQUIRE(point);
+    REQUIRE(cloner->members.size == 2);
+    REQUIRE(point->members.size == 1);
+
+    auto returned = [](const AstClassMember& member) -> AstExpr*
+    {
+        const AstClassMethod* method = member.get_if<AstClassMethod>();
+        REQUIRE(method);
+        AstStatBlock* body = method->function->body;
+        REQUIRE(body->body.size > 0);
+        AstStatReturn* ret = body->body.data[body->body.size - 1]->as<AstStatReturn>();
+        REQUIRE(ret);
+        REQUIRE(ret->list.size == 1);
+        return ret->list.data[0];
+    };
+
+    AstExprSelfClass* inMethod = returned(cloner->members.data[0])->as<AstExprSelfClass>();
+    REQUIRE(inMethod);
+    REQUIRE(inMethod->classOf->args.size == 1);
+    AstExprLocal* self = inMethod->classOf->args.data[0]->as<AstExprLocal>();
+    REQUIRE(self);
+    CHECK_EQ(self->local, cloner->members.data[0].get_if<AstClassMethod>()->function->args.data[0]);
+
+    CHECK(returned(cloner->members.data[1])->is<AstExprLocal>());
+
+    AstExprFunction* closure = returned(point->members.data[0])->as<AstExprFunction>();
+    REQUIRE(closure);
+    REQUIRE(closure->body->body.size == 1);
+    AstStatReturn* closureReturn = closure->body->body.data[0]->as<AstStatReturn>();
+    REQUIRE(closureReturn);
+    AstExprGlobal* inClass = closureReturn->list.data[0]->as<AstExprGlobal>();
+    REQUIRE(inClass);
+    CHECK(inClass->writtenAsSelf);
+    CHECK_EQ(inClass->name, "Point");
+
+    AstStatReturn* outside = block->body.data[2]->as<AstStatReturn>();
+    REQUIRE(outside);
+    AstExprGlobal* global = outside->list.data[0]->as<AstExprGlobal>();
+    REQUIRE(global);
+    CHECK(!global->writtenAsSelf);
+    CHECK_EQ(global->name, "Self");
+
+    ParseResult inStatic = tryParse("trait Cloner\n    function make()\n        return Self\n    end\nend\n");
+    REQUIRE(inStatic.errors.size() == 1);
+    CHECK_EQ(
+        inStatic.errors[0].getMessage(), "Write 'Cloner' here: 'Self' is the class of 'self', and this trait function doesn't take 'self'"
+    );
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `Self` in a trait's field defaults is the class of the object they initialize, the
+// trait's initSelf, which every `Self` there shares. A trait's parameters can't use it.
+TEST_CASE_FIXTURE(Fixture, "self_class_value_in_trait_defaults")
+{
+    ScopedFastFlag flags[3]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}, {FFlag::LuwuDefaultArguments, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait T
+            x = Self
+            y = function() return Self end
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 1);
+    AstStatClass* trait = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(trait);
+    REQUIRE(trait->initSelf);
+    REQUIRE(trait->members.size == 2);
+
+    const AstClassProperty* field = trait->members.data[0].get_if<AstClassProperty>();
+    const AstClassProperty* closureField = trait->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(field);
+    REQUIRE(closureField);
+    AstExprFunction* closure = closureField->defaultValue->as<AstExprFunction>();
+    REQUIRE(closure);
+    REQUIRE(closure->body->body.size == 1);
+    AstStatReturn* closureReturn = closure->body->body.data[0]->as<AstStatReturn>();
+    REQUIRE(closureReturn);
+
+    for (AstExpr* value : {field->defaultValue, closureReturn->list.data[0]})
+    {
+        REQUIRE(value);
+        AstExprSelfClass* selfClass = value->as<AstExprSelfClass>();
+        REQUIRE(selfClass);
+        REQUIRE(selfClass->classOf->args.size == 1);
+        AstExprLocal* object = selfClass->classOf->args.data[0]->as<AstExprLocal>();
+        REQUIRE(object);
+        CHECK_EQ(object->local, trait->initSelf);
+    }
+
+    AstStatBlock* noSelf = parse("trait U\n    x = 1\nend");
+    REQUIRE(noSelf);
+    AstStatClass* plain = noSelf->body.data[0]->as<AstStatClass>();
+    REQUIRE(plain);
+    CHECK(!plain->initSelf);
+
+    ParseResult inParameters = tryParse("trait V(a = Self)\nend");
+    REQUIRE(inParameters.errors.size() == 1);
+    CHECK_EQ(inParameters.errors[0].getMessage(), "'Self' can't be used in a trait's parameters");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait can't take a class or trait keyword as its name
+TEST_CASE_FIXTURE(Fixture, "trait_names_are_not_class_keywords")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    for (const char* name : {"class", "trait", "public", "private", "const", "extends", "implements", "needs", "expect", "final"})
+    {
+        std::string code = std::string("trait ") + name + "\nend";
+        ParseResult result = tryParse(code);
+        REQUIRE_MESSAGE(result.errors.size() == 1, code);
+        CHECK_EQ(result.errors[0].getMessage(), std::string("A trait can't be named '") + name + "': it's a keyword in classes and traits");
+    }
+
+    CHECK(tryParse("trait Needs\nend").errors.empty());
+}
 TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_variadic")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
@@ -5046,7 +5216,8 @@ TEST_CASE_FIXTURE(Fixture, "class_extends_is_rejected")
 
 TEST_CASE_FIXTURE(Fixture, "class_implements_is_rejected")
 {
-    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    // Without traits, `implements` is reserved; trait_declarations_parse covers it with them.
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, false}};
 
     // `implements` is reserved for traits; one error for the whole interface list
     ParseResult result = tryParse(R"(
@@ -5386,6 +5557,268 @@ TEST_CASE_FIXTURE(Fixture, "class_self_cannot_be_annotated")
     )",
         "The 'self' parameter cannot have a type annotation"
     );
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `function Self.name` in a trait, `function Trait.name` in a class, and the
+// qualified reads `obj:Trait:name()` and `Class:Trait.name`
+TEST_CASE_FIXTURE(Fixture, "trait_scoped_functions_and_qualified_reads_parse")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait Json
+            function Self.encode(value) end
+            expect function Self.tag?(self)
+        end
+
+        class Cat() implements Json, mod.Toml
+            function Json.tag(self) end
+            function mod.Toml.tag(self) end
+            function tag(self) end
+        end
+
+        local a = Cat():Json:tag()
+        local b = Cat:Json.encode
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 4);
+
+    AstStatClass* json = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(json);
+    REQUIRE(json->members.size == 2);
+    for (const AstClassMember& member : json->members)
+    {
+        const AstClassMethod* method = member.get_if<AstClassMethod>();
+        REQUIRE(method);
+        CHECK(method->scopeLocation);
+        CHECK(!method->qualifiedTrait);
+    }
+
+    AstStatClass* cat = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(cat);
+    REQUIRE(cat->members.size == 3);
+    const AstClassMethod* forJson = cat->members.data[0].get_if<AstClassMethod>();
+    const AstClassMethod* forToml = cat->members.data[1].get_if<AstClassMethod>();
+    const AstClassMethod* own = cat->members.data[2].get_if<AstClassMethod>();
+    REQUIRE(forJson);
+    REQUIRE(forToml);
+    REQUIRE(own);
+    REQUIRE(forJson->qualifiedTrait);
+    CHECK(forJson->qualifiedTrait->is<AstExprGlobal>());
+    REQUIRE(forToml->qualifiedTrait);
+    CHECK(forToml->qualifiedTrait->is<AstExprIndexName>());
+    CHECK_EQ(std::string(forToml->functionName.value), "tag");
+    CHECK(!own->qualifiedTrait);
+
+    AstStatLocal* call = block->body.data[2]->as<AstStatLocal>();
+    REQUIRE(call);
+    AstExprCall* callExpr = call->values.data[0]->as<AstExprCall>();
+    REQUIRE(callExpr);
+    CHECK(callExpr->self);
+    AstExprIndexName* method = callExpr->func->as<AstExprIndexName>();
+    REQUIRE(method);
+    CHECK(method->qualifiedTrait);
+    CHECK_EQ(method->op, ':');
+
+    AstStatLocal* read = block->body.data[3]->as<AstStatLocal>();
+    REQUIRE(read);
+    AstExprIndexName* value = read->values.data[0]->as<AstExprIndexName>();
+    REQUIRE(value);
+    CHECK(value->qualifiedTrait);
+    CHECK_EQ(value->op, '.');
+}
+
+TEST_CASE_FIXTURE(Fixture, "trait_scoped_functions_and_qualified_reads_parse_errors")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    matchParseError("trait T function Other.f(self) end end", "A trait can only scope a function to itself: write 'function Self.f'");
+    matchParseError("trait T function Self.__tostring(self) end end", "'__tostring' can't be scoped to a trait: the VM looks it up as a member of the class");
+    matchParseError("class C() function T.f(self) end end", "Class 'C' implements no traits, so it can't implement 'T.f'");
+    matchParseError("class C() implements T function T.f(self) end function T.f(self) end end", "Duplicate class member 'T.f'");
+    matchParseError("local x = C:T.f\nC:T.f = 1", "Assigned expression must be a variable or a field");
+}
+
+// Luwu Traits (rfcs/classes/traits.md)
+TEST_CASE_FIXTURE(Fixture, "trait_declarations_parse")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait Item(public category: string)
+            expect public name: string
+            expect private function fire?(self)
+            public final function f(self) end
+        end
+
+        trait Tool needs Item, mod.Other<number>
+        end
+
+        class Rifle(level: number) implements Tool, Item(`h{level}`)
+            name = "x"
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 3);
+
+    AstStatClass* item = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(item);
+    CHECK(item->isTrait);
+    REQUIRE(item->primaryConstructor);
+    REQUIRE(item->members.size == 3);
+
+    const AstClassProperty* name = item->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(name);
+    CHECK(name->expectLocation);
+
+    const AstClassMethod* fire = item->members.data[1].get_if<AstClassMethod>();
+    REQUIRE(fire);
+    CHECK(fire->expectLocation);
+    CHECK(fire->isOptional);
+    CHECK(fire->visibility == AstClassMemberVisibility::Private);
+
+    const AstClassMethod* f = item->members.data[2].get_if<AstClassMethod>();
+    REQUIRE(f);
+    CHECK(f->finalLocation);
+
+    AstStatClass* tool = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(tool);
+    REQUIRE(tool->needs.size == 2);
+    CHECK(tool->needsLocation);
+    CHECK(!tool->implementsLocation);
+    CHECK(tool->needs.data[1].trait->is<AstExprIndexName>());
+    CHECK_EQ(tool->needs.data[1].typeArguments.size, 1);
+
+    AstStatClass* rifle = block->body.data[2]->as<AstStatClass>();
+    REQUIRE(rifle);
+    CHECK(!rifle->isTrait);
+    REQUIRE(rifle->implements.size == 2);
+    REQUIRE(rifle->implementsLocation);
+    CHECK_EQ(rifle->implementsLocation->begin.line, 10);
+    CHECK(!rifle->implements.data[0].hasArgs);
+    CHECK(rifle->implements.data[1].hasArgs);
+    CHECK_EQ(rifle->implements.data[1].args.size, 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "trait_lists_may_be_parenthesized")
+{
+    ScopedFastFlag _[3]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait A<T> end
+        trait B(n: number) end
+        trait C needs (
+            A<string>
+        )
+        end
+        class Flag<T = boolean>(
+            public name: string
+        ) implements (
+            A<T>,
+            B(1),
+            C
+        )
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 4);
+
+    AstStatClass* c = block->body.data[2]->as<AstStatClass>();
+    REQUIRE(c);
+    REQUIRE(c->needs.size == 1);
+    CHECK_EQ(c->needs.data[0].typeArguments.size, 1);
+
+    AstStatClass* flag = block->body.data[3]->as<AstStatClass>();
+    REQUIRE(flag);
+    REQUIRE(flag->implements.size == 3);
+    CHECK_EQ(flag->implements.data[0].typeArguments.size, 1);
+    CHECK(flag->implements.data[1].hasArgs);
+    CHECK(flag->implements.data[2].trait->is<AstExprGlobal>());
+    CHECK(flag->members.size == 0);
+
+    matchParseError("trait A end class C implements (A, ) end", "Expected identifier when parsing trait name, got ')'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "trait_syntax_errors")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    matchParseError("class C expect x: number end", "Only traits can 'expect' members");
+    matchParseError("class C final function f(self) end end", "Only trait members can be 'final'");
+    matchParseError("trait T function f?(self) end end", "Only expected functions can be optional: 'expect function f?()'");
+    matchParseError(
+        "trait T function __init(self) end end", "Traits can't define '__init'; give fields default values or trait parameters instead"
+    );
+    matchParseError("trait T expect x = 1 end", "Expected fields can't have default values");
+    matchParseError("trait T path: string end", "Trait field 'path' needs a default value; did you mean 'expect path'?");
+    matchParseError("trait T final x: number end", "Final field 'x' needs a default value");
+    matchParseError("trait T final const x = 1 end", "'final' fields are already const");
+    matchParseError("trait T(x: number) final x = 1 end", "Final field 'x' can't be a trait parameter");
+    matchParseError("class C final x = 1 end", "Only trait members can be 'final'");
+    matchParseError("trait A end trait T needs A(1) end", "Traits in a 'needs' list can't take arguments; the implementing class passes them");
+    matchParseError("class A end trait A end", "A class or trait named 'A' has already been declared in this module");
+    matchParseError("class C function __create() end end", "Only traits can define '__create'; did you mean '__init'?");
+    matchParseError("class C implements Later end trait Later end", "Trait 'Later' must be declared before class 'C'");
+    matchParseError("trait T expect function __create() end", "'__create' can't be expected");
+    matchParseError("trait T(x) function __create() end end", "Traits with parameters can't define '__create'");
+    matchParseError("trait T function __create(self) end end", "'__create' can't take 'self'");
+    matchParseError("class C final function __implemented(cls) end end", "Only trait members can be 'final'");
+    matchParseError("trait T function __implemented(cls) end end", "'__implemented' must be final: write 'final function __implemented'");
+    matchParseError("trait T expect function __implemented(cls) end", "'__implemented' can't be expected");
+    matchParseError("trait T final function __implemented(self) end end", "'__implemented' can't take 'self'; it's given the implementing class");
+    matchParseError(
+        "trait T final function __init(self) end end", "Traits can't define '__init'; give fields default values or trait parameters instead"
+    );
+    matchParseError("trait T expect function __init?(self) end", "An expected '__init' can't be optional");
+    // a trait may expect a constructor, to construct its implementing classes
+    CHECK_EQ(parse("trait T expect function __init(self, x: number) end")->body.size, 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "an_unterminated_trait_ends_at_the_next_declaration")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    ParseResult result = tryParse(R"(
+trait Started
+trait Next
+    function f(self) end
+end
+export class C implements Next
+end
+)");
+
+    // only the missing `end`: `Next` and `C` parse as declarations of their own, not as members of `Started`
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected 'end' (to close 'trait' at line 2), got 'trait'");
+    REQUIRE_EQ(result.root->body.size, 3);
+    AstStatClass* next = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(next);
+    CHECK_EQ(next->members.size, 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "trait_parse_errors_say_trait")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    matchParseError("trait T(...) end", "A trait's parameter list cannot be variadic");
+    matchParseError("trait T x = 1 x = 2 end", "Duplicate trait member 'x'");
+    matchParseError("trait T __x = 1 end", "Trait fields cannot start with '__'");
+    matchParseError("trait T const function f(self) end end", "Functions in a trait are always const; remove 'const' here");
+}
+
+// `trait` stays an ordinary name outside a declaration
+TEST_CASE_FIXTURE(Fixture, "trait_is_a_contextual_keyword")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        local trait = 1
+        trait = trait + 1
+        local t = { trait = trait }
+        print(trait)
+    )");
+    REQUIRE(block);
+    CHECK_EQ(block->body.size, 4);
 }
 
 TEST_CASE_FIXTURE(Fixture, "classes_cannot_be_shadowed_by_classes")
@@ -8242,7 +8675,7 @@ TEST_CASE_FIXTURE(Fixture, "export_declare_is_for_types_only")
         REQUIRE_EQ(result.errors.size(), 1);
         CHECK_EQ(
             result.errors[0].getMessage(),
-            "'export declare' exports classes and types only; to declare a global for several files, use a definitions file"
+            "'export declare' exports classes, traits and types only; to declare a global for several files, use a definitions file"
         );
         REQUIRE_EQ(result.root->body.size, 1);
         bool declaresValue = result.root->body.data[0]->is<AstStatDeclareGlobal>() || result.root->body.data[0]->is<AstStatDeclareFunction>();
@@ -8361,6 +8794,95 @@ declare class: number
 
     // `class` followed by `:` is the name of a global
     CHECK(result.root->body.data[2]->is<AstStatDeclareGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_trait")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}
+    };
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+export trait type Container<T>
+    expect public function __len(self): number
+    expect public function front?(self): T?
+    expect public function back?(self): T?
+end
+trait type Handler(public name = string) needs Container<string>
+    private cb: (() -> ())?
+    public final tag: string
+    public final function on_callback(self, cb: () -> ())
+    public function describe(self): string
+end
+declare trait: number
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatDeclareClass* container = result.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(container);
+    CHECK(container->shape->isTrait);
+    CHECK(container->shape->exported);
+    REQUIRE_EQ(container->shape->members.size, 3);
+    const AstClassMethod* front = container->shape->members.data[1].get_if<AstClassMethod>();
+    REQUIRE(front);
+    CHECK(front->expectLocation);
+    CHECK(front->isOptional);
+
+    AstStatDeclareClass* handler = result.root->body.data[1]->as<AstStatDeclareClass>();
+    REQUIRE(handler);
+    AstStatClass* shape = handler->shape;
+    CHECK(shape->isTrait);
+    CHECK_FALSE(shape->exported);
+    REQUIRE(shape->primaryConstructor);
+    CHECK(shape->primaryConstructor->argsQualifiers.data[0].declaredDefaultLocation);
+    REQUIRE_EQ(shape->needs.size, 1);
+    REQUIRE_EQ(shape->members.size, 4);
+    const AstClassProperty* tag = shape->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(tag);
+    CHECK(tag->finalLocation);
+    const AstClassMethod* describe = shape->members.data[3].get_if<AstClassMethod>();
+    REQUIRE(describe);
+    CHECK_EQ(describe->function->body->body.size, 0);
+
+    // `trait` followed by `:` is the name of a global
+    CHECK(result.root->body.data[2]->is<AstStatDeclareGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_trait_mistakes")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    auto onlyError = [](const char* source, const std::string& message)
+    {
+        INFO(std::string(source));
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], message);
+    };
+
+    onlyError(
+        "declare trait type Handler\nend",
+        "Write 'trait type Handler' for the type alone, or 'declare trait Handler' for the trait and its type: 'declare' declares a value"
+    );
+    onlyError("trait type A\n    expect x = number\nend", "Expected fields can't have default values");
+    onlyError("trait type A\n    c\nend", "Declared trait field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
+    onlyError("trait type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
+    onlyError("trait type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("trait type A implements B\nend", "Traits can't implement traits; did you mean 'needs'?");
+
+    // `export` goes first
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, "declare export trait A\nend");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "'export' goes before 'declare': write 'export declare'");
+    AstStatDeclareClass* trait = result.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(trait);
+    CHECK(trait->shape->exported);
 }
 
 TEST_CASE_FIXTURE(Fixture, "declare_class_mistakes")

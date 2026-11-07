@@ -75,6 +75,9 @@ void AstAttr::visit(AstVisitor* visitor)
     {
         for (AstExpr* arg : args)
             arg->visit(visitor);
+
+        if (refinedType)
+            refinedType->visit(visitor);
     }
 }
 
@@ -305,7 +308,12 @@ AstExprIndexName::AstExprIndexName(
 void AstExprIndexName::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
+    {
         expr->visit(visitor);
+
+        if (qualifiedTrait)
+            qualifiedTrait->visit(visitor);
+    }
 }
 
 AstExprIndexExpr::AstExprIndexExpr(const Location& location, AstExpr* expr, AstExpr* index)
@@ -612,6 +620,18 @@ void AstExprInterpString::visit(AstVisitor* visitor)
         for (AstExpr* expr : expressions)
             expr->visit(visitor);
     }
+}
+
+AstExprSelfClass::AstExprSelfClass(const Location& location, AstExprCall* classOf)
+    : AstExpr(ClassIndex(), location)
+    , classOf(classOf)
+{
+}
+
+void AstExprSelfClass::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        classOf->visit(visitor);
 }
 
 AstExprInstantiate::AstExprInstantiate(const Location& location, AstExpr* expr, AstArray<AstTypeOrPack> types)
@@ -1150,6 +1170,28 @@ void AstStatClass::visit(AstVisitor* visitor)
             }
         }
 
+        auto visitTraitRefs = [&](const AstArray<AstClassTraitRef>& refs)
+        {
+            for (const AstClassTraitRef& ref : refs)
+            {
+                ref.trait->visit(visitor);
+
+                for (const AstTypeOrPack& param : ref.typeArguments)
+                {
+                    if (param.type)
+                        param.type->visit(visitor);
+                    else if (param.typePack)
+                        param.typePack->visit(visitor);
+                }
+
+                for (AstExpr* arg : ref.args)
+                    arg->visit(visitor);
+            }
+        };
+
+        visitTraitRefs(needs);
+        visitTraitRefs(implements);
+
         for (const auto& member : members)
         {
             Luau::visit(
@@ -1165,6 +1207,9 @@ void AstStatClass::visit(AstVisitor* visitor)
                     },
                     [&](const AstClassMethod& method)
                     {
+                        if (method.qualifiedTrait)
+                            method.qualifiedTrait->visit(visitor);
+
                         method.function->visit(visitor);
                     }
                 },

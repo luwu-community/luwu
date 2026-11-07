@@ -16,6 +16,7 @@
 #include <stdint.h>
 
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 
 namespace Luau
 {
@@ -235,6 +236,8 @@ public:
         // Luwu @noinline (rfcs/noinline-attribute.md): upstream's `DebugNoinline` (`@debugnoinline`), shipped as
         // `@noinline`.
         Noinline,
+        // Luwu user-defined refinements: `@[truthy(param, Type)]`
+        Truthy,
         // Luwu: `@[nolint(Name, ...)]` turns lints off inside the function, class or field it is written on, and
         // `@[lint(Name, ...)]` turns them back on. Without names, all of them.
         Nolint,
@@ -326,6 +329,14 @@ public:
     Type type;
     AstArray<AstExpr*> args;
     AstName name;
+
+    // Luwu user-defined refinements: `@[truthy(param, Type)]` (behind DebugLuwuUserDefinedRefinements) says that when
+    // the function returns a truthy value, the argument for its parameter `param` is a `Type`. Only a `Truthy`
+    // attribute has them; its `args` stay empty, since `Type` is a type, not an expression.
+    AstName refinedParam;
+    Location refinedParamLocation;
+    AstType* refinedType = nullptr;
+
     // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): written as a `--@[...]` comment. It means
     // the same as an attribute in the code, but the pretty printer doesn't print it.
     bool comment = false;
@@ -539,6 +550,9 @@ public:
     void visit(AstVisitor* visitor) override;
 
     AstName name;
+    // Luwu Traits (rfcs/classes/traits.md): written `Self` in a class's body, or in a trait function without `self`.
+    // `name` is the class or trait, so `Self` compiles and type checks exactly like its name.
+    bool writtenAsSelf = false;
 };
 
 class AstExprVarargs : public AstExpr
@@ -598,6 +612,9 @@ public:
     Location indexLocation;
     Position opPosition;
     char op = '.';
+    // Luwu Traits (rfcs/classes/traits.md): the trait in a qualified read, `obj:Trait:name` or `Class:Trait.name`, which
+    // reads the class's version of the trait's member `name`. `op` is the second operator. nullptr for a plain index.
+    AstExpr* qualifiedTrait = nullptr;
 };
 
 class AstExprIndexExpr : public AstExpr
@@ -818,6 +835,23 @@ public:
     /// `strings` will always have one more element than `expressions`.
     AstArray<AstArray<char>> strings;
     AstArray<AstExpr*> expressions;
+};
+
+// Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method or a trait's field default, the class of the
+// object it's called on or initializes. `Self` everywhere else in a class or trait body is the class or trait itself
+// (AstExprGlobal::writtenAsSelf).
+class AstExprSelfClass : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprSelfClass)
+
+    AstExprSelfClass(const Location& location, AstExprCall* classOf);
+
+    void visit(AstVisitor* visitor) override;
+
+    // `class.of(self)`, with the method's `self` or the trait's AstStatClass::initSelf. Everything past the parser compiles
+    // and type checks this call.
+    AstExprCall* classOf;
 };
 
 // f<<T>>
@@ -1343,6 +1377,12 @@ struct AstClassProperty
     // Attributes written above the field, e.g. `@deprecated`. A method's attributes live on its
     // AstExprFunction instead, since that is where a function's attributes already are.
     AstArray<AstAttr*> attributes{nullptr, 0};
+    // Luwu Traits (rfcs/classes/traits.md): location of `expect` in a trait's `expect name: T`, a field every implementing
+    // class must declare itself. nullopt for a provided field, and always in a class.
+    std::optional<Location> expectLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): location of `final` in a trait's `final name = value`: a const field only the
+    // trait sets, from its default; not even an implementing class's `__init` can write it. nullopt in a class.
+    std::optional<Location> finalLocation = std::nullopt;
 };
 
 struct AstClassMethod
@@ -1354,6 +1394,21 @@ struct AstClassMethod
     Location nameLocation;
     AstExprFunction* function;
     bool hasSemicolon = false;
+    // Luwu Traits (rfcs/classes/traits.md): location of `expect` in a trait's `expect function name(self)`, a function every
+    // implementing class must define. Its `function` is a signature with an empty body. nullopt in a class.
+    std::optional<Location> expectLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): `expect function name?(self)`, an expected function a class may leave out; reading
+    // it on such a class gives nil. Only set together with expectLocation.
+    bool isOptional = false;
+    // Luwu Traits (rfcs/classes/traits.md): location of `final` in a trait's `final function`, which no implementing class may
+    // define itself. nullopt in a class.
+    std::optional<Location> finalLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): location of `Self` in a trait's `function Self.name`, a member scoped to the
+    // trait. Implementing classes don't get it as a member; `obj:Trait:name()` and `Class:Trait.name()` reach it.
+    std::optional<Location> scopeLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): the trait in a class's `function Json.name`, a qualified implementation of that
+    // trait's member `name`. It isn't a member of the class. nullptr otherwise.
+    AstExpr* qualifiedTrait = nullptr;
 };
 
 using AstClassMember = Variant<AstClassProperty, AstClassMethod>;
@@ -1396,6 +1451,23 @@ struct AstClassPrimaryConstructor
     Location argLocation;
 };
 
+// Luwu Traits (rfcs/classes/traits.md): one entry of a class's `implements` list or a trait's `needs` list:
+// `Element("div")`, `Iterable<number>`, `mod.Trait`.
+struct AstClassTraitRef
+{
+    // The trait value: a name, or a name indexed with `.` (`mod.Trait`).
+    AstExpr* trait = nullptr;
+    // The whole entry, generic and trait arguments included.
+    Location location;
+    AstArray<AstTypeOrPack> typeArguments{nullptr, 0};
+    // Whether the entry has a trait argument list, even an empty one: `Element()` passes no arguments, but says so.
+    bool hasArgs = false;
+    // Trait arguments, parsed like a class field's default value: one function scope deeper than the class, with the
+    // class's primary constructor parameters in scope.
+    AstArray<AstExpr*> args{nullptr, 0};
+    Location argsLocation;
+};
+
 class AstStatClass : public AstStat
 {
 public:
@@ -1430,6 +1502,20 @@ public:
 
     // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
     AstArray<AstAttr*> attributes{nullptr, 0};
+
+    // Luwu Traits (rfcs/classes/traits.md): `trait Name ... end` is parsed as a class with this set. A trait's primary
+    // constructor holds its trait parameters (`trait Element(tag: string)`), and `keywordLocation` is its `trait`.
+    bool isTrait = false;
+    // Luwu Traits (rfcs/classes/traits.md): the object a trait's field defaults initialize, when one of them uses `Self`
+    // (the class of this object). The compiler's `__traitinit` takes it as its `self`.
+    AstLocal* initSelf = nullptr;
+    // Luwu Traits (rfcs/classes/traits.md): a class's `implements` list. Always empty on a trait.
+    AstArray<AstClassTraitRef> implements{nullptr, 0};
+    // Luwu Traits (rfcs/classes/traits.md): the `implements` and `needs` keywords; nullopt when the list is absent
+    std::optional<Location> implementsLocation = std::nullopt;
+    std::optional<Location> needsLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): a trait's `needs` list; entries never have trait arguments. Always empty on a class.
+    AstArray<AstClassTraitRef> needs{nullptr, 0};
 };
 
 // Luwu Declare Statements (rfcs/declare-statements.md): `[export] declare class`, a class that exists at runtime but
@@ -1894,6 +1980,10 @@ public:
         return visit(static_cast<AstExpr*>(node));
     }
     virtual bool visit(class AstExprInterpString* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
+    virtual bool visit(class AstExprSelfClass* node)
     {
         return visit(static_cast<AstExpr*>(node));
     }

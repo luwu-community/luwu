@@ -5,6 +5,7 @@ LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuwuTableDrop)
@@ -375,6 +376,18 @@ declare class: {
 }
 )CLASS_SRC";
 
+// Luwu Traits (rfcs/classes/traits.md): a trait's value is a `trait`. `class.isinstance` never matches one, so it
+// doesn't take one either.
+static const char* kBuiltinDefinitionClassTraitsSrc = R"CLASS_SRC(
+declare class: {
+    isinstance: @checked (o: unknown, c: class) -> boolean,
+    implements: @checked (o: unknown, t: trait) -> boolean,
+    of: @checked (o: unknown) -> class?,
+    name: @checked (o: class | object | trait) -> string,
+    fields: @checked (o: class | object | trait) -> ({ [string]: unknown }, boolean)
+}
+)CLASS_SRC";
+
 std::string getBuiltinDefinitionSource()
 {
     std::string result = kBuiltinDefinitionBaseSrc;
@@ -412,7 +425,7 @@ std::string getBuiltinDefinitionSource()
 
     if (FFlag::LuwuClasses && FFlag::LuauAllowGlobalDeclarationToBeCalledClass)
     {
-        result += kBuiltinDefinitionClassSrc;
+        result += FFlag::LuwuTraits ? kBuiltinDefinitionClassTraitsSrc : kBuiltinDefinitionClassSrc;
     }
 
     return result;
