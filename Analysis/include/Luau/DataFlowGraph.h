@@ -176,6 +176,8 @@ private:
     ControlFlow visit(AstStatDeclareFunction* d);
     ControlFlow visit(AstStatDeclareExternType* d);
     ControlFlow visit(AstStatClass* d);
+    ControlFlow visit(AstStatDeclareClass* d);
+    void visitClassShape(AstStatClass* d);
     ControlFlow visit(AstStatError* error);
 
     DataFlowResult visitExpr(AstExpr* e);
