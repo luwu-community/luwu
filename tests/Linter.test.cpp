@@ -5019,6 +5019,139 @@ return 1
     CHECK_EQ(result.warnings[2].text, "lint directive refers to unknown lint rule 'ConstLocl'; did you mean 'ConstLocal'?");
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "ExtraArgumentsReportsDirectCalls")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    LintResult result = lint(R"(
+--!strict
+class Box
+    value: string = ""
+    function __init(self, value: string?)
+        self.value = value or ""
+    end
+    function set(self, value: string)
+        self.value = value
+    end
+end
+local function greet(name: string?)
+    print(name)
+end
+local function reset()
+    print("reset")
+end
+local box = Box("a", "b")
+box:set("c", 1)
+Box.set(box, "d", 2)
+greet("e", 3)
+reset(4)
+reset(5, 6)
+reset(7, 8, 9)
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_ExtraArguments);
+    REQUIRE(7 == found.size());
+    CHECK_EQ(found[0].text, "'Box' takes 1 argument but this call passes 2");
+    CHECK_EQ(found[0].location, Location(Position(17, 21), Position(17, 24)));
+    CHECK_EQ(found[1].text, "'box:set' takes 1 argument but this call passes 2");
+    CHECK_EQ(found[2].text, "'Box.set' takes 2 arguments but this call passes 3");
+    CHECK_EQ(found[3].location, Location(Position(20, 11), Position(20, 12)));
+    CHECK_EQ(found[4].text, "'reset' takes no arguments but this call passes 1");
+    CHECK_EQ(found[5].text, "'reset' takes no arguments but this call passes 2");
+    CHECK_EQ(found[6].text, "'reset' takes no arguments but this call passes 3");
+    CHECK_EQ(found[6].location, Location(Position(23, 6), Position(23, 13)));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ExtraArgumentsSuggestsOneList")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    LintResult result = lint(R"(
+--!strict
+type Content = string | { string }
+class Paragraph
+    function __init(self, content: Content?)
+        print(content)
+    end
+end
+local function words(text: string | { string })
+    print(text)
+end
+local a = Paragraph("a", "b", "c")
+words("d", "e")
+-- already a table: the extras aren't more of the array
+words({ "f" }, "g")
+return a
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_ExtraArguments);
+    REQUIRE(3 == found.size());
+    CHECK_EQ(found[0].text, "'Paragraph' takes 1 argument but this call passes 3. Write 'Paragraph({ ... })' to pass them as one array");
+    CHECK_EQ(found[0].location, Location(Position(11, 20), Position(11, 33)));
+    CHECK_EQ(found[1].text, "'words' takes 1 argument but this call passes 2. Write 'words({ ... })' to pass them as one array");
+    CHECK_EQ(found[2].text, "'words' takes 1 argument but this call passes 2");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ExtraArgumentsLeavesUncountedCallsAlone")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    LintResult result = lint(R"(
+--!strict
+class Point(public x: number, public y: number) end
+local function one(n: number?)
+    print(n)
+end
+local function any(...: number)
+    print(...)
+end
+local function forward(...: number)
+    one(1, ...)
+end
+local typed: (number?) -> () = one
+
+-- `...` and a call last pass as many values as they give
+forward(1, 2)
+one(1, any(2))
+any(1, 2, 3)
+-- a function passed as a value can be given more arguments: that's arity subtyping
+table.sort({ 3, 1 }, function(a: number, b: number): boolean
+    return a < b
+end)
+local ok = pcall(one, 1)
+-- the type checker reports these
+typed(1, 2)
+local p = Point(1, 2, 3)
+return ok, p
+)");
+
+    CHECK(warningsWithCode(result, LintWarning::Code_ExtraArguments).empty());
+}
+
+// Luwu Traits (rfcs/classes/traits.md): calling a trait runs its `__create`, which may hand its arguments on
+TEST_CASE_FIXTURE(BuiltinsFixture, "ExtraArgumentsLeavesTraitFactoriesAlone")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    LintResult result = lint(R"(
+--!strict
+trait Component
+    expect function render(self): string
+    function __create(name: string): Component
+        return Button(name)
+    end
+end
+class Button(label: string) implements Component
+    function render(self): string
+        return self.label
+    end
+end
+return Component("submit", 1)
+)");
+
+    CHECK(warningsWithCode(result, LintWarning::Code_ExtraArguments).empty());
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "ReturnSelfFlagsSelfReturnedAsTheTrait")
 {
     ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};

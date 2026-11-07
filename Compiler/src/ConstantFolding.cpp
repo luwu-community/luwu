@@ -1072,6 +1072,10 @@ struct ConstantVisitor : AstVisitor
         {
             result = analyze(expr->expr);
         }
+        else if (AstExprSelfClass* expr = node->as<AstExprSelfClass>())
+        {
+            analyze(expr->classOf);
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");
