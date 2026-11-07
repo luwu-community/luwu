@@ -7616,6 +7616,15 @@ private:
         size_t implicitParameters = 0;
     };
 
+    // Luwu Traits (rfcs/classes/traits.md): calling a trait runs its `__create`, a factory that may hand its arguments to
+    // classes taking more than it declares
+    static bool isTraitValue(const ExternType* value)
+    {
+        const Obj* object = value->relation ? value->relation->get_if<Obj>() : nullptr;
+        const ExternType* instance = object ? get<ExternType>(follow(object->ty)) : nullptr;
+        return instance && isTraitLike(instance);
+    }
+
     std::optional<Callee> calleeOf(AstExprCall* call) const
     {
         std::optional<TypeId> calleeType = context->getType(call->func);
@@ -7628,6 +7637,9 @@ private:
             return Callee{function, self};
 
         const ExternType* cls = get<ExternType>(callee);
+        if (cls && isTraitValue(cls))
+            return std::nullopt;
+
         const TableType* metatable = cls && cls->metatable ? get<TableType>(follow(*cls->metatable)) : nullptr;
         if (!metatable)
             return std::nullopt;

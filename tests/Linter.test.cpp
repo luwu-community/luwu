@@ -5128,6 +5128,30 @@ return ok, p
     CHECK(warningsWithCode(result, LintWarning::Code_ExtraArguments).empty());
 }
 
+// Luwu Traits (rfcs/classes/traits.md): calling a trait runs its `__create`, which may hand its arguments on
+TEST_CASE_FIXTURE(BuiltinsFixture, "ExtraArgumentsLeavesTraitFactoriesAlone")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    LintResult result = lint(R"(
+--!strict
+trait Component
+    expect function render(self): string
+    function __create(name: string): Component
+        return Button(name)
+    end
+end
+class Button(label: string) implements Component
+    function render(self): string
+        return self.label
+    end
+end
+return Component("submit", 1)
+)");
+
+    CHECK(warningsWithCode(result, LintWarning::Code_ExtraArguments).empty());
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "ReturnSelfFlagsSelfReturnedAsTheTrait")
 {
     ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
