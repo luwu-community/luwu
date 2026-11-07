@@ -7573,6 +7573,150 @@ private:
     }
 };
 
+// Luwu: a call that passes more arguments than the function it calls takes. The type checker allows it on purpose for a
+// function written in Luau or Luwu. That function ignores extra arguments and can stand in for one that takes more (arity
+// subtyping). Extra arguments in a direct call are usually a mistake, like `Paragraph("a", Code("b"))` for
+// `Paragraph({ "a", Code("b") })`.
+class LintExtraArguments : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintExtraArguments pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // The function a call runs and how many of its parameters the call fills without an argument: `self` for a method
+    // call, and the class for a constructor (a class value's `__call`)
+    struct Callee
+    {
+        const FunctionType* function = nullptr;
+        size_t implicitParameters = 0;
+    };
+
+    std::optional<Callee> calleeOf(AstExprCall* call) const
+    {
+        std::optional<TypeId> calleeType = context->getType(call->func);
+        if (!calleeType)
+            return std::nullopt;
+
+        size_t self = call->self ? 1 : 0;
+        TypeId callee = follow(*calleeType);
+        if (const FunctionType* function = get<FunctionType>(callee))
+            return Callee{function, self};
+
+        const ExternType* cls = get<ExternType>(callee);
+        const TableType* metatable = cls && cls->metatable ? get<TableType>(follow(*cls->metatable)) : nullptr;
+        if (!metatable)
+            return std::nullopt;
+
+        auto constructor = metatable->props.find("__call");
+        if (constructor == metatable->props.end() || !constructor->second.readTy)
+            return std::nullopt;
+
+        const FunctionType* function = get<FunctionType>(follow(*constructor->second.readTy));
+        if (!function)
+            return std::nullopt;
+        return Callee{function, self + 1};
+    }
+
+    // Whether the parameters end in the hidden `...any` tail the type checker gives a function written without `...`
+    static bool ignoresExtraArguments(std::optional<TypePackId> tail)
+    {
+        const VariadicTypePack* variadic = tail ? get<VariadicTypePack>(follow(*tail)) : nullptr;
+        return variadic && variadic->hidden;
+    }
+
+    static bool isArrayType(TypeId ty)
+    {
+        const TableType* table = get<TableType>(follow(ty));
+        return table && table->indexer && isNumber(follow(table->indexer->indexType));
+    }
+
+    // Whether the arguments could have been meant as one array: `ty` accepts an array
+    static bool acceptsArray(TypeId ty)
+    {
+        ty = follow(ty);
+        const UnionType* options = get<UnionType>(ty);
+        if (!options)
+            return isArrayType(ty);
+
+        for (TypeId option : options)
+        {
+            if (isArrayType(option))
+                return true;
+        }
+        return false;
+    }
+
+    static std::string countArguments(size_t count)
+    {
+        if (count == 0)
+            return "no arguments";
+        if (count == 1)
+            return "1 argument";
+        return std::to_string(count) + " arguments";
+    }
+
+
+    bool visit(AstExprCall* call) override
+    {
+        if (call->args.size == 0)
+            return true;
+
+        // the lint can't count the values a call or `...` passes in the last position
+        AstExpr* last = call->args.data[call->args.size - 1];
+        if (last->is<AstExprCall>() || last->is<AstExprVarargs>())
+            return true;
+
+        std::optional<Callee> callee = calleeOf(call);
+        if (!callee)
+            return true;
+
+        auto [parameters, tail] = flatten(callee->function->argTypes);
+        if (!ignoresExtraArguments(tail) || parameters.size() < callee->implicitParameters)
+            return true;
+
+        size_t takes = parameters.size() - callee->implicitParameters;
+        if (call->args.size <= takes)
+            return true;
+
+        std::string name = describe(call->func, "This function");
+        std::string passes = countArguments(takes) + " but this call passes " + std::to_string(call->args.size);
+        AstExpr* first = call->args.data[0];
+        bool couldBeOneArray = takes == 1 && !unwrapGroup(first)->is<AstExprTable>() && acceptsArray(parameters[callee->implicitParameters]);
+        if (couldBeOneArray)
+        {
+            std::string wrapped = shortExprName(unwrapGroup(call->func)).value_or("f") + "({ ... })";
+            emitWarning(
+                *context,
+                LintWarning::Code_ExtraArguments,
+                Location(first->location, last->location),
+                "%s takes %s. Write '%s' to pass them as one array",
+                name.c_str(),
+                passes.c_str(),
+                wrapped.c_str()
+            );
+            return true;
+        }
+
+        emitWarning(
+            *context,
+            LintWarning::Code_ExtraArguments,
+            Location(call->args.data[takes]->location, last->location),
+            "%s takes %s",
+            name.c_str(),
+            passes.c_str()
+        );
+        return true;
+    }
+};
+
 // Luwu: a computed value stored in a local and overwritten, in the same block, before anything reads it. The work that
 // produced it was for nothing, which usually means a use of it was forgotten. Only computed values count (calls,
 // arithmetic, ...): `local x = 0` then `x = f()` is just a default.
@@ -8389,6 +8533,9 @@ std::vector<LintWarning> lint(
 
     if (context.warningEnabled(LintWarning::Code_DeadStore))
         LintDeadStore::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_ExtraArguments))
+        LintExtraArguments::process(context);
 
     if (context.anyWarningEnabled(
             {LintWarning::Code_NewValueComparison, LintWarning::Code_TableTruthiness, LintWarning::Code_DiscardedResult}
