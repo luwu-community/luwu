@@ -186,7 +186,9 @@ SelfReturns countSelfReturns(AstExprFunction* fn, AstLocal* self)
 
 AstLocal* newOfClassOf(AstExprCall* call)
 {
-    AstExprCall* classOf = call->func->as<AstExprCall>();
+    // `Self(...)` in a trait method is `class.of(self)(...)`
+    AstExprSelfClass* selfClass = call->func->as<AstExprSelfClass>();
+    AstExprCall* classOf = selfClass ? selfClass->classOf : call->func->as<AstExprCall>();
     AstExprIndexName* of = classOf ? classOf->func->as<AstExprIndexName>() : nullptr;
     AstExprGlobal* classLib = of ? of->expr->as<AstExprGlobal>() : nullptr;
 

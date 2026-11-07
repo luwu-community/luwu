@@ -917,6 +917,7 @@ struct TypeMapVisitor : AstVisitor
             case LBF_BUFFER_WRITEF32:
             case LBF_BUFFER_WRITEF64:
             case LBF_BUFFER_WRITEINTEGER:
+            case LBF_CLASS_OF:
             case LBF_OPTION_SOME:
             case LBF_RESULT_OK:
             case LBF_RESULT_ERR:

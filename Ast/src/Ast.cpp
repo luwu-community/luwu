@@ -625,6 +625,18 @@ void AstExprInterpString::visit(AstVisitor* visitor)
     }
 }
 
+AstExprSelfClass::AstExprSelfClass(const Location& location, AstExprCall* classOf)
+    : AstExpr(ClassIndex(), location)
+    , classOf(classOf)
+{
+}
+
+void AstExprSelfClass::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        classOf->visit(visitor);
+}
+
 AstExprTry::AstExprTry(const Location& location, const Location& tryLocation, AstExpr* expr)
     : AstExpr(ClassIndex(), location)
     , tryLocation(tryLocation)

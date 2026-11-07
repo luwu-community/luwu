@@ -1001,6 +1001,25 @@ static int luauF_class_isinstance(lua_State* L, StkId res, TValue* arg0, int nre
     return -1;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): class.of(value) -> the class of an object, and nil for any other value
+static int luauF_class_of(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    if (nparams >= 1 && nresults <= 1)
+    {
+        if (ttisobject(arg0))
+        {
+            setclassvalue(L, res, objectvalue(arg0)->lclass);
+        }
+        else
+        {
+            setnilvalue(res);
+        }
+        return 1;
+    }
+
+    return -1;
+}
+
 // Luwu bundles and try expressions: a new object of the builtin class `classdef` in `res`, its members set from the
 // arguments in order and nil past them. The caller has checked that the collector doesn't need a step.
 static void buildnative(lua_State* L, StkId res, LuauClass* classdef, TValue* arg0, StkId args, int nparams)
@@ -2891,6 +2910,8 @@ const luau_FastFunction luauF_table[256] = {
     luauF_bufferisfrozen,
 
     luauF_class_isinstance,
+
+    luauF_class_of,
 
     luauF_payloadconstruct<LUWU_BUILTIN_SOME>,
     luauF_payloadconstruct<LUWU_BUILTIN_OK>,

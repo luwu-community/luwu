@@ -106,6 +106,20 @@ const std::unordered_set<std::string> DISALLOWED_CLASS_MEMBER_NAMES{
     "implements",
 };
 
+// Luwu Traits (rfcs/classes/traits.md): the contextual keywords of classes and traits, which can't name a trait
+const std::unordered_set<std::string> CLASS_AND_TRAIT_KEYWORDS{
+    "class",
+    "trait",
+    "public",
+    "private",
+    "const",
+    "extends",
+    "implements",
+    "needs",
+    "expect",
+    "final",
+};
+
 // Only ask this from a position that is unambiguously a field or a function, so the caller's message
 // can say which one it is.
 bool isDisallowedClassMemberName(const AstName& name)
@@ -550,6 +564,8 @@ Parser::Parser(const char* buffer, size_t bufferSize, AstNameTable& names, Alloc
     functionStack.push_back(top);
 
     nameSelf = names.getOrAdd("self");
+    nameSelfClass = names.getOrAdd("Self");
+    nameOf = names.getOrAdd("of");
     nameNumber = names.getOrAdd("number");
     nameAny = names.getOrAdd("any");
     nameError = names.getOrAdd(kParseNameError);
@@ -1308,8 +1324,9 @@ bool Parser::isExprLValue(AstExpr* expr)
 {
     // Luwu Traits (rfcs/classes/traits.md): `Class:Trait.name` reads a function, and nothing writes one
     AstExprIndexName* index = expr->as<AstExprIndexName>();
+    AstExprGlobal* global = expr->as<AstExprGlobal>();
     return (expr->is<AstExprLocal>() && !expr->as<AstExprLocal>()->local->isConst) ||
-           (expr->is<AstExprGlobal>() && !(FFlag::LuwuClasses && getMatchingClass(expr) != nullptr)) ||
+           (global && !global->writtenAsSelf && !(FFlag::LuwuClasses && getMatchingClass(expr) != nullptr)) ||
            expr->is<AstExprIndexExpr>() || (index && !index->qualifiedTrait);
 }
 
@@ -2593,6 +2610,25 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     else
         checkTypeName(*name, declared);
 
+    if (isTrait && CLASS_AND_TRAIT_KEYWORDS.count(name->name.value) > 0)
+        report(name->location, "A trait can't be named '%s': it's a keyword in classes and traits", name->name.value);
+
+    // Luwu Traits (rfcs/classes/traits.md): `Self` refers to this class or trait until its declaration ends. Classes and
+    // traits are only declared at the top level, but a misplaced one is still parsed.
+    std::optional<SelfClassContext> enclosingSelfClass = selfClass;
+    if (FFlag::LuwuTraits && !declared)
+        selfClass = SelfClassContext{name->name, isTrait, functionStack.size() - 1};
+
+    struct RestoreSelfClass
+    {
+        std::optional<SelfClassContext>& current;
+        std::optional<SelfClassContext> enclosing;
+        ~RestoreSelfClass()
+        {
+            current = enclosing;
+        }
+    } restoreSelfClass{selfClass, enclosingSelfClass};
+
     AstArray<AstGenericType*> generics{};
     AstArray<AstGenericTypePack*> genericPacks{};
     if (FFlag::LuwuGenericNominals)
@@ -2674,7 +2710,15 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     AstClassPrimaryConstructor* primaryConstructor = nullptr;
 
     if (lexer.current().type == '(')
+    {
+        if (selfClass)
+            selfClass->inParameters = isTrait;
+
         primaryConstructor = parseClassPrimaryConstructor(ctorQualifierLocation, ctorVisibility, declared, isTrait);
+
+        if (selfClass)
+            selfClass->inParameters = false;
+    }
 
     if (primaryConstructor)
     {
@@ -3353,8 +3397,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
                     // `__init` is not a metamethod (it applies to the class itself, not its
                     // instances), but it's a valid special method to define: it overrides the
-                    // class's constructor. It must take `self` as its first parameter.
-                    if (body->args.size == 0 || body->args.data[0]->name != "self")
+                    // class's constructor. Once its parameter list is closed, it must take `self` as its first parameter.
+                    bool takesSelf = body->args.size > 0 && body->args.data[0]->name == "self";
+                    if (!takesSelf && body->argLocation)
                         report(name.location, "'__init' must take 'self' as its first parameter");
                 }
                 else if (EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0)
@@ -3516,6 +3561,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     cls->hasEnd = hasEnd;
     cls->attributes = classAttributes;
     cls->isTrait = isTrait;
+    cls->initSelf = selfClass ? selfClass->initSelf : nullptr;
     cls->implements = implements;
     cls->needs = needs;
     cls->implementsLocation = implementsKeywordLocation;
@@ -4433,6 +4479,10 @@ AstExprError* Parser::reportLValueError(AstExpr* expr)
         AstExprLocal* local = expr->as<AstExprLocal>();
         return reportExprError(expr->location, copy({expr}), "Variable '%s' is constant and may not be reassigned", local->local->name.value);
     }
+    // Luwu Traits (rfcs/classes/traits.md): `Self` is const like `self`
+    AstExprGlobal* global = expr->as<AstExprGlobal>();
+    if ((global && global->writtenAsSelf) || expr->is<AstExprSelfClass>())
+        return reportExprError(expr->location, copy({expr}), "'Self' is constant and may not be reassigned");
     if (FFlag::LuwuClasses)
     {
         if (AstStatClass* classStat = getMatchingClass(expr))
@@ -4889,6 +4939,14 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
     if (isClassFunction && vars.size > 0 && vars.data[0]->name == "self")
         vars.data[0]->isConst = true;
 
+    // Luwu Traits (rfcs/classes/traits.md): `Self` in this function's body depends on whether it takes `self`
+    std::optional<SelfClassContext> enclosingSelfClass = selfClass;
+    if (isClassFunction && selfClass)
+    {
+        selfClass->inFunction = true;
+        selfClass->self = vars.size > 0 && vars.data[0]->name == "self" ? vars.data[0] : nullptr;
+    }
+
     AstStatBlock* body = nullptr;
     Location end;
     if (signatureOnly)
@@ -4902,6 +4960,7 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
         body->hasEnd = true;
 
         functionStack.pop_back();
+        selfClass = enclosingSelfClass;
         restoreLocals(localsBegin);
     }
     else
@@ -4909,6 +4968,7 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
         body = parseBlock();
 
         functionStack.pop_back();
+        selfClass = enclosingSelfClass;
 
         restoreLocals(localsBegin);
 
@@ -6345,6 +6405,14 @@ AstExpr* Parser::nameExpr(const Name& name)
 {
     AstLocal* const* value = localMap.find(name.name);
 
+    // Luwu Traits (rfcs/classes/traits.md): `Self` in a class or trait body, unless a local the body declares shadows it
+    if (selfClass && name.name == nameSelfClass)
+    {
+        bool shadowed = value && *value && (*value)->functionDepth > selfClass->functionDepth;
+        if (!shadowed)
+            return selfClassExpr(name.location);
+    }
+
     if (value && *value)
     {
         AstLocal* local = *value;
@@ -6356,6 +6424,45 @@ AstExpr* Parser::nameExpr(const Name& name)
     }
 
     return allocator.alloc<AstExprGlobal>(name.location, name.name);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `Self`, the class the running code was reached through. In a class it's the
+// class. In a trait method it's `class.of(self)`, the class the method is called on, and in a trait's field defaults it's
+// the class of the object they initialize. A trait function without `self` has no class to give.
+AstExpr* Parser::selfClassExpr(const Location& location)
+{
+    LUAU_ASSERT(selfClass);
+
+    if (selfClass->isTrait && selfClass->inParameters)
+        return reportExprError(location, {}, "'Self' can't be used in a trait's parameters");
+
+    if (selfClass->isTrait && selfClass->inFunction && !selfClass->self)
+        return reportExprError(
+            location,
+            {},
+            "Write '%s' here: 'Self' is the class of 'self', and this trait function doesn't take 'self'",
+            selfClass->name.value
+        );
+
+    // A trait's field defaults initialize an object, which isn't a parameter of anything the parser sees
+    if (selfClass->isTrait && !selfClass->inFunction && !selfClass->initSelf)
+        selfClass->initSelf = allocator.alloc<AstLocal>(
+            nameSelf, location, nullptr, selfClass->functionDepth + 1, /* loopDepth= */ 0, /* annotation= */ nullptr, /* isConst= */ true
+        );
+
+    AstLocal* self = selfClass->inFunction ? selfClass->self : selfClass->initSelf;
+    if (selfClass->isTrait && self)
+    {
+        AstExpr* classLibrary = allocator.alloc<AstExprGlobal>(location, nameClass);
+        AstExpr* of = allocator.alloc<AstExprIndexName>(location, classLibrary, nameOf, location, location.begin, '.');
+        AstExpr* selfArg = allocator.alloc<AstExprLocal>(location, self, self->functionDepth != functionStack.size() - 1);
+        AstExprCall* classOf = allocator.alloc<AstExprCall>(location, of, copy({selfArg}), false, AstArray<AstTypeOrPack>{}, location);
+        return allocator.alloc<AstExprSelfClass>(location, classOf);
+    }
+
+    AstExprGlobal* expr = allocator.alloc<AstExprGlobal>(location, selfClass->name);
+    expr->writtenAsSelf = true;
+    return expr;
 }
 
 // Luwu Traits (rfcs/classes/traits.md): a qualifier as written, `Json` or `mod.Json`, for messages

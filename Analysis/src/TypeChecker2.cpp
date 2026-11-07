@@ -3054,6 +3054,9 @@ void TypeChecker2::visit(AstExpr* expr, ValueContext context)
         return visit(e);
     else if (auto e = expr->as<AstExprInterpString>())
         return visit(e);
+    // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
+    else if (auto e = expr->as<AstExprSelfClass>())
+        return visit(e->classOf, context);
     else if (auto e = expr->as<AstExprTry>())
         return visit(e->expr, ValueContext::RValue);
     else if (auto e = expr->as<AstExprError>())

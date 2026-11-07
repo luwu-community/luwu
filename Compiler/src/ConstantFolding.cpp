@@ -1072,6 +1072,10 @@ struct ConstantVisitor : AstVisitor
         {
             result = analyze(expr->expr);
         }
+        else if (AstExprSelfClass* expr = node->as<AstExprSelfClass>())
+        {
+            analyze(expr->classOf);
+        }
         else if (AstExprTry* expr = node->as<AstExprTry>())
         {
             // Luwu try expressions: a new result object every time, never a constant

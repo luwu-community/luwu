@@ -561,7 +561,12 @@ struct Printer
         }
         else if (const auto& a = expr.as<AstExprGlobal>())
         {
-            writer.identifier(a->name.value);
+            // Luwu Traits (rfcs/classes/traits.md): `Self` names the class or trait it refers to
+            writer.identifier(a->writtenAsSelf ? "Self" : a->name.value);
+        }
+        else if (expr.is<AstExprSelfClass>())
+        {
+            writer.identifier("Self");
         }
         else if (expr.is<AstExprVarargs>())
         {

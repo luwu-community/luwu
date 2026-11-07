@@ -4503,6 +4503,14 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
     ScopePtr initializerScope = bodyScope;
     std::vector<TypeId> primaryCtorParamTypes;
 
+    // Luwu Traits (rfcs/classes/traits.md): the object `Self` in a trait's defaults is the class of, known by the trait
+    if (AstLocal* initSelf = statClass->initSelf)
+    {
+        bodyScope->bindings[initSelf] = Binding{classDeclRecord->ty, initSelf->location};
+        if (!FFlag::DebugLuauCFG)
+            bodyScope->lvalueTypes[dfg->getDef(initSelf)] = classDeclRecord->ty;
+    }
+
     if (const AstClassPrimaryConstructor* primaryConstructor = statClass->primaryConstructor)
     {
         // Deliberately not childScope(): that would register the scope under the *class's* location,
@@ -5456,6 +5464,9 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
         result = check(scope, interpString);
     else if (auto explicitTypeInstantiation = expr->as<AstExprInstantiate>())
         result = check(scope, explicitTypeInstantiation);
+    // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
+    else if (auto selfClass = expr->as<AstExprSelfClass>())
+        result = check(scope, selfClass->classOf, std::nullopt, forceSingleton);
     else if (auto tryExpr = expr->as<AstExprTry>())
         result = check(scope, tryExpr);
     else if (auto err = expr->as<AstExprError>())
