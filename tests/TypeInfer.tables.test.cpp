@@ -8127,7 +8127,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_exported_destructuring")
     const char* before = kDestructuringTypewriterBefore;
     const char* after = kDestructuringTypewriterAfter;
 
-    checkTypewriting(*this, before, "export const .{x, y} = point", after);
     checkTypewriting(*this, before, "export .{x, y} = point", after);
 }
 

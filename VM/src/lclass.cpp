@@ -76,6 +76,7 @@ LuauClass* luaR_newclass(
     classdef->keybyvalue = false;
     classdef->fastmethods = NULL;
     classdef->qualified = NULL;
+    classdef->reflection = NULL;
     classdef->positionalmembers = NULL;
     classdef->numberofpositional = -1;
 
@@ -287,7 +288,7 @@ bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl)
 // construction *on behalf of whoever called the class*. Its immediate caller is not that: for
 // `pcall(SomeClass, ...)` it is `pcall`, and a builtin's C frame is not authority for anything. Note
 // this is not the rule for an access a C function performs itself -- see luaR_checkprivateaccess.
-static const Closure* luaR_callinglua(lua_State* L)
+const Closure* luaR_callinglua(lua_State* L)
 {
     for (CallInfo* ci = L->ci; ci > L->base_ci; ci--)
         if (isLua(ci))

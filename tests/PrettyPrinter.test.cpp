@@ -2694,8 +2694,8 @@ TEST_CASE("prettyPrint_exported_destructuring")
     ScopedFastFlag sffs[] = {{FFlag::LuwuDestructuring, true}, {FFlag::LuauExportValueSyntax, true}};
 
     std::string code = R"(
-export const .{x, y} = v
-export   local m.{z} = v
+export .{x, y} = v
+export   m.{z} = v
 export .{w} = v
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);

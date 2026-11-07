@@ -977,7 +977,7 @@ AstStat* Parser::parseStat()
 
     // Luwu Destructuring (rfcs/destructuring.md): `export .{x, y} = v` is `export const .{x, y} = v`
     if (FFlag::LuauExportValueSyntax && destructurePatternFollows() && leading == "export")
-        return parseExportValue(expr->location, expr->location.begin, AstArray<AstAttr*>({nullptr, 0}));
+        return parseExportValue(expr->location, expr->location, AstArray<AstAttr*>({nullptr, 0}));
 
     bool destructuringWithoutKeyword = destructurePatternFollows() && leading != "const" && leading != "type";
     if (destructuringWithoutKeyword)
@@ -8441,7 +8441,10 @@ AstExpr* Parser::parseMethodCall(Position start, AstExpr* expr)
     // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name(...)` calls the class's version of a trait's method, and
     // `Class:Trait.name` reads the class's version of a trait's static
     Lexeme::Type afterName = lexer.current().type;
-    bool qualified = FFlag::LuwuTraits && index.name != nameError && (afterName == ':' || afterName == '.');
+    // Luwu Destructuring (rfcs/destructuring.md): `obj:method.{...}` and `obj:method.(...)` pass a dot table or bundle
+    Lexeme::Type afterDot = lexer.lookahead().type;
+    bool dotArguments = afterName == '.' && (afterDot == '{' || afterDot == '(');
+    bool qualified = FFlag::LuwuTraits && index.name != nameError && (afterName == ':' || afterName == '.') && !dotArguments;
 
     AstExprIndexName* func = nullptr;
     if (qualified)

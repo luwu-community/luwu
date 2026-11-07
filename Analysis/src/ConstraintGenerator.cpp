@@ -1595,7 +1595,8 @@ void ConstraintGenerator::prototypeClass(
     auto classFieldUserData = std::make_shared<ClassFieldUserData>();
     classFieldUserData->fieldNames = std::move(instanceFieldNames);
 
-    if (classDecl->primaryConstructor)
+    // Luwu Traits (rfcs/classes/traits.md): only a class is destructured by position (see compileClassDeclaration)
+    if (classDecl->primaryConstructor && !classDecl->isTrait)
     {
         std::vector<Name> positionalFields;
         for (AstLocal* param : classDecl->primaryConstructor->args)

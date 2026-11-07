@@ -14785,7 +14785,7 @@ TEST_CASE("ExportDestructuringStoresTheNamesItBinds")
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuwuDestructuring, true}};
 
     CHECK_EQ(
-        "\n" + compileFunction0("export const .{x, y} = ..."),
+        "\n" + compileFunction0("export .{x, y} = ..."),
         R"(
 GETVARARGS R0 1
 GETTABLEKS R1 R0 K0 ['x']

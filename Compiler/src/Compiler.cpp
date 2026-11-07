@@ -5365,10 +5365,12 @@ struct Compiler
             }
 
             // Luwu Destructuring (rfcs/destructuring.md): a positional pattern reads the parameters' fields in parameter
-            // order, which differs from member order when the body restates a parameter
+            // order, which differs from member order when the body restates a parameter.
+            // Luwu Traits (rfcs/classes/traits.md): only a class has positions. A trait's parameters become fields of the
+            // classes implementing it, which have their own constructors.
             shape.propertyPositions.assign(shape.propertyNames.size(), -1);
 
-            for (size_t i = 0; i < decl->primaryConstructor->args.size; ++i)
+            for (size_t i = 0; i < decl->primaryConstructor->args.size && !decl->isTrait; ++i)
             {
                 int offset = classInstanceMemberOffset(decl, decl->primaryConstructor->args.data[i]->name, /* forWrite= */ false);
                 LUAU_ASSERT(offset >= 0 && size_t(offset) < shape.propertyNames.size());
