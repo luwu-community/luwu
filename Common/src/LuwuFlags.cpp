@@ -48,3 +48,8 @@ bool luauClassCompat()
 }
 
 } // namespace Luau
+
+// Luwu collections: the `collections` library of builtin classes (`Pair`, `Triple`, `Quad`, `OrderedMap`, `Vec`,
+// `VecDeque`), in the VM and in Analysis's builtin definitions. A prototype whose API can still change. Needs
+// LuwuClasses.
+LUAU_FASTFLAGVARIABLE(DebugLuwuCollections)

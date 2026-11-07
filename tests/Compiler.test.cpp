@@ -37,6 +37,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
+LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
@@ -15275,3 +15276,207 @@ end
 }
 
 // Compiler B (classes review) end
+
+// Luwu collections: a small table literal in a loop header is never built. The body runs once per item, skipping the
+// items that are nil at run time, and those known to be nil aren't compiled at all.
+TEST_CASE("LoopOverSmallTableLiteralBuildsNoTable")
+{
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(x, y)
+    local t = {}
+    for i, v in { x, nil, y } do
+        t[i] = v
+    end
+    return t
+end
+)",
+                   0,
+                   1
+               ),
+        R"(
+NEWTABLE R2 0 0
+MOVE R3 R0
+LOADNIL R4
+MOVE R5 R1
+JUMPXEQKNIL R3 L0
+LOADN R6 1
+SETTABLE R3 R2 R6
+L0: JUMPXEQKNIL R5 L1
+LOADN R6 3
+SETTABLE R5 R2 R6
+L1: RETURN R2 1
+)"
+    );
+
+    // five items, keys or a trailing call build the table and loop over it
+    const char* const kept[] = {
+        "local function f(t) for _, v in { 1, 2, 3, 4, 5 } do t[v] = v end end",
+        "local function f(t) for _, v in { a = 1 } do t[v] = v end end",
+        "local function f(t, g) for _, v in { 1, g() } do t[v] = v end end",
+    };
+    for (const char* source : kept)
+    {
+        INFO(source);
+        std::string bytecode = compileFunction(source, 0, 1);
+        CHECK(bytecode.find("FORGLOOP") != std::string::npos);
+    }
+}
+
+// Luwu bundles: calling `bundle.pack` or `bundle.unpack` directly or through a local compiles to a fastcall. Any chain
+// of locals that are never written resolves, which is what destructuring them out of `bundle` desugars to.
+TEST_CASE("BundleFunctionsCompileToFastcalls")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+
+    const char* fastcalls[] = {
+        "local function f(x) local v = bundle.pack(x, x) return v end",
+        "local pack = bundle.pack local function f(x) local v = pack(x, x, x, x) return v end",
+        "local c = bundle local p = c.pack local function f(x) local v = p(x, x) return v end",
+        "local c = bundle local function f(x) local v = c.pack(x, x) return v end",
+        "local c = bundle local c2 = c local function f(x) local v = c2.pack(x, x, x) return v end",
+        "local function f(x) local v = bundle.pack(x, x, x, x, x) return v end",
+        "local function f(...) local v = bundle.pack(...) return v end",
+        "local function f(b) return bundle.unpack(b) end",
+    };
+    for (const char* source : fastcalls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("FASTCALL") != std::string::npos);
+    }
+
+    const char* calls[] = {
+        "local bundle = {} local function f(x) local v = bundle.pack(x, x) return v end",
+        "local function f(x) local v = string.pick(x, x) return v end",
+        "local function f(x) local v = bundle.Other(x) return v end",
+        "local c = bundle c = {} local function f(x) local v = c.pack(x, x) return v end",
+        "local p = bundle.pack p = print local function f(x) local v = p(x, x) return v end",
+    };
+    for (const char* source : calls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("FASTCALL") == std::string::npos);
+    }
+
+    ScopedFastFlag off{FFlag::DebugLuwuCollections, false};
+    CHECK(compileFunction(fastcalls[0], 0, 1).find("FASTCALL") == std::string::npos);
+}
+
+// Luwu collections: an OrderedMap built from `.(key, value)` bundles, as arguments or as a list, builds neither: it's
+// an empty map and a `set` call per entry. Anything else is an ordinary call.
+TEST_CASE("OrderedMapFromBundlesBuildsNoBundle")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(a, b)
+    local m = collections.OrderedMap({ bundle.pack("x", a), bundle.pack(b, 2) })
+    return m
+end
+)",
+                   0,
+                   1
+               ),
+        R"(
+GETIMPORT R3 2 [collections.OrderedMap]
+CALL R3 0 1
+LOADK R6 K4 ['x']
+MOVE R7 R0
+NAMECALL R4 R3 K3 ['set']
+CALL R4 3 0
+MOVE R6 R1
+LOADN R7 2
+NAMECALL R4 R3 K3 ['set']
+CALL R4 3 0
+MOVE R2 R3
+RETURN R2 1
+)"
+    );
+
+    const char* lowered[] = {
+        "local function f(a) local m = collections.OrderedMap(bundle.pack(1, a), bundle.pack(2, a)) return m end",
+        "local function f(a) local m = collections.OrderedMap({ bundle.pack(1, a) }) return m end",
+    };
+    for (const char* source : lowered)
+    {
+        INFO(source);
+        std::string bytecode = compileFunction(source, 0, 1);
+        CHECK(bytecode.find("NAMECALL") != std::string::npos);
+        CHECK(bytecode.find("FASTCALL") == std::string::npos);
+    }
+
+    const char* calls[] = {
+        "local function f(a) local m = collections.OrderedMap(bundle.pack(1, a), a) return m end",
+        "local function f(a) local m = collections.OrderedMap({ bundle.pack(1, a), k = bundle.pack(2, a) }) return m end",
+        "local function f(a) local m = collections.OrderedMap(bundle.pack(1, a, a)) return m end",
+        "local function f(a) local m = collections.OrderedMap({ bundle.pack(1, a) }, bundle.pack(2, a)) return m end",
+        "local collections = {} local function f(a) local m = collections.OrderedMap(bundle.pack(1, a)) return m end",
+    };
+    for (const char* source : calls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("NAMECALL") == std::string::npos);
+    }
+}
+
+// Luwu bundles: `for i, v in bundle.pack(a, b)` constructs no bundle. The position is only loaded when the body
+// reads it.
+TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(t, a, b)
+    for i, v in bundle.pack(a, b) do
+        t[i] = v
+    end
+    for _, v in bundle.pack(a, b, a) do
+        t[v] = true
+    end
+end
+)",
+                   0,
+                   1
+               ),
+        R"(
+MOVE R3 R1
+MOVE R4 R2
+LOADN R5 1
+SETTABLE R3 R0 R5
+LOADN R5 2
+SETTABLE R4 R0 R5
+MOVE R3 R1
+MOVE R4 R2
+MOVE R5 R1
+LOADB R6 1
+SETTABLE R6 R0 R3
+LOADB R6 1
+SETTABLE R6 R0 R4
+LOADB R6 1
+SETTABLE R6 R0 R5
+RETURN R0 0
+)"
+    );
+}
+
+// Luwu bundles: a loop over `bundle.pack` with a fixed count unfolds like one over a named bundle, up to four elements;
+// a larger bundle is built and iterated
+TEST_CASE("LoopOverBundlePackUnfoldsUpToFourElements")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+
+    std::string small = compileFunction("local function f(t, a, b) for _, v in bundle.pack(a, b) do t[v] = true end end", 0, 1);
+    CHECK(small.find("FASTCALL") == std::string::npos);
+    CHECK(small.find("FORGLOOP") == std::string::npos);
+
+    std::string large = compileFunction("local function f(t, a) for _, v in bundle.pack(a, a, a, a, a) do t[v] = true end end", 0, 1);
+    CHECK(large.find("FORGLOOP") != std::string::npos);
+
+    std::string spread = compileFunction("local function f(t, ...) for _, v in bundle.pack(...) do t[v] = true end end", 0, 1);
+    CHECK(spread.find("FORGLOOP") != std::string::npos);
+}

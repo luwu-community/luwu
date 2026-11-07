@@ -2,6 +2,7 @@
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lobject.h"
 
+#include "lclass.h"
 #include "lstate.h"
 #include "lstring.h"
 #include "lgc.h"
@@ -79,6 +80,9 @@ int luaO_rawequalKey(const TKey* t1, const TValue* t2)
             return bvalue(t1) == bvalue(t2); // boolean true must be 1 !!
         case LUA_TLIGHTUSERDATA:
             return pvalue(t1) == pvalue(t2) && lightuserdatatag(t1) == lightuserdatatag(t2);
+        case LUA_TOBJECT:
+            // Luwu bundles: equal bundles are the same key (LuauClass::keybyvalue); other objects are only themselves
+            return gcvalue(t1) == gcvalue(t2) || luaR_keyequal(objectvalue(t1), objectvalue(t2));
         default:
             LUAU_ASSERT(iscollectable(t1));
             return gcvalue(t1) == gcvalue(t2);

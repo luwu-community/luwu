@@ -10,6 +10,8 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 
 namespace Luau
 {
@@ -398,6 +400,68 @@ declare class: {
 }
 )CLASS_SRC";
 
+// Luwu collections: the `collections` library's classes. The VM builds them in C++ (lcollectionslib.cpp); these are
+// their public members, which the Conformance test `CollectionsDeclarationsMatchTheVm` checks against the VM's classes.
+// The types are the library's exports, not globals (registerBuiltinGlobals).
+static const char* kBuiltinDefinitionCollectionsSrc = R"BUILTIN_SRC(
+class type OrderedMap<K, V>
+    public function __init(self, ...: bundle.Bundle2<K, V> | {bundle.Bundle2<K, V>})
+    public function get(self, key: K): V?
+    public function set(self, key: K, value: V)
+    public function has(self, key: K): boolean
+    public function remove(self, key: K): V?
+    public function insert(self, position: number, key: K, value: V)
+    public function move(self, key: K, position: number)
+    public function movebefore(self, key: K, other: K)
+    public function moveafter(self, key: K, other: K)
+    public function swap(self, a: K, b: K)
+    public function sort(self, comesbefore: (K, K) -> boolean)
+    public function index(self, key: K): number?
+    public function at(self, position: number): (K?, V?)
+    public function __len(self): number
+    public function __iter(self): ((OrderedMap<K, V>, K?) -> (K?, V), OrderedMap<K, V>, nil)
+end
+
+class type Vec<T>
+    public function __init(self, ...: T)
+    public function push(self, value: T, ...: T)
+    public function extend(self, items: {T})
+    public function pop(self): T?
+    public function at(self, position: number): T?
+    public function set(self, position: number, value: T)
+    public function insert(self, position: number, value: T)
+    public function remove(self, position: number): T
+    public function clear(self)
+    public function __len(self): number
+    public function __iter(self): ((Vec<T>, number?) -> (number?, T), Vec<T>, nil)
+    public function __tostring(self): string
+end
+
+class type VecDeque<T>
+    public function __init(self, ...: T)
+    public function pushfront(self, value: T, ...: T)
+    public function pushback(self, value: T, ...: T)
+    public function extend(self, items: {T})
+    public function prepend(self, items: {T})
+    public function popfront(self): T?
+    public function popback(self): T?
+    public function front(self): T?
+    public function back(self): T?
+    public function at(self, position: number): T?
+    public function set(self, position: number, value: T)
+    public function clear(self)
+    public function __len(self): number
+    public function __iter(self): ((VecDeque<T>, number?) -> (number?, T), VecDeque<T>, nil)
+    public function __tostring(self): string
+end
+
+declare collections: {
+    OrderedMap: class<OrderedMap>,
+    Vec: class<Vec>,
+    VecDeque: class<VecDeque>,
+}
+)BUILTIN_SRC";
+
 std::string getBuiltinDefinitionSource()
 {
     std::string result = kBuiltinDefinitionBaseSrc;
@@ -442,6 +506,176 @@ std::string getBuiltinDefinitionSource()
     }
 
     return result;
+}
+
+// Luwu bundles: the `bundle` library's functions, and its classes, one per size (lcollectionslib.cpp). The classes are
+// types the library exports, for `.(A, B)` to name; code builds bundles with `.(...)` and `bundle.pack`.
+static const char* kBuiltinDefinitionBundleSrc = R"BUILTIN_SRC(
+class type Bundle0
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle0): boolean
+    public function __lt(self, other: Bundle0): boolean
+    public function __le(self, other: Bundle0): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle0, number?) -> (number?, never), Bundle0, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle1<A>(public const first: A)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle1<A>): boolean
+    public function __lt(self, other: Bundle1<A>): boolean
+    public function __le(self, other: Bundle1<A>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle1<A>, number?) -> (number?, A), Bundle1<A>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle2<A, B>(public const first: A, public const second: B)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle2<A, B>): boolean
+    public function __lt(self, other: Bundle2<A, B>): boolean
+    public function __le(self, other: Bundle2<A, B>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle2<A, B>, number?) -> (number?, A | B), Bundle2<A, B>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle3<A, B, C>(public const first: A, public const second: B, public const third: C)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle3<A, B, C>): boolean
+    public function __lt(self, other: Bundle3<A, B, C>): boolean
+    public function __le(self, other: Bundle3<A, B, C>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle3<A, B, C>, number?) -> (number?, A | B | C), Bundle3<A, B, C>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle4<A, B, C, D>(public const first: A, public const second: B, public const third: C, public const fourth: D)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle4<A, B, C, D>): boolean
+    public function __lt(self, other: Bundle4<A, B, C, D>): boolean
+    public function __le(self, other: Bundle4<A, B, C, D>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle4<A, B, C, D>, number?) -> (number?, A | B | C | D), Bundle4<A, B, C, D>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle5<A, B, C, D, E>(public const first: A, public const second: B, public const third: C, public const fourth: D, public const fifth: E)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle5<A, B, C, D, E>): boolean
+    public function __lt(self, other: Bundle5<A, B, C, D, E>): boolean
+    public function __le(self, other: Bundle5<A, B, C, D, E>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle5<A, B, C, D, E>, number?) -> (number?, A | B | C | D | E), Bundle5<A, B, C, D, E>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle6<A, B, C, D, E, F>(public const first: A, public const second: B, public const third: C, public const fourth: D, public const fifth: E, public const sixth: F)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle6<A, B, C, D, E, F>): boolean
+    public function __lt(self, other: Bundle6<A, B, C, D, E, F>): boolean
+    public function __le(self, other: Bundle6<A, B, C, D, E, F>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle6<A, B, C, D, E, F>, number?) -> (number?, A | B | C | D | E | F), Bundle6<A, B, C, D, E, F>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle7<A, B, C, D, E, F, G>(public const first: A, public const second: B, public const third: C, public const fourth: D, public const fifth: E, public const sixth: F, public const seventh: G)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle7<A, B, C, D, E, F, G>): boolean
+    public function __lt(self, other: Bundle7<A, B, C, D, E, F, G>): boolean
+    public function __le(self, other: Bundle7<A, B, C, D, E, F, G>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle7<A, B, C, D, E, F, G>, number?) -> (number?, A | B | C | D | E | F | G), Bundle7<A, B, C, D, E, F, G>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle8<A, B, C, D, E, F, G, H>(public const first: A, public const second: B, public const third: C, public const fourth: D, public const fifth: E, public const sixth: F, public const seventh: G, public const eighth: H)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle8<A, B, C, D, E, F, G, H>): boolean
+    public function __lt(self, other: Bundle8<A, B, C, D, E, F, G, H>): boolean
+    public function __le(self, other: Bundle8<A, B, C, D, E, F, G, H>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle8<A, B, C, D, E, F, G, H>, number?) -> (number?, A | B | C | D | E | F | G | H), Bundle8<A, B, C, D, E, F, G, H>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle9<A, B, C, D, E, F, G, H, I>(public const first: A, public const second: B, public const third: C, public const fourth: D, public const fifth: E, public const sixth: F, public const seventh: G, public const eighth: H, public const ninth: I)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle9<A, B, C, D, E, F, G, H, I>): boolean
+    public function __lt(self, other: Bundle9<A, B, C, D, E, F, G, H, I>): boolean
+    public function __le(self, other: Bundle9<A, B, C, D, E, F, G, H, I>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle9<A, B, C, D, E, F, G, H, I>, number?) -> (number?, A | B | C | D | E | F | G | H | I), Bundle9<A, B, C, D, E, F, G, H, I>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle10<A, B, C, D, E, F, G, H, I, J>(public const first: A, public const second: B, public const third: C, public const fourth: D, public const fifth: E, public const sixth: F, public const seventh: G, public const eighth: H, public const ninth: I, public const tenth: J)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle10<A, B, C, D, E, F, G, H, I, J>): boolean
+    public function __lt(self, other: Bundle10<A, B, C, D, E, F, G, H, I, J>): boolean
+    public function __le(self, other: Bundle10<A, B, C, D, E, F, G, H, I, J>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle10<A, B, C, D, E, F, G, H, I, J>, number?) -> (number?, A | B | C | D | E | F | G | H | I | J), Bundle10<A, B, C, D, E, F, G, H, I, J>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle11<A, B, C, D, E, F, G, H, I, J, K>(public const first: A, public const second: B, public const third: C, public const fourth: D, public const fifth: E, public const sixth: F, public const seventh: G, public const eighth: H, public const ninth: I, public const tenth: J, public const eleventh: K)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle11<A, B, C, D, E, F, G, H, I, J, K>): boolean
+    public function __lt(self, other: Bundle11<A, B, C, D, E, F, G, H, I, J, K>): boolean
+    public function __le(self, other: Bundle11<A, B, C, D, E, F, G, H, I, J, K>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle11<A, B, C, D, E, F, G, H, I, J, K>, number?) -> (number?, A | B | C | D | E | F | G | H | I | J | K), Bundle11<A, B, C, D, E, F, G, H, I, J, K>, nil)
+    public function __tostring(self): string
+end
+
+class type Bundle12<A, B, C, D, E, F, G, H, I, J, K, L>(public const first: A, public const second: B, public const third: C, public const fourth: D, public const fifth: E, public const sixth: F, public const seventh: G, public const eighth: H, public const ninth: I, public const tenth: J, public const eleventh: K, public const twelfth: L)
+    public function sub(self, first: number?, last: number?): unknown
+    public function with(self, position: number, value: unknown): unknown
+    public function __eq(self, other: Bundle12<A, B, C, D, E, F, G, H, I, J, K, L>): boolean
+    public function __lt(self, other: Bundle12<A, B, C, D, E, F, G, H, I, J, K, L>): boolean
+    public function __le(self, other: Bundle12<A, B, C, D, E, F, G, H, I, J, K, L>): boolean
+    public function __len(self): number
+    public function __iter(self): ((Bundle12<A, B, C, D, E, F, G, H, I, J, K, L>, number?) -> (number?, A | B | C | D | E | F | G | H | I | J | K | L), Bundle12<A, B, C, D, E, F, G, H, I, J, K, L>, nil)
+    public function __tostring(self): string
+end
+
+declare bundle: {
+    pack: (...unknown) -> unknown,
+    unpack: (b: unknown, first: number?, last: number?) -> ...unknown,
+    concat: (...unknown) -> unknown,
+    sub: (b: unknown, first: number?, last: number?) -> unknown,
+    with: (b: unknown, position: number, value: unknown) -> unknown,
+}
+)BUILTIN_SRC";
+
+std::string getBundleDefinitionSource()
+{
+    return kBuiltinDefinitionBundleSrc;
+}
+
+bool collectionsLibraryEnabled()
+{
+    return FFlag::LuwuClasses && FFlag::DebugLuwuCollections && FFlag::LuwuDeclareStatements;
+}
+
+std::string getCollectionsDefinitionSource()
+{
+    return kBuiltinDefinitionCollectionsSrc;
 }
 
 // Luwu: the type function API's typedefs. Upstream's `type` is one table with every kind's methods, so calling one on

@@ -72,6 +72,9 @@ LuauClass* luaR_newclass(
     classdef->numoverriddenconsts = 0;
     classdef->traitdefaults = NULL;
     classdef->compiledtraitcopies = NULL;
+    classdef->lengthfield = LUAR_NO_LENGTH_FIELD;
+    classdef->keybyvalue = false;
+    classdef->fastmethods = NULL;
     classdef->qualified = NULL;
     classdef->positionalmembers = NULL;
     classdef->numberofpositional = -1;
@@ -207,11 +210,13 @@ size_t luaR_classsize(const LuauClass* classdef)
            (classdef->numberofallmembers * (sizeof(TString*) + sizeof(uint8_t))) +
            // ... plus the constant field defaults, when the class carries them ...
            (classdef->memberdefaults ? classdef->numberofinstancemembers * sizeof(TValue) : 0) +
-           // ... plus what it keeps about the traits it implements.
+           // ... plus what it keeps about the traits it implements ...
            (classdef->numtraits * sizeof(LuauClass*)) + (classdef->numtraitinits * (sizeof(TValue) + 2 * sizeof(uint32_t))) +
            (classdef->numoverriddenconsts * sizeof(uint32_t)) +
            // ... plus the offsets of its positional members.
-           (classdef->positionalmembers ? classdef->numberofpositional * sizeof(uint32_t) : 0);
+           (classdef->positionalmembers ? classdef->numberofpositional * sizeof(uint32_t) : 0) +
+           // ... plus a builtin class's fast methods.
+           (classdef->fastmethods ? classdef->numberofallmembers * sizeof(luaR_FastMethod) : 0);
 }
 
 bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
@@ -382,7 +387,10 @@ void luaR_checkconstassign(lua_State* L, const TValue* key, const LuauObject* ob
     // allowing such could lead to UB in future const optimizations.
     // also if you're using `const` just to have embedder-only-assignable fields please just use userdata
     if (!cl || (!isfinal && !luaR_closureisinit(classdef, cl)))
+    {
+        luaR_checkbundleassign(L, object, key);
         luaG_constassignerror(L, key, classdef->name);
+    }
 
     // `__init` constructs the object in its `self` parameter, which is register 0 of its frame. This
     // holds for a vararg `__init` too: its fixed parameters are moved up, and its frame base moves with
@@ -616,11 +624,11 @@ void luaR_applyobjectfields(lua_State* L, LuauClass* classdef, LuauObject* objec
         const TValue* value = luaH_getstr(arg, classdef->offsettomember[idx]);
 
         // A field absent from the table (or explicitly nil) keeps whatever's already in
-        // object->members[idx] -- nil, or that field's default.
+        // luaR_members(object)[idx] -- nil, or that field's default.
         if (!ttisnil(value))
         {
             luaR_checknotfinal(L, classdef, idx);
-            setobj(L, &object->members[idx], value);
+            setobj(L, &luaR_members(object)[idx], value);
         }
     }
 }
@@ -653,7 +661,7 @@ static void luaR_applyobjectfieldsas(lua_State* L, LuauClass* classdef, LuauObje
         if (!ttisnil(value))
         {
             luaR_checknotfinal(L, classdef, idx);
-            setobj(L, &object->members[idx], value);
+            setobj(L, &luaR_members(object)[idx], value);
             // An __index call can run the collector, so `object` may already be black. Once the next
             // field's lookup overwrites the stack slot, this member is the value's only reference, so
             // it needs the barrier.
@@ -692,7 +700,7 @@ static l_noret luaR_podargumentcounterror(lua_State* L, const LuauClass* classde
 static void luaR_storepoddefaults(lua_State* L, const LuauClass* classdef, LuauObject* object, StkId results)
 {
     for (uint32_t idx = 0; idx < classdef->numberofownmembers; idx++)
-        setobj(L, &object->members[idx], &results[idx]);
+        setobj(L, &luaR_members(object)[idx], &results[idx]);
 
     // `object` can be black by now, and the argument's __index calls after this can run the collector
     luaC_barrierfast(L, object);
@@ -853,9 +861,9 @@ LuauObject* luaR_newobjectuninit(lua_State* L, LuauClass* classdef)
     uint32_t nummembers = classdef->numberofinstancemembers;
     LuauObject* object = luaM_newgco(L, LuauObject, luaR_objectsize(nummembers), L->activememcat);
     luaC_init(L, object, LUA_TOBJECT);
+    object->storagekind = LUAR_STORAGE_NONE;
     object->lclass = classdef;
     object->numberofmembers = nummembers;
-    object->members = cast_to(TValue*, object + 1);
 
     return object;
 }
@@ -864,14 +872,14 @@ LuauObject* luaR_newobject(lua_State* L, LuauClass* classdef)
 {
     // The members live in the same allocation as the object itself (see luaR_objectsize): one GC
     // object per instance instead of two, which halves both the allocator traffic and the sweep cost
-    // of constructing objects. The interpreter reads them through `members`; native code addresses
-    // them from the object pointer (LUAR_OBJECT_MEMBERS_OFFSET).
+    // of constructing objects. Both the interpreter (luaR_members) and native code
+    // (LUAR_OBJECT_MEMBERS_OFFSET) address them from the object pointer.
     uint32_t nummembers = classdef->numberofinstancemembers;
     LuauObject* object = luaM_newgco(L, LuauObject, luaR_objectsize(nummembers), L->activememcat);
     luaC_init(L, object, LUA_TOBJECT);
+    object->storagekind = LUAR_STORAGE_NONE;
     object->lclass = classdef;
     object->numberofmembers = nummembers;
-    object->members = cast_to(TValue*, object + 1);
 
     // Initialize every member before anything can trigger a GC step, since traverseobject reads them
     // all. Constant defaults go straight in here, so the common case writes each member exactly once
@@ -879,12 +887,12 @@ LuauObject* luaR_newobject(lua_State* L, LuauClass* classdef)
     if (classdef->memberdefaults)
     {
         for (uint32_t idx = 0; idx < nummembers; idx++)
-            setobj(L, &object->members[idx], &classdef->memberdefaults[idx]);
+            setobj(L, &luaR_members(object)[idx], &classdef->memberdefaults[idx]);
     }
     else
     {
         for (uint32_t idx = 0; idx < nummembers; idx++)
-            setnilvalue(&object->members[idx]);
+            setnilvalue(&luaR_members(object)[idx]);
     }
 
     return object;
@@ -1020,11 +1028,15 @@ void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
         luaM_freearray(L, classdef->memberdefaults, classdef->numberofinstancemembers, TValue, classdef->memcat);
     if (classdef->positionalmembers)
         luaM_freearray(L, classdef->positionalmembers, classdef->numberofpositional, uint32_t, classdef->memcat);
+    if (classdef->fastmethods)
+        luaM_freearray(L, classdef->fastmethods, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
     luaM_freegco(L, classdef, sizeof(LuauClass), classdef->memcat, page);
 }
 
 void luaR_freeobject(lua_State* L, LuauObject* object, lua_Page* page)
 {
+    if (LuauStorage* storage = luaR_storage(object))
+        luaM_free_(L, storage, luaR_storagesize(storage->capacity), object->memcat);
     luaM_freegco(L, object, luaR_objectsize(object->numberofmembers), object->memcat, page);
 }
 
@@ -2633,7 +2645,7 @@ static int luaR_traitinitstep(lua_State* L, int status)
     for (uint32_t i = 0; i < classdef->numoverriddenconsts; i++)
     {
         uint32_t off = classdef->overriddenconsts[i];
-        setobj(L, &object->members[off], &classdef->memberdefaults[off]);
+        setobj(L, &luaR_members(object)[off], &classdef->memberdefaults[off]);
     }
 
     // the constants were already reachable from the class, but the object may have been blackened by a call above
@@ -2674,6 +2686,184 @@ bool luaR_implements(const LuauClass* classdef, const LuauClass* trait)
             return true;
 
     return false;
+}
+
+// Luwu bundles: how deep bundles nest inside a key before an inner one counts by identity. It bounds the C stack a table
+// lookup uses: a chain of pairs can be as deep as a list.
+static const int kKeyByValueDepth = 32;
+
+// Mixes `value` into the hash `h`
+static unsigned int mixkeyhash(unsigned int h, unsigned int value)
+{
+    return (h ^ value) * 0x01000193u;
+}
+
+static unsigned int keyhash(const LuauObject* object, int depth);
+
+// A field's hash. Values that are raw equal hash the same: the sign of a zero is dropped, and a vector hashes to nothing
+// rather than reproduce its comparison.
+static unsigned int keyfieldhash(const TValue* value, int depth)
+{
+    switch (ttype(value))
+    {
+    case LUA_TNUMBER:
+    {
+        double n = nvalue(value);
+        uint64_t bits;
+        memcpy(&bits, &n, sizeof(bits));
+        bits &= ~(uint64_t(1) << 63);
+        return unsigned(bits) ^ unsigned(bits >> 32);
+    }
+    case LUA_TINTEGER:
+    {
+        uint64_t bits = uint64_t(lvalue(value));
+        return unsigned(bits) ^ unsigned(bits >> 32);
+    }
+    case LUA_TBOOLEAN:
+        return unsigned(bvalue(value));
+    case LUA_TSTRING:
+        return tsvalue(value)->hash;
+    case LUA_TLIGHTUSERDATA:
+        return unsigned(uintptr_t(pvalue(value)));
+    case LUA_TOBJECT:
+        if (objectvalue(value)->lclass->keybyvalue)
+            return keyhash(objectvalue(value), depth - 1);
+        return unsigned(uintptr_t(gcvalue(value)));
+    case LUA_TVECTOR:
+        return 0;
+    default:
+        return iscollectable(value) ? unsigned(uintptr_t(gcvalue(value))) : unsigned(ttype(value));
+    }
+}
+
+static unsigned int keyhash(const LuauObject* object, int depth)
+{
+    unsigned int h = mixkeyhash(0x811c9dc5u, object->numberofmembers);
+    if (depth == 0)
+        return h;
+
+    const TValue* fields = luaR_members(object);
+    for (uint32_t i = 0; i < object->numberofmembers; i++)
+        h = mixkeyhash(h, keyfieldhash(&fields[i], depth));
+    return h;
+}
+
+unsigned int luaR_keyhash(const LuauObject* object)
+{
+    unsigned int h = keyhash(object, kKeyByValueDepth);
+
+    // MurmurHash3 32-bit finalizer, as table keys use for pointers
+    h ^= h >> 16;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16;
+    return h;
+}
+
+// Past kKeyByValueDepth an object is only equal to itself
+static bool keyequal(const LuauObject* a, const LuauObject* b, int depth)
+{
+    if (a == b)
+        return true;
+    if (a->lclass != b->lclass || !a->lclass->keybyvalue || depth == 0)
+        return false;
+
+    const TValue* left = luaR_members(a);
+    const TValue* right = luaR_members(b);
+    for (uint32_t i = 0; i < a->numberofmembers; i++)
+    {
+        bool equal;
+        if (ttisobject(&left[i]) && ttisobject(&right[i]))
+            equal = keyequal(objectvalue(&left[i]), objectvalue(&right[i]), depth - 1);
+        else
+            equal = luaO_rawequalObj(&left[i], &right[i]);
+
+        if (!equal)
+            return false;
+    }
+    return true;
+}
+
+bool luaR_keyequal(const LuauObject* a, const LuauObject* b)
+{
+    return keyequal(a, b, kKeyByValueDepth);
+}
+
+static void luaR_addnativemethod(lua_State* L, LuauClass* classdef, const char* name, lua_CFunction method)
+{
+    Closure* cl = luaF_newCclosure(L, 0, L->gt);
+    cl->c.f = method;
+    cl->c.debugname = name;
+
+    TValue value;
+    setclvalue(L, &value, cl);
+    luaR_addclassmember(L, classdef, luaS_new(L, name), &value);
+}
+
+LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init)
+{
+    uint32_t numfields = 0;
+    while (numfields < uint32_t(count) && !members[numfields].method)
+        numfields++;
+
+    luaD_checkstack(L, 1);
+
+    // Every part of the class is allocated separately, as the loader does it, so no GC step may run until the class is
+    // anchored on the stack
+    const ScopedSetGCThreshold pauseGC{L->global, SIZE_MAX};
+
+    // every class has an `__init` member, `init` or the one that's only there to be refused by name
+    uint32_t numstatic = uint32_t(count) - numfields + 1;
+    LuauClass* classdef = luaR_newclass(L, luaS_new(L, name), numfields, numstatic, /* hasmemberdefaults= */ false);
+    setclassvalue(L, L->top, classdef);
+    incr_top(L);
+
+    for (uint32_t idx = 0; idx < uint32_t(count); idx++)
+    {
+        LUAU_ASSERT((idx < numfields) == !members[idx].method);
+        TString* membername = luaS_new(L, members[idx].name);
+        classdef->offsettomember[idx] = membername;
+        classdef->memberflags[idx] = members[idx].flags;
+        setnvalue(luaH_setstr(L, classdef->memberstooffset, membername), double(idx));
+    }
+
+    TString* initname = luaS_newliteral(L, "__init");
+    classdef->offsettomember[count] = initname;
+    classdef->memberflags[count] = 0;
+    setnvalue(luaH_setstr(L, classdef->memberstooffset, initname), double(count));
+
+    luaR_sealclassshape(L, classdef);
+
+    for (uint32_t idx = numfields; idx < uint32_t(count); idx++)
+    {
+        luaR_addnativemethod(L, classdef, members[idx].name, members[idx].method);
+        if (!members[idx].fast)
+            continue;
+
+        if (!classdef->fastmethods)
+        {
+            classdef->fastmethods = luaM_newarray(L, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
+            for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+                classdef->fastmethods[i] = NULL;
+        }
+        classdef->fastmethods[idx] = members[idx].fast;
+    }
+
+    if (init)
+        luaR_addnativemethod(L, classdef, "__init", init);
+
+    return classdef;
+}
+
+LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method)
+{
+    if (L->top > L->base && ttisobject(L->base) && objectvalue(L->base)->lclass == classdef)
+        return objectvalue(L->base);
+
+    TValue none;
+    setnilvalue(&none);
+    luaG_selfclasserror(L, L->top > L->base ? L->base : &none, classdef, luaS_new(L, method), false);
 }
 
 void luaR_getqualified(lua_State* L, StkId ra, const TValue* receiver, const TValue* traitvalue, TString* name)

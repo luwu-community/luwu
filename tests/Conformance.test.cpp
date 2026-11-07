@@ -4,6 +4,7 @@
 #include "lua.h"
 #include "lapix.h"
 #include "lobject.h"
+#include "lstate.h"
 #include "lualib.h"
 #include "luacode.h"
 #include "luacodegen.h"
@@ -27,6 +28,7 @@
 #include <fstream>
 #include <chrono>
 #include <functional>
+#include <set>
 #include <tuple>
 #include <thread>
 #include <string>
@@ -105,6 +107,8 @@ LUAU_FASTFLAG(LuauCodegenFixTwoResA64Builtin)
 LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
@@ -4791,6 +4795,140 @@ TEST_CASE("CursedClasses")
     runConformance("cursed_classes.luwu");
 }
 
+static std::string joinNames(const std::set<std::string>& names)
+{
+    std::string joined;
+    for (const std::string& name : names)
+        joined += name + " ";
+    return joined;
+}
+
+// The public members a builtin class's objects have in the VM, metamethods included
+static std::string vmClassMembers(const LuauClass* classdef)
+{
+    std::set<std::string> names;
+    for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+    {
+        const TString* name = classdef->offsettomember[i];
+        if (name && !(classdef->memberflags[i] & LBC_CLASSMEMBER_PRIVATE))
+            names.insert(getstr(name));
+    }
+    return joinNames(names);
+}
+
+// The public members the type checker gives the objects of a declared class: their properties, except `__init`, which
+// can't be read, and the metamethods in their metatable
+static std::string declaredObjectMembers(Luau::TypeId objectType)
+{
+    std::set<std::string> names;
+    const Luau::ExternType* object = Luau::get<Luau::ExternType>(Luau::follow(objectType));
+    REQUIRE(object);
+
+    for (const auto& prop : object->props())
+    {
+        if (!prop.second.isPrivate && prop.first != "__init")
+            names.insert(prop.first);
+    }
+
+    if (object->metatable)
+    {
+        const Luau::TableType* metatable = Luau::get<Luau::TableType>(Luau::follow(*object->metatable));
+        REQUIRE(metatable);
+        for (const auto& metamethod : metatable->props)
+            names.insert(metamethod.first);
+    }
+    return joinNames(names);
+}
+
+// The public members of the objects of the class value `classValue` (see declaredObjectMembers)
+static std::string declaredClassMembers(Luau::TypeId classValue)
+{
+    const Luau::ExternType* value = Luau::get<Luau::ExternType>(Luau::follow(classValue));
+    REQUIRE(value);
+    REQUIRE(value->relation);
+    const Luau::Obj* obj = Luau::get_if<Luau::Obj>(&*value->relation);
+    REQUIRE(obj);
+    return declaredObjectMembers(obj->ty);
+}
+
+// The declared class value named `name` in the library table
+static std::optional<Luau::TypeId> declaredClassValue(const Luau::TableType* library, const std::string& name)
+{
+    auto declared = library->props.find(name);
+    if (declared == library->props.end() || !declared->second.readTy)
+        return std::nullopt;
+    return declared->second.readTy;
+}
+
+// Luwu collections and bundles: the builtin definitions declare each class the VM builds, with exactly its public members.
+// A bundle class is a type the `bundle` library exports, since only Pair, Triple and Quad are in its table.
+TEST_CASE("CollectionsDeclarationsMatchTheVm")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    Luau::NullFileResolver fileResolver;
+    Luau::NullConfigResolver configResolver;
+    Luau::Frontend frontend{Luau::SolverMode::New, &fileResolver, &configResolver};
+    Luau::registerBuiltinGlobals(frontend, frontend.globals);
+
+    const Luau::TableType* library = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "collections")));
+    REQUIRE(library);
+    const auto& bundleTypes = frontend.globals.globalScope->importedTypeBindings["bundle"];
+
+    StateRef state(luaL_newstate(), lua_close);
+    luaL_openlibs(state.get());
+
+    for (int kind = 0; kind < LUWU_BUILTIN__COUNT; kind++)
+    {
+        const LuauClass* classdef = state->global->builtinclasses[kind];
+        REQUIRE(classdef);
+        std::string name = getstr(classdef->name);
+        INFO(name);
+
+        if (kind <= LUWU_BUILTIN_BUNDLE12)
+        {
+            auto declaredBundle = bundleTypes.find(name);
+            REQUIRE(declaredBundle != bundleTypes.end());
+            CHECK_EQ(declaredObjectMembers(declaredBundle->second.type), vmClassMembers(classdef));
+            continue;
+        }
+
+        std::optional<Luau::TypeId> declared = declaredClassValue(library, name);
+        REQUIRE(declared);
+        CHECK_EQ(declaredClassMembers(*declared), vmClassMembers(classdef));
+    }
+}
+
+TEST_CASE("Collections")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    runConformance("collections.luwu");
+}
+
+TEST_CASE("CollectionsFastPaths")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    runConformance("collections_fastpaths.luwu");
+}
+
 TEST_CASE("ClassesExportHoistingRepro")
 {
     ScopedFastFlag sffs[] = {
@@ -7217,3 +7355,51 @@ TEST_CASE("ClassesInterpreterMemberSlotCacheSkipsWideOffsets")
 }
 
 TEST_SUITE_END();
+
+// Luwu bundles: an embedder packs and unpacks bundles with no Lua frame
+TEST_CASE("BundleCApi")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    lua_pushnumber(L, 1);
+    lua_pushstring(L, "x");
+    lua_packbundle(L, 2);
+    REQUIRE(lua_gettop(L) == 1);
+    CHECK(std::string(lua_getclassname(L, -1)) == "Bundle2");
+    CHECK(std::string(luaL_tolstring(L, -1, nullptr)) == ".(1, \"x\")");
+    lua_pop(L, 1);
+
+    REQUIRE(lua_unpackbundle(L, -1) == 2);
+    CHECK(lua_tonumber(L, -2) == 1);
+    CHECK(std::string(lua_tostring(L, -1)) == "x");
+    lua_settop(L, 0);
+
+    // anything else isn't a bundle, and pushes nothing
+    lua_newtable(L);
+    CHECK(lua_unpackbundle(L, -1) == -1);
+    CHECK(lua_gettop(L) == 1);
+    lua_settop(L, 0);
+
+    lua_packbundle(L, 0);
+    CHECK(lua_unpackbundle(L, -1) == 0);
+    lua_settop(L, 0);
+
+    std::string tooMany = classesCApiProtected(
+        L,
+        [](lua_State* L)
+        {
+            for (int i = 0; i < 13; i++)
+                lua_pushnumber(L, i);
+            lua_packbundle(L, 13);
+        }
+    );
+    CHECK(tooMany == "a bundle holds at most 12 values, but got 13");
+}

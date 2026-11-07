@@ -1,0 +1,845 @@
+--!nocheck
+-- Luwu collections: the `collections` library's builtin classes, which the VM builds in C++.
+
+local function entries(map): string
+    local text = ""
+    for key, value in map do
+        text ..= `{key}={value} `
+    end
+    return text
+end
+
+local function raises(f: () -> (), message: string)
+    local ok, err = pcall(f)
+    assert(not ok, `expected an error containing '{message}'`)
+    assert(string.find(tostring(err), message, 1, true), `expected '{message}' in '{err}'`)
+end
+
+-- a bundle holds its values as `first`, `second` and so on, and prints the way `.(...)` writes it
+do
+    const range = bundle.pack(1, "x")
+    assert(range.first == 1 and range.second == "x")
+    assert(class.name(range) == "Bundle2")
+    assert(range == bundle.pack(1, "x"))
+    assert(range ~= bundle.pack(1, "y"))
+    assert(range ~= bundle.pack(1, "x", nil))
+    assert(tostring(range) == `.(1, "x")`)
+    assert(tostring(bundle.pack("a\"b", nil)) == `.("a\\"b", nil)`)
+
+    const color = bundle.pack(255, 128, 0)
+    assert(color.first == 255 and color.second == 128 and color.third == 0)
+    assert(color == bundle.pack(255, 128, 0))
+    assert(tostring(color) == ".(255, 128, 0)")
+
+    const margins = bundle.pack(1, 2, 3, 4)
+    assert(margins.fourth == 4)
+    assert(margins == bundle.pack(1, 2, 3, 4))
+    assert(margins ~= bundle.pack(1, 2, 3, 5))
+    assert(tostring(margins) == ".(1, 2, 3, 4)")
+
+    -- the elements compare with ==, so nested bundles compare by value too
+    assert(bundle.pack(range, 1) == bundle.pack(bundle.pack(1, "x"), 1))
+
+    raises(function()
+        range.first = 2
+    end, "a bundle can't be changed; b:with(1, value) makes a copy with 'first' replaced")
+    raises(function()
+        print(range.third)
+    end, "third")
+end
+
+-- `bundle.pack` holds every value it gets, nil included, up to 12; positions past `fourth` are `fifth` to `twelfth`
+do
+    assert(collections.Pair == nil and bundle.Bundle2 == nil)
+
+    const record = bundle.pack("AX1230", nil, 3, true, "e", "f", "g")
+    assert(#record == 7 and class.name(record) == "Bundle7" and record.first == "AX1230" and record.second == nil)
+    assert(record.seventh == "g" and tostring(record) == `.("AX1230", nil, 3, true, "e", "f", "g")`)
+    assert(class.name(bundle.pack(1, 2)) == "Bundle2")
+    assert(#bundle.pack() == 0 and #bundle.pack(nil) == 1)
+    const twelve = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+    assert(twelve.twelfth == 12 and #twelve == 12)
+    raises(function()
+        bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+    end, "bundle.pack takes at most 12 values, but got 13")
+
+    local fields = 0
+    for name, value in class.fields(bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)) do
+        fields += 1
+        assert(value == ({ first = 1, fifth = 5, tenth = 10 })[name] or (name ~= "first" and name ~= "fifth" and name ~= "tenth"))
+    end
+    assert(fields == 10)
+
+    -- `unpack` gives a range of positions, the whole bundle by default
+    const a, b, c = bundle.unpack(bundle.pack(1, nil, 3))
+    assert(a == 1 and b == nil and c == 3)
+    assert(select("#", bundle.unpack(record)) == 7 and select("#", bundle.unpack(record, 3, 2)) == 0)
+    const third, fourth = bundle.unpack(record, 3, 4)
+    assert(third == 3 and fourth == true)
+    raises(function()
+        bundle.unpack(record, 0, 2)
+    end, "range 0 to 2 is out of range 1 to 7")
+    raises(function()
+        bundle.unpack({ 1, 2 })
+    end, "bundle expected, got table")
+
+    -- `sub` and `with` make new bundles; `concat` joins several
+    assert(record:sub(3, 4) == bundle.pack(3, true) and record:sub(6) == bundle.pack("f", "g") and #record:sub(8) == 0)
+    assert(record:with(2, "two").second == "two" and record.second == nil)
+    raises(function()
+        record:with(8, 1)
+    end, "position 8 is out of range 1 to 7")
+
+    -- the library has both as functions too, taking the bundle first
+    assert(bundle.sub(record, 3, 4) == record:sub(3, 4) and bundle.sub(record) == record)
+    assert(bundle.with(record, 2, "two") == record:with(2, "two"))
+    raises(function()
+        bundle.sub({}, 1, 2)
+    end, "bundle expected, got table")
+    raises(function()
+        bundle.with(record, 0, 1)
+    end, "position 0 is out of range 1 to 7")
+    assert(bundle.concat(bundle.pack(1, 2), bundle.pack(3), bundle.pack()) == bundle.pack(1, 2, 3))
+    raises(function()
+        bundle.concat(twelve, bundle.pack(1))
+    end, "bundle.concat makes at most 12 values, but these hold 13")
+
+    -- bundles of one size order position by position, so a list of them sorts
+    assert(bundle.pack(1, 2) < bundle.pack(1, 3) and bundle.pack(1, 2) <= bundle.pack(1, 2) and not (bundle.pack(2, 0) < bundle.pack(1, 9)))
+    const list = { bundle.pack(2, "b"), bundle.pack(1, "z"), bundle.pack(1, "a") }
+    table.sort(list)
+    assert(list[1] == bundle.pack(1, "a") and list[3] == bundle.pack(2, "b"))
+    raises(function()
+        return bundle.pack(1, 2) < bundle.pack(1, 2, 3)
+    end, "attempt to compare")
+end
+
+-- a bundle is a table key by its values: an equal bundle finds the entry, though the two aren't rawequal
+do
+    const flights = {}
+    flights[bundle.pack("AX1230", "2026-11-04", "A", "C")] = "booked"
+    assert(flights[bundle.pack("AX1230", "2026-11-04", "A", "C")] == "booked")
+    assert(flights[bundle.pack("AX1230", "2026-11-04", "A", "D")] == nil)
+    assert(not rawequal(bundle.pack(1, 2), bundle.pack(1, 2)))
+
+    -- the fields compare raw: zero's sign doesn't matter, a table inside is only itself, nested bundles go by value,
+    -- and bundles of different sizes are different keys
+    const keys = {}
+    keys[bundle.pack(0, 1)] = "zero"
+    assert(keys[bundle.pack(-0, 1)] == "zero")
+    const inner = {}
+    keys[bundle.pack(inner, 1)] = "inner"
+    assert(keys[bundle.pack(inner, 1)] == "inner" and keys[bundle.pack({}, 1)] == nil)
+    keys[bundle.pack(bundle.pack(1, 2), "x")] = "nested"
+    assert(keys[bundle.pack(bundle.pack(1, 2), "x")] == "nested")
+    keys[bundle.pack(1)] = "one"
+    assert(keys[bundle.pack(1, nil)] == nil)
+
+    -- assigning through an equal bundle replaces the entry, and nil removes it
+    keys[bundle.pack(-0, 1)] = "again"
+    local count = 0
+    for _ in keys do
+        count += 1
+    end
+    assert(count == 4 and keys[bundle.pack(0, 1)] == "again")
+    keys[bundle.pack(0, 1)] = nil
+    assert(keys[bundle.pack(0, 1)] == nil)
+
+    -- a NaN field never equals itself, so only the same bundle finds it
+    const nan = 0 / 0
+    const withnan = bundle.pack(nan, 1)
+    keys[withnan] = "nan"
+    assert(keys[withnan] == "nan" and keys[bundle.pack(nan, 1)] == nil)
+
+    -- bundles nested deeper than 32 levels count by identity past that depth
+    local shallow, shallowcopy, deep, deepcopy = bundle.pack(), bundle.pack(), bundle.pack(), bundle.pack()
+    for i = 1, 20 do
+        shallow, shallowcopy = bundle.pack(i, shallow), bundle.pack(i, shallowcopy)
+    end
+    for i = 1, 40 do
+        deep, deepcopy = bundle.pack(i, deep), bundle.pack(i, deepcopy)
+    end
+    keys[shallow] = "shallow"
+    keys[deep] = "deep"
+    assert(keys[shallowcopy] == "shallow" and keys[deep] == "deep" and keys[deepcopy] == nil)
+
+    -- many keys spread over the hash
+    const many = {}
+    for i = 1, 5000 do
+        many[bundle.pack(i, tostring(i))] = i
+    end
+    for i = 1, 5000 do
+        assert(many[bundle.pack(i, tostring(i))] == i)
+    end
+end
+
+-- iterating a bundle gives every slot in order, nil included, and starting a loop allocates nothing
+do
+    const seen = {}
+    for i, v in bundle.pack("a", nil) do
+        seen[i] = if v == nil then "nil" else v
+    end
+    assert(seen[1] == "a" and seen[2] == "nil" and #seen == 2)
+
+    local weighted = 0
+    for i, v in bundle.pack(1, 2, 3, 4) do
+        weighted += i * v
+    end
+    assert(weighted == 1 + 4 + 9 + 16)
+
+    const color = bundle.pack(255, 128, 0)
+    local total = 0
+    for _, channel in color do
+        for _, again in color do
+            total += channel * 0 + again
+        end
+    end
+    assert(total == 3 * (255 + 128))
+
+    local before = gcinfo()
+    for _ = 1, 10000 do
+        for _, channel in color do
+            total += channel
+        end
+    end
+    assert(gcinfo() - before < 4)
+end
+
+-- a loop over a bundle or a small table literal in its header builds neither, and runs like iterating one
+do
+    const order = {}
+    local function note(value: string?): string?
+        table.insert(order, value or "nil")
+        return value
+    end
+
+    -- every item is evaluated before the body runs; a table skips its nil items and keeps the positions
+    for i, v in { note("a"), note(nil), note("c") } do
+        table.insert(order, `{i}={v}`)
+    end
+    assert(table.concat(order, " ") == "a nil c 1=a 3=c")
+
+    -- a bundle yields every slot
+    table.clear(order)
+    for i, v in bundle.pack(note("a"), note(nil), note("c")) do
+        table.insert(order, `{i}={v}`)
+    end
+    assert(table.concat(order, " ") == "a nil c 1=a 2=nil 3=c")
+
+    -- break and continue
+    table.clear(order)
+    for i, v in { 10, 20, 30, 40 } do
+        if v == 20 then
+            continue
+        end
+        if v == 40 then
+            break
+        end
+        table.insert(order, tostring(i))
+    end
+    assert(table.concat(order, " ") == "1 3")
+
+    -- each pass's value is its own, for closures and for writes
+    const readers = {}
+    for _, v in bundle.pack("x", "y") do
+        table.insert(readers, function()
+            return v
+        end)
+        v = "changed"
+    end
+    assert(readers[1]() == "changed" and readers[2]() == "changed")
+    const first, second = "x", "y"
+    table.clear(readers)
+    for _, v in { first, second } do
+        table.insert(readers, function()
+            return v
+        end)
+    end
+    assert(readers[1]() == "x" and readers[2]() == "y" and first == "x")
+
+    -- only the position, and a variable past the value
+    local positions = 0
+    for i in { "a", "b" } do
+        positions += i
+    end
+    assert(positions == 3)
+    for _, _, extra in { 1 } do
+        assert(extra == nil)
+    end
+
+    -- nested, and a trailing call that still builds the table
+    local cells = 0
+    for _, row in { 1, 2 } do
+        for _, column in bundle.pack(10, 20) do
+            cells += row * column
+        end
+    end
+    assert(cells == 90)
+
+    -- a list of bundles, the last one included, is unfolded too
+    local sum = 0
+    for _, entry in { bundle.pack(1, 2), bundle.pack(3, 4) } do
+        sum += entry.first * entry.second
+    end
+    assert(sum == 14)
+    local function two()
+        return "p", "q"
+    end
+    table.clear(order)
+    for _, v in { "o", two() } do
+        table.insert(order, v)
+    end
+    assert(table.concat(order) == "opq")
+end
+
+-- a new key goes at the end; an existing key doesn't move
+do
+    const map = collections.OrderedMap()
+    assert(#map == 0)
+    assert(map:get("a") == nil)
+    map:set("a", 1)
+    map:set("b", 2)
+    map:set("c", 3)
+    map:set("a", 10)
+    assert(entries(map) == "a=10 b=2 c=3 ")
+    assert(#map == 3)
+    assert(map:has("b") and not map:has("z"))
+    assert(map:index("c") == 3)
+    assert(map:index("z") == nil)
+    const key, value = map:at(2)
+    assert(key == "b" and value == 2)
+    assert(map:at(4) == nil)
+    assert(map:at(1.5) == nil)
+    assert(class.isinstance(map, collections.OrderedMap))
+end
+
+-- entries move anywhere, and the positions follow
+do
+    const map = collections.OrderedMap()
+    map:set("a", 1)
+    map:set("b", 2)
+    map:set("c", 3)
+    map:insert(1, "z", 26)
+    assert(entries(map) == "z=26 a=1 b=2 c=3 ")
+    map:move("c", 2)
+    assert(entries(map) == "z=26 c=3 a=1 b=2 ")
+    map:move("z", 4)
+    assert(entries(map) == "c=3 a=1 b=2 z=26 ")
+    map:movebefore("z", "c")
+    assert(entries(map) == "z=26 c=3 a=1 b=2 ")
+    map:moveafter("z", "b")
+    assert(entries(map) == "c=3 a=1 b=2 z=26 ")
+    map:swap("c", "z")
+    assert(entries(map) == "z=26 a=1 b=2 c=3 ")
+    map:insert(2, "c", 30)
+    assert(entries(map) == "z=26 c=30 a=1 b=2 ")
+    map:sort(function(a, b)
+        return a < b
+    end)
+    assert(entries(map) == "a=1 b=2 c=30 z=26 ")
+    for position = 1, #map do
+        const key = map:at(position)
+        assert(map:index(key) == position)
+    end
+end
+
+-- sort is stable, and survives a comparator that isn't a valid order
+do
+    const map = collections.OrderedMap()
+    for i = 1, 50 do
+        map:set(i, i % 3)
+    end
+    map:sort(function(a, b)
+        return a % 3 < b % 3
+    end)
+    local previous = -1
+    local last = 0
+    for key in map do
+        if key % 3 == previous then
+            assert(key > last)
+        end
+        previous = key % 3
+        last = key
+    end
+
+    map:sort(function()
+        return math.random() < 0.5
+    end)
+    assert(#map == 50)
+    for position = 1, #map do
+        const key = map:at(position)
+        assert(map:index(key) == position)
+    end
+
+    local removed = false
+    raises(function()
+        map:sort(function(a, b)
+            if not removed then
+                removed = true
+                map:remove(a)
+            end
+            return (a or 0) < (b or 0)
+        end)
+    end, "OrderedMap changed while it was being sorted")
+end
+
+-- removed entries free their ids for new keys
+do
+    const map = collections.OrderedMap()
+    map:set("a", 1)
+    map:set("b", 2)
+    map:set("c", 3)
+    assert(map:remove("b") == 2)
+    assert(map:remove("b") == nil)
+    assert(entries(map) == "a=1 c=3 ")
+    map:set("d", 4)
+    map:set("e", 5)
+    assert(entries(map) == "a=1 c=3 d=4 e=5 ")
+    assert(map:index("e") == 4)
+    map:remove("a")
+    assert(map:index("c") == 1)
+    assert(map:at(1) == "c")
+end
+
+-- any value can be a key, and keys are compared like table keys
+do
+    const map = collections.OrderedMap()
+    const t = {}
+    map:set(t, "table")
+    map:set(1, "one")
+    map:set(true, "yes")
+    assert(map:get(t) == "table" and map:get(1) == "one" and map:get(true) == "yes")
+    assert(map:get({}) == nil)
+    raises(function()
+        map:set(nil, 1)
+    end, "key can't be nil")
+    raises(function()
+        map:set(0 / 0, 1)
+    end, "key can't be NaN")
+end
+
+-- out-of-range positions and missing keys raise at the caller
+do
+    const map = collections.OrderedMap()
+    map:set("a", 1)
+    raises(function()
+        map:move("missing", 1)
+    end, `OrderedMap has no key "missing"`)
+    raises(function()
+        map:move("a", 2)
+    end, "position 2 is out of range 1 to 1")
+    raises(function()
+        map:insert(3, "b", 2)
+    end, "position 3 is out of range 1 to 2")
+    raises(function()
+        map:move("a", 1.5)
+    end, "position 1.5 is out of range")
+
+    const ok, err = pcall(function()
+        map:move("missing", 1)
+    end)
+    assert(string.find(err, "collections.luwu:", 1, true), err)
+end
+
+-- iterating stops on a key removed under it
+do
+    const map = collections.OrderedMap()
+    map:set("a", 1)
+    map:set("b", 2)
+    raises(function()
+        for key in map do
+            map:remove(key)
+        end
+    end, `OrderedMap lost key "a" while it was being iterated`)
+end
+
+-- private state stays private
+do
+    const map = collections.OrderedMap()
+    raises(function()
+        print(map.order)
+    end, "'order' is a private member of 'OrderedMap'")
+    raises(function()
+        map.count = 5
+    end, "'count' is a private member of 'OrderedMap'")
+end
+
+-- a method called on the wrong receiver names the method and what it got
+do
+    const map = collections.OrderedMap()
+    const list = collections.Vec()
+    raises(function()
+        map.get(list, 1)
+    end, "attempt to call method 'OrderedMap.get' with 'self' of class 'Vec'")
+    raises(function()
+        map.get(nil, 1)
+    end, "attempt to call method 'OrderedMap.get' with 'self' of type 'nil'")
+end
+
+-- vec: a growable array
+do
+    const list = collections.Vec()
+    assert(#list == 0 and list:pop() == nil and list:at(1) == nil)
+    list:push(10)
+    list:push(30)
+    list:insert(2, 20)
+    list:insert(1, 5)
+    list:insert(5, 40)
+    local text = ""
+    for i, x in list do
+        text ..= `{i}:{x} `
+    end
+    assert(text == "1:5 2:10 3:20 4:30 5:40 ")
+    assert(list:remove(1) == 5)
+    assert(list:remove(4) == 40)
+    assert(list:pop() == 30)
+    assert(#list == 2 and list:at(1) == 10 and list:at(2) == 20)
+    list:set(2, 25)
+    assert(list:at(2) == 25)
+    raises(function()
+        list:set(3, 1)
+    end, "position 3 is out of range 1 to 2")
+    raises(function()
+        list:remove(0)
+    end, "position 0 is out of range 1 to 2")
+    list:clear()
+    assert(#list == 0)
+    -- the element type outlives a clear
+    raises(function()
+        list:push("x")
+    end, "this Vec can only accept numbers, but you passed a string")
+end
+
+-- vecdeque: both ends, through growth and wrap-around
+do
+    const queue = collections.VecDeque()
+    assert(queue:front() == nil and queue:back() == nil and queue:popfront() == nil and queue:popback() == nil)
+    queue:pushback("b")
+    queue:pushfront("a")
+    queue:pushback("c")
+    for i = 1, 20 do
+        queue:pushback(`x{i}`)
+        queue:pushfront(`y{i}`)
+    end
+    for i = 1, 20 do
+        assert(queue:popback() == `x{21 - i}`)
+        assert(queue:popfront() == `y{21 - i}`)
+    end
+    assert(#queue == 3 and queue:front() == "a" and queue:back() == "c" and queue:at(2) == "b")
+    queue:set(2, "B")
+    local text = ""
+    for i, x in queue do
+        text ..= `{i}{x}`
+    end
+    assert(text == "1a2B3c")
+    assert(queue:popfront() == "a" and queue:popback() == "c" and queue:popfront() == "B" and #queue == 0)
+
+    -- a long run in one direction wraps the ring many times
+    const numbers = collections.VecDeque()
+    for i = 1, 1000 do
+        numbers:pushback(i)
+        if i % 3 == 0 then
+            numbers:popfront()
+        end
+    end
+    assert(#numbers == 667 and numbers:front() == 334 and numbers:back() == 1000)
+    numbers:clear()
+    assert(#numbers == 0 and numbers:front() == nil)
+end
+
+-- vec and vecdeque take one type of value, and never nil
+do
+    raises(function()
+        collections.VecDeque():pushback(nil)
+    end, "this VecDeque can't accept nil")
+
+    const queue = collections.VecDeque()
+    queue:pushback("a")
+    raises(function()
+        queue:pushfront({})
+    end, "this VecDeque can only accept strings, but you passed a table")
+    raises(function()
+        queue:pushback(none)
+    end, "this VecDeque can only accept strings, but you passed none")
+
+    const bundles = collections.Vec()
+    bundles:push(bundle.pack(1, 2))
+    raises(function()
+        bundles:push(collections.OrderedMap())
+    end, "this Vec can only accept 'Bundle2' objects, but you passed an 'OrderedMap' object")
+    raises(function()
+        bundles:insert(1, bundle.pack(1, 2, 3))
+    end, "this Vec can only accept 'Bundle2' objects, but you passed a 'Bundle3' object")
+
+    const flags = collections.Vec()
+    flags:push(true)
+    raises(function()
+        flags:push(1)
+    end, "this Vec can only accept booleans, but you passed a number")
+end
+
+-- vec and vecdeque take their values as arguments, checked value by value like `push` does, and print as that call
+do
+    const list = collections.Vec(1, 2, 3)
+    assert(#list == 3 and list:at(1) == 1 and list:at(3) == 3)
+    assert(tostring(list) == "Vec(1, 2, 3)")
+    assert(tostring(collections.Vec()) == "Vec()")
+
+    const queue = collections.VecDeque("a", "b")
+    queue:pushfront("z")
+    assert(queue:front() == "z" and queue:back() == "b")
+    assert(tostring(queue) == `VecDeque("z", "a", "b")`)
+
+    -- one table is a value like any other
+    const rows = collections.Vec({ 1, 2 })
+    assert(#rows == 1 and type(rows:at(1)) == "table")
+
+    raises(function()
+        collections.Vec(1, "two")
+    end, "this Vec can only accept numbers, but you passed a string")
+    raises(function()
+        collections.VecDeque(1, nil, 3)
+    end, "this VecDeque can only accept numbers, but you passed nil")
+    raises(function()
+        collections.Vec(nil)
+    end, "this Vec can't accept nil")
+end
+
+-- push, pushfront and pushback take several values; extend and prepend take a list. A value of the wrong type adds
+-- none of them. Values added at the front keep their order.
+do
+    const list = collections.Vec()
+    list:push(1, 2)
+    list:extend({ 3, 4 })
+    list:extend({})
+    assert(tostring(list) == "Vec(1, 2, 3, 4)")
+    raises(function()
+        list:push(5, "six")
+    end, "this Vec can only accept numbers, but you passed a string")
+    raises(function()
+        list:extend({ 5, "six" })
+    end, "this Vec can only accept numbers, but you passed a string")
+    raises(function()
+        list:extend(5)
+    end, "Vec:extend() takes a list of values, but you passed a number")
+    assert(#list == 4)
+
+    const queue = collections.VecDeque(3)
+    queue:pushfront(1, 2)
+    queue:pushback(4, 5)
+    queue:prepend({ -1, 0 })
+    queue:extend({ 6, 7 })
+    assert(tostring(queue) == "VecDeque(-1, 0, 1, 2, 3, 4, 5, 6, 7)")
+
+    -- more values than the first block holds, at both ends, wrapping around the ring
+    const items = {}
+    for i = 1, 10000 do
+        items[i] = i
+    end
+    const big = collections.VecDeque()
+    big:extend(items)
+    big:prepend(items)
+    big:pushfront(table.unpack(items, 1, 100))
+    assert(#big == 20100 and big:front() == 1 and big:at(101) == 1 and big:at(10101) == 1 and big:back() == 10000)
+    for position = 1, 100 do
+        assert(big:popfront() == position)
+    end
+    assert(big:popback() == 10000 and big:popfront() == 1)
+end
+
+-- OrderedMap takes `.(key, value)` bundles as arguments or as a list, and adds their entries in order like `set`
+do
+    const function collect(map): string
+        const parts = {}
+        for key, value in map do
+            table.insert(parts, `{key}={value}`)
+        end
+        return table.concat(parts, " ")
+    end
+
+    -- a key given twice keeps its first place and its last value
+    assert(collect(collections.OrderedMap(bundle.pack("b", 2), bundle.pack("a", 1), bundle.pack("b", 3))) == "b=3 a=1")
+    assert(collect(collections.OrderedMap({ bundle.pack("x", 1), bundle.pack("y", 2) })) == "x=1 y=2")
+
+    -- bundles the compiler can't see being built go through the constructor
+    const entries = { bundle.pack("p", 1), bundle.pack("q", 2) }
+    const entry = bundle.pack("z", 9)
+    assert(collect(collections.OrderedMap(entries)) == "p=1 q=2")
+    assert(collect(collections.OrderedMap(entry, bundle.pack("w", 0))) == "z=9 w=0")
+    assert(#collections.OrderedMap({}) == 0)
+
+    -- arguments are evaluated before the map gets any entry
+    local evaluated = 0
+    const function count(value: number): number
+        evaluated += 1
+        return value
+    end
+    const counted = collections.OrderedMap(bundle.pack(1, count(1)), bundle.pack(2, count(2)))
+    assert(evaluated == 2 and collect(counted) == "1=1 2=2")
+
+    raises(function()
+        collections.OrderedMap(1)
+    end, "OrderedMap() takes .(key, value) bundles, but argument 1 is a number")
+    raises(function()
+        collections.OrderedMap({ entry, bundle.pack(1, 2, 3) })
+    end, "OrderedMap() takes .(key, value) bundles, but item 2 is a 'Bundle3' object")
+    raises(function()
+        collections.OrderedMap(entries, entry)
+    end, "OrderedMap() takes .(key, value) bundles, but argument 1 is a table")
+    raises(function()
+        local key = nil
+        collections.OrderedMap(bundle.pack(key, 1))
+    end, "key can't be nil")
+    raises(function()
+        collections.OrderedMap({ bundle.pack(0 / 0, 1) })
+    end, "key can't be NaN")
+end
+
+-- a generic for loop over a vec or vecdeque visits positions 1 to the count in order, wherever the storage starts
+do
+    const function collect(container): string
+        const parts = {}
+        for position, value in container do
+            table.insert(parts, `{position}={value}`)
+        end
+        return table.concat(parts, " ")
+    end
+
+    const queue = collections.VecDeque(3, 4)
+    queue:pushfront(2)
+    queue:pushfront(1)
+    queue:pushback(5)
+    assert(collect(queue) == "1=1 2=2 3=3 4=4 5=5")
+    queue:popfront()
+    queue:pushfront(0)
+    assert(collect(queue) == "1=0 2=2 3=3 4=4 5=5")
+    assert(queue:front() == 0 and queue:back() == 5 and queue:at(3) == 3)
+    for _ = 1, 5 do
+        queue:popback()
+    end
+    assert(collect(queue) == "" and queue:front() == nil)
+
+    const list = collections.Vec()
+    for i = 1, 100 do
+        list:insert(1, i)
+    end
+    list:remove(1)
+    list:pop()
+    local expected = 99
+    local visited = 0
+    for position, value in list do
+        visited += 1
+        assert(position == visited and value == expected)
+        expected -= 1
+    end
+    assert(visited == 98)
+
+    -- pushing while looping is unspecified but memory safe
+    const growing = collections.Vec(1)
+    local steps = 0
+    for _, value in growing do
+        steps += 1
+        if value < 50 then
+            growing:push(value + 1)
+        end
+        if steps > 1000 then
+            break
+        end
+    end
+    assert(#growing == 50)
+end
+
+-- printing a large container grows its string buffer while values are shown, and an element's own __tostring may
+-- change the container it's printed from
+class Named
+    name: string
+    function __tostring(self)
+        return `Named({self.name})`
+    end
+end
+
+-- what a Clearing object clears when it's printed
+local printing: collections.Vec<Clearing>? = nil
+
+class Clearing
+    function __tostring(self)
+        assert(printing):clear()
+        return "cleared"
+    end
+end
+
+do
+    const queue = collections.VecDeque()
+    for i = 1, 200 do
+        queue:pushback(Named { name = string.rep("x", i) })
+    end
+    const shown = tostring(queue)
+    assert(#shown > 20000 and string.find(shown, "Named(" .. string.rep("x", 200) .. ")", 1, true))
+
+    const long = string.rep("\"quoted\"\n", 500)
+    assert(#tostring(collections.Vec(long, long)) > 2 * #long)
+    assert(#tostring(bundle.pack(long, long)) > 2 * #long)
+
+    const list = collections.Vec(Clearing {}, Clearing {}, Clearing {})
+    printing = list
+    assert(tostring(list) == "Vec(cleared, nil, nil)")
+end
+
+-- `bundle.pack` compiles to a fastcall, which builds what the function does
+do
+    const three = bundle.pack(1, 2, 3)
+    assert(three.first == 1 and three.third == 3 and tostring(three) == ".(1, 2, 3)")
+    assert(#bundle.pack("a") == 1 and bundle.pack("a").first == "a")
+    assert(bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12).twelfth == 12)
+    assert(#bundle.pack() == 0)
+
+    -- enough allocation to run the collector between constructions
+    const kept = {}
+    for i = 1, 20000 do
+        kept[i % 100 + 1] = bundle.pack({ i })
+    end
+    collectgarbage()
+    for i = 1, 100 do
+        assert(kept[i].first[1] % 100 + 1 == i)
+    end
+
+    -- with `bundle` replaced in the environment, the call reaches the replacement
+    const replaced = loadstring("local value = bundle.pack(1) return value")
+    setfenv(replaced, { bundle = { pack = function(value) return `replaced {value}` end } })
+    assert(replaced() == "replaced 1")
+end
+
+-- `none` is a value like any other, so a container of strings refuses it
+do
+    const strings = collections.Vec()
+    strings:push("a")
+    raises(function()
+        strings:push(none)
+    end, "this Vec can only accept strings, but you passed none")
+end
+
+-- every class's data lives in ordinary values, which collections keep alive
+do
+    const maps = {}
+    for i = 1, 200 do
+        const map = collections.OrderedMap()
+        for j = 1, 20 do
+            map:set(`k{j}`, { j })
+        end
+        map:remove("k5")
+        table.insert(maps, map)
+
+        const queue = collections.VecDeque()
+        for j = 1, 20 do
+            queue:pushback({ j })
+        end
+        table.insert(maps, queue)
+    end
+    collectgarbage()
+    for i = 1, #maps, 2 do
+        assert(maps[i]:get("k20")[1] == 20 and maps[i]:get("k5") == nil)
+        assert(maps[i + 1]:back()[1] == 20)
+    end
+end
+
+return "OK"

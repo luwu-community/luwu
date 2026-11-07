@@ -932,6 +932,8 @@ struct TypeMapVisitor : AstVisitor
             case LBF_BUFFER_WRITEF64:
             case LBF_BUFFER_WRITEINTEGER:
             case LBF_CLASS_OF:
+            case LBF_BUNDLE_PACK:
+            case LBF_BUNDLE_UNPACK:
                 break;
             case LBF_MATH_ABS:
             case LBF_MATH_ACOS:

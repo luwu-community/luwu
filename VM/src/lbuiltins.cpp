@@ -10,6 +10,7 @@
 #include "ldo.h"
 #include "lbuffer.h"
 #include "lvector.h"
+#include "lclass.h"
 
 #include <math.h>
 #include <string.h>
@@ -1018,6 +1019,71 @@ static int luauF_class_of(lua_State* L, StkId res, TValue* arg0, int nresults, S
     }
 
     return -1;
+}
+
+// Luwu bundles: a new object of the builtin class `classdef` in `res`, its members set from the
+// arguments in order and nil past them. The caller has checked that the collector doesn't need a step.
+static void buildnative(lua_State* L, StkId res, LuauClass* classdef, TValue* arg0, StkId args, int nparams)
+{
+    // A new object is white, so storing into it needs no barrier
+    LuauObject* object = luaR_newobjectuninit(L, classdef);
+    TValue* members = luaR_members(object);
+    int count = int(object->numberofmembers);
+    if (count >= 1 && nparams >= 1)
+        setobj(L, &members[0], arg0);
+    for (int i = 1; i < count && i < nparams; i++)
+        setobj(L, &members[i], &args[i - 1]);
+    for (int i = nparams; i < count; i++)
+        setnilvalue(&members[i]);
+
+    setobjectvalue(L, res, object);
+}
+
+// Luwu bundles: `bundle.pack(...)` without a call frame. More values than a bundle holds fall back to the function,
+// which raises.
+static int luauF_bundlepack(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    if (nresults > 1 || nparams > LUWU_BUNDLE_MAX || luaC_needsGC(L))
+        return -1;
+
+    LuauClass* classdef = L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + nparams];
+    if (!classdef)
+        return -1;
+
+    buildnative(L, res, classdef, arg0, args, nparams);
+    return 1;
+}
+
+// Luwu bundles: `bundle.unpack(b)` without a call frame. A range, or anything but a bundle, falls back to the function.
+static int luauF_bundleunpack(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    if (nparams != 1 || !ttisobject(arg0))
+        return -1;
+
+    // the members stay put while the results overwrite the arguments: they're on the heap
+    const LuauObject* bundle = objectvalue(arg0);
+    int size = int(bundle->numberofmembers);
+    if (size > LUWU_BUNDLE_MAX || bundle->lclass != L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + size])
+        return -1;
+
+    int count = nresults < 0 ? size : nresults;
+    if (cast_int(L->stack_last - res) < count)
+        return -1;
+
+    const TValue* members = luaR_members(bundle);
+    for (int i = 0; i < count; i++)
+    {
+        if (i < size)
+        {
+            setobj2s(L, res + i, &members[i]);
+        }
+        else
+        {
+            setnilvalue(res + i);
+        }
+    }
+    expandstacklimit(L, res + count);
+    return count;
 }
 
 static int luauF_rawget(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
@@ -2884,6 +2950,9 @@ const luau_FastFunction luauF_table[256] = {
     luauF_startswith,
     luauF_endswith,
     luauF_contains,
+
+    luauF_bundlepack,
+    luauF_bundleunpack,
 
 // When adding builtins, add them above this line; what follows is 64 "dummy" entries with luauF_missing fallback.
 // This is important so that older versions of the runtime that don't support newer builtins automatically fall back via luauF_missing.

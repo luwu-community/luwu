@@ -754,6 +754,10 @@ struct ExternType
     // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): set on an instantiation of a generic class, to the class's template
     std::optional<TypeId> genericTemplate;
 
+    // Luwu bundles: a bundle class (`bundle.Two`), which prints the way `.(A, B)` writes it. Set on the declared class;
+    // an instantiation reads its template's.
+    bool printsAsBundle = false;
+
     // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): whether the members still have to be built (see props)
     bool hasUnbuiltMembers() const
     {

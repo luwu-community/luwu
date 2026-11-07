@@ -44,6 +44,7 @@ LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuStringExtensions)
 
@@ -3846,6 +3847,78 @@ struct Compiler
         }
     }
 
+    // Luwu collections: the `.(key, value)` bundles an `OrderedMap(...)` call builds for its entries, passed as its
+    // arguments or as the items of a list literal. Empty when the call passes anything else.
+    std::vector<AstExprCall*> orderedMapEntryBundles(AstExprCall* expr)
+    {
+        if (!FFlag::DebugLuwuCollections || expr->self)
+            return {};
+
+        Builtin builtin = getBuiltin(expr->func, globals, variables);
+        if (!builtin.isMethod("collections", "OrderedMap"))
+            return {};
+
+        std::vector<AstExpr*> entries(expr->args.begin(), expr->args.end());
+        AstExprTable* list = expr->args.size == 1 ? expr->args.data[0]->as<AstExprTable>() : nullptr;
+        if (list)
+        {
+            entries.clear();
+            for (const AstExprTable::Item& item : list->items)
+            {
+                if (item.kind != AstExprTable::Item::Kind::List)
+                    return {};
+                entries.push_back(item.value);
+            }
+        }
+
+        std::vector<AstExprCall*> bundles;
+        for (AstExpr* entry : entries)
+        {
+            if (bundleConstructionSize(entry) != 2)
+                return {};
+            bundles.push_back(entry->as<AstExprCall>());
+        }
+        return bundles;
+    }
+
+    // Luwu collections: `OrderedMap(.(k, v), ...)` and `OrderedMap({ .(k, v), ... })` compile to `OrderedMap()` and a
+    // `set` call per entry, so neither the bundles nor the list are built
+    bool tryCompileOrderedMapFromBundles(AstExprCall* expr, uint8_t target)
+    {
+        if (options.optimizationLevel < 1)
+            return false;
+
+        std::vector<AstExprCall*> bundles = orderedMapEntryBundles(expr);
+        if (bundles.empty())
+            return false;
+
+        RegScope rs(this);
+        uint8_t map = allocReg(expr, 1u);
+        compileExprTemp(expr->func, map);
+        bytecode.emitABC(LOP_CALL, map, 1, 2);
+
+        BytecodeBuilder::StringRef setName = sref(AstName("set"));
+        int32_t setId = bytecode.addConstantString(setName);
+        if (setId < 0)
+            CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+
+        for (AstExprCall* bundle : bundles)
+        {
+            RegScope entryScope(this);
+            uint8_t regs = allocReg(bundle, 4u);
+            compileExprTempTop(bundle->args.data[0], uint8_t(regs + 2));
+            compileExprTempTop(bundle->args.data[1], uint8_t(regs + 3));
+
+            setDebugLine(bundle);
+            bytecode.emitABC(LOP_NAMECALL, regs, map, uint8_t(BytecodeBuilder::getStringHash(setName)));
+            bytecode.emitAux(setId);
+            bytecode.emitABC(LOP_CALL, regs, 4, 1);
+        }
+
+        bytecode.emitABC(LOP_MOVE, target, map, 0);
+        return true;
+    }
+
     void compileExprCall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop = false, bool multRet = false)
     {
         LUAU_ASSERT(targetCount < 255);
@@ -3898,6 +3971,9 @@ struct Compiler
             if (tryCompileNewObject(expr, target))
                 return;
         }
+
+        if (!expr->self && !multRet && targetCount == 1 && tryCompileOrderedMapFromBundles(expr, target))
+            return;
 
         // Luwu Classes (rfcs/classes): inline `obj:method()` calls whose receiver class is
         // statically known and whose body can be inlined here (see tryResolveMethodCall).
@@ -9015,8 +9091,196 @@ struct Compiler
         loops.pop_back();
     }
 
+    // Luwu bundles: the most values a bundle holds (LUWU_BUNDLE_MAX in the VM)
+    static constexpr unsigned kMaxBundleValues = 12;
+
+    // Luwu bundles: the size of the bundle `expr` constructs, a `bundle.pack` call (which `.(a, b)` is) whose last argument
+    // isn't a multiret. 0 for anything else.
+    unsigned bundleConstructionSize(AstExpr* expr)
+    {
+        AstExprCall* call = expr->as<AstExprCall>();
+        if (!FFlag::DebugLuwuCollections || !call || call->self || call->args.size > kMaxBundleValues)
+            return 0;
+
+        Builtin builtin = getBuiltin(call->func, globals, variables);
+        if (!builtin.isMethod("bundle", "pack"))
+            return 0;
+
+        bool spreads = call->args.size > 0 && isExprMultRet(call->args.data[call->args.size - 1]);
+        return spreads ? 0 : unsigned(call->args.size);
+    }
+
+    // Luwu collections: the most elements a loop header unfolds, from a table literal (`for _, v in { a, b }`) or a
+    // bundle's construction
+    static constexpr size_t kMaxUnfoldedLoopItems = 4;
+
+    // Luwu collections: the elements of the value a `for ... in` loop unfolds instead of building it (see
+    // tryCompileUnfoldedForIn). Empty when it can't be unfolded.
+    struct UnfoldedLoopValue
+    {
+        std::vector<AstExpr*> elements;
+        // A table skips its `nil` items when iterated; a bundle yields every slot
+        bool skipsNil = false;
+    };
+
+    UnfoldedLoopValue unfoldedLoopValue(AstExpr* value)
+    {
+        UnfoldedLoopValue unfolded;
+        unsigned bundleSize = bundleConstructionSize(value);
+        if (bundleSize > 0 && bundleSize <= kMaxUnfoldedLoopItems)
+        {
+            AstExprCall* call = value->as<AstExprCall>();
+            unfolded.elements.assign(call->args.begin(), call->args.end());
+            return unfolded;
+        }
+
+        AstExprTable* table = value->as<AstExprTable>();
+        if (!table || table->items.size == 0 || table->items.size > kMaxUnfoldedLoopItems)
+            return unfolded;
+
+        for (const AstExprTable::Item& item : table->items)
+        {
+            if (item.kind != AstExprTable::Item::Kind::List)
+                return {};
+        }
+
+        // a call or `...` as the last item adds as many items as it returns; a bundle's construction returns one
+        AstExpr* last = table->items.data[table->items.size - 1].value;
+        if (isExprMultRet(last) && bundleConstructionSize(last) == 0)
+            return unfolded;
+
+        for (const AstExprTable::Item& item : table->items)
+            unfolded.elements.push_back(item.value);
+        unfolded.skipsNil = true;
+        return unfolded;
+    }
+
+    // Luwu collections: whether `body` reads or writes `local`
+    static bool mentionsLocal(AstStat* body, AstLocal* local)
+    {
+        struct Visitor : AstVisitor
+        {
+            AstLocal* local = nullptr;
+            bool found = false;
+
+            bool visit(AstExprLocal* node) override
+            {
+                found = found || node->local == local;
+                return !found;
+            }
+        };
+
+        Visitor visitor;
+        visitor.local = local;
+        body->visit(&visitor);
+        return visitor.found;
+    }
+
+    // Luwu collections: `for i, v in bundle.Pair(a, b)`, and `for i, v in { a, b }` with up to four plain items,
+    // build no bundle or table. Each element goes into a register and the body is compiled once per element. Each copy
+    // binds `v` to its element's register and `i` to its position, and a closure in one copy captures that copy's `v`.
+    // A table literal's `nil` items are skipped the way iterating the table skips them. Like a fastcall, this assumes
+    // `collections` is the builtin library when the module never assigns it.
+    bool tryCompileUnfoldedForIn(AstStatForIn* stat)
+    {
+        if (stat->values.size != 1 || stat->vars.size == 0)
+            return false;
+
+        UnfoldedLoopValue unfolded = unfoldedLoopValue(stat->values.data[0]);
+        if (unfolded.elements.empty())
+            return false;
+
+        RegScope rs(this);
+        uint8_t elements = allocReg(stat, unsigned(unfolded.elements.size()));
+        for (size_t i = 0; i < unfolded.elements.size(); i++)
+        {
+            RegScope rsElement(this);
+            compileExpr(unfolded.elements[i], uint8_t(elements + i), /* targetTemp= */ true);
+        }
+
+        // the position and any extra variables only get a register when the body uses them
+        std::vector<uint8_t> extraRegs(stat->vars.size, kInvalidReg);
+        for (size_t v = 0; v < stat->vars.size; v++)
+        {
+            if (v != 1 && mentionsLocal(stat->body, stat->vars.data[v]))
+                extraRegs[v] = allocReg(stat, 1u);
+        }
+
+        size_t oldLocals = localStack.size();
+        size_t oldJumps = loopJumps.size();
+        loops.push_back({oldLocals, oldLocals, nullptr});
+
+        for (size_t i = 0; i < unfolded.elements.size(); i++)
+        {
+            uint8_t element = uint8_t(elements + i);
+
+            Constant constant = getConstant(unfolded.elements[i]);
+            if (unfolded.skipsNil && constant.type == Constant::Type_Nil)
+                continue;
+
+            std::optional<size_t> skipLabel;
+            if (unfolded.skipsNil && constant.type == Constant::Type_Unknown)
+            {
+                skipLabel = bytecode.emitLabel();
+                bytecode.emitAD(LOP_JUMPXEQKNIL, element, 0);
+                bytecode.emitAux(0);
+            }
+
+            for (size_t v = 0; v < stat->vars.size; v++)
+            {
+                if (v == 1)
+                {
+                    pushLocal(stat->vars.data[v], element, kDefaultAllocPc);
+                    continue;
+                }
+
+                if (extraRegs[v] == kInvalidReg)
+                    continue;
+
+                if (v == 0)
+                    bytecode.emitAD(LOP_LOADN, extraRegs[v], int16_t(i + 1));
+                else
+                    bytecode.emitABC(LOP_LOADNIL, extraRegs[v], 0, 0);
+                pushLocal(stat->vars.data[v], extraRegs[v], kDefaultAllocPc);
+            }
+
+            size_t iterJumps = loopJumps.size();
+
+            compileStat(stat->body);
+
+            closeLocals(oldLocals);
+            popLocals(oldLocals);
+
+            // a `continue` and a skipped `nil` item go to the next element
+            size_t contLabel = bytecode.emitLabel();
+            for (size_t j = iterJumps; j < loopJumps.size(); ++j)
+            {
+                if (loopJumps[j].type == LoopJump::Continue)
+                    patchJump(stat, loopJumps[j].label, contLabel);
+            }
+            if (skipLabel)
+                patchJump(stat, *skipLabel, contLabel);
+        }
+
+        // a `break` goes past the last element
+        size_t endLabel = bytecode.emitLabel();
+        for (size_t j = oldJumps; j < loopJumps.size(); ++j)
+        {
+            if (loopJumps[j].type == LoopJump::Break)
+                patchJump(stat, loopJumps[j].label, endLabel);
+        }
+
+        loopJumps.resize(oldJumps);
+        loops.pop_back();
+        return true;
+    }
+
     void compileStatForIn(AstStatForIn* stat)
     {
+        // Luwu collections: a bundle or small table literal in the loop header is never built (tryCompileUnfoldedForIn)
+        if (options.optimizationLevel >= 1 && tryCompileUnfoldedForIn(stat))
+            return;
+
         RegScope rs(this);
 
         size_t oldLocals = localStack.size();

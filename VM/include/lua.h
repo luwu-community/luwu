@@ -557,6 +557,12 @@ LUA_API int lua_ismemberconst(lua_State* L, int idx, const char* membername);
 LUA_API int lua_ismemberfinal(lua_State* L, int idx, const char* membername);
 LUA_API const char* lua_getclassname(lua_State* L, int idx);
 
+// Luwu bundles: lua_packbundle pops `n` values and pushes a bundle of them, as `bundle.pack` does; it raises past 12
+// values or when the bundle library (luaopen_bundle) isn't open. lua_unpackbundle pushes the values of the bundle at
+// `idx` and returns how many, or pushes nothing and returns -1 for any other value.
+LUA_API void lua_packbundle(lua_State* L, int n);
+LUA_API int lua_unpackbundle(lua_State* L, int idx);
+
 LUA_API int lua_getbuffermode(lua_State* L, int idx);
 LUA_API void* lua_getbufferuserdata(lua_State* L, int idx);
 

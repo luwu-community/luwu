@@ -32,6 +32,8 @@ LUAU_FASTINT(LuauSolverConstraintLimit)
 LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 LUAU_FASTFLAG(LuauCstAttr)
+LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(LuwuNonePrimitive)
 
 
 TEST_SUITE_BEGIN("TypeInferClasses");
@@ -6406,6 +6408,285 @@ local function wrong(_x: Input = { padding = 1 }) end
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(result.errors[0].location.begin.line, 6);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "classes_from_definition_files_keep_private_and_const_members")
+{
+    loadDefinition(R"(
+        export class Counter(public const step: number)
+            private count = 0
+            public function bump(self)
+                self.count += self.step
+            end
+        end
+        declare counters: { Counter: class<Counter> }
+    )");
+
+    CheckResult result = check(R"(
+        --!strict
+        local counter = counters.Counter(1)
+        local count = counter.count
+        counter.step = 2
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<PrivatePropertyAccess>(result.errors[0]));
+    CHECK(get<ConstPropertyAssignment>(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_declarations")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local map = collections.OrderedMap<<string, number>>()
+        map:set("a", 1)
+        local value = map:get("a")
+        local range = bundle.pack(1, "x")
+        local first = range.first
+        local second = range.second
+        for key, entry in map do
+            local k: string = key
+            local v: number = entry
+        end
+        local queue = collections.VecDeque<<string>>()
+        queue:pushback("a")
+        local front = queue:popfront()
+        local list = collections.Vec<<number>>()
+        for position, item in list do
+            local p: number = position
+            local i: number = item
+        end
+        map:set(1, "a")
+        list:push("a")
+        local private = map.order
+        range.first = 2
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    // `map:set(1, "a")`: the key and the value both have the wrong type
+    CHECK_EQ(result.errors[0].location.begin.line, 20);
+    CHECK_EQ(result.errors[1].location.begin.line, 20);
+    CHECK_EQ(result.errors[2].location.begin.line, 21);
+    // the declarations leave out private fields, which only the VM's classes have
+    CHECK_EQ(result.errors[3].location.begin.line, 22);
+    CHECK(get<ConstPropertyAssignment>(result.errors[4]));
+    CHECK_EQ(toString(requireType("map")), "OrderedMap<string, number>");
+    CHECK_EQ(toString(requireType("value")), "number?");
+    CHECK_EQ(toString(requireType("first")), "number");
+    CHECK_EQ(toString(requireType("second")), "string");
+    CHECK_EQ(toString(requireType("front")), "string?");
+}
+
+// Luwu collections: Vec and VecDeque take their values as arguments, OrderedMap takes `.(key, value)` bundles, and the
+// element types come from them
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements_from_their_arguments")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local list = collections.Vec(1, 2, 3)
+        list:push(4, 5)
+        list:extend({ 6, 7 })
+        local queue = collections.VecDeque("a", "b")
+        queue:pushfront("y", "z")
+        queue:extend({ "c" })
+        local map = collections.OrderedMap(bundle.pack("a", 1), bundle.pack("b", 2))
+        local listed = collections.OrderedMap({ bundle.pack(true, "x") })
+        local value = map:get("a")
+        list:push(6, "seven")
+        queue:prepend({ 1 })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 11);
+    CHECK_EQ(result.errors[1].location.begin.line, 12);
+    CHECK_EQ(toString(requireType("list")), "Vec<number>");
+    CHECK_EQ(toString(requireType("queue")), "VecDeque<string>");
+    CHECK_EQ(toString(requireType("map")), "OrderedMap<string, number>");
+    CHECK_EQ(toString(requireType("listed")), "OrderedMap<boolean, string>");
+    CHECK_EQ(toString(requireType("value")), "number?");
+}
+
+// Luwu collections: a bundle iterates over its slots, so the value is any of its element types
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_elements")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        for position, value in bundle.pack(1, "x") do
+            local p: number = position
+            local v: number | string = value
+        end
+        local color = bundle.pack(255, true, "red")
+        for _, channel in color do
+            local c: number | boolean | string = channel
+        end
+        for _, side in bundle.pack(1, 2, 3, 4) do
+            local s: number = side
+        end
+        for _, value in bundle.pack(1, "x") do
+            local wrong: number = value
+        end
+    )");
+
+    // only the last loop is wrong: its value can be a string
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 14);
+}
+
+// Luwu bundles: `bundle.pack`, `unpack`, `concat`, `sub` and `with` keep each position's own type. A literal position
+// picks out one; any other position of `with` could be any of them.
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_functions_keep_each_position_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    // an `unknown` would fail to assign to any of these annotations
+    CheckResult result = check(R"(
+        --!strict
+        local function f(n: number, s: string, flag: boolean, i: number)
+            local b: bundle.Bundle3<number, string, boolean> = bundle.pack(n, s, flag)
+            local x: number, y: string, z: boolean = bundle.unpack(b)
+            local middle: string = bundle.unpack(b, 2, 2)
+            local tail: bundle.Bundle2<string, boolean> = b:sub(2, 3)
+            local replaced: bundle.Bundle3<string, string, boolean> = b:with(1, "text")
+            local anywhere: bundle.Bundle3<number | boolean, string | boolean, boolean> = b:with(i, true)
+            local joined: bundle.Bundle5<number, string, boolean, number, string> = bundle.concat(b, bundle.pack(1, "x"))
+            local last: number = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12).twelfth
+            local empty: bundle.Bundle0 = bundle.pack()
+            local wrong: bundle.Bundle2<number, string> = b:sub(2, 3)
+            local tailFunction: bundle.Bundle2<string, boolean> = bundle.sub(b, 2, 3)
+            local replacedFunction: bundle.Bundle3<string, string, boolean> = bundle.with(b, 1, "text")
+            return x, y, z, middle, tail, replaced, anywhere, joined, last, empty, wrong, tailFunction, replacedFunction
+        end
+    )");
+
+    // only `wrong` is: its positions are a string and a boolean
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 12);
+}
+
+// Luwu bundles: two bundles of the same size compare with their metamethods, whatever their position types
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_compare_with_their_metamethods")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local a = bundle.pack(1, 2)
+        local b = bundle.pack(1, 3)
+        local less: boolean = a < b
+        local atMost: boolean = a <= b
+        local same: boolean = a == b
+        local mixed: boolean = bundle.pack(1, "x") == bundle.pack(2, "y")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu bundles: assigning a bundle's field names the `with` call that makes a changed copy
+TEST_CASE_FIXTURE(BuiltinsFixture, "assigning_a_bundle_field_points_at_with")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local b = bundle.pack(1, 2)
+        b.second = 3
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<ConstPropertyAssignment>(result.errors[0]));
+    CHECK(toString(result.errors[0]).find("b:with(2, value)") != std::string::npos);
+}
+
+// Luwu bundles: a bundle type prints the way `.(A, B)` writes it, whatever its class is called
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_types_print_as_dot_positional")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local pair = bundle.pack(1, "x")
+        local nested = bundle.pack(bundle.pack(true), pair)
+        local empty = bundle.pack()
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("pair")), ".(number, string)");
+    CHECK_EQ(toString(requireType("nested")), ".(.(boolean), .(number, string))");
+    CHECK_EQ(toString(requireType("empty")), ".()");
+}
+
+// Luwu: `none` has no keys, so indexing an optional `T | none` names its `none` as the problem
+TEST_CASE_FIXTURE(BuiltinsFixture, "indexing_none_by_a_key_is_an_error")
+{
+    ScopedFastFlag sff{FFlag::LuwuNonePrimitive, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local a = none.foo
+        local b = none["bar"]
+        local function f(x: number | none)
+            return x.baz
+        end
+        local function g(s: string | none)
+            return s.len
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 2);
+    CHECK_EQ(result.errors[1].location.begin.line, 3);
+    CHECK_EQ(result.errors[2].location.begin.line, 5);
+    // only `none` lacks `len`
+    CHECK_EQ(result.errors[3].location.begin.line, 8);
+    CHECK(toString(result.errors[3]).find("may be 'none'") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "trait_function_naming_self_without_a_self_parameter")
