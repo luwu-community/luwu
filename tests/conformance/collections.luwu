@@ -605,8 +605,8 @@ do
     end, "this Vec can't accept nil")
 end
 
--- push, pushfront and pushback take several values; extend, extendfront and extendback take a list. A value of the
--- wrong type adds none of them. Values added at the front keep their order.
+-- push, pushfront and pushback take several values; extend and prepend take a list. A value of the wrong type adds
+-- none of them. Values added at the front keep their order.
 do
     const list = collections.Vec()
     list:push(1, 2)
@@ -627,8 +627,8 @@ do
     const queue = collections.VecDeque(3)
     queue:pushfront(1, 2)
     queue:pushback(4, 5)
-    queue:extendfront({ -1, 0 })
-    queue:extendback({ 6, 7 })
+    queue:prepend({ -1, 0 })
+    queue:extend({ 6, 7 })
     assert(tostring(queue) == "VecDeque(-1, 0, 1, 2, 3, 4, 5, 6, 7)")
 
     -- more values than the first block holds, at both ends, wrapping around the ring
@@ -637,8 +637,8 @@ do
         items[i] = i
     end
     const big = collections.VecDeque()
-    big:extendback(items)
-    big:extendfront(items)
+    big:extend(items)
+    big:prepend(items)
     big:pushfront(table.unpack(items, 1, 100))
     assert(#big == 20100 and big:front() == 1 and big:at(101) == 1 and big:at(10101) == 1 and big:back() == 10000)
     for position = 1, 100 do

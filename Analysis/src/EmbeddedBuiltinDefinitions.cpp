@@ -431,8 +431,8 @@ class type VecDeque<T>
     public function __init(self, ...: T)
     public function pushfront(self, value: T, ...: T)
     public function pushback(self, value: T, ...: T)
-    public function extendfront(self, items: {T})
-    public function extendback(self, items: {T})
+    public function extend(self, items: {T})
+    public function prepend(self, items: {T})
     public function popfront(self): T?
     public function popback(self): T?
     public function front(self): T?
