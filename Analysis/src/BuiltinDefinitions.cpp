@@ -591,6 +591,27 @@ std::optional<std::string> fixedElementContainerName(TypeArena* arena, const Sco
     return std::nullopt;
 }
 
+std::optional<std::string> builtinEnumPlural(const Scope* scope, TypeId ty)
+{
+    const ExternType* object = get<ExternType>(follow(ty));
+    if (!object)
+        return std::nullopt;
+    TypeId objectTemplate = follow(object->genericTemplate.value_or(follow(ty)));
+
+    const Scope* globalScope = scope;
+    while (globalScope->parent)
+        globalScope = globalScope->parent.get();
+
+    const std::pair<const char*, const char*> variants[] = {{"Some", "options"}, {"Ok", "results"}, {"Err", "results"}};
+    for (const auto& [name, plural] : variants)
+    {
+        std::optional<TypeFun> declared = globalScope->lookupType(name);
+        if (declared && follow(declared->type) == objectTemplate)
+            return std::string(plural);
+    }
+    return std::nullopt;
+}
+
 // Luwu bundles: the position a literal number names, or nullopt for anything else
 static std::optional<size_t> literalPosition(const AstExpr* expr)
 {

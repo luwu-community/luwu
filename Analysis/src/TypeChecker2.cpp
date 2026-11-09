@@ -3867,7 +3867,7 @@ std::optional<ContainerElement> objectElement(const ExternType* object)
 }
 
 // The element a value of type `ty` fixes, or nullopt when the type doesn't pin one down (a union, `unknown`, a generic)
-std::optional<ContainerElement> containerElementOf(NotNull<BuiltinTypes> builtinTypes, TypeId ty)
+std::optional<ContainerElement> containerElementOf(NotNull<BuiltinTypes> builtinTypes, const Scope* scope, TypeId ty)
 {
     ty = follow(ty);
     if (const SingletonType* singleton = get<SingletonType>(ty))
@@ -3908,6 +3908,9 @@ std::optional<ContainerElement> containerElementOf(NotNull<BuiltinTypes> builtin
         const ExternType* declared = externType->genericTemplate ? get<ExternType>(follow(*externType->genericTemplate)) : externType;
         if (!declared || declared->traitInfo)
             return std::nullopt;
+        // Luwu try expressions: `Ok` and `Err` are both results at runtime, and `Some` an option
+        if (std::optional<std::string> plural = builtinEnumPlural(scope, ty))
+            return ContainerElement{*plural, nullptr, *plural, withArticle(plural->substr(0, plural->size() - 1))};
         if (declared->relation && declared->relation->get_if<Klass>())
             return objectElement(externType);
         if (!declared->relation)
@@ -3936,7 +3939,8 @@ void TypeChecker2::checkContainerConstructor(AstExprCall* call)
     if (!containerName)
         return;
 
-    std::optional<ContainerElement> fixed = containerElementOf(builtinTypes, lookupType(call->args.data[0]));
+    const Scope* scope = findInnermostScope(call->location);
+    std::optional<ContainerElement> fixed = containerElementOf(builtinTypes, scope, lookupType(call->args.data[0]));
     if (!fixed)
         return;
 
@@ -3950,7 +3954,7 @@ void TypeChecker2::checkContainerConstructor(AstExprCall* call)
     for (size_t i = 1; i < checked; i++)
     {
         AstExpr* arg = call->args.data[i];
-        std::optional<ContainerElement> element = containerElementOf(builtinTypes, lookupType(arg));
+        std::optional<ContainerElement> element = containerElementOf(builtinTypes, scope, lookupType(arg));
         if (!element || sameElement(*element, *fixed))
             continue;
 

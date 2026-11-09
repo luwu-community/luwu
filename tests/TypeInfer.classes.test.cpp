@@ -6447,6 +6447,38 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_eleme
     CHECK_EQ(result.errors[0].location.begin.line, 14);
 }
 
+// Luwu try expressions: a Vec or VecDeque of results takes both `Ok` and `Err`, and one of options takes `Some` and `none`,
+// as the runtime does. Neither a constructor nor a first push makes one variant the element type.
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_hold_every_variant_of_a_builtin_enum")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local results = collections.Vec(Ok(1), Err("no"))
+        local pushed = collections.VecDeque()
+        pushed:pushback(Ok(1))
+        pushed:pushback(Err("no"))
+        local options = collections.Vec()
+        options:push(Some(1))
+        options:push(none)
+        local mixed = collections.Vec(Ok(1), Some(2))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 9);
+    CHECK(toString(result.errors[0]).find("can only accept results") != std::string::npos);
+    CHECK(toString(result.errors[0]).find("but you passed an option") != std::string::npos);
+}
+
 // Luwu try expressions: options and results are global classes, and an empty option is `none`, which gets `get` and
 // `expect` while the library exists
 TEST_CASE_FIXTURE(BuiltinsFixture, "option_and_result_types")

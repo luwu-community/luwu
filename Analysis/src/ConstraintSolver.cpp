@@ -3603,6 +3603,19 @@ bool ConstraintSolver::tryDispatch(const TypeInstantiationConstraint& c, NotNull
         bind(constraint, c.placeholderType, c.functionType);
         return true;
     }
+
+    // Luwu try expressions: a container whose first value is an `Ok` takes `Err`s too, and one of a `Some` takes `none`,
+    // which a type taken from the first push can't say. Those keep the element type an empty container gets otherwise.
+    if (c.fromFirstPush && !c.typeArguments.empty())
+    {
+        if (isBlocked(c.typeArguments[0]))
+            return block(c.typeArguments[0], constraint);
+        if (builtinEnumPlural(constraint->scope.get(), c.typeArguments[0]))
+        {
+            bind(constraint, c.placeholderType, c.functionType);
+            return true;
+        }
+    }
     if (classCall)
     {
         if (isBlocked(*classCall))
