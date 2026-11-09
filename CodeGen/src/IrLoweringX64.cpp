@@ -2748,8 +2748,16 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         RegisterX64 object = regOp(OP_A(inst));
         int kind = intOp(OP_B(inst));
         Label fresh;
-        build.cmp(byte[object + offsetof(LuauObject, storagekind)], uint8_t(kind));
-        jumpOrAbortOnUndefNoFinalize(kind == LUAR_STORAGE_NONE ? ConditionX64::Equal : ConditionX64::NotEqual, OP_C(inst), index, next, fresh);
+        if (kind == LUAR_STORAGE_CONTAINER)
+        {
+            build.test(byte[object + offsetof(LuauObject, storagekind)], uint8_t(LUAR_STORAGE_CONTAINER));
+            jumpOrAbortOnUndefNoFinalize(ConditionX64::Zero, OP_C(inst), index, next, fresh);
+        }
+        else
+        {
+            build.cmp(byte[object + offsetof(LuauObject, storagekind)], uint8_t(kind));
+            jumpOrAbortOnUndefNoFinalize(ConditionX64::NotEqual, OP_C(inst), index, next, fresh);
+        }
         build.cmp(dword[object + kStorageMemberOffset + offsetof(TValue, tt)], LUA_TLIGHTUSERDATA);
         jumpOrAbortOnUndefNoFinalize(ConditionX64::NotEqual, OP_C(inst), index, next, fresh);
         finalizeTargetLabel(OP_C(inst), index, fresh);

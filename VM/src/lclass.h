@@ -15,6 +15,20 @@ inline size_t luaR_objectsize(uint32_t nummembers)
     return sizeof(LuauObject) + size_t(nummembers) * sizeof(TValue);
 }
 
+// Luwu bundles: a bundle's allocation, its values followed by its key (LuauBundleKey)
+inline size_t luaR_bundleallocsize(uint32_t size)
+{
+    return luaR_objectsize(size) + sizeof(LuauBundleKey);
+}
+
+// The size of `object`'s allocation, which a bundle's key makes larger than its members need
+inline size_t luaR_objectallocsize(const LuauObject* object)
+{
+    if (object->storagekind == LUAR_STORAGE_BUNDLE)
+        return luaR_bundleallocsize(object->numberofmembers);
+    return luaR_objectsize(object->numberofmembers);
+}
+
 // LuauClass::memberflags entries use LBC_CLASSMEMBER_PRIVATE / LBC_CLASSMEMBER_CONST (see
 // Luau/Bytecode.h), the same bits the compiler serializes into LBC_CONSTANT_CLASS_SHAPE.
 
@@ -270,7 +284,7 @@ LUAI_FUNC bool luaR_collectionnext(lua_State* L, StkId ra);
 // object's storage kind and leaves the storage member nil. Native code reads light userdata there as a block.
 LUAU_FORCEINLINE LuauStorage* luaR_storage(LuauObject* object)
 {
-    if (object->storagekind == LUAR_STORAGE_NONE)
+    if ((object->storagekind & LUAR_STORAGE_CONTAINER) == 0)
         return NULL;
 
     const TValue* member = &luaR_members(object)[LUAR_STORAGE_MEMBER];
@@ -292,7 +306,25 @@ LUAU_FORCEINLINE size_t luaR_storagesize(uint32_t capacity)
 LUAU_FORCEINLINE size_t luaR_objectmemory(const LuauObject* object)
 {
     const LuauStorage* storage = luaR_storage(object);
-    return luaR_objectsize(object->numberofmembers) + (storage ? luaR_storagesize(storage->capacity) : 0);
+    return luaR_objectallocsize(object) + (storage ? luaR_storagesize(storage->capacity) : 0);
+}
+
+// Luwu bundles: whether `object` is a bundle
+LUAU_FORCEINLINE bool luaR_isbundle(const LuauObject* object)
+{
+    return object->storagekind == LUAR_STORAGE_BUNDLE;
+}
+
+// Luwu bundles: the key that follows a bundle's values
+LUAU_FORCEINLINE LuauBundleKey* luaR_bundlekey(LuauObject* object)
+{
+    LUAU_ASSERT(luaR_isbundle(object));
+    return reinterpret_cast<LuauBundleKey*>(luaR_members(object) + object->numberofmembers);
+}
+
+LUAU_FORCEINLINE const LuauBundleKey* luaR_bundlekey(const LuauObject* object)
+{
+    return luaR_bundlekey(const_cast<LuauObject*>(object));
 }
 
 // Luwu collections: the slot of the entry `offset` places from the front of a `Vec` or `VecDeque`
@@ -323,11 +355,13 @@ LUAU_FORCEINLINE bool luaR_storagenext(lua_State* L, LuauObject* container, StkI
 // `Vec` and a `VecDeque` read their storage block, an `OrderedMap` its length field (LuauClass::lengthfield).
 LUAU_FORCEINLINE double luaR_objectlength(const LuauObject* object)
 {
-    if (object->storagekind != LUAR_STORAGE_NONE)
+    if (object->storagekind & LUAR_STORAGE_CONTAINER)
     {
         const LuauStorage* storage = luaR_storage(object);
         return storage ? double(storage->count) : 0;
     }
+    if (luaR_isbundle(object))
+        return double(object->numberofmembers);
 
     uint32_t field = object->lclass->lengthfield;
     return field == LUAR_NO_LENGTH_FIELD ? -1 : nvalue(&luaR_members(object)[field]);
@@ -408,16 +442,30 @@ LUAI_FUNC void luaR_getqualified(lua_State* L, StkId ra, const TValue* receiver,
 // Luwu Traits (rfcs/classes/traits.md): whether `classdef` implements `trait`, listed or implied through `needs`.
 LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait);
 
-// Luwu bundles: an object whose class is LuauClass::keybyvalue is a table key by its fields. luaR_keyhash gives equal
-// objects equal hashes, and luaR_keyequal compares the fields raw (no `__eq`), nested bundles by their fields too.
-LUAI_FUNC unsigned int luaR_keyhash(const LuauObject* object);
+// Luwu bundles: a bundle is a table key by its values. luaR_keyhash gives equal bundles equal hashes, and luaR_keyequal
+// compares their values raw (no `__eq`), nested bundles by their values too.
+LUAI_FUNC unsigned int luaR_keyhash(const LuauObject* bundle);
 LUAI_FUNC bool luaR_keyequal(const LuauObject* a, const LuauObject* b);
 
+// Luwu bundles: whether comparing `bundle` by value could take too long, past a weight limit. Such a bundle is only equal
+// to itself.
+LUAI_FUNC bool luaR_bundletooheavy(const LuauObject* bundle);
+
+/**
+ * Luwu bundles: a new bundle of `size` values, of the class for its size. Its values are unset: fill all of them, with
+ * nothing in between that could run the collector, then call luaR_sealbundle. Raises when `size` is past
+ * LUWU_BUNDLE_LIMIT or the bundle library isn't open. `what` names the operation in that error.
+ */
+LUAI_FUNC LuauObject* luaR_newbundleuninit(lua_State* L, int size, const char* what);
+// Luwu bundles: computes the key of a bundle luaR_newbundleuninit made, once its values are set
+LUAI_FUNC void luaR_sealbundle(LuauObject* bundle);
+
 // Luwu bundles: the number of values in the bundle `value`, or -1 when it isn't a bundle
-LUAI_FUNC int luaR_bundlesize(lua_State* L, const TValue* value);
-// Luwu bundles: raises for an assignment to a bundle's field, naming `with` instead of a constructor nothing can call.
-// Returns when the object isn't a bundle.
-LUAI_FUNC void luaR_checkbundleassign(lua_State* L, const LuauObject* object, const TValue* key);
+LUAI_FUNC int luaR_bundlesize(const TValue* value);
+// Luwu bundles: `bundle[key]` into `val`, a position by number. Raises for any other key or a position out of range.
+LUAI_FUNC void luaR_getbundleposition(lua_State* L, const LuauObject* bundle, const TValue* key, StkId val);
+// Luwu bundles: raises for an assignment to a bundle, naming `with` for a position
+LUAI_FUNC l_noret luaR_bundleassignerror(lua_State* L, const TValue* key);
 
 // A member's offset is cached in its instruction's 8-bit C operand (the slot the fast paths check). A
 // larger offset doesn't fit: it is never cached, and that member is looked up by name every time.

@@ -167,7 +167,19 @@ bool classReflectionEnabled();
 bool collectionsLibraryEnabled();
 // Luwu collections: the library's declarations, a definition file of its own (see registerBuiltinGlobals)
 std::string getCollectionsDefinitionSource();
-// Luwu bundles: the `bundle` library's declarations, opened with `collections` (see registerBuiltinGlobals)
+// Luwu builtin classes: whether `typeof` gives `name` for an object of a builtin class ("bundle", "vec", ...)
+bool isBuiltinClassTypeofName(const std::string& name);
+// Luwu builtin classes: the class types whose objects `typeof` names `name`, every bundle class for "bundle". nullopt for
+// any other name, or when the library isn't loaded.
+std::optional<TypeId> builtinClassTypeofType(TypeArena* arena, const Scope* globalScope, const std::string& name);
+
+// Luwu bundles: the type of each position of the bundle type `ty`, or nullopt when it isn't a bundle class instance
+std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty);
+
+// Luwu bundles: whether Analysis has the `bundle` library: the flags the VM opens it with (luaL_openlibs), and
+// LuwuDeclareStatements, which parses its declarations
+bool bundleLibraryEnabled();
+// Luwu bundles: the `bundle` library's declarations, a definition file of its own (see registerBuiltinGlobals)
 std::string getBundleDefinitionSource();
 std::string getTypeFunctionDefinitionSource();
 

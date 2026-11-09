@@ -34,6 +34,7 @@ LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 
 
@@ -6439,6 +6440,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -6449,8 +6451,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
         map:set("a", 1)
         local value = map:get("a")
         local range = bundle.pack(1, "x")
-        local first = range.first
-        local second = range.second
+        local position = range[1]
         for key, entry in map do
             local k: string = key
             local v: number = entry
@@ -6466,21 +6467,19 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
         map:set(1, "a")
         list:push("a")
         local private = map.order
-        range.first = 2
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
     // `map:set(1, "a")`: the key and the value both have the wrong type
-    CHECK_EQ(result.errors[0].location.begin.line, 20);
-    CHECK_EQ(result.errors[1].location.begin.line, 20);
-    CHECK_EQ(result.errors[2].location.begin.line, 21);
+    CHECK_EQ(result.errors[0].location.begin.line, 19);
+    CHECK_EQ(result.errors[1].location.begin.line, 19);
+    CHECK_EQ(result.errors[2].location.begin.line, 20);
     // the declarations leave out private fields, which only the VM's classes have
-    CHECK_EQ(result.errors[3].location.begin.line, 22);
-    CHECK(get<ConstPropertyAssignment>(result.errors[4]));
+    CHECK_EQ(result.errors[3].location.begin.line, 21);
     CHECK_EQ(toString(requireType("map")), "OrderedMap<string, number>");
     CHECK_EQ(toString(requireType("value")), "number?");
-    CHECK_EQ(toString(requireType("first")), "number");
-    CHECK_EQ(toString(requireType("second")), "string");
+    // `b[n]` can read any position
+    CHECK_EQ(toString(requireType("position")), "number | string");
     CHECK_EQ(toString(requireType("front")), "string?");
 }
 
@@ -6492,6 +6491,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -6528,6 +6528,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_eleme
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -7040,6 +7041,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_functions_keep_each_position_type")
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -7055,7 +7057,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_functions_keep_each_position_type")
             local replaced: bundle.Bundle3<string, string, boolean> = b:with(1, "text")
             local anywhere: bundle.Bundle3<number | boolean, string | boolean, boolean> = b:with(i, true)
             local joined: bundle.Bundle5<number, string, boolean, number, string> = bundle.concat(b, bundle.pack(1, "x"))
-            local last: number = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12).twelfth
+            local last: number = bundle.unpack(bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "12"), 11, 11)
             local empty: bundle.Bundle0 = bundle.pack()
             local wrong: bundle.Bundle2<number, string> = b:sub(2, 3)
             local tailFunction: bundle.Bundle2<string, boolean> = bundle.sub(b, 2, 3)
@@ -7069,6 +7071,61 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_functions_keep_each_position_type")
     CHECK_EQ(result.errors[0].location.begin.line, 12);
 }
 
+// Luwu bundles: past six values a bundle is a `BigBundle`, whose type pack holds each position's type
+TEST_CASE_FIXTURE(BuiltinsFixture, "big_bundles_keep_each_position_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local seven = bundle.pack(1, "two", 3, 4, 5, 6, true)
+        local named: bundle.BigBundle<number, string, number, number, number, number, boolean> = seven
+        local last: boolean = bundle.unpack(seven, 7, 7)
+        local short = seven:sub(2, 3)
+        local joined = bundle.concat(bundle.pack(1, 2, 3), bundle.pack("a", "b", "c", "d"))
+        local wrong: bundle.BigBundle<number, number, number, number, number, number, boolean> = seven
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+    CHECK_EQ(toString(requireType("seven")), ".(number, string, number, number, number, number, boolean)");
+    CHECK_EQ(toString(requireType("short")), ".(string, number)");
+    CHECK_EQ(toString(requireType("joined")), ".(number, number, number, string, string, string, string)");
+}
+
+// Luwu builtin classes: `typeof` names a bundle "bundle" and a container after its class, and narrows to them
+TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_narrows_to_builtin_classes")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function f(x: bundle.Bundle2<number, string> | string, y: collections.Vec<number> | number)
+            if typeof(x) == "bundle" then
+                local b: bundle.Bundle2<number, string> = x
+            end
+            if typeof(y) == "vec" then
+                local v: collections.Vec<number> = y
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 // Luwu bundles: two bundles of the same size compare with their metamethods, whatever their position types
 TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_compare_with_their_metamethods")
 {
@@ -7076,6 +7133,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_compare_with_their_metamethods")
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -7093,13 +7151,14 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_compare_with_their_metamethods")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-// Luwu bundles: assigning a bundle's field names the `with` call that makes a changed copy
+// Luwu bundles: assigning a bundle's position names the `with` call that makes a changed copy
 TEST_CASE_FIXTURE(BuiltinsFixture, "assigning_a_bundle_field_points_at_with")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -7107,12 +7166,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "assigning_a_bundle_field_points_at_with")
     CheckResult result = check(R"(
         --!strict
         local b = bundle.pack(1, 2)
-        b.second = 3
+        b[2] = 3
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    REQUIRE(get<ConstPropertyAssignment>(result.errors[0]));
-    CHECK(toString(result.errors[0]).find("b:with(2, value)") != std::string::npos);
+    REQUIRE(get<PropertyAccessViolation>(result.errors[0]));
+    CHECK(toString(result.errors[0]).find("b:with(") != std::string::npos);
 }
 
 // Luwu bundles: a bundle type prints the way `.(A, B)` writes it, whatever its class is called
@@ -7122,6 +7181,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_types_print_as_dot_positional")
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -7131,10 +7191,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_types_print_as_dot_positional")
         local pair = bundle.pack(1, "x")
         local nested = bundle.pack(bundle.pack(true), pair)
         local empty = bundle.pack()
+        local big = bundle.pack(1, 2, 3, 4, 5, 6, "seven")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ(toString(requireType("pair")), ".(number, string)");
+    CHECK_EQ(toString(requireType("big")), ".(number, number, number, number, number, number, string)");
     CHECK_EQ(toString(requireType("nested")), ".(.(boolean), .(number, string))");
     CHECK_EQ(toString(requireType("empty")), ".()");
 }

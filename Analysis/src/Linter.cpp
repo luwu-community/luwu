@@ -3,6 +3,7 @@
 
 #include "Luau/AstQuery.h"
 #include "Luau/AstUtils.h"
+#include "Luau/BuiltinDefinitions.h"
 #include "Luau/LinterConfig.h"
 #include "Luau/LuwuOnlyApi.h"
 #include "Luau/Module.h"
@@ -1525,6 +1526,10 @@ private:
             return Kind_Primitive;
         if (FFlag::LuwuClasses && FFlag::LuwuTraits && name == "trait")
             return Kind_Primitive;
+
+        // Luwu builtin classes: `typeof` names an object of one after what it is ("bundle", "vec"), as it does userdata
+        if (isBuiltinClassTypeofName(name))
+            return Kind_Userdata;
 
         if (std::optional<TypeFun> maybeTy = context->scope->lookupType(name))
             return Kind_Userdata;

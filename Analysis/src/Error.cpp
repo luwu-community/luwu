@@ -144,25 +144,12 @@ static const char* declarationKind(TypeId t)
     return isTrait ? "trait" : "class";
 }
 
-// Luwu bundles: the position of the bundle field `key` on `t` (1 for `first`), or 0 when `t` isn't a bundle or has no such
-// field
-static int bundleFieldPosition(TypeId t, const std::string& key)
+// Luwu bundles: whether `t` is a bundle class instance
+static bool isBundleType(TypeId t)
 {
-    static const char* const kFieldNames[] = {
-        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth",
-    };
-
     const ExternType* etv = get<ExternType>(follow(t));
     const ExternType* declared = etv && etv->genericTemplate ? get<ExternType>(follow(*etv->genericTemplate)) : etv;
-    if (!declared || !declared->printsAsBundle)
-        return 0;
-
-    for (size_t i = 0; i < sizeof(kFieldNames) / sizeof(kFieldNames[0]); i++)
-    {
-        if (key == kFieldNames[i])
-            return int(i + 1);
-    }
-    return 0;
+    return declared && declared->printsAsBundle;
 }
 
 // Luwu Traits (rfcs/classes/traits.md): a trait's value where any class is expected (`class.isinstance(x, Trait)`), or a
@@ -1806,6 +1793,9 @@ struct ErrorConverter
         case PropertyAccessViolation::CannotRead:
             return "Property " + stringKey + " of " + kind + " '" + toString(e.table) + "' is write-only";
         case PropertyAccessViolation::CannotWrite:
+            // Luwu bundles: a write to a position, which only a changed copy can do
+            if (isBundleType(e.table))
+                return "A bundle can't be changed; b:with(position, value) makes a copy with that position replaced";
             return "Property " + stringKey + " of " + kind + " '" + toString(e.table) + "' is read-only";
         }
 
@@ -1823,10 +1813,6 @@ struct ErrorConverter
 
     std::string operator()(const ConstPropertyAssignment& e) const
     {
-        // Luwu bundles: no code can call a bundle's constructor, so name the copy `with` makes
-        if (int position = bundleFieldPosition(e.table, e.key))
-            return "A bundle can't be changed; b:with(" + std::to_string(position) + ", value) makes a copy with '" + e.key + "' replaced";
-
         return "Field '" + e.key + "' of " + declarationKind(e.table) + " '" + e.className +
                "' is constant; assigning to it outside of '__init' will raise a runtime error";
     }

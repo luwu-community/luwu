@@ -2294,7 +2294,7 @@ SubtypingResult Subtyping::isCovariantWith(
         subExternType->definitionLocation == superExternType->definitionLocation &&
         subExternType->instantiatedTypeParams.size() == superExternType->instantiatedTypeParams.size() &&
         subExternType->instantiatedTypePackParams.size() == superExternType->instantiatedTypePackParams.size() &&
-        !subExternType->instantiatedTypeParams.empty())
+        (!subExternType->instantiatedTypeParams.empty() || !subExternType->instantiatedTypePackParams.empty()))
     {
         SubtypingResult result{true};
         bool anyUnsuppressedMismatch = false;
@@ -2309,8 +2309,10 @@ SubtypingResult Subtyping::isCovariantWith(
 
         for (size_t i = 0; i < subExternType->instantiatedTypePackParams.size(); ++i)
         {
-            if (follow(subExternType->instantiatedTypePackParams[i]) != follow(superExternType->instantiatedTypePackParams[i]))
-                return {false};
+            SubtypingResult argResult =
+                isInvariantWith(env, follow(subExternType->instantiatedTypePackParams[i]), follow(superExternType->instantiatedTypePackParams[i]), scope);
+            anyUnsuppressedMismatch |= !argResult.isSubtype && !argResult.isErrorSuppressing;
+            result.andAlso(std::move(argResult));
         }
 
         // An argument that only mismatches `any` (`A<any>` against `A<string>`) fails with the error

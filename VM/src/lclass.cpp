@@ -17,6 +17,7 @@
 #include "lvm.h"
 #include "lbytecode.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -73,12 +74,12 @@ LuauClass* luaR_newclass(
     classdef->traitdefaults = NULL;
     classdef->compiledtraitcopies = NULL;
     classdef->lengthfield = LUAR_NO_LENGTH_FIELD;
-    classdef->keybyvalue = false;
     classdef->fastmethods = NULL;
     classdef->qualified = NULL;
     classdef->reflection = NULL;
     classdef->positionalmembers = NULL;
     classdef->numberofpositional = -1;
+    classdef->typeofname = NULL;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -388,10 +389,7 @@ void luaR_checkconstassign(lua_State* L, const TValue* key, const LuauObject* ob
     // allowing such could lead to UB in future const optimizations.
     // also if you're using `const` just to have embedder-only-assignable fields please just use userdata
     if (!cl || (!isfinal && !luaR_closureisinit(classdef, cl)))
-    {
-        luaR_checkbundleassign(L, object, key);
         luaG_constassignerror(L, key, classdef->name);
-    }
 
     // `__init` constructs the object in its `self` parameter, which is register 0 of its frame. This
     // holds for a vararg `__init` too: its fixed parameters are moved up, and its frame base moves with
@@ -1038,7 +1036,7 @@ void luaR_freeobject(lua_State* L, LuauObject* object, lua_Page* page)
 {
     if (LuauStorage* storage = luaR_storage(object))
         luaM_free_(L, storage, luaR_storagesize(storage->capacity), object->memcat);
-    luaM_freegco(L, object, luaR_objectsize(object->numberofmembers), object->memcat, page);
+    luaM_freegco(L, object, luaR_objectallocsize(object), object->memcat, page);
 }
 
 // Luwu Traits (rfcs/classes/traits.md)
@@ -2690,8 +2688,12 @@ bool luaR_implements(const LuauClass* classdef, const LuauClass* trait)
 }
 
 // Luwu bundles: how deep bundles nest inside a key before an inner one counts by identity. It bounds the C stack a table
-// lookup uses: a chain of pairs can be as deep as a list.
+// lookup uses: a chain of bundles can be as deep as a list.
 static const int kKeyByValueDepth = 32;
+
+// Luwu bundles: the heaviest bundle (LuauBundleKey::weight) that compares by value. Bundles can share nested bundles, so
+// a few small ones can unfold to billions of values, and comparing two equal copies would visit all of them.
+static const uint32_t kBundleWeightLimit = 1 << 16;
 
 // Mixes `value` into the hash `h`
 static unsigned int mixkeyhash(unsigned int h, unsigned int value)
@@ -2699,11 +2701,9 @@ static unsigned int mixkeyhash(unsigned int h, unsigned int value)
     return (h ^ value) * 0x01000193u;
 }
 
-static unsigned int keyhash(const LuauObject* object, int depth);
-
-// A field's hash. Values that are raw equal hash the same: the sign of a zero is dropped, and a vector hashes to nothing
-// rather than reproduce its comparison.
-static unsigned int keyfieldhash(const TValue* value, int depth)
+// A value's hash. Values that are raw equal hash the same: the sign of a zero is dropped, and a vector hashes to nothing
+// rather than reproduce its comparison. A nested bundle gives the hash it was built with.
+static unsigned int keyvaluehash(const TValue* value)
 {
     switch (ttype(value))
     {
@@ -2727,8 +2727,8 @@ static unsigned int keyfieldhash(const TValue* value, int depth)
     case LUA_TLIGHTUSERDATA:
         return unsigned(uintptr_t(pvalue(value)));
     case LUA_TOBJECT:
-        if (objectvalue(value)->lclass->keybyvalue)
-            return keyhash(objectvalue(value), depth - 1);
+        if (luaR_isbundle(objectvalue(value)))
+            return luaR_bundlekey(objectvalue(value))->hash;
         return unsigned(uintptr_t(gcvalue(value)));
     case LUA_TVECTOR:
         return 0;
@@ -2737,21 +2737,19 @@ static unsigned int keyfieldhash(const TValue* value, int depth)
     }
 }
 
-static unsigned int keyhash(const LuauObject* object, int depth)
+void luaR_sealbundle(LuauObject* bundle)
 {
-    unsigned int h = mixkeyhash(0x811c9dc5u, object->numberofmembers);
-    if (depth == 0)
-        return h;
+    unsigned int h = mixkeyhash(0x811c9dc5u, bundle->numberofmembers);
+    uint64_t weight = 1;
 
-    const TValue* fields = luaR_members(object);
-    for (uint32_t i = 0; i < object->numberofmembers; i++)
-        h = mixkeyhash(h, keyfieldhash(&fields[i], depth));
-    return h;
-}
+    const TValue* values = luaR_members(bundle);
+    for (uint32_t i = 0; i < bundle->numberofmembers; i++)
+    {
+        h = mixkeyhash(h, keyvaluehash(&values[i]));
 
-unsigned int luaR_keyhash(const LuauObject* object)
-{
-    unsigned int h = keyhash(object, kKeyByValueDepth);
+        bool nested = ttisobject(&values[i]) && luaR_isbundle(objectvalue(&values[i]));
+        weight += nested ? luaR_bundlekey(objectvalue(&values[i]))->weight : 1;
+    }
 
     // MurmurHash3 32-bit finalizer, as table keys use for pointers
     h ^= h >> 16;
@@ -2759,15 +2757,32 @@ unsigned int luaR_keyhash(const LuauObject* object)
     h ^= h >> 13;
     h *= 0xc2b2ae35u;
     h ^= h >> 16;
-    return h;
+
+    LuauBundleKey* key = luaR_bundlekey(bundle);
+    key->hash = h;
+    key->weight = weight > UINT32_MAX ? UINT32_MAX : uint32_t(weight);
 }
 
-// Past kKeyByValueDepth an object is only equal to itself
+unsigned int luaR_keyhash(const LuauObject* bundle)
+{
+    return luaR_bundlekey(bundle)->hash;
+}
+
+bool luaR_bundletooheavy(const LuauObject* bundle)
+{
+    return luaR_bundlekey(bundle)->weight > kBundleWeightLimit;
+}
+
+// Past kKeyByValueDepth, or past the weight limit, a bundle is only equal to itself
 static bool keyequal(const LuauObject* a, const LuauObject* b, int depth)
 {
     if (a == b)
         return true;
-    if (a->lclass != b->lclass || !a->lclass->keybyvalue || depth == 0)
+    if (!luaR_isbundle(a) || !luaR_isbundle(b) || depth == 0)
+        return false;
+    if (a->numberofmembers != b->numberofmembers || luaR_bundlekey(a)->hash != luaR_bundlekey(b)->hash)
+        return false;
+    if (luaR_bundletooheavy(a) || luaR_bundletooheavy(b))
         return false;
 
     const TValue* left = luaR_members(a);
@@ -2789,6 +2804,60 @@ static bool keyequal(const LuauObject* a, const LuauObject* b, int depth)
 bool luaR_keyequal(const LuauObject* a, const LuauObject* b)
 {
     return keyequal(a, b, kKeyByValueDepth);
+}
+
+// The class of a bundle of `size` values
+static LuauClass* bundleclass(lua_State* L, int size)
+{
+    if (size <= LUWU_BUNDLE_FIXED_MAX)
+        return L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + size];
+    return L->global->builtinclasses[LUWU_BUILTIN_BIGBUNDLE];
+}
+
+LuauObject* luaR_newbundleuninit(lua_State* L, int size, const char* what)
+{
+    LUAU_ASSERT(size >= 0);
+    if (size > LUWU_BUNDLE_LIMIT)
+        luaG_runerror(L, "%s: a bundle holds at most %d values, but got %d", what, LUWU_BUNDLE_LIMIT, size);
+
+    LuauClass* classdef = bundleclass(L, size);
+    if (!classdef)
+        luaG_runerror(L, "%s: open the bundle library (luaopen_bundle) before building a bundle", what);
+
+    LuauObject* bundle = luaM_newgco(L, LuauObject, luaR_bundleallocsize(uint32_t(size)), L->activememcat);
+    luaC_init(L, bundle, LUA_TOBJECT);
+    bundle->storagekind = LUAR_STORAGE_BUNDLE;
+    bundle->lclass = classdef;
+    bundle->numberofmembers = uint32_t(size);
+    return bundle;
+}
+
+int luaR_bundlesize(const TValue* value)
+{
+    if (!ttisobject(value) || !luaR_isbundle(objectvalue(value)))
+        return -1;
+    return int(objectvalue(value)->numberofmembers);
+}
+
+void luaR_getbundleposition(lua_State* L, const LuauObject* bundle, const TValue* key, StkId val)
+{
+    if (!ttisnumber(key))
+        luaG_runerror(L, "a bundle is indexed by position, but got %s", luaT_objtypename(L, key));
+
+    // checked before converting, which is undefined for a number out of an int's range
+    double position = nvalue(key);
+    bool inrange = position >= 1 && position <= double(bundle->numberofmembers) && position == floor(position);
+    if (!inrange)
+        luaG_runerror(L, "position %.14g is out of range 1 to %d", position, int(bundle->numberofmembers));
+
+    setobj2s(L, val, &luaR_members(bundle)[int(position) - 1]);
+}
+
+l_noret luaR_bundleassignerror(lua_State* L, const TValue* key)
+{
+    if (ttisnumber(key))
+        luaG_runerror(L, "a bundle can't be changed; b:with(%.14g, value) makes a copy with that position replaced", nvalue(key));
+    luaG_runerror(L, "a bundle can't be changed");
 }
 
 static void luaR_addnativemethod(lua_State* L, LuauClass* classdef, const char* name, lua_CFunction method)
