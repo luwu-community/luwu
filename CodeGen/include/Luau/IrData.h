@@ -742,7 +742,7 @@ enum class IrCmd : uint8_t
 
     // Luwu collections: guard against an object not being a `Vec` or `VecDeque` with a storage block (LuauStorage)
     // A: pointer (LuauObject)
-    // B: int (LuwuStorageKind, or LUAR_STORAGE_NONE for either)
+    // B: int (LuwuStorageKind, or LUAR_STORAGE_CONTAINER for either)
     // C: block/vmexit/undef
     // When undef is specified instead of a block, execution is aborted on check failure
     CHECK_STORAGE,

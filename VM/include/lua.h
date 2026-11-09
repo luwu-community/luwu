@@ -570,7 +570,7 @@ LUA_API int lua_isresulterr(lua_State* L, int idx);
 // any other value.
 LUA_API int lua_getpayload(lua_State* L, int idx);
 
-// Luwu bundles: lua_packbundle pops `n` values and pushes a bundle of them, as `bundle.pack` does; it raises past 12
+// Luwu bundles: lua_packbundle pops `n` values and pushes a bundle of them, as `bundle.pack` does; it raises past 1024
 // values or when the bundle library (luaopen_bundle) isn't open. lua_unpackbundle pushes the values of the bundle at
 // `idx` and returns how many, or pushes nothing and returns -1 for any other value.
 LUA_API void lua_packbundle(lua_State* L, int n);

@@ -11,9 +11,8 @@ LUAU_FASTFLAGVARIABLE(LuwuClasses)
 // Luwu Traits (rfcs/classes/traits.md): enables `trait` declarations and `implements` (in progress). Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(LuwuTraits)
 
-// Luwu collections: the `collections` library of builtin classes (`Pair`, `Triple`, `Quad`, `OrderedMap`, `Vec`,
-// `VecDeque`), in the VM and in Analysis's builtin definitions. A prototype whose API can still change. Needs
-// LuwuClasses.
+// Luwu collections: the `collections` library of builtin classes (`OrderedMap`, `Vec`, `VecDeque`), in the VM and in
+// Analysis's builtin definitions. A prototype whose API can still change. Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(DebugLuwuCollections)
 
 // Luwu try expressions: `try expr` gives an `Ok` or an `Err`, and the `Ok`, `Err`, `Some` and `None` globals exist. A
@@ -21,3 +20,7 @@ LUAU_FASTFLAGVARIABLE(DebugLuwuCollections)
 // and LuwuNonePrimitive. The parser gates the syntax, and while it is on the compiler emits WIP bytecode (version 200),
 // which holds the protected ranges.
 LUAU_FASTFLAGVARIABLE(DebugLuwuTryExpressions)
+
+// Luwu bundles: the `bundle` library, its classes, and the compiler's fastcalls and unfolding for it. A prototype whose
+// API can still change. Needs LuwuClasses.
+LUAU_FASTFLAGVARIABLE(DebugLuwuBundles)

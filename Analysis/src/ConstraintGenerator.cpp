@@ -6083,6 +6083,11 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         if (!key)
             return {leftType, rightType, nullptr};
 
+        // Luwu builtin classes: `typeof` names an object of one after what it is ("bundle", "vec")
+        std::optional<TypeId> builtinClass;
+        if (typeguard->isTypeof)
+            builtinClass = builtinClassTypeofType(arena, globalScope.get(), typeguard->type);
+
         TypeId discriminantTy = builtinTypes->neverType;
         if (typeguard->type == "nil")
             discriminantTy = builtinTypes->nilType;
@@ -6116,6 +6121,8 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
             discriminantTy = builtinTypes->objectType;
         else if (FFlag::LuwuClasses && FFlag::LuwuTraits && typeguard->type == "trait")
             discriminantTy = builtinTypes->traitType;
+        else if (builtinClass)
+            discriminantTy = *builtinClass;
         else if (typeguard->type == "vector" && !typeguard->isTypeof)
         {
             // `vector` is defined in EmbeddedBuiltinDefinitions, not as an actual built-in type

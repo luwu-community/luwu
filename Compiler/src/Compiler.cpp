@@ -43,6 +43,7 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
 
 // May a file use the `--!trust` directive, which lets the compiler act on type annotations it cannot
@@ -8086,15 +8087,15 @@ struct Compiler
         loops.pop_back();
     }
 
-    // Luwu bundles: the most values a bundle holds (LUWU_BUNDLE_MAX in the VM)
-    static constexpr unsigned kMaxBundleValues = 12;
+    // Luwu bundles: the most values a bundle holds (LUWU_BUNDLE_LIMIT in the VM). A larger construction raises.
+    static constexpr unsigned kMaxBundleValues = 1024;
 
     // Luwu bundles: the size of the bundle `expr` constructs, a `bundle.pack` call (which `.(a, b)` is) whose last argument
     // isn't a multiret. 0 for anything else.
     unsigned bundleConstructionSize(AstExpr* expr)
     {
         AstExprCall* call = expr->as<AstExprCall>();
-        if (!FFlag::DebugLuwuCollections || !call || call->self || call->args.size > kMaxBundleValues)
+        if (!FFlag::DebugLuwuBundles || !call || call->self || call->args.size > kMaxBundleValues)
             return 0;
 
         Builtin builtin = getBuiltin(call->func, globals, variables);

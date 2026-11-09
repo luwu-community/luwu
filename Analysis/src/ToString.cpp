@@ -1490,12 +1490,28 @@ struct TypeStringifier
             return;
         }
 
+        // a fixed size's positions are its type arguments, a `BigBundle`'s are its type pack
+        std::vector<TypeId> positions = etv.instantiatedTypeParams;
+        std::optional<TypePackId> tail;
+        if (!etv.instantiatedTypePackParams.empty())
+        {
+            auto [heads, packTail] = flatten(etv.instantiatedTypePackParams[0]);
+            positions = std::move(heads);
+            tail = packTail;
+        }
+
         state.emit(".(");
-        for (size_t i = 0; i < etv.instantiatedTypeParams.size(); i++)
+        for (size_t i = 0; i < positions.size(); i++)
         {
             if (i > 0)
                 state.emit(", ");
-            stringify(etv.instantiatedTypeParams[i]);
+            stringify(positions[i]);
+        }
+        if (tail)
+        {
+            if (!positions.empty())
+                state.emit(", ");
+            stringify(*tail);
         }
         state.emit(")");
         state.unsee(&etv);

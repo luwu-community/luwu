@@ -2916,9 +2916,10 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         int kind = intOp(OP_B(inst));
 
         build.ldrb(temp, mem(object, offsetof(LuauObject, storagekind)));
-        if (kind == LUAR_STORAGE_NONE)
+        if (kind == LUAR_STORAGE_CONTAINER)
         {
-            build.cbz(temp, fail);
+            build.tst(temp, uint32_t(LUAR_STORAGE_CONTAINER));
+            build.b(ConditionA64::Equal, fail);
         }
         else
         {

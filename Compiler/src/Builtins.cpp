@@ -11,8 +11,8 @@ LUAU_FASTFLAGVARIABLE(LuauIntegerFastcalls)
 LUAU_FASTFLAGVARIABLE(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
-LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuBundles)
 
 namespace Luau
 {
@@ -100,7 +100,7 @@ static int getBundleFunctionId(const Builtin& builtin)
 
 static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& options)
 {
-    if (FFlag::DebugLuwuCollections && builtin.object == "bundle")
+    if (FFlag::DebugLuwuBundles && builtin.object == "bundle")
         return getBundleFunctionId(builtin);
 
     // Luwu try expressions: the constructors of options and results. FASTCALL's safe-env guard falls back to the real

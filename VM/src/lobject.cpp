@@ -81,7 +81,7 @@ int luaO_rawequalKey(const TKey* t1, const TValue* t2)
         case LUA_TLIGHTUSERDATA:
             return pvalue(t1) == pvalue(t2) && lightuserdatatag(t1) == lightuserdatatag(t2);
         case LUA_TOBJECT:
-            // Luwu bundles: equal bundles are the same key (LuauClass::keybyvalue); other objects are only themselves
+            // Luwu bundles: equal bundles are the same key (luaR_keyequal); other objects are only themselves
             return gcvalue(t1) == gcvalue(t2) || luaR_keyequal(objectvalue(t1), objectvalue(t2));
         default:
             LUAU_ASSERT(iscollectable(t1));

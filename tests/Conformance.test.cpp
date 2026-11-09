@@ -101,6 +101,7 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(DebugLuwuCollections)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuauDirectFieldGet)
@@ -4808,13 +4809,14 @@ static std::optional<Luau::TypeId> declaredClassValue(const Luau::TableType* lib
 
 // Luwu collections, bundles and try expressions: the builtin definitions declare each class the VM builds, with exactly
 // its public members. The collections classes are in the `collections` table, and `Some`, `Ok` and `Err` are globals.
-// A bundle class is a type the `bundle` library exports, since only Pair, Triple and Quad are in its table.
+// A bundle class is a type the `bundle` library exports, since the library's table holds only functions.
 TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
@@ -4839,7 +4841,7 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
         std::string name = getstr(classdef->name);
         INFO(name);
 
-        if (kind <= LUWU_BUILTIN_BUNDLE12)
+        if (kind <= LUWU_BUILTIN_BIGBUNDLE)
         {
             auto declaredBundle = bundleTypes.find(name);
             REQUIRE(declaredBundle != bundleTypes.end());
@@ -4860,6 +4862,7 @@ TEST_CASE("Collections")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -4898,6 +4901,7 @@ TEST_CASE("CollectionsFastPaths")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };
@@ -7305,7 +7309,7 @@ TEST_CASE("BundleCApi")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
     };
 
@@ -7336,14 +7340,24 @@ TEST_CASE("BundleCApi")
     CHECK(lua_unpackbundle(L, -1) == 0);
     lua_settop(L, 0);
 
+    // past six values, any size is a `BigBundle`
+    for (int i = 0; i < 13; i++)
+        lua_pushnumber(L, i);
+    lua_packbundle(L, 13);
+    CHECK(std::string(lua_getclassname(L, -1)) == "BigBundle");
+    REQUIRE(lua_unpackbundle(L, -1) == 13);
+    CHECK(lua_tonumber(L, -1) == 12);
+    lua_settop(L, 0);
+
     std::string tooMany = classesCApiProtected(
         L,
         [](lua_State* L)
         {
-            for (int i = 0; i < 13; i++)
+            lua_checkstack(L, 1025);
+            for (int i = 0; i < 1025; i++)
                 lua_pushnumber(L, i);
-            lua_packbundle(L, 13);
+            lua_packbundle(L, 1025);
         }
     );
-    CHECK(tooMany == "a bundle holds at most 12 values, but got 13");
+    CHECK(tooMany == "lua_packbundle: a bundle holds at most 1024 values, but got 1025");
 }

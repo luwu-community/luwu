@@ -15,11 +15,11 @@ local function raises(f: () -> (), message: string)
     assert(string.find(tostring(err), message, 1, true), `expected '{message}' in '{err}'`)
 end
 
--- a bundle holds its values as `first`, `second` and so on, and prints the way `.(...)` writes it
+-- a bundle holds its values by position, `b[1]` to `b[n]`, and prints the way `.(...)` writes it
 do
     const range = bundle.pack(1, "x")
-    assert(range.first == 1 and range.second == "x")
-    assert(class.name(range) == "Bundle2")
+    assert(range[1] == 1 and range[2] == "x")
+    assert(class.name(range) == "Bundle2" and typeof(range) == "bundle" and type(range) == "object")
     assert(range == bundle.pack(1, "x"))
     assert(range ~= bundle.pack(1, "y"))
     assert(range ~= bundle.pack(1, "x", nil))
@@ -27,12 +27,13 @@ do
     assert(tostring(bundle.pack("a\"b", nil)) == `.("a\\"b", nil)`)
 
     const color = bundle.pack(255, 128, 0)
-    assert(color.first == 255 and color.second == 128 and color.third == 0)
+    const channel = 2
+    assert(color[1] == 255 and color[channel] == 128 and color[3] == 0)
     assert(color == bundle.pack(255, 128, 0))
     assert(tostring(color) == ".(255, 128, 0)")
 
     const margins = bundle.pack(1, 2, 3, 4)
-    assert(margins.fourth == 4)
+    assert(margins[4] == 4)
     assert(margins == bundle.pack(1, 2, 3, 4))
     assert(margins ~= bundle.pack(1, 2, 3, 5))
     assert(tostring(margins) == ".(1, 2, 3, 4)")
@@ -41,34 +42,58 @@ do
     assert(bundle.pack(range, 1) == bundle.pack(bundle.pack(1, "x"), 1))
 
     raises(function()
-        range.first = 2
-    end, "a bundle can't be changed; b:with(1, value) makes a copy with 'first' replaced")
+        range[1] = 2
+    end, "a bundle can't be changed; b:with(1, value) makes a copy with that position replaced")
     raises(function()
-        print(range.third)
-    end, "third")
+        range.first = 2
+    end, "do not have a field named 'first'")
+    raises(function()
+        print(range[3])
+    end, "position 3 is out of range 1 to 2")
+    raises(function()
+        print(range[1.5])
+    end, "position 1.5 is out of range 1 to 2")
+    raises(function()
+        print(range[true])
+    end, "a bundle is indexed by position, but got boolean")
+    -- a bundle's values aren't named fields
+    raises(function()
+        print(range.first)
+    end, "first")
+    raises(function()
+        class.of(range)(1, "x")
+    end, "build a bundle with .(...) or bundle.pack, not its class")
 end
 
--- `bundle.pack` holds every value it gets, nil included, up to 12; positions past `fourth` are `fifth` to `twelfth`
+-- `bundle.pack` holds every value it gets, nil included. Sizes 0 to 6 have a class each, and larger ones are `BigBundle`s.
 do
-    assert(collections.Pair == nil and bundle.Bundle2 == nil)
+    assert(collections.Pair == nil)
+    assert(bundle.Bundle2 == nil)
 
     const record = bundle.pack("AX1230", nil, 3, true, "e", "f", "g")
-    assert(#record == 7 and class.name(record) == "Bundle7" and record.first == "AX1230" and record.second == nil)
-    assert(record.seventh == "g" and tostring(record) == `.("AX1230", nil, 3, true, "e", "f", "g")`)
-    assert(class.name(bundle.pack(1, 2)) == "Bundle2")
+    assert(#record == 7 and class.name(record) == "BigBundle" and typeof(record) == "bundle")
+    assert(record[1] == "AX1230" and record[2] == nil and record[7] == "g")
+    assert(tostring(record) == `.("AX1230", nil, 3, true, "e", "f", "g")`)
+    assert(class.name(bundle.pack(1, 2, 3, 4, 5, 6)) == "Bundle6")
     assert(#bundle.pack() == 0 and #bundle.pack(nil) == 1)
-    const twelve = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
-    assert(twelve.twelfth == 12 and #twelve == 12)
-    raises(function()
-        bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
-    end, "bundle.pack takes at most 12 values, but got 13")
 
-    local fields = 0
-    for name, value in class.fields(bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)) do
-        fields += 1
-        assert(value == ({ first = 1, fifth = 5, tenth = 10 })[name] or (name ~= "first" and name ~= "fifth" and name ~= "tenth"))
+    const values = {}
+    for i = 1, 1024 do
+        values[i] = i
     end
-    assert(fields == 10)
+    const largest = bundle.pack(table.unpack(values))
+    assert(#largest == 1024 and largest[1024] == 1024 and largest == bundle.pack(table.unpack(values)))
+    table.insert(values, 1025)
+    raises(function()
+        bundle.pack(table.unpack(values))
+    end, "bundle.pack: a bundle holds at most 1024 values, but got 1025")
+
+    -- a bundle class has no fields to list
+    local fields = 0
+    for _ in class.fields(record) do
+        fields += 1
+    end
+    assert(fields == 0)
 
     -- `unpack` gives a range of positions, the whole bundle by default
     const a, b, c = bundle.unpack(bundle.pack(1, nil, 3))
@@ -83,12 +108,16 @@ do
         bundle.unpack({ 1, 2 })
     end, "bundle expected, got table")
 
-    -- `sub` and `with` make new bundles; `concat` joins several
+    -- `sub` and `with` make new bundles, of the class for their size; `concat` joins several
     assert(record:sub(3, 4) == bundle.pack(3, true) and record:sub(6) == bundle.pack("f", "g") and #record:sub(8) == 0)
-    assert(record:with(2, "two").second == "two" and record.second == nil)
+    assert(class.name(record:sub(2)) == "Bundle6" and class.name(record:sub(3, 4)) == "Bundle2")
+    assert(record:with(2, "two")[2] == "two" and record[2] == nil)
     raises(function()
         record:with(8, 1)
     end, "position 8 is out of range 1 to 7")
+
+    -- a method read from one bundle class works on a bundle of any size
+    assert(bundle.pack(1, 2).sub(record, 7) == bundle.pack("g"))
 
     -- the library has both as functions too, taking the bundle first
     assert(bundle.sub(record, 3, 4) == record:sub(3, 4) and bundle.sub(record) == record)
@@ -100,12 +129,14 @@ do
         bundle.with(record, 0, 1)
     end, "position 0 is out of range 1 to 7")
     assert(bundle.concat(bundle.pack(1, 2), bundle.pack(3), bundle.pack()) == bundle.pack(1, 2, 3))
+    assert(class.name(bundle.concat(bundle.pack(1, 2, 3), bundle.pack(4, 5, 6, 7))) == "BigBundle")
     raises(function()
-        bundle.concat(twelve, bundle.pack(1))
-    end, "bundle.concat makes at most 12 values, but these hold 13")
+        bundle.concat(largest, bundle.pack(1))
+    end, "bundle.concat: a bundle holds at most 1024 values, but got 1025")
 
     -- bundles of one size order position by position, so a list of them sorts
     assert(bundle.pack(1, 2) < bundle.pack(1, 3) and bundle.pack(1, 2) <= bundle.pack(1, 2) and not (bundle.pack(2, 0) < bundle.pack(1, 9)))
+    assert(record < record:with(7, "h"))
     const list = { bundle.pack(2, "b"), bundle.pack(1, "z"), bundle.pack(1, "a") }
     table.sort(list)
     assert(list[1] == bundle.pack(1, "a") and list[3] == bundle.pack(2, "b"))
@@ -162,6 +193,27 @@ do
     keys[shallow] = "shallow"
     keys[deep] = "deep"
     assert(keys[shallowcopy] == "shallow" and keys[deep] == "deep" and keys[deepcopy] == nil)
+
+    -- bundles that share nested bundles can unfold to more values than fit in memory. Hashing one reads the hashes its
+    -- nested bundles were built with, and past 65536 values one is only equal to itself, so none of this takes long.
+    local heavy, heavycopy = bundle.pack(0), bundle.pack(0)
+    for _ = 1, 40 do
+        heavy, heavycopy = bundle.pack(heavy, heavy), bundle.pack(heavycopy, heavycopy)
+    end
+    keys[heavy] = "heavy"
+    assert(keys[heavy] == "heavy" and keys[heavycopy] == nil)
+    assert(heavy == heavy and heavy ~= heavycopy)
+    raises(function()
+        return heavy < heavycopy
+    end, "attempt to compare")
+
+    -- below that, equal copies are the same key however they share
+    local light, lightcopy = bundle.pack(0), bundle.pack(0)
+    for _ = 1, 10 do
+        light, lightcopy = bundle.pack(light, light), bundle.pack(lightcopy, lightcopy)
+    end
+    keys[light] = "light"
+    assert(keys[lightcopy] == "light" and light == lightcopy)
 
     -- many keys spread over the hash
     const many = {}
@@ -279,7 +331,7 @@ do
     -- a list of bundles, the last one included, is unfolded too
     local sum = 0
     for _, entry in { bundle.pack(1, 2), bundle.pack(3, 4) } do
-        sum += entry.first * entry.second
+        sum += entry[1] * entry[2]
     end
     assert(sum == 14)
     local function two()
@@ -788,9 +840,11 @@ end
 -- `bundle.pack` compiles to a fastcall, which builds what the function does
 do
     const three = bundle.pack(1, 2, 3)
-    assert(three.first == 1 and three.third == 3 and tostring(three) == ".(1, 2, 3)")
-    assert(#bundle.pack("a") == 1 and bundle.pack("a").first == "a")
-    assert(bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12).twelfth == 12)
+    assert(three[1] == 1 and three[3] == 3 and tostring(three) == ".(1, 2, 3)")
+    assert(#bundle.pack("a") == 1 and bundle.pack("a")[1] == "a")
+    assert(bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)[12] == 12)
+    const thirteen = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+    assert(class.name(thirteen) == "BigBundle" and thirteen[13] == 13)
     assert(#bundle.pack() == 0)
 
     -- enough allocation to run the collector between constructions
@@ -800,7 +854,7 @@ do
     end
     collectgarbage()
     for i = 1, 100 do
-        assert(kept[i].first[1] % 100 + 1 == i)
+        assert(kept[i][1][1] % 100 + 1 == i)
     end
 
     -- with `bundle` replaced in the environment, the call reaches the replacement
@@ -840,6 +894,12 @@ do
         assert(maps[i]:get("k20")[1] == 20 and maps[i]:get("k5") == nil)
         assert(maps[i + 1]:back()[1] == 20)
     end
+end
+
+-- `typeof` names a builtin container after what it is; `type` says "object" like for any class
+do
+    assert(typeof(collections.Vec()) == "vec" and typeof(collections.VecDeque()) == "vecdeque")
+    assert(typeof(collections.OrderedMap()) == "orderedmap" and type(collections.Vec()) == "object")
 end
 
 return "OK"

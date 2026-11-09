@@ -1082,6 +1082,17 @@ static void enumobject(EnumContext* ctx, LuauObject* inst)
         enumedge(ctx, obj, gcvalue(&luaR_members(inst)[i]), membername);
     }
 
+    // Luwu bundles: the values aren't named fields of the class, so each is named by its position
+    for (uint32_t i = 0; luaR_isbundle(inst) && i < inst->numberofmembers; i++)
+    {
+        if (!iscollectable(&luaR_members(inst)[i]))
+            continue;
+
+        char position[32];
+        snprintf(position, sizeof(position), "[%u]", unsigned(i + 1));
+        enumedge(ctx, obj, gcvalue(&luaR_members(inst)[i]), position);
+    }
+
     // Luwu collections: a `Vec`'s or `VecDeque`'s entries
     LuauStorage* storage = luaR_storage(inst);
     for (uint32_t i = 0; storage && i < storage->count; i++)

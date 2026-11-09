@@ -34,6 +34,7 @@ LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuClasses)
@@ -14644,7 +14645,7 @@ L1: RETURN R2 1
 // of locals that are never written resolves, which is what destructuring them out of `bundle` desugars to.
 TEST_CASE("BundleFunctionsCompileToFastcalls")
 {
-    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+    ScopedFastFlag bundles{FFlag::DebugLuwuBundles, true};
 
     const char* fastcalls[] = {
         "local function f(x) local v = bundle.pack(x, x) return v end",
@@ -14675,7 +14676,7 @@ TEST_CASE("BundleFunctionsCompileToFastcalls")
         CHECK(compileFunction(source, 0, 1).find("FASTCALL") == std::string::npos);
     }
 
-    ScopedFastFlag off{FFlag::DebugLuwuCollections, false};
+    ScopedFastFlag off{FFlag::DebugLuwuBundles, false};
     CHECK(compileFunction(fastcalls[0], 0, 1).find("FASTCALL") == std::string::npos);
 }
 
@@ -14684,6 +14685,7 @@ TEST_CASE("BundleFunctionsCompileToFastcalls")
 TEST_CASE("OrderedMapFromBundlesBuildsNoBundle")
 {
     ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+    ScopedFastFlag bundles{FFlag::DebugLuwuBundles, true};
 
     CHECK_EQ(
         "\n" + compileFunction(
@@ -14742,7 +14744,7 @@ RETURN R2 1
 // reads it.
 TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
 {
-    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+    ScopedFastFlag bundles{FFlag::DebugLuwuBundles, true};
 
     CHECK_EQ(
         "\n" + compileFunction(
@@ -14784,7 +14786,7 @@ RETURN R0 0
 // a larger bundle is built and iterated
 TEST_CASE("LoopOverBundlePackUnfoldsUpToFourElements")
 {
-    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+    ScopedFastFlag bundles{FFlag::DebugLuwuBundles, true};
 
     std::string small = compileFunction("local function f(t, a, b) for _, v in bundle.pack(a, b) do t[v] = true end end", 0, 1);
     CHECK(small.find("FASTCALL") == std::string::npos);

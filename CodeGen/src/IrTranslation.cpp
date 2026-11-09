@@ -2249,7 +2249,7 @@ enum class StorageMethod
 struct StorageMethodInfo
 {
     StorageMethod method = StorageMethod::None;
-    // The containers that have it (LuwuStorageKind), or LUAR_STORAGE_NONE for both
+    // The containers that have it (LuwuStorageKind), or LUAR_STORAGE_CONTAINER for both
     int kind = LUAR_STORAGE_NONE;
     int params = 0;
 };
@@ -2271,8 +2271,8 @@ static StorageMethodInfo storageMethodOf(const TString* name)
         {"popfront", {StorageMethod::PopFront, LUAR_STORAGE_RING, 0}},
         {"front", {StorageMethod::Front, LUAR_STORAGE_RING, 0}},
         {"back", {StorageMethod::Back, LUAR_STORAGE_RING, 0}},
-        {"at", {StorageMethod::At, LUAR_STORAGE_NONE, 1}},
-        {"set", {StorageMethod::Set, LUAR_STORAGE_NONE, 2}},
+        {"at", {StorageMethod::At, LUAR_STORAGE_CONTAINER, 1}},
+        {"set", {StorageMethod::Set, LUAR_STORAGE_CONTAINER, 2}},
     };
 
     for (const Entry& entry : kMethods)
