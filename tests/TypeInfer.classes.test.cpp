@@ -6315,6 +6315,35 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements
     CHECK_EQ(toString(requireType("value")), "number?");
 }
 
+// Luwu bundles: `b[n]` reads any position, so it has the union of the positions' types, with each type once
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_index_reads_have_each_position_type_once")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local i = 1
+        local nums = bundle.pack(1, 2)
+        local nested = bundle.pack(bundle.pack(0.5, 2), bundle.pack(0.8, 4))
+        local mixed = bundle.pack(1, "x", 2)
+        local n = nums[i]
+        local inner = nested[i]
+        local either = mixed[i]
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("n")), "number");
+    CHECK_EQ(toString(requireType("inner")), ".(number, number)");
+    CHECK_EQ(toString(requireType("either")), "number | string");
+}
+
 // Luwu collections: an empty Vec or VecDeque takes its element type from its first push, as the runtime fixes it from
 // the first value. A later push of another type is an error, and reads give the element type.
 TEST_CASE_FIXTURE(BuiltinsFixture, "collections_empty_constructors_take_their_element_type_from_the_first_push")
