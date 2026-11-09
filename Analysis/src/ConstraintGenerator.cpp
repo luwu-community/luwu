@@ -4068,6 +4068,13 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeAlias* 
         /* replaceErrorWithFresh */ false
     );
 
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): a non-generic alias of a generic class instantiation prints
+    // as its name (see PendingExpansionType::aliasName)
+    // An alias of another alias (`type B = A`) is bound to that alias's type, which keeps its own name.
+    bool generic = alias->generics.size > 0 || alias->genericPacks.size > 0;
+    if (PendingExpansionType* body = generic ? nullptr : get_if<PendingExpansionType>(&asMutable(ty)->ty))
+        body->aliasName = alias->name.value;
+
     TypeId aliasTy = bindingIt->second.type;
     LUAU_ASSERT(get<BlockedType>(aliasTy));
     if (occursCheck(aliasTy, ty))

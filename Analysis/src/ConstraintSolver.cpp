@@ -1458,7 +1458,9 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     // If we use the same signature, we don't need to bother trying to
     // instantiate the alias again, since the instantiation should be
     // deterministic.
-    if (TypeId* cached = instantiatedAliases.find(signature))
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an alias's body gets an instantiation of its own (below)
+    bool namesInstantiation = petv->aliasName && FFlag::LuwuGenericNominals && get<ExternType>(follow(tf->type));
+    if (TypeId* cached = namesInstantiation ? nullptr : instantiatedAliases.find(signature))
     {
         bindResult(*cached);
         return true;
@@ -1504,7 +1506,12 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
         for (TypePackId argument : packArguments)
             queuer.run(argument);
 
-        instantiatedAliases[signature] = instantiation;
+        // The body of `type Nums = Vec<number>` prints as `Nums`. Every other `Vec<number>` shares the cached instantiation,
+        // so this one isn't cached.
+        if (namesInstantiation)
+            getMutable<ExternType>(instantiation)->aliasName = petv->aliasName;
+        else
+            instantiatedAliases[signature] = instantiation;
         bindResult(instantiation);
         return true;
     }
@@ -4603,6 +4610,10 @@ bool ConstraintSolver::bindCachedExpansion(TypeId pendingExpansion, NotNull<Scop
     TypeId target = follow(pendingExpansion);
     const PendingExpansionType* petv = get<PendingExpansionType>(target);
     if (!petv)
+        return false;
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an alias's body gets an instantiation of its own
+    // (tryDispatch(TypeAliasExpansionConstraint))
+    if (petv->aliasName)
         return false;
 
     std::optional<TypeFun> tf;

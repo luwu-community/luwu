@@ -167,6 +167,7 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.traitInfo = a.traitInfo;
             clone.traitIntersection = a.traitIntersection;
             clone.printsAsBundle = a.printsAsBundle;
+            clone.aliasName = a.aliasName;
             if (FFlag::LuwuGenericNominals)
             {
                 clone.hasUnresolvedGenerics = a.hasUnresolvedGenerics;
