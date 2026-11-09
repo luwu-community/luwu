@@ -169,6 +169,9 @@ std::optional<std::string> builtinEnumPlural(const Scope* scope, TypeId ty);
 // bundles share the class `BigBundle`.
 constexpr size_t kBundleFixedMax = 6;
 
+// Luwu bundles: whether `call` is `bundle.pack(...)`, which a bundle literal `.(a, b)` is parsed as
+bool isBundlePackCall(const AstExprCall* call);
+
 // Luwu bundles: the type of each position of the bundle type `ty`, or nullopt when it isn't a bundle class instance
 std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty);
 

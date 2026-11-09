@@ -5182,6 +5182,29 @@ InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall*
             result = InferencePack{arena->addTypePack({*selfType})};
     }
 
+    // Luwu bundles: a bundle literal `.(a, b)` where a bundle type is expected takes its positions' expected types
+    // (BidirectionalTypePusher), before the call builds the bundle's type from its arguments
+    if (expectedType && isBundlePackCall(call))
+    {
+        // A call as a local's value is recorded as a pack only, and the pusher reads the expression's type
+        TypeId bundleType = flattenPack(scope, call->location, result).ty;
+        if (!module->astTypes.contains(call))
+            module->astTypes[call] = bundleType;
+        Checkpoint callEndCheckpoint = checkpoint(this);
+        NotNull<Constraint> push = addConstraint(
+            scope,
+            call->location,
+            PushTypeConstraint{
+                /* expectedType */ *expectedType,
+                /* targetType */ bundleType,
+                /* astTypes */ NotNull{&module->astTypes},
+                /* astExpectedTypes */ NotNull{&module->astExpectedTypes},
+                /* expr */ NotNull{call},
+            }
+        );
+        addAllAsReverseDependencies(funcBeginCheckpoint, callEndCheckpoint, this, push);
+    }
+
     // Luwu: every call's values, not only those of a call in a place that takes them all, so the DiscardedValues lint
     // can see what a call that keeps one value drops.
     module->astTypePacks[call] = result.tp;
