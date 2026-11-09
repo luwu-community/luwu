@@ -6113,7 +6113,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "class_member_has_the_members_type")
         {FFlag::LuwuClasses, true},
         {FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true},
         {FFlag::LuwuTraits, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::DebugLuwuTryExpressions, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},

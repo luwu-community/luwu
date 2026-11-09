@@ -4667,7 +4667,7 @@ TEST_CASE("ClassMembers")
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuTraits, true},
         {FFlag::LuwuNonePrimitive, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::DebugLuwuTryExpressions, true},
         {FFlag::LuwuDefaultArguments, true},
     };

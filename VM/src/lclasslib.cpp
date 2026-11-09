@@ -15,7 +15,7 @@
 #include "Luau/Common.h"
 
 LUAU_FASTFLAG(LuwuNonePrimitive)
-LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 
 static int class_isinstance(lua_State* L)
@@ -452,7 +452,7 @@ int luaopen_class(lua_State* L)
     luaL_register(L, LUA_CLASSLIBNAME, classlib);
 
     // Luwu class reflection (rfcs/classes): a ClassMember's modifiers are a bundle and its value an option
-    if (FFlag::DebugLuwuCollections && FFlag::DebugLuwuTryExpressions && FFlag::LuwuNonePrimitive)
+    if (FFlag::DebugLuwuBundles && FFlag::DebugLuwuTryExpressions && FFlag::LuwuNonePrimitive)
     {
         LuauClass* classmember =
             luaR_newnativeclass(L, "ClassMember", kClassMemberMembers, int(sizeof(kClassMemberMembers) / sizeof(kClassMemberMembers[0])), classmember_init);

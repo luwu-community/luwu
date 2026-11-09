@@ -577,7 +577,7 @@ std::string getBuiltinDefinitionSource()
 
 bool classReflectionEnabled()
 {
-    return FFlag::LuwuTraits && FFlag::DebugLuwuCollections && resultLibraryEnabled();
+    return FFlag::LuwuTraits && FFlag::DebugLuwuBundles && resultLibraryEnabled();
 }
 
 bool resultLibraryEnabled()
