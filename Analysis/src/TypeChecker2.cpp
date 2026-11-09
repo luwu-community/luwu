@@ -2834,9 +2834,9 @@ TypeId TypeChecker2::stripFromNilAndReport(TypeId ty, const Location& location)
     return ty;
 }
 
-// Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern on an object, or a union of objects,
-// reads the field each class's primary constructor takes at that position. Returns false for any other value, whose
-// element is checked like `t[i]`.
+// Luwu Destructuring (rfcs/destructuring.md): a position read (`x.1`, or an element of `.(a, b)`) from an object, or a
+// union of objects, reads the field each class's primary constructor takes at that position. Anything else has no
+// positions. Returns false only when the position isn't a number literal.
 bool TypeChecker2::checkPositionalElement(AstExprIndexExpr* indexExpr)
 {
     const AstExprConstantNumber* number = indexExpr->index->as<AstExprConstantNumber>();
@@ -2857,19 +2857,24 @@ bool TypeChecker2::checkPositionalElement(AstExprIndexExpr* indexExpr)
         options.push_back(exprType);
     }
 
-    for (TypeId option : options)
-    {
-        if (!getClassFieldUserData(option))
-            return false;
-    }
-
     visit(indexExpr->expr, ValueContext::RValue);
+
+    // the parser writes the position of a pattern's element nowhere in the source
+    bool inPattern = indexExpr->index->location.begin == indexExpr->index->location.end;
 
     for (TypeId option : options)
     {
         const ExternType* cls = get<ExternType>(option);
         const ClassFieldUserData* data = getClassFieldUserData(option);
-        LUAU_ASSERT(cls && data);
+        if (!data)
+        {
+            // only objects have positions; `any` and an earlier error read as anything
+            bool readsAnything = get<AnyType>(option) || get<ErrorType>(option);
+            if (!readsAnything)
+                reportError(PositionalDestructuring{toString(option), position, std::nullopt, /* notObject */ true, inPattern}, indexExpr->location);
+            continue;
+        }
+        LUAU_ASSERT(cls);
 
         bool hasPosition = data->positionalFields && position < data->positionalFields->size();
         if (hasPosition)

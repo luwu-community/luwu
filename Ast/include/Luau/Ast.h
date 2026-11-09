@@ -913,17 +913,23 @@ struct AstDestructurePattern
     bool closed = true;
     // `.(a, b)`: the fields are elements read by position, in order, and have no keys.
     bool positional = false;
+    // `.[a, b]`: the fields are elements read by index, `value[1]` on, and have no keys.
+    bool array = false;
     AstArray<AstDestructureField> fields{nullptr, 0};
 };
 
 struct AstDestructureField
 {
-    // Empty for an element of a positional pattern, whose `keyLocation` is where the element starts.
+    // Empty for an element of a positional or array pattern, whose `keyLocation` is where the element starts, and for a
+    // key that isn't a name.
     AstName key;
     Location keyLocation;
     // The `as` keyword, when the field is bound under another name or only destructured.
     std::optional<Location> asLocation;
     AstDestructurePattern target;
+    // `[key] as name` reads `value[key]`, and `5 as name` reads position 5 (keyIsPosition)
+    AstExpr* keyExpr = nullptr;
+    bool keyIsPosition = false;
 };
 
 class AstStatLocal : public AstStat

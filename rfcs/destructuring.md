@@ -112,13 +112,35 @@ A positional pattern on an object reads the fields its class's primary construct
 That holds even when the class body restates the parameters in another order. Fewer names than parameters is fine. A
 class without a primary constructor (a POD class, or one with `__init`) can't be destructured positionally, and neither
 can a position past the constructor's last parameter: both raise at runtime, the way reading a field an object doesn't
-have does, and both are type errors. A private field is read with the same rules as reading it by name.
+have does, and both are type errors. A private field is read with the same rules as reading it by name. A position that
+holds `nil` (a bundle can) binds `nil`: the pattern checks the value's shape, not its values.
 
-Anything else is destructured like unpacking an array: element `i` is `value[i]`, so a missing one is `nil`.
+Each element reads the value's position the way `cat.1` does, and `cat.1` works outside patterns too:
 
 ```luwu
-const .(a, b, c) = { "Hi", "there" } -- a = "Hi", b = "there", c = nil
+print(Cat("Nanuk", 2).1) -- Nanuk
+const .{ 2 as age } = Cat("Nanuk", 2)
 ```
+
+Tables don't have positions. `t.3` and `const .(a) = t` are type errors and raise at runtime, suggesting `t[3]`.
+
+### Array patterns with `.[...]`
+
+`.[a, b]` reads `value[1]` and `value[2]`. A missing element is `nil`, like any table read:
+
+```luwu
+const .[a, b, c] = { "Hi", "there" } -- a = "Hi", b = "there", c = nil
+```
+
+By-name patterns also take computed keys, which need `as`: `const .{ [1] as head, ["content-type"] as kind } = t`.
+
+The three patterns read the way their access syntax does, and work wherever it works:
+
+| pattern | reads | works on |
+|---|---|---|
+| `.{x, y}` | `v.x`, `v.y` | anything indexable by name |
+| `.(a, b)` | `v.1`, `v.2` | bundles, classes with a primary constructor |
+| `.[a, b]` | `v[1]`, `v[2]` | anything indexable by number |
 
 Positional patterns go anywhere `.{...}` patterns do, nest in each other, and take a name and annotations the same way:
 `local pair.(first: number, .(x, y), entry.{kind}) = t`, `const .{pos as .(x, y)} = u`,
@@ -145,14 +167,13 @@ names nothing in scope has (`is Ok(content)`) is a syntax error that suggests th
 
 #### Building bundles with `.(...)`
 
-Where a value goes, `.(a, b)` builds a `bundle.Pair`, the way `.{x, y}` builds a table. Three values make a
-`bundle.Triple`, four a `bundle.Quad`, and five to twelve the bundle of that size (`bundle.pack`). More than twelve is a
-syntax error that suggests a table or a function returning multiple values instead.
+Where a value goes, `.(a, b)` builds a bundle of its values, the way `.{x, y}` builds a table. A bundle has any number
+of values, and `b.1` reads its first.
 
 ```luwu
 const .(name, age) = do
     -- ... a bunch of logic
-    give .(got_name, got_age) -- a bundle.Pair
+    give .(got_name, got_age) -- a bundle of two values
 ```
 
 A pair that's destructured right where it's built, like this one, is never created. The compiler keeps each value in a

@@ -202,9 +202,9 @@ private:
 
     // Luwu Destructuring (rfcs/destructuring.md):
     // destructuring ::= (`local' | `const') target `=' exp
-    // pattern ::= `.' `{' fieldlist `}' | `.' `(' elementlist `)'
+    // pattern ::= `.' `{' fieldlist `}' | `.' `(' elementlist `)' | `.' `[' elementlist `]'
     // fieldlist ::= field {`,' field} [`,']
-    // field ::= Name [pattern] [`:' Type] | Name `as' target
+    // field ::= Name [pattern] [`:' Type] | Name `as' target | `[' exp `]' `as' target | Number `as' target
     // elementlist ::= target {`,' target} [`,']
     // target ::= Name [pattern] [`:' Type] | pattern [`:' Type]
     // An annotation follows the binding it types; after a pattern, it types the value the pattern destructures.
@@ -213,6 +213,7 @@ private:
     bool destructuringFollows();
     bool destructurePatternFollows();
     bool positionalPatternFollows();
+    bool arrayPatternFollows();
     bool dotTableFollows();
     void parseDestructureElements(DestructureTarget& target);
     void parseDestructureTarget(DestructureTarget& target);
@@ -223,6 +224,9 @@ private:
     void parseDestructurePattern(DestructureTarget& target);
     struct DestructureField;
     DestructureField parseDestructureField();
+    DestructureField parseDestructureKeyField();
+    // The position `written` names, or 0 after reporting why it isn't one. `example` is a position written right.
+    unsigned parsePositionNumber(const Location& location, const std::string& written, const char* example);
     void reportDestructureKeyError();
     void skipDestructureField();
     AstDestructurePattern desugarDestructuring(
@@ -422,6 +426,9 @@ private:
     // primaryexp -> prefixexp { `.' NAME | `[' exp `]' | TypeInstantiation | `:' NAME [TypeInstantiation] funcargs | funcargs }
     AstExpr* parsePrimaryExpr(bool asStatement);
     AstExpr* parseIndexExpr(Position start, AstExpr* expr);
+    // Luwu Destructuring (rfcs/destructuring.md): `x.1`, a read of a position
+    bool positionIndexFollows();
+    AstExpr* parsePositionIndex(Position start, AstExpr* expr);
     AstExpr* parseMethodCall(Position start, AstExpr* expr);
 
     // asexp -> simpleexp [`::' Type]
@@ -660,13 +667,19 @@ private:
         bool closed = true;
         // `.(a, b)`: `fields` are elements read by position, with empty keys
         bool positional = false;
+        // `.[a, b]`: `fields` are elements read by index, `value[1]` on, with empty keys
+        bool array = false;
         std::vector<DestructureField> fields;
     };
     struct DestructureField
     {
+        // Empty for a key that isn't a name, whose location `key` still holds
         Name key;
         std::optional<Location> asLocation;
         DestructureTarget target;
+        // `[key] as name` reads `value[key]`, and `5 as name` reads position 5 (keyIsPosition)
+        AstExpr* keyExpr = nullptr;
+        bool keyIsPosition = false;
     };
 
     ParseOptions options;

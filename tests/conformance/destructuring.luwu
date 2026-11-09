@@ -204,7 +204,7 @@ do
     assert(wrapped.p == p and wrapped.inner.x == 3)
 end
 
--- `.(a, b)` reads by position: a class's primary constructor parameters, or a table's array items
+-- `.(a, b)` reads by position: a class's primary constructor parameters. `.[a, b]` reads a table's array items.
 class Tabby(name: string, age: number)
     mood = "happy"
 end
@@ -240,18 +240,31 @@ do
     const f.(fname, fposition) = Frame("frame", 3)
     assert(fname == "frame" and fposition == 3 and f.position == 3)
 
-    -- tables read like array unpacking, missing items are nil
-    const .(a, b, c) = { "Hi", "there" }
+    -- an array pattern reads a table's items, and a missing one is nil
+    const .[a, b, c] = { "Hi", "there" }
     assert(a == "Hi" and b == "there" and c == nil)
 
-    -- nesting with field patterns, both ways
-    const .(x, .(y, z), w.{mood}) = { 1, { 2, 3 }, Tabby("Meow", 2) }
-    assert(x == 1 and y == 2 and z == 3 and mood == "happy" and w.name == "Meow")
-    const .{pair as .(p1, p2)} = { pair = { "l", "r" } }
+    -- nesting with field and positional patterns, both ways
+    const .[x, .[y, z], w.{mood}, .(tname)] = { 1, { 2, 3 }, Tabby("Meow", 2), Tabby("Tom", 3) }
+    assert(x == 1 and y == 2 and z == 3 and mood == "happy" and w.name == "Meow" and tname == "Tom")
+    const .{pair as .[p1, p2]} = { pair = { "l", "r" } }
     assert(p1 == "l" and p2 == "r")
 
+    -- `x.1` reads a position outside a pattern too, and `.{ 2 as age }` reads one by name
+    const tabby = Tabby("Nanuk", 2)
+    assert(tabby.1 == "Nanuk" and tabby.2 == 2)
+    const .{2 as tabby_age} = tabby
+    assert(tabby_age == 2)
+    const nested = { inner = Frame("f", 7) }
+    assert(nested.inner.2 == 7)
+
+    -- a key in brackets reads any key
+    const key = "content-type"
+    const .{[key] as kind, ["x-y"] as xy, [1] as head} = { ["content-type"] = "json", ["x-y"] = 1, "first" }
+    assert(kind == "json" and xy == 1 and head == "first")
+
     local total = 0
-    for _, .(word, count) in { { "a", 1 }, { "b", 2 } } do
+    for _, .[word, count] in { { "a", 1 }, { "b", 2 } } do
         assert(type(word) == "string")
         total += count
     end
@@ -297,18 +310,27 @@ do
         const .(l, s) = Key("a", "b")
         return s
     end, "'secret' is a private member of 'Key'")
+    -- only objects have positions
     fails(function()
         const .(n) = 5
         return n
-    end, "number may not be destructured")
+    end, "value of type number does not have a constant positional member at offset 1; did you mean to use runtime indexing syntax [1] instead?")
     fails(function()
-        const .(.(inner), outer) = { 1, 2 }
+        const .(first, second) = { 1, 2 }
+        return second
+    end, "value of type table does not have a constant positional member at offset 1")
+    fails(function()
+        const t = { 1, 2, 3 }
+        return t.3
+    end, "value of type table does not have a constant positional member at offset 3; did you mean to use runtime indexing syntax [3] instead?")
+    fails(function()
+        const .[.(inner), outer] = { 1, 2 }
         return inner
-    end, "number may not be destructured")
+    end, "value of type number does not have a constant positional member at offset 1")
     fails(function()
         const .(n) = nil
         return n
-    end, "nil may not be destructured")
+    end, "value of type nil does not have a constant positional member at offset 1")
 end
 
 return "OK"

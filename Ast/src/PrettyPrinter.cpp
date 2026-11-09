@@ -361,9 +361,9 @@ struct Printer
         advance(pattern.location->begin);
         writer.symbol(".");
 
-        if (pattern.positional)
+        if (pattern.positional || pattern.array)
         {
-            writer.symbol("(");
+            writer.symbol(pattern.array ? "[" : "(");
 
             CommaSeparatorInserter elementComma(writer, nullptr);
             for (const AstDestructureField& element : pattern.fields)
@@ -373,7 +373,7 @@ struct Printer
             }
 
             advanceBefore(pattern.location->end, 1);
-            writer.symbol(")");
+            writer.symbol(pattern.array ? "]" : ")");
             return;
         }
 
@@ -384,7 +384,21 @@ struct Printer
         {
             comma();
             advance(field.keyLocation.begin);
-            writer.identifier(field.key.value);
+            if (field.keyIsPosition)
+            {
+                visualize(*field.keyExpr);
+            }
+            else if (field.keyExpr)
+            {
+                writer.symbol("[");
+                visualize(*field.keyExpr);
+                advanceBefore(field.keyLocation.end, 1);
+                writer.symbol("]");
+            }
+            else
+            {
+                writer.identifier(field.key.value);
+            }
 
             if (field.asLocation)
             {
@@ -679,6 +693,13 @@ struct Printer
             writer.symbol(std::string(1, a->op));
             advance(a->indexLocation.begin);
             writer.write(a->index.value);
+        }
+        else if (const auto& a = expr.as<AstExprIndexExpr>(); a && a->positional)
+        {
+            // Luwu Destructuring (rfcs/destructuring.md): `x.1`
+            visualize(*a->expr);
+            writer.symbol(".");
+            visualize(*a->index);
         }
         else if (const auto& a = expr.as<AstExprIndexExpr>())
         {
