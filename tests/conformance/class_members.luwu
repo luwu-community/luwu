@@ -35,7 +35,7 @@ local p = Point(1, 2)
 local fields = class.fields(p)
 assert(#fields == 3)
 assert(fields[1].name == "x" and fields[2].name == "y" and fields[3].name == "label")
-assert(fields[1].positional and fields[2].positional and not fields[3].positional)
+assert(fields[1].position == 1 and fields[2].position == 2 and fields[3].position == nil)
 assert(fields[1].value:get() == 1 and fields[3].value:get() == "p")
 assert(table.isfrozen(fields))
 
@@ -96,5 +96,37 @@ end)
 expectfail("const field", "const", function()
     x.name = "z"
 end)
+
+-- a bundle's positions are public const fields named "1" to "n"
+local b = bundle.pack(5, "s", nil)
+local positions = class.fields(b)
+assert(#positions == 3 and table.isfrozen(positions))
+assert(positions[1].name == "1" and positions[3].name == "3")
+assert(positions[2].position == 2 and positions[2].isconst and positions[2].visibility == "public")
+assert(positions[1].value:get() == 5 and positions[3].value ~= none and positions[3].value:get() == nil)
+assert(positions[2]:get(b) == "s" and positions[2]:get(bundle.pack(1, 2, 3)) == 2)
+assert(tostring(positions[1]) == "public const 1 = 5" and tostring(positions[2]) == 'public const 2 = "s"')
+assert(class.member(b, "2").value:get() == "s" and class.member(b, 2).position == 2)
+assert(#class.fields(bundle.pack()) == 0)
+
+-- through a bundle class, a position has no value, and members are made once
+local Bundle3 = class.of(b)
+assert(#class.fields(Bundle3) == 3 and class.fields(Bundle3)[1].value == none)
+assert(class.fields(Bundle3) == class.fields(Bundle3) and class.member(Bundle3, "1") == class.fields(Bundle3)[1])
+assert(tostring(class.member(Bundle3, "1")) == "public const 1")
+
+-- a bundle's methods are still members, and positions past its size aren't
+assert(class.member(b, "sub").value:get() ~= nil)
+expectfail("position past the size", "has no member '4'", class.member, b, "4")
+expectfail("position zero", "has no member '0'", class.member, b, "0")
+expectfail("leading zero", "has no member '01'", class.member, b, "01")
+
+-- BigBundle's size is its object's: through the class it has no positions
+local big = bundle.pack(1, 2, 3, 4, 5, 6, 7, 8)
+assert(#class.fields(big) == 8 and class.fields(big)[8].value:get() == 8)
+assert(#class.fields(class.of(big)) == 0)
+local eighth = class.member(big, "8")
+assert(eighth:get(bundle.pack(9, 9, 9, 9, 9, 9, 9, 10)) == 10)
+expectfail("position past a smaller BigBundle", "out of range", eighth.get, eighth, bundle.pack(1, 2, 3, 4, 5, 6, 7))
 
 return "OK"

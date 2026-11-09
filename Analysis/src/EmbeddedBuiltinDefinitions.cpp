@@ -403,7 +403,7 @@ class type ClassMember<T>(
     public const isconst: boolean,
     public const isfinal: boolean,
     public const visibility: "public" | "private",
-    public const positional: boolean
+    public const position: number?
 )
     public function get(self, object: unknown): T
     public function __tostring(self): string

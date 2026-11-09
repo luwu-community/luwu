@@ -109,8 +109,8 @@ static int class_fields(lua_State* L)
 }
 
 // Luwu class reflection (rfcs/classes): `ClassMember`, one member of a class as `class.member` and `class.fields` give it.
-// `owner` and `offset` are private: `get` and `__tostring` read by them. Only the VM constructs one: its constructor is
-// private, so `class.of(member)` can't make another.
+// `owner` and `offset` are private: `get` and `__tostring` read by them. A bundle's position has no offset, and `get`
+// reads it by `position`. Only the VM constructs one: its constructor is private, so `class.of(member)` can't make another.
 enum ClassMemberField
 {
     kMemberName,
@@ -118,7 +118,7 @@ enum ClassMemberField
     kMemberIsConst,
     kMemberIsFinal,
     kMemberVisibility,
-    kMemberPositional,
+    kMemberPosition,
     kMemberOwner,
     kMemberOffset,
 };
@@ -133,25 +133,36 @@ static LuauClass* classmemberclass(lua_State* L)
     return L->global->builtinclasses[LUWU_BUILTIN_CLASSMEMBER];
 }
 
-// The class and offset of the member a ClassMember describes
-static const LuauClass* memberowner(const LuauObject* member, uint32_t* offset)
+// Whether the ClassMember `member` describes a field (or a bundle's position) rather than a method
+static bool memberisfield(const LuauObject* member)
 {
     const TValue* fields = luaR_members(member);
-    *offset = uint32_t(nvalue(&fields[kMemberOffset]));
-    return classvalue(&fields[kMemberOwner]);
+    if (!ttisnumber(&fields[kMemberOffset]))
+        return true;
+    return uint32_t(nvalue(&fields[kMemberOffset])) < classvalue(&fields[kMemberOwner])->numberofinstancemembers;
 }
 
 // member:get(object): the member's value in `object`, which must be an object of the member's class
 static int classmember_get(lua_State* L)
 {
-    uint32_t offset = 0;
-    const LuauClass* owner = memberowner(luaR_checknativeself(L, classmemberclass(L), "get"), &offset);
+    const TValue* fields = luaR_members(luaR_checknativeself(L, classmemberclass(L), "get"));
+    const LuauClass* owner = classvalue(&fields[kMemberOwner]);
 
     const TValue* object = luaA_toobject(L, 2);
     bool ofOwner = object && ttisobject(object) && objectvalue(object)->lclass == owner;
     if (!ofOwner)
         luaL_typeerror(L, 2, getstr(owner->name));
 
+    // a member of BigBundle can be given a smaller bundle, which raises here
+    if (!ttisnumber(&fields[kMemberOffset]))
+    {
+        lua_checkstack(L, 1);
+        luaR_getbundleposition(L, objectvalue(object), &fields[kMemberPosition], L->top);
+        incr_top(L);
+        return 1;
+    }
+
+    uint32_t offset = uint32_t(nvalue(&fields[kMemberOffset]));
     if (offset < owner->numberofinstancemembers)
         luaA_pushvalue(L, &luaR_members(objectvalue(object))[offset]);
     else
@@ -160,26 +171,24 @@ static int classmember_get(lua_State* L)
 }
 
 // tostring(member): the member as a class body declares it, without its type: `public const x = 1`, `public x`,
-// `public final function f`
+// `public final function f`. A bundle's position prints as `public const 1 = 5`.
 static int classmember_tostring(lua_State* L)
 {
     LuauObject* member = luaR_checknativeself(L, classmemberclass(L), "__tostring");
-    uint32_t offset = 0;
-    const LuauClass* owner = memberowner(member, &offset);
     const TValue* fields = luaR_members(member);
-    uint8_t flags = owner->memberflags[offset];
-    bool isfield = offset < owner->numberofinstancemembers;
+    bool isfield = memberisfield(member);
 
     luaL_Strbuf buffer;
     luaL_buffinit(L, &buffer);
-    luaL_addstring(&buffer, (flags & LBC_CLASSMEMBER_PRIVATE) ? "private " : "public ");
-    if (flags & LBC_CLASSMEMBER_FINAL)
+    luaL_addstring(&buffer, svalue(&fields[kMemberVisibility]));
+    luaL_addchar(&buffer, ' ');
+    if (bvalue(&fields[kMemberIsFinal]))
         luaL_addstring(&buffer, "final ");
-    if (isfield && (flags & LBC_CLASSMEMBER_CONST))
+    if (bvalue(&fields[kMemberIsConst]))
         luaL_addstring(&buffer, "const ");
     if (!isfield)
         luaL_addstring(&buffer, "function ");
-    luaL_addstring(&buffer, getstr(owner->offsettomember[offset]));
+    luaL_addstring(&buffer, svalue(&fields[kMemberName]));
 
     // a field read through an object has a value; `none` is the empty option
     if (isfield && !ttissymnone(&fields[kMemberValue]))
@@ -215,22 +224,53 @@ static const luaR_NativeMember kClassMemberMembers[] = {
     {"isconst", nullptr, LBC_CLASSMEMBER_CONST, nullptr},
     {"isfinal", nullptr, LBC_CLASSMEMBER_CONST, nullptr},
     {"visibility", nullptr, LBC_CLASSMEMBER_CONST, nullptr},
-    {"positional", nullptr, LBC_CLASSMEMBER_CONST, nullptr},
+    {"position", nullptr, LBC_CLASSMEMBER_CONST, nullptr},
     {"owner", nullptr, LBC_CLASSMEMBER_PRIVATE | LBC_CLASSMEMBER_CONST, nullptr},
     {"offset", nullptr, LBC_CLASSMEMBER_PRIVATE | LBC_CLASSMEMBER_CONST, nullptr},
     {"get", classmember_get, 0, nullptr},
     {"__tostring", classmember_tostring, 0, nullptr},
 };
 
-// Whether the member at `offset` of `cls` is one of its primary constructor's parameters
-static bool ispositional(const LuauClass* cls, uint32_t offset)
+// The position of the member at `offset` of `cls` among its primary constructor's parameters, from 1, or 0 when it isn't
+// one of them
+static int positionof(const LuauClass* cls, uint32_t offset)
 {
     for (int i = 0; i < cls->numberofpositional; i++)
         if (cls->positionalmembers[i] == offset)
-            return true;
+            return i + 1;
 
-    return false;
+    return 0;
 }
+
+// The number of positions class reflection lists for `cls`, read through `object` when it's set, or -1 when `cls` isn't
+// a bundle class. Through the class only the fixed sizes have positions: a BigBundle's size is its object's.
+static int bundlepositions(lua_State* L, const LuauClass* cls, const LuauObject* object)
+{
+    if (object)
+        return luaR_isbundle(object) ? int(object->numberofmembers) : -1;
+
+    for (int size = 0; size <= LUWU_BUNDLE_FIXED_MAX; size++)
+        if (L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + size] == cls)
+            return size;
+
+    return L->global->builtinclasses[LUWU_BUILTIN_BIGBUNDLE] == cls ? 0 : -1;
+}
+
+// What a new ClassMember says about its member
+struct MemberInfo
+{
+    TString* name = nullptr;
+    bool isconst = false;
+    bool isfinal = false;
+    bool isprivate = false;
+    // from 1 for a primary constructor's parameter or a bundle's position, 0 for any other member
+    int position = 0;
+    // a bundle's position has none
+    bool hasoffset = true;
+    uint32_t offset = 0;
+    // the value for `Some(value)`, or null for `none`
+    const TValue* value = nullptr;
+};
 
 // Sets field `field` of the new `member`. A new object is white, but filling it allocates, so each store has a barrier.
 static void setmemberfield(lua_State* L, LuauObject* member, ClassMemberField field, const TValue* value)
@@ -239,10 +279,9 @@ static void setmemberfield(lua_State* L, LuauObject* member, ClassMemberField fi
     luaC_barrier(L, member, value);
 }
 
-// Pushes a new ClassMember for the member at `offset` of `cls`. Through an object its value is `Some(value)`; a field
-// read through the class has none. The strings are the class's own and interned literals, so the member itself and a
-// `Some` are all that's allocated.
-static void pushnewclassmember(lua_State* L, LuauClass* cls, uint32_t offset, const LuauObject* object)
+// Pushes a new ClassMember of `cls` saying `info`. The strings are the class's own and interned literals, so the member
+// itself and a `Some` are all that's allocated.
+static void pushnewmember(lua_State* L, LuauClass* cls, const MemberInfo& info)
 {
     LuauClass* membercls = classmemberclass(L);
     LUAU_ASSERT(membercls);
@@ -255,42 +294,84 @@ static void pushnewclassmember(lua_State* L, LuauClass* cls, uint32_t offset, co
     setobjectvalue(L, L->top, member);
     incr_top(L);
 
-    uint8_t flags = cls->memberflags[offset];
-    bool isfield = offset < cls->numberofinstancemembers;
     TValue value;
-
-    setsvalue(L, &value, cls->offsettomember[offset]);
+    setsvalue(L, &value, info.name);
     setmemberfield(L, member, kMemberName, &value);
 
-    setbvalue(&value, isfield && (flags & LBC_CLASSMEMBER_CONST) != 0);
+    setbvalue(&value, info.isconst);
     setmemberfield(L, member, kMemberIsConst, &value);
-    setbvalue(&value, (flags & LBC_CLASSMEMBER_FINAL) != 0);
+    setbvalue(&value, info.isfinal);
     setmemberfield(L, member, kMemberIsFinal, &value);
-    setbvalue(&value, isfield && ispositional(cls, offset));
-    setmemberfield(L, member, kMemberPositional, &value);
+    if (info.position > 0)
+    {
+        setnvalue(&value, double(info.position));
+        setmemberfield(L, member, kMemberPosition, &value);
+    }
 
-    setsvalue(L, &value, (flags & LBC_CLASSMEMBER_PRIVATE) ? luaS_newliteral(L, "private") : luaS_newliteral(L, "public"));
+    setsvalue(L, &value, info.isprivate ? luaS_newliteral(L, "private") : luaS_newliteral(L, "public"));
     setmemberfield(L, member, kMemberVisibility, &value);
 
     setclassvalue(L, &value, cls);
     setmemberfield(L, member, kMemberOwner, &value);
-    setnvalue(&value, double(offset));
-    setmemberfield(L, member, kMemberOffset, &value);
+    if (info.hasoffset)
+    {
+        setnvalue(&value, double(info.offset));
+        setmemberfield(L, member, kMemberOffset, &value);
+    }
 
-    if (isfield && !object)
+    if (!info.value)
     {
         setsymnonevalue(&value);
         setmemberfield(L, member, kMemberValue, &value);
         return;
     }
 
-    if (isfield)
-        luaA_pushvalue(L, &luaR_members(object)[offset]);
-    else
-        luaA_pushvalue(L, &cls->staticmembers[offset - cls->numberofinstancemembers]);
+    luaA_pushvalue(L, info.value);
     lua_pushsome(L, -1);
     setmemberfield(L, member, kMemberValue, L->top - 1);
     L->top -= 2;
+}
+
+// Pushes a new ClassMember for the member at `offset` of `cls`. Through an object its value is `Some(value)`; a field
+// read through the class has none.
+static void pushnewclassmember(lua_State* L, LuauClass* cls, uint32_t offset, const LuauObject* object)
+{
+    uint8_t flags = cls->memberflags[offset];
+    bool isfield = offset < cls->numberofinstancemembers;
+
+    MemberInfo info;
+    info.name = cls->offsettomember[offset];
+    info.isconst = isfield && (flags & LBC_CLASSMEMBER_CONST) != 0;
+    info.isfinal = (flags & LBC_CLASSMEMBER_FINAL) != 0;
+    info.isprivate = (flags & LBC_CLASSMEMBER_PRIVATE) != 0;
+    info.position = isfield ? positionof(cls, offset) : 0;
+    info.offset = offset;
+    if (!isfield)
+        info.value = &cls->staticmembers[offset - cls->numberofinstancemembers];
+    else if (object)
+        info.value = &luaR_members(object)[offset];
+
+    pushnewmember(L, cls, info);
+}
+
+// Pushes a new ClassMember for `position` of the bundle class `cls`: a public const field named after the position.
+// Through a bundle its value is `Some(value)`; through the class it has none.
+static void pushnewbundleposition(lua_State* L, LuauClass* cls, int position, const LuauObject* object)
+{
+    // the name stays on the stack until the member holds it, so allocating the member can't collect it
+    lua_checkstack(L, 1);
+    lua_pushfstring(L, "%d", position);
+
+    MemberInfo info;
+    info.name = tsvalue(L->top - 1);
+    info.isconst = true;
+    info.position = position;
+    info.hasoffset = false;
+    if (object)
+        info.value = &luaR_members(object)[position - 1];
+
+    pushnewmember(L, cls, info);
+    lua_remove(L, -2);
 }
 
 // Pushes `cls`'s cache of its members read through the class (LuauClass::reflection), creating it the first time: the
@@ -308,21 +389,57 @@ static void pushreflection(lua_State* L, LuauClass* cls)
     incr_top(L);
 }
 
+// Pushes the ClassMember `cls`'s reflection cache holds at `key`, after `pushnew` creates it the first time
+template<typename PushNew>
+static void pushcachedmember(lua_State* L, LuauClass* cls, int key, PushNew pushnew)
+{
+    pushreflection(L, cls);
+    if (lua_rawgeti(L, -1, key) == LUA_TNIL)
+    {
+        lua_pop(L, 1);
+        pushnew();
+        lua_pushvalue(L, -1);
+        lua_rawseti(L, -3, key);
+    }
+    lua_remove(L, -2);
+}
+
 // Pushes the ClassMember of the member at `offset` of `cls`: through the class it's created once and kept
 static void pushclassmember(lua_State* L, LuauClass* cls, uint32_t offset, const LuauObject* object)
 {
     if (object)
         return pushnewclassmember(L, cls, offset, object);
 
-    pushreflection(L, cls);
-    if (lua_rawgeti(L, -1, int(offset) + 1) == LUA_TNIL)
+    pushcachedmember(L, cls, int(offset) + 1, [&]{ pushnewclassmember(L, cls, offset, NULL); });
+}
+
+// Pushes the ClassMember of `position` of the bundle class `cls`. Through the class it's kept like pushclassmember's,
+// under the negative position.
+static void pushbundleposition(lua_State* L, LuauClass* cls, int position, const LuauObject* object)
+{
+    if (object)
+        return pushnewbundleposition(L, cls, position, object);
+
+    pushcachedmember(L, cls, -position, [&]{ pushnewbundleposition(L, cls, position, NULL); });
+}
+
+// The position `name` names in a bundle of `size` positions, or 0 when it names none: `1` to `size`, without a sign or
+// leading zeros, like `b.1`
+static int parseposition(const char* name, int size)
+{
+    if (name[0] < '1' || name[0] > '9')
+        return 0;
+
+    int position = 0;
+    for (const char* digit = name; *digit; digit++)
     {
-        lua_pop(L, 1);
-        pushnewclassmember(L, cls, offset, NULL);
-        lua_pushvalue(L, -1);
-        lua_rawseti(L, -3, int(offset) + 1);
+        if (*digit < '0' || *digit > '9')
+            return 0;
+        position = position * 10 + (*digit - '0');
+        if (position > size)
+            return 0;
     }
-    lua_remove(L, -2);
+    return position;
 }
 
 // The class and object at argument 1, a class or an object of it
@@ -351,12 +468,18 @@ static bool callerreadsprivate(lua_State* L, const LuauClass* cls)
 }
 
 // class.member(x, name): the member `name` of the class or object `x`, as a ClassMember. Raises when the class has no such
-// member, or it's private and the caller isn't the class's code.
+// member, or it's private and the caller isn't the class's code. A bundle's positions are members `"1"` to `"n"`.
 static int class_member(lua_State* L)
 {
     const LuauObject* object = NULL;
     LuauClass* cls = checkclassorobject(L, &object);
     const char* name = luaL_checkstring(L, 2);
+
+    if (int position = parseposition(name, bundlepositions(L, cls, object)))
+    {
+        pushbundleposition(L, cls, position, object);
+        return 1;
+    }
 
     const TValue* offset = luaH_getstr(cls->memberstooffset, luaS_new(L, name));
     bool member = !ttisnil(offset) && strcmp(name, "__init") != 0;
@@ -372,9 +495,22 @@ static int class_member(lua_State* L)
 }
 
 // Pushes a new frozen list of the fields of `cls` as ClassMembers: a primary constructor's parameters in the order it takes
-// them, then the others in declaration order. Private ones only with `withprivate`.
+// them, then the others in declaration order. Private ones only with `withprivate`. A bundle lists its positions.
 static void pushfieldlist(lua_State* L, LuauClass* cls, const LuauObject* object, bool withprivate)
 {
+    int positions = bundlepositions(L, cls, object);
+    if (positions >= 0)
+    {
+        lua_createtable(L, positions, 0);
+        for (int position = 1; position <= positions; position++)
+        {
+            pushbundleposition(L, cls, position, object);
+            lua_rawseti(L, -2, position);
+        }
+        lua_setreadonly(L, -1, true);
+        return;
+    }
+
     lua_createtable(L, int(cls->numberofinstancemembers), 0);
     int list = lua_gettop(L);
     int count = 0;
@@ -393,7 +529,7 @@ static void pushfieldlist(lua_State* L, LuauClass* cls, const LuauObject* object
 
     for (uint32_t offset = 0; offset < cls->numberofinstancemembers; offset++)
     {
-        if (!ispositional(cls, offset))
+        if (positionof(cls, offset) == 0)
             add(offset);
     }
 
