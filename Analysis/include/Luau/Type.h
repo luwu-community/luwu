@@ -676,6 +676,10 @@ struct ExternType
     // an instantiation reads its template's.
     bool printsAsBundle = false;
 
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): the alias an instantiation is the type of (`type Nums =
+    // Vec<number>`, `type UDim2 = .(.(number, number), .(number, number))`), which it prints as. See TableType::name.
+    std::optional<std::string> aliasName;
+
     // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): whether the members still have to be built (see props)
     bool hasUnbuiltMembers() const
     {
@@ -943,6 +947,10 @@ struct PendingExpansionType
     size_t index;
     // Luwu try expressions: expands the alias's error hint (TypeFun::errorHint) instead of its type
     bool errorHint = false;
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): set when this is the body of a non-generic alias, `Vec<number>`
+    // in `type Nums = Vec<number>`. An instantiation of a generic class it expands to prints as the alias's name.
+    std::optional<std::string> aliasName;
 
     static size_t nextIndex;
 };
