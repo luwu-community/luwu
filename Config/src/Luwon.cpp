@@ -649,16 +649,21 @@ private:
         return value ? *value : LuwonValue{};
     }
 
-    // Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern `.(a, b)`. An object gives the
-    // argument its call wrote at that position: the reader knows no classes, so it can't tell a primary constructor's
-    // parameters from the table the default constructor takes.
+    // Luwu Destructuring (rfcs/destructuring.md): a position, `x.1` or an element of a positional pattern `.(a, b)`. Only
+    // an object has positions. It gives the argument its call wrote at that position: the reader knows no classes, so it
+    // can't tell a primary constructor's parameters from the table the default constructor takes.
     LuwonValue readElement(AstExpr* objectExpr, const LuwonValue& position, const Location& location)
     {
         LuwonValue object = evaluate(objectExpr);
-        if (object.kind != LuwonValue::Kind::Object)
-            return readFieldOf(object, position, location);
-
         LUAU_ASSERT(position.kind == LuwonValue::Kind::Number && position.number >= 1);
+        if (object.kind != LuwonValue::Kind::Object)
+        {
+            fail(
+                location,
+                format("A %s has no positions; read its item with '[%s]' or '.[...]'", luwonKindName(object.kind), formatLuwonNumber(position.number).c_str())
+            );
+        }
+
         size_t index = size_t(position.number) - 1;
         return index < object.args.size() ? object.args[index] : LuwonValue{};
     }

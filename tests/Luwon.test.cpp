@@ -151,17 +151,22 @@ TEST_CASE("luwon_positional_destructuring")
 {
     ScopedFastFlag destructuring{FFlag::LuwuDestructuring, true};
 
-    // A table gives its items; a constructor call gives the arguments it wrote
+    // A constructor call gives the arguments it wrote; an array pattern reads a table's items
     LuwonValue value = evaluate(R"(
-const .(first, second) = { "a", "b" }
+const .[first, second] = { "a", "b" }
 const .(x, y) = Point(1, 2)
-return { first = first, second = second, x = x, y = y }
+const point = Point(3, 4)
+return { first = first, second = second, x = x, y = y, z = point.2 }
 )");
 
     CHECK(field(value, "first").bytes == "a");
     CHECK(field(value, "second").bytes == "b");
     CHECK(field(value, "x").number == 1);
     CHECK(field(value, "y").number == 2);
+    CHECK(field(value, "z").number == 4);
+
+    // only an object has positions
+    CHECK(firstError("const .(first) = { \"a\" }\nreturn first") == "A table has no positions; read its item with '[1]' or '.[...]'");
 }
 
 TEST_CASE("luwon_nil_fields_are_absent")
