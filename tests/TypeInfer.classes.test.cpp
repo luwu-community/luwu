@@ -6610,6 +6610,35 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "aliases_of_generic_class_instantiations_keep
     CHECK_EQ(toString(requireType("listed")), "Vec<string>");
 }
 
+// Luwu bundles: a bundle literal takes its positions' expected types, so a string literal where a union of string
+// singletons goes stays a singleton
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_literals_take_their_positions_expected_types")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type ItemId = "torch" | "stick" | "coal"
+        type Ingredient = bundle.Bundle2<ItemId, number>
+        local one: Ingredient = bundle.pack("torch", 1)
+        local listed: { Ingredient } = { bundle.pack("torch", 1), bundle.pack("stick", 2) }
+        local items: { [ItemId]: { ingredients: { Ingredient } } } = {
+            torch = { ingredients = { bundle.pack("coal", 1), bundle.pack("stick", 1) } },
+        }
+        local wrong: Ingredient = bundle.pack("diamond", 1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 9);
+}
+
 // Luwu bundles: `b[n]` reads any position, so it has the union of the positions' types, with each type once
 TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_index_reads_have_each_position_type_once")
 {

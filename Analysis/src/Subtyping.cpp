@@ -2299,18 +2299,25 @@ SubtypingResult Subtyping::isCovariantWith(
         SubtypingResult result{true};
         bool anyUnsuppressedMismatch = false;
 
+        // Luwu bundles: a bundle can't be changed, so its positions are covariant: `.("torch", number)` is an
+        // `.(ItemId, number)`
+        const ExternType* declared = subExternType->genericTemplate ? get<ExternType>(follow(*subExternType->genericTemplate)) : nullptr;
+        bool covariant = declared && declared->printsAsBundle;
+
         for (size_t i = 0; i < subExternType->instantiatedTypeParams.size(); ++i)
         {
-            SubtypingResult argResult =
-                isInvariantWith(env, follow(subExternType->instantiatedTypeParams[i]), follow(superExternType->instantiatedTypeParams[i]), scope);
+            TypeId subArg = follow(subExternType->instantiatedTypeParams[i]);
+            TypeId superArg = follow(superExternType->instantiatedTypeParams[i]);
+            SubtypingResult argResult = covariant ? isCovariantWith(env, subArg, superArg, scope) : isInvariantWith(env, subArg, superArg, scope);
             anyUnsuppressedMismatch |= !argResult.isSubtype && !argResult.isErrorSuppressing;
             result.andAlso(std::move(argResult));
         }
 
         for (size_t i = 0; i < subExternType->instantiatedTypePackParams.size(); ++i)
         {
-            SubtypingResult argResult =
-                isInvariantWith(env, follow(subExternType->instantiatedTypePackParams[i]), follow(superExternType->instantiatedTypePackParams[i]), scope);
+            TypePackId subArg = follow(subExternType->instantiatedTypePackParams[i]);
+            TypePackId superArg = follow(superExternType->instantiatedTypePackParams[i]);
+            SubtypingResult argResult = covariant ? isCovariantWith(env, subArg, superArg, scope) : isInvariantWith(env, subArg, superArg, scope);
             anyUnsuppressedMismatch |= !argResult.isSubtype && !argResult.isErrorSuppressing;
             result.andAlso(std::move(argResult));
         }
