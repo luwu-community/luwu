@@ -6315,6 +6315,56 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements
     CHECK_EQ(toString(requireType("value")), "number?");
 }
 
+// Luwu collections: an empty Vec or VecDeque takes its element type from its first push, as the runtime fixes it from
+// the first value. A later push of another type is an error, and reads give the element type.
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_empty_constructors_take_their_element_type_from_the_first_push")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local queue = collections.VecDeque()
+        queue:pushback(bundle.pack(bundle.pack(0.5, 2), bundle.pack(0.8, 4)))
+        queue:pushback(bundle.pack(0.5, 4))
+        local names = collections.Vec()
+        names:push("Ada")
+        names:push("Grace")
+        local last = names:pop()
+        local inserted = collections.Vec()
+        inserted:insert(1, true)
+        local printed = collections.Vec()
+        print(printed)
+        printed:push(1)
+        local function stack()
+            return { push = function(self, value: number) end }
+        end
+        local s = stack()
+        s:push(1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+    CHECK_EQ(toString(requireType("queue")), "VecDeque<.(.(number, number), .(number, number))>");
+    CHECK_EQ(toString(requireType("names")), "Vec<string>");
+    CHECK_EQ(toString(requireType("last")), "string?");
+    CHECK_EQ(toString(requireType("inserted")), "Vec<boolean>");
+    CHECK_EQ(toString(requireType("printed")), "Vec<unknown>");
+
+    checkTypewriting(
+        *this,
+        "local VecDeque = collections.VecDeque\nlocal pack = bundle.pack\nlocal queue = VecDeque()\nqueue:pushback(pack(",
+        "1, 2",
+        "))\nlocal after = 1\nprint(after)\n"
+    );
+}
+
 // Luwu collections: Vec and VecDeque fix their element type to their first value's at runtime, so constructor arguments
 // of another runtime type are reported where they're passed. Bundles of different sizes have different classes.
 TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_report_values_of_another_type")

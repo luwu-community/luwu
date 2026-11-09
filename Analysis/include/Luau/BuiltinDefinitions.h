@@ -152,6 +152,10 @@ bool isBuiltinClassTypeofName(const std::string& name);
 // any other name, or when the library isn't loaded.
 std::optional<TypeId> builtinClassTypeofType(TypeArena* arena, const Scope* globalScope, const std::string& name);
 
+// Luwu collections: "Vec" or "VecDeque" when `classValue` is that class's value, whose objects fix their element type to
+// their first value's at runtime. nullopt for any other type. `scope` is any scope of the module.
+std::optional<std::string> fixedElementContainerName(TypeArena* arena, const Scope* scope, TypeId classValue);
+
 // Luwu bundles: the most values a bundle with a class of its size holds (LUWU_BUNDLE_FIXED_MAX in the VM). Larger
 // bundles share the class `BigBundle`.
 constexpr size_t kBundleFixedMax = 6;

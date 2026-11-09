@@ -4,6 +4,7 @@
 #include "Luau/Anyification.h"
 #include "Luau/ApplyTypeFunction.h"
 #include "Luau/AstUtils.h"
+#include "Luau/BuiltinDefinitions.h"
 #include "Luau/BuiltinTypeFunctions.h"
 #include "Luau/Clone.h"
 #include "Luau/Common.h"
@@ -3586,6 +3587,11 @@ bool ConstraintSolver::tryDispatch(const TypeInstantiationConstraint& c, NotNull
     // Luwu Classes (rfcs/classes): `Box<<string>>` is the constructor (a trait's `__create`) with its type arguments
     // given, so `Box<<string>>(x)` is a `Box<string>`. Its `__call` takes the class value first, which the call won't pass.
     std::optional<TypeId> classCall = FFlag::LuwuClasses ? classValueCallType(builtinTypes, c.functionType) : std::nullopt;
+    if (c.fromFirstPush && !(classCall && fixedElementContainerName(arena, constraint->scope.get(), c.functionType)))
+    {
+        bind(constraint, c.placeholderType, c.functionType);
+        return true;
+    }
     if (classCall)
     {
         if (isBlocked(*classCall))

@@ -542,6 +542,29 @@ std::optional<TypeId> builtinClassTypeofType(TypeArena* arena, const Scope* glob
     return std::nullopt;
 }
 
+std::optional<std::string> fixedElementContainerName(TypeArena* arena, const Scope* scope, TypeId classValue)
+{
+    const ExternType* classType = get<ExternType>(follow(classValue));
+    const Obj* instance = classType && classType->relation ? classType->relation->get_if<Obj>() : nullptr;
+    const ExternType* object = instance ? get<ExternType>(follow(instance->ty)) : nullptr;
+    if (!object)
+        return std::nullopt;
+    TypeId objectTemplate = follow(object->genericTemplate.value_or(instance->ty));
+
+    const Scope* globalScope = scope;
+    while (globalScope->parent)
+        globalScope = globalScope->parent.get();
+
+    const std::pair<const char*, const char*> containers[] = {{"vec", "Vec"}, {"vecdeque", "VecDeque"}};
+    for (const auto& [typeofName, name] : containers)
+    {
+        std::optional<TypeId> declared = builtinClassTypeofType(arena, globalScope, typeofName);
+        if (declared && follow(*declared) == objectTemplate)
+            return std::string(name);
+    }
+    return std::nullopt;
+}
+
 // Luwu bundles: the position a literal number names, or nullopt for anything else
 static std::optional<size_t> literalPosition(const AstExpr* expr)
 {

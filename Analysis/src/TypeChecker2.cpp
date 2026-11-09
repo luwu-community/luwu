@@ -3916,25 +3916,8 @@ void TypeChecker2::checkContainerConstructor(AstExprCall* call)
     if (call->args.size < 2)
         return;
 
-    const ExternType* classValue = get<ExternType>(follow(lookupType(call->func)));
-    const Obj* instance = classValue && classValue->relation ? classValue->relation->get_if<Obj>() : nullptr;
-    const ExternType* object = instance ? get<ExternType>(follow(instance->ty)) : nullptr;
-    if (!object)
-        return;
-    TypeId objectTemplate = follow(object->genericTemplate.value_or(instance->ty));
-
-    const Scope* globalScope = findInnermostScope(call->location);
-    while (globalScope->parent)
-        globalScope = globalScope->parent.get();
-
-    const std::pair<const char*, const char*> containers[] = {{"vec", "Vec"}, {"vecdeque", "VecDeque"}};
-    const char* containerName = nullptr;
-    for (const auto& [typeofName, name] : containers)
-    {
-        std::optional<TypeId> declared = builtinClassTypeofType(module->internalTypes.get(), globalScope, typeofName);
-        if (declared && follow(*declared) == objectTemplate)
-            containerName = name;
-    }
+    std::optional<std::string> containerName =
+        fixedElementContainerName(module->internalTypes.get(), findInnermostScope(call->location), lookupType(call->func));
     if (!containerName)
         return;
 
@@ -3958,7 +3941,7 @@ void TypeChecker2::checkContainerConstructor(AstExprCall* call)
 
         std::string message = format(
             "This %s can only accept %s (the type of its first value), but you passed %s",
-            containerName,
+            containerName->c_str(),
             fixed->plural.c_str(),
             element->single.c_str()
         );
