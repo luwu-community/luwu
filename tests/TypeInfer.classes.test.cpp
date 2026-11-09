@@ -6567,6 +6567,49 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements
     CHECK_EQ(toString(requireType("value")), "number?");
 }
 
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an alias of a generic class instantiation prints as its name
+// inside another type, and other uses of the same instantiation don't. At the root a type prints what it expands to, like
+// a named union.
+TEST_CASE_FIXTURE(BuiltinsFixture, "aliases_of_generic_class_instantiations_keep_their_names")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type Nums = collections.Vec<number>
+        type UDim = bundle.Bundle2<number, number>
+        type Listed<T> = collections.Vec<T>
+        type Again = Nums
+        local nums: Nums = collections.Vec(1)
+        local plain: collections.Vec<number> = collections.Vec(1)
+        local udim: UDim = bundle.pack(0.5, 4)
+        local queue = collections.VecDeque<<UDim>>()
+        local lists = collections.VecDeque<<Nums>>()
+        local plainLists = collections.VecDeque<<collections.Vec<number>>>()
+        local again = collections.VecDeque<<Again>>()
+        local listed: Listed<string> = collections.Vec("a")
+        local wrong: UDim = bundle.pack(1, "x")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 14);
+    CHECK_EQ(toString(requireType("nums")), "Vec<number>");
+    CHECK_EQ(toString(requireType("udim")), ".(number, number)");
+    CHECK_EQ(toString(requireType("queue")), "VecDeque<UDim>");
+    CHECK_EQ(toString(requireType("lists")), "VecDeque<Nums>");
+    CHECK_EQ(toString(requireType("plainLists")), "VecDeque<Vec<number>>");
+    // an alias of an alias is the other alias's type
+    CHECK_EQ(toString(requireType("again")), "VecDeque<Nums>");
+    CHECK_EQ(toString(requireType("listed")), "Vec<string>");
+}
+
 // Luwu bundles: `b[n]` reads any position, so it has the union of the positions' types, with each type once
 TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_index_reads_have_each_position_type_once")
 {
