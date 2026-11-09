@@ -652,10 +652,11 @@ bool AstExprDo::alwaysLeaves() const
             return false;
         }
 
-        // a nested `do` expression's gives are its own, and a function's body is another function
-        bool visit(AstExprDo*) override
+        // a nested `do` expression's gives are its own, except the shorthand's (`x or give v`), and a function's body is
+        // another function
+        bool visit(AstExprDo* expr) override
         {
-            return false;
+            return expr->shorthand;
         }
 
         bool visit(AstExprFunction*) override

@@ -6121,6 +6121,13 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprDo* doExpr, s
 
     ScopePtr bodyScope = childScope(doExpr->body, scope);
 
+    // `x or give v` gives from the enclosing `do` expression, and has no value of its own
+    if (doExpr->shorthand)
+    {
+        visitBlockWithoutChildScope(bodyScope, doExpr->body);
+        return Inference{builtinTypes->neverType};
+    }
+
     giveContexts.push_back({scope.get(), expectedType, {}});
     visitBlockWithoutChildScope(bodyScope, doExpr->body);
 

@@ -9724,6 +9724,59 @@ TEST_CASE_FIXTURE(Fixture, "or_return_and_or_break_are_do_expressions")
     CHECK(e->body->body.data[0]->is<AstStatBreak>());
 }
 
+TEST_CASE_FIXTURE(Fixture, "or_give_and_and_give_give_from_the_enclosing_do_expression")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    AstStatBlock* block = parse(R"(
+        local r = do
+            local a = x or give nil
+            const b = y and give 1
+            local c, d = z or give 2, 3
+            local e = w or (give 4)
+            give a
+    )");
+
+    AstStatBlock* body = block->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprDo>()->body;
+    REQUIRE_EQ(body->body.size, 5);
+
+    for (size_t i = 0; i < 2; i++)
+    {
+        AstExprBinary* binary = body->body.data[i]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>();
+        REQUIRE(binary);
+        AstExprDo* shorthand = binary->right->as<AstExprDo>();
+        REQUIRE(shorthand);
+        CHECK(shorthand->shorthand);
+        REQUIRE_EQ(shorthand->body->body.size, 1);
+        CHECK(shorthand->body->body.data[0]->is<AstStatGive>());
+    }
+
+    // the comma after an unparenthesized `or give` belongs to the local
+    CHECK_EQ(body->body.data[2]->as<AstStatLocal>()->values.size, 2);
+
+    AstExprGroup* e = body->body.data[3]->as<AstStatLocal>()->values.data[0]->as<AstExprBinary>()->right->as<AstExprGroup>();
+    REQUIRE(e);
+    CHECK(e->expr->as<AstExprDo>()->body->body.data[0]->is<AstStatGive>());
+
+    // the enclosing `do` expression still gives a value
+    CHECK_FALSE(block->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprDo>()->alwaysLeaves());
+
+    // outside a `do` expression, `give` is a name
+    CHECK(tryParse("local a = x or give").errors.empty());
+
+    ParseResult statement = tryParse("local r = do\n    x or give 1, 2\n    give 3");
+    REQUIRE_EQ(statement.errors.size(), 1);
+    CHECK_EQ(statement.errors[0].getMessage(), "'give' gives exactly one value");
+
+    ParseResult parenthesized = tryParse("local r = do\n    local a = x or (give 1, 2)\n    give a");
+    REQUIRE_EQ(parenthesized.errors.size(), 1);
+    CHECK_EQ(parenthesized.errors[0].getMessage(), "'give' gives exactly one value");
+
+    ParseResult missing = tryParse("local r = do\n    local a = x or give\n    give a");
+    REQUIRE_EQ(missing.errors.size(), 1);
+    CHECK_EQ(missing.errors[0].getMessage(), "Expected a value after 'give'");
+}
+
 // `x or continue` is the shorthand in a loop of a module that never uses `continue` as a name; anywhere else it keeps
 // Luau's meaning, a read of the variable
 TEST_CASE_FIXTURE(Fixture, "or_continue_is_the_shorthand_unless_the_module_names_continue")

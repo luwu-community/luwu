@@ -534,6 +534,8 @@ private:
     // Luwu Do Expressions (rfcs/do-expressions.md)
     AstExpr* parseDoExpr();
     AstStat* parseGive();
+    AstExpr* parseGiveValue();
+    void reportExtraGiveValues();
     bool orLeaveFollows();
     bool orContinueFollows();
     void resolveOrContinues();

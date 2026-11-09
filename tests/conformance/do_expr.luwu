@@ -698,6 +698,36 @@ do
     end
     assert(table.concat(out, ",") == "1,4")
 
+    -- `x or give v` and `x and give v` give from the enclosing `do` expression
+    local function classify(x, y)
+        return do
+            local n = x or give "no x"
+            const m = y and give `y with {n}`
+            n > 2 or give "small"
+            const d = do
+                local inner = n > 10 and give "big"
+                give if inner == false then "medium" else "?"
+            give d
+    end
+    assert(classify(nil) == "no x")
+    assert(classify(1, true) == "y with 1")
+    assert(classify(1) == "small")
+    assert(classify(20) == "big")
+    assert(classify(5) == "medium")
+
+    -- and from an if-else expression's arm
+    local function arm(c)
+        return do
+            local v = if c then give "early" else 2
+            give v * 10
+    end
+    assert(arm(true) == "early" and arm(false) == 20)
+
+    -- in a call's arguments
+    const called = do
+        give tostring(nil or give "given") .. " to tostring"
+    assert(called == "given")
+
     -- `x and return v` returns when `x` is truthy, and the code after it sees `x` falsy
     local function f(x)
         x and return "x"

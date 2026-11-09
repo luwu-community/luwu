@@ -9044,12 +9044,16 @@ AstExpr* Parser::parseDoExpr()
     return node;
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): `return` or `break` right after `or`, bare or in parentheses
+// Luwu Do Expressions (rfcs/do-expressions.md): `return` or `break` right after `or`, bare or in parentheses, and `give`
+// inside a `do` expression, where it's a keyword
 bool Parser::orLeaveFollows()
 {
-    auto isLeave = [](const Lexeme& l)
+    bool inDoExpr = functionStack.back().doExprDepth > 0;
+
+    auto isLeave = [inDoExpr](const Lexeme& l)
     {
-        return l.type == Lexeme::ReservedReturn || l.type == Lexeme::ReservedBreak;
+        bool give = inDoExpr && l.type == Lexeme::Name && AstName(l.name) == "give";
+        return l.type == Lexeme::ReservedReturn || l.type == Lexeme::ReservedBreak || give;
     };
 
     if (isLeave(lexer.current()))
@@ -9146,6 +9150,7 @@ void Parser::checkLeaveShorthandFeature(const Location& keyword, const char* int
 //   x or continue      x or (do continue)       (see orContinueFollows)
 //   x or (return a, b) x or (do return a, b)
 //   x and break        x and (do break)
+//   x or give v        (inside a `do` expression) gives v from it
 //
 // Unparenthesized, `return` takes exactly one value: in `local a, b = x or return y, z` the `, z` belongs to the
 // `local`. More values, or none, need the parentheses (`x or (return)`), for the same reason `(do return)` does.
@@ -9166,6 +9171,19 @@ AstExpr* Parser::parseOrLeave(const char* introducer)
     if (lexer.current().type == Lexeme::ReservedBreak)
     {
         leave = parseBreak();
+    }
+    else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "give")
+    {
+        // a `give` gives exactly one value, parenthesized or not, so `local a, b = x or give y, z` is unambiguous
+        nextLexeme();
+        AstExpr* value = parseGiveValue();
+
+        if (matchParen && lexer.current().type == ',')
+            reportExtraGiveValues();
+
+        AstStatGive* give = allocator.alloc<AstStatGive>(Location(keyword, value->location), value);
+        give->luwuOnly = true;
+        leave = give;
     }
     else if (lexer.current().type == Lexeme::Name)
     {
@@ -9217,8 +9235,9 @@ AstExpr* Parser::parseOrLeave(const char* introducer)
     expr->shorthand = true;
     expr->luwuOnly = true;
 
-    // A `continue` shorthand is checked once the module is parsed (resolveOrContinues)
-    if (!leave->is<AstStatContinue>())
+    // A `continue` shorthand is checked once the module is parsed (resolveOrContinues), and a `give` one with the `do`
+    // expression it's in
+    if (!leave->is<AstStatContinue>() && !leave->is<AstStatGive>())
         checkLeaveShorthandFeature(keyword, introducer);
 
     if (!matchParen)
@@ -9270,16 +9289,24 @@ AstStat* Parser::parseOrLeaveStatement(AstExpr* expr, size_t errorsBeforeStateme
                 guard = withoutGroups(guard->right)->as<AstExprBinary>();
             const char* introducer = guard->op == AstExprBinary::And ? "and" : "or";
 
-            Location comma = lexer.current().location;
-            nextLexeme();
-            TempVector<AstExpr*> rest(scratchExpr);
-            parseExprList(rest);
-            report(
-                Location(comma, lexer.previousLocation()),
-                "'%s return' returns one value unless parenthesized: 'x %s (return a, b)'",
-                introducer,
-                introducer
-            );
+            // the shorthand's body is its one statement
+            if (asLeave(guard->right)->body->body.data[0]->is<AstStatGive>())
+            {
+                reportExtraGiveValues();
+            }
+            else
+            {
+                Location comma = lexer.current().location;
+                nextLexeme();
+                TempVector<AstExpr*> rest(scratchExpr);
+                parseExprList(rest);
+                report(
+                    Location(comma, lexer.previousLocation()),
+                    "'%s return' returns one value unless parenthesized: 'x %s (return a, b)'",
+                    introducer,
+                    introducer
+                );
+            }
         }
 
         AstStatExpr* node = allocator.alloc<AstStatExpr>(expr->location, expr);
@@ -9326,29 +9353,38 @@ AstStat* Parser::parseGive()
         checkDoExprKeywordAsName(keyword);
         value = reportExprError(lexer.current().location, {}, "Expected a value after 'give'");
     }
-    else if (valueEnds(lexer.current()))
-    {
-        value = reportExprError(lexer.current().location, {}, "Expected a value after 'give'");
-    }
     else
     {
-        value = parseExpr();
+        value = parseGiveValue();
     }
 
     // At the top of the block, the `give` ends the expression, and the `,` belongs to the list around it:
     // `f(a, do give b, c)`. Nested deeper, nothing else can own it.
     if (lexer.current().type == ',' && !doExprTopLevel)
-    {
-        Location extra = lexer.current().location;
-        TempVector<AstExpr*> rest(scratchExpr);
-        nextLexeme();
-        parseExprList(rest);
-        report(Location(extra, lexer.previousLocation()), "'give' gives exactly one value");
-    }
+        reportExtraGiveValues();
 
     AstStatGive* node = allocator.alloc<AstStatGive>(Location(start, value->location), value);
     node->luwuOnly = true;
     return node;
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): the value after `give`, or an error where none can start
+AstExpr* Parser::parseGiveValue()
+{
+    if (valueEnds(lexer.current()))
+        return reportExprError(lexer.current().location, {}, "Expected a value after 'give'");
+
+    return parseExpr();
+}
+
+// Luwu Do Expressions (rfcs/do-expressions.md): the `, b, c` after a `give`'s value, which nothing can own
+void Parser::reportExtraGiveValues()
+{
+    Location extra = lexer.current().location;
+    TempVector<AstExpr*> rest(scratchExpr);
+    nextLexeme();
+    parseExprList(rest);
+    report(Location(extra, lexer.previousLocation()), "'give' gives exactly one value");
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md): tokens that end the expression a `do` expression is part of, so its
@@ -9373,7 +9409,11 @@ bool Parser::valueEnds(const Lexeme& l)
     bool startsStatement = l.type == Lexeme::ReservedLocal || l.type == Lexeme::ReservedReturn || l.type == Lexeme::ReservedBreak ||
                            l.type == Lexeme::ReservedWhile || l.type == Lexeme::ReservedFor || l.type == Lexeme::ReservedRepeat;
 
-    return blockFollow(l) || doExprBodyFollow(l) || l.type == ';' || startsStatement;
+    // inside a `do` expression, `give` and `continue` are statement keywords too (see checkDoExprKeywordAsName)
+    bool doExprKeyword = functionStack.back().doExprDepth > 0 && l.type == Lexeme::Name &&
+                         (AstName(l.name) == "give" || AstName(l.name) == "continue");
+
+    return blockFollow(l) || doExprBodyFollow(l) || l.type == ';' || startsStatement || doExprKeyword;
 }
 
 // Luwu Do Expressions (rfcs/do-expressions.md): inside a `do` expression, `give` and `continue` can't name a

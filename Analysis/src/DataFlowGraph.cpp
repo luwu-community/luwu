@@ -1426,9 +1426,17 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIfElse* i)
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprDo* d)
 {
     DfgScope* outer = currentScope();
-    giveExits.push_back({outer, nullptr});
-
     DfgScope* body = makeChildScope();
+
+    // `x or give v` gives from the enclosing `do` expression
+    if (d->shorthand)
+    {
+        PushScope ps{scopeStack, body};
+        visitBlockWithoutChildScope(d->body);
+        return {defArena->freshCell(Symbol{}, d->location), nullptr};
+    }
+
+    giveExits.push_back({outer, nullptr});
     {
         PushScope ps{scopeStack, body};
         visitBlockWithoutChildScope(d->body);

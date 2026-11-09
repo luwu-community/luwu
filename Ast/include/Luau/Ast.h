@@ -1869,8 +1869,8 @@ public:
 
     AstStatBlock* body;
 
-    // Written as `x or return v` or `x or break` rather than with `do`: the body is that one statement
-    // (see Parser::parseOrLeave).
+    // Written as `x or return v`, `x or break` or `x or give v` rather than with `do`: the body is that one statement
+    // (see Parser::parseOrLeave). It has no value of its own: a `give` in it gives from the enclosing `do` expression.
     bool shorthand = false;
 
     // Luwu match expressions: parsed from a `match` expression (see Parser::parseMatchExpr). The body is the subject's

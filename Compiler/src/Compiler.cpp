@@ -6084,6 +6084,13 @@ struct Compiler
     {
         RegScope rs(this);
 
+        // `x or give v` gives from the enclosing `do` expression's frame
+        if (expr->shorthand)
+        {
+            compileStat(expr->body);
+            return;
+        }
+
         giveFrames.push_back({target, targetTemp, localStack.size(), {}});
 
         // The block always ends in a `give`, `return`, `break` or `continue`, so nothing falls through it

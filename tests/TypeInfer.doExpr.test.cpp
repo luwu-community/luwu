@@ -118,6 +118,25 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "assignments_on_the_way_to_a_give_are_seen_af
     CHECK_EQ(result.errors[0].location.begin.line, 10);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "or_give_gives_from_the_enclosing_do_expression")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function f(x: number?, y: string?)
+            return do
+                local n = x or give "none"
+                const _ = y and give false
+                give n + 1
+        end
+    )");
+
+    // `n` is a number after the `or give`
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("f")), "(number?, string?) -> boolean | number | string");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "the_expected_type_flows_into_give")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
@@ -328,6 +347,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_do_expressions")
         "local function f(): number?\n    local n = maybe() or do\n        print(\"none\")\n        return nil\n    return n + 1\nend",
         kTypewriterAfter
     );
+    checkTypewriting(*this, kTypewriterBefore, "local a = do\n    local n = maybe() or give 0\n    give n * 2", kTypewriterAfter);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_or_leave")
