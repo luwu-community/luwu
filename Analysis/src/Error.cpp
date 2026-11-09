@@ -1575,6 +1575,11 @@ struct ErrorConverter
 
     std::string operator()(const PositionalDestructuring& e) const
     {
+        if (e.notObject && e.inPattern)
+            return "'" + e.className + "' has no positions; destructure it by index with '.[...]' instead";
+        if (e.notObject)
+            return "'" + e.className + "' has no positions; index it with '[" + std::to_string(e.position + 1) + "]' instead";
+
         if (!e.parameters)
             return "'" + e.className + "' can't be destructured positionally without a primary constructor; take its fields by name with '.{...}'";
 
@@ -2026,7 +2031,8 @@ bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
 
 bool PositionalDestructuring::operator==(const PositionalDestructuring& rhs) const
 {
-    return className == rhs.className && position == rhs.position && parameters == rhs.parameters;
+    return className == rhs.className && position == rhs.position && parameters == rhs.parameters && notObject == rhs.notObject &&
+           inPattern == rhs.inPattern;
 }
 
 bool PrivateConstructorAccess::operator==(const PrivateConstructorAccess& rhs) const

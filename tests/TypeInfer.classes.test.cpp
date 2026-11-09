@@ -2793,7 +2793,7 @@ end
 const .(cat_name, cat_age) = Cat("Taz", 12)
 const .(item) = Box("hello", 2)
 const .(frame_name, frame_size) = Frame("f", 2)
-const .(a, b) = { "hi", "there" }
+const .[a, b] = { "hi", "there" }
 local function first(v: Cat | Dog)
     const .(f) = v
     return f
@@ -2809,6 +2809,39 @@ local either = first(Dog(true))
     CHECK_EQ(toString(requireType("frame_size")), "number");
     CHECK_EQ(toString(requireType("a")), "string");
     CHECK_EQ(toString(requireType("either")), "boolean | string");
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `x.1` reads a position, and only objects have positions
+TEST_CASE_FIXTURE(ClassesFixture, "positions_are_read_from_objects_only")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+    CheckResult result = check(R"(
+class Cat(name: string, age: number) end
+const cat = Cat("Nanuk", 2)
+const name = cat.1
+const age = cat.2
+const list = { "a", "b" }
+const wrong = list.1
+const .(also) = list
+const .[fine] = list
+local function anything(x: any)
+    return x.1
+end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(toString(requireType("name")), "string");
+    CHECK_EQ(toString(requireType("age")), "number");
+    CHECK_EQ(toString(requireType("fine")), "string");
+    const PositionalDestructuring* read = get<PositionalDestructuring>(result.errors[0]);
+    REQUIRE(read);
+    CHECK(read->notObject);
+    CHECK(!read->inPattern);
+    CHECK_EQ(result.errors[0].location.begin.line, 6);
+    const PositionalDestructuring* pattern = get<PositionalDestructuring>(result.errors[1]);
+    REQUIRE(pattern);
+    CHECK(pattern->notObject);
+    CHECK(pattern->inPattern);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "positional_destructuring_needs_a_primary_constructor_with_that_position")
@@ -2872,6 +2905,19 @@ TEST_CASE_FIXTURE(ClassesFixture, "typing_positional_destructuring")
     checkTypewriting(*this, before, "const .(name, age) = Cat(\"Taz\", 12)", after);
     checkTypewriting(*this, before, "local cat.(name, age: number) = Cat(\"Taz\", 12)", after);
     checkTypewriting(*this, before, "for _, .(name, age) in cats do\n    print(name, age)\nend", after);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typing_positions_array_patterns_and_bracket_keys")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+    const char* before = "class Cat(name: string, age: number) end\nlocal cat = Cat(\"Taz\", 12)\nlocal list = { \"a\", \"b\" }\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+
+    checkTypewriting(*this, before, "print(cat.1, cat.2)", after);
+    checkTypewriting(*this, before, "const .[first, second] = list", after);
+    checkTypewriting(*this, before, "const .{[1] as head} = list", after);
+    checkTypewriting(*this, before, "const .{2 as age} = cat", after);
+    checkTypewriting(*this, before, "for _, .[x, y] in { list } do\n    print(x, y)\nend", after);
 }
 
 // Luwu: a callee with one `__call` signature is called like a function type, so a call with a wrong argument reports

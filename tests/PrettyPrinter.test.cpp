@@ -2292,6 +2292,18 @@ for _, .(k, v) in list do end
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
+TEST_CASE("prettyPrint_array_patterns_keys_and_positions")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    std::string code = R"(
+const list.[head, .(x, y)] = t
+local .{["content-type"] as kind, [i + 1] as next, 2 as age} = u
+print(cat.1, screen.1.2)
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
 TEST_CASE("prettyPrint_exported_destructuring")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuwuDestructuring, true}, {FFlag::LuauExportValueSyntax, true}};

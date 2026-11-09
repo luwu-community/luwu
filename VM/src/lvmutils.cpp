@@ -203,13 +203,14 @@ void luaV_getpositional(lua_State* L, const TValue* t, int position, StkId val)
         return;
     }
 
-    // a value nothing can index names the pattern instead of an index with a number
-    if (!ttistable(t) && ttisnil(luaT_gettmbyobj(L, t, TM_INDEX)))
-        luaG_runerror(L, "%s may not be destructured", luaT_objtypename(L, t));
-
-    TValue key;
-    setnvalue(&key, double(position + 1));
-    luaV_gettable(L, t, &key, val);
+    // only objects have positions: a table's numbers are keys
+    luaG_runerror(
+        L,
+        "value of type %s does not have a constant positional member at offset %d; did you mean to use runtime indexing syntax [%d] instead?",
+        luaT_objtypename(L, t),
+        position + 1,
+        position + 1
+    );
 }
 
 void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)

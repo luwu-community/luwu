@@ -12099,6 +12099,35 @@ L0: RETURN R2 4
     );
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): `x.1` compiles like a pattern's element, and an array pattern's element
+// like `t[1]`
+TEST_CASE("PositionReadsAndArrayPatternsCompileLikeTheirAccess")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+
+    const char* source = R"(
+local function f(x, t)
+    const .[a, b] = t
+    return x.1, x.2.3, a, b
+end
+return f
+)";
+
+    CHECK_EQ(
+        "\n" + compileFunction(source, 0, 1),
+        R"(
+GETTABLEN R2 R1 1
+GETTABLEN R3 R1 2
+GETPOSITIONAL R4 R0 0 [1]
+GETPOSITIONAL R6 R0 1 [2]
+GETPOSITIONAL R5 R6 2 [3]
+MOVE R6 R2
+MOVE R7 R3
+RETURN R4 4
+)"
+    );
+}
+
 TEST_CASE("ClassPrimaryConstructorFieldsFormInsideAnotherClass")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
