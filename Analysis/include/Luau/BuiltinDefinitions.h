@@ -152,6 +152,10 @@ bool isBuiltinClassTypeofName(const std::string& name);
 // any other name, or when the library isn't loaded.
 std::optional<TypeId> builtinClassTypeofType(TypeArena* arena, const Scope* globalScope, const std::string& name);
 
+// Luwu bundles: the most values a bundle with a class of its size holds (LUWU_BUNDLE_FIXED_MAX in the VM). Larger
+// bundles share the class `BigBundle`.
+constexpr size_t kBundleFixedMax = 6;
+
 // Luwu bundles: the type of each position of the bundle type `ty`, or nullopt when it isn't a bundle class instance
 std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty);
 

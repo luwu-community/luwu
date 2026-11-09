@@ -138,9 +138,44 @@ static bool fitselement(lua_State* L, const LuauStorage* storage, const TValue* 
     return storage && hastype(L, storage, value);
 }
 
-// Writes how an error names the values of the element type of `storage`: "strings", "'Player' objects"
+// Luwu bundles: the number of values a bundle of class `cls` holds, LUWU_BUNDLE_FIXED_MAX + 1 for `BigBundle`, or -1 when
+// `cls` isn't a bundle class
+static int bundleclasssize(lua_State* L, const LuauClass* cls)
+{
+    for (int size = 0; size <= LUWU_BUNDLE_FIXED_MAX + 1; size++)
+    {
+        if (builtinclass(L, LuwuBuiltinClass(LUWU_BUILTIN_BUNDLE0 + size)) == cls)
+            return size;
+    }
+    return -1;
+}
+
+// Writes "<count> value" or "<count> values"
+static void addvaluecount(luaL_Strbuf* b, int count)
+{
+    char text[32];
+    snprintf(text, sizeof(text), "%d value%s", count, count == 1 ? "" : "s");
+    luaL_addstring(b, text);
+}
+
+// Writes how an error names the values of the element type of `storage`: "strings", "'Player' objects", "bundles of 3
+// values". Bundles are named by size: their classes are an implementation detail.
 static void addtypeplural(luaL_Strbuf* b, const LuauStorage* storage)
 {
+    int bundlesize = storage->elementclass ? bundleclasssize(b->L, storage->elementclass) : -1;
+    if (bundlesize > LUWU_BUNDLE_FIXED_MAX)
+    {
+        luaL_addstring(b, "bundles of more than ");
+        addvaluecount(b, LUWU_BUNDLE_FIXED_MAX);
+        return;
+    }
+    if (bundlesize >= 0)
+    {
+        luaL_addstring(b, "bundles of ");
+        addvaluecount(b, bundlesize);
+        return;
+    }
+
     if (storage->elementclass)
     {
         luaL_addchar(b, '\'');
@@ -159,12 +194,19 @@ static void addtypeplural(luaL_Strbuf* b, const LuauStorage* storage)
         luaL_addchar(b, 's');
 }
 
-// Writes how an error names `value`: "a table", "an 'Account' object", "nil", "none"
+// Writes how an error names `value`: "a table", "an 'Account' object", "nil", "none", "a bundle of 2 values"
 static void addvaluetype(luaL_Strbuf* b, const TValue* value)
 {
     if (isnovalue(value))
     {
         luaL_addstring(b, getstr(b->L->global->ttname[ttype(value)]));
+        return;
+    }
+    int bundlesize = luaR_bundlesize(value);
+    if (bundlesize >= 0)
+    {
+        luaL_addstring(b, "a bundle of ");
+        addvaluecount(b, bundlesize);
         return;
     }
 

@@ -6315,6 +6315,51 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements
     CHECK_EQ(toString(requireType("value")), "number?");
 }
 
+// Luwu collections: Vec and VecDeque fix their element type to their first value's at runtime, so constructor arguments
+// of another runtime type are reported where they're passed. Bundles of different sizes have different classes.
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_report_values_of_another_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local bundles = collections.VecDeque(bundle.pack(1, 2, 3), bundle.pack(1, 2))
+        local mixed = collections.Vec(1, "two")
+        local maps = collections.Vec(collections.OrderedMap(), collections.Vec(1))
+        local sized = collections.Vec(bundle.pack(1, 2), bundle.pack("a", true))
+        local big = collections.Vec(bundle.pack(1, 2, 3, 4, 5, 6, 7), bundle.pack(1, 2, 3, 4, 5, 6, 7, 8))
+        local function values(): (number, string) return 1, "x" end
+        local spread = collections.Vec(1, values())
+        local u: number | string = 1
+        local unknownFirst = collections.Vec(u, "x")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 2);
+    CHECK_EQ(result.errors[0].location.begin.column, 67);
+    CHECK(toString(result.errors[0]).find("bundles of 3 values") != std::string::npos);
+    CHECK(toString(result.errors[0]).find("a bundle of 2 values") != std::string::npos);
+    CHECK_EQ(result.errors[1].location.begin.line, 3);
+    CHECK(toString(result.errors[1]).find("numbers") != std::string::npos);
+    CHECK(toString(result.errors[1]).find("a string") != std::string::npos);
+    CHECK_EQ(result.errors[2].location.begin.line, 4);
+    CHECK(toString(result.errors[2]).find("'OrderedMap' objects") != std::string::npos);
+
+    checkTypewriting(
+        *this,
+        "local VecDeque = collections.VecDeque\nlocal pack = bundle.pack\n",
+        "local queue = VecDeque(pack(1, 2), pack(3, 4))",
+        "\nlocal after = 1\nprint(after)\n"
+    );
+}
+
 // Luwu collections: a bundle iterates over its slots, so the value is any of its element types
 TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_elements")
 {

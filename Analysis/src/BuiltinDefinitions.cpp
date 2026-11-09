@@ -418,6 +418,7 @@ static const char* const kBundleClassNames[] = {
 };
 static constexpr size_t kBundleClassCount = sizeof(kBundleClassNames) / sizeof(kBundleClassNames[0]);
 static const char* const kBigBundleName = "BigBundle";
+static_assert(kBundleClassCount == kBundleFixedMax + 1, "one bundle class per fixed size");
 
 // Luwu bundles: the most values a bundle holds (LUWU_BUNDLE_LIMIT in the VM)
 static constexpr size_t kBundleLimit = 1024;
