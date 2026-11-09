@@ -4916,6 +4916,7 @@ TEST_CASE("OptionAndResult")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},

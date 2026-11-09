@@ -3810,6 +3810,172 @@ void TypeChecker2::visitCall(AstExprCall* call)
     }
 }
 
+namespace
+{
+
+// Luwu collections: the element type a Vec or VecDeque fixes from a value at runtime (setelementtype in
+// lcollectionslib.cpp): a type tag, or a class for an object. The names say it the way the runtime's errors do.
+struct ContainerElement
+{
+    std::string tag;
+    // The class's template for an object, null for any other value
+    const ExternType* cls = nullptr;
+    // "numbers", "'Player' objects", "bundles of 3 values"
+    std::string plural;
+    // "a number", "a 'Player' object", "a bundle of 2 values"
+    std::string single;
+};
+
+std::string withArticle(const std::string& text)
+{
+    bool vowel = !text.empty() && std::string("aeiouAEIOU").find(text[0]) != std::string::npos;
+    return (vowel ? "an " : "a ") + text;
+}
+
+std::string valueCount(size_t count)
+{
+    return std::to_string(count) + (count == 1 ? " value" : " values");
+}
+
+// The element of a value whose runtime type is `tag`
+ContainerElement taggedElement(const std::string& tag)
+{
+    std::string plural = tag;
+    if (tag == "userdata")
+        plural += " values";
+    else if (tag.back() == 's')
+        plural += "es";
+    else
+        plural += "s";
+    return ContainerElement{tag, nullptr, plural, withArticle(tag)};
+}
+
+// The element a value of the object type `object` fixes: its class, named by size for a bundle
+std::optional<ContainerElement> objectElement(const ExternType* object)
+{
+    const ExternType* declared = object->genericTemplate ? get<ExternType>(follow(*object->genericTemplate)) : object;
+    if (!declared)
+        return std::nullopt;
+
+    std::string quoted = "'" + declared->name + "'";
+    if (!declared->printsAsBundle)
+        return ContainerElement{"object", declared, quoted + " objects", withArticle(quoted + " object")};
+
+    // Bundles past the fixed sizes share the class BigBundle at runtime, so any two of them fit together
+    if (object->instantiatedTypePackParams.empty())
+    {
+        std::string size = valueCount(object->instantiatedTypeParams.size());
+        return ContainerElement{"object", declared, "bundles of " + size, "a bundle of " + size};
+    }
+    auto [positions, rest] = flatten(object->instantiatedTypePackParams[0]);
+    std::string bigSize = "more than " + valueCount(kBundleFixedMax);
+    std::string single = rest ? "a bundle of " + bigSize : "a bundle of " + valueCount(positions.size());
+    return ContainerElement{"object", declared, "bundles of " + bigSize, single};
+}
+
+// The element a value of type `ty` fixes, or nullopt when the type doesn't pin one down (a union, `unknown`, a generic)
+std::optional<ContainerElement> containerElementOf(NotNull<BuiltinTypes> builtinTypes, const Scope* scope, TypeId ty)
+{
+    ty = follow(ty);
+    if (const SingletonType* singleton = get<SingletonType>(ty))
+        return taggedElement(get<BooleanSingleton>(singleton) ? "boolean" : "string");
+    if (get<FunctionType>(ty))
+        return taggedElement("function");
+    if (get<TableType>(ty) || get<MetatableType>(ty))
+        return taggedElement("table");
+    if (const PrimitiveType* primitive = get<PrimitiveType>(ty))
+    {
+        switch (primitive->type)
+        {
+        case PrimitiveType::Boolean:
+            return taggedElement("boolean");
+        case PrimitiveType::Number:
+            return taggedElement("number");
+        case PrimitiveType::Integer:
+            return taggedElement("integer");
+        case PrimitiveType::String:
+            return taggedElement("string");
+        case PrimitiveType::Thread:
+            return taggedElement("thread");
+        case PrimitiveType::Function:
+            return taggedElement("function");
+        case PrimitiveType::Table:
+            return taggedElement("table");
+        case PrimitiveType::Buffer:
+            return taggedElement("buffer");
+        default:
+            return std::nullopt;
+        }
+    }
+    if (const ExternType* externType = get<ExternType>(ty))
+    {
+        if (ty == builtinTypes->vectorType)
+            return taggedElement("vector");
+        // An instantiation of a generic class (`OrderedMap<string, number>`) is related to the class through its template
+        const ExternType* declared = externType->genericTemplate ? get<ExternType>(follow(*externType->genericTemplate)) : externType;
+        if (!declared || declared->traitInfo)
+            return std::nullopt;
+        // Luwu try expressions: `Ok` and `Err` are both results at runtime, and `Some` an option
+        if (std::optional<std::string> plural = builtinEnumPlural(scope, ty))
+            return ContainerElement{*plural, nullptr, *plural, withArticle(plural->substr(0, plural->size() - 1))};
+        if (declared->relation && declared->relation->get_if<Klass>())
+            return objectElement(externType);
+        if (!declared->relation)
+            return taggedElement("userdata");
+    }
+    return std::nullopt;
+}
+
+bool sameElement(const ContainerElement& a, const ContainerElement& b)
+{
+    return a.tag == b.tag && a.cls == b.cls;
+}
+
+
+} // namespace
+
+// Luwu collections: `Vec(...)` and `VecDeque(...)` fix their element type to their first value's and raise on a value of
+// another type. The solver infers the union of the arguments instead, so the mismatch is reported here.
+void TypeChecker2::checkContainerConstructor(AstExprCall* call)
+{
+    if (call->args.size < 2)
+        return;
+
+    std::optional<std::string> containerName =
+        fixedElementContainerName(module->internalTypes.get(), findInnermostScope(call->location), lookupType(call->func));
+    if (!containerName)
+        return;
+
+    const Scope* scope = findInnermostScope(call->location);
+    std::optional<ContainerElement> fixed = containerElementOf(builtinTypes, scope, lookupType(call->args.data[0]));
+    if (!fixed)
+        return;
+
+    // A call or `...` as the last argument can stand for any number of values, unless the call returns exactly one (as
+    // `bundle.pack` and a bundle literal `.(a, b)` do)
+    AstExpr* last = call->args.data[call->args.size - 1];
+    auto [lastValues, lastRest] = flatten(lookupPack(last));
+    bool lastIsOneValue = lastValues.size() == 1 && !lastRest;
+    bool lastSpreads = (last->is<AstExprCall>() && !lastIsOneValue) || last->is<AstExprVarargs>();
+    size_t checked = lastSpreads ? call->args.size - 1 : call->args.size;
+    for (size_t i = 1; i < checked; i++)
+    {
+        AstExpr* arg = call->args.data[i];
+        std::optional<ContainerElement> element = containerElementOf(builtinTypes, scope, lookupType(arg));
+        if (!element || sameElement(*element, *fixed))
+            continue;
+
+        std::string message = format(
+            "This %s can only accept %s (the type of its first value), but you passed %s",
+            containerName->c_str(),
+            fixed->plural.c_str(),
+            element->single.c_str()
+        );
+        reportError(GenericError{std::move(message)}, arg->location);
+        return;
+    }
+}
+
 void TypeChecker2::visit(AstExprCall* call)
 {
     std::optional<InConditionalContext> flipper;
@@ -3837,6 +4003,7 @@ void TypeChecker2::visit(AstExprCall* call)
     }
 
     visitCall(call);
+    checkContainerConstructor(call);
 }
 
 std::optional<TypeId> TypeChecker2::tryStripUnionFromNil(TypeId ty) const

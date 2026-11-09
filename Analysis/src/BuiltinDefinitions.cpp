@@ -444,6 +444,7 @@ static const char* const kBundleClassNames[] = {
 };
 static constexpr size_t kBundleClassCount = sizeof(kBundleClassNames) / sizeof(kBundleClassNames[0]);
 static const char* const kBigBundleName = "BigBundle";
+static_assert(kBundleClassCount == kBundleFixedMax + 1, "one bundle class per fixed size");
 
 // Luwu bundles: the most values a bundle holds (LUWU_BUNDLE_LIMIT in the VM)
 static constexpr size_t kBundleLimit = 1024;
@@ -563,6 +564,50 @@ std::optional<TypeId> builtinClassTypeofType(TypeArena* arena, const Scope* glob
             continue;
         if (std::optional<TypeFun> declared = globalScope->lookupImportedType("collections", className))
             return follow(declared->type);
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> fixedElementContainerName(TypeArena* arena, const Scope* scope, TypeId classValue)
+{
+    const ExternType* classType = get<ExternType>(follow(classValue));
+    const Obj* instance = classType && classType->relation ? classType->relation->get_if<Obj>() : nullptr;
+    const ExternType* object = instance ? get<ExternType>(follow(instance->ty)) : nullptr;
+    if (!object)
+        return std::nullopt;
+    TypeId objectTemplate = follow(object->genericTemplate.value_or(instance->ty));
+
+    const Scope* globalScope = scope;
+    while (globalScope->parent)
+        globalScope = globalScope->parent.get();
+
+    const std::pair<const char*, const char*> containers[] = {{"vec", "Vec"}, {"vecdeque", "VecDeque"}};
+    for (const auto& [typeofName, name] : containers)
+    {
+        std::optional<TypeId> declared = builtinClassTypeofType(arena, globalScope, typeofName);
+        if (declared && follow(*declared) == objectTemplate)
+            return std::string(name);
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> builtinEnumPlural(const Scope* scope, TypeId ty)
+{
+    const ExternType* object = get<ExternType>(follow(ty));
+    if (!object)
+        return std::nullopt;
+    TypeId objectTemplate = follow(object->genericTemplate.value_or(follow(ty)));
+
+    const Scope* globalScope = scope;
+    while (globalScope->parent)
+        globalScope = globalScope->parent.get();
+
+    const std::pair<const char*, const char*> variants[] = {{"Some", "options"}, {"Ok", "results"}, {"Err", "results"}};
+    for (const auto& [name, plural] : variants)
+    {
+        std::optional<TypeFun> declared = globalScope->lookupType(name);
+        if (declared && follow(declared->type) == objectTemplate)
+            return std::string(plural);
     }
     return std::nullopt;
 }

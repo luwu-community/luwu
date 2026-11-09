@@ -6567,6 +6567,101 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements
     CHECK_EQ(toString(requireType("value")), "number?");
 }
 
+// Luwu collections: an empty Vec or VecDeque takes its element type from its first push, as the runtime fixes it from
+// the first value. A later push of another type is an error, and reads give the element type.
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_empty_constructors_take_their_element_type_from_the_first_push")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local queue = collections.VecDeque()
+        queue:pushback(bundle.pack(bundle.pack(0.5, 2), bundle.pack(0.8, 4)))
+        queue:pushback(bundle.pack(0.5, 4))
+        local names = collections.Vec()
+        names:push("Ada")
+        names:push("Grace")
+        local last = names:pop()
+        local inserted = collections.Vec()
+        inserted:insert(1, true)
+        local printed = collections.Vec()
+        print(printed)
+        printed:push(1)
+        local function stack()
+            return { push = function(self, value: number) end }
+        end
+        local s = stack()
+        s:push(1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+    CHECK_EQ(toString(requireType("queue")), "VecDeque<.(.(number, number), .(number, number))>");
+    CHECK_EQ(toString(requireType("names")), "Vec<string>");
+    CHECK_EQ(toString(requireType("last")), "string?");
+    CHECK_EQ(toString(requireType("inserted")), "Vec<boolean>");
+    CHECK_EQ(toString(requireType("printed")), "Vec<unknown>");
+
+    checkTypewriting(
+        *this,
+        "local VecDeque = collections.VecDeque\nlocal pack = bundle.pack\nlocal queue = VecDeque()\nqueue:pushback(pack(",
+        "1, 2",
+        "))\nlocal after = 1\nprint(after)\n"
+    );
+}
+
+// Luwu collections: Vec and VecDeque fix their element type to their first value's at runtime, so constructor arguments
+// of another runtime type are reported where they're passed. Bundles of different sizes have different classes.
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_report_values_of_another_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local bundles = collections.VecDeque(bundle.pack(1, 2, 3), bundle.pack(1, 2))
+        local mixed = collections.Vec(1, "two")
+        local maps = collections.Vec(collections.OrderedMap(), collections.Vec(1))
+        local sized = collections.Vec(bundle.pack(1, 2), bundle.pack("a", true))
+        local big = collections.Vec(bundle.pack(1, 2, 3, 4, 5, 6, 7), bundle.pack(1, 2, 3, 4, 5, 6, 7, 8))
+        local function values(): (number, string) return 1, "x" end
+        local spread = collections.Vec(1, values())
+        local u: number | string = 1
+        local unknownFirst = collections.Vec(u, "x")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 2);
+    CHECK_EQ(result.errors[0].location.begin.column, 67);
+    CHECK(toString(result.errors[0]).find("bundles of 3 values") != std::string::npos);
+    CHECK(toString(result.errors[0]).find("a bundle of 2 values") != std::string::npos);
+    CHECK_EQ(result.errors[1].location.begin.line, 3);
+    CHECK(toString(result.errors[1]).find("numbers") != std::string::npos);
+    CHECK(toString(result.errors[1]).find("a string") != std::string::npos);
+    CHECK_EQ(result.errors[2].location.begin.line, 4);
+    CHECK(toString(result.errors[2]).find("'OrderedMap' objects") != std::string::npos);
+
+    checkTypewriting(
+        *this,
+        "local VecDeque = collections.VecDeque\nlocal pack = bundle.pack\n",
+        "local queue = VecDeque(pack(1, 2), pack(3, 4))",
+        "\nlocal after = 1\nprint(after)\n"
+    );
+}
+
 // Luwu collections: a bundle iterates over its slots, so the value is any of its element types
 TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_elements")
 {
@@ -6600,6 +6695,38 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_eleme
     // only the last loop is wrong: its value can be a string
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(result.errors[0].location.begin.line, 14);
+}
+
+// Luwu try expressions: a Vec or VecDeque of results takes both `Ok` and `Err`, and one of options takes `Some` and `none`,
+// as the runtime does. Neither a constructor nor a first push makes one variant the element type.
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_hold_every_variant_of_a_builtin_enum")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local results = collections.Vec(Ok(1), Err("no"))
+        local pushed = collections.VecDeque()
+        pushed:pushback(Ok(1))
+        pushed:pushback(Err("no"))
+        local options = collections.Vec()
+        options:push(Some(1))
+        options:push(none)
+        local mixed = collections.Vec(Ok(1), Some(2))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 9);
+    CHECK(toString(result.errors[0]).find("can only accept results") != std::string::npos);
+    CHECK(toString(result.errors[0]).find("but you passed an option") != std::string::npos);
 }
 
 // Luwu try expressions: options and results are global classes, and an empty option is `none`, which gets `get` and
