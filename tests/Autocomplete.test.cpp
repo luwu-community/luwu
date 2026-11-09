@@ -21,6 +21,7 @@ LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
@@ -3432,6 +3433,34 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons")
     CHECK(ac.entryMap.count("cat"));
     CHECK(ac.entryMap.count("dog"));
     CHECK_EQ(ac.context, AutocompleteContext::String);
+}
+
+// Luwu bundles: a string in a bundle literal completes the singletons its position's expected type allows
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_string_singletons_in_bundle_literals")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    check(R"(
+        type ItemId = "torch" | "coal"
+        local one: bundle.Bundle2<ItemId, number> = bundle.pack("@1", 1)
+        local listed: { bundle.Bundle2<ItemId, number> } = { bundle.pack("@2", 1) }
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("torch"));
+    CHECK(ac.entryMap.count("coal"));
+    CHECK_EQ(ac.context, AutocompleteContext::String);
+
+    ac = autocomplete('2');
+    CHECK(ac.entryMap.count("torch"));
+    CHECK(ac.entryMap.count("coal"));
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons_in_trait_arguments")

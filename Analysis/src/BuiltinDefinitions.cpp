@@ -432,6 +432,13 @@ static std::optional<TypeFun> bundleExport(const Scope* scope, const char* name)
     return scope->lookupImportedType("bundle", name);
 }
 
+bool isBundlePackCall(const AstExprCall* call)
+{
+    const AstExprIndexName* index = call->func->as<AstExprIndexName>();
+    const AstExprGlobal* library = index ? index->expr->as<AstExprGlobal>() : nullptr;
+    return library && library->name == "bundle" && index->index == "pack";
+}
+
 std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty)
 {
     ty = follow(ty);

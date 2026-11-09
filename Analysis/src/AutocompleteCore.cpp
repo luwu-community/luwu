@@ -2114,6 +2114,31 @@ static std::optional<AutocompleteEntryMap> convertRequireSuggestionsToAutocomple
     return result;
 }
 
+// Luwu bundles: the expected type of the position the innermost node of `ancestry` fills in a bundle literal `.(a, b)`,
+// from the expected type of the whole bundle. nullopt outside a bundle literal or without a bundle type expected.
+static std::optional<TypeId> bundlePositionExpectedType(const Module& module, const std::vector<AstNode*>& ancestry, const ScopePtr& scope)
+{
+    if (ancestry.size() < 2)
+        return std::nullopt;
+
+    AstExpr* value = ancestry.back()->asExpr();
+    AstExprCall* bundle = ancestry[ancestry.size() - 2]->as<AstExprCall>();
+    if (!value || !bundle || !isBundlePackCall(bundle))
+        return std::nullopt;
+
+    const TypeId* expected = module.astExpectedTypes.find(bundle);
+    std::optional<std::vector<TypeId>> positions = expected ? bundlePositions(scope.get(), *expected) : std::nullopt;
+    if (!positions)
+        return std::nullopt;
+
+    for (size_t i = 0; i < bundle->args.size && i < positions->size(); i++)
+    {
+        if (bundle->args.data[i] == value)
+            return (*positions)[i];
+    }
+    return std::nullopt;
+}
+
 static std::optional<AutocompleteEntryMap> autocompleteStringParams(
     const ModulePtr& module,
     const std::vector<AstNode*>& nodes,
@@ -2992,6 +3017,11 @@ AutocompleteResult autocomplete_(
 
         if (auto it = module->astExpectedTypes.find(node->asExpr()))
             autocompleteStringSingleton(*it, false, node, position, result);
+
+        // Luwu bundles: a string in a bundle literal `.(a, b)` completes what its position of the bundle's expected type
+        // allows. The bundle is a `bundle.pack` call, whose own argument check records `unknown` for the string.
+        if (std::optional<TypeId> expected = bundlePositionExpectedType(*module, ancestry, scopeAtPosition))
+            autocompleteStringSingleton(*expected, false, node, position, result);
 
         return {std::move(result), ancestry, AutocompleteContext::String};
     }
