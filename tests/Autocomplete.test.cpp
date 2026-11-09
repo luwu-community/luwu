@@ -6355,7 +6355,7 @@ TEST_CASE_FIXTURE(ACFixture, "positional_patterns_complete_only_nested_keys")
         local points = { { x = 1, y = 2 } }
         local .(@1) = points
         local .(first, @2) = points
-        local .(p.{@3}) = points
+        local .[p.{@3}] = points
         local .{inner as .(@4)} = { inner = points }
         for _, .(@5) in { points } do end
     )");

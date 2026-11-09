@@ -2871,10 +2871,7 @@ bool ConstraintSolver::tryDispatch(const HasIndexerConstraint& c, NotNull<const 
         return block(*btf.blocked, constraint);
 
     if (c.position)
-    {
-        if (std::optional<bool> dispatched = tryDispatchPositional(constraint, subjectType, *c.position, c.resultType))
-            return *dispatched;
-    }
+        return tryDispatchPositional(constraint, subjectType, *c.position, c.resultType);
 
     int recursionDepth = 0;
 
@@ -2890,11 +2887,11 @@ bool ConstraintSolver::tryDispatch(const HasIndexerConstraint& c, NotNull<const 
     return result;
 }
 
-// Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern on an object, or on a union of objects,
-// is the field each class's primary constructor takes at that position. A class without one, or without that position,
-// gives an error type here and an error from TypeChecker2. Returns nullopt when `subjectType` isn't made only of objects:
-// the element is then read like `t[i]`.
-std::optional<bool> ConstraintSolver::tryDispatchPositional(
+// Luwu Destructuring (rfcs/destructuring.md): a position read from an object, or from a union of objects, is the field each
+// class's primary constructor takes at that position. Anything else has no positions. A class without a primary
+// constructor or without that position, and anything that isn't an object, gives an error type here and an error from
+// TypeChecker2. `any` reads as `any`.
+bool ConstraintSolver::tryDispatchPositional(
     NotNull<const Constraint> constraint,
     TypeId subjectType,
     size_t position,
@@ -2915,9 +2912,18 @@ std::optional<bool> ConstraintSolver::tryDispatchPositional(
     std::vector<TypeId> results;
     for (TypeId option : options)
     {
+        if (get<AnyType>(option))
+        {
+            results.push_back(builtinTypes->anyType);
+            continue;
+        }
+
         const ClassFieldUserData* data = getClassFieldUserData(option);
         if (!data)
-            return std::nullopt;
+        {
+            results.push_back(builtinTypes->errorType);
+            continue;
+        }
 
         if (!data->positionalFields || position >= data->positionalFields->size())
         {

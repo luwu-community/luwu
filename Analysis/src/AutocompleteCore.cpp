@@ -2703,8 +2703,10 @@ static std::optional<DestructureCursor> findDestructureCursorInPattern(const Ast
         if (std::optional<DestructureCursor> inner = findDestructureCursorInPattern(target, position))
             return inner;
 
-        // An annotation is a type position; the ordinary type completion handles it
+        // An annotation is a type position, and a key in brackets an expression; the ordinary completion handles both
         if (target.local->annotation && target.local->annotation->location.containsClosed(position))
+            return std::nullopt;
+        if (field.keyExpr && !field.keyIsPosition && field.keyLocation.containsClosed(position))
             return std::nullopt;
 
         bool namedAfterAs = field.asLocation && target.local->name != kDestructuredLocalName;
@@ -2712,8 +2714,8 @@ static std::optional<DestructureCursor> findDestructureCursorInPattern(const Ast
             return DestructureCursor{DestructureCursor::BindingName, &pattern};
     }
 
-    // Every element of a positional pattern `.(a, b)` declares a local
-    if (pattern.positional)
+    // Every element of a positional pattern `.(a, b)` or an array pattern `.[a, b]` declares a local
+    if (pattern.positional || pattern.array)
         return DestructureCursor{DestructureCursor::BindingName, &pattern};
 
     return DestructureCursor{DestructureCursor::Key, &pattern};

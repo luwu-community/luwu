@@ -9957,8 +9957,20 @@ TEST_CASE_FIXTURE(Fixture, "destructuring_mistakes_get_one_error_that_names_the_
     );
 
     // Keys other than names
-    for (const char* source : {"local .{[1] as x} = t", "local .{\"x\"} = t", "local .{1} = t"})
-        matchOnlyDestructuringError(*this, source, "Destructured fields are names; read any other key by indexing the value: 'local v = t[key]'");
+    matchOnlyDestructuringError(*this, "local .{\"x\"} = t", "A string key goes in brackets: '[\"key\"] as name'");
+    matchOnlyDestructuringError(*this, "local .{[1]} = t", "Bind a key in brackets to a name with 'as': '[key] as name'");
+    matchOnlyDestructuringError(*this, "local .{1} = t", "Bind a position to a name with 'as': '5 as name'");
+    matchOnlyDestructuringError(*this, "local .{0 as x} = t", "Positions start at 1");
+    matchOnlyDestructuringError(*this, "local .{1.5 as x} = t", "A position is a whole number, like '5'");
+
+    // Positions read with `x.1`
+    matchOnlyDestructuringError(*this, "local v = x.0", "Positions start at 1");
+    matchOnlyDestructuringError(*this, "local v = x.01", "Write the position without leading zeros");
+    matchOnlyDestructuringError(*this, "local v = x.1e2", "A position is a whole number, like 'x.1'");
+    matchOnlyDestructuringError(
+        *this, "local v = x.300", "Positions past 256 can't be written this way; read a larger one from a bundle with '[300]'"
+    );
+    matchOnlyDestructuringError(*this, "x.1 = 2", "A position can only be read; assign the field by its name");
 
     // A path instead of a nested pattern
     matchOnlyDestructuringError(
@@ -10320,6 +10332,99 @@ TEST_CASE_FIXTURE(Fixture, "positional_destructuring_in_loop_bindings")
     REQUIRE(loop->destructure.data[1]);
     CHECK(loop->destructure.data[1]->positional);
     REQUIRE_EQ(loop->body->body.size, 2);
+}
+
+TEST_CASE_FIXTURE(Fixture, "array_patterns_read_each_element_by_index")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        const list.[head, second] = t
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+    AstStatLocal* list = destructuredLocal(block, 0);
+    REQUIRE(list->destructure);
+    CHECK(list->destructure->array);
+    CHECK(!list->destructure->positional);
+
+    // an array element is an ordinary index, not a position
+    for (size_t i = 1; i <= 2; ++i)
+    {
+        AstExprIndexExpr* read = destructuredLocal(block, i)->values.data[0]->as<AstExprIndexExpr>();
+        REQUIRE(read);
+        CHECK(!read->positional);
+        AstExprConstantNumber* index = read->index->as<AstExprConstantNumber>();
+        REQUIRE(index);
+        CHECK_EQ(index->value, double(i));
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_keys_in_brackets_and_positions")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        local .{["content-type"] as kind, [1] as head, 2 as age} = t
+    )");
+
+    REQUIRE_EQ(block->body.size, 4);
+    AstStatLocal* value = destructuredLocal(block, 0);
+
+    AstExprIndexExpr* kind = destructuredLocal(block, 1)->values.data[0]->as<AstExprIndexExpr>();
+    REQUIRE(kind);
+    CHECK(!kind->positional);
+    CHECK(kind->index->is<AstExprConstantString>());
+
+    AstExprIndexExpr* head = destructuredLocal(block, 2)->values.data[0]->as<AstExprIndexExpr>();
+    REQUIRE(head);
+    CHECK(!head->positional);
+
+    checkElementRead(destructuredLocal(block, 3), "age", value, 2);
+}
+
+TEST_CASE_FIXTURE(Fixture, "positions_are_read_with_dot_numbers")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    AstStatBlock* block = parse(R"(
+        local name = cat.1
+        local nested = screen.1.2
+        local spaced = t[1]
+    )");
+
+    REQUIRE_EQ(block->body.size, 3);
+    AstExprIndexExpr* name = block->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprIndexExpr>();
+    REQUIRE(name);
+    CHECK(name->positional);
+
+    // `.1.2` lexes as one number and reads two positions
+    AstExprIndexExpr* outer = block->body.data[1]->as<AstStatLocal>()->values.data[0]->as<AstExprIndexExpr>();
+    REQUIRE(outer);
+    CHECK(outer->positional);
+    CHECK_EQ(outer->index->as<AstExprConstantNumber>()->value, 2);
+    AstExprIndexExpr* inner = outer->expr->as<AstExprIndexExpr>();
+    REQUIRE(inner);
+    CHECK(inner->positional);
+    CHECK_EQ(inner->index->as<AstExprConstantNumber>()->value, 1);
+
+    AstExprIndexExpr* spaced = block->body.data[2]->as<AstStatLocal>()->values.data[0]->as<AstExprIndexExpr>();
+    REQUIRE(spaced);
+    CHECK(!spaced->positional);
+}
+
+TEST_CASE_FIXTURE(Fixture, "array_pattern_mistakes_get_one_error_that_names_the_fix")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    matchOnlyDestructuringError(*this, "local .[] = t", "An array pattern needs at least one element");
+    matchOnlyDestructuringError(
+        *this, "local .[a as b] = t", "Array elements are bound to the name written in their place; 'as' only renames fields of '.{...}'"
+    );
+    matchOnlyDestructuringError(*this, "local .[a b] = t", "Expected ',' or ']' after an array element, got 'b'");
+    matchOnlyDestructuringError(
+        *this, "local .[a, ...] = t", "Destructuring has no rest pattern; bind the value with a name to keep the rest: 'local t.[x] = ...'"
+    );
 }
 
 TEST_CASE_FIXTURE(Fixture, "positional_destructuring_mistakes_get_one_error_that_names_the_fix")
