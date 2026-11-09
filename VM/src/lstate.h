@@ -191,15 +191,18 @@ struct lua_UdataDirectAccessData
 ** `global state', shared by all threads of this state
 */
 // clang-format off
-// Luwu bundles: the most values a bundle holds
-#define LUWU_BUNDLE_MAX 12
+// Luwu bundles: the largest bundle with a class of its own size; larger ones are `BigBundle`s
+#define LUWU_BUNDLE_FIXED_MAX 6
+// Luwu bundles: the most values a bundle holds. Comparing and hashing a bundle walks its values.
+#define LUWU_BUNDLE_LIMIT 1024
 
 // Luwu builtin classes: the classes the VM builds in C++ (luaR_newnativeclass), one slot each in global_State
 enum LuwuBuiltinClass
 {
-    // Luwu bundles: one class per size, LUWU_BUILTIN_BUNDLE0 + n holds n values
+    // Luwu bundles: one class per size up to LUWU_BUNDLE_FIXED_MAX, LUWU_BUILTIN_BUNDLE0 + n holding n values, then
+    // `BigBundle` for every larger size
     LUWU_BUILTIN_BUNDLE0,
-    LUWU_BUILTIN_BUNDLE12 = LUWU_BUILTIN_BUNDLE0 + LUWU_BUNDLE_MAX,
+    LUWU_BUILTIN_BIGBUNDLE = LUWU_BUILTIN_BUNDLE0 + LUWU_BUNDLE_FIXED_MAX + 1,
     LUWU_BUILTIN_ORDEREDMAP,
     LUWU_BUILTIN_VEC,
     LUWU_BUILTIN_VECDEQUE,

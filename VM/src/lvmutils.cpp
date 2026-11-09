@@ -129,6 +129,14 @@ void luaV_gettablefor(lua_State* L, const TValue* t, TValue* key, StkId val, con
         else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisobject(t)))
         {
             LuauObject* inst = objectvalue(t);
+
+            // Luwu bundles: `b[n]` reads a position; a string still finds a method
+            if (luaR_isbundle(inst) && !ttisstring(key))
+            {
+                luaR_getbundleposition(L, inst, key, val);
+                return;
+            }
+
             const TValue* offsettval = luaH_get(inst->lclass->memberstooffset, key);
 
             // Objects throw if you try to access a member that is not
@@ -218,6 +226,10 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
         else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisobject(t)))
         {
             LuauObject* inst = objectvalue(t);
+            // Luwu bundles: `b[n] = v` names `with`; a string is a missing field like on any object
+            if (luaR_isbundle(inst) && !ttisstring(key))
+                luaR_bundleassignerror(L, key);
+
             const TValue* offset = luaH_get(inst->lclass->memberstooffset, key);
             if (ttisnil(offset))
                 luaG_missingmembererror(L, t, key);

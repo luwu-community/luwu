@@ -1020,61 +1020,45 @@ static int luauF_class_of(lua_State* L, StkId res, TValue* arg0, int nresults, S
     return -1;
 }
 
-// Luwu bundles: a new object of the builtin class `classdef` in `res`, its members set from the
-// arguments in order and nil past them. The caller has checked that the collector doesn't need a step.
-static void buildnative(lua_State* L, StkId res, LuauClass* classdef, TValue* arg0, StkId args, int nparams)
-{
-    // A new object is white, so storing into it needs no barrier
-    LuauObject* object = luaR_newobjectuninit(L, classdef);
-    TValue* members = luaR_members(object);
-    int count = int(object->numberofmembers);
-    if (count >= 1 && nparams >= 1)
-        setobj(L, &members[0], arg0);
-    for (int i = 1; i < count && i < nparams; i++)
-        setobj(L, &members[i], &args[i - 1]);
-    for (int i = nparams; i < count; i++)
-        setnilvalue(&members[i]);
-
-    setobjectvalue(L, res, object);
-}
-
-// Luwu bundles: `bundle.pack(...)` without a call frame. More values than a bundle holds fall back to the function,
-// which raises.
+// Luwu bundles: `bundle.pack(...)` without a call frame. Past the bundle limit, or without the library, it falls back to
+// the function, which raises.
 static int luauF_bundlepack(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nresults > 1 || nparams > LUWU_BUNDLE_MAX || luaC_needsGC(L))
+    bool opened = L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0] != NULL;
+    if (nresults > 1 || nparams > LUWU_BUNDLE_LIMIT || !opened || luaC_needsGC(L))
         return -1;
 
-    LuauClass* classdef = L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + nparams];
-    if (!classdef)
-        return -1;
+    // A new object is white, so storing into it needs no barrier
+    LuauObject* bundle = luaR_newbundleuninit(L, nparams, "bundle.pack");
+    TValue* values = luaR_members(bundle);
+    if (nparams >= 1)
+        setobj(L, &values[0], arg0);
+    for (int i = 1; i < nparams; i++)
+        setobj(L, &values[i], &args[i - 1]);
+    luaR_sealbundle(bundle);
 
-    buildnative(L, res, classdef, arg0, args, nparams);
+    setobjectvalue(L, res, bundle);
     return 1;
 }
 
 // Luwu bundles: `bundle.unpack(b)` without a call frame. A range, or anything but a bundle, falls back to the function.
 static int luauF_bundleunpack(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
-    if (nparams != 1 || !ttisobject(arg0))
-        return -1;
-
-    // the members stay put while the results overwrite the arguments: they're on the heap
-    const LuauObject* bundle = objectvalue(arg0);
-    int size = int(bundle->numberofmembers);
-    if (size > LUWU_BUNDLE_MAX || bundle->lclass != L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + size])
+    int size = luaR_bundlesize(arg0);
+    if (nparams != 1 || size < 0)
         return -1;
 
     int count = nresults < 0 ? size : nresults;
     if (cast_int(L->stack_last - res) < count)
         return -1;
 
-    const TValue* members = luaR_members(bundle);
+    // the values stay put while the results overwrite the arguments: they're on the heap
+    const TValue* values = luaR_members(objectvalue(arg0));
     for (int i = 0; i < count; i++)
     {
         if (i < size)
         {
-            setobj2s(L, res + i, &members[i]);
+            setobj2s(L, res + i, &values[i]);
         }
         else
         {

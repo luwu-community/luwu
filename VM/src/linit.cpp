@@ -8,6 +8,7 @@
 LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBundles)
 
 static const luaL_Reg lualibs[] = {
     {"", luaopen_base},
@@ -68,7 +69,10 @@ void luaL_openlibs(lua_State* L)
         lua_pushcfunction(L, luaopen_collections, NULL);
         lua_pushstring(L, LUA_COLLECTIONSLIBNAME);
         lua_call(L, 1, 0);
+    }
 
+    if (FFlag::LuwuClasses && FFlag::DebugLuwuBundles)
+    {
         lua_pushcfunction(L, luaopen_bundle, NULL);
         lua_pushstring(L, LUA_BUNDLELIBNAME);
         lua_call(L, 1, 0);

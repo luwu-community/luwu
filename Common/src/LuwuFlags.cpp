@@ -11,7 +11,10 @@ LUAU_FASTFLAGVARIABLE(LuwuClasses)
 // Luwu Traits (rfcs/classes/traits.md): enables `trait` declarations and `implements` (in progress). Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(LuwuTraits)
 
-// Luwu collections: the `collections` library of builtin classes (`Pair`, `Triple`, `Quad`, `OrderedMap`, `Vec`,
-// `VecDeque`), in the VM and in Analysis's builtin definitions. A prototype whose API can still change. Needs
-// LuwuClasses.
+// Luwu collections: the `collections` library of builtin classes (`OrderedMap`, `Vec`, `VecDeque`), in the VM and in
+// Analysis's builtin definitions. A prototype whose API can still change. Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(DebugLuwuCollections)
+
+// Luwu bundles: the `bundle` library, its classes, and the compiler's fastcalls and unfolding for it. A prototype whose
+// API can still change. Needs LuwuClasses.
+LUAU_FASTFLAGVARIABLE(DebugLuwuBundles)

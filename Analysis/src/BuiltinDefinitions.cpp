@@ -411,33 +411,48 @@ void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
     persist(*vectorCls->metatable);
 }
 
-// Luwu bundles: the class of each size, as the `bundle` library exports them (kBundleClassNames in lcollectionslib.cpp)
+// Luwu bundles: the class of each fixed size, as the `bundle` library exports them (kBundleClassNames in
+// lcollectionslib.cpp). Larger bundles are `BigBundle<T...>`.
 static const char* const kBundleClassNames[] = {
     "Bundle0", "Bundle1", "Bundle2", "Bundle3", "Bundle4", "Bundle5", "Bundle6",
-    "Bundle7", "Bundle8", "Bundle9", "Bundle10", "Bundle11", "Bundle12",
 };
 static constexpr size_t kBundleClassCount = sizeof(kBundleClassNames) / sizeof(kBundleClassNames[0]);
+static const char* const kBigBundleName = "BigBundle";
 
-// Luwu bundles: the declared class of a bundle of `size` values. It's looked up in the outermost scope, where the
-// builtin library's types are: a module can file its own types under the name `bundle`.
-static std::optional<TypeFun> bundleClass(const Scope* scope, size_t size)
+// Luwu bundles: the most values a bundle holds (LUWU_BUNDLE_LIMIT in the VM)
+static constexpr size_t kBundleLimit = 1024;
+
+// Luwu bundles: a type the `bundle` library exports. It's looked up in the outermost scope, where the builtin library's
+// types are: a module can file its own types under the name `bundle`.
+static std::optional<TypeFun> bundleExport(const Scope* scope, const char* name)
 {
     while (scope->parent)
         scope = scope->parent.get();
-    return size < kBundleClassCount ? scope->lookupImportedType("bundle", kBundleClassNames[size]) : std::nullopt;
+    return scope->lookupImportedType("bundle", name);
 }
 
-// Luwu bundles: the type of each position of the bundle type `ty`, or nullopt when it isn't a bundle class instance
-static std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty)
+std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty)
 {
     ty = follow(ty);
     const ExternType* etv = get<ExternType>(ty);
     if (!etv)
         return std::nullopt;
 
+    if (std::optional<TypeFun> big = bundleExport(scope, kBigBundleName))
+    {
+        bool isBig = etv->genericTemplate && follow(*etv->genericTemplate) == follow(big->type) && etv->instantiatedTypePackParams.size() == 1;
+        if (isBig)
+        {
+            auto [positions, tail] = flatten(etv->instantiatedTypePackParams[0]);
+            if (tail)
+                return std::nullopt;
+            return positions;
+        }
+    }
+
     for (size_t size = 0; size < kBundleClassCount; size++)
     {
-        std::optional<TypeFun> declared = bundleClass(scope, size);
+        std::optional<TypeFun> declared = bundleExport(scope, kBundleClassNames[size]);
         if (!declared)
             continue;
 
@@ -450,27 +465,87 @@ static std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, Ty
     return std::nullopt;
 }
 
-// Luwu bundles: the bundle class instance whose positions have the types `positions`, or nullopt past the largest bundle
+// Luwu bundles: the bundle class instance whose positions have the types `positions`, or nullopt past the bundle limit
 static std::optional<TypeId> bundleType(const MagicFunctionCallContext& context, std::vector<TypeId> positions)
 {
-    std::optional<TypeFun> declared = bundleClass(context.constraint->scope.get(), positions.size());
+    if (positions.size() > kBundleLimit)
+        return std::nullopt;
+
+    bool fixed = positions.size() < kBundleClassCount;
+    const Scope* scope = context.constraint->scope.get();
+    std::optional<TypeFun> declared = bundleExport(scope, fixed ? kBundleClassNames[positions.size()] : kBigBundleName);
     if (!declared)
         return std::nullopt;
     if (positions.empty())
         return declared->type;
 
+    TypeArena* arena = context.solver->arena;
+    std::vector<TypeId> typeArguments;
+    std::vector<TypePackId> packArguments;
+    if (fixed)
+        typeArguments = std::move(positions);
+    else
+        packArguments.push_back(arena->addTypePack(std::move(positions)));
+
     std::vector<TypeId> copiedReferences;
-    TypeId instance = instantiateGenericNominal(context.solver->arena, declared->type, std::move(positions), {}, copiedReferences);
+    TypeId instance = instantiateGenericNominal(arena, declared->type, std::move(typeArguments), std::move(packArguments), copiedReferences);
     for (TypeId reference : copiedReferences)
         context.solver->queueExpansion(reference, context.constraint->scope, context.constraint->location);
     return instance;
+}
+
+// Luwu builtin classes: what `typeof` gives an object of each class the `collections` library exports
+// (luaopen_collections)
+static const std::pair<const char*, const char*> kCollectionsTypeofNames[] = {
+    {"orderedmap", "OrderedMap"},
+    {"vec", "Vec"},
+    {"vecdeque", "VecDeque"},
+};
+
+bool isBuiltinClassTypeofName(const std::string& name)
+{
+    if (name == "bundle")
+        return bundleLibraryEnabled();
+    for (const auto& [typeofName, className] : kCollectionsTypeofNames)
+    {
+        if (name == typeofName)
+            return collectionsLibraryEnabled();
+    }
+    return false;
+}
+
+std::optional<TypeId> builtinClassTypeofType(TypeArena* arena, const Scope* globalScope, const std::string& name)
+{
+    if (name == "bundle")
+    {
+        std::vector<TypeId> classes;
+        for (const char* className : kBundleClassNames)
+        {
+            if (std::optional<TypeFun> declared = bundleExport(globalScope, className))
+                classes.push_back(follow(declared->type));
+        }
+        if (std::optional<TypeFun> big = bundleExport(globalScope, kBigBundleName))
+            classes.push_back(follow(big->type));
+        if (classes.empty())
+            return std::nullopt;
+        return arena->addType(UnionType{std::move(classes)});
+    }
+
+    for (const auto& [typeofName, className] : kCollectionsTypeofNames)
+    {
+        if (name != typeofName)
+            continue;
+        if (std::optional<TypeFun> declared = globalScope->lookupImportedType("collections", className))
+            return follow(declared->type);
+    }
+    return std::nullopt;
 }
 
 // Luwu bundles: the position a literal number names, or nullopt for anything else
 static std::optional<size_t> literalPosition(const AstExpr* expr)
 {
     const AstExprConstantNumber* number = expr->as<AstExprConstantNumber>();
-    if (!number || number->value != std::floor(number->value) || number->value < 0 || number->value > double(kBundleClassCount))
+    if (!number || number->value != std::floor(number->value) || number->value < 0 || number->value > double(kBundleLimit))
         return std::nullopt;
     return size_t(number->value);
 }
@@ -680,6 +755,21 @@ static void prepareBundleTypes(GlobalTypes& globals)
 
         etv->printsAsBundle = true;
 
+        // `b[n]` reads any position: the union of the positions' types, which a `BigBundle` can't spell
+        if (!etv->instantiatedTypePackParams.empty())
+        {
+            etv->indexer = TableIndexer{globals.builtinTypes->numberType, globals.builtinTypes->unknownType, /* isReadOnly */ true};
+        }
+        else if (etv->instantiatedTypeParams.size() == 1)
+        {
+            etv->indexer = TableIndexer{globals.builtinTypes->numberType, etv->instantiatedTypeParams[0], /* isReadOnly */ true};
+        }
+        else if (!etv->instantiatedTypeParams.empty())
+        {
+            TypeId positions = globals.globalTypes.addType(UnionType{etv->instantiatedTypeParams});
+            etv->indexer = TableIndexer{globals.builtinTypes->numberType, positions, /* isReadOnly */ true};
+        }
+
         const std::pair<const char*, Operation> methods[] = {
             {"sub", Operation::Sub},
             {"with", Operation::With},
@@ -872,13 +962,14 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     // Luwu collections and bundles: builtin modules. Their types are their exports, filed under the library's name the way
     // a required module's are, so code imports them (`type .{ Vec } = collections`, `const .{ Pair } = bundle`) or names
     // them (`collections.Vec<T>`) instead of finding them as globals. The library value is a global.
-    if (collectionsLibraryEnabled())
+    // `bundle` goes first: `collections` declarations name its types.
+    if (bundleLibraryEnabled())
     {
-        // `bundle` goes first: `collections` declarations name its types
         registerBuiltinModule(frontend, globals, "bundle", getBundleDefinitionSource(), typeCheckForAutocomplete);
-        registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
         prepareBundleTypes(globals);
     }
+    if (collectionsLibraryEnabled())
+        registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
 
     // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder
     globals.globalTypeFunctionScope->exportedTypeBindings = globals.globalScope->exportedTypeBindings;

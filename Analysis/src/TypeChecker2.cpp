@@ -4195,7 +4195,11 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
     else if (auto cls = get<ExternType>(exprType))
     {
         if (cls->indexer)
+        {
             testIsSubtype(indexType, cls->indexer->indexType, indexExpr->index->location);
+            if (context == ValueContext::LValue && cls->indexer->isReadOnly)
+                reportError(PropertyAccessViolation{exprType, "indexer", PropertyAccessViolation::CannotWrite}, indexExpr->location);
+        }
         else
             reportError(DynamicPropertyLookupOnExternTypesUnsafe{exprType}, indexExpr->location);
     }

@@ -753,11 +753,6 @@ typedef struct LuauClass
     // calling its `__len`, which returns the same number. LUAR_NO_LENGTH_FIELD for every other class.
     uint32_t lengthfield;
 
-    // Luwu bundles: an object of this class is a table key by the values of its fields, not by its identity, so equal
-    // bundles index the same entry (luaR_keyhash, luaR_keyequal). Only the bundle classes set it: their objects can't
-    // change.
-    bool keybyvalue;
-
     // Luwu collections: a builtin class's fast methods by member offset, with NULL for the members that have none. NULL
     // for every other class. Owned by this class.
     luaR_FastMethod* fastmethods;
@@ -768,6 +763,10 @@ typedef struct LuauClass
     // implements its traits, it holds only the qualified implementations, unchecked. NULL when there are none. Marked in
     // traverseclass.
     struct LuaTable* qualified;
+
+    // Luwu builtin classes: what `typeof` gives an object of this builtin class ("bundle", "vec", ...), or NULL for
+    // "object". Marked in traverseclass.
+    TString* typeofname;
 
 } LuauClass;
 
@@ -780,8 +779,9 @@ typedef struct LuauObject
 {
     CommonHeader;
 
-    // Luwu collections: what the object's storage block holds (LuwuStorageKind), or LUAR_STORAGE_NONE without one. The
-    // object keeps it because a sweep can free the class first. It sits in the padding after CommonHeader.
+    // Luwu collections: what the object's storage block holds (LuwuStorageKind), LUAR_STORAGE_BUNDLE for a bundle, or
+    // LUAR_STORAGE_NONE. The object keeps it because a sweep can free the class first. It sits in the padding after
+    // CommonHeader.
     uint8_t storagekind;
 
     // The number of members that this instance contains. We need this in order
@@ -796,15 +796,32 @@ typedef struct LuauObject
 
 } LuauObject;
 
-// Luwu collections: the kinds of storage block a builtin container owns (LuauObject::storagekind)
+// Luwu collections: the kinds of storage block a builtin container owns (LuauObject::storagekind), and bundles. Each kind
+// is a separate bit, so native code tests for either container with one instruction.
 enum LuwuStorageKind
 {
-    LUAR_STORAGE_NONE,
+    LUAR_STORAGE_NONE = 0,
     // `Vec`: entries 1 to count in items[0] to items[count - 1]
-    LUAR_STORAGE_VEC,
+    LUAR_STORAGE_VEC = 1,
     // `VecDeque`: a ring. The entry i places from the front is in items[(head + i) & (capacity - 1)].
-    LUAR_STORAGE_RING,
+    LUAR_STORAGE_RING = 2,
+    // Luwu bundles: no storage block. The values are the object's members, and a LuauBundleKey follows them in the same
+    // allocation (luaR_bundlekey).
+    LUAR_STORAGE_BUNDLE = 4,
 };
+
+// Luwu collections: the kinds that own a storage block
+#define LUAR_STORAGE_CONTAINER (LUAR_STORAGE_VEC | LUAR_STORAGE_RING)
+
+// Luwu bundles: what a bundle's key compares by, computed once when the bundle is built. Its values can't change, and
+// each one hashes by identity or by a value that can't change either.
+typedef struct LuauBundleKey
+{
+    // The hash of every value, nested bundles by their hashes (luaR_keyhash)
+    uint32_t hash;
+    // The number of values and bundles in the tree it unfolds to, itself included. Saturates at UINT32_MAX.
+    uint32_t weight;
+} LuauBundleKey;
 
 // Luwu collections: the entries of a `Vec` or `VecDeque`, in a block the object owns from its first value on. The
 // object's first member points to it as light userdata, and is nil before the first value. It's allocated with luaM_
