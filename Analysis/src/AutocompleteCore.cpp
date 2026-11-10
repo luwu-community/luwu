@@ -2127,7 +2127,7 @@ static std::optional<TypeId> bundlePositionExpectedType(const Module& module, co
         return std::nullopt;
 
     const TypeId* expected = module.astExpectedTypes.find(bundle);
-    std::optional<std::vector<TypeId>> positions = expected ? bundlePositions(scope.get(), *expected) : std::nullopt;
+    std::optional<std::vector<TypeId>> positions = expected ? expectedBundlePositions(scope.get(), *expected, bundle->args.size) : std::nullopt;
     if (!positions)
         return std::nullopt;
 

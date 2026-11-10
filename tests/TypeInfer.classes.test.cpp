@@ -18,6 +18,7 @@ using namespace Luau;
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(LuauBidirectionalInferenceVariadics)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -6358,8 +6359,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "aliases_of_generic_class_instantiations_keep
     CHECK_EQ(toString(requireType("listed")), "Vec<string>");
 }
 
-// Luwu bundles: a bundle literal takes its positions' expected types, so a string literal where a union of string
-// singletons goes stays a singleton
+// Luwu bundles: a bundle literal takes its positions' expected types, so a string or boolean literal where a singleton
+// goes stays one. Where a union is expected, the bundle member with as many positions decides them.
 TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_literals_take_their_positions_expected_types")
 {
     ScopedFastFlag sffs[] = {
@@ -6380,11 +6381,61 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_literals_take_their_positions_expecte
         local items: { [ItemId]: { ingredients: { Ingredient } } } = {
             torch = { ingredients = { bundle.pack("coal", 1), bundle.pack("stick", 1) } },
         }
+        local function hasEnough(have: number, need: number): true | bundle.Bundle2<false, number>
+            if have < need then
+                return bundle.pack(false, need - have)
+            end
+            return true
+        end
+        local switch: bundle.Bundle2<true, "on"> = bundle.pack(true, "on")
         local wrong: Ingredient = bundle.pack("diamond", 1)
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(result.errors[0].location.begin.line, 9);
+    CHECK_EQ(result.errors[0].location.begin.line, 16);
+}
+
+// Luwu bundles: a bundle literal takes its positions' expected types wherever an expected type reaches it: arguments
+// (functions, methods, constructors, generics), properties, assignments, optionals, intersections and nested bundles
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_literals_take_expected_types_everywhere")
+{
+    ScopedFastFlag sffs[] = {
+        // pushes expected types into variadic parameters, like the constructors' `...: T`
+        {FFlag::LuauBidirectionalInferenceVariadics, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type ItemId = "torch" | "coal"
+        type Ingredient = bundle.Bundle2<ItemId, number>
+        local function take(i: Ingredient) end
+        take(bundle.pack("torch", 1))
+        local record: { main: Ingredient, extra: Ingredient? } = { main = bundle.pack("torch", 1), extra = bundle.pack("coal", 2) }
+        local later: Ingredient = bundle.pack("torch", 1)
+        later = bundle.pack("coal", 3)
+        local nested: bundle.Bundle2<Ingredient, number> = bundle.pack(bundle.pack("torch", 1), 2)
+        local queue: collections.VecDeque<Ingredient> = collections.VecDeque()
+        queue:pushback(bundle.pack("coal", 4))
+        local list: collections.Vec<Ingredient> = collections.Vec(bundle.pack("torch", 1))
+        local explicit = collections.Vec<<Ingredient>>(bundle.pack("torch", 1))
+        local both: Ingredient & Ingredient = bundle.pack("torch", 1)
+        local holder: { slot: Ingredient } = { slot = bundle.pack("torch", 1) }
+        holder.slot = bundle.pack("coal", 9)
+        class Recipe(public const input: Ingredient) end
+        local recipe = Recipe(bundle.pack("coal", 1))
+        local function identity<T>(x: T): T return x end
+        local same = identity<<Ingredient>>(bundle.pack("torch", 1))
+        take(bundle.pack("gold", 1))
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 21);
 }
 
 // Luwu bundles: `b[n]` reads any position, so it has the union of the positions' types, with each type once

@@ -522,6 +522,7 @@ private:
     );
 
     void visitLValue(const ScopePtr& scope, AstExpr* expr, TypeId rhsType);
+    std::optional<TypeId> expectedTypeOfAssignedBundle(const ScopePtr& scope, AstExpr* target, AstExpr* value);
     void visitLValue(const ScopePtr& scope, AstExprLocal* local, TypeId rhsType);
     void visitLValue(const ScopePtr& scope, AstExprGlobal* global, TypeId rhsType);
     void visitLValue(const ScopePtr& scope, AstExprIndexName* expr, TypeId rhsType);

@@ -3891,7 +3891,10 @@ static void bindFreeType(TypeId a, TypeId b)
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatAssign* assign)
 {
-    TypePackId resultPack = checkPack(scope, assign->values).tp;
+    std::vector<std::optional<TypeId>> expectedTypes;
+    for (size_t i = 0; i < assign->vars.size && i < assign->values.size; ++i)
+        expectedTypes.push_back(expectedTypeOfAssignedBundle(scope, assign->vars.data[i], assign->values.data[i]));
+    TypePackId resultPack = checkPack(scope, assign->values, expectedTypes).tp;
 
     std::vector<TypeId> valueTypes;
     valueTypes.reserve(assign->vars.size);
@@ -3925,6 +3928,35 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatAssign* ass
     }
 
     return ControlFlow::None;
+}
+
+// Luwu bundles: the type a bundle literal assigned to `target` is expected to have, so its positions take their expected
+// types as in a declaration (`later = .("coal", 3)` keeps "coal" a singleton where an `.(ItemId, number)` goes): an
+// annotated local's type, or the type of a local's property. nullopt for any other value or target, which are checked
+// without an expected type as before.
+std::optional<TypeId> ConstraintGenerator::expectedTypeOfAssignedBundle(const ScopePtr& scope, AstExpr* target, AstExpr* value)
+{
+    const AstExprCall* call = value->as<AstExprCall>();
+    if (!call || !isBundlePackCall(call))
+        return std::nullopt;
+
+    if (const AstExprLocal* local = target->as<AstExprLocal>())
+        return local->local->annotation ? scope->lookup(local->local) : std::nullopt;
+
+    const AstExprIndexName* property = target->as<AstExprIndexName>();
+    const AstExprLocal* object = property ? property->expr->as<AstExprLocal>() : nullptr;
+    std::optional<TypeId> objectType = object ? scope->lookup(object->local) : std::nullopt;
+    if (!objectType)
+        return std::nullopt;
+
+    TypeId propertyType = arena->addType(BlockedType{});
+    NotNull<Constraint> hasProp = addConstraint(
+        scope,
+        property->location,
+        HasPropConstraint{propertyType, *objectType, property->index.value, ValueContext::LValue, inConditional(typeContext)}
+    );
+    getMutable<BlockedType>(propertyType)->setOwner(hasProp);
+    return propertyType;
 }
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatCompoundAssign* assign)
@@ -5165,14 +5197,17 @@ InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall*
             result = InferencePack{arena->addTypePack({*selfType})};
     }
 
-    // Luwu bundles: a bundle literal `.(a, b)` where a bundle type is expected takes its positions' expected types
-    // (BidirectionalTypePusher), before the call builds the bundle's type from its arguments
+    // Luwu bundles: a bundle literal `.(a, b)` takes its positions' expected types (BidirectionalTypePusher). The pusher
+    // reads the expression's type, but a call as an argument or a local's value is recorded as a pack only. A bundle
+    // literal is always one value, so record that too.
+    if (isBundlePackCall(call) && !module->astTypes.contains(call))
+        module->astTypes[call] = flattenPack(scope, call->location, result).ty;
+
+    // Where the expected type is known here (an annotated local), the push comes before the call builds the bundle's
+    // type from its arguments. An argument's comes from the function check.
     if (expectedType && isBundlePackCall(call))
     {
-        // A call as a local's value is recorded as a pack only, and the pusher reads the expression's type
-        TypeId bundleType = flattenPack(scope, call->location, result).ty;
-        if (!module->astTypes.contains(call))
-            module->astTypes[call] = bundleType;
+        TypeId bundleType = module->astTypes[call];
         Checkpoint callEndCheckpoint = checkpoint(this);
         NotNull<Constraint> push = addConstraint(
             scope,
@@ -5255,6 +5290,10 @@ InferencePack ConstraintGenerator::checkExprCall(
     for (size_t i = 0; i < exprArgs.size(); ++i)
     {
         AstExpr* arg = exprArgs[i];
+        // Luwu bundles: a bundle literal `.(a, b)` is a call that's always one value, so as the last argument it's an
+        // ordinary one, which the function check pushes the parameter's type into
+        const AstExprCall* argCall = arg->as<AstExprCall>();
+        bool spreads = (argCall && !isBundlePackCall(argCall)) || arg->is<AstExprVarargs>();
 
         if (i == 0 && call->self)
         {
@@ -5268,7 +5307,7 @@ InferencePack ConstraintGenerator::checkExprCall(
             else
                 args.push_back(freshType(scope, Polarity::Negative));
         }
-        else if (i < exprArgs.size() - 1 || !(arg->is<AstExprCall>() || arg->is<AstExprVarargs>()))
+        else if (i < exprArgs.size() - 1 || !spreads)
         {
             std::optional<TypeId> expectedType = std::nullopt;
             if (i < expectedTypesForCall.size())
