@@ -200,7 +200,7 @@ struct BidirectionalTypePusher
         // `.("torch", 1)` where an `.(ItemId, number)` goes keeps "torch" as a singleton
         if (auto call = expr->as<AstExprCall>(); call && isBundlePackCall(call))
         {
-            if (std::optional<std::vector<TypeId>> positions = bundlePositions(constraint->scope.get(), expectedType))
+            if (std::optional<std::vector<TypeId>> positions = expectedBundlePositions(constraint->scope.get(), expectedType, call->args.size))
             {
                 for (size_t i = 0; i < call->args.size && i < positions->size(); i++)
                     pushType((*positions)[i], call->args.data[i]);
