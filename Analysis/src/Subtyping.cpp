@@ -2272,6 +2272,14 @@ SubtypingResult Subtyping::isCovariantWith(
     return {false};
 }
 
+// Luwu bundles: the positions of the bundle `etv` as one type pack: a fixed size's type arguments, or a `BigBundle`'s pack
+static TypePackId bundlePositionPack(NotNull<TypeArena> arena, const ExternType* etv)
+{
+    if (!etv->instantiatedTypePackParams.empty())
+        return etv->instantiatedTypePackParams[0];
+    return arena->addTypePack(etv->instantiatedTypeParams);
+}
+
 SubtypingResult Subtyping::isCovariantWith(
     SubtypingEnvironment& env,
     const ExternType* subExternType,
@@ -2281,6 +2289,19 @@ SubtypingResult Subtyping::isCovariantWith(
 {
     if (isSubclass(subExternType, superExternType))
         return {true};
+
+    // Luwu bundles: a bundle's type is its positions, whichever class holds them, so a `BigBundle<number, string>` is a
+    // `.(number, string)`. Two bundles of one class compare their type arguments below. A mismatch has no reasonings,
+    // like one there: their paths lead into the positions, which the error explanation can't follow.
+    bool bundlesOfTwoClasses = isBundle(subExternType) && isBundle(superExternType) && subExternType->name != superExternType->name;
+    if (bundlesOfTwoClasses)
+    {
+        SubtypingResult positions =
+            isCovariantWith(env, bundlePositionPack(arena, subExternType), bundlePositionPack(arena, superExternType), scope);
+        if (positions.isSubtype || positions.isErrorSuppressing)
+            return positions;
+        return {false};
+    }
 
     // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): `isSubclass` compares a generic nominal's type arguments with `sameNominalTypeArg`
     // (Type.cpp), which can only answer pointer identity or another nominal -- it lives in Type.cpp

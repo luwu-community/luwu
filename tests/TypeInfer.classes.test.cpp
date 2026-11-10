@@ -6663,6 +6663,73 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "big_bundles_keep_each_position_type")
     CHECK_EQ(toString(requireType("joined")), ".(number, number, number, string, string, string, string)");
 }
 
+// Luwu bundles: a bundle's type is its positions, so a `BigBundle` and a fixed size's class with the same positions are
+// the same type
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_of_two_classes_compare_by_position")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local big: bundle.BigBundle<number, string> = bundle.pack(1, "a")
+        local small: bundle.Bundle2<number, string> = big
+        local literal: bundle.BigBundle<"a", number> = bundle.pack("a", 1)
+        local widened: bundle.Bundle2<string, number> = literal
+        local wrong: bundle.Bundle2<string, string> = big
+        local shorter: bundle.Bundle1<number> = big
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 6);
+    CHECK_EQ(result.errors[1].location.begin.line, 7);
+}
+
+// Luwu bundles: `typeof(x) == "bundle"` narrows a value nothing is known about to `.(...unknown)`, which every bundle is
+TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_narrows_unknown_to_any_bundle")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function size(b: unknown): number
+            if typeof(b) == "bundle" then
+                for _, value in b do
+                    local _: unknown = value
+                end
+                return #b
+            end
+            return 0
+        end
+        local function narrowed(b: unknown, sized: bundle.Bundle2<number, string> | string)
+            if typeof(b) == "bundle" then
+                local wrong: string = b
+            end
+            if typeof(sized) == "bundle" then
+                local kept: bundle.Bundle2<number, string> = sized
+            end
+        end
+        local anything: bundle.BigBundle<...unknown> = bundle.pack(1, "a")
+        local none: bundle.BigBundle<...unknown> = bundle.pack()
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const TypeMismatch* mismatch = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(mismatch);
+    CHECK_EQ(toString(mismatch->givenType), ".(...unknown)");
+}
+
 // Luwu builtin classes: `typeof` names a bundle "bundle" and a container after its class, and narrows to them
 TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_narrows_to_builtin_classes")
 {

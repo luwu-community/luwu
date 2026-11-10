@@ -557,23 +557,9 @@ bool isBuiltinClassTypeofName(const std::string& name)
     return false;
 }
 
-std::optional<TypeId> builtinClassTypeofType(TypeArena* arena, const Scope* globalScope, const std::string& name)
+// Luwu builtin classes: the class type of the `collections` class whose objects `typeof` names `name`
+static std::optional<TypeId> collectionsTypeofType(const Scope* globalScope, const std::string& name)
 {
-    if (name == "bundle")
-    {
-        std::vector<TypeId> classes;
-        for (const char* className : kBundleClassNames)
-        {
-            if (std::optional<TypeFun> declared = bundleExport(globalScope, className))
-                classes.push_back(follow(declared->type));
-        }
-        if (std::optional<TypeFun> big = bundleExport(globalScope, kBigBundleName))
-            classes.push_back(follow(big->type));
-        if (classes.empty())
-            return std::nullopt;
-        return arena->addType(UnionType{std::move(classes)});
-    }
-
     for (const auto& [typeofName, className] : kCollectionsTypeofNames)
     {
         if (name != typeofName)
@@ -582,6 +568,25 @@ std::optional<TypeId> builtinClassTypeofType(TypeArena* arena, const Scope* glob
             return follow(declared->type);
     }
     return std::nullopt;
+}
+
+std::optional<TypeId> builtinClassTypeofType(
+    TypeArena* arena,
+    NotNull<BuiltinTypes> builtinTypes,
+    const Scope* globalScope,
+    const std::string& name,
+    std::vector<TypeId>& copiedReferences
+)
+{
+    if (name != "bundle")
+        return collectionsTypeofType(globalScope, name);
+
+    // `.(...unknown)`, which every bundle is (isAnyBundle)
+    std::optional<TypeFun> big = bundleExport(globalScope, kBigBundleName);
+    if (!big)
+        return std::nullopt;
+    TypePackId anyPositions = arena->addTypePack(TypePack{{}, arena->addTypePack(VariadicTypePack{builtinTypes->unknownType})});
+    return instantiateGenericNominal(arena, big->type, {}, {anyPositions}, copiedReferences);
 }
 
 std::optional<std::string> fixedElementContainerName(TypeArena* arena, const Scope* scope, TypeId classValue)
@@ -600,7 +605,7 @@ std::optional<std::string> fixedElementContainerName(TypeArena* arena, const Sco
     const std::pair<const char*, const char*> containers[] = {{"vec", "Vec"}, {"vecdeque", "VecDeque"}};
     for (const auto& [typeofName, name] : containers)
     {
-        std::optional<TypeId> declared = builtinClassTypeofType(arena, globalScope, typeofName);
+        std::optional<TypeId> declared = collectionsTypeofType(globalScope, typeofName);
         if (declared && follow(*declared) == objectTemplate)
             return std::string(name);
     }

@@ -148,9 +148,16 @@ bool collectionsLibraryEnabled();
 std::string getCollectionsDefinitionSource();
 // Luwu builtin classes: whether `typeof` gives `name` for an object of a builtin class ("bundle", "vec", ...)
 bool isBuiltinClassTypeofName(const std::string& name);
-// Luwu builtin classes: the class types whose objects `typeof` names `name`, every bundle class for "bundle". nullopt for
-// any other name, or when the library isn't loaded.
-std::optional<TypeId> builtinClassTypeofType(TypeArena* arena, const Scope* globalScope, const std::string& name);
+// Luwu builtin classes: the class type whose objects `typeof` names `name`, and `.(...unknown)` for "bundle". nullopt
+// for any other name, or when the library isn't loaded. Alias references copied into a new type go to
+// `copiedReferences` for the caller to expand.
+std::optional<TypeId> builtinClassTypeofType(
+    TypeArena* arena,
+    NotNull<BuiltinTypes> builtinTypes,
+    const Scope* globalScope,
+    const std::string& name,
+    std::vector<TypeId>& copiedReferences
+);
 
 // Luwu collections: "Vec" or "VecDeque" when `classValue` is that class's value, whose objects fix their element type to
 // their first value's at runtime. nullopt for any other type. `scope` is any scope of the module.
