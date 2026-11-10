@@ -2243,10 +2243,14 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatPush* push)
     if (containerTable && containerTable->indexer && follow(containerTable->indexer->indexType) == builtinTypes->numberType)
         elementType = containerTable->indexer->indexResultType;
 
+    // The values settle first: an expected type they take on the way (a literal's singletons) is part of what's pushed
     std::vector<std::optional<TypeId>> expectedTypes(push->values.size, elementType);
+    Checkpoint valuesStart = checkpoint(this);
     TypePackId valuesPack = checkPack(scope, push->values, expectedTypes).tp;
+    Checkpoint valuesEnd = checkpoint(this);
 
-    addConstraint(scope, push->location, PushConstraint{containerType, valuesPack});
+    NotNull<Constraint> pushConstraint = addConstraint(scope, push->location, PushConstraint{containerType, valuesPack});
+    addAllAsDependencies(valuesStart, valuesEnd, this, pushConstraint);
 
     return ControlFlow::None;
 }
