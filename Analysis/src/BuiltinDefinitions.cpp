@@ -465,6 +465,41 @@ bool isBundlePackCall(const AstExprCall* call)
     return library && library->name == "bundle" && index->index == "pack";
 }
 
+std::optional<std::vector<TypeId>> expectedBundlePositions(const Scope* scope, TypeId expected, size_t count)
+{
+    expected = follow(expected);
+    if (std::optional<std::vector<TypeId>> positions = bundlePositions(scope, expected))
+        return positions;
+
+    // An intersection's first bundle part decides: the literal is still checked against the whole intersection
+    if (const IntersectionType* parts = get<IntersectionType>(expected))
+    {
+        for (TypeId part : parts->parts)
+        {
+            if (std::optional<std::vector<TypeId>> positions = expectedBundlePositions(scope, part, count))
+                return positions;
+        }
+        return std::nullopt;
+    }
+
+    const UnionType* options = get<UnionType>(expected);
+    if (!options)
+        return std::nullopt;
+
+    std::optional<std::vector<TypeId>> found;
+    for (TypeId option : options->options)
+    {
+        std::optional<std::vector<TypeId>> positions = bundlePositions(scope, option);
+        if (!positions || positions->size() != count)
+            continue;
+        // two bundles of this size leave the positions ambiguous
+        if (found)
+            return std::nullopt;
+        found = std::move(positions);
+    }
+    return found;
+}
+
 std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty)
 {
     ty = follow(ty);
