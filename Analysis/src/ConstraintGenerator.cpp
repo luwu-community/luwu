@@ -2249,6 +2249,31 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatPush* push)
     TypePackId valuesPack = checkPack(scope, push->values, expectedTypes).tp;
     Checkpoint valuesEnd = checkpoint(this);
 
+    // A container whose type isn't known yet passes its element type to the values through the solver, before their own
+    // constraints run, as a parameter's type reaches an argument. A call's values are fixed by its own constraints (a
+    // bundle literal's), so only a call needs it: anything else still takes the element type when it's pushed.
+    bool pushesCall = std::any_of(push->values.begin(), push->values.end(), [](AstExpr* value) { return value->is<AstExprCall>(); });
+    if (!elementType && pushesCall)
+    {
+        TypeId element = arena->addType(BlockedType{});
+        NotNull<Constraint> indexer =
+            addConstraint(scope, push->target->location, HasIndexerConstraint{element, containerType, builtinTypes->numberType});
+        getMutable<BlockedType>(element)->setOwner(indexer);
+
+        for (AstExpr* value : push->values)
+        {
+            TypeId* valueType = module->astTypes.find(value);
+            if (!valueType)
+                continue;
+            NotNull<Constraint> expected = addConstraint(
+                scope,
+                value->location,
+                PushTypeConstraint{element, *valueType, NotNull{&module->astTypes}, NotNull{&module->astExpectedTypes}, NotNull{value}}
+            );
+            addAllAsReverseDependencies(valuesStart, valuesEnd, this, expected);
+        }
+    }
+
     NotNull<Constraint> pushConstraint = addConstraint(scope, push->location, PushConstraint{containerType, valuesPack});
     addAllAsDependencies(valuesStart, valuesEnd, this, pushConstraint);
 
