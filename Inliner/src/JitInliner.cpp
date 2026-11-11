@@ -279,6 +279,10 @@ Proto* onInlineFunction(lua_State* L, Closure* caller, Closure* target, uint32_t
     if (callerProto->sizecode > FInt::LuauJitInlineTooLongFunSize || targetProto->sizecode > FInt::LuauJitInlineTooLongFunSize)
         return nullptr;
 
+    for (const Instruction* p = callerProto->code, *e = callerProto->code + callerProto->sizecode; p < e; p += Luau::getOpLength(static_cast<LuauOpcode>(LUAU_INSN_OP(*p))))
+        if (LUAU_INSN_OP(*p) == LOP_TAILCALL)
+            return nullptr;
+
     auto callerGraph = buildGraphFromProto(callerProto, pc);
     if (!callerGraph)
         return nullptr;

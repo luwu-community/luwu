@@ -250,6 +250,20 @@ struct BcReturn : public BcInstHelper<VmConst, BcReturn<VmConst>>
 };
 
 template<typename VmConst = BcVmConst>
+struct BcTailCall : public BcInstHelper<VmConst, BcTailCall<VmConst>>
+{
+    static const LuauOpcode opcode = LOP_TAILCALL;
+    INT_IMM(ParamCount, 0)
+    BC_OP(Target, 1)
+
+    static const uint32_t kParamStartInput = 2;
+    std::vector<BcOp> params()
+    {
+        return this->sliceInputs(kParamStartInput);
+    }
+};
+
+template<typename VmConst = BcVmConst>
 struct BcLoadNil : public BcInstHelper<VmConst, BcLoadNil<VmConst>>
 {
     static const LuauOpcode opcode = LOP_LOADNIL;

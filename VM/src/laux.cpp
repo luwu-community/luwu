@@ -473,7 +473,7 @@ void luaL_traceback(lua_State* L, lua_State* L1, const char* msg, int level)
     }
 
     lua_Debug ar;
-    for (int i = level; lua_getinfo(L1, i, "sln", &ar); ++i)
+    for (int i = level; lua_getinfo(L1, i, "slnt", &ar); ++i)
     {
         if (strcmp(ar.what, "C") == 0)
             continue;
@@ -500,6 +500,9 @@ void luaL_traceback(lua_State* L, lua_State* L1, const char* msg, int level)
         }
 
         luaL_addchar(&buf, '\n');
+
+        if (ar.istailcall)
+            luaL_addstring(&buf, "(...tail calls...)\n");
     }
 
     luaL_pushresult(&buf);

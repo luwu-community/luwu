@@ -1658,7 +1658,7 @@ void BytecodeBuilder::validateInstructions() const
             VREG(LUAU_INSN_A(insn));
             VREG(LUAU_INSN_B(insn));
             VCONST(insns[i + 1], String);
-            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 2]) == LOP_CALLFB || LUAU_INSN_OP(insns[i + 2]) == LOP_CALL);
+            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 2]) == LOP_CALLFB || LUAU_INSN_OP(insns[i + 2]) == LOP_CALL || LUAU_INSN_OP(insns[i + 2]) == LOP_TAILCALL);
             break;
 
         case LOP_CALL:
@@ -1669,6 +1669,14 @@ void BytecodeBuilder::validateInstructions() const
             VREG(LUAU_INSN_A(insn));
             VREGRANGE(LUAU_INSN_A(insn) + 1, nparams); // 1..nparams
             VREGRANGE(LUAU_INSN_A(insn), nresults);    // 1..nresults
+        }
+        break;
+
+        case LOP_TAILCALL:
+        {
+            int nparams = LUAU_INSN_B(insn) - 1;
+            VREG(LUAU_INSN_A(insn));
+            VREGRANGE(LUAU_INSN_A(insn) + 1, nparams); // 1..nparams
         }
         break;
 
@@ -1876,33 +1884,33 @@ void BytecodeBuilder::validateInstructions() const
 
         case LOP_FASTCALL:
             VJUMP(LUAU_INSN_C(insn));
-            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_CALL);
+            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_CALL || LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_TAILCALL);
             break;
 
         case LOP_FASTCALL1:
             VREG(LUAU_INSN_B(insn));
             VJUMP(LUAU_INSN_C(insn));
-            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_CALL);
+            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_CALL || LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_TAILCALL);
             break;
 
         case LOP_FASTCALL2:
             VREG(LUAU_INSN_B(insn));
             VJUMP(LUAU_INSN_C(insn));
-            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_CALL);
+            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_CALL || LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_TAILCALL);
             VREG(insns[i + 1]);
             break;
 
         case LOP_FASTCALL2K:
             VREG(LUAU_INSN_B(insn));
             VJUMP(LUAU_INSN_C(insn));
-            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_CALL);
+            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_CALL || LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_TAILCALL);
             VCONSTANY(insns[i + 1]);
             break;
 
         case LOP_FASTCALL3:
             VREG(LUAU_INSN_B(insn));
             VJUMP(LUAU_INSN_C(insn));
-            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_CALL);
+            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_CALL || LUAU_INSN_OP(insns[i + 1 + LUAU_INSN_C(insn)]) == LOP_TAILCALL);
             VREG(insns[i + 1] & 0xff);
             VREG((insns[i + 1] >> 8) & 0xff);
             break;
@@ -1949,7 +1957,7 @@ void BytecodeBuilder::validateInstructions() const
             VREG(LUAU_INSN_A(insn));
             VREG(LUAU_INSN_B(insn));
             VCONST(LUAU_INSN_AUX_KV16(insns[i + 1]), String);
-            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 2]) == LOP_CALL);
+            LUAU_ASSERT(LUAU_INSN_OP(insns[i + 2]) == LOP_CALL || LUAU_INSN_OP(insns[i + 2]) == LOP_TAILCALL);
             break;
 
         case LOP_CMPPROTO:
@@ -2082,7 +2090,34 @@ void BytecodeBuilder::validateVariadic() const
             LUAU_ASSERT(!variadicSeq);
             variadicSeq = true;
         }
-        else if ((op == LOP_RETURN && LUAU_INSN_B(insn) == 0) || (op == LOP_SETLIST && LUAU_INSN_C(insn) == 0))
+        else if (op == LOP_TAILCALL)
+        {
+            if (LUAU_INSN_B(insn) == 0)
+            {
+                // consumer instruction ends a variadic sequence
+                LUAU_ASSERT(variadicSeq);
+                variadicSeq = false;
+            }
+            else
+            {
+                // TAILCALL is not a neutral instruction so it can't be present in a variadic sequence unless it's a consumer
+                LUAU_ASSERT(!variadicSeq);
+            }
+        }
+        else if (op == LOP_RETURN && LUAU_INSN_B(insn) == 0)
+        {
+            // consumer instruction ends a variadic sequence; when preceded by TAILCALL, it serves as the landing pad for FASTCALL
+            if (i > 0 && LUAU_INSN_OP(insns[i - 1]) == LOP_TAILCALL)
+            {
+                LUAU_ASSERT(!variadicSeq);
+            }
+            else
+            {
+                LUAU_ASSERT(variadicSeq);
+                variadicSeq = false;
+            }
+        }
+        else if (op == LOP_SETLIST && LUAU_INSN_C(insn) == 0)
         {
             // consumer instruction ends a variadic sequence
             LUAU_ASSERT(variadicSeq);
@@ -2091,7 +2126,7 @@ void BytecodeBuilder::validateVariadic() const
         else if (op == LOP_FASTCALL)
         {
             int callTarget = int(i + LUAU_INSN_C(insn) + 1);
-            LUAU_ASSERT(unsigned(callTarget) < insns.size() && LUAU_INSN_OP(insns[callTarget]) == LOP_CALL);
+            LUAU_ASSERT(unsigned(callTarget) < insns.size() && (LUAU_INSN_OP(insns[callTarget]) == LOP_CALL || LUAU_INSN_OP(insns[callTarget]) == LOP_TAILCALL));
 
             if (LUAU_INSN_B(insns[callTarget]) == 0)
             {
@@ -2432,6 +2467,10 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
     case LOP_CALLFB:
         formatAppend(result, "CALLFB R%d %d %d [%d]\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn) - 1, LUAU_INSN_C(insn) - 1, static_cast<int>(*code));
         code++;
+        break;
+
+    case LOP_TAILCALL:
+        formatAppend(result, "TAILCALL R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn) - 1);
         break;
 
     case LOP_RETURN:

@@ -354,4 +354,9 @@ void setTypeFunctionEnvironment(lua_State* L);
 
 void resetTypeFunctionState(lua_State* L);
 
+inline void* getTypeFunctionEnvironmentKey(const AstStatTypeFunction* function)
+{
+    return reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(function) | 1);
+}
+
 } // namespace Luau

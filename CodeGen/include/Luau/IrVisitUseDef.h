@@ -112,6 +112,12 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
 
         visitor.defRange(vmRegOp(OP_A(inst)), function.intOp(OP_C(inst)));
         break;
+    case IrCmd::TAILCALL:
+        visitor.use(OP_A(inst));
+        visitor.useRange(vmRegOp(OP_A(inst)) + 1, function.intOp(OP_B(inst)));
+
+        visitor.defRange(vmRegOp(OP_A(inst)), -1);
+        break;
     case IrCmd::RETURN:
         visitor.useRange(vmRegOp(OP_A(inst)), function.intOp(OP_B(inst)));
         break;

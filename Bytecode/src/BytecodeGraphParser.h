@@ -755,6 +755,28 @@ struct BytecodeGraphParser
                 break;
             }
 
+            case LOP_TAILCALL:
+            {
+                int nparams = LUAU_INSN_B(insn) - 1;
+                addImmInput(node, static_cast<int32_t>(nparams));
+
+                // Call target.
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                // Fixed arguments.
+                for (int j = 1; j <= nparams; j++)
+                    addVmRegInput(node, LUAU_INSN_A(insn) + j);
+
+                if (nparams < 0)
+                {
+                    // all arguments prepared before call in the same block
+                    for (auto& inp : findProducersUpToTop(currentBlock, LUAU_INSN_A(insn) + 1))
+                    {
+                        func.addUse(node, inp);
+                    }
+                }
+                break;
+            }
+
             case LOP_JUMP:
             {
                 if (isJumpTrampoline(i, code, codesize))
