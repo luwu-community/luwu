@@ -258,16 +258,36 @@ void callEpilogC(lua_State* L, int nresults, int n)
     StkId vali = L->top - n;
     StkId valend = L->top;
 
-    int i;
-    for (i = nresults; i != 0 && vali < valend; i--)
-        setobj2s(L, res++, vali++);
-    while (i-- > 0)
-        setnilvalue(res++);
+    if (nresults == 1)
+    {
+        if (LUAU_LIKELY(n >= 1))
+        {
+            setobj2s(L, res, vali);
+        }
+        else
+        {
+            setnilvalue(res);
+        }
+        L->top = cip->top;
+    }
+    else if (nresults == 0)
+    {
+        L->top = cip->top;
+    }
+    else
+    {
+        int i;
+        for (i = nresults; i != 0 && vali < valend; i--)
+            setobj2s(L, res++, vali++);
+        while (i-- > 0)
+            setnilvalue(res++);
+
+        L->top = (nresults == LUA_MULTRET) ? res : cip->top;
+    }
 
     // pop the stack frame
     L->ci = cip;
     L->base = cip->base;
-    L->top = (nresults == LUA_MULTRET) ? res : cip->top;
 }
 
 Udata* newUserdata(lua_State* L, size_t s, int tag)
@@ -378,16 +398,36 @@ Closure* callFallback(lua_State* L, StkId ra, StkId argtop, int nresults)
         StkId vali = L->top - n;
         StkId valend = L->top;
 
-        int i;
-        for (i = nresults; i != 0 && vali < valend; i--)
-            setobj2s(L, res++, vali++);
-        while (i-- > 0)
-            setnilvalue(res++);
+        if (nresults == 1)
+        {
+            if (LUAU_LIKELY(n >= 1))
+            {
+                setobj2s(L, res, vali);
+            }
+            else
+            {
+                setnilvalue(res);
+            }
+            L->top = cip->top;
+        }
+        else if (nresults == 0)
+        {
+            L->top = cip->top;
+        }
+        else
+        {
+            int i;
+            for (i = nresults; i != 0 && vali < valend; i--)
+                setobj2s(L, res++, vali++);
+            while (i-- > 0)
+                setnilvalue(res++);
+
+            L->top = (nresults == LUA_MULTRET) ? res : cip->top;
+        }
 
         // pop the stack frame
         L->ci = cip;
         L->base = cip->base;
-        L->top = (nresults == LUA_MULTRET) ? res : cip->top;
 
         // keep executing current function
         return NULL;

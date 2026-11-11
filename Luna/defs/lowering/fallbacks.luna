@@ -1,0 +1,184 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-fallback-getglobal pc ra k)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executeGETGLOBAL) (uint-val pc)))]
+    [:x64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:call :emitFallback cpp:regs cpp:build (gen:offsetof :NativeContext.executeGETGLOBAL) (uint-val pc)))]))
+
+(define (lower-fallback-setglobal pc ra k)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executeSETGLOBAL) (uint-val pc)))]
+    [:x64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:call :emitFallback cpp:regs cpp:build (gen:offsetof :NativeContext.executeSETGLOBAL) (uint-val pc)))]))
+
+(define (lower-fallback-gettableks pc ra rb k)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field rb :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executeGETTABLEKS) (uint-val pc)))]
+    [:x64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field rb :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:call :emitFallback cpp:regs cpp:build (gen:offsetof :NativeContext.executeGETTABLEKS) (uint-val pc)))]))
+
+(define (lower-fallback-settableks pc ra rb k)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field rb :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executeSETTABLEKS) (uint-val pc)))]
+    [:x64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field rb :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:call :emitFallback cpp:regs cpp:build (gen:offsetof :NativeContext.executeSETTABLEKS) (uint-val pc)))]))
+
+(define (lower-fallback-namecall pc ra rb k)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field rb :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executeNAMECALL) (uint-val pc)))]
+    [:x64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field rb :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:call :emitFallback cpp:regs cpp:build (gen:offsetof :NativeContext.executeNAMECALL) (uint-val pc)))]))
+
+(define (lower-fallback-prepvarargs pc numparams)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field numparams :kind) (gen:enum :IrOpKind :Constant)))
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executePREPVARARGS) (uint-val pc)))]
+    [:x64
+      (gen:seq
+        (gen:assert (gen:== (gen:field numparams :kind) (gen:enum :IrOpKind :Constant)))
+        (gen:call :emitFallback cpp:regs cpp:build (gen:offsetof :NativeContext.executePREPVARARGS) (uint-val pc)))]))
+
+(define (lower-fallback-getvarargs pc ra count)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field count :kind) (gen:enum :IrOpKind :Constant)))
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:if (gen:== (int-val count) (gen:name :LUA_MULTRET))
+          (gen:block
+            (gen:call :emitAddOffset cpp:build (a64:reg :x1) (a64:reg :rCode) (gen:* (uint-val pc) (gen:sizeof "Instruction")))
+            (gen:build :mov (a64:reg :x2) (a64:reg :rBase))
+            (gen:build :mov (a64:reg :w3) (gen:call :vmRegOp ra))
+            (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.executeGETVARARGSMultRet)))
+            (gen:build :blr (a64:reg :x4))
+            (gen:call :emitUpdateBase cpp:build))
+          (gen:block
+            (gen:build :mov (a64:reg :x1) (a64:reg :rBase))
+            (gen:build :mov (a64:reg :w2) (gen:call :vmRegOp ra))
+            (gen:build :mov (a64:reg :w3) (int-val count))
+            (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.executeGETVARARGSConst)))
+            (gen:build :blr (a64:reg :x4)))))]
+    [:x64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field count :kind) (gen:enum :IrOpKind :Constant)))
+        (gen:if (gen:== (int-val count) (gen:name :LUA_MULTRET))
+          (gen:block
+            (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build)])
+              (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+              (gen:let ([reg (gen:method call-wrap :suggestNextArgumentRegister (gen:enum :SizeX64 :qword))])
+                (gen:build :mov reg (gen:name :sCode))
+                (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (gen:index (gen:name :addr) (gen:+ reg (gen:* (uint-val pc) (gen:sizeof "Instruction")))))
+                (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rBase))
+                (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (gen:call :vmRegOp ra))
+                (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.executeGETVARARGSMultRet))))
+                (gen:call :emitUpdateBase cpp:build))))
+          (gen:block
+            (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build)])
+              (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+              (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rBase))
+              (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (gen:call :vmRegOp ra))
+              (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (int-val count))
+              (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.executeGETVARARGSConst))))))))]))
+
+(define (lower-fallback-dupclosure pc ra k)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executeDUPCLOSURE) (uint-val pc)))]
+    [:x64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field k :kind) (gen:enum :IrOpKind :VmConst)))
+        (gen:call :emitFallback cpp:regs cpp:build (gen:offsetof :NativeContext.executeDUPCLOSURE) (uint-val pc)))]))
+
+(define (lower-fallback-forgprep pc ra loop)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executeFORGPREP) (uint-val pc))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of loop) cpp:next))]
+    [:x64
+      (gen:seq
+        (gen:call :emitFallback cpp:regs cpp:build (gen:offsetof :NativeContext.executeFORGPREP) (uint-val pc))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of loop) cpp:next))]))
+
+(define (lower-fallback-newobject pc ra rb form count)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field rb :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executeNEWOBJECT) (uint-val pc)))]
+    [:x64
+      (gen:seq
+        (gen:call :emitFallback cpp:regs cpp:build (gen:offsetof :NativeContext.executeNEWOBJECT) (uint-val pc)))]))
+
+(define (lower-fallback-newclassmember pc ra rb)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:assert (gen:== (gen:field ra :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:assert (gen:== (gen:field rb :kind) (gen:enum :IrOpKind :VmReg)))
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:call :emitFallback cpp:build (gen:offsetof :NativeContext.executeNEWCLASSMEMBER) (uint-val pc)))]
+    [:x64
+      (gen:seq
+        (gen:call :emitFallback cpp:regs cpp:build (gen:offsetof :NativeContext.executeNEWCLASSMEMBER) (uint-val pc)))]))

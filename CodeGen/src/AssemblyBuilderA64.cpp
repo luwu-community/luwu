@@ -762,6 +762,8 @@ void AssemblyBuilderA64::fmov(RegisterA64 dst, RegisterA64 src)
         placeR1("fmov", dst, src, 0b00'11110'00'1'0000'00'10000);
     else if (dst.kind == KindA64::s && src.kind == KindA64::w)
         placeR1("fmov", dst, src, 0b00'11110'00'1'00'111'000000);
+    else if (dst.kind == KindA64::w && src.kind == KindA64::s)
+        placeR1("fmov", dst, src, 0b00'11110'00'1'00'110'000000);
     else
         CODEGEN_ASSERT(!"Unsupported fmov kind");
 }
@@ -1149,6 +1151,19 @@ void AssemblyBuilderA64::frintm(RegisterA64 dst, RegisterA64 src)
         placeR1("frintm", dst, src, 0b000'11110'01'1'001'010'10000);
     else
         placeR1("frintm", dst, src, 0b000'11110'00'1'001'010'10000);
+}
+
+void AssemblyBuilderA64::frintz(RegisterA64 dst, RegisterA64 src)
+{
+    CODEGEN_ASSERT(dst.kind == src.kind);
+    CODEGEN_ASSERT(dst.kind == KindA64::d || dst.kind == KindA64::s || dst.kind == KindA64::q);
+
+    if (dst.kind == KindA64::q)
+        placeR1("frintz", dst, src, 0b010'01110'10'1'0000'11001'10);
+    else if (dst.kind == KindA64::d)
+        placeR1("frintz", dst, src, 0b000'11110'01'1'001'011'10000);
+    else
+        placeR1("frintz", dst, src, 0b000'11110'00'1'001'011'10000);
 }
 
 void AssemblyBuilderA64::frintp(RegisterA64 dst, RegisterA64 src)

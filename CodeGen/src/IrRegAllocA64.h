@@ -65,6 +65,7 @@ struct IrRegAllocA64
 
     // Spills all live registers that outlive current instruction; all allocated registers are assumed to be undefined
     size_t spill(uint32_t index, std::initializer_list<RegisterA64> live = {});
+    size_t spill(uint32_t index, const RegisterA64* live, size_t liveCount);
 
     // Restores registers starting from the offset returned by spill(); all spills will be restored to the original registers
     void restore(size_t start);

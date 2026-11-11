@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Luau/IrData.h"
+#include "Luau/generated/IrCmdInfo.h"
 #include "Luau/CodeGenOptions.h"
 
 #include <string>
@@ -17,7 +18,6 @@ namespace CodeGen
 struct CfgInfo;
 
 const char* getTagName(uint8_t tag);
-const char* getCmdName(IrCmd cmd);
 const char* getBlockKindName(IrBlockKind kind);
 const char* getValueKindName(IrValueKind kind);
 const char* getConversionCmdSuffix(IrCmd conversionCmd);

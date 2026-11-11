@@ -1,0 +1,122 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-get-arr-addr table idx)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list table)))
+        (gen:build :ldr (result-reg) (a64:mem (reg-op table) (gen:offsetof :LuaTable.array)))
+        (gen:if (gen:== (gen:field idx :kind) (gen:enum :IrOpKind :Inst))
+          (gen:block
+            (gen:build :add (result-reg) (result-reg) (reg-op idx) (gen:name :kTValueSizeLog2)))
+          (gen:if (gen:== (gen:field idx :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:if (gen:== (int-val idx) 0)
+                (gen:block
+                  (gen:seq))
+                (gen:if (gen:<= (gen:* (int-val idx) (gen:sizeof "TValue")) (gen:name :AssemblyBuilderA64::kMaxImmediate))
+                  (gen:block
+                    (gen:build :add (result-reg) (result-reg) (gen:cast "uint16_t" (gen:* (int-val idx) (gen:sizeof "TValue")))))
+                  (gen:block
+                    (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))])
+                      (gen:build :mov temp (gen:* (int-val idx) (gen:sizeof "TValue")))
+                      (gen:build :add (result-reg) (result-reg) temp))))))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]
+    [:x64
+      (gen:seq
+        (gen:if (gen:== (gen:field idx :kind) (gen:enum :IrOpKind :Inst))
+          (gen:block
+            (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list idx)))
+            (gen:if (gen:!= (gen:call :dwordReg (result-reg)) (reg-op idx))
+              (gen:block
+                (gen:build :mov (gen:call :dwordReg (result-reg)) (reg-op idx))))
+            (gen:build :shl (gen:call :dwordReg (result-reg)) (gen:name :kTValueSizeLog2))
+            (gen:build :add (result-reg) (gen:index (gen:name :qword) (gen:+ (reg-op table) (gen:offsetof :LuaTable.array)))))
+          (gen:if (gen:== (gen:field idx :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :qword) cpp:index (gen:init-list table)))
+              (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (reg-op table) (gen:offsetof :LuaTable.array))))
+              (gen:if (gen:!= (int-val idx) 0)
+                (gen:block
+                  (gen:build :lea (result-reg) (gen:index (gen:name :addr) (gen:+ (result-reg) (gen:* (int-val idx) (gen:sizeof "TValue"))))))))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]))
+
+(define (lower-get-slot-node-addr table pc c)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list table)))
+        (gen:let ([temp1 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :x))]
+                  [temp1w (gen:call :castReg (gen:enum :KindA64 :w) temp1)]
+                  [temp2 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                  [temp2x (gen:call :castReg (gen:enum :KindA64 :x) temp2)])
+          (gen:if (gen:<= (uint-val pc) (gen:name :AddressA64::kMaxOffset))
+            (gen:block
+              (gen:build :ldr temp1w (a64:mem (a64:reg :rCode) (gen:* (uint-val pc) (gen:sizeof "Instruction")))))
+            (gen:block
+              (gen:build :mov temp1 (gen:* (uint-val pc) (gen:sizeof "Instruction")))
+              (gen:build :ldr temp1w (a64:mem (a64:reg :rCode) temp1))))
+          (gen:assert (gen:== (gen:name :kOffsetOfInstructionC) 3))
+          (gen:build :ldrb temp2 (a64:mem (reg-op table) (gen:offsetof :LuaTable.nodemask8)))
+          (gen:build :and_ temp2 temp2 temp1w (gen:- 24))
+          (gen:build :ldr (result-reg) (a64:mem (reg-op table) (gen:offsetof :LuaTable.node)))
+          (gen:build :add (result-reg) (result-reg) temp2x (gen:name :kLuaNodeSizeLog2))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :qword) cpp:index))
+        (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+          (gen:call :getTableNodeAtCachedSlot cpp:build (x64:scoped-reg tmp) (result-reg) (reg-op table) (uint-val pc))))]))
+
+(define (lower-get-hash-node-addr table hash)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :x) cpp:index (gen:init-list table)))
+        (gen:let ([temp1 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                  [temp2 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                  [temp2x (gen:call :castReg (gen:enum :KindA64 :x) temp2)])
+          (gen:build :mov temp1 (gen:- 1))
+          (gen:build :ldrb temp2 (a64:mem (reg-op table) (gen:offsetof :LuaTable.lsizenode)))
+          (gen:build :lsl temp1 temp1 temp2)
+          (gen:build :mov temp2 (uint-val hash))
+          (gen:build :bic temp2 temp2 temp1)
+          (gen:build :ldr (result-reg) (a64:mem (reg-op table) (gen:offsetof :LuaTable.node)))
+          (gen:build :add (result-reg) (result-reg) temp2x (gen:name :kLuaNodeSizeLog2))))]
+    [:x64
+      (gen:seq
+        (gen:let ([shift-tmp (gen:call "ScopedRegX64" cpp:regs)])
+          (gen:method shift-tmp :take (x64:reg :rcx))
+          (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :qword) cpp:index))
+          (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+            (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (reg-op table) (gen:offsetof :LuaTable.node))))
+            (gen:build :mov (gen:call :dwordReg (x64:scoped-reg tmp)) 1)
+            (gen:build :mov (gen:call :byteReg (x64:scoped-reg shift-tmp)) (gen:index (gen:name :byte) (gen:+ (reg-op table) (gen:offsetof :LuaTable.lsizenode))))
+            (gen:build :shl (gen:call :dwordReg (x64:scoped-reg tmp)) (gen:call :byteReg (x64:scoped-reg shift-tmp)))
+            (gen:build :dec (gen:call :dwordReg (x64:scoped-reg tmp)))
+            (gen:build :and_ (gen:call :dwordReg (x64:scoped-reg tmp)) (uint-val hash))
+            (gen:build :shl (x64:scoped-reg tmp) (gen:name :kLuaNodeSizeLog2))
+            (gen:build :add (result-reg) (x64:scoped-reg tmp)))))]))
+
+(define (lower-try-num-to-index num fail)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :w) cpp:index))
+        (gen:let ([temp1 (gen:method cpp:lowering :tempDouble num)])
+          (gen:if (gen:!= (gen:& (gen:field cpp:build :features) (gen:enum :FeaturesA64 :Feature_JSCVT)) 0)
+            (gen:block
+              (gen:build :fjcvtzs (result-reg) temp1)
+              (gen:build :b (gen:enum :ConditionA64 :NotEqual) (label-of fail)))
+            (gen:block
+              (gen:let ([temp2 (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :d))])
+                (gen:build :fcvtzs (result-reg) temp1)
+                (gen:build :scvtf temp2 (result-reg))
+                (gen:build :fcmp temp1 temp2)
+                (gen:build :b (gen:enum :ConditionA64 :NotEqual) (label-of fail)))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :dword) cpp:index))
+        (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+          (gen:call :convertNumberToIndexOrJump cpp:build (x64:scoped-reg tmp) (reg-op num) (result-reg) (label-of fail))))]))

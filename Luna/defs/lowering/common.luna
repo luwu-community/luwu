@@ -1,0 +1,19 @@
+;; Thin bindings used by explicitly authored target sequences.
+
+~ Register assigned to the current instruction. Allocation is explicit in each lowering.
+(define (result-reg)
+  (gen:typed (if (target? :a64) :RegisterA64 :RegisterX64)
+    (gen:field cpp:inst (if (target? :a64) :regA64 :regX64))))
+
+~ Resolves an IR operand's register at this exact point in the emitted sequence.
+(define (reg-op operand)
+  (gen:typed (if (target? :a64) :RegisterA64 :RegisterX64)
+    (gen:method cpp:lowering :regOp operand)))
+
+;; X64 fallback table access needs an addressable constant TValue. The builder
+;; copies its bytes immediately, so the C++ local need not outlive this sequence.
+(define (number-tvalue-operand value)
+  (gen:let ([number (:type :TValue) (gen:init-list)])
+    (gen:value
+      (gen:call :setnvalue (gen:address-of number) value)
+      (gen:build :bytes (gen:address-of number) (gen:sizeof :TValue)))))

@@ -214,6 +214,20 @@ inline void jumpIfTruthy(AssemblyBuilderX64& build, int ri, Label& target, Label
 
 void jumpOnNumberCmp(AssemblyBuilderX64& build, RegisterX64 tmp, OperandX64 lhs, OperandX64 rhs, IrCondition cond, Label& label, bool floatPrecision);
 
+// AVX compare predicate for a float IrCondition: the plain conditions are false on NaN (ordered), the Not* ones true
+uint8_t getCmpPredicateFP(IrCondition cond);
+
+// A register move of either kind (omitted when the registers are the same)
+inline void emitMoveX64(AssemblyBuilderX64& build, RegisterX64 dst, RegisterX64 src)
+{
+    if (dst == src)
+        return;
+    if (dst.size == SizeX64::xmmword)
+        build.vmovaps(dst, src);
+    else
+        build.mov(dst, src);
+}
+
 ConditionX64 getConditionInt(IrCondition cond);
 
 void getTableNodeAtCachedSlot(AssemblyBuilderX64& build, RegisterX64 tmp, RegisterX64 node, RegisterX64 table, int pcpos);
@@ -235,6 +249,14 @@ void emitExit(AssemblyBuilderX64& build, bool continueInVm);
 void emitUpdateBase(AssemblyBuilderX64& build);
 void emitInterrupt(AssemblyBuilderX64& build);
 void emitFallback(IrRegAllocX64& regs, AssemblyBuilderX64& build, int offset, int pcpos);
+void emitClassMemberAuthX64(
+    AssemblyBuilderX64& build,
+    IrRegAllocX64& regs,
+    RegisterX64 classReg,
+    RegisterX64 slotReg,
+    RegisterX64 writtenObject,
+    Label& mismatch
+);
 
 void emitUpdatePcForExit(AssemblyBuilderX64& build);
 
