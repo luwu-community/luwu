@@ -1180,6 +1180,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typecheck_class_method_field_access")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "typecheck_class_annotations")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::LuwuClasses, true},

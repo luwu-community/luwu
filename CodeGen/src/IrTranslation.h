@@ -62,6 +62,7 @@ void translateInstForNPrep(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstForNLoop(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstForGPrepNext(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstForGPrepInext(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstForGPrep(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstForGLoopIpairs(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstGetTableN(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstSetTableN(IrBuilder& build, const Instruction* pc, int pcpos);

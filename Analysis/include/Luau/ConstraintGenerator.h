@@ -296,6 +296,10 @@ private:
 
         // Sometimes the type we're discriminating against is implicitly nil.
         bool shouldAppendNilType = false;
+
+        // Luwu: the tests on properties that refine this def: the path from it to the property (`enc` for `h` in
+        // `not h.enc`, empty for `h.enc` itself) and the property's discriminant (`falsy`)
+        std::vector<std::pair<std::string, TypeId>> propertyTests;
     };
 
     using RefinementContext = InsertionOrderedMap<DefId, RefinementPartition>;
@@ -317,6 +321,15 @@ private:
         std::vector<ConstraintV>* constraints
     );
     void applyRefinements(const ScopePtr& scope, Location location, RefinementId refinement);
+    void forgetPropertyTests(const ScopePtr& scope, AstExpr* assigned, AstExpr* table, const std::string& name);
+    TypeId refineUnlessContradicted(
+        const ScopePtr& scope,
+        Location location,
+        DefId def,
+        TypeId unrefined,
+        TypeId refined,
+        const RefinementPartition& partition
+    );
 
     LUAU_NOINLINE void prototypeTypeDefinitions(const ScopePtr& scope, AstStatBlock* block);
 

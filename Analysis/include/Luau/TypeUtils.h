@@ -126,6 +126,13 @@ std::vector<TypeId> reduceUnion(const std::vector<TypeId>& types);
  */
 TypeId stripNil(NotNull<BuiltinTypes> builtinTypes, TypeArena& arena, TypeId ty);
 
+// Luwu: `v:m(...)` where `v` is a union whose members each have their own `m`: one function that takes any of their
+// `self`s, arguments every `m` accepts (each parameter after `self` is the intersection of theirs), and returns any of
+// their results. Sound only for a method call, where each member's `m` only ever gets that member as `self`; `local f =
+// v.m; f(v)` could pair one member's `m` with another member. Nothing when the `m`s have generics, or different numbers of
+// parameters or returns.
+std::optional<TypeId> mergeUnionMethods(NotNull<BuiltinTypes> builtinTypes, NotNull<TypeArena> arena, TypeId fn);
+
 struct ErrorSuppression
 {
     enum Value

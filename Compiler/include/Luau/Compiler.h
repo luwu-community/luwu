@@ -72,6 +72,9 @@ struct CompileOptions
 
     // null-terminated array of library functions that should not be compiled into a built-in fastcall ("name" "lib.name")
     const char* const* disabledBuiltins = nullptr;
+
+    // Luwu: the language the source is written in, a Luau::Language (see lua_CompileOptions::language)
+    int language = 0;
 };
 
 class CompileError : public std::exception

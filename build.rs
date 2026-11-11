@@ -169,26 +169,38 @@ fn main() {
         eprintln!("\nLuwu CLI binaries: {}\\luwu.exe, {0}\\luwu-analyze.exe\n", root.display());
     } else {
         let build_dir = out_dir.join("build");
-        let total = count_make_compile_steps(&manifest_dir, &build_dir, &jobs);
 
-        let mut child = Command::new("make")
-            .current_dir(&manifest_dir)
-            .arg(format!("-j{jobs}"))
-            .arg(format!("BUILD={}", build_dir.display()))
-            // Warnings are errors, as in CI. This has to match tests/luwu.rs: both share one build
-            // directory and make won't recompile an object just because the flags changed.
-            .arg("werror=1")
-            .arg("luwu")
-            .arg("luwu-analyze")
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("failed to invoke make");
+        // Luwu: a source that changes while make runs (a branch switch, an `integration` rebuild) leaves objects compiled
+        // from both versions, and the binaries link them together. So build until make has nothing left to compile.
+        const MAX_BUILDS: usize = 3;
+        let mut total = count_make_compile_steps(&manifest_dir, &build_dir, &jobs);
+        for build in 1..=MAX_BUILDS {
+            let mut child = Command::new("make")
+                .current_dir(&manifest_dir)
+                .arg(format!("-j{jobs}"))
+                .arg(format!("BUILD={}", build_dir.display()))
+                // Warnings are errors, as in CI. This has to match tests/luwu.rs: both share one build
+                // directory, and the Makefile rebuilds every object when the flags change.
+                .arg("werror=1")
+                .arg("luwu")
+                .arg("luwu-analyze")
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("failed to invoke make");
 
-        let mut progress = Progress::new("Compiling", total);
-        stream_and_report(&mut child, &mut progress, extract_make_source);
-        let status = child.wait().expect("failed to wait on make");
-        progress.finish(if status.success() { "Build finished" } else { "Build failed" });
-        assert!(status.success(), "make build failed");
+            let mut progress = Progress::new("Compiling", total);
+            stream_and_report(&mut child, &mut progress, extract_make_source);
+            let status = child.wait().expect("failed to wait on make");
+            progress.finish(if status.success() { "Build finished" } else { "Build failed" });
+            assert!(status.success(), "make build failed");
+
+            total = count_make_compile_steps(&manifest_dir, &build_dir, &jobs);
+            if total == 0 {
+                break;
+            }
+            assert!(build < MAX_BUILDS, "sources kept changing while make ran; stop editing them and build again");
+            eprintln!("\n{total} sources changed while make ran; compiling them again\n");
+        }
 
         // `make ... luwu luwu-analyze` already symlinks these to the repo
         // root itself (see the Makefile's `luwu`/`luwu-analyze` targets).

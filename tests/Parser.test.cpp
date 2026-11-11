@@ -2207,12 +2207,74 @@ TEST_CASE_FIXTURE(Fixture, "default_arguments_are_gated")
 {
     {
         ScopedFastFlag sff{FFlag::LuwuDefaultArguments, false};
-        matchParseError("local function foo(x = 1) end", "Expected ')' (to close '(' at column 19), got '='");
+        // Luwu: upstream reports "Expected ')' (to close '(' at column 19), got '='"
+        matchParseError(
+            "local function foo(x = 1) end",
+            "attempt to use disabled Luwu feature default arguments; enable via FFlag 'LuwuDefaultArguments'",
+            Location{{0, 21}, {0, 22}}
+        );
     }
 
     ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     parse("local function foo(x = 1) end");
+}
+
+TEST_CASE_FIXTURE(Fixture, "luwu_features_are_errors_in_a_luau_module")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    ParseOptions runtime;
+    runtime.language = Language::Luau;
+
+    // A runtime gets one line, even with the feature's FFlag on
+    ParseResult result = tryParse("local function f(x = 1) end", runtime);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: default arguments");
+
+    result = tryParse("class Point end", runtime);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: classes");
+
+    // Static analysis also gets the ways out
+    ParseOptions analysis = runtime;
+    analysis.analysisErrors = true;
+    result = tryParse("local function f(x = 1) end", analysis);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Default arguments are a Luwu-only feature.\n"
+        "\n"
+        "Help (Luwu-only feature):\n"
+        "  • Consider migrating to a .luwu module if this environment supports Luwu\n"
+        "  • Alternatively, you may transpile Luwu code to Luau code via the 'ast' library; see Luwu documentation on existing "
+        "transpilers and usage"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "disabled_luwu_features_say_which_fflag_enables_them")
+{
+    ScopedFastFlag sff{FFlag::LuwuClasses, false};
+
+    ParseOptions analysis;
+    analysis.analysisErrors = true;
+
+    ParseResult result = tryParse("class Point end", analysis);
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Classes are currently disabled.\n"
+        "\n"
+        "Help (Disabled Luwu feature):\n"
+        "  • If this environment supports classes at runtime, enable the 'LuwuClasses' FFlag in your editor's configuration options"
+    );
+
+    result = tryParse("class Point end");
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use disabled Luwu feature classes; enable via FFlag 'LuwuClasses'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_luwu_only")
@@ -5331,6 +5393,49 @@ TEST_CASE_FIXTURE(Fixture, "classes_nested_and_repeated")
     CHECK_EQ("Cannot declare class 'Foo' inside another statement or expression", result.errors[0].getMessage());
 }
 
+// Luwu: `obj:` with no method name yet reports only the missing name, not the missing arguments too. Found by the
+// typewriter tests.
+TEST_CASE_FIXTURE(Fixture, "method_call_missing_its_name_reports_one_error")
+{
+    ParseResult result = tryParse(R"(
+local n = obj:
+local unrelated = 1
+)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected identifier when parsing method name, got 'local'");
+}
+
+// Luwu: a block missing its `then` or `do` names its own keyword in the "Expected 'end'" error, not the token that stood
+// where the `then` or `do` should have been. Found by the typewriter tests.
+TEST_CASE_FIXTURE(Fixture, "block_missing_then_or_do_names_its_keyword_in_the_end_error")
+{
+    for (const char* source : {"if x\nlocal y = 1\n", "while x\nlocal y = 1\n", "for i = 1, 2\nlocal y = 1\n", "for k in t\nlocal y = 1\n"})
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(result.errors.size(), 2);
+        CHECK(result.errors[1].getMessage().find("to close 'local'") == std::string::npos);
+    }
+
+    ParseResult result = tryParse("if x\nlocal y = 1\n");
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[1].getMessage(), "Expected 'end' (to close 'if' at line 1), got <eof>");
+}
+
+// Luwu Classes (rfcs/classes): a class with a syntax error reports only that, not its members' access specifiers.
+// Found by the typewriter tests: `private` with no name after it yet also reported every other parameter as needing one.
+TEST_CASE_FIXTURE(Fixture, "half_typed_class_reports_only_its_syntax_error")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    ParseResult result = tryParse(R"(
+class Cat(public name: string, private)
+end
+)");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Fields are not allowed to be named 'private'");
+}
+
 TEST_CASE_FIXTURE(Fixture, "non_exported_class")
 {
     ScopedFastFlag _{FFlag::LuwuClasses, true};
@@ -5903,12 +6008,14 @@ local a = b:do
     )");
     CHECK_EQ(2, result.errors.size());
 
+    // Luwu: only the missing method name; upstream also reports the missing arguments at the same `do`
     result = tryParse(R"(
 local b
 local a = b:
 do end
     )");
-    CHECK_EQ(2, result.errors.size());
+    REQUIRE_EQ(1, result.errors.size());
+    CHECK_EQ(result.errors[0].getMessage(), "Expected identifier when parsing method name, got 'do'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "recover_type_index_name_keyword")

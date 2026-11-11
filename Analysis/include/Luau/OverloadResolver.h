@@ -171,6 +171,16 @@ private:
         NotNull<DenseHashSet<TypeId>> uniqueTypes
     );
 
+    void emplaceArgumentMismatch(
+        ErrorVec& errors,
+        Location location,
+        const ModuleName& moduleName,
+        const SubtypingReasoning& reason,
+        const std::optional<TypeOrPack>& wanted,
+        const std::optional<TypeOrPack>& given,
+        bool onNone
+    ) const;
+
     void maybeEmplaceError(
         ErrorVec* errors,
         Location argLocation,

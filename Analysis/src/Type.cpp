@@ -302,6 +302,16 @@ std::optional<TypeId> getMetatable(TypeId type, NotNull<BuiltinTypes> builtinTyp
         LUAU_ASSERT(ptv && ptv->metatable);
         return ptv->metatable;
     }
+    else if (const IntersectionType* itv = get<IntersectionType>(type))
+    {
+        // Luwu: a value of an intersection is a value of every part, so a string part makes it a string: `string & ~"p"`,
+        // what `x ~= "p"` leaves of a string
+        for (TypeId part : itv)
+        {
+            if (isString(part))
+                return getMetatable(part, builtinTypes);
+        }
+    }
 
     return std::nullopt;
 }

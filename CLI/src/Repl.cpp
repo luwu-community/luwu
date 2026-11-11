@@ -618,7 +618,9 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
 
     std::string chunkname = "@" + normalizePath(name);
 
-    std::string bytecode = Luau::compile(*source, copts());
+    Luau::CompileOptions options = copts();
+    options.language = int(languageOfPath(name));
+    std::string bytecode = Luau::compile(*source, options);
     int status = 0;
 
     if (luau_load(L, chunkname.c_str(), bytecode.data(), bytecode.size(), 0) == 0)
