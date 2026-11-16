@@ -324,6 +324,74 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_unfinished_match_has_no_unused_subject")
         CHECK_NE(warning.code, LintWarning::Code_LocalUnused);
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `return match` whose arms all `return` their values gets a
+// warning on each arm's `return`, which the one before `match` makes unnecessary
+TEST_CASE_FIXTURE(BuiltinsFixture, "returns_in_arms_of_a_returned_match_are_unnecessary")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    LintResult result = lint(R"(
+local function pick(n: number): string
+    return match n
+        case is 1 then
+            return "one"
+        case m when m < 10 then
+            return "small"
+        else
+            return "big"
+end
+local function mixed(n: number): string
+    return match n
+        case is 1 then
+            return "one"
+        else "other"
+end
+print(pick(1), mixed(1))
+)");
+
+    std::vector<const LintWarning*> unnecessary;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code == LintWarning::Code_UnreachableCode)
+            unnecessary.push_back(&warning);
+    }
+
+    REQUIRE_EQ(unnecessary.size(), 3);
+    const unsigned lines[] = {4, 6, 8};
+    for (size_t i = 0; i < unnecessary.size(); ++i)
+    {
+        CHECK_EQ(unnecessary[i]->text, "These returns are unnecessary because of the 'return' on line 3");
+        CHECK_EQ(unnecessary[i]->location.begin.line, lines[i]);
+        CHECK_EQ(unnecessary[i]->location.end.column - unnecessary[i]->location.begin.column, 6);
+    }
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match`'s `else` arm can leave like a `then` arm
+TEST_CASE_FIXTURE(Fixture, "a_match_else_arm_can_leave")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    for (const char* source : {
+             "local function f(n: number)\n    return match n\n        case is 1 then 'one'\n        else return 'other'\nend\n",
+             "for i = 1, 3 do\n    local s = match i\n        case is 1 then 'one'\n        else continue\n    print(s)\nend\n",
+             "for i = 1, 3 do\n    local s = match i\n        case is 1 then 'one'\n        else break\n    print(s)\nend\n",
+             "local s = do\n    local t = match 1\n        case is 1 then 'one'\n        else give 'early'\n    give t\nprint(s)\n",
+         })
+    {
+        INFO(source);
+        ParseResult result = tryParse(source);
+        CHECK_EQ(result.errors.size(), 0);
+    }
+}
+
 // Valid Luau that looks like the new syntax parses as before in a Luau file
 TEST_CASE_FIXTURE(Fixture, "match_and_is_stay_names_in_luau_files")
 {

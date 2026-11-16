@@ -1755,8 +1755,11 @@ private:
         {
             return Continue;
         }
-        else if (node->is<AstStatReturn>())
+        else if (AstStatReturn* stat = node->as<AstStatReturn>())
         {
+            if (!silent)
+                checkReturnOfReturns(stat);
+
             return Return;
         }
         else if (node->is<AstStatGive>())
@@ -1805,6 +1808,63 @@ private:
             return "Move the 'else' branch's statements after its 'end' in place of this line";
 
         return nullptr;
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): adds to `returns` the `return` of each branch of `expr`
+    // (`then return v`, `else return v`), through the arms of a `match` and the branches of an if-else expression. False
+    // when a branch doesn't return.
+    static bool collectBranchReturns(AstExpr* expr, std::vector<AstStatReturn*>& returns)
+    {
+        expr = withoutGroups(expr);
+        if (AstExprIfElse* ifElse = expr->as<AstExprIfElse>())
+            return collectBranchReturns(ifElse->trueExpr, returns) && collectBranchReturns(ifElse->falseExpr, returns);
+
+        AstExprDo* block = expr->as<AstExprDo>();
+        if (!block || block->body->body.size == 0)
+            return false;
+        AstStat* last = block->body->body.data[block->body->body.size - 1];
+
+        // a `match`, or its last `case name` arm: the block gives the arms' value last
+        if (block->fromMatch)
+        {
+            AstStatGive* give = last->as<AstStatGive>();
+            return give && collectBranchReturns(give->value, returns);
+        }
+
+        AstStatReturn* ret = last->as<AstStatReturn>();
+        if (!block->shorthand || block->body->body.size != 1 || !ret)
+            return false;
+        returns.push_back(ret);
+        return true;
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `return match x case 1 then return a ...`, where every
+    // branch returns, so the `return`s in the branches can go
+    void checkReturnOfReturns(AstStatReturn* stat)
+    {
+        if (stat->list.size != 1)
+            return;
+
+        AstExpr* value = withoutGroups(stat->list.data[0]);
+        if (!value->is<AstExprDo>() && !value->is<AstExprIfElse>())
+            return;
+
+        std::vector<AstStatReturn*> returns;
+        if (!collectBranchReturns(value, returns))
+            return;
+
+        for (AstStatReturn* ret : returns)
+        {
+            const char* keyword = "return";
+            Location location(ret->location.begin, Position{ret->location.begin.line, ret->location.begin.column + unsigned(strlen(keyword))});
+            emitWarning(
+                *context,
+                LintWarning::Code_UnreachableCode,
+                location,
+                "These returns are unnecessary because of the 'return' on line %d",
+                stat->location.begin.line + 1
+            );
+        }
     }
 
     // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): how a `do` expression that never ends normally leaves: a break, a

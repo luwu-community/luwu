@@ -8872,11 +8872,18 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
 
     AstExpr* result = nullptr;
     std::optional<Location> elseLocation;
+    bool elseContinue = false;
     if (lexer.current().type == Lexeme::ReservedElse)
     {
         elseLocation = lexer.current().location;
         nextLexeme();
-        result = parseExpr();
+
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `else return v`, `else break`, `else continue`, as after `then`
+        elseContinue = orContinueFollows();
+        if (orLeaveFollows() || elseContinue)
+            result = parseOrLeave("else");
+        else
+            result = parseExpr();
     }
     else if (endsInCatchAll)
     {
@@ -8927,6 +8934,8 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
         node->luwuOnly = true;
         if (arm.thenContinue)
             recordOrContinue(&node->trueExpr, "then");
+        if (elseContinue && i + 1 == arms.size())
+            recordOrContinue(&node->falseExpr, "else");
         result = node;
     }
 
@@ -8934,6 +8943,9 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
 
     Location location(start, result->location);
     AstStatGive* give = allocator.alloc<AstStatGive>(result->location, result);
+    // with no `case` arms, the `else` value is the one given
+    if (elseContinue && arms.empty())
+        recordOrContinue(&give->value, "else");
     AstStatBlock* body = allocator.alloc<AstStatBlock>(
         location, declaration ? copy<AstStat*>({declaration, give}) : copy<AstStat*>({give})
     );
