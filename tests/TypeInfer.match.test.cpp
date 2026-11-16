@@ -181,9 +181,10 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
                  "const LIMIT = 2\nlocal x = 1\nlocal y = match x\n    case LIMIT then 'limit'\n    else 'other'\n",
                  "Did you mean 'case is LIMIT'? A name after 'case' binds the value, and 'LIMIT' is already a const",
              },
+             // a `match` statement ends with `end`
              Case{
                  "local x = 1\nmatch x\n    case is 1 then print('one')\n    case is 2 then print('two')\nprint(x)\n",
-                 "'match' only supports expressions, use an 'if' statement instead",
+                 "Expected 'end' (to close 'then' at line 4), got <eof>",
              },
              Case{
                  "local x = 1\nlocal y = match x\n    c\nprint(y)\n",
@@ -491,8 +492,97 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_match_expressions")
         "local label = match const n = maybe()\n    case is nil then \"none\"\n    case is number when n > 0 then \"positive\"\n    else \"other\"",
         kTypewriterAfter
     );
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "match const n = maybe()\n    case is nil then\n        print(\"none\")\n    when n > 0 then\n        print(n + 1)\n    else\n        print(n)\nend",
+        kTypewriterAfter
+    );
     checkTypewriting(*this, kTypewriterBefore, "local n = maybe()\nlocal ok = n is number", kTypewriterAfter);
     checkTypewriting(*this, kTypewriterBefore, "local n = maybe()\nlocal ok = n is 1 | 2 | nil", kTypewriterAfter);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match` statement narrows the subject in each arm,
+// and after it when the arms it skipped leave
+TEST_CASE_FIXTURE(BuiltinsFixture, "match_statements_narrow_like_if_chains")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function f(v: number | string | nil): number
+            match v
+                case is nil then
+                    return 0
+                case is string then
+                    local s: string = v
+                    return #s
+            end
+            local n: number = v
+            return n
+        end
+
+        local function g(v: number?): string
+            match const n = v
+                case is nil then
+                    return "none"
+                when n > 0 then
+                    local positive: number = n
+                    return tostring(positive)
+                else
+                    return "other"
+            end
+        end
+
+        print(f(1), g(1))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a function whose last statement is a `match` with no
+// `else` doesn't return on every path
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_match_statement_without_else_can_fall_through")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function f(v: number): string
+            match v
+                case is 1 then
+                    return "one"
+                case is 2 then
+                    return "two"
+            end
+        end
+
+        local function g(v: number): string
+            match v
+                case is 1 then
+                    return "one"
+                else
+                    return "other"
+            end
+        end
+
+        print(f(1), g(1))
+    )");
+
+    // one on `f`'s `end`, and one on the `match` that lets a value through
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    for (const TypeError& error : result.errors)
+        CHECK(get<FunctionExitsWithoutReturning>(error));
+    CHECK_EQ(result.errors[1].location.begin.line, 3);
+    CHECK(toString(result.errors[1]).find("This 'match' has no 'else'") != std::string::npos);
 }
 
 // A guard statement can start with a type test, and narrows after it like the written-out test

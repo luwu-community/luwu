@@ -1,4 +1,5 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+#include "Luau/AstQuery.h"
 #include "Luau/Autocomplete.h"
 #include "Luau/AutocompleteTypes.h"
 #include "Luau/BuiltinDefinitions.h"
@@ -18,6 +19,7 @@
 LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDestructuring)
@@ -6392,6 +6394,83 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
 
     auto ac = autocomplete('1');
     CHECK(ac.entryMap.count("Animator"));
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): every query an editor's hover, docs and autocomplete
+// make answers at every position of `match` expressions and statements, finished or still being typed, without crashing
+TEST_CASE_FIXTURE(ACFixture, "every_query_at_every_position_of_a_match")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    const char* sources[] = {
+        R"(local function roll(): number
+    return 4
+end
+local function f(v: number | string | nil): number
+    const label = match const n = roll()
+        case is 1 then "one"
+        case m is number when m > 10 when const half = m / 2 then tostring(half)
+        when n < 0 then
+            return 0
+        else "other"
+    match v
+        case is nil then
+            return 0
+        case s is string then
+            print(s, label)
+        when v == 3 then
+            print("three")
+    end
+    match v
+        case is 1 then print(1)
+        else
+            print(v)
+    end
+    return 1
+end
+print(f(1))
+)",
+        "local x = 1\nmatch x\n    case is 1 then\n        print(x)\n",
+        "local x = 1\nmatch const n = x\n    when n\n",
+        "local x = 1\nlocal y = match x\n    case is\n",
+        "local x = 1\nlocal y = match x\n    case is 1 then\n",
+        "match\n",
+        "local x = 1\nmatch x\nend\n",
+    };
+
+    for (const char* source : sources)
+    {
+        INFO(source);
+        check(source);
+
+        ModulePtr module = getMainModule(/* forAutocomplete= */ true);
+        SourceModule* sourceModule = getMainSourceModule();
+        REQUIRE(module);
+        REQUIRE(sourceModule);
+
+        std::vector<std::string_view> lines = split(source, '\n');
+        for (unsigned line = 0; line < lines.size(); ++line)
+        {
+            for (unsigned column = 0; column <= lines[line].size(); ++column)
+            {
+                Position position{line, column};
+                findAstAncestryOfPosition(*sourceModule, position);
+                findAncestryAtPositionForAutocomplete(*sourceModule, position);
+                findExprOrLocalAtPosition(*sourceModule, position);
+                findNodeAtPosition(*sourceModule, position);
+                findScopeAtPosition(*module, position);
+                findBindingAtPosition(*module, *sourceModule, position);
+                Luau::findTypeAtPosition(*module, *sourceModule, position);
+                Luau::findExpectedTypeAtPosition(*module, *sourceModule, position);
+                getDocumentationSymbolAtPosition(*sourceModule, *module, position);
+                autocomplete(line, column);
+            }
+        }
+    }
 }
 
 // The value is a call, so its type is a pack (astTypePacks), not a single type

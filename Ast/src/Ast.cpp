@@ -637,6 +637,67 @@ void AstExprIfElse::visit(AstVisitor* visitor)
     }
 }
 
+void AstMatchArm::visitCondition(AstVisitor* visitor) const
+{
+    if (condition)
+        visitIfCondition(condition, clauses, visitor);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the header's declaration (or the tested local), then
+// each arm's condition and value or block
+static void visitMatch(const AstMatchSubject& subject, const AstArray<AstMatchArm>& arms, AstVisitor* visitor)
+{
+    if (subject.declaration)
+        subject.declaration->visit(visitor);
+    else
+        subject.value->visit(visitor);
+
+    for (const AstMatchArm& arm : arms)
+    {
+        arm.visitCondition(visitor);
+        if (arm.value)
+            arm.value->visit(visitor);
+        if (arm.body)
+            arm.body->visit(visitor);
+    }
+}
+
+bool matchesEveryValue(const AstArray<AstMatchArm>& arms)
+{
+    if (arms.size == 0)
+        return false;
+
+    const AstMatchArm& last = arms.data[arms.size - 1];
+    return last.kind == AstMatchArm::Else || last.catchAll;
+}
+
+AstExprMatch::AstExprMatch(const Location& location, const AstMatchSubject& subject, const AstArray<AstMatchArm>& arms)
+    : AstExpr(ClassIndex(), location)
+    , subject(subject)
+    , arms(arms)
+{
+}
+
+void AstExprMatch::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        visitMatch(subject, arms, visitor);
+}
+
+AstStatMatch::AstStatMatch(const Location& location, const AstMatchSubject& subject, const AstArray<AstMatchArm>& arms, bool hasEnd)
+    : AstStat(ClassIndex(), location)
+    , subject(subject)
+    , arms(arms)
+    , hasEnd(hasEnd)
+{
+}
+
+void AstStatMatch::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        visitMatch(subject, arms, visitor);
+}
+
 bool AstExprDo::alwaysLeaves() const
 {
     if (shorthand)

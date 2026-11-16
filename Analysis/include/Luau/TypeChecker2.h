@@ -244,6 +244,8 @@ private:
     Scope* findInnermostScope(Location location) const;
     void visit(AstStat* stat);
     void visit(AstStatIf* ifStatement);
+    void visit(const AstMatchSubject& subject);
+    void visit(AstStatMatch* match);
     void visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses);
     void visit(AstStatWhile* whileStatement);
     void visit(AstStatRepeat* repeatStatement);
@@ -345,6 +347,7 @@ private:
     void visit(AstExprTypeAssertion* expr);
     void visit(AstExprIfElse* expr);
     void visit(AstExprDo* expr);
+    void visit(AstExprMatch* expr);
     void visit(AstExprTableComprehension* expr);
     void visit(AstExprInterpString* interpString);
     void visit(AstExprInstantiate* explicitTypeInstantiation);

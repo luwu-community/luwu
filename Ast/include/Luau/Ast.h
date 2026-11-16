@@ -1892,13 +1892,92 @@ public:
     // (see Parser::parseOrLeave). It has no value of its own: a `give` in it gives from the enclosing `do` expression.
     bool shorthand = false;
 
-    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): parsed from a `match` expression (see Parser::parseMatchExpr). The
-    // body is the subject's `local` and a `give` of an if-else expression with one arm per `case`, none of them written as statements.
-    bool fromMatch = false;
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): made by `x is A | B` to read a value that isn't a
+    // local once (see Parser::makePatternTest). The body is that value's hidden `local` and a `give` of the test.
+    bool fromTypeTest = false;
 
     // Does every path leave it with `return`, `break` or `continue`, so it never has a value? True for the shorthand,
     // and for a `do` expression with no `give` of its own.
     bool alwaysLeaves() const;
+};
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the value a `match` tests, from its header
+struct AstMatchSubject
+{
+    // The value as written after `match` (or after `=` in `match const name = value`)
+    AstExpr* value = nullptr;
+    // The local each arm tests: the header's name, a hidden local holding the value, or the value itself when it's a
+    // local and the header doesn't name it (so each arm narrows that local)
+    AstLocal* local = nullptr;
+    // The declaration of `local` that runs before the arms, or null when `value` is a local tested as itself
+    AstStatLocal* declaration = nullptr;
+};
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): one arm of a `match`
+struct AstMatchArm
+{
+    enum Kind
+    {
+        // `case [name] [is pattern] [when ...] then`
+        Case,
+        // `when condition [when ...] then`, an arm with no pattern
+        When,
+        // `else`
+        Else,
+    };
+
+    Kind kind = Case;
+    // The `case`, `when` or `else` that opens the arm
+    Location keywordLocation;
+    // The arm's test of the subject followed by its `when` chain, in AstStatIf's convention: `condition` is the first
+    // clause's expression and `clauses` is the whole chain when it has more than one clause. Null for `else`.
+    AstExpr* condition = nullptr;
+    AstArray<AstIfClause> clauses{nullptr, 0};
+    std::optional<Location> thenLocation;
+    // `case name` with no pattern and no `when`, which matches every value like `else`
+    bool catchAll = false;
+    // The arm's value in an AstExprMatch, null in an AstStatMatch
+    AstExpr* value = nullptr;
+    // The arm's block in an AstStatMatch, null in an AstExprMatch
+    AstStatBlock* body = nullptr;
+
+    // Visits the condition (see AstExprIfElse::visitCondition); nothing for `else`
+    void visitCondition(AstVisitor* visitor) const;
+};
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): does the last of `arms` match every value? It does when it's
+// an `else`, or a `case name` with no `when`.
+bool matchesEveryValue(const AstArray<AstMatchArm>& arms);
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match subject case ... then value ... else value`. The
+// arms are tested in order and the first that matches gives the value. The last arm is an `else` or a catch-all.
+class AstExprMatch : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprMatch)
+
+    AstExprMatch(const Location& location, const AstMatchSubject& subject, const AstArray<AstMatchArm>& arms);
+
+    void visit(AstVisitor* visitor) override;
+
+    AstMatchSubject subject;
+    AstArray<AstMatchArm> arms;
+};
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match subject case ... then block ... end`. The first arm
+// that matches runs its block; with no `else`, a subject no arm matches runs nothing.
+class AstStatMatch : public AstStat
+{
+public:
+    LUAU_RTTI(AstStatMatch)
+
+    AstStatMatch(const Location& location, const AstMatchSubject& subject, const AstArray<AstMatchArm>& arms, bool hasEnd);
+
+    void visit(AstVisitor* visitor) override;
+
+    AstMatchSubject subject;
+    AstArray<AstMatchArm> arms;
+    bool hasEnd;
 };
 
 // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `expr` without the parentheses around it.
@@ -2184,6 +2263,10 @@ public:
     {
         return visit(static_cast<AstExpr*>(node));
     }
+    virtual bool visit(class AstExprMatch* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
     virtual bool visit(class AstExprInterpString* node)
     {
         return visit(static_cast<AstExpr*>(node));
@@ -2211,6 +2294,10 @@ public:
         return visit(static_cast<AstStat*>(node));
     }
     virtual bool visit(class AstStatIf* node)
+    {
+        return visit(static_cast<AstStat*>(node));
+    }
+    virtual bool visit(class AstStatMatch* node)
     {
         return visit(static_cast<AstStat*>(node));
     }

@@ -547,7 +547,16 @@ private:
     bool literalPatternFollows();
     std::optional<AstExpr*> parseNothingValue();
     bool matchExpressionFollows();
-    AstExpr* parseMatchExpr(bool inStatement = false);
+    AstExpr* parseMatchExpr();
+    AstStat* parseMatchStat();
+    bool matchStatementFollows();
+    bool matchArmFollows();
+    AstMatchSubject parseMatchSubject(const Location& start);
+    AstMatchArm parseMatchArmHead(AstLocal* subject);
+    AstExpr* parseMatchArmValue(const char* introducer, bool& isContinue);
+    AstStatBlock* parseMatchArmBlock();
+    bool skipArmBeingTyped(bool report, const char* message);
+    void recordArmContinues(AstArray<AstMatchArm>& arms, const std::vector<size_t>& continues);
     bool parseCaseHead(AstLocal* subject, std::vector<AstIfClause>& chain);
     bool checkCaseBindingName(const Name& name);
     AstExpr* parseMatchPattern(AstLocal* subject);
@@ -993,6 +1002,10 @@ private:
     std::string scratchData;
 
     CstNodeMap cstNodeMap;
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the next block is a `match` statement's arm, which ends where
+    // the next arm starts (see parseMatchArmBlock)
+    bool nextBlockIsMatchArm = false;
 
     // Luwu Declare Statements (rfcs/declare-statements.md): whether the block being parsed may contain `declare`
     // (the top level, or a `do` block there), and what the next block parseBlockNoScope starts should allow.

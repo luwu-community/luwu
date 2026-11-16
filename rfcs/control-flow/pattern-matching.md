@@ -9,7 +9,7 @@ FFlag: DebugLuwuMatchExpressions (destructuring patterns also need LuwuDestructu
 ## Summary
 
 The `is`, `is not` and `implements` operators test a value's type, class or trait, and can destructure it in the same test. A `match` expression picks
-a value by testing one subject against a list of patterns.
+a value by testing one subject against a list of patterns, and a `match` statement runs the block of the first pattern that matches.
 
 ```luwu
 if event is Click {x, y} then
@@ -140,7 +140,8 @@ print(match foo()
 ```
 
 - The header is `match <subject>`, or `match const <name> = <subject>` (also `local`) to name the subject in every arm and guard.
-- Each arm is `case [<name>] [is <pattern>] [when <condition> ...] then <value>`. The pattern is the pattern of `is` (and `is not` and `implements`),
+- Each arm is `case [<name>] [is <pattern>] [when <condition> ...] then <value>`, or `when <condition> [when <condition> ...] then <value>`
+  for an arm that only tests conditions. With a named subject, `when n > 10 then` reads better than `case n when n > 10 then`. The pattern is the pattern of `is` (and `is not` and `implements`),
   literals included: `case is "p" | "patch"`, `case is Point {x, y}`, `case implements Named`. A pattern always comes after `is`, as it does
   outside a `match`. A `when` chain after the pattern works as in [If Local](if-local.md).
 - A name before `is` is always a new binding. It holds the subject's value, narrowed by the pattern, for the arm's guards and value:
@@ -153,9 +154,32 @@ print(match foo()
 - An arm's value can leave instead, as an if-else expression's can: `case is nil then return`, `case is 0 then continue`.
 - Names are introduced only by `case` names, class and bundle patterns, `when const` guards and the subject. A named subject is narrowed in each
   arm.
-- `match` has no `end` and no statement form. In statement position it's an error that suggests an `if` statement.
+- A `match` expression has no `end`: it ends at its last arm's value.
 
-A `match` behaves as a `do` expression that binds the subject and gives an if-else expression with one arm per `case`.
+The arms are tested in order, like the branches of an if-else chain, and the subject is evaluated once before the first arm.
+
+### `match` statements
+
+In statement position, `match` takes the same header and arms, but each arm's `then` (or `else`) is followed by a block, and the `match`
+ends with `end`:
+
+```luwu
+match const event = next_event()
+    case is Click {x, y} then
+        press(x, y)
+    case is Key {code} when code == ESCAPE then
+        return
+    when event == nil then
+        print("no events")
+    else
+        log(event)
+end
+```
+
+- A statement arm's block ends where the next `case`, `when` or `else` starts. Inside an arm's block, a statement can't start with `case`
+  or `when` unless it assigns, indexes or calls a variable with that name.
+- `else` is optional. When no arm matches, the statement runs nothing, like an `if` with no `else`.
+- The arms are indented one level under `match`, and the `end` lines up with `match`.
 
 ### Type system
 
@@ -176,7 +200,9 @@ A tag after `is` or `is not` colors as part of the keyword, and in `is Cat(name)
 
 The operators and `match` are Luwu-only and parse only in Luwu files. In Luau files, `local a = x is = 1` and `local a = match b = 1` keep their
 Luau meaning. In Luwu files `is`, `implements`, `case` and `match` stay valid names wherever the operator reading can't apply: `match` is a match
-expression only when a `case` arm follows its subject, and `is` starts a type test only before a name, `not`, a literal or `function`.
+expression only when a `case` or `when` arm follows its subject, and `is` starts a type test only before a name, `not`, a literal or
+`function`. A statement that starts with `match` followed on the same line by anything but an assignment, an index or call arguments
+is a `match` statement.
 
 ## Drawbacks
 
@@ -189,8 +215,8 @@ A pattern whose alternatives bind names tests the alternatives again for each na
 
 ## Alternatives
 
-- **A `match` statement** with indented arms and `end` was designed and dropped. With patterns in `if` conditions it adds nothing, and every layout
-  had a cost: a hanging last arm, an `end` that doesn't line up with its opener, or `end end`.
+- **Other layouts for the `match` statement.** Every layout has a cost: with the arms indented under `match`, the last arm hangs without its
+  own `end`; an `end` per arm, or `end end`, is noise. The statement uses one `end` at the `match`'s indentation.
 - **`or` between alternatives** (`case "p" or "patch"`) is already an expression that evaluates to `"p"`.
 - **Patterns without `is`** (`case "p" | "patch"`, `case .(name)`). A bare `.(name)` reads as a bundle now that `.(a, b)` builds one, and
   patterns that only worked after `case` made `match` a second pattern language next to `is`.

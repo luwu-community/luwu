@@ -555,6 +555,10 @@ bool TypeChecker2::hasBreak(AstStat* node)
         return false;
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+    if (node->is<AstStatMatch>())
+        return Luau::hasBreak(node);
+
     return false;
 }
 
@@ -594,6 +598,10 @@ const AstStat* TypeChecker2::getFallthrough(const AstStat* node)
         else
             return stat;
     }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+    if (node->is<AstStatMatch>())
+        return Luau::getFallthrough(node);
 
     if (node->is<AstStatReturn>())
         return nullptr;
@@ -799,6 +807,8 @@ void TypeChecker2::visit(AstStat* stat)
         return visit(s);
     else if (auto s = stat->as<AstStatIf>())
         return visit(s);
+    else if (auto s = stat->as<AstStatMatch>())
+        return visit(s);
     else if (auto s = stat->as<AstStatWhile>())
         return visit(s);
     else if (auto s = stat->as<AstStatRepeat>())
@@ -891,6 +901,28 @@ void TypeChecker2::visit(AstStatIf* ifStatement)
         visit(ifStatement->elsebody);
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+void TypeChecker2::visit(const AstMatchSubject& subject)
+{
+    if (subject.declaration)
+        visit(subject.declaration);
+    else
+        visit(subject.value, ValueContext::RValue);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+void TypeChecker2::visit(AstStatMatch* match)
+{
+    visit(match->subject);
+
+    for (const AstMatchArm& arm : match->arms)
+    {
+        if (arm.condition)
+            visitIfCondition(arm.condition, arm.clauses);
+        visit(arm.body);
+    }
+}
+
 void TypeChecker2::visit(AstStatWhile* whileStatement)
 {
     if (whileStatement->clauses.size != 0)
@@ -916,6 +948,8 @@ void TypeChecker2::visit(AstStatContinue*) {}
 enum class FallthroughKind
 {
     IfWithoutElse,
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match` statement with no `else` or catch-all arm
+    MatchWithoutElse,
     Loop,
     CodePath,
 };
@@ -934,6 +968,8 @@ static FallthroughSite classifyFallthrough(const AstStat* fallthrough)
     constexpr unsigned whileKeywordLength = 5;
     constexpr unsigned repeatKeywordLength = 6;
 
+    constexpr unsigned matchKeywordLength = 5;
+
     if (const AstStatIf* ifStat = fallthrough->as<AstStatIf>(); ifStat && !ifStat->elsebody)
         return {FallthroughKind::IfWithoutElse, ifStat->ifLocation};
 
@@ -941,6 +977,9 @@ static FallthroughSite classifyFallthrough(const AstStat* fallthrough)
     {
         return Location{statement.begin, Position{statement.begin.line, statement.begin.column + length}};
     };
+
+    if (fallthrough->is<AstStatMatch>())
+        return {FallthroughKind::MatchWithoutElse, keyword(fallthrough->location, matchKeywordLength)};
 
     if (fallthrough->is<AstStatWhile>())
         return {FallthroughKind::Loop, keyword(fallthrough->location, whileKeywordLength)};
@@ -959,6 +998,8 @@ static std::string describeFallthrough(FallthroughKind kind, TypePackId expected
     {
     case FallthroughKind::IfWithoutElse:
         return "This 'if' has no 'else', so the code path that skips it doesn't " + returns;
+    case FallthroughKind::MatchWithoutElse:
+        return "This 'match' has no 'else', so the code path where no arm matches doesn't " + returns;
     case FallthroughKind::Loop:
         return "This loop may not run, so the code path that skips it doesn't " + returns;
     case FallthroughKind::CodePath:
@@ -3100,6 +3141,8 @@ void TypeChecker2::visit(AstExpr* expr, ValueContext context)
         return visit(e);
     else if (auto e = expr->as<AstExprDo>())
         return visit(e);
+    else if (auto e = expr->as<AstExprMatch>())
+        return visit(e);
     else if (auto e = expr->as<AstExprTableComprehension>())
         return visit(e);
     else if (auto e = expr->as<AstExprInstantiate>())
@@ -5199,6 +5242,20 @@ void TypeChecker2::visit(AstExprIfElse* expr)
     visit(expr->falseExpr, ValueContext::RValue);
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+void TypeChecker2::visit(AstExprMatch* expr)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+    visit(expr->subject);
+
+    for (const AstMatchArm& arm : expr->arms)
+    {
+        if (arm.condition)
+            visitIfCondition(arm.condition, arm.clauses);
+        visit(arm.value, ValueContext::RValue);
+    }
+}
+
 // Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
 void TypeChecker2::visit(AstExprDo* expr)
 {
@@ -7159,6 +7216,14 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
     {
         bool passes = testPotentialLiteralIsSubtype(ifElse->trueExpr, expectedType);
         passes &= testPotentialLiteralIsSubtype(ifElse->falseExpr, expectedType);
+        return passes;
+    }
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): each arm's value, like an if-else expression's branches
+    else if (auto match = expr->as<AstExprMatch>())
+    {
+        bool passes = true;
+        for (const AstMatchArm& arm : match->arms)
+            passes &= testPotentialLiteralIsSubtype(arm.value, expectedType);
         return passes;
     }
     else if (auto binExpr = expr->as<AstExprBinary>(); binExpr && binExpr->op == AstExprBinary::Or)

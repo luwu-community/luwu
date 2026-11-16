@@ -536,6 +536,26 @@ void addLeaveConditions(AstStatExpr* statement, std::vector<Condition>& conditio
     conditions.push_back({guard->left, true});
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): in an arm's value or block, the arm's condition holds and
+// the arms before it failed. A `when` chain only says that one of its clauses failed, so it adds nothing.
+void addMatchArmConditions(const AstArray<AstMatchArm>& arms, AstNode* child, std::vector<Condition>& conditions)
+{
+    std::vector<Condition> failed;
+    for (const AstMatchArm& arm : arms)
+    {
+        if (child == arm.value || child == arm.body)
+        {
+            conditions.insert(conditions.end(), failed.begin(), failed.end());
+            if (arm.condition)
+                conditions.push_back({arm.condition, true});
+            return;
+        }
+
+        if (arm.condition && arm.clauses.size == 0)
+            failed.push_back({arm.condition, false});
+    }
+}
+
 // The conditions that hold or fail at the end of `ancestry`: the branches around it, the left of an `and`/`or` it's on the
 // right of, and the guards that leave, the `assert`s and the `or return` statements before it in each block around it
 std::vector<Condition> conditionsAt(const std::vector<AstNode*>& ancestry)
@@ -559,6 +579,14 @@ std::vector<Condition> conditionsAt(const std::vector<AstNode*>& ancestry)
                 conditions.push_back({ifElse->condition, true});
             else if (child == ifElse->falseExpr)
                 conditions.push_back({ifElse->condition, false});
+        }
+        else if (AstExprMatch* match = parent->as<AstExprMatch>())
+        {
+            addMatchArmConditions(match->arms, child, conditions);
+        }
+        else if (AstStatMatch* match = parent->as<AstStatMatch>())
+        {
+            addMatchArmConditions(match->arms, child, conditions);
         }
         else if (AstStatWhile* whileStatement = parent->as<AstStatWhile>(); whileStatement && child == whileStatement->body)
         {

@@ -860,6 +860,15 @@ struct Printer
             writer.keyword("if");
             visualizeElseIfExpr(*a);
         }
+        else if (const auto& a = expr.as<AstExprMatch>())
+        {
+            visualizeMatchSubject(a->subject);
+            for (const AstMatchArm& arm : a->arms)
+            {
+                visualizeMatchArmHead(arm);
+                visualize(*arm.value);
+            }
+        }
         else if (const auto& a = expr.as<AstExprDo>())
         {
             // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the shorthand (`x or return v`) is just its statement
@@ -1122,6 +1131,20 @@ struct Printer
         {
             writer.keyword("if");
             visualizeElseIf(*a);
+        }
+        else if (const auto& a = program.as<AstStatMatch>())
+        {
+            visualizeMatchSubject(a->subject);
+            for (const AstMatchArm& arm : a->arms)
+            {
+                visualizeMatchArmHead(arm);
+                visualizeBlock(*arm.body);
+            }
+            if (a->hasEnd)
+            {
+                advanceBefore(a->location.end, 3);
+                writer.keyword("end");
+            }
         }
         else if (const auto& a = program.as<AstStatWhile>())
         {
@@ -2029,6 +2052,59 @@ struct Printer
 
         visualizeIfCondition(*guard->condition, guard->clauses);
         return guard->thenbody;
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match value` or `match const name = value`
+    void visualizeMatchSubject(const AstMatchSubject& subject)
+    {
+        writer.keyword("match");
+
+        AstStatLocal* declaration = subject.declaration;
+        bool named = declaration && declaration->keywordLocation.has_value();
+        if (!named)
+        {
+            visualize(*subject.value);
+            return;
+        }
+
+        writer.keyword(declaration->vars.data[0]->isConst ? "const" : "local");
+        writer.identifier(declaration->vars.data[0]->name.value);
+        writer.symbol("=");
+        visualize(*subject.value);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): an arm up to its value or block. A `case` arm's pattern
+    // is stored as the test it means, so every arm with a condition prints as a `when` chain, which tests the same thing.
+    void visualizeMatchArmHead(const AstMatchArm& arm)
+    {
+        advance(arm.keywordLocation.begin);
+        if (arm.kind == AstMatchArm::Else)
+        {
+            writer.keyword("else");
+            return;
+        }
+
+        writer.keyword("when");
+        if (arm.clauses.size == 0)
+        {
+            visualize(*arm.condition);
+        }
+        else
+        {
+            for (size_t i = 0; i < arm.clauses.size; ++i)
+            {
+                const AstIfClause& clause = arm.clauses.data[i];
+                if (i != 0)
+                    writer.keyword("when");
+
+                if (clause.declaration)
+                    visualize(static_cast<AstStat&>(*clause.declaration));
+                else
+                    visualize(*clause.expr);
+            }
+        }
+
+        writer.keyword("then");
     }
 
     // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain prints clause by clause. A binding prints through its

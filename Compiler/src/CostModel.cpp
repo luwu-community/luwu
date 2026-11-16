@@ -239,6 +239,23 @@ struct CostVisitor : AstVisitor
             // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the cost of the block, modeled like any statements
             return modelStatement(expr->body);
         }
+        else if (AstExprMatch* expr = node->as<AstExprMatch>())
+        {
+            // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the subject, then each arm like an if-else
+            // expression's branch: every clause is evaluated and tested
+            Cost cost = model(expr->subject.value);
+            for (const AstMatchArm& arm : expr->arms)
+            {
+                if (arm.condition)
+                    cost += model(arm.condition) + 2;
+                for (size_t i = 1; i < arm.clauses.size; ++i)
+                    cost += model(arm.clauses.data[i].expr) + 1;
+
+                cost += model(arm.value);
+            }
+
+            return cost;
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");
@@ -331,6 +348,14 @@ struct CostVisitor : AstVisitor
 
         loop(node->body, condition);
         return false;
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a test and a jump per arm. The visitor goes on to model
+    // the subject and the arms.
+    bool visit(AstStatMatch* node) override
+    {
+        result += 2 * node->arms.size;
+        return true;
     }
 
     bool visit(AstStatIf* node) override

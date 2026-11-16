@@ -623,6 +623,13 @@ struct TableMutationTracker : AstVisitor
                 markEscaped(ifElse->trueExpr); // recurse through true branch
                 expr = ifElse->falseExpr;      // continue loop with false branch
             }
+            // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): any arm's value can be the result
+            else if (AstExprMatch* match = expr->as<AstExprMatch>())
+            {
+                for (const AstMatchArm& arm : match->arms)
+                    markEscaped(arm.value);
+                return;
+            }
             else if (AstExprBinary* bin = expr->as<AstExprBinary>())
             {
                 if (bin->op == AstExprBinary::And || bin->op == AstExprBinary::Or)
@@ -1097,6 +1104,25 @@ struct ConstantVisitor : AstVisitor
             // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the block's statements are folded like any other, and the
             // expression itself is never a constant
             expr->body->visit(this);
+        }
+        else if (AstExprMatch* expr = node->as<AstExprMatch>())
+        {
+            // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the parts are folded like any other, and the
+            // `match` itself is never a constant
+            if (expr->subject.declaration)
+                expr->subject.declaration->visit(this);
+            else
+                analyze(expr->subject.value);
+
+            for (const AstMatchArm& arm : expr->arms)
+            {
+                if (arm.clauses.size != 0)
+                    analyzeIfClauses(arm.clauses);
+                else if (arm.condition)
+                    analyze(arm.condition);
+
+                analyze(arm.value);
+            }
         }
         else
         {

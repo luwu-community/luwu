@@ -170,6 +170,12 @@ private:
 
     ControlFlow visit(AstStat* s);
     ControlFlow visit(AstStatIf* i);
+    ControlFlow joinBranches(DfgScope* thenScope, DfgScope* elseScope, ControlFlow thencf, ControlFlow elsecf);
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+    ControlFlow visit(AstStatMatch* m);
+    void visitMatchSubject(const AstMatchSubject& subject);
+    ControlFlow visitMatchArmBlocks(const AstArray<AstMatchArm>& arms, size_t index);
+    void visitMatchArmValues(const AstArray<AstMatchArm>& arms, size_t index);
     ControlFlow visit(AstStatWhile* w);
     ControlFlow visit(AstStatRepeat* r);
     ControlFlow visit(AstStatBreak* b);
@@ -213,6 +219,7 @@ private:
     DataFlowResult visitExpr(AstExprTypeAssertion* t);
     DataFlowResult visitExpr(AstExprIfElse* i);
     DataFlowResult visitExpr(AstExprDo* d);
+    DataFlowResult visitExpr(AstExprMatch* m);
     DataFlowResult visitExpr(AstExprTableComprehension* c);
     DataFlowResult visitExpr(AstExprInterpString* i);
     DataFlowResult visitExpr(AstExprInstantiate* i);

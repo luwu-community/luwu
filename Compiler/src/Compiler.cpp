@@ -6063,6 +6063,129 @@ struct Compiler
             bytecode.emitABC(LOP_CLOSEUPVALS, uint8_t(closeReg), 0, 0);
     }
 
+    // Luwu Classes (rfcs/classes): compiles `thenBody` with `compileBranch`. The branch of `if class.isinstance(x, C)` knows
+    // `x` is exactly a `C`, so `x.field` can use GETOBJECTMEMBER (see provenIsinstanceClass).
+    template<typename CompileBranch>
+    void compileProvenBranch(AstExpr* condition, AstStat* thenBody, CompileBranch&& compileBranch)
+    {
+        AstLocal* provenLocal = nullptr;
+        AstStatClass* previousProvenClass = nullptr;
+
+        if (AstStatClass* decl = matchIsinstanceProvenLocal(condition, thenBody, provenLocal))
+        {
+            AstStatClass** existing = isinstanceProvenLocals.find(provenLocal);
+            previousProvenClass = existing ? *existing : nullptr;
+            isinstanceProvenLocals[provenLocal] = decl;
+        }
+
+        compileBranch();
+
+        // DenseHashMap has no erase; a null entry means "not proven"
+        if (provenLocal)
+            isinstanceProvenLocals[provenLocal] = previousProvenClass;
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the header's declaration of the subject, if it has one.
+    // The caller pops the subject's local.
+    void compileMatchSubject(const AstMatchSubject& subject)
+    {
+        if (subject.declaration)
+            compileStat(subject.declaration);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): one arm with a condition. A failing test jumps past the
+    // arm; a passing one runs `compileBranch` and jumps to the end of the `match` (into `endJumps`) unless the arm's block
+    // always leaves. A statement arm with a plain `class.isinstance` test proves the class in its block, as an `if` does.
+    template<typename CompileBranch>
+    void compileMatchArm(AstNode* match, const AstMatchArm& arm, std::vector<size_t>& endJumps, CompileBranch&& compileBranch)
+    {
+        LUAU_ASSERT(arm.condition);
+        AstNode* branch = arm.value ? static_cast<AstNode*>(arm.value) : arm.body;
+        bool terminates = arm.body && alwaysTerminates(arm.body);
+
+        std::vector<size_t> elseJump;
+        int closeReg = -1;
+        if (arm.clauses.size != 0)
+        {
+            closeReg = compileGuardedBranch(arm.clauses, elseJump, branch, /* loopHeader */ false, /* closeAfter */ !terminates, compileBranch);
+        }
+        else
+        {
+            compileConditionValue(arm.condition, nullptr, elseJump, false);
+            if (arm.body)
+                compileProvenBranch(arm.condition, arm.body, compileBranch);
+            else
+                compileBranch();
+        }
+
+        if (!terminates)
+        {
+            endJumps.push_back(bytecode.emitLabel());
+            bytecode.emitAD(LOP_JUMP, 0, 0);
+        }
+
+        size_t elseLabel = bytecode.emitLabel();
+        emitClauseFailureClose(closeReg);
+        patchJumps(match, elseJump, elseLabel);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the subject, then the arms as an if-else chain whose
+    // branches compile into `target`. Only a `match` already reported for its missing `else` can match no arm; it gives
+    // nil.
+    void compileExprMatch(AstExprMatch* expr, uint8_t target, bool targetTemp)
+    {
+        RegScope rs(this);
+        size_t oldLocals = localStack.size();
+        compileMatchSubject(expr->subject);
+
+        std::vector<size_t> endJumps;
+        for (const AstMatchArm& arm : expr->arms)
+        {
+            auto compileValue = [&]()
+            {
+                compileExpr(arm.value, target, targetTemp);
+            };
+
+            if (arm.condition)
+                compileMatchArm(expr, arm, endJumps, compileValue);
+            else
+                compileValue();
+        }
+
+        if (!matchesEveryValue(expr->arms))
+            bytecode.emitABC(LOP_LOADNIL, target, 0, 0);
+
+        patchJumps(expr, endJumps, bytecode.emitLabel());
+        closeLocals(oldLocals);
+        popLocals(oldLocals);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the subject, then the arms as an `if` chain
+    void compileStatMatch(AstStatMatch* stat)
+    {
+        RegScope rs(this);
+        size_t oldLocals = localStack.size();
+        compileMatchSubject(stat->subject);
+
+        std::vector<size_t> endJumps;
+        for (const AstMatchArm& arm : stat->arms)
+        {
+            auto compileBody = [&]()
+            {
+                compileStat(arm.body);
+            };
+
+            if (arm.condition)
+                compileMatchArm(stat, arm, endJumps, compileBody);
+            else
+                compileBody();
+        }
+
+        patchJumps(stat, endJumps, bytecode.emitLabel());
+        closeLocals(oldLocals);
+        popLocals(oldLocals);
+    }
+
     // Luwu If Local (rfcs/control-flow/if-local.md)
     void compileExprIfElseClauses(AstExprIfElse* expr, uint8_t target, bool targetTemp)
     {
@@ -7335,6 +7458,10 @@ struct Compiler
         {
             compileExprDo(expr, target, targetTemp);
         }
+        else if (AstExprMatch* expr = node->as<AstExprMatch>())
+        {
+            compileExprMatch(expr, target, targetTemp);
+        }
         else if (AstExprTableComprehension* expr = node->as<AstExprTableComprehension>())
         {
             compileExprTableComprehension(expr, target, targetTemp);
@@ -7822,23 +7949,14 @@ struct Compiler
         std::vector<size_t> elseJump;
         compileConditionValue(stat->condition, nullptr, elseJump, false);
 
-        // Luwu Classes (rfcs/classes): the then-branch of `if class.isinstance(x, C)` knows `x` is exactly a
-        // `C`, so `x.field` can use GETOBJECTMEMBER (see provenIsinstanceClass).
-        AstLocal* provenLocal = nullptr;
-        AstStatClass* previousProvenClass = nullptr;
-
-        if (AstStatClass* decl = matchIsinstanceProvenLocal(stat->condition, stat->thenbody, provenLocal))
-        {
-            AstStatClass** existing = isinstanceProvenLocals.find(provenLocal);
-            previousProvenClass = existing ? *existing : nullptr;
-            isinstanceProvenLocals[provenLocal] = decl;
-        }
-
-        compileStat(stat->thenbody);
-
-        // DenseHashMap has no erase; a null entry means "not proven"
-        if (provenLocal)
-            isinstanceProvenLocals[provenLocal] = previousProvenClass;
+        compileProvenBranch(
+            stat->condition,
+            stat->thenbody,
+            [&]()
+            {
+                compileStat(stat->thenbody);
+            }
+        );
 
         if (stat->elsebody && elseJump.size() > 0)
         {
@@ -8858,6 +8976,10 @@ struct Compiler
         else if (AstStatIf* stat = node->as<AstStatIf>())
         {
             compileStatIf(stat);
+        }
+        else if (AstStatMatch* stat = node->as<AstStatMatch>())
+        {
+            compileStatMatch(stat);
         }
         else if (AstStatWhile* stat = node->as<AstStatWhile>())
         {

@@ -195,6 +195,14 @@ struct BidirectionalTypePusher
             return exprType;
         }
 
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): each arm's value, like an if-else expression's branches
+        if (auto match = expr->as<AstExprMatch>())
+        {
+            for (const AstMatchArm& arm : match->arms)
+                pushType(expectedType, arm.value);
+            return exprType;
+        }
+
         if (!isLiteral(expr))
             // NOTE: For now we aren't using the result of this function, so
             // just return the original expression type.

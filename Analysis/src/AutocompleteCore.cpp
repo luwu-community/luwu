@@ -1848,6 +1848,9 @@ static AutocompleteEntryMap autocompleteStatement(
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
         else if (AstStatClass* statClass = (*it)->as<AstStatClass>(); statClass && !statClass->hasEnd)
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+        else if (AstStatMatch* statMatch = (*it)->as<AstStatMatch>(); statMatch && !statMatch->hasEnd)
+            result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
         if (AstStatBlock* exprBlock = (*it)->as<AstStatBlock>(); exprBlock && !exprBlock->hasEnd)
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
     }

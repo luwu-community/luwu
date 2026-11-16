@@ -62,6 +62,21 @@ inline bool alwaysTerminates(const DenseHashMap<AstExpr*, Constant>& constants, 
         return stat->elsebody && alwaysTerminates(constants, stat->thenbody) && alwaysTerminates(constants, stat->elsebody);
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): every arm leaves, and some arm always matches
+    if (AstStatMatch* stat = node->as<AstStatMatch>())
+    {
+        if (!matchesEveryValue(stat->arms))
+            return false;
+
+        for (const AstMatchArm& arm : stat->arms)
+        {
+            if (!alwaysTerminates(constants, arm.body))
+                return false;
+        }
+
+        return true;
+    }
+
     return false;
 }
 

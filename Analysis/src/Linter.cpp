@@ -728,23 +728,14 @@ private:
     unsigned int lastLine;
     // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the line each `do` expression's block starts on
     DenseHashMap<const AstStatBlock*, unsigned int> doExprLines{nullptr};
-    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the blocks of `match` expressions, whose statements
-    // the parser makes from the header and the arms
-    DenseHashSet<const AstStatBlock*> matchBodies{nullptr};
-
     bool visit(AstExprDo* node) override
     {
         doExprLines[node->body] = node->location.begin.line;
-        if (node->fromMatch)
-            matchBodies.insert(node->body);
         return true;
     }
 
     bool visit(AstStatBlock* node) override
     {
-        if (matchBodies.contains(node))
-            return true;
-
         const unsigned int* doLine = doExprLines.find(node);
 
         for (size_t i = 1; i < node->body.size; ++i)
@@ -927,6 +918,39 @@ private:
         return false;
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match` expression's arms are part of the statement
+    // around it, each starting with its keyword
+    bool visit(AstExprMatch* node) override
+    {
+        checkStart(node->location);
+        node->subject.value->visit(this);
+
+        for (const AstMatchArm& arm : node->arms)
+        {
+            checkStart(arm.keywordLocation);
+            if (arm.condition)
+                visitCondition(arm.condition, arm.clauses);
+            arm.value->visit(this);
+        }
+
+        return false;
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match` statement's arms hold blocks, like an `if`'s
+    bool visit(AstStatMatch* node) override
+    {
+        node->subject.value->visit(this);
+
+        for (const AstMatchArm& arm : node->arms)
+        {
+            if (arm.condition)
+                visitCondition(arm.condition, arm.clauses);
+            arm.body->visit(this);
+        }
+
+        return false;
+    }
+
     bool visit(AstStatWhile* node) override
     {
         visitCondition(node->condition, node->clauses);
@@ -1040,19 +1064,19 @@ private:
     {
         visit(static_cast<AstExpr*>(node));
 
-        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match`'s subject and arms are parts of the
-        // statement around it, not statements
-        if (node->fromMatch)
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a type test's hidden local and the test it gives
+        // are parts of the statement around it, not statements
+        if (node->fromTypeTest)
         {
             for (AstStat* stmt : node->body->body)
             {
-                if (AstStatLocal* subject = stmt->as<AstStatLocal>())
+                if (AstStatLocal* hidden = stmt->as<AstStatLocal>())
                 {
-                    for (AstExpr* value : subject->values)
+                    for (AstExpr* value : hidden->values)
                         value->visit(this);
                 }
-                else if (AstStatGive* arms = stmt->as<AstStatGive>())
-                    arms->value->visit(this);
+                else if (AstStatGive* give = stmt->as<AstStatGive>())
+                    give->value->visit(this);
             }
 
             stack.back().lastLine = std::max(stack.back().lastLine, node->location.end.line);
@@ -1743,6 +1767,16 @@ private:
 
             return std::min(ifs, elses);
         }
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): merged like an `if` chain's branches. With no arm
+        // that matches every value, a value can skip them all.
+        else if (AstStatMatch* stat = node->as<AstStatMatch>())
+        {
+            Status arms = Error;
+            for (const AstMatchArm& arm : stat->arms)
+                arms = std::min(arms, analyze(arm.body));
+
+            return matchesEveryValue(stat->arms) ? arms : Unknown;
+        }
         else if (AstStatWhile* stat = node->as<AstStatWhile>())
         {
             analyze(stat->body);
@@ -1827,20 +1861,19 @@ private:
         if (AstExprIfElse* ifElse = expr->as<AstExprIfElse>())
             return collectBranchReturns(ifElse->trueExpr, returns) && collectBranchReturns(ifElse->falseExpr, returns);
 
-        AstExprDo* block = expr->as<AstExprDo>();
-        if (!block || block->body->body.size == 0)
-            return false;
-        AstStat* last = block->body->body.data[block->body->body.size - 1];
-
-        // a `match`, or its last `case name` arm: the block gives the arms' value last
-        if (block->fromMatch)
+        if (AstExprMatch* match = expr->as<AstExprMatch>())
         {
-            AstStatGive* give = last->as<AstStatGive>();
-            return give && collectBranchReturns(give->value, returns);
+            for (const AstMatchArm& arm : match->arms)
+            {
+                if (!collectBranchReturns(arm.value, returns))
+                    return false;
+            }
+            return true;
         }
 
-        AstStatReturn* ret = last->as<AstStatReturn>();
-        if (!block->shorthand || block->body->body.size != 1 || !ret)
+        AstExprDo* leave = asLeave(expr);
+        AstStatReturn* ret = leave && leave->body->body.size == 1 ? leave->body->body.data[0]->as<AstStatReturn>() : nullptr;
+        if (!ret)
             return false;
         returns.push_back(ret);
         return true;
@@ -1854,7 +1887,7 @@ private:
             return;
 
         AstExpr* value = withoutGroups(stat->list.data[0]);
-        if (!value->is<AstExprDo>() && !value->is<AstExprIfElse>())
+        if (!value->is<AstExprMatch>() && !value->is<AstExprIfElse>())
             return;
 
         std::vector<AstStatReturn*> returns;

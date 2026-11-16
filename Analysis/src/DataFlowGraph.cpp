@@ -434,6 +434,8 @@ ControlFlow DataFlowGraphBuilder::visit(AstStat* s)
         return visit(b);
     else if (auto i = s->as<AstStatIf>())
         return visit(i);
+    else if (auto m = s->as<AstStatMatch>())
+        return visit(m);
     else if (auto w = s->as<AstStatWhile>())
         return visit(w);
     else if (auto r = s->as<AstStatRepeat>())
@@ -529,6 +531,12 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatIf* i)
         elsecf = visit(i->elsebody);
     }
 
+    return joinBranches(thenScope, elseScope, thencf, elsecf);
+}
+
+// What the code after a two-way branch sees, and how the whole statement leaves
+ControlFlow DataFlowGraphBuilder::joinBranches(DfgScope* thenScope, DfgScope* elseScope, ControlFlow thencf, ControlFlow elsecf)
+{
     DfgScope* scope = currentScope();
     // If the control flow from the `if` or `else` block is non-linear,
     // then we should assume that the _other_ branch is the one taken.
@@ -545,6 +553,67 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatIf* i)
         return ControlFlow::Returns;
     else
         return ControlFlow::None;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the header's declaration of the subject, or the local the
+// arms test
+void DataFlowGraphBuilder::visitMatchSubject(const AstMatchSubject& subject)
+{
+    if (subject.declaration)
+        visit(subject.declaration);
+    else
+        visitExpr(subject.value);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the arms run like an `if` chain, in a scope that holds the
+// subject
+ControlFlow DataFlowGraphBuilder::visit(AstStatMatch* m)
+{
+    DfgScope* outer = currentScope();
+    DfgScope* matchScope = makeChildScope();
+
+    ControlFlow cf;
+    {
+        PushScope ps{scopeStack, matchScope};
+        visitMatchSubject(m->subject);
+        cf = visitMatchArmBlocks(m->arms, 0);
+    }
+
+    outer->inherit(matchScope);
+    return cf;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `arms[index]` and the arms after it, as an `if` whose
+// `else` is the rest
+ControlFlow DataFlowGraphBuilder::visitMatchArmBlocks(const AstArray<AstMatchArm>& arms, size_t index)
+{
+    if (index == arms.size)
+        return ControlFlow::None;
+
+    const AstMatchArm& arm = arms.data[index];
+    if (!arm.condition)
+        return visit(arm.body);
+
+    DfgScope* thenScope = makeChildScope();
+    DfgScope* restScope = makeChildScope();
+
+    if (arm.clauses.size == 0)
+        visitExpr(arm.condition);
+
+    ControlFlow thencf;
+    {
+        PushScope ps{scopeStack, thenScope};
+        visitIfClauses(arm.clauses);
+        thencf = visit(arm.body);
+    }
+
+    ControlFlow restcf;
+    {
+        PushScope ps{scopeStack, restScope};
+        restcf = visitMatchArmBlocks(arms, index + 1);
+    }
+
+    return joinBranches(thenScope, restScope, thencf, restcf);
 }
 
 ControlFlow DataFlowGraphBuilder::visit(AstStatWhile* w)
@@ -1123,6 +1192,8 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExpr* e)
             return visitExpr(s->classOf);
         else if (auto d = e->as<AstExprDo>())
             return visitExpr(d);
+        else if (auto m = e->as<AstExprMatch>())
+            return visitExpr(m);
         else if (auto c = e->as<AstExprTableComprehension>())
             return visitExpr(c);
         else if (auto error = e->as<AstExprError>())
@@ -1418,6 +1489,62 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIfElse* i)
     join(currentScope(), thenScope, elseScope);
 
     return {defArena->freshCell(Symbol{}, i->location), nullptr};
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the arms run like an if-else chain, in a scope that holds
+// the subject
+DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprMatch* m)
+{
+    DfgScope* outer = currentScope();
+    DfgScope* matchScope = makeChildScope();
+
+    {
+        PushScope ps{scopeStack, matchScope};
+        visitMatchSubject(m->subject);
+        visitMatchArmValues(m->arms, 0);
+    }
+
+    outer->inherit(matchScope);
+    return {defArena->freshCell(Symbol{}, m->location), nullptr};
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `arms[index]` and the arms after it, as an if-else
+// expression whose `else` is the rest. A last arm that matches every value is the only way out of the rest.
+void DataFlowGraphBuilder::visitMatchArmValues(const AstArray<AstMatchArm>& arms, size_t index)
+{
+    if (index == arms.size)
+        return;
+
+    const AstMatchArm& arm = arms.data[index];
+    if (!arm.condition)
+    {
+        visitExpr(arm.value);
+        return;
+    }
+
+    DfgScope* thenScope = makeChildScope();
+    if (arm.clauses.size == 0)
+        visitExpr(arm.condition);
+
+    {
+        PushScope ps{scopeStack, thenScope};
+        visitIfClauses(arm.clauses);
+        visitExpr(arm.value);
+    }
+
+    if (index + 1 == arms.size && arm.catchAll)
+    {
+        currentScope()->inherit(thenScope);
+        return;
+    }
+
+    DfgScope* restScope = makeChildScope();
+    {
+        PushScope ps{scopeStack, restScope};
+        visitMatchArmValues(arms, index + 1);
+    }
+
+    join(currentScope(), thenScope, restScope);
 }
 
 // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the block always ends in a `give`, `return`, `break` or `continue`, so

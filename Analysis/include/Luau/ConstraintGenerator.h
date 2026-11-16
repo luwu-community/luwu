@@ -300,6 +300,7 @@ private:
      * @param parent the parent scope of the new scope. Must not be null.
      */
     ScopePtr childScope(AstNode* node, const ScopePtr& parent);
+    ScopePtr childScope(const Location& location, const ScopePtr& parent);
 
     std::optional<TypeId> lookup(const ScopePtr& scope, Location location, DefId def, bool prototype = true);
 
@@ -462,6 +463,24 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatAssign* assign);
     ControlFlow visit(const ScopePtr& scope, AstStatCompoundAssign* assign);
     ControlFlow visit(const ScopePtr& scope, AstStatIf* ifStatement);
+
+    // The scopes of a branch with a condition: `chain` for a `when` chain's bindings (null without one), `body` for
+    // the branch, and the refinement the code after a failed condition may assume the negation of
+    struct BranchScopes
+    {
+        ScopePtr chain;
+        ScopePtr body;
+        RefinementId refinement = nullptr;
+    };
+    ControlFlow joinBranches(const ScopePtr& scope, const BranchScopes& then, const ScopePtr& elseScope, ControlFlow thencf, ControlFlow elsecf);
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+    ControlFlow visit(const ScopePtr& scope, AstStatMatch* match);
+    ControlFlow visitMatchArms(const ScopePtr& scope, AstStatMatch* match, size_t index);
+    BranchScopes checkMatchArmCondition(const ScopePtr& scope, const AstMatchArm& arm, AstNode* branch);
+    ScopePtr matchRestScope(const ScopePtr& scope, const AstArray<AstMatchArm>& arms, size_t index, const Location& matchLocation, RefinementId refinement);
+    void checkMatchSubject(const ScopePtr& scope, const AstMatchSubject& subject);
+    Inference checkMatchArms(const ScopePtr& scope, AstExprMatch* match, size_t index, std::optional<TypeId> expectedType);
     ScopePtr ifClausesScope(const AstArray<AstIfClause>& clauses, AstNode* branch, const ScopePtr& parent);
     RefinementId checkIfClauses(const ScopePtr& chainScope, const AstArray<AstIfClause>& clauses);
     ControlFlow visit(const ScopePtr& scope, AstStatTypeAlias* alias);
@@ -529,6 +548,7 @@ private:
     );
     Inference check(const ScopePtr& scope, AstExprIfElse* ifElse, std::optional<TypeId> expectedType);
     Inference check(const ScopePtr& scope, AstExprDo* doExpr, std::optional<TypeId> expectedType);
+    Inference check(const ScopePtr& scope, AstExprMatch* match, std::optional<TypeId> expectedType);
     Inference check(const ScopePtr& scope, AstExprTableComprehension* comprehension, std::optional<TypeId> expectedType);
     Inference check(const ScopePtr& scope, AstExprTypeAssertion* typeAssert);
     Inference check(const ScopePtr& scope, AstExprInterpString* interpString);

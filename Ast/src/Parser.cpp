@@ -794,6 +794,10 @@ AstStatBlock* Parser::parseBlockNoScope(bool doExprBody)
     blockAllowsDeclarations = nextBlockAllowsDeclarations;
     nextBlockAllowsDeclarations = false;
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match` statement's arm ends where the next one starts
+    bool matchArm = nextBlockIsMatchArm;
+    nextBlockIsMatchArm = false;
+
     const Position prevPosition = lexer.previousLocation().end;
 
     // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): no statement starts with a closing bracket, `,` or `then`, so inside
@@ -801,7 +805,8 @@ AstStatBlock* Parser::parseBlockNoScope(bool doExprBody)
     // there too.
     bool inDoExpr = doExprBody || functionStack.back().doExprDepth > 0;
 
-    while (!blockFollow(lexer.current()) && !(inDoExpr && doExprBodyFollow(lexer.current())) && !closesOpenBracket(lexer.current()))
+    while (!blockFollow(lexer.current()) && !(inDoExpr && doExprBodyFollow(lexer.current())) && !closesOpenBracket(lexer.current()) &&
+           !(matchArm && matchArmFollows()))
     {
         unsigned int oldRecursionCount = recursionCounter;
 
@@ -926,14 +931,9 @@ AstStat* Parser::parseStat()
         }
     }
 
-    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` with `case` arms where a statement goes. It's parsed as the
-    // expression it is, so its arms don't cascade, and reported once, without the missing `else` an `if`-like statement wouldn't have.
-    if (matchExpressionFollows())
-    {
-        Location keyword = lexer.current().location;
-        AstExpr* match = parseMatchExpr(/* inStatement= */ true);
-        return reportStatError(keyword, copy({match}), {}, "'match' only supports expressions, use an 'if' statement instead");
-    }
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` with arms where a statement goes
+    if (matchExpressionFollows() || matchStatementFollows())
+        return parseMatchStat();
 
     // we need to disambiguate a few cases, primarily assignment (lvalue = ...) vs statements-that-are calls
     size_t errorsBeforeExpr = parseErrors.size();
@@ -8618,7 +8618,7 @@ AstExpr* Parser::makePatternTest(AstExpr* value, const Pattern& pattern, const L
     AstStatGive* give = allocator.alloc<AstStatGive>(test->location, test);
     AstExprDo* node = allocator.alloc<AstExprDo>(location, allocator.alloc<AstStatBlock>(location, copy<AstStat*>({declaration, give})));
     node->luwuOnly = true;
-    node->fromMatch = true;
+    node->fromTypeTest = true;
     return node;
 }
 
@@ -8668,13 +8668,14 @@ static bool caseStartsArm(const Lexeme& next)
     }
 }
 
-// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` starting an expression, which is decided by a
-// `case` arm following the value it tests. Line breaks don't matter. `const which = match x or return` is valid Luau (a
-// global `match`, then a statement on the same line), and so is the same code split over two lines; neither has a `case`.
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` starting an expression or a statement, which is
+// decided by an arm following the value it tests. Line breaks don't matter. `const which = match x or return` is valid
+// Luau (a global `match`, then a statement on the same line), and so is the same code split over two lines; neither has
+// an arm.
 //
 // The look-ahead scans to the first token at bracket depth 0 that starts a line after the subject's first token. A
-// `case` there (or on the subject's lines) is an arm. So is a lone `c`, `ca` or `cas` on its line, which is the first
-// arm still being typed and can't be a Luau statement.
+// `case` there (or on the subject's lines), or a `when` there, is an arm. So is a lone `c`, `ca`, `cas`, `w`, `wh` or
+// `whe` on its line, which is the first arm still being typed and can't be a Luau statement.
 bool Parser::matchExpressionFollows()
 {
     const Lexeme& current = lexer.current();
@@ -8733,27 +8734,63 @@ bool Parser::matchExpressionFollows()
     return false;
 }
 
-// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md):
-//
-//   match [const name =] value
-//       case [name] [is pattern] [when clause ...] then value
-//       when clause [when clause ...] then value
-//       ...
-//       else value
-//
-// is parsed as the `do` expression it means: the subject bound to a local, then an if-else expression with one arm per
-// `case` or `when`, each arm's condition the pattern's test of the subject followed by its `when` clauses. An arm that
-// starts with `when` has no pattern: its first clause is its condition. Every pass that handles
-// `do` and if-else expressions (scopes, narrowing per arm, the compiler's fused class checks) handles a `match`.
-AstExpr* Parser::parseMatchExpr(bool inStatement)
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` starting a statement, before its arms are written.
+// In valid Luau a statement starting with the name `match` assigns, indexes or calls it, so `match` followed on the same
+// line by anything else (`match const n =`, `match x`) is a `match` statement being typed.
+bool Parser::matchStatementFollows()
 {
-    Location start = lexer.current().location;
-    checkLuwuFeature(start, kMatchFeature, FFlag::DebugLuwuMatchExpressions);
-    nextLexeme(); // match
+    const Lexeme& current = lexer.current();
+    if (!matchExpressionsAvailable() || current.type != Lexeme::Name || AstName(current.name) != "match")
+        return false;
 
-    unsigned int localsBegin = saveLocals();
-    size_t errorsBefore = parseErrors.size();
+    const Lexeme& next = lexer.lookahead();
+    if (next.location.begin.line != current.location.end.line || next.type == Lexeme::Eof)
+        return false;
 
+    switch (int(next.type))
+    {
+    case '=':
+    case '.':
+    case ':':
+    case '(':
+    case '[':
+    case '{':
+    case ',':
+    case ';':
+    case Lexeme::QuotedString:
+    case Lexeme::RawString:
+    case Lexeme::InterpStringBegin:
+    case Lexeme::InterpStringSimple:
+        return false;
+    default:
+        return true;
+    }
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `case` or `when` opening an arm. Like `case`, a `when`
+// followed by `=`, `.`, `:`, `[` or `,` is a name, so a statement in an arm's block can still assign to one.
+bool Parser::matchArmFollows()
+{
+    const Lexeme& current = lexer.current();
+    if (current.type != Lexeme::Name)
+        return false;
+
+    AstName keyword(current.name);
+    if (keyword == "case")
+        return caseStartsArm(lexer.lookahead());
+
+    if (keyword != "when")
+        return false;
+
+    Lexeme::Type next = lexer.lookahead().type;
+    return next != '=' && next != '.' && next != ':' && next != '[' && next != ',';
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match [const name =] value`, after `match`. A local is
+// tested as itself, so each arm narrows it. Anything else is evaluated once into the subject's local: the header's name,
+// or a hidden one. The caller restores the locals after the arms.
+AstMatchSubject Parser::parseMatchSubject(const Location& start)
+{
     // `match const name = value` names the subject for every arm; otherwise it gets a name nothing can read
     bool named = lexer.current().type == Lexeme::ReservedLocal || ifBindingFollows();
     bool isConst = lexer.current().type != Lexeme::ReservedLocal;
@@ -8771,200 +8808,253 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
         expectAndConsume('=', "match subject");
     }
 
-    AstExpr* value = parseExpr();
+    AstMatchSubject subject;
+    subject.value = parseExpr();
 
-    // A local is tested as itself, so each arm narrows it. Anything else is evaluated once, into the subject's local.
-    AstLocal* subject = nullptr;
-    AstStatLocal* declaration = nullptr;
-    if (AstExprLocal* local = value->as<AstExprLocal>(); local && !named)
+    if (AstExprLocal* local = subject.value->as<AstExprLocal>(); local && !named)
     {
-        subject = local->local;
-    }
-    else
-    {
-        if (!named)
-            binding.name.location = value->location;
-        binding.isConst = true;
-
-        subject = pushLocal(binding);
-        declaration =
-            allocator.alloc<AstStatLocal>(Location(start, value->location), copy({subject}), copy({value}), equalsLocation, true);
-        declaration->keywordLocation = keywordLocation;
+        subject.local = local->local;
+        return subject;
     }
 
-    struct Arm
-    {
-        Location caseLocation;
-        AstExpr* condition = nullptr;
-        AstArray<AstIfClause> clauses{nullptr, 0};
-        std::optional<Location> thenLocation;
-        AstExpr* value = nullptr;
-        // `case name` with no pattern and no `when`, which matches every value
-        bool catchAll = false;
-        // the value is `continue` (see recordOrContinue)
-        bool thenContinue = false;
-    };
-    std::vector<Arm> arms;
+    if (!named)
+        binding.name.location = subject.value->location;
+    binding.isConst = true;
 
-    while ((lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "case") || whenFollows())
-    {
-        Arm arm;
-        arm.caseLocation = lexer.current().location;
-        bool startsWithWhen = whenFollows();
+    subject.local = pushLocal(binding);
+    subject.declaration =
+        allocator.alloc<AstStatLocal>(Location(start, subject.value->location), copy({subject.local}), copy({subject.value}), equalsLocation, true);
+    subject.declaration->keywordLocation = keywordLocation;
+    return subject;
+}
 
-        // the arm's `when` bindings end with its value
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): an arm up to and including its `then`:
+// `case [name] [is pattern] [when clause ...] then` or `when clause [when clause ...] then`
+AstMatchArm Parser::parseMatchArmHead(AstLocal* subject)
+{
+    AstMatchArm arm;
+    arm.keywordLocation = lexer.current().location;
+    arm.kind = whenFollows() ? AstMatchArm::When : AstMatchArm::Case;
+
+    std::vector<AstIfClause> chain;
+    if (arm.kind == AstMatchArm::Case)
+    {
+        nextLexeme(); // case
+        bool hasPattern = parseCaseHead(subject, chain);
+        arm.catchAll = !hasPattern && !whenFollows();
+    }
+
+    while (whenFollows())
+    {
+        Location whenLocation = lexer.current().location;
+        nextLexeme(); // when
+
+        if (ifBindingFollows())
+        {
+            parseIfBindingClause(chain, whenLocation);
+            continue;
+        }
+
+        AstIfClause clause;
+        clause.expr = parseExpr();
+        clause.whenLocation = whenLocation;
+        chain.push_back(clause);
+    }
+
+    LUAU_ASSERT(!chain.empty());
+    arm.condition = chain.front().expr;
+    if (chain.size() > 1)
+        arm.clauses = copy(chain.data(), chain.size());
+
+    if (lexer.current().type == Lexeme::ReservedThen)
+        arm.thenLocation = lexer.current().location;
+    expectAndConsume(Lexeme::ReservedThen, "match arm");
+    return arm;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): an expression arm's value after `then` or `else`
+// (`introducer`), which can leave instead: `then return v`, `then break`, `then continue`, as in an if-else expression.
+// Sets `isContinue` when the value is the `continue` shorthand, which the caller records once the arm is stored.
+AstExpr* Parser::parseMatchArmValue(const char* introducer, bool& isContinue)
+{
+    isContinue = orContinueFollows();
+    if (orLeaveFollows() || isContinue)
+        return parseOrLeave(introducer);
+    return parseExpr();
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a statement arm's block, which ends at the next arm, an
+// `else` or the `match`'s `end`
+AstStatBlock* Parser::parseMatchArmBlock()
+{
+    nextBlockIsMatchArm = true;
+    return parseBlock();
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a name being typed where an arm goes (`c`, `whe`, `els`)
+// gets the missing arm's error and is consumed, so its line isn't also an incomplete statement. Returns whether one
+// was.
+bool Parser::skipArmBeingTyped(bool report, const char* message)
+{
+    const Lexeme& next = lexer.current();
+    if (next.type != Lexeme::Name || next.location.begin.line <= lexer.previousLocation().end.line)
+        return false;
+
+    std::string_view typed = next.name;
+    bool typingArm = std::string_view("case").substr(0, typed.size()) == typed || std::string_view("when").substr(0, typed.size()) == typed;
+    if (!typingArm && std::string_view("else").substr(0, typed.size()) != typed)
+        return false;
+
+    if (report)
+        this->report(next.location, "%s", message);
+    nextLexeme();
+    return true;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the arms whose value is the `continue` shorthand, now
+// that they're stored where the shorthand's slot can point
+void Parser::recordArmContinues(AstArray<AstMatchArm>& arms, const std::vector<size_t>& continues)
+{
+    for (size_t i : continues)
+        recordOrContinue(&arms.data[i].value, arms.data[i].kind == AstMatchArm::Else ? "else" : "then");
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md):
+//
+//   match [const name =] value
+//       case [name] [is pattern] [when clause ...] then value
+//       when clause [when clause ...] then value
+//       ...
+//       else value
+//
+// The last arm is an `else`, or a `case name` with no `when`, which matches every value.
+AstExpr* Parser::parseMatchExpr()
+{
+    Location start = lexer.current().location;
+    checkLuwuFeature(start, kMatchFeature, FFlag::DebugLuwuMatchExpressions);
+    nextLexeme(); // match
+
+    unsigned int localsBegin = saveLocals();
+    size_t errorsBefore = parseErrors.size();
+    AstMatchSubject subject = parseMatchSubject(start);
+
+    std::vector<AstMatchArm> arms;
+    std::vector<size_t> continues;
+    while (matchArmFollows())
+    {
+        // the arm's `case` and `when` bindings end with its value
         unsigned int armLocalsBegin = saveLocals();
+        AstMatchArm arm = parseMatchArmHead(subject.local);
 
-        std::vector<AstIfClause> chain;
-        if (!startsWithWhen)
-        {
-            nextLexeme(); // case
-            bool hasPattern = parseCaseHead(subject, chain);
-            arm.catchAll = !hasPattern && !whenFollows();
-        }
-
-        while (whenFollows())
-        {
-            Location whenLocation = lexer.current().location;
-            nextLexeme(); // when
-
-            if (ifBindingFollows())
-            {
-                parseIfBindingClause(chain, whenLocation);
-                continue;
-            }
-
-            AstIfClause clause;
-            clause.expr = parseExpr();
-            clause.whenLocation = whenLocation;
-            chain.push_back(clause);
-        }
-
-        arm.condition = chain.front().expr;
-        if (chain.size() > 1)
-            arm.clauses = copy(chain.data(), chain.size());
-
-        if (lexer.current().type == Lexeme::ReservedThen)
-            arm.thenLocation = lexer.current().location;
-        expectAndConsume(Lexeme::ReservedThen, "match arm");
-
-        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `then return v`, `then break`, `then continue`, as in
-        // an if-else expression
-        arm.thenContinue = orContinueFollows();
-        if (orLeaveFollows() || arm.thenContinue)
-            arm.value = parseOrLeave("then");
-        else
-            arm.value = parseExpr();
+        bool isContinue = false;
+        arm.value = parseMatchArmValue("then", isContinue);
+        if (isContinue)
+            continues.push_back(arms.size());
 
         restoreLocals(armLocalsBegin);
         arms.push_back(arm);
     }
 
-    // A name that starts `case` or `else` (`c`, `els`) is the next arm being typed: it gets the arm's error and is
-    // consumed, so its line isn't also an incomplete statement. An unfinished header or arm has already said what's
-    // missing, so it gets no second error.
+    // An unfinished header or arm has already said what's missing, so it gets no second error
     const char* missingArm = arms.empty() ? "Expected 'case' after the value 'match' tests"
                                           : "A 'match' expression must be exhaustive; add an 'else' branch to handle all unhandled cases";
     bool endsInCatchAll = !arms.empty() && arms.back().catchAll;
-    bool reportMissingArm = parseErrors.size() == errorsBefore && !inStatement && !endsInCatchAll;
-    if (const Lexeme& next = lexer.current(); next.type == Lexeme::Name && next.location.begin.line > lexer.previousLocation().end.line)
-    {
-        std::string_view typed = next.name;
-        bool typingArm = std::string_view("case").substr(0, typed.size()) == typed || std::string_view("when").substr(0, typed.size()) == typed;
-        if (typingArm || std::string_view("else").substr(0, typed.size()) == typed)
-        {
-            if (reportMissingArm)
-                report(next.location, "%s", missingArm);
-            reportMissingArm = false;
-            nextLexeme();
-        }
-    }
+    bool reportMissingArm = parseErrors.size() == errorsBefore && !endsInCatchAll;
+    if (skipArmBeingTyped(reportMissingArm, missingArm))
+        reportMissingArm = false;
     // with no arms, the missing `case` goes at the end of the line being typed rather than on the next one
     if (reportMissingArm && arms.empty())
         report(lexer.previousLocation(), "%s", missingArm);
 
-    AstExpr* result = nullptr;
-    std::optional<Location> elseLocation;
-    bool elseContinue = false;
     if (lexer.current().type == Lexeme::ReservedElse)
     {
-        elseLocation = lexer.current().location;
-        nextLexeme();
+        AstMatchArm arm;
+        arm.kind = AstMatchArm::Else;
+        arm.keywordLocation = lexer.current().location;
+        nextLexeme(); // else
 
-        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `else return v`, `else break`, `else continue`, as after `then`
-        elseContinue = orContinueFollows();
-        if (orLeaveFollows() || elseContinue)
-            result = parseOrLeave("else");
-        else
-            result = parseExpr();
+        bool isContinue = false;
+        arm.value = parseMatchArmValue("else", isContinue);
+        if (isContinue)
+            continues.push_back(arms.size());
+        arms.push_back(arm);
     }
-    else if (endsInCatchAll)
+    else if (reportMissingArm && !arms.empty())
     {
-        // A last `case name` is the `else`: its binding, then its value
-        const Arm& last = arms.back();
-        std::vector<AstStat*> statements;
-        for (const AstIfClause& clause : last.clauses)
-        {
-            if (clause.declaration)
-                statements.push_back(clause.declaration);
-        }
-        Location location(last.caseLocation, last.value->location);
-        AstStatGive* give = allocator.alloc<AstStatGive>(last.value->location, last.value);
-        give->luwuOnly = true;
-        statements.push_back(give);
-        if (last.thenContinue)
-            recordOrContinue(&give->value, "then");
-
-        AstExprDo* arm = allocator.alloc<AstExprDo>(location, allocator.alloc<AstStatBlock>(location, copy(statements.data(), statements.size())));
-        arm->luwuOnly = true;
-        arm->fromMatch = true;
-        result = arm;
-        arms.pop_back();
-    }
-    else
-    {
-        if (reportMissingArm && !arms.empty())
-            report(start, "%s", missingArm);
-        result = missingValueHere();
-    }
-
-    // the arms, last to first, each with the rest of the chain as its `else`
-    for (size_t i = arms.size(); i-- > 0;)
-    {
-        const Arm& arm = arms[i];
-        AstExprIfElse* node = allocator.alloc<AstExprIfElse>(
-            Location(arm.caseLocation, result->location),
-            arm.condition,
-            arm.thenLocation.has_value(),
-            arm.value,
-            true,
-            result,
-            arm.caseLocation,
-            arm.thenLocation,
-            i + 1 == arms.size() ? elseLocation : std::nullopt
-        );
-        node->clauses = arm.clauses;
-        node->luwuOnly = true;
-        if (arm.thenContinue)
-            recordOrContinue(&node->trueExpr, "then");
-        if (elseContinue && i + 1 == arms.size())
-            recordOrContinue(&node->falseExpr, "else");
-        result = node;
+        report(start, "%s", missingArm);
     }
 
     restoreLocals(localsBegin);
 
-    Location location(start, result->location);
-    AstStatGive* give = allocator.alloc<AstStatGive>(result->location, result);
-    // with no `case` arms, the `else` value is the one given
-    if (elseContinue && arms.empty())
-        recordOrContinue(&give->value, "else");
-    AstStatBlock* body = allocator.alloc<AstStatBlock>(
-        location, declaration ? copy<AstStat*>({declaration, give}) : copy<AstStat*>({give})
-    );
-    AstExprDo* node = allocator.alloc<AstExprDo>(location, body);
+    AstArray<AstMatchArm> stored = copy(arms.data(), arms.size());
+    recordArmContinues(stored, continues);
+
+    AstExprMatch* node = allocator.alloc<AstExprMatch>(Location(start, lexer.previousLocation()), subject, stored);
     node->luwuOnly = true;
-    node->fromMatch = true;
+    return node;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md):
+//
+//   match [const name =] value
+//       case [name] [is pattern] [when clause ...] then block
+//       when clause [when clause ...] then block
+//       ...
+//       [else block]
+//   end
+//
+// The first arm that matches runs; with no `else`, a value no arm matches runs nothing.
+AstStat* Parser::parseMatchStat()
+{
+    Location start = lexer.current().location;
+    // the missing `end` names the last block's `then` or `else`, like an `if`'s (see blockOpener)
+    Lexeme opener = lexer.current();
+    checkLuwuFeature(start, kMatchFeature, FFlag::DebugLuwuMatchExpressions);
+    nextLexeme(); // match
+
+    unsigned int localsBegin = saveLocals();
+    size_t errorsBefore = parseErrors.size();
+    AstMatchSubject subject = parseMatchSubject(start);
+
+    std::vector<AstMatchArm> arms;
+    while (matchArmFollows())
+    {
+        // the arm's `case` and `when` bindings end with its block
+        unsigned int armLocalsBegin = saveLocals();
+        AstMatchArm arm = parseMatchArmHead(subject.local);
+        if (arm.thenLocation)
+            opener = Lexeme(*arm.thenLocation, Lexeme::ReservedThen);
+        arm.body = parseMatchArmBlock();
+        restoreLocals(armLocalsBegin);
+        arms.push_back(arm);
+    }
+
+    const char* missingArm = "Expected 'case' after the value 'match' tests";
+    bool reportMissingArm = parseErrors.size() == errorsBefore && arms.empty();
+    if (skipArmBeingTyped(reportMissingArm, missingArm))
+        reportMissingArm = false;
+    if (reportMissingArm)
+        report(lexer.previousLocation(), "%s", missingArm);
+
+    // A `match` with no arm written yet has said so, and gets no missing `end` too
+    bool expectsEnd = !arms.empty() || lexer.current().type == Lexeme::ReservedElse || lexer.current().type == Lexeme::ReservedEnd;
+
+    if (lexer.current().type == Lexeme::ReservedElse)
+    {
+        AstMatchArm arm;
+        arm.kind = AstMatchArm::Else;
+        arm.keywordLocation = lexer.current().location;
+        opener = lexer.current();
+        nextLexeme(); // else
+        arm.body = parseMatchArmBlock();
+        arms.push_back(arm);
+    }
+
+    restoreLocals(localsBegin);
+
+    bool hasEnd = expectsEnd && expectMatchEndAndConsume(Lexeme::ReservedEnd, opener);
+    AstStatMatch* node = allocator.alloc<AstStatMatch>(Location(start, lexer.previousLocation()), subject, copy(arms.data(), arms.size()), hasEnd);
+    node->luwuOnly = true;
     return node;
 }
 

@@ -644,15 +644,23 @@ TypePackId ConstraintGenerator::addTypePack(std::vector<TypeId> head, std::optio
 
 ScopePtr ConstraintGenerator::childScope(AstNode* node, const ScopePtr& parent)
 {
+    ScopePtr scope = childScope(node->location, parent);
+    module->astScopes[node] = scope.get();
+
+    return scope;
+}
+
+// Luwu: a scope for part of a node, such as the rest of a `match`'s arms, which no AstNode spans
+ScopePtr ConstraintGenerator::childScope(const Location& location, const ScopePtr& parent)
+{
     auto scope = std::make_shared<Scope>(parent);
-    scopes.emplace_back(node->location, scope);
-    scope->location = node->location;
+    scopes.emplace_back(location, scope);
+    scope->location = location;
 
     scope->returnType = parent->returnType;
     scope->varargPack = parent->varargPack;
 
     parent->children.emplace_back(scope.get());
-    module->astScopes[node] = scope.get();
 
     return scope;
 }
@@ -3240,6 +3248,8 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
         return visit(scope, s);
     else if (auto i = stat->as<AstStatIf>())
         return visit(scope, i);
+    else if (auto match = stat->as<AstStatMatch>())
+        return visit(scope, match);
     else if (auto s = stat->as<AstStatWhile>())
         return visit(scope, s);
     else if (auto s = stat->as<AstStatRepeat>())
@@ -4042,29 +4052,129 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatIf* ifState
         if (ifStatement->elsebody)
             elsecf = visit(elseScope, ifStatement->elsebody);
 
-        if (thencf != ControlFlow::None && elsecf == ControlFlow::None)
-            scope->inheritRefinements(elseScope);
-        else if (thencf == ControlFlow::None && elsecf != ControlFlow::None)
-        {
-            // Luwu If Local (rfcs/control-flow/if-local.md): every clause passed, so what the chain refined holds after the `if`
-            if (chainScope)
-                scope->inheritRefinements(chainScope);
-
-            scope->inheritRefinements(thenScope);
-        }
-
-        if (thencf == ControlFlow::None)
-            scope->inheritAssignments(thenScope);
-        if (elsecf == ControlFlow::None)
-            scope->inheritAssignments(elseScope);
-
-        if (thencf == elsecf)
-            return thencf;
-        else if (matches(thencf, ControlFlow::Returns | ControlFlow::Throws) && matches(elsecf, ControlFlow::Returns | ControlFlow::Throws))
-            return ControlFlow::Returns;
-        else
-            return ControlFlow::None;
+        return joinBranches(scope, BranchScopes{chainScope, thenScope, refinement}, elseScope, thencf, elsecf);
     }
+}
+
+// What the code after a two-way branch sees: the refinements of the branch that falls through when the other one
+// leaves, the assignments of each branch that falls through, and how the whole statement leaves
+ControlFlow ConstraintGenerator::joinBranches(
+    const ScopePtr& scope,
+    const BranchScopes& then,
+    const ScopePtr& elseScope,
+    ControlFlow thencf,
+    ControlFlow elsecf
+)
+{
+    if (thencf != ControlFlow::None && elsecf == ControlFlow::None)
+        scope->inheritRefinements(elseScope);
+    else if (thencf == ControlFlow::None && elsecf != ControlFlow::None)
+    {
+        // Luwu If Local (rfcs/control-flow/if-local.md): every clause passed, so what the chain refined holds after the `if`
+        if (then.chain)
+            scope->inheritRefinements(then.chain);
+
+        scope->inheritRefinements(then.body);
+    }
+
+    if (thencf == ControlFlow::None)
+        scope->inheritAssignments(then.body);
+    if (elsecf == ControlFlow::None)
+        scope->inheritAssignments(elseScope);
+
+    if (thencf == elsecf)
+        return thencf;
+    else if (matches(thencf, ControlFlow::Returns | ControlFlow::Throws) && matches(elsecf, ControlFlow::Returns | ControlFlow::Throws))
+        return ControlFlow::Returns;
+    else
+        return ControlFlow::None;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): checks `arm`'s condition (a plain one, or its `when`
+// chain) in `scope`. `branch` is the arm's value or block, which gets the scope with the condition's refinement.
+ConstraintGenerator::BranchScopes ConstraintGenerator::checkMatchArmCondition(const ScopePtr& scope, const AstMatchArm& arm, AstNode* branch)
+{
+    BranchScopes result;
+
+    if (arm.clauses.size != 0)
+    {
+        result.chain = ifClausesScope(arm.clauses, branch, scope);
+        result.refinement = checkIfClauses(result.chain, arm.clauses);
+        result.body = childScope(branch, result.chain);
+        return result;
+    }
+
+    {
+        InConditionalContext flipper{&typeContext};
+        result.refinement = check(scope, arm.condition).refinement;
+    }
+
+    result.body = childScope(branch, scope);
+    applyRefinements(result.body, arm.condition->location, result.refinement);
+    return result;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the scope the arms after `arms[index]` are checked in,
+// which assumes that arm didn't match. It spans from the next arm's keyword to the end of the `match`.
+ScopePtr ConstraintGenerator::matchRestScope(
+    const ScopePtr& scope,
+    const AstArray<AstMatchArm>& arms,
+    size_t index,
+    const Location& matchLocation,
+    RefinementId refinement
+)
+{
+    Location location{matchLocation.end, matchLocation.end};
+    if (index + 1 < arms.size)
+        location = Location{arms.data[index + 1].keywordLocation, matchLocation};
+
+    ScopePtr rest = childScope(location, scope);
+    applyRefinements(rest, location, refinementArena.negation(refinement));
+    return rest;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the header's declaration of the subject, or the local the
+// arms test
+void ConstraintGenerator::checkMatchSubject(const ScopePtr& scope, const AstMatchSubject& subject)
+{
+    if (subject.declaration)
+        visit(scope, subject.declaration);
+    else
+        check(scope, subject.value);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the arms are checked like an `if` chain: each arm's block in
+// a scope where its condition holds, and the arms after it where that condition failed
+ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatMatch* match)
+{
+    ScopePtr matchScope = childScope(match, scope);
+    checkMatchSubject(matchScope, match->subject);
+
+    ControlFlow flow = visitMatchArms(matchScope, match, 0);
+
+    scope->inheritRefinements(matchScope);
+    scope->inheritAssignments(matchScope);
+    return flow;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match->arms[index]` and the arms after it. A value no arm
+// matches runs nothing.
+ControlFlow ConstraintGenerator::visitMatchArms(const ScopePtr& scope, AstStatMatch* match, size_t index)
+{
+    if (index == match->arms.size)
+        return ControlFlow::None;
+
+    const AstMatchArm& arm = match->arms.data[index];
+    if (!arm.condition)
+        return visit(scope, arm.body);
+
+    BranchScopes then = checkMatchArmCondition(scope, arm, arm.body);
+    ScopePtr rest = matchRestScope(scope, match->arms, index, match->location, then.refinement);
+
+    ControlFlow thencf = visit(then.body, arm.body);
+    ControlFlow restcf = visitMatchArms(rest, match, index + 1);
+
+    return joinBranches(scope, then, rest, thencf, restcf);
 }
 
 void ConstraintGenerator::resolveGenericDefaultParameters(const ScopePtr& defnScope, AstStatTypeAlias* alias, const TypeFun& fun)
@@ -5616,6 +5726,8 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
         result = check(scope, ifElse, expectedType);
     else if (auto doExpr = expr->as<AstExprDo>())
         result = check(scope, doExpr, expectedType);
+    else if (auto match = expr->as<AstExprMatch>())
+        result = check(scope, match, expectedType);
     else if (auto comprehension = expr->as<AstExprTableComprehension>())
         result = check(scope, comprehension, expectedType);
     else if (auto typeAssert = expr->as<AstExprTypeAssertion>())
@@ -6111,6 +6223,46 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprIfElse* ifEls
     scope->inheritAssignments(elseScope);
 
     return Inference{makeUnion(scope, ifElse->location, thenType, elseType)};
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the union of the arms' values, each checked where its
+// condition holds and every condition before it failed
+Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprMatch* match, std::optional<TypeId> expectedType)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+
+    ScopePtr matchScope = childScope(match, scope);
+    checkMatchSubject(matchScope, match->subject);
+
+    Inference result = checkMatchArms(matchScope, match, 0, expectedType);
+
+    scope->inheritAssignments(matchScope);
+    return result;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the union of `match->arms[index]`'s value and the values of
+// the arms after it
+Inference ConstraintGenerator::checkMatchArms(const ScopePtr& scope, AstExprMatch* match, size_t index, std::optional<TypeId> expectedType)
+{
+    if (index == match->arms.size)
+        return Inference{builtinTypes->neverType};
+
+    const AstMatchArm& arm = match->arms.data[index];
+    if (!arm.condition)
+        return check(scope, arm.value, expectedType);
+
+    BranchScopes then = checkMatchArmCondition(scope, arm, arm.value);
+    TypeId thenType = check(then.body, arm.value, expectedType).ty;
+    scope->inheritAssignments(then.body);
+
+    if (index + 1 == match->arms.size)
+        return Inference{thenType};
+
+    ScopePtr rest = matchRestScope(scope, match->arms, index, match->location, then.refinement);
+    TypeId restType = checkMatchArms(rest, match, index + 1, expectedType).ty;
+    scope->inheritAssignments(rest);
+
+    return Inference{makeUnion(scope, match->location, thenType, restType)};
 }
 
 // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a `do` expression's type is the union of what its `give`s give. One

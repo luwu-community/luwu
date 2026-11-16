@@ -108,6 +108,17 @@ bool hasBreak(AstStat* node)
 
         return false;
     }
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+    else if (AstStatMatch* stat = node->as<AstStatMatch>())
+    {
+        for (const AstMatchArm& arm : stat->arms)
+        {
+            if (hasBreak(arm.body))
+                return true;
+        }
+
+        return false;
+    }
     else
     {
         return false;
@@ -164,6 +175,10 @@ static const AstExprDo* findAlwaysLeavingDo(const AstExpr* expr)
 
     if (const AstExprIfElse* ifElse = expr->as<AstExprIfElse>())
         return findAlwaysLeavingDo(ifElse->condition);
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): only the subject always runs
+    if (const AstExprMatch* match = expr->as<AstExprMatch>())
+        return findAlwaysLeavingDo(match->subject.value);
 
     if (const AstExprIndexName* index = expr->as<AstExprIndexName>())
         return findAlwaysLeavingDo(index->expr);
@@ -255,6 +270,10 @@ const AstExprDo* findDoBlockingThenBranch(const AstStatIf* stat)
 // statement always evaluates it, and it never ends normally
 const AstExprDo* findDoEndingStatement(const AstStat* node)
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): only the subject always runs
+    if (const AstStatMatch* stat = node->as<AstStatMatch>())
+        return findAlwaysLeavingDo(stat->subject.value);
+
     if (const AstStatIf* stat = node->as<AstStatIf>())
         return findAlwaysLeavingDo(stat->clauses.size == 0 ? stat->condition : stat->clauses.data[0].expr);
 
@@ -324,6 +343,18 @@ const AstStat* getFallthrough(const AstStat* node)
         {
             return stat;
         }
+    }
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): an arm that falls through, or the `match` itself when a
+    // value can match no arm
+    else if (const AstStatMatch* stat = node->as<AstStatMatch>())
+    {
+        for (const AstMatchArm& arm : stat->arms)
+        {
+            if (const AstStat* armf = getFallthrough(arm.body))
+                return armf;
+        }
+
+        return matchesEveryValue(stat->arms) ? nullptr : stat;
     }
     else if (node->is<AstStatReturn>())
     {
@@ -594,6 +625,11 @@ ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStat& program)
     else if (program.is<AstStatDeclareClass>())
     {
         // Luwu Declare Statements (rfcs/declare-statements.md): classes are only checked by the new solver
+        return ControlFlow::None;
+    }
+    else if (auto match = program.as<AstStatMatch>())
+    {
+        checkMatch(scope, match->location, match->subject, match->arms);
         return ControlFlow::None;
     }
     else
@@ -2160,6 +2196,11 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
         result = checkExpr(scope, *a, expectedType);
     else if (auto a = expr.as<AstExprDo>())
         result = checkExpr(scope, *a);
+    else if (auto a = expr.as<AstExprMatch>())
+    {
+        checkMatch(scope, a->location, a->subject, a->arms);
+        result = WithPredicate{anyType};
+    }
     else if (auto a = expr.as<AstExprTableComprehension>())
         result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInterpString>())
@@ -3530,6 +3571,36 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
 {
     check(childScope(scope, expr.body->location), *expr.body);
     return WithPredicate{anyType};
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the old solver gets the minimum, so it doesn't fail on one:
+// every part is checked without narrowing, and a `match` expression is `any`.
+void TypeChecker::checkMatch(const ScopePtr& scope, const Location& location, const AstMatchSubject& subject, const AstArray<AstMatchArm>& arms)
+{
+    ScopePtr matchScope = childScope(scope, location);
+    if (subject.declaration)
+        check(matchScope, *subject.declaration);
+    else
+        checkExpr(matchScope, *subject.value);
+
+    for (const AstMatchArm& arm : arms)
+    {
+        ScopePtr armScope = childScope(matchScope, location);
+        for (const AstIfClause& clause : arm.clauses)
+        {
+            if (clause.declaration)
+                check(armScope, *clause.declaration);
+            else
+                checkExpr(armScope, *clause.expr);
+        }
+
+        if (arm.condition && arm.clauses.size == 0)
+            checkExpr(armScope, *arm.condition);
+        if (arm.value)
+            checkExpr(armScope, *arm.value);
+        if (arm.body)
+            check(armScope, *arm.body);
+    }
 }
 
 // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the old solver gets the minimum, so it doesn't fail on one:
