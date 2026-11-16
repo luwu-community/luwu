@@ -9,7 +9,7 @@
 
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuGenericNominals)
-LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
@@ -5000,7 +5000,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "UncaughtErrors")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
