@@ -838,7 +838,14 @@ void* lua_pushcclosurewithdatak(lua_State* L, lua_CFunction fn, const char* debu
     return (void*)cl->fatc.data;
 }
 
-void* lua_pushdatacfunctionk(lua_State* L, lua_DataCFunction fn, const char* debugname, lua_Continuation cont, size_t size, lua_ClosureWithDataFree dtor)
+void* lua_pushdatacfunctionk(
+    lua_State* L,
+    lua_DataCFunction fn,
+    const char* debugname,
+    lua_Continuation cont,
+    size_t size,
+    lua_ClosureWithDataFree dtor
+)
 {
     api_check(L, fn != nullptr);
     void* data = lua_pushcclosurewithdatak(L, luaF_calldatacfunction, debugname, cont, size, dtor);

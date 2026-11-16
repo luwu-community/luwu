@@ -221,7 +221,14 @@ LUA_API void* lua_pushcclosurewithdatak(lua_State *L, lua_CFunction fn, const ch
 // lua_getcclosuredata or lua_gettop call to find them
 typedef int (*lua_DataCFunction)(lua_State* L, void* data, int nargs);
 // Luwu: lua_pushcclosurewithdatak with a lua_DataCFunction. The closure is an ordinary C function everywhere else.
-LUA_API void* lua_pushdatacfunctionk(lua_State* L, lua_DataCFunction fn, const char* debugname, lua_Continuation cont, size_t size, lua_ClosureWithDataFree dtor);
+LUA_API void* lua_pushdatacfunctionk(
+    lua_State* L,
+    lua_DataCFunction fn,
+    const char* debugname,
+    lua_Continuation cont,
+    size_t size,
+    lua_ClosureWithDataFree dtor
+);
 LUA_API void* lua_getcclosuredata(lua_State *L);
 LUA_API void lua_pushboolean(lua_State* L, int b);
 LUA_API int lua_pushthread(lua_State* L);
