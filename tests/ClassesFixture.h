@@ -23,6 +23,7 @@ struct ClassesFixture : Fixture
 declare function sqrt(n: number): number
 declare function tostring<T>(value: T): string
 declare function typeof<T>(value: T): string
+declare function type<T>(value: T): string
 declare function print(...: any): ()
 declare none: none
 

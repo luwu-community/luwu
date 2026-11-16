@@ -513,11 +513,36 @@ private:
     AstStat* parseLeaveGuard(AstStat* leave);
     AstStatIf* makeLeaveGuard(AstStat* leave, const Location& ifLocation, AstExpr* condition);
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): one alternative of a pattern after `is`, parsed
+    // before anything is tested
+    struct PatternAlternative
+    {
+        Location location;
+        // What the value is compared with (`nil`, `none`, a literal), or the class it's an instance of
+        AstExpr* operand = nullptr;
+        bool isClass = false;
+        // The name `type(value)` gives
+        std::optional<std::string> tag;
+    };
+    // `is <alternatives>`, `is not <alternatives>` or `implements Trait`
+    struct Pattern
+    {
+        Location location;
+        bool negated = false;
+        bool implements = false;
+        std::vector<PatternAlternative> alternatives;
+    };
+
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` and the `is` / `implements` operators
     bool matchExpressionsAvailable();
     bool typeTestFollows();
     AstExpr* parseTypeTest(AstExpr* value, const Location& start);
-    AstExpr* parseTypeTestAlternative(AstExpr* value, const Location& start, bool negated);
+    Pattern parsePattern();
+    PatternAlternative parsePatternAlternative();
+    AstExpr* parsePatternClass();
+    AstExpr* buildTypeTest(AstExpr* value, const Pattern& pattern, const Location& start);
+    AstExpr* makePatternTest(AstExpr* value, const Pattern& pattern, const Location& start);
+    AstExpr* makeAlternativeTest(AstExpr* value, const PatternAlternative& alternative, bool negated, const Location& start);
     bool literalPatternFollows();
     std::optional<AstExpr*> parseNothingValue();
     bool matchExpressionFollows();

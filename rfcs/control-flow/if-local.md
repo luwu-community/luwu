@@ -145,7 +145,7 @@ A binding tests truthiness rather than `nil`. `if local flag = read_flag()` skip
 ## Future work
 
 - `repeat ... until` chains.
-- Patterns in clauses beyond destructuring are covered by the Pattern Matching RFC (`if x is Point.{x, y} then`).
+- Patterns in clauses beyond destructuring are covered by the Pattern Matching RFC (`if x is Point {x, y} then`).
 
 ## Prior art
 

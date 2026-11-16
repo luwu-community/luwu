@@ -808,7 +808,7 @@ struct AstIfClause
     // The `when` before this clause. Unset on the first clause.
     std::optional<Location> whenLocation;
     // False for a binding that holds its value whatever it is, with no truthiness test: a field a pattern binds after
-    // a type test (`x is Point.{x, y}`), which has to bind even when the field is `false`.
+    // a type test (`x is Point {x, y}`), which has to bind even when the field is `false`.
     bool tested = true;
 };
 

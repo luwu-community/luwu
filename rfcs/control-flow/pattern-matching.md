@@ -12,16 +12,16 @@ The `is`, `is not` and `implements` operators test a value's type, class or trai
 a value by testing one subject against a list of patterns.
 
 ```luwu
-if event is Click.{x, y} then
+if event is Click {x, y} then
     press(x, y)
-elseif event is Key.{code} then
+elseif event is Key {code} then
     type_key(code)
 end
 
 const area = match const s = shape
     case is Point then 0
-    case is Circle.{radius} when radius > 0 then math.pi * radius ^ 2
-    case is Rect.{w, h as height} then w * height
+    case is Circle {radius} when radius > 0 then math.pi * radius ^ 2
+    case is Rect {w, h as height} then w * height
     else 0
 ```
 
@@ -53,7 +53,7 @@ The right side of `is` is a pattern made of alternatives joined by `|`. Each alt
   tag is never looked up as a name: a local named `string` doesn't change what `is string` means;
 - `nil` or `none`, compared with `==`;
 - a literal string, number or boolean, compared with `==`;
-- a class, given as any other expression (`class.isinstance`).
+- a class, given as a name or a dotted path such as `geometry.Point` (`class.isinstance`).
 
 `x is 1 | 2 | 3` means the `or` of the three tests, and narrows like them. `is not` negates the whole pattern. A tested value that isn't a local is read
 once: `t.kind is "a" | "b"` doesn't read `t.kind` twice. Because `is not` is a fixed pair, `x is not y` never parses as `x is (not y)`.
@@ -62,18 +62,31 @@ once: `t.kind is "a" | "b"` doesn't read `t.kind` twice. Because `is not` is a f
 
 ### Destructuring in a test
 
-A class test can bind fields with the `.{}` syntax of destructuring, by name or by position:
+A class test can also take the object apart. Put the fields to bind in braces after the class to bind them by name, or in parentheses
+to bind them by position, the way the class's primary constructor takes them:
 
 ```luwu
-if event is Click.{x, y} then ... end
-if r is Ok.(value) then ... end
-if node is Branch.{left.{value as left_value}, right} then ... end
+if event is Click {x, y} then ... end
+if cat is Cat(name, age) then ... end
+if r is Ok(value) then ... end
 ```
 
+`cat is Cat(name, age)` tests that `cat` is a `Cat` and binds `name` and `age` in the branch. A pattern can rename a field with `as` and test it with
+`is`, and a pattern nested in a field can bind more names:
+
+```luwu
+if b is Box { inner as _ is Some(inner is string) } then
+    print(inner)
+end
+```
+
+A field taken apart without a test uses destructuring's `.{}` and `.()`, as in `is Branch {left.{value as left_value}, right}`. Bundles have no
+class to name, and a bundle pattern is written like the `.(1, 2, 3)` that builds one: `x is .(a, b)`.
+
 The names are bound only when the whole condition holds and are visible in the branch it guards, like an `if local` binding. A bound field can be
-falsy (`is Flag.{on}` binds `on = false`). Destructuring is allowed only where a binding can be scoped: a whole `if`, `elseif` or `while` condition, a
+falsy (`is Flag {on}` binds `on = false`). Destructuring is allowed only where a binding can be scoped: a whole `if`, `elseif` or `while` condition, a
 `when` clause, or a `case` pattern. Alternatives can destructure only when every alternative binds the same names, as in Rust:
-`x is Move.{x, y} | Jump.{x, y}` is fine, and `x is Move.{x, y} | Stop` is an error. A guard such as `r is Ok.(value) and return value` is an error.
+`x is Move {x, y} | Jump {x, y}` is fine, and `x is Move {x, y} | Stop` is an error. A guard such as `r is Ok(value) and return value` is an error.
 
 ### `match` expressions
 
@@ -85,14 +98,14 @@ const which = match args[1] or error("missing 'patch' or 'unpatch'")
 
 print(match foo()
     case name is string then `name: {name}`
-    case is Cat.{name, age} then `{name} is {age}`
+    case is Cat {name, age} then `{name} is {age}`
     case other then error(`unexpected {other}`)
 )
 ```
 
 - The header is `match <subject>`, or `match const <name> = <subject>` (also `local`) to name the subject in every arm and guard.
 - Each arm is `case [<name>] [is <pattern>] [when <condition> ...] then <value>`. The pattern is the pattern of `is` (and `is not` and `implements`),
-  literals included: `case is "p" | "patch"`, `case is Point.{x, y}`, `case implements Named`. A pattern always comes after `is`, as it does
+  literals included: `case is "p" | "patch"`, `case is Point {x, y}`, `case implements Named`. A pattern always comes after `is`, as it does
   outside a `match`. A `when` chain after the pattern works as in [If Local](if-local.md).
 - A name before `is` is always a new binding. It holds the subject's value, narrowed by the pattern, for the arm's guards and value:
   `case n is number when n > 10 then ...`. With no pattern, `case other` matches every value, `nil` and `false` included.
@@ -102,7 +115,7 @@ print(match foo()
 - The last arm is `else <value>`, or a `case <name>` with no `when`, which matches everything. A `match` always gives a value. Because a nested
   `match` ends at its last arm, the arms after it belong to the outer `match`.
 - An arm's value can leave instead, as an if-else expression's can: `case is nil then return`, `case is 0 then continue`.
-- Names are introduced only by `case` names, `.{}` and `.()` patterns, `when const` guards and the subject. A named subject is narrowed in each
+- Names are introduced only by `case` names, class and bundle patterns, `when const` guards and the subject. A named subject is narrowed in each
   arm.
 - `match` has no `end` and no statement form. In statement position it's an error that suggests an `if` statement.
 
@@ -138,6 +151,9 @@ values has to list each class.
 - **`or` between alternatives** (`case "p" or "patch"`) is already an expression that evaluates to `"p"`.
 - **Patterns without `is`** (`case "p" | "patch"`, `case .(name)`). A bare `.(name)` reads as a bundle now that `.(a, b)` builds one, and
   patterns that only worked after `case` made `match` a second pattern language next to `is`.
+- **A dot in class patterns** (`is Cat.(name, age)`, `is Pod.{x, y}`). Patterns used to be written like destructuring
+  (`const Cat.(name) = c`), and the dot told a pattern apart from constructing a `Cat`. The dot was removed once every pattern moved behind `is`,
+  where `Cat(name)` can't be a call. Bundle patterns keep it because `.(a, b)` is how a bundle is written everywhere.
 - **Binding a bare name that's already taken** (Python's `case FOO:`) silently shadows `FOO`. A `case` name binds, and the names that are
   always meant as tests are errors.
 - **`:` as a runtime type test** in patterns was rejected. `:` is a static, erased annotation everywhere else.

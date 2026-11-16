@@ -185,6 +185,11 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
                  "local x = 1\nlocal y = match x\n    c\nprint(y)\n",
                  "Expected 'case' after the value 'match' tests",
              },
+             // the right side of `is` is a pattern, never an expression
+             Case{
+                 "local x, y = 1, 2\nlocal z = x is not (y)\n",
+                 "Expected a type, class or literal after 'is', got '('",
+             },
          })
     {
         INFO(c.source);
@@ -192,6 +197,37 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
         REQUIRE_EQ(result.errors.size(), 1);
         CHECK_EQ(result.errors[0].getMessage(), c.message);
     }
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the class after `is` is a name or a dotted path, and
+// `is integer` tests for an integer
+TEST_CASE_FIXTURE(ClassesFixture, "type_tests_name_their_class_by_path")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        class Point(public x: number)
+        end
+        local geometry = { Point = Point }
+
+        local function f(p: Point | string): number
+            if p is geometry.Point then
+                return 1
+            end
+            return 0
+        end
+
+        local function whole(n: unknown): boolean
+            return n is integer
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 // An unnamed subject's hidden local is never reported unused, even before the first arm is written
