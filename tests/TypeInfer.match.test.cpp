@@ -12,6 +12,7 @@ LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(LuwuTraits)
 
 using namespace Luau;
 
@@ -234,6 +235,39 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_arguments_in_a_pattern_are_one_error"
     const SyntaxError* syntax = get<SyntaxError>(result.errors[0]);
     REQUIRE(syntax);
     CHECK_EQ(result.errors[0].location.begin.line, 4);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `is trait` and `is class` test a value's type like the
+// other primitive tags, and a local holding a trait works after `implements`
+TEST_CASE_FIXTURE(ClassesFixture, "is_trait_narrows_for_implements")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        trait Named
+            expect name: string
+        end
+        class Path(public name: string) implements Named
+        end
+
+        local function matches(value: Path, expected: class | trait): boolean
+            if expected is trait and value implements expected then
+                return true
+            end
+            if expected is class and value is expected then
+                return true
+            end
+            return expected is not trait and expected is not class
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the class after `is` is a name or a dotted path, and

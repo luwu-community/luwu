@@ -8291,7 +8291,7 @@ AstExpr* Parser::parseTableComprehension(const Location& start, const MatchLexem
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the primitive types `is` tests against with `type()`.
 // `function` is a keyword token, so it's matched separately (see primitiveTagAt).
 static constexpr const char* kPrimitiveTags[] = {
-    "string", "number", "integer", "boolean", "buffer", "vector", "table", "thread", "userdata", "object", "class",
+    "string", "number", "integer", "boolean", "buffer", "vector", "table", "thread", "userdata", "object", "class", "trait",
 };
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the primitive type `is` names at `lexeme`, if it names one
