@@ -204,7 +204,7 @@ struct CostVisitor : AstVisitor
         }
         else if (AstExprIfElse* expr = node->as<AstExprIfElse>())
         {
-            // Luwu If Local (rfcs/if-local.md): every clause in a `when` chain is evaluated and tested
+            // Luwu If Local (rfcs/control-flow/if-local.md): every clause in a `when` chain is evaluated and tested
             Cost condition = model(expr->condition);
             for (size_t i = 1; i < expr->clauses.size; ++i)
                 condition += model(expr->clauses.data[i].expr) + 1;
@@ -231,12 +231,12 @@ struct CostVisitor : AstVisitor
         }
         else if (AstExprTableComprehension* expr = node->as<AstExprTableComprehension>())
         {
-            // Luwu Table Comprehensions (rfcs/table-comprehensions.md): an allocation plus the loop, modeled like any loop
+            // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): an allocation plus the loop, modeled like any loop
             return modelStatement(expr->loop) + Cost(1, 0);
         }
         else if (AstExprDo* expr = node->as<AstExprDo>())
         {
-            // Luwu Do Expressions (rfcs/do-expressions.md): the cost of the block, modeled like any statements
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the cost of the block, modeled like any statements
             return modelStatement(expr->body);
         }
         else
@@ -317,7 +317,7 @@ struct CostVisitor : AstVisitor
     {
         Cost condition = model(node->condition);
 
-        // Luwu If Local (rfcs/if-local.md): every clause of a `when` chain runs per iteration, and each adds a test
+        // Luwu If Local (rfcs/control-flow/if-local.md): every clause of a `when` chain runs per iteration, and each adds a test
         for (size_t i = 1; i < node->clauses.size; ++i)
             condition += model(node->clauses.data[i].expr) + 1;
 
@@ -335,7 +335,7 @@ struct CostVisitor : AstVisitor
 
     bool visit(AstStatIf* node) override
     {
-        // Luwu If Local (rfcs/if-local.md): a constant first clause doesn't decide a `when` chain. The visitor
+        // Luwu If Local (rfcs/control-flow/if-local.md): a constant first clause doesn't decide a `when` chain. The visitor
         // goes on to model every clause; each one adds a test.
         if (node->clauses.size != 0)
         {

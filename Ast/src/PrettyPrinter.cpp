@@ -862,7 +862,7 @@ struct Printer
         }
         else if (const auto& a = expr.as<AstExprDo>())
         {
-            // Luwu Do Expressions (rfcs/do-expressions.md): the shorthand (`x or return v`) is just its statement
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the shorthand (`x or return v`) is just its statement
             if (!a->shorthand)
                 writer.keyword("do");
 
@@ -871,7 +871,7 @@ struct Printer
         }
         else if (const auto& a = expr.as<AstExprTableComprehension>())
         {
-            // Luwu Table Comprehensions (rfcs/table-comprehensions.md): prints the clauses back from the loop they are
+            // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): prints the clauses back from the loop they are
             // stored as (see AstExprTableComprehension)
             writer.symbol("{");
 
@@ -956,28 +956,7 @@ struct Printer
             const auto cstNode = lookupCstNode<CstExprTable>(a);
             const CstExprTable::Item* cstItem = cstNode && cstNode->items.size == 1 ? cstNode->items.begin() : nullptr;
 
-            if (a->item->key)
-            {
-                std::string assignment = a->item->accumulate ? toString(*a->item->accumulate) + "=" : "=";
-
-                if (cstItem)
-                {
-                    maybeAdvanceAndWrite(cstItem->indexerOpenPosition, "[", true);
-                    visualize(*a->item->key);
-                    maybeAdvanceAndWrite(cstItem->indexerClosePosition, "]");
-                    maybeAdvanceAndWrite(cstItem->equalsPosition, assignment);
-                }
-                else
-                {
-                    writer.symbol("[");
-                    visualize(*a->item->key);
-                    writer.symbol("]");
-                    writer.maybeSpace(a->item->value->location.begin, 1);
-                    writer.symbol(assignment);
-                }
-            }
-
-            visualize(*a->item->value);
+            visualizeComprehensionItem(*a->item, cstItem);
 
             Position endPos = expr.location.end;
             if (endPos.column > 0)
@@ -1077,6 +1056,33 @@ struct Printer
             advance(newPos);
     }
 
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): `value`, `[key] = value` or `[key] op= value`
+    void visualizeComprehensionItem(const AstStatComprehensionItem& item, const CstExprTable::Item* cstItem)
+    {
+        if (item.key)
+        {
+            std::string assignment = item.accumulate ? toString(*item.accumulate) + "=" : "=";
+
+            if (cstItem)
+            {
+                maybeAdvanceAndWrite(cstItem->indexerOpenPosition, "[", true);
+                visualize(*item.key);
+                maybeAdvanceAndWrite(cstItem->indexerClosePosition, "]");
+                maybeAdvanceAndWrite(cstItem->equalsPosition, assignment);
+            }
+            else
+            {
+                writer.symbol("[");
+                visualize(*item.key);
+                writer.symbol("]");
+                writer.maybeSpace(item.value->location.begin, 1);
+                writer.symbol(assignment);
+            }
+        }
+
+        visualize(*item.value);
+    }
+
     void visualize(AstStat& program)
     {
         advance(program.location.begin);
@@ -1102,6 +1108,15 @@ struct Printer
                 writer.advance(block->location.end);
                 writeEnd(program.location);
             }
+        }
+        else if (const auto& a = program.as<AstStatIf>(); a && a->isLeaveGuard)
+        {
+            // Luwu Guards (rfcs/control-flow/guards.md): `continue if x`
+            LUAU_ASSERT(a->thenbody->body.size == 1);
+            visualize(*a->thenbody->body.data[0]);
+            advance(a->ifLocation.begin);
+            writer.keyword("if");
+            visualize(*a->condition);
         }
         else if (const auto& a = program.as<AstStatIf>())
         {
@@ -1138,9 +1153,16 @@ struct Printer
             writer.keyword("continue");
         else if (const auto& a = program.as<AstStatGive>())
         {
-            // Luwu Do Expressions (rfcs/do-expressions.md)
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
             writer.keyword("give");
-            visualize(*a->value);
+
+            const auto cstNode = a->item ? lookupCstNode<CstExprTable>(a->item) : nullptr;
+            const CstExprTable::Item* cstItem = cstNode && cstNode->items.size == 1 ? cstNode->items.begin() : nullptr;
+
+            if (a->item)
+                visualizeComprehensionItem(*a->item, cstItem);
+            else
+                visualize(*a->value);
         }
         else if (const auto& a = program.as<AstStatReturn>())
         {
@@ -1991,7 +2013,7 @@ struct Printer
             LUAU_ASSERT(!"visualizeBlock was expecting an AstStatBlock");
     }
 
-    // Luwu If Local (rfcs/if-local.md): prints a loop's `when` chain, if its body holds one (AstStatFor::whenGuard),
+    // Luwu If Local (rfcs/control-flow/if-local.md): prints a loop's `when` chain, if its body holds one (AstStatFor::whenGuard),
     // and returns the block as written.
     AstStatBlock* visualizeLoopWhen(AstStatBlock& body, AstStatIf* guard)
     {
@@ -2009,7 +2031,7 @@ struct Printer
         return guard->thenbody;
     }
 
-    // Luwu If Local (rfcs/if-local.md): a `when` chain prints clause by clause. A binding prints through its
+    // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain prints clause by clause. A binding prints through its
     // declaration.
     void visualizeIfCondition(AstExpr& condition, const AstArray<AstIfClause>& clauses)
     {

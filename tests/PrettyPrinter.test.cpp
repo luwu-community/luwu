@@ -1590,7 +1590,7 @@ TEST_CASE_FIXTURE(Fixture, "prettyPrint_error_stat")
     auto names = AstNameTable{allocator};
     ParseResult parseResult = Parser::parse(code.data(), code.size(), names, allocator, {});
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): a statement can start with a value (`-n < 0 or return`), so the `-`
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a statement can start with a value (`-n < 0 or return`), so the `-`
     // is parsed as a unary operator missing its operand
     if (FFlag::LuwuDoExpr)
         CHECK_EQ("(error-stat: -(error-expr))", prettyPrintWithTypes(*parseResult.root));
@@ -2392,6 +2392,8 @@ TEST_CASE("prettyPrint_loop_when_chains")
     std::string code = R"(
 x  or return nil
 for _, v in t do v or continue; ok and  valid or (return 1, 2) end
+return nil  if not x
+for _, v in t do continue if  not v; return 1, 2 if not (ok and  valid) end
 for i = 1,  10 when i % 2 == 0 do
     print(i)
 end
@@ -2434,7 +2436,7 @@ end
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md)
 TEST_CASE("prettyPrint_table_comprehensions")
 {
     ScopedFastFlag sffs[] = {
@@ -2462,6 +2464,11 @@ local f = {
             give w
         end
         give -w
+}
+local g = {
+    for k, v in t do
+        give [v] = 0  if not k
+        give [k] += v
 }
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);

@@ -13,7 +13,7 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 using namespace Luau;
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md)
 TEST_SUITE_BEGIN("TypeInferTableComprehensions");
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_comprehension_types_come_from_the_item")
@@ -89,6 +89,44 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "accumulating_items_keep_the_value_type")
     CHECK_EQ(toString(requireType("joined")), "{ [string]: number | string }");
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "keyed_gives_in_a_do_item_make_a_map")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuTableComprehensions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local nums = {1, 2, 3}
+        local names = { for i, v in nums do
+            local name = tostring(i)
+            give [name] = v
+        }
+        local mixed = { for i, v in nums do
+            if v > 1 then
+                give [i] = "big"
+            end
+            give [i] = true
+        }
+        local joined = { for i, v in nums do give [v] ..= i }
+        local typed: { [string]: number } = { for i, v in nums do give [tostring(i)] = v }
+        local bad: { [string]: number } = { for i, v in nums do give [tostring(i)] = "no" }
+    )");
+
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    // `bad` gives a string where the annotation wants a number
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 15);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+
+    CHECK_EQ(toString(requireType("names")), "{ [string]: number }");
+    CHECK_EQ(toString(requireType("mixed")), "{boolean | string}");
+    CHECK_EQ(toString(requireType("joined")), "{number | string}");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "an_annotation_checks_the_item")
 {
     ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
@@ -162,6 +200,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_table_comprehensions")
         kTypewriterBefore,
         "local kept = {\n    for _, v in nums do\n        local n = maybe()\n        n or continue\n"
         "        if v > n then\n            give v\n        end\n        give n\n}",
+        kTypewriterAfter
+    );
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "local tally = {\n    for i, v in nums do\n        local n = maybe()\n        give [i] = 0 if not n\n        give [i] += v + n\n}",
         kTypewriterAfter
     );
 }

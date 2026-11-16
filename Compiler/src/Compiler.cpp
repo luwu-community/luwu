@@ -5306,11 +5306,27 @@ struct Compiler
         if (!FFlag::LuwuClasses)
             return nullptr;
 
+        // Luwu Guards (rfcs/control-flow/guards.md): `return if not class.isinstance(c, C)` leaves when the check fails,
+        // so it proves `c` for the rest of the block just as the assert does. So does the `if` statement it means.
+        if (AstStatIf* guard = stat->as<AstStatIf>())
+        {
+            bool leavesOnFailure = !guard->elsebody && guard->clauses.size == 0 && guard->thenbody->body.size == 1 &&
+                                   alwaysTerminates(guard->thenbody->body.data[0]);
+            AstExprUnary* negated = withoutGroups(guard->condition)->as<AstExprUnary>();
+            bool checksFailure = negated && negated->op == AstExprUnary::Op::Not;
+
+            AstStatClass* decl = leavesOnFailure && checksFailure ? matchIsinstanceCall(negated->expr, local) : nullptr;
+            if (!decl || bodyWritesLocal(body, index + 1, local))
+                return nullptr;
+
+            return decl;
+        }
+
         AstStatExpr* statExpr = stat->as<AstStatExpr>();
         if (!statExpr)
             return nullptr;
 
-        // Luwu Do Expressions (rfcs/do-expressions.md): `class.isinstance(c, C) or return` leaves when the check fails,
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `class.isinstance(c, C) or return` leaves when the check fails,
         // so it proves `c` for the rest of the block just as the assert does
         if (AstExprBinary* orLeave = asOrLeave(statExpr->expr))
         {
@@ -5760,10 +5776,10 @@ struct Compiler
             return;
         }
 
-        // Luwu Table Comprehensions (rfcs/table-comprehensions.md): nothing can observe the table in `#{ for ... }`, so only
+        // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): nothing can observe the table in `#{ for ... }`, so only
         // its length is computed and the table is never built
         AstExprTableComprehension* counted = expr->op == AstExprUnary::Op::Len ? expr->expr->as<AstExprTableComprehension>() : nullptr;
-        if (counted && !counted->item->key)
+        if (counted && !counted->item->isMap())
             return compileComprehensionCount(counted, target);
 
         uint8_t re = compileExprAuto(expr->expr, rs);
@@ -5925,7 +5941,7 @@ struct Compiler
         }
     }
 
-    // Luwu If Local (rfcs/if-local.md): emits a `when` chain's clauses in order, adding a jump to `elseJumps` after
+    // Luwu If Local (rfcs/control-flow/if-local.md): emits a `when` chain's clauses in order, adding a jump to `elseJumps` after
     // each one, taken when it fails. A binding gets a register of its own and stays pushed as a local; the caller
     // closes and pops the chain's locals (from `oldLocals`) after the branch.
     //
@@ -5986,7 +6002,7 @@ struct Compiler
         isinstanceProvenLocals[local] = decl;
     }
 
-    // Luwu If Local (rfcs/if-local.md): the lowest register among the captured locals from `start` up, or -1. A
+    // Luwu If Local (rfcs/control-flow/if-local.md): the lowest register among the captured locals from `start` up, or -1. A
     // clause can capture an earlier binding (`when run(function() x = nil end)`), and when a later clause fails the
     // else path has to close that upvalue too, because the binding's register is reused after the chain.
     int capturedLocalsReg(size_t start)
@@ -6005,7 +6021,7 @@ struct Compiler
         return reg;
     }
 
-    // Luwu If Local (rfcs/if-local.md): compiles `clauses`, then the code they guard with `compileBranch`, which sees the
+    // Luwu If Local (rfcs/control-flow/if-local.md): compiles `clauses`, then the code they guard with `compileBranch`, which sees the
     // clauses' bindings and `class.isinstance` proofs. A `while` chain is its loop's header (Loop::compilingHeader). Closes
     // the bindings' upvalues when `closeAfter`, and pops them. Returns the register a failing clause's path closes
     // upvalues from, or -1 (capturedLocalsReg; see emitClauseFailureClose).
@@ -6040,14 +6056,14 @@ struct Compiler
         return closeReg;
     }
 
-    // Luwu If Local (rfcs/if-local.md): the start of the path a failing clause jumps to
+    // Luwu If Local (rfcs/control-flow/if-local.md): the start of the path a failing clause jumps to
     void emitClauseFailureClose(int closeReg)
     {
         if (closeReg >= 0)
             bytecode.emitABC(LOP_CLOSEUPVALS, uint8_t(closeReg), 0, 0);
     }
 
-    // Luwu If Local (rfcs/if-local.md)
+    // Luwu If Local (rfcs/control-flow/if-local.md)
     void compileExprIfElseClauses(AstExprIfElse* expr, uint8_t target, bool targetTemp)
     {
         std::vector<size_t> elseJump;
@@ -6076,7 +6092,7 @@ struct Compiler
         patchJump(expr, thenLabel, endLabel);
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): the block runs in place, and each `give` compiles its value into
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the block runs in place, and each `give` compiles its value into
     // `target`, closes the block's captured locals and jumps to the end, the way an inlined function's `return` does
     // (compileInlineReturn). `return`, `break` and `continue` leave through their usual paths: they close upvalues
     // from the local stack, which already holds the block's locals.
@@ -6111,7 +6127,7 @@ struct Compiler
         giveFrames.pop_back();
     }
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the comprehension's loop compiles like any loop, with its
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the comprehension's loop compiles like any loop, with its
     // item appending to the table (compileStatComprehensionItem). What makes it faster than the loop one would write by
     // hand is the sizing: the table is allocated for every element the source can produce, by NEWTABLE for a constant
     // range or by PRESIZETABLE at the loop's start (compileComprehensionPresize), so filling it never rehashes. An array
@@ -6124,7 +6140,7 @@ struct Compiler
 
         RegScope rs(this);
 
-        bool isMap = expr->item->key != nullptr;
+        bool isMap = expr->item->isMap();
 
         // The target can be a local the loop reads (`t = { for _, v in t do v }`), so the table is only written to it at the end
         uint8_t table = targetTemp ? target : allocReg(expr, 1u);
@@ -6174,7 +6190,7 @@ struct Compiler
             bytecode.emitABC(LOP_MOVE, target, table, 0);
     }
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the trip count of a numeric for whose bounds and step are
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the trip count of a numeric for whose bounds and step are
     // constants, with the first value and the step; -1 when they aren't constant (see getTripCount for the other -1 cases)
     int getConstantTripCount(AstStatFor* range, double& from, double& step)
     {
@@ -6194,13 +6210,13 @@ struct Compiler
         return getTripCount(fromc.valueNumber, toc.valueNumber, stepc.valueNumber);
     }
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): an array comprehension over a constant range whose item and
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): an array comprehension over a constant range whose item and
     // `when` conditions fold to constants on every iteration has nothing left to run at runtime. It compiles to what the
     // literal it builds compiles to: `{ for i = 1, 4 do i * 2 }` is `{ 2, 4, 6, 8 }`, a NEWTABLE and SETLISTs.
     bool tryCompileConstantComprehension(AstExprTableComprehension* expr, uint8_t target)
     {
         AstStatFor* range = expr->clauseCount == 1 ? expr->loop->as<AstStatFor>() : nullptr;
-        if (!range || expr->item->key)
+        if (!range || expr->item->isMap())
             return false;
 
         AstStatIf* guard = range->whenGuard;
@@ -6320,7 +6336,7 @@ struct Compiler
         return true;
     }
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): `#{ for ... }`, which counts the items that aren't nil
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): `#{ for ... }`, which counts the items that aren't nil
     // without building the table (see ComprehensionFrame)
     void compileComprehensionCount(AstExprTableComprehension* expr, uint8_t target)
     {
@@ -6337,7 +6353,7 @@ struct Compiler
         bytecode.emitABC(LOP_MOVE, target, counter, 0);
     }
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): sizes the comprehension's table from the loop whose
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): sizes the comprehension's table from the loop whose
     // registers start at `regs`, when that loop is the one its frame sizes from
     void compileComprehensionPresize(AstStat* loop, uint8_t regs, bool range)
     {
@@ -6356,7 +6372,7 @@ struct Compiler
         bytecode.emitABC(LOP_PRESIZETABLE, frame.table, regs, form);
     }
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): one element. A nil value adds nothing, which is also how an
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): one element. A nil value adds nothing, which is also how an
     // `if c then v else nil` item filters.
     void compileStatComprehensionItem(AstStatComprehensionItem* stat)
     {
@@ -6368,8 +6384,15 @@ struct Compiler
 
         if (frame.table == kInvalidReg)
         {
-            LUAU_ASSERT(!stat->key);
+            LUAU_ASSERT(!stat->isMap());
             compileComprehensionCountItem(stat, frame.counter, rs);
+            return;
+        }
+
+        // A `do` item whose `give`s write keys gives nothing itself: each `give` stores its key (compileStatGive)
+        if (stat->givenItems.size != 0)
+        {
+            compileExprAuto(stat->value, rs);
             return;
         }
 
@@ -6396,7 +6419,7 @@ struct Compiler
         patchJump(stat, skipLabel, endLabel);
     }
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): an item of `#{ for ... }`: counted unless it is nil
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): an item of `#{ for ... }`: counted unless it is nil
     void compileComprehensionCountItem(AstStatComprehensionItem* stat, uint8_t counter, RegScope& rs)
     {
         // a constant has no side effects to keep, so a non-nil one just counts and a nil one does nothing
@@ -6436,7 +6459,7 @@ struct Compiler
             patchJump(stat, skipLabel, bytecode.emitLabel());
     }
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): `[key] op= value`. The key's current value is combined
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): `[key] op= value`. The key's current value is combined
     // with the new one; an absent key stores the value itself (negated for -=)
     void compileComprehensionAccumulate(AstStatComprehensionItem* stat, uint8_t table, uint8_t key, uint8_t value)
     {
@@ -6483,14 +6506,21 @@ struct Compiler
         patchJump(stat, doneLabel, bytecode.emitLabel());
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md)
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
     void compileStatGive(AstStatGive* stat)
     {
         LUAU_ASSERT(!giveFrames.empty());
 
-        // Each `give` writes the target only once, right before it jumps out: the target can be a live local that the
-        // block still reads (`x = do ... give x + 1`), so it's never used as scratch before that
+        // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): `give [k] = v` stores into the comprehension's table
+        // instead of writing the target
+        if (stat->item)
         {
+            compileStatComprehensionItem(stat->item);
+        }
+        else
+        {
+            // Each `give` writes the target only once, right before it jumps out: the target can be a live local that the
+            // block still reads (`x = do ... give x + 1`), so it's never used as scratch before that
             RegScope rs(this);
             GiveFrame& frame = giveFrames.back();
             compileExpr(stat->value, frame.target, frame.targetTemp);
@@ -7695,7 +7725,7 @@ struct Compiler
             return nullptr;
     }
 
-    // Luwu If Local (rfcs/if-local.md)
+    // Luwu If Local (rfcs/control-flow/if-local.md)
     void compileStatIfClauses(AstStatIf* stat)
     {
         std::vector<size_t> elseJump;
@@ -7846,7 +7876,7 @@ struct Compiler
         }
     }
 
-    // Luwu If Local (rfcs/if-local.md): `while local x = f() when c do`. The chain runs before every iteration, and its
+    // Luwu If Local (rfcs/control-flow/if-local.md): `while local x = f() when c do`. The chain runs before every iteration, and its
     // bindings are locals of the iteration: closed (if captured) and popped before jumping back, so a closure in the
     // body captures that iteration's value, as with a `for` variable. A failing clause leaves the loop through a
     // CLOSEUPVALS when a later clause captured an earlier binding (see capturedLocalsReg).
@@ -7893,7 +7923,7 @@ struct Compiler
         loops.pop_back();
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): `x or return v` as a statement compiles as the
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `x or return v` as a statement compiles as the
     // `if not x then return v end` it replaces, and `x and break` as `if x then break end`, with every shortcut an `if`
     // gets (a `break` or `continue` body is a single jump to the loop's exit or continue label). In `x or y and continue`
     // the `if` body is the statement `y and continue`.
@@ -9195,7 +9225,7 @@ struct Compiler
         {
             const LoopJump& lj = loopJumps[i];
 
-            // Luwu Do Expressions (rfcs/do-expressions.md): a `do` expression in this loop's header jumps for an
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a `do` expression in this loop's header jumps for an
             // enclosing loop, which patches it later
             if (lj.loop != loop)
             {
@@ -9222,7 +9252,7 @@ struct Compiler
         loopJumps.resize(kept);
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): the loop a `break` or `continue` belongs to: the innermost loop that
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the loop a `break` or `continue` belongs to: the innermost loop that
     // isn't compiling its own header (a `while` or `until` condition, `for` bounds, `for ... in` values). A header runs
     // outside its loop's body, so the parser resolves a `break`/`continue` in a `do` expression there to the enclosing
     // loop.
@@ -10136,7 +10166,7 @@ struct Compiler
 
         bool visit(AstExpr* expr) override
         {
-            // Luwu Do Expressions (rfcs/do-expressions.md): a `do` expression can `return` from anywhere inside an
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a `do` expression can `return` from anywhere inside an
             // expression, so every expression has to be searched. Upstream skips them: there, a `return` is only ever a
             // statement of the function's own blocks.
             return FFlag::LuwuDoExpr;
@@ -10214,7 +10244,7 @@ struct Compiler
         Type type;
         size_t label;
 
-        // Luwu Do Expressions (rfcs/do-expressions.md): the index in `loops` of the loop this jump leaves or continues.
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the index in `loops` of the loop this jump leaves or continues.
         // It isn't always the innermost one: see targetLoop.
         size_t loop;
     };
@@ -10226,7 +10256,7 @@ struct Compiler
 
         AstStatContinue* continueUsed;
 
-        // Luwu Do Expressions (rfcs/do-expressions.md): set while the loop compiles its own header (see targetLoop)
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): set while the loop compiles its own header (see targetLoop)
         bool compilingHeader = false;
     };
 
@@ -10417,7 +10447,7 @@ struct Compiler
     std::vector<Loop> loops;
     std::vector<InlineFrame> inlineFrames;
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): the `do` expressions being compiled, innermost last
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the `do` expressions being compiled, innermost last
     struct GiveFrame
     {
         uint8_t target;
@@ -10427,7 +10457,7 @@ struct Compiler
     };
     std::vector<GiveFrame> giveFrames;
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the comprehensions being compiled, innermost last
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the comprehensions being compiled, innermost last
     struct ComprehensionFrame
     {
         // The table being built, or kInvalidReg for `#{ for ... }`, which only counts (compileComprehensionCount).
@@ -10439,7 +10469,7 @@ struct Compiler
     };
     std::vector<ComprehensionFrame> comprehensionFrames;
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the longest constant range a comprehension is folded to
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the longest constant range a comprehension is folded to
     // a literal for (tryCompileConstantComprehension). Past it, the loop is less bytecode than the constants.
     static const int kConstantComprehensionLimit = 64;
     // Luwu Classes (rfcs/classes): classes whose initializers are being compiled at a construction site

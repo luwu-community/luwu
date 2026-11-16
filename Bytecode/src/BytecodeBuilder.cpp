@@ -1484,7 +1484,7 @@ uint8_t BytecodeBuilder::getVersion()
     if (FFlag::LuwuClasses)
         return LWBC_VERSION_WIP;
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): LOP_PRESIZETABLE is WIP bytecode too
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): LOP_PRESIZETABLE is WIP bytecode too
     if (FFlag::LuwuTableComprehensions)
         return LWBC_VERSION_WIP;
 

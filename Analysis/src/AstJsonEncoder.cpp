@@ -550,7 +550,7 @@ struct AstJsonEncoder : public AstVisitor
         writeRaw("}");
     }
 
-    // Luwu If Local (rfcs/if-local.md)
+    // Luwu If Local (rfcs/control-flow/if-local.md)
     void write(const AstIfClause& clause)
     {
         writeRaw("{");
@@ -796,7 +796,7 @@ struct AstJsonEncoder : public AstVisitor
         writeNode(node, "AstStatContinue", []() {});
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md)
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
     void write(class AstStatGive* node)
     {
         writeNode(
@@ -804,12 +804,15 @@ struct AstJsonEncoder : public AstVisitor
             "AstStatGive",
             [&]()
             {
-                PROP(value);
+                if (node->item)
+                    PROP(item);
+                else
+                    PROP(value);
             }
         );
     }
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md)
     void write(class AstExprTableComprehension* node)
     {
         writeNode(

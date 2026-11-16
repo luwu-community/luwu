@@ -11,7 +11,7 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 using namespace Luau;
 
-// Luwu If Local (rfcs/if-local.md)
+// Luwu If Local (rfcs/control-flow/if-local.md)
 TEST_SUITE_BEGIN("TypeInferIfLocal");
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_binding_is_narrowed_to_truthy")

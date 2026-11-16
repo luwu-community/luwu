@@ -4067,7 +4067,7 @@ reentry:
 
             VM_CASE(LOP_PRESIZETABLE)
             {
-                // Luwu Table Comprehensions (rfcs/table-comprehensions.md): sizes or trims the table a comprehension builds
+                // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): sizes or trims the table a comprehension builds
                 Instruction insn = *pc++;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
                 StkId rb = VM_REG(LUAU_INSN_B(insn));
@@ -4080,7 +4080,7 @@ reentry:
 
             VM_CASE(LOP_APPENDTABLE)
             {
-                // Luwu Table Comprehensions (rfcs/table-comprehensions.md): adds a non-nil value at the next index
+                // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): adds a non-nil value at the next index
                 Instruction insn = *pc++;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
                 StkId rb = VM_REG(LUAU_INSN_B(insn));

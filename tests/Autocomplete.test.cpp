@@ -697,7 +697,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     )");
 
     auto ac4 = autocomplete('1');
-    // Luwu Do Expressions (rfcs/do-expressions.md): `do` also starts a value, so it's offered where one goes
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do` also starts a value, so it's offered where one goes
     CHECK_EQ(ac4.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac4.entryMap.count("end"), 0);
     CHECK_EQ(ac4.context, AutocompleteContext::Expression);
@@ -717,7 +717,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     )");
 
     auto ac6 = autocomplete('1');
-    // Luwu If Local (rfcs/if-local.md): a loop's header can also be followed by a `when` chain
+    // Luwu If Local (rfcs/control-flow/if-local.md): a loop's header can also be followed by a `when` chain
     CHECK_EQ(ac6.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
     CHECK_EQ(ac6.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac6.entryMap.count("do"), 1);
@@ -783,7 +783,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_in_middle_keywords")
 
     auto ac3 = autocomplete('1');
     CHECK_EQ(ac3.entryMap.count("table"), 1);
-    // Luwu Do Expressions (rfcs/do-expressions.md): `do` also starts a value, so it's offered where one goes
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do` also starts a value, so it's offered where one goes
     CHECK_EQ(ac3.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac3.context, AutocompleteContext::Expression);
 
@@ -792,7 +792,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_in_middle_keywords")
     )");
 
     auto ac4 = autocomplete('1');
-    // Luwu If Local (rfcs/if-local.md): a loop's header can also be followed by a `when` chain
+    // Luwu If Local (rfcs/control-flow/if-local.md): a loop's header can also be followed by a `when` chain
     CHECK_EQ(ac4.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
     CHECK_EQ(ac4.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac4.entryMap.count("do"), 1);
@@ -838,7 +838,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac1 = autocomplete('1');
-    // Luwu Do Expressions (rfcs/do-expressions.md): `do` also starts a value, so it's offered where one goes
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do` also starts a value, so it's offered where one goes
     CHECK_EQ(ac1.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac1.entryMap.count("end"), 0);
     CHECK_EQ(ac1.context, AutocompleteContext::Expression);
@@ -848,7 +848,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac2 = autocomplete('1');
-    // Luwu If Local (rfcs/if-local.md): a loop's header can also be followed by a `when` chain
+    // Luwu If Local (rfcs/control-flow/if-local.md): a loop's header can also be followed by a `when` chain
     CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac2.entryMap.size());
     CHECK_EQ(ac2.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac2.entryMap.count("do"), 1);
@@ -886,7 +886,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     CHECK_EQ(ac5.entryMap.count("false"), 1);
 }
 
-// Luwu If Local (rfcs/if-local.md)
+// Luwu If Local (rfcs/control-flow/if-local.md)
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_local_keywords")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
@@ -982,7 +982,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_loop_when_keywords")
     CHECK_EQ(autocomplete('1').entryMap.count("abc"), 1);
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md)
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_give_inside_do_expressions")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
@@ -1010,7 +1010,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_give_inside_do_expressions")
     CHECK_EQ(autocomplete('1').entryMap.count("give"), 0);
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): `do` where a value goes, so typing it doesn't complete to a name
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do` where a value goes, so typing it doesn't complete to a name
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_do_where_a_value_goes")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
@@ -1057,7 +1057,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_middle_keywords")
     )");
 
     auto ac3 = autocomplete('1');
-    // Luwu If Local (rfcs/if-local.md): `when` can also follow a condition
+    // Luwu If Local (rfcs/control-flow/if-local.md): `when` can also follow a condition
     CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac3.entryMap.size());
     CHECK_EQ(ac3.entryMap.count("then"), 1);
     CHECK_EQ(ac3.entryMap.count("and"), 1);

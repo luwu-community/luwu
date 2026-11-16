@@ -1,5 +1,5 @@
 -- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
--- Luwu match expressions: `match`, `is`, `is not` and `implements`
+-- Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match`, `is`, `is not` and `implements`
 print("testing match expressions")
 
 class Point(public x: number, public y: number)
@@ -10,8 +10,8 @@ end
 -- literals and alternatives, and the subject named for `else`
 local function which(arg: string)
     return match const a = arg
-        case "p" | "patch" then "patch"
-        case "u" | "unpatch" then "unpatch"
+        case is "p" | "patch" then "patch"
+        case is "u" | "unpatch" then "unpatch"
         else `other:{a}`
 end
 assert(which("p") == "patch")
@@ -27,7 +27,7 @@ local function describe(value: unknown): string
         case is number then "number"
         case is Point then `point:{v.x},{v.y}`
         case is Circle when const r = v.radius when r > 1 then `big:{r}`
-        case nil then "nil"
+        case is nil then "nil"
         else "other"
 end
 assert(describe("hi") == "text:hi")
@@ -46,8 +46,8 @@ local function next_value()
     return calls
 end
 local first = match next_value()
-    case 2 then "two"
-    case 1 then "one"
+    case is 2 then "two"
+    case is 1 then "one"
     else "many"
 assert(first == "one" and calls == 1)
 
@@ -66,8 +66,8 @@ assert((match p
 -- `nil` and `none` as patterns and after `is`
 local function nothing(v: unknown): string
     return match v
-        case nil then "nil"
-        case none then "none"
+        case is nil then "nil"
+        case is none then "none"
         else "something"
 end
 assert(nothing(nil) == "nil")
@@ -126,4 +126,57 @@ do
     assert(type() == "nope" and class)
 end
 
+-- `case name is <pattern>` binds the subject's value as `name`, narrowed by the pattern; `case name` alone matches every
+-- value, `nil` included, and as the last arm it's the `else`
+do
+    local function describe(v)
+        return match v
+            case s is string then `string {s}`
+            case n is number when n > 10 then `big {n}`
+            case is nil then "nothing"
+            case other then `other {tostring(other)}`
+    end
+    assert(describe("a") == "string a")
+    assert(describe(20) == "big 20")
+    assert(describe(3) == "other 3")
+    assert(describe(nil) == "nothing")
+    assert(describe(false) == "other false")
+
+    -- the subject is read once, and every arm's name sees that value
+    local reads = 0
+    local function read()
+        reads += 1
+        return reads
+    end
+    local seen = match read()
+        case n is 1 | 2 then n * 10
+        case other then -other
+    assert(seen == 10 and reads == 1)
+
+    -- an arm can leave instead of giving a value
+    local function first_positive(xs)
+        for _, x in xs do
+            const r = match x
+                case is 0 then continue
+                case n when n < 0 then return nil
+                case n then n
+            return r
+        end
+        return "none"
+    end
+    assert(first_positive({ 0, 0, 5 }) == 5)
+    assert(first_positive({ 0, -1, 5 }) == nil)
+    assert(first_positive({ 0 }) == "none")
+end
+
+-- a literal pattern after `is` works in any condition
+do
+    local function kind(k)
+        if k is "join" | "leave" then
+            return "membership"
+        end
+        return "other"
+    end
+    assert(kind("join") == "membership" and kind("x") == "other")
+end
 return "OK"

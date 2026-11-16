@@ -212,7 +212,7 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
 
         return true;
     }
-    // Luwu If Local (rfcs/if-local.md): a `when` chain is never similar to anything, since its bindings are new locals
+    // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain is never similar to anything, since its bindings are new locals
     CASE(AstExprIfElse) return le->clauses.size == 0 && re->clauses.size == 0 && similar(le->condition, re->condition) &&
                                similar(le->trueExpr, re->trueExpr) && similar(le->falseExpr, re->falseExpr);
     CASE(AstExprInterpString)
@@ -242,9 +242,9 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
     {
         return similar(le->classOf, re->classOf);
     }
-    // Luwu Do Expressions (rfcs/do-expressions.md): a block runs statements, so two are never the same check
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a block runs statements, so two are never the same check
     CASE(AstExprDo) return false;
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): each evaluation builds a new table
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): each evaluation builds a new table
     CASE(AstExprTableComprehension) return false;
     else
     {
@@ -726,7 +726,7 @@ public:
 private:
     LintContext* context;
     unsigned int lastLine;
-    // Luwu Do Expressions (rfcs/do-expressions.md): the line each `do` expression's block starts on
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the line each `do` expression's block starts on
     DenseHashMap<const AstStatBlock*, unsigned int> doExprLines{nullptr};
 
     bool visit(AstExprDo* node) override
@@ -747,7 +747,7 @@ private:
             if (location.begin.line != last.end.line)
                 continue;
 
-            // Luwu Do Expressions (rfcs/do-expressions.md): a one-line `do` expression (`do s = tostring(s) give true`)
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a one-line `do` expression (`do s = tostring(s) give true`)
             // holds several statements on the `do`'s line by design
             if (doLine && location.begin.line == *doLine)
                 continue;
@@ -874,7 +874,7 @@ private:
         return true;
     }
 
-    // Luwu If Local (rfcs/if-local.md): a `when` chain's clauses start with their `when` or their binding's keyword, not
+    // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain's clauses start with their `when` or their binding's keyword, not
     // with an expression, so those are checked too. A plain condition that isn't a chain is visited as usual.
     void visitCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses)
     {
@@ -974,8 +974,8 @@ private:
         return false;
     }
 
-    // Luwu Table Comprehensions: a comprehension is stored as nested loops, but its clauses are parts of the statement
-    // around it, so a nested `for` and the `when` under it are measured against that statement, as the first `for` is
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): a comprehension is stored as nested loops, but its clauses are
+    // parts of the statement around it, so a nested `for` and the `when` under it are measured against that statement, as the first `for` is
     bool visit(AstExprTableComprehension* node) override
     {
         visit(static_cast<AstExpr*>(node));
@@ -1025,14 +1025,15 @@ private:
             visitComprehensionClause(stat);
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): a statement on the line its `do` expression starts on starts
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a statement on the line its `do` expression starts on starts
     // mid-line, so it's measured against the indentation of the statement around the expression. One on its own line
     // is measured against itself, as usual.
     bool visit(AstExprDo* node) override
     {
         visit(static_cast<AstExpr*>(node));
 
-        // Luwu match expressions: a `match`'s subject and arms are parts of the statement around it, not statements
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match`'s subject and arms are parts of the
+        // statement around it, not statements
         if (node->fromMatch)
         {
             for (AstStat* stmt : node->body->body)
@@ -1160,6 +1161,11 @@ private:
             if (l.first->name == kParseNameError)
                 continue;
 
+            // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `case` name over another binding was meant as a
+            // test, which says more than the binding being unused or shadowing
+            if (l.first->isCaseBinding && reportCaseBindingShadow(l.first))
+                continue;
+
             bool shadowsClass = l.second.defined && reportClassShadow(l.first);
 
             if (l.second.used)
@@ -1180,6 +1186,40 @@ private:
                     l.first->name.value
                 );
         }
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `case limit` where `limit` is a local, or a global this
+    // module assigns. BuiltinShadow reports a builtin, and the parser a class, a trait, a const or a builtin tag.
+    bool reportCaseBindingShadow(AstLocal* local)
+    {
+        const char* name = local->name.value;
+        if (AstLocal* shadow = local->shadow)
+        {
+            emitWarning(
+                *context,
+                LintWarning::Code_LocalShadow,
+                local->location,
+                "Did you mean 'case is %s'? A name after 'case' binds the value, and '%s' is already a local declared at line %d",
+                name,
+                name,
+                shadow->location.begin.line + 1
+            );
+            return true;
+        }
+
+        Global* global = globals.find(local->name);
+        if (!global || global->builtin || !global->assigned)
+            return global && global->builtin;
+
+        emitWarning(
+            *context,
+            LintWarning::Code_LocalShadow,
+            local->location,
+            "Did you mean 'case is %s'? A name after 'case' binds the value, and '%s' is already a global",
+            name,
+            name
+        );
+        return true;
     }
 
     // Luwu Classes (rfcs/classes): classes are declared at the top level and a class binding is
@@ -1571,6 +1611,8 @@ private:
     LintContext* context;
     // Luwu: analyzing only for the status, without warnings (see leaveStatus)
     bool silent = false;
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the block of the `do` expression being analyzed
+    const AstStatBlock* doExprBody = nullptr;
 
     // Note: this enum is order-sensitive!
     // The order is in the "severity" of the termination and affects merging of status codes from different branches
@@ -1626,12 +1668,30 @@ private:
                     AstStat* next = stat->body.data[i + 1];
 
                     // silence the warning for common pattern of Error (coming from error()) + Return
-                    // Luwu Do Expressions (rfcs/do-expressions.md): or + Give, which a `do` expression's block needs last
+                    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): or + Give, which a `do` expression's block needs last
                     bool leavesAfterError = next->is<AstStatReturn>() || next->is<AstStatGive>();
                     if (step == Error && si->is<AstStatExpr>() && leavesAfterError && i + 2 == stat->body.size)
                         return Error;
 
-                    if (!silent)
+                    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a `do` expression's block must end in a statement like
+                    // `give`, so one written only for that after a statement that always leaves gets a way to drop it
+                    bool leaves = next->is<AstStatGive>() || next->is<AstStatReturn>() || next->is<AstStatBreak>() || next->is<AstStatContinue>();
+                    bool endsDoExpr = stat == doExprBody && leaves && i + 2 == stat->body.size;
+                    const char* advice = endsDoExpr ? doExprEndingAdvice(si) : nullptr;
+
+                    if (silent)
+                        return step;
+
+                    if (advice)
+                        emitWarning(
+                            *context,
+                            LintWarning::Code_UnreachableCode,
+                            next->location,
+                            "Unreachable code (previous statement always %ss). %s",
+                            getReason(step),
+                            advice
+                        );
+                    else
                         emitWarning(
                             *context,
                             LintWarning::Code_UnreachableCode,
@@ -1647,7 +1707,7 @@ private:
         }
         else if (const AstExprDo* leaving = findDoEndingStatement(node))
         {
-            // Luwu Do Expressions (rfcs/do-expressions.md): `print(do return "x")` returns before the call; the `do`'s block
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `print(do return "x")` returns before the call; the `do`'s block
             // says how it leaves (a return or an error)
             return leaveStatus(leaving);
         }
@@ -1655,7 +1715,7 @@ private:
         {
             Status ifs = Unknown;
 
-            // Luwu Do Expressions (rfcs/do-expressions.md): `if a and (do return x) then` can't enter the branch
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `if a and (do return x) then` can't enter the branch
             if (const AstExprDo* blocking = findDoBlockingThenBranch(stat))
             {
                 ifs = leaveStatus(blocking);
@@ -1729,7 +1789,25 @@ private:
         }
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): how a `do` expression that never ends normally leaves: a break, a
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): how to end a `do` expression's block with `stat`, which always leaves,
+    // instead of with an unreachable statement after it. Null when there's no rewrite to suggest.
+    static const char* doExprEndingAdvice(AstStat* stat)
+    {
+        if (stat->is<AstStatBlock>())
+            return "Remove the 'do' and 'end' around the block above and delete this line";
+
+        // the chain's final `else`, after any `elseif`s
+        AstStatIf* branch = stat->as<AstStatIf>();
+        while (branch && branch->elsebody && branch->elsebody->is<AstStatIf>())
+            branch = branch->elsebody->as<AstStatIf>();
+
+        if (branch && branch->elsebody)
+            return "Move the 'else' branch's statements after its 'end' in place of this line";
+
+        return nullptr;
+    }
+
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): how a `do` expression that never ends normally leaves: a break, a
     // continue, a return or an error. Its block is checked for unreachable code when it is visited, so this only reads
     // the status.
     Status leaveStatus(const AstExprDo* node)
@@ -1742,7 +1820,7 @@ private:
         return status == Continue || status == Break ? status : std::max(status, Return);
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): how `x and continue or break` leaves whether `x` holds or not, merged
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): how `x and continue or break` leaves whether `x` holds or not, merged
     // like an `if`'s branches (see Status). Unknown for a guard that can complete.
     Status guardLeaveStatus(AstExpr* expr)
     {
@@ -1761,10 +1839,13 @@ private:
         return true;
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): a `do` expression's block is checked like a function body
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a `do` expression's block is checked like a function body
     bool visit(AstExprDo* node) override
     {
+        const AstStatBlock* outerDoExprBody = doExprBody;
+        doExprBody = node->body;
         analyze(node->body);
+        doExprBody = outerDoExprBody;
 
         return true;
     }
@@ -3952,7 +4033,7 @@ private:
             head->visitCondition(this);
             head->thenbody->visit(this);
 
-            // Luwu If Local (rfcs/if-local.md): a `when` chain binds new locals, so it never repeats another condition
+            // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain binds new locals, so it never repeats another condition
             if (head->clauses.size == 0)
                 conditions.push_back(head->condition);
 
@@ -3989,7 +4070,7 @@ private:
             head->visitCondition(this);
             head->trueExpr->visit(this);
 
-            // Luwu If Local (rfcs/if-local.md): a `when` chain binds new locals, so it never repeats another condition
+            // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain binds new locals, so it never repeats another condition
             if (head->clauses.size == 0)
                 conditions.push_back(head->condition);
 
@@ -4242,7 +4323,7 @@ private:
 
     bool visit(AstStatWhile* node) override
     {
-        // Luwu If Local (rfcs/if-local.md): a binding's value isn't a condition
+        // Luwu If Local (rfcs/control-flow/if-local.md): a binding's value isn't a condition
         if (node->clauses.size == 0)
             markCondition(node->condition);
 
@@ -4300,7 +4381,7 @@ private:
         if (!and_ || and_->op != AstExprBinary::And)
             return true;
 
-        // Luwu Do Expressions (rfcs/do-expressions.md): `a and b or continue` leaves unless both are truthy, which is
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `a and b or continue` leaves unless both are truthy, which is
         // what it means. It has no value to pick, so it isn't a ternary.
         if (asOrLeave(node))
             return true;
@@ -4530,6 +4611,24 @@ private:
         emitWarning(*context, LintWarning::Code_BuiltinShadow, location, "'%s' hides the builtin '%s' here", name.value, name.value);
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `case print` was meant as a test. The parser reports
+    // the builtins it knows (`case string`); this covers every other builtin global.
+    void checkCaseBinding(AstLocal* local)
+    {
+        if (!enabled.builtin || !context->builtinGlobals.find(local->name))
+            return;
+
+        const char* name = local->name.value;
+        emitWarning(
+            *context,
+            LintWarning::Code_BuiltinShadow,
+            local->location,
+            "Did you mean 'case is %s'? A name after 'case' binds the value, and '%s' is a builtin",
+            name,
+            name
+        );
+    }
+
     // Writing a builtin global is BuiltinGlobalWrite's to report; only the keyword check applies to a global
     void checkGlobalTarget(AstExpr* target)
     {
@@ -4544,7 +4643,12 @@ private:
     bool visit(AstStatLocal* node) override
     {
         for (AstLocal* local : node->vars)
-            check(local->name, local->location);
+        {
+            if (local->isCaseBinding)
+                checkCaseBinding(local);
+            else
+                check(local->name, local->location);
+        }
         return true;
     }
 
@@ -4594,7 +4698,7 @@ private:
     }
 };
 
-// Luwu If Local (rfcs/if-local.md): BindingSwallowsCondition. In `if local x = f() and x > 1 then`, the `and` is part of
+// Luwu If Local (rfcs/control-flow/if-local.md): BindingSwallowsCondition. In `if local x = f() and x > 1 then`, the `and` is part of
 // the value bound to `x`, not a second condition of the chain. Two shapes are almost always meant as `when`:
 // - the right side of an `and`/`or` names the binding, which can't see itself in its own value, so that name reads
 //   whatever it means outside (`when const perms = perms(id) and perms == Admin`);
@@ -4728,12 +4832,18 @@ private:
     }
 };
 
+// Luwu Guards (rfcs/control-flow/guards.md): a guard returning several values, in any form
+const char* const kSeveralValuesOnOwnLine =
+    "Write this as an 'if' statement with the 'return' on the next line; 'return a, b if c' reads like 'return a, if c then b else nil'";
+
 // Luwu: the Style lints about where lines break.
 // - OneLineStatement: a statement with a body (`if`, a loop, `do`, a function statement) written on one line. A function
 //   expression is left alone: a one-line callback is ordinary.
 // - OneLineGuard and LuaGuard: the one-line `if not x then return end`. A Luau file gets OneLineGuard, which asks for
-//   three lines; a Luwu file gets LuaGuard, which asks for `x or return` (or `x and return` for `if x`). Only one of
-//   them reports a guard.
+//   three lines; a Luwu file gets LuaGuard, which asks for `return if not x`. Only one of them reports a guard.
+// - ConfusingGuard: a guard statement that reads badly. `x and return` reads better leave-first (`return if x`), and a long or
+//   chained one (`x or y and continue`, one that leaves either way) as an `if` statement. One that returns several
+//   values is an `if` statement whatever its form: `return a, b if c` could read as `return a, (if c then b else nil)`.
 // - InlineOrLeave: `x or return` after a long `x`, at the end of a line much longer than the lines around it, where the
 //   exit is easy to miss. A long line with a short `x` (`ok or return error("a long message")`) is fine.
 class LintStyle : AstVisitor
@@ -4745,6 +4855,7 @@ public:
         bool oneLineGuard = false;
         bool luaGuard = false;
         bool inlineOrLeave = false;
+        bool confusingGuard = false;
     };
 
     LUAU_NOINLINE static void process(LintContext& context, Enabled enabled)
@@ -4822,97 +4933,75 @@ private:
         return nullptr;
     }
 
-    // Would a statement starting with `expr` continue the line above it? A `-`, a string or a `(` at the start of a line
-    // does, so `x or return` written with one could join the previous statement (see AmbiguousContinuation).
-    static bool continuesLineAbove(AstExpr* expr)
-    {
-        while (true)
-        {
-            if (AstExprBinary* binary = expr->as<AstExprBinary>())
-                expr = binary->left;
-            else if (AstExprCall* call = expr->as<AstExprCall>())
-                expr = call->func;
-            else if (AstExprIndexName* index = expr->as<AstExprIndexName>())
-                expr = index->expr;
-            else if (AstExprIndexExpr* index = expr->as<AstExprIndexExpr>())
-                expr = index->expr;
-            else if (AstExprTypeAssertion* cast = expr->as<AstExprTypeAssertion>())
-                expr = cast->expr;
-            else
-                break;
-        }
-
-        AstExprUnary* unary = expr->as<AstExprUnary>();
-        bool minus = unary && unary->op == AstExprUnary::Op::Minus;
-        return minus || expr->is<AstExprConstantString>() || expr->is<AstExprInterpString>() || expr->is<AstExprGroup>();
-    }
-
-    // How `leave` is written after `or`: a bare `return` needs a `;` and several values need parentheses, or the parser
-    // would read on past them
-    static std::string orLeaveForm(AstStat* leave)
+    static bool returnsSeveral(AstStat* leave)
     {
         AstStatReturn* ret = leave->as<AstStatReturn>();
-        if (!ret)
-            return toString(leave);
-
-        if (ret->list.size == 0)
-            return "return;";
-
-        if (ret->list.size > 1)
-            return "(" + toString(leave) + ")";
-
-        return toString(leave);
+        return ret && ret->list.size > 1;
     }
 
-    // The conditions of an `or` chain, in order: `a`, `b` and `c` in `a or (b or c)`
-    static void collectDisjuncts(AstExpr* condition, std::vector<AstExpr*>& disjuncts)
+    // Luwu Guards (rfcs/control-flow/guards.md): ConfusingGuard, for `x and <leave>` and `x or <leave>` statements and leave-first
+    // guards (see the list above)
+    void checkConfusingGuard(AstStat* stat)
     {
-        condition = withoutGroups(condition);
-        AstExprBinary* binary = condition->as<AstExprBinary>();
-        if (!binary || binary->op != AstExprBinary::Or)
+        // A guard statement wider than this reads better as an `if` statement
+        constexpr unsigned kMaxGuardWidth = 80;
+
+        if (AstStatIf* guard = stat->as<AstStatIf>(); guard && guard->isLeaveGuard)
         {
-            disjuncts.push_back(condition);
+            if (returnsSeveral(guard->thenbody->body.data[0]))
+                emitWarning(*context, LintWarning::Code_ConfusingGuard, stat->location, kSeveralValuesOnOwnLine);
             return;
         }
 
-        collectDisjuncts(binary->left, disjuncts);
-        collectDisjuncts(binary->right, disjuncts);
+        AstStatExpr* statExpr = stat->as<AstStatExpr>();
+        if (!statExpr || !isLeaveStatement(statExpr->expr))
+            return;
+
+        // `x or y and continue` and `x and continue or break` have no single leave on the right
+        AstExprBinary* binary = asLeaveGuard(statExpr->expr);
+        AstExprDo* leave = binary ? asLeave(binary->right) : nullptr;
+        bool chained = !leave || !leave->shorthand || leave->body->body.size != 1 || asLeaveEitherWay(statExpr->expr);
+        if (chained)
+        {
+            emitWarning(*context, LintWarning::Code_ConfusingGuard, stat->location, "Write this as an 'if' statement; it's hard to tell when it leaves");
+            return;
+        }
+
+        AstStat* leaveStat = leave->body->body.data[0];
+        const char* keyword = leaveKeyword(leaveStat);
+        if (!keyword)
+            keyword = "give";
+
+        if (returnsSeveral(leaveStat))
+        {
+            emitWarning(*context, LintWarning::Code_ConfusingGuard, stat->location, kSeveralValuesOnOwnLine);
+            return;
+        }
+
+        bool isAnd = binary->op == AstExprBinary::And;
+        const Location& written = stat->location;
+        bool long_ = written.begin.line != written.end.line || written.end.column - written.begin.column > kMaxGuardWidth;
+        if (long_)
+        {
+            emitWarning(
+                *context,
+                LintWarning::Code_ConfusingGuard,
+                stat->location,
+                isAnd ? "Write this guard as an 'if <condition> then' statement with the '%s' on the next line"
+                      : "Write this guard as an 'if not <condition> then' statement with the '%s' on the next line",
+                keyword
+            );
+            return;
+        }
+
+        if (isAnd)
+            emitWarning(*context, LintWarning::Code_ConfusingGuard, stat->location, "Write this guard leave-first: '%s'", guardFor(binary->left, leaveStat).c_str());
     }
 
-    // Would an `and return` after `expr` end up in an if-else expression's `else` branch? (`x == if a then b else c`)
-    static bool endsWithIfElse(AstExpr* expr)
+    // Luwu Guards (rfcs/control-flow/guards.md): the guard that replaces `if <condition> then <leave> end`
+    static std::string guardFor(AstExpr* condition, AstStat* leave)
     {
-        while (true)
-        {
-            if (AstExprBinary* binary = expr->as<AstExprBinary>())
-                expr = binary->right;
-            else if (AstExprUnary* unary = expr->as<AstExprUnary>())
-                expr = unary->expr;
-            else
-                return expr->is<AstExprIfElse>();
-        }
-    }
-
-    // The guards that replace `if <condition> then return end`, one per condition of its `or` chain, none of them
-    // flipped: `not x` as `x or return` and anything else as `x and return`. Empty when one would continue the line
-    // above it or end in an if-else expression.
-    static std::vector<std::string> guardsFor(AstExpr* condition, AstStat* leave)
-    {
-        std::vector<AstExpr*> disjuncts;
-        collectDisjuncts(condition, disjuncts);
-
-        std::vector<std::string> guards;
-        for (AstExpr* disjunct : disjuncts)
-        {
-            AstExprUnary* unary = disjunct->as<AstExprUnary>();
-            bool negated = unary && unary->op == AstExprUnary::Op::Not;
-            AstExpr* tested = negated ? withoutGroups(unary->expr) : disjunct;
-            if (continuesLineAbove(tested) || endsWithIfElse(tested))
-                return {};
-
-            guards.push_back(toString(tested) + (negated ? " or " : " and ") + orLeaveForm(leave));
-        }
-        return guards;
+        return toString(leave) + " if " + toString(condition);
     }
 
     // Reports a one-line guard (OneLineGuard or LuaGuard, by the file's language). Returns whether `node` is one, so
@@ -4922,7 +5011,8 @@ private:
         // A suggestion longer than this is described instead of quoted
         constexpr size_t kMaxSuggestionLength = 80;
 
-        bool guardShape = !node->elsebody && node->thenbody->body.size == 1 && leaveKeyword(node->thenbody->body.data[0]);
+        // a `when` chain's bindings can't go in a guard's condition
+        bool guardShape = !node->elsebody && node->clauses.size == 0 && node->thenbody->body.size == 1 && leaveKeyword(node->thenbody->body.data[0]);
         if (!guardShape || !isOneLine(node))
             return false;
 
@@ -4930,35 +5020,24 @@ private:
         const char* keyword = leaveKeyword(leave);
         bool luwuFile = !context->module || context->module->language == Language::Luwu;
 
-        // `or return` needs the do expression flag
+        // guards need the do expression flag
         if (luwuFile && FFlag::LuwuDoExpr)
         {
             if (!enabled.luaGuard)
                 return true;
 
-            // `-x > 0 and return` could join the statement above it; the `if` is clearer than a `;` before it
-            std::vector<std::string> guards = guardsFor(node->condition, leave);
-            if (guards.empty())
+            // `return a, b if c` could read as `return a, (if c then b else nil)`
+            if (returnsSeveral(leave))
+            {
+                emitWarning(*context, LintWarning::Code_LuaGuard, node->location, kSeveralValuesOnOwnLine);
                 return true;
+            }
 
-            bool split = guards.size() > 1;
-            std::string suggestion = "'" + join(guards, "', '") + "'";
-            if (suggestion.size() <= (split ? 2 : 1) * kMaxSuggestionLength)
-                emitWarning(
-                    *context,
-                    LintWarning::Code_LuaGuard,
-                    node->location,
-                    split ? "Replace this with one guard per condition: %s" : "Replace this with %s",
-                    suggestion.c_str()
-                );
+            std::string guard = guardFor(node->condition, leave);
+            if (guard.size() <= kMaxSuggestionLength && guard.find('\n') == std::string::npos)
+                emitWarning(*context, LintWarning::Code_LuaGuard, node->location, "Replace this with '%s'", guard.c_str());
             else
-                emitWarning(
-                    *context,
-                    LintWarning::Code_LuaGuard,
-                    node->location,
-                    split ? "Replace this with one '<condition> and %s' guard per condition" : "Replace this with '<condition> and %s'",
-                    keyword
-                );
+                emitWarning(*context, LintWarning::Code_LuaGuard, node->location, "Replace this with '%s if <condition>'", keyword);
 
             return true;
         }
@@ -5054,7 +5133,7 @@ private:
         if (AstStatIf* elseif = node->elsebody ? node->elsebody->as<AstStatIf>() : nullptr)
             elseifs.insert(elseif);
 
-        bool checked = node->isWhenGuard || elseifs.count(node) != 0;
+        bool checked = node->isWhenGuard || node->isLeaveGuard || elseifs.count(node) != 0;
         if (!checked && !checkGuard(node))
             checkBlock(node, node->thenbody, "'if' statement");
 
@@ -5105,10 +5184,14 @@ private:
             if (AstStatBlock* block = stat->as<AstStatBlock>())
                 checkBlock(block, block, "'do' block");
 
+            if (enabled.confusingGuard)
+                checkConfusingGuard(stat);
+
             if (!enabled.inlineOrLeave)
                 continue;
 
-            if (AstStatExpr* expr = stat->as<AstStatExpr>())
+            // ConfusingGuard covers a guard statement's length
+            if (AstStatExpr* expr = stat->as<AstStatExpr>(); expr && !enabled.confusingGuard)
                 checkInlineOrLeave(stat, expr->expr);
             else if (AstStatLocal* local = stat->as<AstStatLocal>())
                 for (AstExpr* value : local->values)
@@ -5140,7 +5223,7 @@ private:
     }
 };
 
-// Luwu Do Expressions (rfcs/do-expressions.md): OrReturnComma. An unparenthesized `or return a` takes one value, so in
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): OrReturnComma. An unparenthesized `or return a` takes one value, so in
 // `local p, q = x or return a, b` or `f(x or return a, b)` the `b` is the list's next value, not a second value to
 // return. Parenthesizing either reading silences it: `(x or return a), b` or `x or (return a, b)`.
 class LintOrReturnComma : AstVisitor
@@ -5291,7 +5374,7 @@ private:
     }
 };
 
-// Luwu Do Expressions (rfcs/do-expressions.md): ReturnOnNextLine, OrContinue, MisleadingIndentation,
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): ReturnOnNextLine, OrContinue, MisleadingIndentation,
 // AmbiguousContinuation and UnflippedGuard
 class LintDoExpressions : AstVisitor
 {
@@ -5481,6 +5564,7 @@ private:
         AstNode* leave = nullptr;
         std::optional<PinnedLocal> pinned;
         bool ifGuard = false;
+        bool leaveGuard = false;
 
         if (AstStatIf* ifStat = stat->as<AstStatIf>())
         {
@@ -5493,6 +5577,7 @@ private:
             condition = ifStat->condition;
             leave = only;
             ifGuard = true;
+            leaveGuard = ifStat->isLeaveGuard;
             pinned = pinnedByGuard(condition, /* continuesWhenTruthy= */ false);
         }
         else if (AstStatExpr* statExpr = stat->as<AstStatExpr>())
@@ -5516,11 +5601,14 @@ private:
         if (leaveRead.found)
             return;
 
-        // The fix leaves when the local is empty: an `if` tests for that, `or` for the opposite
+        // The fix leaves when the local is empty: an `if` or a leave-first guard tests for that, `or` for the opposite
         std::string name = pinned->local->name.value;
+        std::string emptyTest = pinned->falsy ? "not " + name : name + " == " + pinned->value;
         std::string flipped;
-        if (ifGuard)
-            flipped = "if " + (pinned->falsy ? "not " + name : name + " == " + pinned->value) + " then";
+        if (leaveGuard)
+            flipped = toString(leave) + " if " + emptyTest;
+        else if (ifGuard)
+            flipped = "if " + emptyTest + " then";
         else
             flipped = (pinned->falsy ? name : name + " ~= " + pinned->value) + " or " + toString(leave);
 
@@ -6223,7 +6311,7 @@ private:
 
     bool visit(AstStatIf* node) override
     {
-        // Luwu If Local (rfcs/if-local.md): a `when` chain's first expression may be a binding's value, not a test
+        // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain's first expression may be a binding's value, not a test
         if (node->clauses.size == 0)
             conditions[unwrapGroup(node->condition)] = "if";
         return true;
@@ -6231,7 +6319,7 @@ private:
 
     bool visit(AstStatWhile* node) override
     {
-        // Luwu If Local (rfcs/if-local.md): as for `if`
+        // Luwu If Local (rfcs/control-flow/if-local.md): as for `if`
         if (node->clauses.size == 0)
             conditions[unwrapGroup(node->condition)] = "while";
         return true;
@@ -6603,7 +6691,7 @@ private:
 
     bool visit(AstStatIf* node) override
     {
-        // Luwu If Local (rfcs/if-local.md): only an ordinary condition is a nil check of a local
+        // Luwu If Local (rfcs/control-flow/if-local.md): only an ordinary condition is a nil check of a local
         if (node->clauses.size != 0)
             return true;
 
@@ -7629,7 +7717,7 @@ private:
                     return leaves;
             }
 
-            // Luwu Table Comprehensions (rfcs/table-comprehensions.md): an item evaluates its key and value every time, so a
+            // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): an item evaluates its key and value every time, so a
             // `do` expression there that always leaves (`{ for i = 1, 10 do (do break) }`) leaves the iteration
             if (AstStatComprehensionItem* item = stat->as<AstStatComprehensionItem>())
             {
@@ -8191,7 +8279,7 @@ private:
 
     bool visit(AstStatWhile* node) override
     {
-        // Luwu If Local (rfcs/if-local.md): a `when` chain can fail even when its first clause is constant
+        // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain can fail even when its first clause is constant
         if (node->clauses.size == 0)
             checkForeverLoop(node, node->condition, node->body);
         checkUselessLoop(node, node->body, /* takesFirstItem */ false);
@@ -8414,7 +8502,7 @@ private:
 
     bool visit(AstStatIf* node) override
     {
-        // Luwu If Local (rfcs/if-local.md): each clause of a `when` chain is tested for truthiness, a binding's value
+        // Luwu If Local (rfcs/control-flow/if-local.md): each clause of a `when` chain is tested for truthiness, a binding's value
         // included
         if (node->clauses.size == 0)
             checkCondition(node->condition);
@@ -8427,7 +8515,7 @@ private:
 
     bool visit(AstStatWhile* node) override
     {
-        // Luwu If Local (rfcs/if-local.md): as for `if`
+        // Luwu If Local (rfcs/control-flow/if-local.md): as for `if`
         if (node->clauses.size == 0)
             checkCondition(node->condition);
 
@@ -9353,7 +9441,7 @@ private:
             if (!isName && !strict)
                 continue;
 
-            // Luwu Do Expressions (rfcs/do-expressions.md): `x = x or return nil` assigns `x` to itself; the guard alone,
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `x = x or return nil` assigns `x` to itself; the guard alone,
             // `x or return nil`, narrows `x` the same way
             AstExprBinary* guard = asOrLeave(node->values.data[i]);
             if (guard && sameTarget(var, guard->left))
@@ -9385,7 +9473,7 @@ private:
         return true;
     }
 
-    // Luwu If Local (rfcs/if-local.md): `if const s = s then` binds `s` to itself, which tests nothing `if s then` doesn't.
+    // Luwu If Local (rfcs/control-flow/if-local.md): `if const s = s then` binds `s` to itself, which tests nothing `if s then` doesn't.
     // An annotated binding (`if local s: string = s`) says something about the type, so it isn't reported.
     void checkClauses(const AstArray<AstIfClause>& clauses, const char* head)
     {
@@ -9963,6 +10051,7 @@ static LintWarning::Code lintGroupOf(LintWarning::Code code)
     case LintWarning::Code_OneLineGuard:
     case LintWarning::Code_InlineOrLeave:
     case LintWarning::Code_LuaGuard:
+    case LintWarning::Code_ConfusingGuard:
         return LintWarning::Code_Style;
     case LintWarning::Code_DuplicateKey:
     case LintWarning::Code_DuplicateProperty:
@@ -10474,7 +10563,8 @@ std::vector<LintWarning> lint(
     style.oneLineGuard = context.warningEnabled(LintWarning::Code_OneLineGuard);
     style.luaGuard = context.warningEnabled(LintWarning::Code_LuaGuard);
     style.inlineOrLeave = FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_InlineOrLeave);
-    if (style.oneLineStatement || style.oneLineGuard || style.luaGuard || style.inlineOrLeave)
+    style.confusingGuard = FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_ConfusingGuard);
+    if (style.oneLineStatement || style.oneLineGuard || style.luaGuard || style.inlineOrLeave || style.confusingGuard)
         LintStyle::process(context, style);
 
     if (FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_OrReturnComma))

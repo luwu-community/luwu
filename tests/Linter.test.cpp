@@ -26,6 +26,7 @@ LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
 LUAU_FASTFLAG(LuwuTableDrop)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 
 using namespace Luau;
 
@@ -2978,7 +2979,7 @@ _ = if true then 1 elseif true then 2 else 3
     CHECK_EQ(result.warnings[7].text, "Condition has already been checked on column 8");
 }
 
-// Luwu If Local (rfcs/if-local.md): a `when` chain binds new locals, so the same value in two chains isn't a
+// Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain binds new locals, so the same value in two chains isn't a
 // repeated check
 TEST_CASE_FIXTURE(Fixture, "DuplicateConditionsSkipIfLocalChains")
 {
@@ -3004,7 +3005,7 @@ end
     CHECK(warningsWithCode(result, LintWarning::Code_DuplicateCondition).empty());
 }
 
-// Luwu If Local (rfcs/if-local.md): the local lints see a `when` chain's bindings, with their usual messages
+// Luwu If Local (rfcs/control-flow/if-local.md): the local lints see a `when` chain's bindings, with their usual messages
 TEST_CASE_FIXTURE(Fixture, "LocalLintsSeeIfLocalBindings")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
@@ -3104,13 +3105,12 @@ local function f(x, y, t)
     end
     if x + y then return end
     if not (x or y) then return end
-    -- not reported: `-x > 1 and return` and `"a" == x and return` would continue the line above
     if -x > 1 then return end
-    if "a" == x then return end
+    -- not reported: on several lines, or already a guard
     if not y then
         return
     end
-    y or return
+    return if not y
     return x
 end
 return f
@@ -3121,23 +3121,23 @@ return f
     CHECK(warningsWithCode(result, LintWarning::Code_OneLineGuard).empty());
 
     std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_LuaGuard);
-    REQUIRE_EQ(warnings.size(), 7);
-    CHECK_EQ(warnings[0].text, "Replace this with 'x or return;'");
-    // a condition without `not` is kept as written, with `and`
-    CHECK_EQ(warnings[1].text, "Replace this with 'x == y and return 1'");
-    CHECK_EQ(warnings[2].text, "Replace this with 'x > 1 and return;'");
-    // several values need parentheses
-    CHECK_EQ(warnings[3].text, "Replace this with 'x == 2 and (return x, y)'");
-    CHECK_EQ(warnings[4].text, "Replace this with 'v.ok or continue'");
-    CHECK_EQ(warnings[5].text, "Replace this with 'x + y and return;'");
-    // `or` binds loosest, so the negated condition needs no parentheses
-    CHECK_EQ(warnings[6].text, "Replace this with 'x or y or return;'");
+    REQUIRE_EQ(warnings.size(), 8);
+    CHECK_EQ(warnings[0].text, "Replace this with 'return if not x'");
+    CHECK_EQ(warnings[1].text, "Replace this with 'return 1 if x == y'");
+    CHECK_EQ(warnings[2].text, "Replace this with 'return if x > 1'");
+    // `return x, y if x == 2` could read as `return x, (if x == 2 then y else nil)`
+    CHECK(warnings[3].text.find("Write this as an 'if' statement with the 'return' on the next line") == 0);
+    CHECK_EQ(warnings[4].text, "Replace this with 'continue if not v.ok'");
+    CHECK_EQ(warnings[5].text, "Replace this with 'return if x + y'");
+    CHECK_EQ(warnings[6].text, "Replace this with 'return if not (x or y)'");
+    // the guard starts with its leave, so a `-` can't continue the line above
+    CHECK_EQ(warnings[7].text, "Replace this with 'return if -x > 1'");
     // the warning covers the whole statement it replaces
     CHECK_EQ(warnings[0].location, Location(Position(2, 4), Position(2, 28)));
 }
 
-// An `if` with several conditions splits into one guard per condition, each kept as written like a single one
-TEST_CASE_FIXTURE(Fixture, "LuaGuardSplitsConditions")
+// A guard keeps the `if`'s condition whole, however many parts it has
+TEST_CASE_FIXTURE(Fixture, "LuaGuardKeepsConditionsWhole")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
 
@@ -3149,8 +3149,6 @@ local function f(r, t)
         print(v)
     end
     if r.a and r.b or r.c then return end
-    -- not reported: `(if ...) and return` would continue the line above, and `r.e == if ...` would take the `and`
-    if r.d or (if r.e then r.f else r.g) then return end
     if r.e == if r.f then 1 else 2 then return end
     return r.out
 end
@@ -3158,13 +3156,52 @@ return f
 )");
 
     std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_LuaGuard);
-    REQUIRE_EQ(warnings.size(), 3);
-    CHECK_EQ(warnings[0].text, "Replace this with one guard per condition: 'r.ok or return nil', 'r.out == '' and return nil'");
-    CHECK_EQ(
-        warnings[1].text, "Replace this with one guard per condition: 'v.skip and continue', 'v.ready or continue', '#v.items > 3 and continue'"
-    );
-    // `and` binds tighter than `or`, so a condition holding one needs no parentheses
-    CHECK_EQ(warnings[2].text, "Replace this with one guard per condition: 'r.a and r.b and return;', 'r.c and return;'");
+    REQUIRE_EQ(warnings.size(), 4);
+    CHECK_EQ(warnings[0].text, "Replace this with 'return nil if not r.ok or r.out == '''");
+    CHECK_EQ(warnings[1].text, "Replace this with 'continue if v.skip or not v.ready or #v.items > 3'");
+    CHECK_EQ(warnings[2].text, "Replace this with 'return if r.a and r.b or r.c'");
+    CHECK_EQ(warnings[3].text, "Replace this with 'return if r.e == if r.f then 1 else 2'");
+}
+
+// Luwu Guards (rfcs/control-flow/guards.md)
+TEST_CASE_FIXTURE(Fixture, "ConfusingGuard")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(x, y, t, types)
+    for _, v in t do
+        v.done and break
+        v.a or v.b and continue
+        v.ok and continue or break
+        print(v)
+    end
+    x == 2 and return 1
+    not y or (return 1, 2)
+    t.value or return types.error("a message long enough to push this guard well past eighty columns")
+    return 3, 4 if x
+    -- not reported: a short `or` guard, a leave-first guard and an `if`
+    x or return 5
+    return 6 if y
+    if not t then
+        return 7, 8
+    end
+    return 0
+end
+return f
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_ConfusingGuard);
+    REQUIRE_EQ(warnings.size(), 7);
+    CHECK_EQ(warnings[0].text, "Write this guard leave-first: 'break if v.done'");
+    CHECK_EQ(warnings[0].location, Location(Position(3, 8), Position(3, 24)));
+    CHECK_EQ(warnings[1].text, "Write this as an 'if' statement; it's hard to tell when it leaves");
+    CHECK_EQ(warnings[2].text, "Write this as an 'if' statement; it's hard to tell when it leaves");
+    CHECK_EQ(warnings[3].text, "Write this guard leave-first: 'return 1 if x == 2'");
+    // several values, in either form, always get the `if` statement
+    CHECK(warnings[4].text.find("Write this as an 'if' statement with the 'return' on the next line") == 0);
+    CHECK_EQ(warnings[5].text, "Write this guard as an 'if not <condition> then' statement with the 'return' on the next line");
+    CHECK(warnings[6].text.find("Write this as an 'if' statement with the 'return' on the next line") == 0);
 }
 
 TEST_CASE_FIXTURE(Fixture, "AmbiguousContinuation")
@@ -3253,6 +3290,82 @@ return f, g
         warnings[2].text,
         "Did you mean 'n ~= nil or return 2'? 'n' is always nil after this guard, but the code below uses it"
     );
+}
+
+TEST_CASE_FIXTURE(Fixture, "UnflippedLeaveFirstGuard")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function f(xs, name, n)
+    for _, x in xs do
+        continue if name ~= ""
+        print(name, x)
+    end
+    return 1 if n
+    return 2 if n ~= nil
+    print(n)
+    return n
+end
+local function g(name, n, cached)
+    -- not reported: flipped the right way, the local isn't used after, it's reassigned first, or returned on purpose
+    for _ = 1, 2 do
+        continue if name == ""
+        print(name)
+    end
+    return 1 if n ~= nil
+    n = 5
+    return cached if cached
+    print(name, n, cached)
+    return 0
+end
+return f, g
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_UnflippedGuard);
+    REQUIRE_EQ(warnings.size(), 3);
+    CHECK_EQ(
+        warnings[0].text,
+        "Did you mean 'continue if name == \"\"'? 'name' is always \"\" after this guard, but the code below uses it"
+    );
+    CHECK_EQ(warnings[0].location, Location(Position(3, 20), Position(3, 30)));
+    CHECK_EQ(
+        warnings[1].text,
+        "Did you mean 'return 1 if not n'? 'n' is always nil or false after this guard, but the code below uses it"
+    );
+    CHECK_EQ(
+        warnings[2].text,
+        "Did you mean 'return 2 if n == nil'? 'n' is always nil after this guard, but the code below uses it"
+    );
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `case` name over a local or a builtin was meant as a
+// test. LocalShadow reports the local and BuiltinShadow the builtin, each instead of the usual message.
+TEST_CASE_FIXTURE(BuiltinsFixture, "CaseBindingShadows")
+{
+    ScopedFastFlag matchExpressions{FFlag::DebugLuwuMatchExpressions, true};
+
+    LintResult result = lint(R"(
+local limit = 5
+local function f(v)
+    return match v
+        case limit then 1
+        case print then 2
+        case fresh then fresh
+end
+return f, limit
+)");
+
+    std::vector<LintWarning> local = warningsWithCode(result, LintWarning::Code_LocalShadow);
+    REQUIRE_EQ(local.size(), 1);
+    CHECK_EQ(local[0].text, "Did you mean 'case is limit'? A name after 'case' binds the value, and 'limit' is already a local declared at line 2");
+
+    std::vector<LintWarning> builtin = warningsWithCode(result, LintWarning::Code_BuiltinShadow);
+    REQUIRE_EQ(builtin.size(), 1);
+    CHECK_EQ(builtin[0].text, "Did you mean 'case is print'? A name after 'case' binds the value, and 'print' is a builtin");
+
+    // the names meant as tests aren't also reported unused
+    CHECK(warningsWithCode(result, LintWarning::Code_LocalUnused).empty());
 }
 
 TEST_CASE_FIXTURE(Fixture, "UnflippedGuardInAnIf")
@@ -3528,8 +3641,8 @@ if local grouped = (find(1) and t.flag == 1) then print(grouped) end
     );
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md)
-// Luwu Do Expressions (rfcs/do-expressions.md): an unfinished `do` typed above code that ends in `return` takes that code
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): an unfinished `do` typed above code that ends in `return` takes that code
 // as its block; the first line indented like the code after the `do` is pointed out, with the `do` and the `return`
 TEST_CASE_FIXTURE(Fixture, "MisleadingIndentation")
 {
@@ -3564,10 +3677,10 @@ return f, g
     CHECK_EQ(found[2].location, Location(Position(6, 4), Position(6, 10)));
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): a `do` body is indented one level past the line the `do` is on. A table
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a `do` body is indented one level past the line the `do` is on. A table
 // comprehension's `when` clauses, at the `for`'s indent or one level in, don't change that for `give do`.
-// Luwu Table Comprehensions: a comprehension's clauses are parts of the statement around it, so a nested `for` and its
-// `when` aligned with the first `for` aren't a statement spanning lines; a clause at the statement's own indent is
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): a comprehension's clauses are parts of the statement around it, so
+// a nested `for` and its `when` aligned with the first `for` aren't a statement spanning lines; a clause at the statement's own indent is
 TEST_CASE_FIXTURE(Fixture, "MultiLineStatementComprehensionClauses")
 {
     ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
@@ -3647,7 +3760,7 @@ return nested, flat, outdented, short, shortOutdented
     CHECK_EQ(found[1].location.begin, Position(19, 4));
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): a statement that always runs a returning `do` ends the code path, and a
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a statement that always runs a returning `do` ends the code path, and a
 // condition that can only be true after one returns guards a branch that never runs
 TEST_CASE_FIXTURE(Fixture, "UnreachableCodeAfterReturningDoExpressions")
 {
@@ -3679,7 +3792,7 @@ return f, g
     CHECK_EQ(found[1].location.begin.line, 6);
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): `x and continue or break` leaves through one side or the other, and
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `x and continue or break` leaves through one side or the other, and
 // the reason merges them like an `if`'s branches
 TEST_CASE_FIXTURE(Fixture, "UnreachableCodeAfterAndLeaveOrLeave")
 {
@@ -3711,7 +3824,7 @@ return f
     CHECK_EQ(found[1].location.begin.line, 8);
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): a one-line `do` expression holds several statements on its line by
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a one-line `do` expression holds several statements on its line by
 // design; a later line of a longer one is checked as usual
 TEST_CASE_FIXTURE(Fixture, "SameLineStatementInDoExpressions")
 {
@@ -3733,7 +3846,7 @@ return f
     CHECK_EQ(found[0].location.begin.line, 4);
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): `x = x or return nil` assigns `x` to itself; the guard alone does the
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `x = x or return nil` assigns `x` to itself; the guard alone does the
 // same narrowing
 TEST_CASE_FIXTURE(Fixture, "SelfAssignmentOfAGuard")
 {
@@ -3762,7 +3875,7 @@ return f
     CHECK_EQ(found[2].text, "Replace this with 't.x or return nil'");
 }
 
-// Luwu If Local (rfcs/if-local.md): a condition binding a name to itself tests nothing a plain condition doesn't
+// Luwu If Local (rfcs/control-flow/if-local.md): a condition binding a name to itself tests nothing a plain condition doesn't
 TEST_CASE_FIXTURE(Fixture, "SelfAssignmentInConditionBindings")
 {
     ScopedFastFlag ifLocal{FFlag::LuwuIfLocal, true};
@@ -3961,9 +4074,52 @@ print(v, w)
     std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
     REQUIRE_EQ(found.size(), 2);
     CHECK_EQ(found[0].location.begin.line, 4);
-    CHECK_EQ(found[0].text, "Unreachable code (previous statement always gives)");
+    CHECK(found[0].text.find("Move the 'else' branch's statements") != std::string::npos);
     CHECK_EQ(found[1].location.begin.line, 8);
     CHECK_EQ(found[1].text, "Unreachable code (previous statement always errors)");
+}
+
+// A statement written only to end a `do` expression's block, after one that always leaves, gets the rewrite that drops it
+TEST_CASE_FIXTURE(Fixture, "UnreachableCodeEndingADoExpressionSaysHowToDropIt")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    LintResult result = lint(R"(
+local function maybe() return nil end
+local a = do
+    if maybe() then
+        give 1
+    elseif maybe() then
+        give 2
+    else
+        give 3
+    end
+    give 4
+local b = do
+    do
+        give 1
+    end
+    give 2
+local c = do
+    if maybe() then
+        give 1
+    else
+        give 2
+    end
+    print("dead")
+    give 3
+print(a, b, c)
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_UnreachableCode);
+    REQUIRE_EQ(found.size(), 3);
+    CHECK_EQ(found[0].location.begin.line, 10);
+    CHECK(found[0].text.find("Move the 'else' branch's statements after its 'end'") != std::string::npos);
+    CHECK_EQ(found[1].location.begin.line, 15);
+    CHECK(found[1].text.find("Remove the 'do' and 'end'") != std::string::npos);
+    // not the block's last statement, so no rewrite
+    CHECK_EQ(found[2].location.begin.line, 22);
+    CHECK_EQ(found[2].text, "Unreachable code (previous statement always gives)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "DuplicateConditionsExpr")
@@ -5273,7 +5429,7 @@ return f
     CHECK_EQ(countWarnings(result, LintWarning::Code_LuaAndOr), 2);
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): an `or` that leaves has no value to pick
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): an `or` that leaves has no value to pick
 TEST_CASE_FIXTURE(BuiltinsFixture, "AndOrThatLeavesIsNotATernary")
 {
     ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
@@ -5958,7 +6114,7 @@ return f
     CHECK_EQ(9, found[2].location.begin.line);
 }
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop lints see a comprehension's loops
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the loop lints see a comprehension's loops
 TEST_CASE_FIXTURE(BuiltinsFixture, "LoopLintsSeeTableComprehensions")
 {
     ScopedFastFlag sffs[] = {
@@ -6058,7 +6214,7 @@ return f
     CHECK_EQ(7, found[2].location.begin.line);
 }
 
-// Luwu If Local (rfcs/if-local.md): a binding passes when its value is truthy, so binding a table always passes
+// Luwu If Local (rfcs/control-flow/if-local.md): a binding passes when its value is truthy, so binding a table always passes
 TEST_CASE_FIXTURE(BuiltinsFixture, "TableTruthinessIfLocal")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};

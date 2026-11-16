@@ -512,7 +512,7 @@ void addGuardConditions(AstStatIf* guard, std::vector<Condition>& conditions)
     }
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): the code after `x or return` runs only when `x` holds, and after
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the code after `x or return` runs only when `x` holds, and after
 // `x and continue` only when it fails. After `x and continue or break` it would have to do both.
 void addLeaveConditions(AstStatExpr* statement, std::vector<Condition>& conditions)
 {

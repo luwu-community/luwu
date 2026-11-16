@@ -252,6 +252,7 @@ private:
     void visit(AstStatReturn* ret);
     void visit(AstStatGive* give);
     void visit(AstStatComprehensionItem* item);
+    void checkComprehensionItem(AstStatComprehensionItem* item, const TableIndexer& indexer);
     void visit(AstStatExpr* expr);
     void visit(AstStatLocal* local);
     void visit(AstStatFor* forStatement);

@@ -1626,7 +1626,7 @@ void translateInstSetTableN(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::JUMP, next);
 }
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md): APPENDTABLE. The table and the count register are the
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): APPENDTABLE. The table and the count register are the
 // comprehension's own (see LOP_APPENDTABLE), so their tags, the metatable and readonly aren't checked: only the array
 // size, whose miss stores through the generic SET_TABLE, which grows the table.
 void translateInstAppendTable(IrBuilder& build, const Instruction* pc, int pcpos)

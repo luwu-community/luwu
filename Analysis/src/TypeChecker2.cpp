@@ -574,13 +574,13 @@ const AstStat* TypeChecker2::getFallthrough(const AstStat* node)
         return getFallthrough(stat->body.data[stat->body.size - 1]);
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): `if (do return x) then` returns before the branch
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `if (do return x) then` returns before the branch
     if (findDoEndingStatement(node))
         return nullptr;
 
     if (const AstStatIf* stat = node->as<AstStatIf>())
     {
-        // Luwu Do Expressions (rfcs/do-expressions.md): a then-branch that never runs doesn't fall through
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a then-branch that never runs doesn't fall through
         if (const AstStat* thenf = findDoBlockingThenBranch(stat) ? nullptr : getFallthrough(stat->thenbody))
             return thenf;
 
@@ -857,7 +857,7 @@ void TypeChecker2::visit(AstStatBlock* block)
         visit(statement);
 }
 
-// Luwu If Local (rfcs/if-local.md): a `when` chain's declarations are checked like any `local`, and its plain
+// Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain's declarations are checked like any `local`, and its plain
 // conditions like the condition of an ordinary `if`.
 void TypeChecker2::visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses)
 {
@@ -3908,8 +3908,8 @@ void TypeChecker2::visit(AstExprCall* call)
     visitCall(call);
 }
 
-// Luwu match expressions: a type test's operand for a message. A value `is` read into a hidden local (`(matched)`,
-// `(destructured)`) has no name a user wrote.
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a type test's operand for a message. A value `is` read
+// into a hidden local (`(matched)`, `(destructured)`) has no name a user wrote.
 static std::string typeTestOperandName(std::optional<std::string> name, const char* fallback)
 {
     if (!name || name->empty() || (*name)[0] == '(')
@@ -3917,9 +3917,9 @@ static std::string typeTestOperandName(std::optional<std::string> name, const ch
     return "'" + *name + "'";
 }
 
-// Luwu match expressions: `x is C`, where no value of x's type can be a C. The test is always false, so the code it
-// guards never runs. That's reported here once, and the tested local counts as reported (improperlyUsedLocals), so
-// the reads it guards don't add a "'x' is 'never' here" each.
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is C`, where no value of x's type can be a C. The
+// test is always false, so the code it guards never runs. That's reported here once, and the tested local counts as
+// reported (improperlyUsedLocals), so the reads it guards don't add a "'x' is 'never' here" each.
 void TypeChecker2::checkImpossibleTypeTest(AstExprCall* call)
 {
     AstExprIndexName* callee = call->func->as<AstExprIndexName>();
@@ -5199,20 +5199,23 @@ void TypeChecker2::visit(AstExprIfElse* expr)
     visit(expr->falseExpr, ValueContext::RValue);
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md)
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
 void TypeChecker2::visit(AstExprDo* expr)
 {
     InConditionalContext inContext(&typeContext, TypeContext::Default);
     visit(expr->body);
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md)
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
 void TypeChecker2::visit(AstStatGive* give)
 {
-    visit(give->value, ValueContext::RValue);
+    if (give->item)
+        visit(give->item);
+    else
+        visit(give->value, ValueContext::RValue);
 }
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop is checked like any loop, then the item against the
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the loop is checked like any loop, then the item against the
 // table's indexer, which an annotation may have decided. A nil value adds nothing, so the value may be nil even when
 // the element type isn't.
 void TypeChecker2::visit(AstExprTableComprehension* expr)
@@ -5224,22 +5227,31 @@ void TypeChecker2::visit(AstExprTableComprehension* expr)
     if (!ttv || !ttv->indexer)
         return;
 
-    AstStatComprehensionItem* item = expr->item;
+    // A `do` item whose `give`s write keys adds the items of those `give`s
+    if (expr->item->givenItems.size == 0)
+        checkComprehensionItem(expr->item, *ttv->indexer);
 
+    for (AstStatComprehensionItem* given : expr->item->givenItems)
+        checkComprehensionItem(given, *ttv->indexer);
+}
+
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): one item against the table's indexer
+void TypeChecker2::checkComprehensionItem(AstStatComprehensionItem* item, const TableIndexer& indexer)
+{
     if (item->key)
-        testIsSubtype(lookupType(item->key), ttv->indexer->indexType, item->key->location);
+        testIsSubtype(lookupType(item->key), indexer.indexType, item->key->location);
 
     // Accepted against `element | nil`, but reported against the element type, which is what the reader wrote. Checked as
     // a literal like a list literal's items, so `tags = {}` fits a `{ string }` property.
     TypeId valueType = lookupType(item->value);
-    TypeId elementOrNil = module->internalTypes->addType(UnionType{{ttv->indexer->indexResultType, builtinTypes->nilType}});
+    TypeId elementOrNil = module->internalTypes->addType(UnionType{{indexer.indexResultType, builtinTypes->nilType}});
     NotNull<Scope> scope{findInnermostScope(item->value->location)};
 
     if (!subtyping->isSubtype(valueType, elementOrNil, scope).isSubtype)
-        testPotentialLiteralIsSubtype(item->value, ttv->indexer->indexResultType);
+        testPotentialLiteralIsSubtype(item->value, indexer.indexResultType);
 }
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md): see visit(AstExprTableComprehension*)
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): see visit(AstExprTableComprehension*)
 void TypeChecker2::visit(AstStatComprehensionItem* item)
 {
     if (item->key)

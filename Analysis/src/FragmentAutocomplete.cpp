@@ -196,7 +196,7 @@ Location getFragmentLocation(AstStat* nearestStatement, const Position& cursorPo
         }
         if (auto ifS = getNearestIfToCursor(nearestStatement, cursorPosition))
         {
-            // Luwu If Local (rfcs/if-local.md): conditionLocation() covers a whole `when` chain
+            // Luwu If Local (rfcs/control-flow/if-local.md): conditionLocation() covers a whole `when` chain
             auto conditionExtents = ifS->conditionLocation();
             if (conditionExtents.containsClosed(cursorPosition) || !ifS->thenLocation)
             {

@@ -11,7 +11,7 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 using namespace Luau;
 
-// Luwu Do Expressions (rfcs/do-expressions.md)
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
 TEST_SUITE_BEGIN("TypeInferDoExpr");
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "do_expression_type_is_the_union_of_its_gives")
@@ -319,6 +319,28 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "an_and_leave_or_leave_statement_leaves_nothi
     CHECK(use->reason == UnreachableCodeUse::Reason::NarrowedAway);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_guard_narrows_its_condition_for_the_rest_of_the_block")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function f(x: string?, t: { string? }): string
+            return "" if not x
+            local s: string = x
+
+            for _, v in t do
+                continue if not v
+                local u: string = v
+            end
+
+            return s
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 // Code after the typed text. It uses nothing the typed text declares, so it stays clean whatever is typed above it.
 const char* const kTypewriterAfter = R"(
 local unrelated = 1
@@ -368,6 +390,24 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_or_leave")
     );
     checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    local n = v;\n    -n < 0 or break\nend", kTypewriterAfter);
     checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    local n = maybe()\n    n and continue or break\nend", kTypewriterAfter);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_guards")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    checkTypewriting(*this, kTypewriterBefore, "local function f(): number\n    local n = maybe()\n    return 0 if not n\n    return n\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "local function f()\n    return if #nums > 3\n    print(1)\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    continue if #nums < v\n    print(v)\nend", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    continue if v <= 2 and v == 1\n    print(v)\nend", kTypewriterAfter);
+    // UnflippedGuard: nothing to report while a correct guard is typed
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "for _, v in nums do\n    local n = maybe()\n    continue if n == nil\n    print(v + n)\nend",
+        kTypewriterAfter
+    );
+    checkTypewriting(*this, kTypewriterBefore, "for _, v in nums do\n    local n = maybe()\n    continue if n\n    break\nend", kTypewriterAfter);
 }
 
 TEST_SUITE_END();

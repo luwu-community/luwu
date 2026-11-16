@@ -487,7 +487,7 @@ ControlFlow DataFlowGraphBuilder::visit(AstStat* s)
         handle->ice("Unknown AstStat in DataFlowGraphBuilder::visit");
 }
 
-// Luwu If Local (rfcs/if-local.md): visits a `when` chain in the scope of the branch it guards. A binding's
+// Luwu If Local (rfcs/control-flow/if-local.md): visits a `when` chain in the scope of the branch it guards. A binding's
 // declaration is an ordinary `local`; its def also gets the refinement key the binding is narrowed through.
 void DataFlowGraphBuilder::visitIfClauses(const AstArray<AstIfClause>& clauses)
 {
@@ -566,7 +566,7 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatWhile* w)
     ControlFlow cf;
     {
         PushScope ps{scopeStack, whileScope};
-        // Luwu If Local (rfcs/if-local.md): a `when` chain's bindings are declared in the loop's scope
+        // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain's bindings are declared in the loop's scope
         if (w->clauses.size == 0)
             visitExpr(w->condition);
         else
@@ -1392,7 +1392,7 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprTypeAssertion* t)
     return {def, key};
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): a branch can assign (`if c then do x = 1 give x else x`), so each branch
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a branch can assign (`if c then do x = 1 give x else x`), so each branch
 // gets its own scope and the code after the expression sees the join of both, as after an `if` statement. Upstream
 // visits all three parts in one scope, which is only right while expressions can't assign.
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIfElse* i)
@@ -1405,7 +1405,7 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIfElse* i)
 
     {
         PushScope ps{scopeStack, thenScope};
-        // Luwu If Local (rfcs/if-local.md): the chain's bindings are in scope only in the `then` branch
+        // Luwu If Local (rfcs/control-flow/if-local.md): the chain's bindings are in scope only in the `then` branch
         visitIfClauses(i->clauses);
         visitExpr(i->trueExpr);
     }
@@ -1420,7 +1420,7 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIfElse* i)
     return {defArena->freshCell(Symbol{}, i->location), nullptr};
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): the block always ends in a `give`, `return`, `break` or `continue`, so
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the block always ends in a `give`, `return`, `break` or `continue`, so
 // nothing falls out of its end. Code after the expression runs only after a `give`, and sees the join of what each
 // `give` saw.
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprDo* d)
@@ -1451,7 +1451,7 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprDo* d)
     return {defArena->freshCell(Symbol{}, d->location), nullptr};
 }
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop is an ordinary loop statement, scoped to the
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the loop is an ordinary loop statement, scoped to the
 // expression
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprTableComprehension* c)
 {
@@ -1475,11 +1475,14 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatComprehensionItem* i)
     return ControlFlow::None;
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): records what this path assigned since the `do` expression started, and
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): records what this path assigned since the `do` expression started, and
 // joins it with the other `give`s. Inside the block, a `give` leaves like `return`.
 ControlFlow DataFlowGraphBuilder::visit(AstStatGive* g)
 {
-    visitExpr(g->value);
+    if (g->item)
+        visit(g->item);
+    else
+        visitExpr(g->value);
 
     // The parser only accepts `give` inside a `do` expression
     if (giveExits.empty())

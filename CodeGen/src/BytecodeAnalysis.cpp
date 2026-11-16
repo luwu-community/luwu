@@ -1596,7 +1596,7 @@ static void analyzeBytecodeTypesPass(
                 break;
             case LOP_APPENDTABLE:
             {
-                // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the count stays a number
+                // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the count stays a number
                 int rc = LUAU_INSN_C(*pc);
                 regTags[rc] = LBC_TYPE_NUMBER;
                 break;

@@ -589,7 +589,7 @@ AstExprIfElse::AstExprIfElse(
 {
 }
 
-// Luwu If Local (rfcs/if-local.md)
+// Luwu If Local (rfcs/control-flow/if-local.md)
 static void visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses, AstVisitor* visitor)
 {
     if (clauses.size == 0)
@@ -949,7 +949,12 @@ AstStatGive::AstStatGive(const Location& location, AstExpr* value)
 
 void AstStatGive::visit(AstVisitor* visitor)
 {
-    if (visitor->visit(this))
+    if (!visitor->visit(this))
+        return;
+
+    if (item)
+        item->visit(visitor);
+    else
         value->visit(visitor);
 }
 

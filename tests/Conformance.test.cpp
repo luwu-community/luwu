@@ -6657,7 +6657,7 @@ TEST_CASE("IfLocal")
     runConformance("if_local.luwu");
 }
 
-// Luwu If Local (rfcs/if-local.md): `when` chains on `for` and `while`, and destructured `for` bindings
+// Luwu If Local (rfcs/control-flow/if-local.md): `when` chains on `for` and `while`, and destructured `for` bindings
 TEST_CASE("LoopWhenChains")
 {
     ScopedFastFlag sffs[] = {
@@ -6873,7 +6873,7 @@ TEST_CASE("LuwuBytecodeHeader")
         CHECK(uint8_t(bytecode[1]) == LWBC_VERSION_TARGET);
         CHECK(getLoadError(bytecode) == "");
 
-        // Luwu Table Comprehensions (rfcs/table-comprehensions.md): their opcodes are WIP bytecode too
+        // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): their opcodes are WIP bytecode too
         ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
         std::string withComprehensions = Luau::compile("return 1");
         REQUIRE(withComprehensions.size() > LWBC_HEADER_SIZE);

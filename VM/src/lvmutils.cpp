@@ -751,7 +751,7 @@ LUAU_NOINLINE void luaV_tryfuncTM(lua_State* L, StkId func)
     setobj2s(L, func, tm); // tag method is the new function to be called
 }
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md): how many elements a table iterated by a generic for can
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): how many elements a table iterated by a generic for can
 // produce at most, read in O(1): its array part plus its hash part. A table with __iter can produce anything, which only
 // makes the size a worse guess.
 static int iterationcapacity(const TValue* generator)

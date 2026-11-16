@@ -1053,7 +1053,7 @@ struct BytecodeGraphParser
                 break;
 
             case LOP_APPENDTABLE:
-                // Luwu Table Comprehensions (rfcs/table-comprehensions.md): reads the table and the value, and
+                // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): reads the table and the value, and
                 // updates the count in C
                 addVmRegInput(node, LUAU_INSN_A(insn));
                 addVmRegInput(node, LUAU_INSN_B(insn));
@@ -1062,7 +1062,7 @@ struct BytecodeGraphParser
                 break;
 
             case LOP_PRESIZETABLE:
-                // Luwu Table Comprehensions (rfcs/table-comprehensions.md): writes no register. The registers above B that
+                // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): writes no register. The registers above B that
                 // the iterator and range forms also read belong to the loop that follows, which reads them too.
                 addVmRegInput(node, LUAU_INSN_A(insn));
                 addVmRegInput(node, LUAU_INSN_B(insn));

@@ -1709,7 +1709,7 @@ static bool isValidBreakContinueContext(const std::vector<AstNode*>& ancestry, P
     return false;
 }
 
-// Luwu Do Expressions (rfcs/do-expressions.md): is the position a statement in a `do` expression's block, where `give`
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): is the position a statement in a `do` expression's block, where `give`
 // can go? A function boundary in between means no.
 static bool isInDoExprBody(const std::vector<AstNode*>& ancestry)
 {
@@ -2013,7 +2013,7 @@ static AutocompleteContext autocompleteExpression(
         result["not"] = {AutocompleteEntryKind::Keyword};
         result["function"] = {AutocompleteEntryKind::Keyword, std::nullopt, false, false, correctForFunction};
 
-        // Luwu Do Expressions (rfcs/do-expressions.md): `do` starts a value too. Without it, typing `do` here fuzzy-matches
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do` starts a value too. Without it, typing `do` here fuzzy-matches
         // names like `DirectoryPath` and the editor completes to them.
         if (FFlag::LuwuDoExpr)
             result["do"] = {AutocompleteEntryKind::Keyword, std::nullopt, false, false};
@@ -2469,13 +2469,13 @@ static AutocompleteResult autocompleteWhileLoopKeywords(std::vector<AstNode*> an
     ret["and"] = {AutocompleteEntryKind::Keyword};
     ret["or"] = {AutocompleteEntryKind::Keyword};
 
-    // Luwu If Local (rfcs/if-local.md)
+    // Luwu If Local (rfcs/control-flow/if-local.md)
     if (FFlag::LuwuIfLocal)
         ret["when"] = {AutocompleteEntryKind::Keyword};
     return {std::move(ret), std::move(ancestry), AutocompleteContext::Keyword};
 }
 
-// Luwu If Local (rfcs/if-local.md): the keywords after a loop's header, when the cursor is past its last part (the
+// Luwu If Local (rfcs/control-flow/if-local.md): the keywords after a loop's header, when the cursor is past its last part (the
 // bounds, the values, the condition or the last clause of its `when` chain) and before its `do`: `do` and `when`, plus
 // `give` and `for` for a table comprehension's clause. Nothing when the cursor isn't there, or the part before it
 // is unfinished.
@@ -2813,7 +2813,7 @@ AutocompleteResult autocomplete_(
     if (hotComment)
         return {autocompleteHotComment(*hotComment, position), ancestry, AutocompleteContext::HotComment};
 
-    // Luwu If Local (rfcs/if-local.md): `for ... when ... do`, `while local ... when ... do` and comprehension clauses
+    // Luwu If Local (rfcs/control-flow/if-local.md): `for ... when ... do`, `while local ... when ... do` and comprehension clauses
     if (FFlag::LuwuIfLocal || FFlag::LuwuTableComprehensions)
     {
         if (std::optional<AutocompleteResult> loopKeywords = autocompleteLoopHeaderKeywords(ancestry, position))
@@ -2949,7 +2949,7 @@ AutocompleteResult autocomplete_(
         {
             AutocompleteResult result = autocompleteExpression(*module, builtinTypes, typeArena, ancestry, scopeAtPosition, position);
 
-            // Luwu If Local (rfcs/if-local.md): a condition can start with a binding
+            // Luwu If Local (rfcs/control-flow/if-local.md): a condition can start with a binding
             if (FFlag::LuwuIfLocal && statWhile->clauses.size == 0 && statWhile->condition->is<AstExprError>())
             {
                 result.entryMap["local"] = {AutocompleteEntryKind::Keyword};
@@ -2983,7 +2983,7 @@ AutocompleteResult autocomplete_(
         {
             AutocompleteResult result = autocompleteExpression(*module, builtinTypes, typeArena, ancestry, scopeAtPosition, position);
 
-            // Luwu If Local (rfcs/if-local.md): a condition can start with a binding
+            // Luwu If Local (rfcs/control-flow/if-local.md): a condition can start with a binding
             if (FFlag::LuwuIfLocal && statIf->clauses.size == 0)
             {
                 result.entryMap["local"] = {AutocompleteEntryKind::Keyword};
@@ -3004,7 +3004,7 @@ AutocompleteResult autocomplete_(
         ret["and"] = {AutocompleteEntryKind::Keyword};
         ret["or"] = {AutocompleteEntryKind::Keyword};
 
-        // Luwu If Local (rfcs/if-local.md)
+        // Luwu If Local (rfcs/control-flow/if-local.md)
         if (FFlag::LuwuIfLocal)
             ret["when"] = {AutocompleteEntryKind::Keyword};
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};

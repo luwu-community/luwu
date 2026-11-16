@@ -465,4 +465,45 @@ do
     assert(first_big(xs) == 3 and first_big({ 1 }) == nil)
 end
 
+-- `give [k] = v` in a `do` item writes a key
+do
+    local t = { a = 1, b = 2, c = 3 }
+    local renamed = { for k, v in t do
+        local nk = k .. "!"
+        local nv = v * 10
+        give [nk] = nv }
+    assert(count(renamed) == 3 and renamed["a!"] == 10 and renamed["c!"] == 30)
+
+    -- in any branch, accumulating, in a guard, with `continue` and in `give do`
+    local words = { "x", "y", "x", "skip", "z", "x" }
+    local counts = { for _, w in words do
+        continue if w == "skip"
+        if w == "z" then
+            give [w] += 100
+        end
+        give [w] += 1 }
+    assert(count(counts) == 3 and counts.x == 3 and counts.y == 1 and counts.z == 100)
+
+    local lengths = { for i = 1, 4 give do
+        local s = string.rep("a", i)
+        give [s] = -1 if i == 3
+        give [s] = #s }
+    assert(lengths.aaa == -1 and lengths.aaaa == 4)
+
+    -- a nil value writes nothing, and a comprehension inside the block builds its own table
+    local rows = { for i = 1, 3 do
+        local row = { for j = 1, i give j }
+        give [i] = if i == 2 then nil else #row }
+    assert(count(rows) == 2 and rows[1] == 1 and rows[3] == 3)
+
+    -- the key is evaluated before the value
+    local order = {}
+    local _ = { for i = 1, 2 do
+        give [(function() table.insert(order, "k") return i end)()] = (function() table.insert(order, "v") return i end)() }
+    assert(same(order, { "k", "v", "k", "v" }))
+
+    -- `#` counts the keys a map comprehension writes the way it counts any table's border
+    assert(#{ for i = 1, 3 do give [i] = i } == 3)
+end
+
 return "OK"

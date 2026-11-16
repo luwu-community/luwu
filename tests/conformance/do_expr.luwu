@@ -627,6 +627,104 @@ do
     assert(after - before < 64, `grew by {after - before}KB`)
 end
 
+-- guards: `return v if c`, `break if c` and `continue if c`
+do
+    local function f(x)
+        return "none" if not x
+        return x .. "!"
+    end
+    assert(f(nil) == "none" and f(false) == "none" and f("a") == "a!")
+
+    local function g(a, b)
+        return "no", "pair" if not (a and b)
+        return "one" if a == 1
+        return "ok"
+    end
+    local p, q = g(1, nil)
+    assert(p == "no" and q == "pair")
+    assert(g(1, 2) == "one" and g(2, 3) == "ok")
+
+    local function bare(x)
+        return if x
+        return "fell through"
+    end
+    assert(select("#", bare(1)) == 0 and bare(nil) == "fell through")
+
+    local out = {}
+    for _, s in { "a1", "b", "a2", "stop", "a3" } do
+        break if s == "stop"
+        continue if not string.find(s, "^a")
+        table.insert(out, s)
+    end
+    assert(table.concat(out, ",") == "a1,a2")
+
+    -- the condition runs exactly once, and before the values, which only run when it holds
+    local calls = 0
+    local function count(v)
+        calls += 1
+        return v
+    end
+    local function h(v)
+        return "left" if not count(v)
+        return "stayed"
+    end
+    assert(h(true) == "stayed" and calls == 1)
+    assert(h(nil) == "left" and calls == 2)
+
+    local order = {}
+    local function note(name, v)
+        table.insert(order, name)
+        return v
+    end
+    local function lazy(c)
+        return note("value", 1) if note("condition", c)
+        return 0
+    end
+    assert(lazy(false) == 0 and table.concat(order, ",") == "condition")
+    assert(lazy(true) == 1 and table.concat(order, ",") == "condition,condition,value")
+
+    -- `return if c then a else b` returns an if-else expression, as in Luau
+    local function pick(c)
+        return if c then "a" else "b"
+    end
+    assert(pick(true) == "a" and pick(false) == "b")
+
+    -- the values can span lines, as long as the `if` starts on the line they end on
+    local function spread(c)
+        return 1,
+            2 if c
+        return 3
+    end
+    assert(select("#", spread(true)) == 2 and spread(false) == 3)
+end
+
+-- guards in loops, and after other statements on the line
+do
+    local out = {}
+    local t = { 1, 2 }
+    for i = 1, 4 do
+        continue if #t < i
+        continue if i == 2
+        table.insert(out, i)
+    end
+    assert(table.concat(out, ",") == "1")
+
+    out = {}
+    for i = 1, 5 do
+        break if i == 4
+        local skip, keep = i == 2, i == 1
+        continue if not keep and skip
+        table.insert(out, i)
+    end
+    assert(table.concat(out, ",") == "1,3")
+
+    out = {}
+    for i = 1, 3 do
+        local v = i * 2; continue if v == 4; table.insert(out, v)
+    end
+    assert(table.concat(out, ",") == "2,6")
+end
+
 -- `x or return`, `x or break` and `x or continue` as statements
 do
     local function f(x)

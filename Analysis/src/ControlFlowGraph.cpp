@@ -366,7 +366,7 @@ void CFGBuilder::lower(AstStatIf* statIf)
 
     Block* thenBlock = newBlock(BlockKind::Linear, "then branch", currBlock);
 
-    // Luwu If Local (rfcs/if-local.md): a `when` chain's bindings are declared at the top of the then branch.
+    // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain's bindings are declared at the top of the then branch.
     // Neither they nor its plain conditions refine anything here yet.
     auto ref = statIf->clauses.size == 0 ? resolveCondition(statIf->condition) : std::nullopt;
     if (ref)
@@ -423,7 +423,7 @@ void CFGBuilder::lower(AstStatWhile* statWhile)
     std::optional<CFGRefinement::RefinementId> ref;
     {
         BlockScope scope(*this, loopHeader);
-        // Luwu If Local (rfcs/if-local.md): as for `if`, a `when` chain refines nothing here yet
+        // Luwu If Local (rfcs/control-flow/if-local.md): as for `if`, a `when` chain refines nothing here yet
         if (statWhile->clauses.size == 0)
             ref = resolveCondition(statWhile->condition);
     }

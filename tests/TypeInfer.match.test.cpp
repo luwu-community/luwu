@@ -14,7 +14,7 @@ LUAU_FASTFLAG(LuwuClasses)
 
 using namespace Luau;
 
-// Luwu match expressions
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
 TEST_SUITE_BEGIN("TypeInferMatch");
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "match_gives_the_union_of_its_arms")
@@ -29,8 +29,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "match_gives_the_union_of_its_arms")
         --!strict
         local function which(arg: string)
             return match const a = arg
-                case "p" | "patch" then "patch"
-                case "u" | "unpatch" then "unpatch"
+                case is "p" | "patch" then "patch"
+                case is "u" | "unpatch" then "unpatch"
                 else error(`unexpected {a}`)
         end
         local w = which("p")
@@ -100,8 +100,8 @@ TEST_CASE_FIXTURE(ClassesFixture, "is_and_implements_narrow_like_the_class_libra
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-// Luwu match expressions: a type test no value can pass is reported once, at the test, and the code it guards adds
-// nothing about the tested value being 'never'
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a type test no value can pass is reported once, at the
+// test, and the code it guards adds nothing about the tested value being 'never'
 TEST_CASE_FIXTURE(ClassesFixture, "a_type_test_that_never_passes_is_one_error")
 {
     ScopedFastFlag sffs[] = {
@@ -145,6 +145,7 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuClasses, true},
         {FFlag::LuwuIfLocal, true},
         {FFlag::LuwuDoExpr, true},
     };
@@ -156,16 +157,28 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
     };
     for (const Case& c : {
              Case{
-                 "local x = 1\nlocal y = match x\n    case 1 then 'one'\n",
+                 "local x = 1\nlocal y = match x\n    case is 1 then 'one'\n",
                  "A 'match' expression must be exhaustive; add an 'else' branch to handle all unhandled cases",
              },
              Case{
-                 "local x, limit = 1, 2\nlocal y = match x\n    case limit then 'one'\n    else 'other'\n",
-                 "A 'case' pattern is a literal, 'is Type' or 'implements Trait'; to compare with a variable, name the subject "
-                 "('match const v = ...') and use 'when v == x'",
+                 "local x = 1\nlocal y = match x\n    case 1 | 2 then 'small'\n    else 'other'\n",
+                 "Write 'is' before a 'case' pattern: 'case is <pattern>'",
+             },
+             // a name after `case` binds, so one that's a builtin, a class or a const was meant as a test
+             Case{
+                 "local x = 1\nlocal y = match x\n    case string then 'text'\n    else 'other'\n",
+                 "Did you mean 'case is string'? A name after 'case' binds the value, and 'string' is a builtin",
              },
              Case{
-                 "local x = 1\nmatch x\n    case 1 then print('one')\n    case 2 then print('two')\nprint(x)\n",
+                 "class Cat\nend\nlocal x: unknown = 1\nlocal y = match x\n    case Cat then 'cat'\n    else 'other'\n",
+                 "Did you mean 'case is Cat'? A name after 'case' binds the value, and 'Cat' is a class",
+             },
+             Case{
+                 "const LIMIT = 2\nlocal x = 1\nlocal y = match x\n    case LIMIT then 'limit'\n    else 'other'\n",
+                 "Did you mean 'case is LIMIT'? A name after 'case' binds the value, and 'LIMIT' is already a const",
+             },
+             Case{
+                 "local x = 1\nmatch x\n    case is 1 then print('one')\n    case is 2 then print('two')\nprint(x)\n",
                  "'match' only supports expressions, use an 'if' statement instead",
              },
              Case{
@@ -251,7 +264,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_match_expressions")
     checkTypewriting(
         *this,
         kTypewriterBefore,
-        "local label = match const n = maybe()\n    case nil then \"none\"\n    case is number when n > 0 then \"positive\"\n    else \"other\"",
+        "local label = match const n = maybe()\n    case is nil then \"none\"\n    case is number when n > 0 then \"positive\"\n    else \"other\"",
         kTypewriterAfter
     );
     checkTypewriting(*this, kTypewriterBefore, "local n = maybe()\nlocal ok = n is number", kTypewriterAfter);
@@ -321,6 +334,85 @@ TEST_CASE_FIXTURE(ClassesFixture, "is_with_alternatives_narrows_the_value")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_leave_first_guard_condition_can_be_a_type_test")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        local function f(r: unknown): number
+            return 1 if r is string
+            return 2 if r is not number
+            return r
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_a_leave_first_guard_whose_condition_is_a_type_test")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "local function f(r: unknown): number?\n    return 1 if r is string\n    return nil if r is not number\n    return r\nend",
+        kTypewriterAfter
+    );
+}
+
+// A `case` name binds the subject's value narrowed by the arm's pattern, and a last `case name` is the `else`
+TEST_CASE_FIXTURE(BuiltinsFixture, "case_bindings_narrow_and_a_last_catch_all_is_the_else")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function describe(v: string | number | boolean): string
+            return match v
+                case s is string then s
+                case n is number when n > 10 then tostring(n + 1)
+                case other then tostring(other)
+        end
+        local function first(xs: { number }): number?
+            for _, x in xs do
+                const r: number = match x
+                    case is 0 then continue
+                    case n when n < 0 then return nil
+                    case n then n
+                return r
+            end
+            return nil
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_case_bindings")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "local label = match maybe()\n    case n is number when n > 0 then \"positive\"\n    case other then tostring(other)",
+        kTypewriterAfter
+    );
 }
 
 TEST_SUITE_END();

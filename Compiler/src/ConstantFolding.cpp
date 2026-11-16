@@ -1051,7 +1051,7 @@ struct ConstantVisitor : AstVisitor
         }
         else if (AstExprIfElse* expr = node->as<AstExprIfElse>())
         {
-            // Luwu If Local (rfcs/if-local.md): a `when` chain isn't folded, even when its first clause is constant
+            // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain isn't folded, even when its first clause is constant
             if (expr->clauses.size != 0)
             {
                 analyzeIfClauses(expr->clauses);
@@ -1088,13 +1088,13 @@ struct ConstantVisitor : AstVisitor
         }
         else if (AstExprTableComprehension* expr = node->as<AstExprTableComprehension>())
         {
-            // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop's expressions are folded like any other,
+            // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the loop's expressions are folded like any other,
             // and the table is never a constant
             expr->loop->visit(this);
         }
         else if (AstExprDo* expr = node->as<AstExprDo>())
         {
-            // Luwu Do Expressions (rfcs/do-expressions.md): the block's statements are folded like any other, and the
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the block's statements are folded like any other, and the
             // expression itself is never a constant
             expr->body->visit(this);
         }
@@ -1170,7 +1170,7 @@ struct ConstantVisitor : AstVisitor
         }
     }
 
-    // Luwu If Local (rfcs/if-local.md): a `when` chain inside an expression. analyze() doesn't go through the
+    // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain inside an expression. analyze() doesn't go through the
     // visitor, so the declarations are visited here, which records their values the same as any `local`.
     void analyzeIfClauses(const AstArray<AstIfClause>& clauses)
     {

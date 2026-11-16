@@ -582,7 +582,7 @@ enum LuauOpcode
     // D: jump offset (-32768..32767) past the CALL, taken when the class has no trait initializers
     LOP_INITTRAITS,
 
-    // PRESIZETABLE: Luwu Table Comprehensions (rfcs/table-comprehensions.md): sizes the table a comprehension builds from
+    // PRESIZETABLE: Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): sizes the table a comprehension builds from
     // what its loop iterates, so filling it doesn't rehash, and trims it afterwards. Emitted after the loop's registers are
     // loaded and before its FORNPREP/FORGPREP, and once more after the loop. A size is a capacity hint, never a result:
     // the comprehension's contents don't depend on it.
@@ -600,7 +600,7 @@ enum LuauOpcode
     //       used, it shrinks to fit.
     LOP_PRESIZETABLE,
 
-    // APPENDTABLE: Luwu Table Comprehensions (rfcs/table-comprehensions.md): adds one element to the array a comprehension
+    // APPENDTABLE: Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): adds one element to the array a comprehension
     // builds: when B isn't nil, increments the count in C and stores B at that index. The table is one the comprehension
     // allocated, and nothing else can reach it while the comprehension runs, so the VM asserts rather than checks that it
     // has no metatable and isn't readonly, and that C holds a number (only this instruction writes it).
@@ -666,7 +666,7 @@ enum LuauOpcode
 #define LBC_NEWOBJECT_FIELDS 2
 #define LBC_NEWOBJECT_ALLOC 3
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md): operand C of LOP_PRESIZETABLE (see LOP_PRESIZETABLE)
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): operand C of LOP_PRESIZETABLE (see LOP_PRESIZETABLE)
 #define LBC_PRESIZE_ITER_ARRAY 0
 #define LBC_PRESIZE_ITER_HASH 1
 #define LBC_PRESIZE_RANGE_ARRAY 2

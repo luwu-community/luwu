@@ -1308,7 +1308,7 @@ TEST_CASE_FIXTURE(Fixture, "parse_interpolated_string_call_without_parens")
     }
     catch (const ParseErrors& e)
     {
-        // Luwu Do Expressions (rfcs/do-expressions.md): a statement can start with a value (`#t > 0 or return`), so the
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a statement can start with a value (`#t > 0 or return`), so the
         // string is parsed as one that doesn't leave
         if (FFlag::LuwuDoExpr)
             CHECK_EQ(
@@ -8945,8 +8945,8 @@ local is_string = x is string
     );
 }
 
-// Luwu match expressions: `x is None` compares with the global `None` like `x is none`, but a local named `None` (a
-// user's class) is tested against like any other class
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is None` compares with the global `None` like `x is
+// none`, but a local named `None` (a user's class) is tested against like any other class
 TEST_CASE_FIXTURE(Fixture, "is_None_compares_unless_a_local_shadows_it")
 {
     ScopedFastFlag sff{FFlag::DebugLuwuMatchExpressions, true};
@@ -9062,7 +9062,7 @@ TEST_CASE_FIXTURE(Fixture, "loop_when_without_the_flag_says_how_to_enable_it")
     matchParseError("while local x = f() do end", "attempt to use disabled Luwu feature 'while local' and 'when'; enable via FFlag 'LuwuIfLocal'");
 }
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md)
 TEST_CASE_FIXTURE(Fixture, "table_comprehension_is_stored_as_its_loop")
 {
     ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
@@ -9145,6 +9145,66 @@ TEST_CASE_FIXTURE(Fixture, "table_comprehension_do_item_is_a_do_expression")
     CHECK(!cBody->body->body.data[0]->is<AstStatError>());
 }
 
+// Luwu Guards (rfcs/control-flow/guards.md)
+TEST_CASE_FIXTURE(Fixture, "leave_guards")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    // a guard is the `if` it means, with the leave as its one statement, and the block goes on after it
+    AstStatBlock* block = parse("for i = 1, 3 do\n    continue if i == 2\n    print(i)\nend");
+    AstStatFor* loop = block->body.data[0]->as<AstStatFor>();
+    REQUIRE(loop);
+    REQUIRE_EQ(loop->body->body.size, 2);
+    AstStatIf* guard = loop->body->body.data[0]->as<AstStatIf>();
+    REQUIRE(guard);
+    CHECK(guard->isLeaveGuard);
+    CHECK(!guard->elsebody);
+    REQUIRE_EQ(guard->thenbody->body.size, 1);
+    CHECK(guard->thenbody->body.data[0]->is<AstStatContinue>());
+    CHECK(guard->condition->is<AstExprBinary>());
+
+    // `return if c` returns nothing when `c` holds, and with `then` after the condition it returns an if-else expression
+    AstStatBlock* bare = parse("local x = ...\nreturn if x\nprint(x)");
+    REQUIRE_EQ(bare->body.size, 3);
+    AstStatIf* bareGuard = bare->body.data[1]->as<AstStatIf>();
+    REQUIRE(bareGuard);
+    CHECK(bareGuard->isLeaveGuard);
+    REQUIRE(bareGuard->thenbody->body.data[0]->is<AstStatReturn>());
+    CHECK_EQ(bareGuard->thenbody->body.data[0]->as<AstStatReturn>()->list.size, 0);
+
+    AstStatBlock* ifElse = parse("local x = ...\nreturn if x then 1 else 2");
+    REQUIRE_EQ(ifElse->body.size, 2);
+    AstStatReturn* ret = ifElse->body.data[1]->as<AstStatReturn>();
+    REQUIRE(ret);
+    REQUIRE_EQ(ret->list.size, 1);
+    CHECK(ret->list.data[0]->is<AstExprIfElse>());
+
+    // the values can span lines; the `if` starts on the line they end on
+    AstStatBlock* spread = parse("local c = ...\nreturn 1,\n    2 if c\nreturn 3");
+    REQUIRE_EQ(spread->body.size, 3);
+    CHECK(spread->body.data[1]->is<AstStatIf>());
+
+    // an `if` on the next line isn't a guard
+    matchParseError("for i = 1, 3 do\n    continue\n    if i then end\nend", "Expected 'end' (to close 'do' at line 1), got 'if'");
+
+    // the condition-first statements still parse; ConfusingGuard lints the ones that read badly
+    for (const char* source : {
+             "local t = {}\n#t > 0 or return nil",
+             "for _, v in {} do\n    v == 2 and break\nend",
+             "for _, v in {} do\n    v and continue or break\nend",
+             "local x = ...\nnot x or (return 1, 2)",
+         })
+    {
+        INFO(source);
+        CHECK_EQ(tryParse(source).errors.size(), 0);
+    }
+
+    // a bare `or return` inside brackets needs no parentheses: the bracket ends it
+    CHECK_EQ(tryParse("local function f(x)\n    print(x or return)\n    print(x, x or return, 1)\nend").errors.size(), 0);
+    matchParseError("for _, v in {} do\n    continue if v =\nend", "Expected '==' or '~=' to compare, got '='");
+    matchParseError("for _, v in {} do\n    continue if\nend", "Expected a condition after 'if'");
+}
+
 TEST_CASE_FIXTURE(Fixture, "table_comprehension_parse_errors")
 {
     ScopedFastFlag sffs[] = {
@@ -9167,11 +9227,40 @@ TEST_CASE_FIXTURE(Fixture, "table_comprehension_parse_errors")
         "local a = { for _, v in xs give [v] /= 2 }", "A table comprehension can accumulate with '+=', '-=', '*=' or '..=', not '/='"
     );
 
+    // the `give`s of a `do` item all write keys or none does
+    matchParseError(
+        "local a = { for _, v in xs do\n    v or give [v] = 1\n    give v\n}",
+        "A table comprehension's 'give's either all write '[key] = value' or all give values"
+    );
+    matchParseError(
+        "local a = { for _, v in xs do\n    v or give v\n    give [v] = 1\n}",
+        "A table comprehension's 'give's either all write '[key] = value' or all give values"
+    );
+    matchParseError(
+        "local a = { for _, v in xs do\n    local w = do give [v] = 1\n    give [v] = w\n}",
+        "Only a table comprehension's 'do' item can 'give [key] = value', not a 'do' expression inside it"
+    );
+
     // an accumulating item records its operator
     AstStatBlock* tally = parse("local a = { for _, v in xs give [v] += 1 }");
     AstExprTableComprehension* counted = tally->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprTableComprehension>();
     REQUIRE(counted);
     CHECK(counted->item->accumulate == AstExprBinary::Add);
+
+    // `give [k] = v` in a `do` item holds the item it writes, and the item lists them
+    AstStatBlock* keyed = parse("local a = { for _, v in xs do\n    v or give [v] = 0\n    give [v] += 1\n}");
+    AstExprTableComprehension* map = keyed->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprTableComprehension>();
+    REQUIRE(map);
+    CHECK(map->item->isMap());
+    CHECK(!map->item->key);
+    REQUIRE_EQ(map->item->givenItems.size, 2);
+    CHECK(map->item->givenItems.data[1]->accumulate == AstExprBinary::Add);
+
+    // a comprehension inside the block has its own item
+    AstStatBlock* inner = parse("local a = { for _, v in xs do\n    local w = { for i = 1, 2 do give [i] = v }\n    give w\n}");
+    AstExprTableComprehension* outer = inner->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprTableComprehension>();
+    REQUIRE(outer);
+    CHECK(!outer->item->isMap());
 
     // the bindings aren't visible after the comprehension
     AstStatBlock* block = parse("local a = { for i = 1, 2 give i } local b = i");

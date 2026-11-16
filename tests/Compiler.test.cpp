@@ -1541,6 +1541,30 @@ TEST_CASE("OrLeaveStatement")
     );
 }
 
+TEST_CASE("LeaveGuards")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    // `return 1 if not x` compiles as the `if not x then return 1 end` it means, shortcuts included
+    CHECK_EQ(compileFunction0("local x = ... return 1 if not x return x"), compileFunction0("local x = ... if not x then return 1 end return x"));
+    CHECK_EQ(compileFunction0("local x = ... return if not x return x"), compileFunction0("local x = ... if not x then return end return x"));
+    CHECK_EQ(
+        compileFunction0("for _, v in t do break if v == 0 print(v) end"),
+        compileFunction0("for _, v in t do if v == 0 then break end print(v) end")
+    );
+    CHECK_EQ(
+        compileFunction0("for _, v in t do continue if not v print(v) end"),
+        compileFunction0("for _, v in t do if not v then continue end print(v) end")
+    );
+    CHECK_EQ(
+        compileFunction0("local x = ... local y = do give 1 if x; give 2; return y"),
+        compileFunction0("local x = ... local y = do if x then give 1 end give 2; return y")
+    );
+
+    // `return if c then a else b` still returns an if-else expression
+    CHECK_EQ(compileFunction0("local x = ... return if x then 1 else 2"), compileFunction0("local x = ... return (if x then 1 else 2)"));
+}
+
 TEST_CASE("IfLocal")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
@@ -1640,7 +1664,7 @@ RETURN R0 0
 )");
 }
 
-// Luwu Table Comprehensions (rfcs/table-comprehensions.md)
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md)
 TEST_CASE("TableComprehension")
 {
     ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};

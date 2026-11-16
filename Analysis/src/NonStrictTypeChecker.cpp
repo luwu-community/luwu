@@ -360,7 +360,7 @@ struct NonStrictTypeChecker
         return ctx;
     }
 
-    // Luwu If Local (rfcs/if-local.md): only a `when` chain's first clause always runs, so only its context is kept.
+    // Luwu If Local (rfcs/control-flow/if-local.md): only a `when` chain's first clause always runs, so only its context is kept.
     // The clauses after it are still checked.
     NonStrictContext visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses)
     {
@@ -894,7 +894,7 @@ struct NonStrictTypeChecker
         return visit(typeAssertion->expr, ValueContext::RValue);
     }
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): the block is checked, but since a `give` can leave it early, none of
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the block is checked, but since a `give` can leave it early, none of
     // its context carries out of the expression
     NonStrictContext visit(AstExprDo* doExpr)
     {
@@ -904,11 +904,14 @@ struct NonStrictTypeChecker
 
     NonStrictContext visit(AstStatGive* give)
     {
+        if (give->item)
+            return visit(give->item);
+
         visit(give->value, ValueContext::RValue);
         return {};
     }
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the loop may run zero times, so like any loop's, its
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the loop may run zero times, so like any loop's, its
     // context doesn't carry out
     NonStrictContext visit(AstExprTableComprehension* comprehension)
     {

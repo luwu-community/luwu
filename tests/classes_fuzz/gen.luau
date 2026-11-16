@@ -670,7 +670,7 @@ const function generate(seed: number): (string, string)
                     "comp_objects", "comp_yield",
                 })
 
-                -- Luwu Table Comprehensions (rfcs/table-comprehensions.md): the same operations as a comprehension's item and `when`
+                -- Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the same operations as a comprehension's item and `when`
                 -- bindings, so they run inside a loop the compiler sizes and appends to itself
                 if form == "comp_array" then
                     op("comp_array", {
@@ -962,9 +962,10 @@ const function generate(seed: number): (string, string)
                         })
                     end
                 elseif string.find(form, "^chain") or string.find(form, "^or_return") then
-                    -- Luwu If Local and Do Expressions: a `class.isinstance` part of a `when` chain proves its local for the
-                    -- parts after it and the branch, and `class.isinstance(x, C) or return` proves it for the rest of the
-                    -- block. A write in a later part, in the branch or after the guard must unprove it, as for an `if`.
+                    -- Luwu If Local, Do Expressions and Guards: a `class.isinstance` part of a `when` chain proves its
+                    -- local for the parts after it and the branch, and `class.isinstance(x, C) or return` or
+                    -- `return -1 if not class.isinstance(x, C)` proves it for the rest of the block. A write in a later
+                    -- part, in the branch or after the guard must unprove it, as for an `if`.
                     const m = rng.pick(instance_methods(c, true))
                     const use = if m then `x:{m.name}()` else read
                     const elsewhere = filter(classes, function(o)
@@ -1027,7 +1028,7 @@ const function generate(seed: number): (string, string)
                     else
                         op("isa_or_return_rebind", {
                             "local function f(x)",
-                            `    class.isinstance(x, {r}) or return -1`,
+                            `    return -1 if not class.isinstance(x, {r})`,
                             `    x = {other}`,
                             `    local got = {use}`,
                             "    return got",

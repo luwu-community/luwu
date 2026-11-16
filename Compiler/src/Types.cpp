@@ -881,7 +881,7 @@ struct TypeMapVisitor : AstVisitor
 
     bool visit(AstExprIfElse* node) override
     {
-        // Luwu If Local (rfcs/if-local.md): a `when` chain's declarations are typed like any `local`
+        // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain's declarations are typed like any `local`
         if (node->clauses.size != 0)
         {
             for (const AstIfClause& clause : node->clauses)

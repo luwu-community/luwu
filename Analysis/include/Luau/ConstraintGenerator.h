@@ -101,7 +101,7 @@ struct ConstraintGenerator
     // define the scope hierarchy.
     std::vector<std::pair<Location, ScopePtr>> scopes;
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): the `do` expressions being checked, innermost last. `outer` is the
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the `do` expressions being checked, innermost last. `outer` is the
     // scope the expression is checked in; `gives` collects the type of each `give` in its block.
     struct GiveContext
     {
@@ -111,14 +111,14 @@ struct ConstraintGenerator
     };
     std::vector<GiveContext> giveContexts;
 
-    // Luwu Do Expressions (rfcs/do-expressions.md): for `x or return` and `x and return`, keyed by the right operand, what
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): for `x or return` and `x and return`, keyed by the right operand, what
     // holds when the expression completes: `x`'s truthiness refinement, or its negation after `and`. A statement whose
     // whole value (or a declaration's or assignment's value) is such an expression applies it to the code after it
     // (applyOrLeaveRefinements).
     DenseHashMap<const AstExpr*, RefinementId> orLeaveRefinements{nullptr};
     void applyOrLeaveRefinements(const ScopePtr& scope, const AstArray<AstExpr*>& values);
 
-    // Luwu Table Comprehensions (rfcs/table-comprehensions.md): the comprehensions being checked, innermost last. The
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the comprehensions being checked, innermost last. The
     // expected key and value types come from an annotation; the item's types are collected when there is none.
     struct ComprehensionContext
     {
