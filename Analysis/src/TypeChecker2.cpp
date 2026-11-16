@@ -4864,6 +4864,12 @@ void TypeChecker2::checkLuwuNominalTypeComparison(AstExprBinary* expr)
     if (!kind || comparedName == kind)
         return;
 
+    // Luwu builtin classes: `typeof` names an object of a builtin class after its class ("bundle", "vec"), not "object"
+    bool builtinClassTypeof =
+        query->function == "typeof" && std::string_view(kind) == "object" && isBuiltinClassTypeofName(std::string(comparedName));
+    if (builtinClassTypeof)
+        return;
+
     bool comparesEqual = expr->op == AstExprBinary::Op::CompareEq;
     reportError(GenericError{luwuNominalTypeComparisonMessage(query->function, comparedName, queriedTy, kind, comparesEqual)}, expr->location);
 }
