@@ -146,24 +146,25 @@ Positional patterns go anywhere `.{...}` patterns do, nest in each other, and ta
 `local pair.(first: number, .(x, y), entry.{kind}) = t`, `const .{pos as .(x, y)} = u`,
 `for _, .(key, value) in entries do`. An element is a binding already, so there's no `as`.
 
-In a type test, a positional pattern binds the values for the branch the test guards, like `.{...}` does:
+A type test can destructure the same way, without the dot after the class. The pattern binds the values for the branch
+the test guards:
 
 ```luwu
-if fs.read(p) is Ok.(content) then
+if fs.read(p) is Ok(content) then
     print(content)
 end
 
 const data = match fs.read(p)
-    case is Ok.(content) then do
+    case is Ok(content) then do
         print(content)
         give content
-    case is Err.(err) then error(err)
+    case is Err(err) then error(err)
     else error("unreachable")
 ```
 
-The `.` isn't needed to tell a pattern apart in this position, but we require it for consistency with every other
-pattern, and so `Ok.(content)` can't be read as calling `Ok`. A type test written as a call whose arguments are all
-names nothing in scope has (`is Ok(content)`) is a syntax error that suggests the `.`.
+Every pattern in a type test comes after `is`, where `Ok(content)` can't be a call.
+
+*See [Pattern Matching](control-flow/pattern-matching.md).*
 
 #### Building bundles with `.(...)`
 
