@@ -142,12 +142,22 @@ std::pair<std::vector<TypeId>, std::vector<TypePackId>> saturateArguments(
     // mutually exclusive with the type pack -> type conversion we do below:
     // extraTypes will only have elements in it if we have more types than we
     // have parameter slots for them to go into.
+    size_t firstRawPack = 0;
     if (!extraTypes.empty() && !fn.typePackParams.empty())
     {
-        saturatedPackArguments.push_back(arena->addTypePack(extraTypes));
+        // Luwu: a pack after the extra types is the rest of theirs when the function has one pack parameter, so
+        // `F<number, ...string>` for `type F<T...>` passes `(number, ...string)`, and `.(number, T...)` is a bundle of
+        // a number and then `T...`. Upstream drops the pack: `F<number, ...string>` is `F<number>`.
+        std::optional<TypePackId> rest;
+        if (fn.typePackParams.size() == 1 && !rawPackArguments.empty())
+        {
+            rest = rawPackArguments[0];
+            firstRawPack = 1;
+        }
+        saturatedPackArguments.push_back(arena->addTypePack(TypePack{extraTypes, rest}));
     }
 
-    for (size_t i = 0; i < rawPackArguments.size(); ++i)
+    for (size_t i = firstRawPack; i < rawPackArguments.size(); ++i)
     {
         TypePackId tp = rawPackArguments[i];
 

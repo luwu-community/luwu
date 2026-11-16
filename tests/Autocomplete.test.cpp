@@ -3482,6 +3482,34 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_string_singletons_in_bundle_l
     CHECK(ac.entryMap.count("coal"));
 }
 
+// Luwu bundles: a literal where a union of bundles goes completes the singletons of the bundles its other values fit
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_bundle_literals_against_unions_of_bundles")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    check(R"(
+        type Event = bundle.Bundle2<"join", number> | bundle.Bundle2<"leave", string> | bundle.Bundle2<"kick", string>
+        local any: Event = bundle.pack("@1", 1)
+        local named: Event = bundle.pack("@2", "spam")
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("join"));
+    CHECK(ac.entryMap.count("leave"));
+    CHECK(ac.entryMap.count("kick"));
+
+    ac = autocomplete('2');
+    CHECK(ac.entryMap.count("leave"));
+    CHECK(ac.entryMap.count("kick"));
+    CHECK(!ac.entryMap.count("join"));
+}
+
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons_in_trait_arguments")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};

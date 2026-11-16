@@ -14,6 +14,7 @@
 #include "Luau/Instantiation.h"
 #include "Luau/Instantiation2.h"
 #include "Luau/MismatchExplanation.h"
+#include "Luau/MismatchWording.h"
 #include "Luau/RepeatedTypeNames.h"
 #include "Luau/Metamethods.h"
 #include "Luau/Normalize.h"
@@ -3516,8 +3517,12 @@ void TypeChecker2::visitCall(AstExprCall* call)
         {
             AstExpr* argExpr = call->args.data[idx];
 
+            // Luwu bundles: a bundle literal `.(a, b)` is a `bundle.pack` call, but always one value
+            const AstExprCall* argCall = argExpr->as<AstExprCall>();
+            bool spreads = !argCall || !isBundlePackCall(argCall);
+
             // The last argument might be an ordinary value, but it can also be an entire pack.
-            if (idx == call->args.size - 1)
+            if (idx == call->args.size - 1 && spreads)
             {
                 if (TypePackId* lastArgPack = module->astTypePacks.find(argExpr))
                 {
@@ -3825,11 +3830,6 @@ std::string withArticle(const std::string& text)
     return (vowel ? "an " : "a ") + text;
 }
 
-std::string valueCount(size_t count)
-{
-    return std::to_string(count) + (count == 1 ? " value" : " values");
-}
-
 // The element of a value whose runtime type is `tag`
 ContainerElement taggedElement(const std::string& tag)
 {
@@ -3857,12 +3857,12 @@ std::optional<ContainerElement> objectElement(const ExternType* object)
     // Bundles past the fixed sizes share the class BigBundle at runtime, so any two of them fit together
     if (object->instantiatedTypePackParams.empty())
     {
-        std::string size = valueCount(object->instantiatedTypeParams.size());
+        std::string size = MismatchWording::countValues(object->instantiatedTypeParams.size());
         return ContainerElement{"object", declared, "bundles of " + size, "a bundle of " + size};
     }
     auto [positions, rest] = flatten(object->instantiatedTypePackParams[0]);
-    std::string bigSize = "more than " + valueCount(kBundleFixedMax);
-    std::string single = rest ? "a bundle of " + bigSize : "a bundle of " + valueCount(positions.size());
+    std::string bigSize = "more than " + MismatchWording::countValues(kBundleFixedMax);
+    std::string single = rest ? "a bundle of " + bigSize : "a bundle of " + MismatchWording::countValues(positions.size());
     return ContainerElement{"object", declared, "bundles of " + bigSize, single};
 }
 
