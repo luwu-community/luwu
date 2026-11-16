@@ -9,7 +9,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuwuTableDrop)
-LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuNonePrimitive)
@@ -660,7 +660,7 @@ std::string getBundleDefinitionSource()
 
 bool collectionsLibraryEnabled()
 {
-    return FFlag::LuwuClasses && FFlag::DebugLuwuCollections && FFlag::LuwuDeclareStatements;
+    return FFlag::LuwuClasses && FFlag::DebugLuwuBuiltinClasses && FFlag::LuwuDeclareStatements;
 }
 
 bool bundleLibraryEnabled()

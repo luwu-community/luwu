@@ -31,7 +31,7 @@ LUAU_FASTINT(LuauSolverConstraintLimit)
 LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 LUAU_FASTFLAG(LuauCstAttr)
-LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuNonePrimitive)
@@ -6236,7 +6236,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -6287,7 +6287,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -6326,7 +6326,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "aliases_of_generic_class_instantiations_keep
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -6368,7 +6368,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_literals_take_their_positions_expecte
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -6406,7 +6406,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_literals_take_expected_types_everywhe
         {FFlag::LuauBidirectionalInferenceVariadics, true},
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -6446,7 +6446,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_index_reads_have_each_position_type_o
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -6476,7 +6476,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_empty_constructors_take_their_el
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -6526,7 +6526,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_report_values_of_an
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -6570,7 +6570,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_bundles_iterate_over_their_eleme
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -6606,7 +6606,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_hold_every_variant_of_a_builtin_
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::DebugLuwuTryExpressions, true},
         {FFlag::LuwuNonePrimitive, true},
@@ -7115,7 +7115,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_functions_keep_each_position_type")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -7387,7 +7387,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_narrows_to_builtin_classes")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -7414,7 +7414,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_compare_with_their_metamethods")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -7439,7 +7439,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "assigning_a_bundle_field_points_at_with")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -7462,7 +7462,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_types_print_as_dot_positional")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},

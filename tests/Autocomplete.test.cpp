@@ -21,7 +21,7 @@ LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuGenericNominals)
-LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuDeclareStatements)
@@ -3460,7 +3460,7 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_string_singletons_in_bundle_l
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -5515,7 +5515,7 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_luwu_only_globals_out_
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
     };

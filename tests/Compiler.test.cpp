@@ -33,7 +33,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
-LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
@@ -14684,7 +14684,7 @@ TEST_CASE("BundleFunctionsCompileToFastcalls")
 // an empty map and a `set` call per entry. Anything else is an ordinary call.
 TEST_CASE("OrderedMapFromBundlesBuildsNoBundle")
 {
-    ScopedFastFlag collections{FFlag::DebugLuwuCollections, true};
+    ScopedFastFlag collections{FFlag::DebugLuwuBuiltinClasses, true};
     ScopedFastFlag bundles{FFlag::DebugLuwuBundles, true};
 
     CHECK_EQ(

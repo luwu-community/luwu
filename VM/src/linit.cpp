@@ -7,7 +7,7 @@
 
 LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAG(LuwuClasses)
-LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(DebugLuwuBundles)
@@ -66,7 +66,7 @@ void luaL_openlibs(lua_State* L)
     }
 
     // Luwu collections and bundles: builtin classes, so they need classes on
-    if (FFlag::LuwuClasses && FFlag::DebugLuwuCollections)
+    if (FFlag::LuwuClasses && FFlag::DebugLuwuBuiltinClasses)
     {
         lua_pushcfunction(L, luaopen_collections, NULL);
         lua_pushstring(L, LUA_COLLECTIONSLIBNAME);
