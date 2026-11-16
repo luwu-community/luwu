@@ -937,7 +937,15 @@ void ConstraintGenerator::applyRefinements(const ScopePtr& scope, Location locat
 
     for (auto& [def, partition] : refinements)
     {
-        if (std::optional<TypeId> defTy = lookup(scope, location, def))
+        // Luwu Destructuring (rfcs/destructuring.md): a position read (`b.1`) records its type in the scope it's checked
+        // in. A condition checks some of its parts in separate scopes (the right side of `and`, an if-else expression's
+        // condition), which the branch being refined isn't inside, so its type is looked up by its definition too. Upstream
+        // has only property reads, which are refined through the table they're read from instead.
+        std::optional<TypeId> defTy = lookup(scope, location, def);
+        if (const TypeId* positionRead = defTy ? nullptr : positionReadTypes.find(def))
+            defTy = *positionRead;
+
+        if (defTy)
         {
             TypeId ty = *defTy;
             // Intersect ty with every discriminant type. If either type is not
@@ -6213,6 +6221,9 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprIndexExpr* in
             return Inference{*ty, refinementArena.proposition(key, builtinTypes->truthyType)};
         updateRValueRefinements(scope, key->def, result);
     }
+
+    if (key && indexExpr->positional && !positionReadTypes.contains(key->def))
+        positionReadTypes[key->def] = result;
 
     std::optional<size_t> position;
     if (indexExpr->positional)

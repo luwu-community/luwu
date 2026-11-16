@@ -134,6 +134,9 @@ struct ConstraintGenerator
 
     // Map a function's signature scope back to its signature type.
     DenseHashMap<Scope*, TypeId> scopeToFunction{nullptr};
+    // Luwu Destructuring (rfcs/destructuring.md): the type of each position read (`b.1`) the first time it's checked,
+    // by its definition (applyRefinements)
+    DenseHashMap<const Def*, TypeId> positionReadTypes{nullptr};
 
     // Luwu try expressions: what the functions being checked raise with `error` and `assert`, innermost last.
     // checkFunctionBody joins a function's onto its error hint.
