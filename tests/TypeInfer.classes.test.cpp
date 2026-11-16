@@ -2844,6 +2844,27 @@ end
     CHECK(pattern->inPattern);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): a position read is refined like a property, until a field of the object is
+// written: the position reads one of its fields
+TEST_CASE_FIXTURE(ClassesFixture, "position_tests_refine_until_a_field_write")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+    CheckResult result = check(R"(
+class Cat(public name: string?)
+end
+local function rename(c: Cat)
+    if c.1 then
+        local before: string = c.1
+        c.name = nil
+        local after: string = c.1
+    end
+end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 7);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "positional_destructuring_needs_a_primary_constructor_with_that_position")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
