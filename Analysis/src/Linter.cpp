@@ -1882,6 +1882,10 @@ private:
         if (name == "vector")
             return Kind_Primitive;
 
+        // Luwu: `type` answers "integer" for an integer, which `is integer` tests
+        if (name == "integer")
+            return Kind_Primitive;
+
         // Luwu Classes (rfcs/classes): `type` and `typeof` answer "class" and "object", and "trait" for a trait's value
         if (FFlag::LuwuClasses && (name == "class" || name == "object"))
             return Kind_Primitive;

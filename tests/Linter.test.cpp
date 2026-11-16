@@ -919,6 +919,16 @@ local _d = typeof(x) == "trait"
     REQUIRE(0 == result.warnings.size());
 }
 
+TEST_CASE_FIXTURE(Fixture, "UnknownTypeKnowsIntegers")
+{
+    LintResult result = lint(R"(
+local x = ...
+local _a = type(x) == "integer"
+)");
+
+    REQUIRE(0 == result.warnings.size());
+}
+
 TEST_CASE_FIXTURE(Fixture, "ForRangeTable")
 {
     LintResult result = lint(R"(
