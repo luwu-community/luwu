@@ -14,41 +14,41 @@ types, variables, table fields, classes, class fields, and parameters in Luwu.
 
 ## Motivation
 
-Currently attributes can only be applied to functions, this means types cannot be marked as
-[`@deprecated`](https://github.com/luau-lang/rfcs/blob/master/docs/syntax-attribute-functions-deprecated.md).
-Nor can variables, table fields, classes, or class fields be marked as `@deprecated`.
+Currently attributes can only be applied to functions. This means types cannot be marked as
+[`@deprecated`](https://github.com/luau-lang/rfcs/blob/master/docs/syntax-attribute-functions-deprecated.md), nor can
+variables, table fields, classes, or class fields.
 
 ## Design
 
-Note: With this RFC the internals for attributes will be able to state they can be applied to only certain bits of
-syntax, so one can't apply [`@native`](https://github.com/luau-lang/rfcs/blob/master/docs/syntax-attribute-functions-native.md)
-to a type, variable, class, or field and have it work. How each attribute states this is described in
-[Where each attribute is allowed](#where-each-attribute-is-allowed).
+Note: with this RFC, each attribute states which bits of syntax it can be applied to, so one can't apply
+[`@native`](https://github.com/luau-lang/rfcs/blob/master/docs/syntax-attribute-functions-native.md) to a type,
+variable, class, or field and have it work. [Where each attribute is allowed](#where-each-attribute-is-allowed) lists
+them.
 
-The following list proposes how attributes should be attached to each bit of syntax in Luwu (except functions and
-comments).
+The following sections propose how attributes attach to each bit of syntax in Luwu (except functions and comments).
 
 ### Attribute arguments
 
-An attribute that takes arguments is written in brackets, `@[deprecated { use = "dog" }]`, in every position, as
+An attribute with arguments is always written in brackets, as
 [Function Attribute Parameters](https://github.com/luau-lang/rfcs/blob/master/docs/syntax-attributes-functions-parameters.md)
-already requires for functions. A bare `@name` never takes arguments; [Alternatives](#alternatives) explains why the
-bare form can't be allowed in the positions this RFC adds.
+already requires for functions:
 
-Writing the arguments bare is the likeliest mistake, so it gets its own diagnostic instead of whatever the next token
-then fails to be:
+```luau
+@[deprecated { use = "dog" }]
+local puppy = "whimper"
+```
+
+The original proposal wrote arguments bare (`@deprecated { use = "dog" }`), but the bare form is ambiguous in the new
+positions (see [Alternatives](#alternatives)). Writing bare arguments anyway is a parse error that shows the bracketed
+form:
 
 ```
 Attribute arguments must be written as '@[deprecated ...]'; a bare '@deprecated' cannot take arguments
 ```
 
-The arguments are still attached to the attribute, so it means what was intended and that is the only error. Inside a
-table, value or type, an entry may itself be a table or a string, so there `{ @deprecated {1, 2} }` is an attributed
-entry whose value is `{1, 2}`, and nothing is reported.
-
 ### Variables
 
-This exists as it could be useful for if for instance a constant is defined as a local variable and then exported:
+This exists as it could be useful if, for instance, a constant is defined as a local variable and then exported:
 
 ```luau
 @[deprecated { use = "dog" }]
@@ -60,8 +60,7 @@ return table.freeze({
 })
 ```
 
-Although this will cause the return in the module to be linted, but this lint won't be passed on to consumers of the
-module:
+This will cause the return in the module to be linted, but the lint won't be passed on to consumers of the module:
 
 Module:
 
@@ -83,7 +82,7 @@ local module = require("@module")
 print(module.puppy)
 ```
 
-`const` bindings take attributes the same way.
+`const` declarations take attributes the same way as `local` ones.
 
 ### Tables
 
@@ -102,11 +101,10 @@ return table.freeze(pet_sounds)
 
 #### Table Fields
 
-If the value of a field has attributes, those will be merged with the attributes defined on the field.
-With the attributes on the field having priority over the attributes on the value.
-For example: if both the value and the field have a `@deprecated` attribute, the `@deprecated` attribute on the value
-will be ignored.
-With the `@deprecated` attribute on the field being used instead.
+If the value of a field has attributes, those will be merged with the attributes defined on the field, with the
+attributes on the field having priority over the attributes on the value. For example, if both the value and the field
+have a `@deprecated` attribute, the `@deprecated` attribute on the value will be ignored and the one on the field used
+instead.
 
 ```luau
 @[deprecated { reason = "cat is a more modern API" }]
@@ -130,9 +128,8 @@ local module = table.freeze({
 module.get_cat_sound()
 ```
 
-A list entry has no name to attach an attribute to, so attributes directly in front of `function` in a list entry
-belong to that function, as they do wherever else a function expression is written. `{ @native function() end }`
-compiles the function natively.
+A list entry has no name, so attributes in front of a function in a list belong to the function:
+`{ @native function() end }` compiles the function natively.
 
 ### Types
 
@@ -151,21 +148,19 @@ type CanineSounds = {
 -- No lint occurs, because the @deprecated attribute of the type 'Puppy' has been overridden
 -- by the @deprecated attribute of the field 'puppy'.
 type PetSounds = {
-    -- Just like with tables, entries have their attributes merged with the values attributes.
+    -- Just like with tables, entries have their attributes merged with the value's attributes.
     @[deprecated { use = "dog" }] puppy: Puppy,
     dog: "bark",
     cat: "mrrp",
 }
 ```
 
-A deprecated type is reported wherever its name is written: in an annotation, and inside another type's definition,
-as `CanineSounds` shows. It is scoped like the type itself. It is reported throughout the block that declares it,
-including above the declaration, where the type is also visible. A generic parameter or a nearer type with the same
-name shadows it, and a reference inside its own definition (`@deprecated type Node = { next: Node? }`) is not
-reported.
+A deprecated type is reported wherever its name is written in the scope the type is visible in. A generic parameter or
+a nearer type with the same name shadows it, and the type's definition can refer to itself without a report
+(`@deprecated type Node = { next: Node? }`).
 
-A deprecated field of a table type is reported where the field is used through a value of that type, never at the
-definition. This is how a library's type marks one of its functions deprecated:
+A deprecated field of a table type is reported where code reads the field from a value of that type. Libraries can use
+this to deprecate one of their functions:
 
 ```luau
 type FsLib = {
@@ -179,9 +174,8 @@ local fs = {} :: FsLib
 fs.read("config.toml")
 ```
 
-An entry's attributes come before its `read` or `write` modifier, so the entry reads in the order it is written. An
-indexer takes attributes too, and since an array-like `{T}` is shorthand for `{[number]: T}`, an attribute on one
-attaches to that indexer:
+Attributes go before a `read` or `write` modifier. Indexers take attributes too, and an attribute on an array type `{T}`
+applies to its `[number]` indexer:
 
 ```luau
 type Registry = {
@@ -190,8 +184,8 @@ type Registry = {
 }
 ```
 
-A `type function` takes no attributes. `@deprecated type function f(t) ... end` is a parse error, "Attributes cannot be
-applied to a type function", rather than an attribute that is silently dropped.
+A `type function` can't take attributes yet, so `@deprecated type function f(t) ... end` is a parse error instead of an
+attribute that does nothing.
 
 ### Classes
 
@@ -231,8 +225,9 @@ local sounds = PetSounds {
 print(sounds.puppy)
 ```
 
-An attribute is best written on the line above the member it annotates, as it is everywhere else. Written inline, it
-goes in front of the access specifier, since an attribute is not a modifier keyword:
+Attributes usually go on the line above a member. On the same line they go in front of the access specifier, or after
+it as methods already allow (`public @deprecated dog: string`), but not on both sides of one member. `const` counts as
+part of the access specifier:
 
 ```luau
 class PetSounds
@@ -241,14 +236,9 @@ class PetSounds
 end
 ```
 
-After the access specifier is accepted too (`public @deprecated dog: string`), since methods already allowed it, but
-not on both sides at once: that would leave a reader looking in two places for them. `const` counts as part of the
-specifier. An attribute never changes what the keywords next to it mean: a `@deprecated private const` field is still
-private and still const.
-
 ### Parameters
 
-A function parameter takes attributes, written before its name:
+Function parameters take attributes before their name:
 
 ```luau
 local function speak(@[deprecated { use = "sound" }] noise: string, sound: string)
@@ -256,8 +246,8 @@ local function speak(@[deprecated { use = "sound" }] noise: string, sound: strin
 end
 ```
 
-A parameter of a class's [primary constructor](./classes/classes.md) also declares a field, so its attributes may sit
-on either side of the access specifier, as a field's may:
+A parameter of a class's [primary constructor](./classes/classes.md) declares a field as well, so its attributes can go
+on either side of the access specifier like a field's:
 
 ```luau
 class SshKey(@deprecated public const key: string, @deprecated public const alg: string)
@@ -266,29 +256,27 @@ end
 
 ### Where each attribute is allowed
 
-Each attribute states the positions it may be written on, in one place: the parser's attribute registry. Writing an
-attribute anywhere else is a parse error that says where it is allowed:
+Each attribute lists the positions it can be written in. Writing it anywhere else is a parse error naming where it's
+allowed:
 
 | attribute | allowed on |
 | --- | --- |
-| `@checked`, `@native` | functions, since they describe how a function is typechecked or compiled |
-| [`@noinline`](./noinline-attribute.md) | the functions the compiler can inline: a local function, a const function, a class method or a function expression |
-| `@deprecated` | every position in this RFC, since any API can be one callers should stop using |
+| `@checked`, `@native` | functions |
+| [`@noinline`](./noinline-attribute.md) | functions the compiler can inline: local and const functions, class methods and function expressions |
+| `@deprecated` | every position in this RFC |
 
 ```luau
 -- Attribute '@native' can only be applied to functions
 @native type X = number
 ```
 
-A new attribute states its positions the same way, and no position needs code of its own for it. Some positions are
-not known yet when their attributes are parsed: a statement could still turn out to be a function, a local, a type, a
-class or an assignment, and a class member could be a method or a field. There the check happens once the parser knows
-which it is, so exactly one error is reported.
+A new attribute only has to list its positions. Autocomplete after `@` reads the same list, so it only offers
+attributes the parser accepts at the cursor.
 
 ### Luau and Lua files
 
-Upstream parses attributes on functions only. In a Luau or Lua file an attribute anywhere else is a parse error that
-asks for a `--@[...]` comment on the line above:
+Upstream Luau only parses attributes on functions. Luau and Lua files write attributes in the new positions as a
+`--@[...]` comment on the line above, so the file still runs on upstream Luau:
 
 ```luau
 type Fs = {
@@ -299,90 +287,66 @@ type Fs = {
 }
 ```
 
-A `--@[...]` comment means exactly what the attribute would mean written at the start of the next line. It works in
-every file and every position. Text after the closing `]` is ignored. Only `--@[` starts one: `-- @[deprecated]` and
-`---@deprecated` stay ordinary comments.
+A `--@[...]` comment means the same as the attribute written at the start of the next line, in every kind of file.
+Text after the closing `]` is ignored. Only `--@[` starts one, so `-- @[deprecated]` and `---@deprecated` are ordinary
+comments. Writing the attribute itself in a new position in a Luau or Lua file is a parse error that suggests the
+comment.
 
-Static analysis checks the comment like the attribute it stands for. A compiler skips one it can't read or apply: valid
-Luau has to keep compiling. The pretty printer drops these comments like every other comment.
-
-### Type system
-
-`@deprecated` on a table type's field, a table constructor's entry or a class field marks the property deprecated in
-the type, which is what the `DeprecatedApi` lint reads for `Member '...' is deprecated`. The old type solver marks
-table type fields only.
-
-### Editor support
-
-Autocomplete after `@` offers only the attributes allowed in the position being written, taken from the same registry
-the parser checks against, so it never suggests one the parser would then reject.
+Static analysis checks these comments like the attributes they stand for. The compiler skips one it can't read or
+apply, since valid Luau has to keep compiling.
 
 ## Compatibility
 
-This is purely additive: an attribute in any of these positions is a parse error in Luau 0.730, so no program that is
-valid without the feature changes meaning with it. With `LuwuAttributesEverywhere` off, parsing and every diagnostic
-are the same as without this feature.
+This is purely additive. An attribute in any of these positions is a parse error in Luau 0.730, so no valid program
+changes meaning. With `LuwuAttributesEverywhere` off, parsing and diagnostics are unchanged.
 
-Existing Luau code can already contain a `--@[...]` comment. It now reads as an attribute, but it never stops the file
-compiling. At most a `--@[native]` or `--@[noinline]` comment changes how a function is compiled.
+Existing Luau code can contain a `--@[...]` comment, which now reads as an attribute. It never stops a file compiling,
+and only a `--@[native]` or `--@[noinline]` comment can change how a function compiles.
 
-Attributes in the new positions have no runtime representation and are not serialized into bytecode, so there is no
-bytecode version bump.
-
-This could be proposed back upstream: it is upstream's own proposal, with its attribute arguments in the bracketed
-form and parameters added.
+Attributes in the new positions aren't stored in bytecode, so the bytecode version doesn't change.
 
 ## Drawbacks
 
-Allowing attributes to be on types, variables, table fields, classes, and class fields, would be added complexity to the
-language. Although would be more inline with what a user would expect/want, as its odd from the perspective of a user
-that currently types can't be marked as deprecated.
+Allowing attributes on types, variables, table fields, classes, and class fields would add complexity to the
+language. It would be more in line with what a user would expect or want, as it's odd from a user's perspective that
+types currently can't be marked as deprecated.
 
-Every new position is also one the pretty printer has to reproduce attributes in exactly, or formatting drops or
-mangles them. And an attribute added to the registry without a considered set of positions will be accepted somewhere
-it means nothing.
+The pretty printer has to reproduce attributes in every new position, or formatting drops them.
 
 ## Alternatives
 
-**Bare attribute arguments** (`@deprecated { use = "dog" }`). The upstream proposal writes them this way, but upstream
-chose `@[]` for arguments "to facilitate syntax evolution without introducing parsing ambiguity", and the positions
-this RFC adds are exactly where the bare form is ambiguous:
+**Bare attribute arguments** (`@deprecated { use = "dog" }`), as the original proposal writes them. Upstream chose
+`@[]` for arguments "to facilitate syntax evolution without introducing parsing ambiguity", and the new positions are
+where the bare form is ambiguous:
 
-| bare form | ambiguous with |
+| bare form | could also mean |
 | --- | --- |
-| `@checked (number) -> number` | the attribute's arguments vs. the function type's parameter list, which is existing syntax |
-| `{ @deprecated {1, 2} }` | an arguments table vs. an attributed list entry whose value is `{1, 2}` |
-| `{ @deprecated {string} }` | an arguments table vs. an attributed array-like table type |
-| `{ @deprecated "hi" }` | string-call arguments vs. an attributed list entry |
+| `@checked (number) -> number` | a function type's parameter list |
+| `{ @deprecated {1, 2} }` | a list entry `{1, 2}` with an attribute |
+| `{ @deprecated {string} }` | an array type `{string}` with an attribute |
+| `{ @deprecated "hi" }` | a list entry `"hi"` with an attribute |
 
-**Comment-driven deprecation** (`---@deprecated`, as some Lua tooling uses). The parser can't see it, so it can't be
-checked for validity, and it would be a second, weaker spelling of something attributes already express.
+**Deprecation in comments** (`---@deprecated`, as some Lua tooling does). The parser can't check a comment, and it
+would be a second spelling of what attributes already express.
 
 ## Future work
 
-- **Attributes directly after a type alias's `=`.** The upstream proposal mentions these without describing them; they
-  would need rules for how they relate to an attribute on the alias itself.
-- **Parameters in function types**, `(@deprecated a: number) -> ()`.
-- **Attributes on a `type function`**, `@deprecated` above all, reported where the type function is used.
-- **Linting a deprecated parameter**: reporting at the call sites that pass an argument for it, rather than at uses
-  inside the function, which needs a way to carry the deprecation per argument.
-- **Linting a deprecated assignment** (`@deprecated module.dog = "woof"`), including what happens when the same field is
+- Attributes right after a type alias's `=`, which the original proposal mentions without describing.
+- Attributes on parameters in function types: `(@deprecated a: number) -> ()`.
+- Attributes on a `type function`, reported where the type function is used.
+- Reporting a deprecated parameter at the call sites that pass it.
+- Reporting a deprecated assignment (`@deprecated module.dog = "woof"`), and deciding what happens when a field is
   assigned twice with different attributes.
 
 ## Prior art
 
-Rust's `#[deprecated]` applies to nearly every item: functions, types, fields, variants and constants, which is the
-shape this RFC is reaching for. C# attributes and Java annotations also apply to declarations generally rather than only
-methods, and both limit each attribute to a declared set of targets (`AttributeTargets`, `@Target`), the same mechanism
-as the registry above. TypeScript spells deprecation as the `@deprecated` JSDoc tag, which editors show but the compiler
-can't check, which is the weakness of keeping it in comments. Upstream Luau's own
-[Attributes](https://github.com/luau-lang/rfcs/blob/master/docs/syntax-attributes-functions.md) and
-[Function Attribute Parameters](https://github.com/luau-lang/rfcs/blob/master/docs/syntax-attributes-functions-parameters.md)
-RFCs are what this one extends.
+Rust's `#[deprecated]` applies to functions, types, fields, variants and constants. C# attributes and Java annotations
+apply to declarations in general, and each one declares the targets it allows (`AttributeTargets`, `@Target`) like the
+list above. TypeScript's `@deprecated` is a JSDoc tag that editors show but the compiler can't check.
 
 ## Implementation details
 
-All positions above parse with their attributes. The `DeprecatedApi` lint reports variables, types, classes, class
-fields, table type fields and table constructor entries, including the rule that a field's attribute takes priority
-over its value's. Three positions are parsed but not yet reported, for the reasons in [Future work](#future-work):
-parameters, assignments, and indexers (which have no member name to report against).
+Every position above parses. The `DeprecatedApi` lint reports variables, types, classes, class fields, table type
+fields and table constructor entries. Parameters, assignments and indexers parse but aren't reported yet (see
+[Future work](#future-work)). The new type solver marks deprecated table type fields, table constructor entries and
+class fields in the type, and the old one marks table type fields only.
