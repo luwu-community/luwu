@@ -11,9 +11,10 @@ LUAU_FASTFLAGVARIABLE(LuwuClasses)
 // Luwu Traits (rfcs/classes/traits.md): enables `trait` declarations and `implements` (in progress). Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(LuwuTraits)
 
-// Luwu collections: the `collections` library of builtin classes (`OrderedMap`, `Vec`, `VecDeque`), in the VM and in
-// Analysis's builtin definitions. A prototype whose API can still change. Needs LuwuClasses.
-LUAU_FASTFLAGVARIABLE(DebugLuwuCollections)
+// Luwu builtin classes: standard library classes written in C++, in the VM and in Analysis's builtin definitions. So far
+// that's the `collections` library (`OrderedMap`, `Vec`, `VecDeque`). A prototype whose API can still change. Needs
+// LuwuClasses.
+LUAU_FASTFLAGVARIABLE(DebugLuwuBuiltinClasses)
 
 // Luwu try expressions: `try expr` gives an `Ok` or an `Err`, and the `Ok`, `Err`, `Some` and `None` globals exist. A
 // Debug flag while it's in progress: a function containing `try` doesn't compile to native code yet. Needs LuwuClasses

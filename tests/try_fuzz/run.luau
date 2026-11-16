@@ -292,7 +292,7 @@ local function main()
         -- the interpreter and native code
         for _, mode in { {}, { "--codegen" }, { "--codegen-cold" } } do
             const args = table.clone(mode)
-            table.insert(args, "--fflags=DebugLuwuCollections=true,DebugLuwuTryExpressions=true")
+            table.insert(args, "--fflags=DebugLuwuBuiltinClasses=true,DebugLuwuTryExpressions=true")
             table.insert(args, path)
             const run = process.run({ program = options.luwu, args = args })
             if not run.ok or not string.find(run.stdout, "OK", 1, true) then

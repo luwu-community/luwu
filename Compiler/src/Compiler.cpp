@@ -42,7 +42,7 @@ LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
-LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
 
@@ -3493,7 +3493,7 @@ struct Compiler
     // arguments or as the items of a list literal. Empty when the call passes anything else.
     std::vector<AstExprCall*> orderedMapEntryBundles(AstExprCall* expr)
     {
-        if (!FFlag::DebugLuwuCollections || expr->self)
+        if (!FFlag::DebugLuwuBuiltinClasses || expr->self)
             return {};
 
         Builtin builtin = getBuiltin(expr->func, globals, variables);
