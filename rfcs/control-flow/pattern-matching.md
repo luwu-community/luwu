@@ -111,8 +111,18 @@ falsy (`is Flag {on}` binds `on = false`). Destructuring is allowed only where a
 binds nothing.
 
 Alternatives may bind different names. A name that an alternative doesn't bind is `nil` when that alternative matches, like a missing value in
-Lua's multiple assignment, so `.(x, y) | .(x, y, z)` gives `z = nil` for a bundle of two. A name bound by several alternatives gets the union
-of its types, `Cat {name} | Dog {name}` included. This isn't implemented yet: alternatives that bind are an error today.
+Lua's multiple assignment, so `.(x, y) | .(x, y, z)` gives `z = nil` for a bundle of two. The first alternative that matches is the one that
+binds:
+
+```luwu
+if shape is Circle(radius) | Square(side) then
+    print(radius, side) -- one of them is nil
+end
+
+if event is Click {x, y} | Drag {x, y, button} then
+    move_to(x, y)
+end
+```
 
 ### `match` expressions
 
@@ -151,9 +161,11 @@ A `match` behaves as a `do` expression that binds the subject and gives an if-el
 
 `is` and `implements` refine like the calls they stand for: `x is string` narrows `x` to `string` in the branch, and `p is Point` narrows `p` to
 `Point`. In a `match`, the subject (named or a plain local) is narrowed in each arm. Destructured names get the field types of the tested class,
-and a binding's test narrows the binding the way a test of a local does. A bundle pattern narrows the value to the bundles in its type, but not yet
-to the bundles of the right size: on `.(A, B) | .(C, D, E)`, the `a` of `.(a, b)` is `A | C`. A type test that no value of the tested type can pass
-is a type error at the test.
+and a binding's test narrows the binding the way a test of a local does. A bundle pattern narrows the value to the bundles of its size, so on
+`.(A, B) | .(C, D, E)` the `a` of `.(a, b)` is `A`; a pattern of more than six values, or one with `..`, narrows to every bundle. A name that
+alternatives bind gets the union of the types they give it, and is optional when an alternative doesn't bind it: in
+`Cat(name, lives) | Dog(name)`, `name` is a `string` and `lives` a `number?`. A type test that no value of the tested type can pass is a type
+error at the test.
 
 ### Editor support
 
@@ -173,6 +185,8 @@ values has to list each class.
 
 `match` arms are tested in order, one after another. A `match` with many string arms is a chain of comparisons rather than a jump table.
 
+A pattern whose alternatives bind names tests the alternatives again for each name it binds, to find which one matched.
+
 ## Alternatives
 
 - **A `match` statement** with indented arms and `end` was designed and dropped. With patterns in `if` conditions it adds nothing, and every layout
@@ -191,7 +205,8 @@ values has to list each class.
 ## Future work
 
 - Exhaustiveness checking over unions of classes and singletons.
-- Bindings in alternatives, and narrowing a bundle pattern's value to the bundles of its size.
+- Narrowing a bundle pattern of more than six values to the bundles of its size.
+- Testing the alternatives of a pattern that binds once, instead of once for the test and again for each name.
 - Computing `typeof` once per `match` instead of once per arm, and jump tables for many literal arms.
 
 ## Prior art
