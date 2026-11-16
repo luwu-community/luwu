@@ -2865,6 +2865,28 @@ end
     CHECK_EQ(result.errors[0].location.begin.line, 7);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): a test of a position narrows it in an if-else expression's branches and on the
+// right side of `and`, which are checked in scopes the condition's reads aren't in
+TEST_CASE_FIXTURE(ClassesFixture, "position_tests_refine_in_if_else_expressions_and_and_chains")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
+    CheckResult result = check(R"(
+class Cat(public name: string?, public age: number?)
+end
+local function describe(c: Cat): string
+    local name: string = if c.1 then c.1 else ""
+    local fallback: string = if not c.1 then "" else c.1
+    if c.2 and c.1 then
+        local both: string = c.1
+        local age: number = c.2
+    end
+    return name .. fallback
+end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "positional_destructuring_needs_a_primary_constructor_with_that_position")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuDestructuring, true}};
