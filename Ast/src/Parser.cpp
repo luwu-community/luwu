@@ -8535,7 +8535,20 @@ AstExpr* Parser::parsePatternClass()
         path = allocator.alloc<AstExprIndexName>(Location(start, index.location), path, index.name, index.location, opPosition, '.');
     }
 
+    // `Box<string>` is reported and its arguments skipped, so the test after it is still `is Box`
+    if (lexer.current().type == '<' && lexer.current().location.begin.line == path->location.end.line)
+        reportPatternTypeArguments();
+
     return path;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `<string>` after the class in `x is Box<string>`.
+// Types are erased at runtime, so a pattern can't test a generic argument.
+void Parser::reportPatternTypeArguments()
+{
+    Location start = lexer.current().location;
+    parseTypeParams();
+    report(Location(start, lexer.previousLocation()), "Patterns cannot have generic parameters (types are erased at runtime)");
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the test of `value` that `pattern` describes

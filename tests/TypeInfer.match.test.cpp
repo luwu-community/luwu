@@ -11,6 +11,7 @@ LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 using namespace Luau;
 
@@ -146,6 +147,7 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuwuMatchExpressions, true},
         {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
         {FFlag::LuwuIfLocal, true},
         {FFlag::LuwuDoExpr, true},
     };
@@ -190,6 +192,15 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
                  "local x, y = 1, 2\nlocal z = x is not (y)\n",
                  "Expected a type, class or literal after 'is', got '('",
              },
+             // types are erased at runtime, so a pattern has no generic arguments to test
+             Case{
+                 "class Box<T>(inner: T)\nend\nconst b = Box('hi')\nlocal ok = b is Box<string>\n",
+                 "Patterns cannot have generic parameters (types are erased at runtime)",
+             },
+             Case{
+                 "class Box<T>(inner: T)\nend\nconst b = Box('hi')\nlocal n = match b\n    case is Box<string> then 1\n    else 2\n",
+                 "Patterns cannot have generic parameters (types are erased at runtime)",
+             },
          })
     {
         INFO(c.source);
@@ -197,6 +208,32 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
         REQUIRE_EQ(result.errors.size(), 1);
         CHECK_EQ(result.errors[0].getMessage(), c.message);
     }
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `is Box<string>` is one syntax error, and the test
+// still checks for a `Box`
+TEST_CASE_FIXTURE(ClassesFixture, "generic_arguments_in_a_pattern_are_one_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        class Box<T>(public inner: T)
+        end
+        const boxy = Box("hi")
+        if boxy is Box<string> then
+            print(boxy.inner)
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const SyntaxError* syntax = get<SyntaxError>(result.errors[0]);
+    REQUIRE(syntax);
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the class after `is` is a name or a dotted path, and
