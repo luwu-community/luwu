@@ -6730,6 +6730,28 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_narrows_unknown_to_any_bundle")
     CHECK_EQ(toString(mismatch->givenType), ".(...unknown)");
 }
 
+// Luwu bundles: `typeof` of a bundle gives "bundle", so comparing it with "bundle" isn't the always-false comparison
+// `typeof` of another object would be
+TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_of_a_bundle_is_bundle")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function isbundle(b: bundle.Bundle2<number, string>): boolean
+            return typeof(b) == "bundle"
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 // Luwu bundles: the flags every bundle test needs
 #define BUNDLE_FLAGS \
     {FFlag::LuwuClasses, true}, {FFlag::LuwuGenericNominals, true}, {FFlag::DebugLuwuBundles, true}, {FFlag::LuwuNonePrimitive, true}, \
