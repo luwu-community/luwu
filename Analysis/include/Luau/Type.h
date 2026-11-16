@@ -672,7 +672,7 @@ struct ExternType
     // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): set on an instantiation of a generic class, to the class's template
     std::optional<TypeId> genericTemplate;
 
-    // Luwu bundles: a bundle class (`bundle.Two`), which prints the way `.(A, B)` writes it. Set on the declared class;
+    // Luwu bundles: a bundle class (`bundle.Bundle2`), which prints the way `.(A, B)` writes it. Set on the declared class;
     // an instantiation reads its template's.
     bool printsAsBundle = false;
 
@@ -1341,6 +1341,12 @@ const Property* lookupExternTypeProp(const ExternType* cls, const Name& name);
 
 // Whether `cls` is a subclass of `parent`
 bool isSubclass(const ExternType* cls, const ExternType* parent);
+
+// Luwu bundles: whether `etv` is a bundle of any size
+bool isBundle(const ExternType* etv);
+
+// Luwu bundles: whether `etv` is `.(...unknown)`, the type of a bundle nothing is known about. Every bundle is one.
+bool isAnyBundle(const ExternType* etv);
 
 // Luwu Traits (rfcs/classes/traits.md): a trait, or an intersection of traits. Two of these may share instances even when neither is a subtype
 // of the other, unlike two classes, which are final.

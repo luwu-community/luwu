@@ -1272,9 +1272,29 @@ static bool isBareGenericNominalRoot(const ExternType* cls, const ExternType* pa
     return true;
 }
 
+bool isBundle(const ExternType* etv)
+{
+    const ExternType* declared = etv->genericTemplate ? get<ExternType>(follow(*etv->genericTemplate)) : etv;
+    return declared && declared->printsAsBundle;
+}
+
+bool isAnyBundle(const ExternType* etv)
+{
+    if (!isBundle(etv) || etv->instantiatedTypePackParams.size() != 1)
+        return false;
+
+    auto [positions, tail] = flatten(etv->instantiatedTypePackParams[0]);
+    const VariadicTypePack* rest = tail ? get<VariadicTypePack>(follow(*tail)) : nullptr;
+    return positions.empty() && rest && get<UnknownType>(follow(rest->ty));
+}
+
 // The extern type hierarchy walk: `cls` or one of its parents is `parent`, or the same generic nominal type
 static bool isNominalSubclass(const ExternType* cls, const ExternType* parent)
 {
+    // Luwu bundles: whatever its class, every bundle is an `.(...unknown)`, which `typeof(x) == "bundle"` narrows to
+    if (isAnyBundle(parent) && isBundle(cls))
+        return true;
+
     while (cls)
     {
         if (cls == parent)
