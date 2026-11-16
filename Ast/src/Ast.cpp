@@ -700,16 +700,18 @@ void AstStatMatch::visit(AstVisitor* visitor)
 
 bool AstExprDo::alwaysLeaves() const
 {
-    if (shorthand)
-        return true;
+    return shorthand || gives().empty();
+}
 
+std::vector<AstStatGive*> AstExprDo::gives() const
+{
     struct GiveFinder : AstVisitor
     {
-        bool found = false;
+        std::vector<AstStatGive*> found;
 
-        bool visit(AstStatGive*) override
+        bool visit(AstStatGive* give) override
         {
-            found = true;
+            found.push_back(give);
             return false;
         }
 
@@ -730,7 +732,7 @@ bool AstExprDo::alwaysLeaves() const
     for (AstStat* stat : body->body)
         stat->visit(&finder);
 
-    return !finder.found;
+    return std::move(finder.found);
 }
 
 AstExpr* withoutGroups(AstExpr* expr)

@@ -1899,6 +1899,10 @@ public:
     // Does every path leave it with `return`, `break` or `continue`, so it never has a value? True for the shorthand,
     // and for a `do` expression with no `give` of its own.
     bool alwaysLeaves() const;
+
+    // The `give`s that give this expression's value, the shorthand's included: not those of a nested `do` expression
+    // or function
+    std::vector<class AstStatGive*> gives() const;
 };
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the value a `match` tests, from its header
