@@ -59,7 +59,7 @@ LUAU_FASTFLAGVARIABLE(LuwuExternTypeUseDefinitionScope)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuauCyclicRequireTypeInference)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
-LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 
 namespace Luau
 {
@@ -3247,7 +3247,7 @@ ControlFlow ConstraintGenerator::visitBlockWithoutChildScope(const ScopePtr& sco
     }
 
     prototypeTypeDefinitions(scope, block);
-    if (FFlag::DebugLuwuCollections)
+    if (FFlag::DebugLuwuBuiltinClasses)
         findFirstPushes(block);
 
     std::optional<ControlFlow> firstControlFlow;

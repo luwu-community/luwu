@@ -99,7 +99,7 @@ LUAU_FASTFLAG(LuauCodegenFixTwoResA64Builtin)
 LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
-LUAU_FASTFLAG(DebugLuwuCollections)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
@@ -4813,7 +4813,7 @@ TEST_CASE("CollectionsDeclarationsMatchTheVm")
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -4856,7 +4856,7 @@ TEST_CASE("Collections")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
@@ -4869,7 +4869,7 @@ TEST_CASE("CollectionsFastPaths")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
-        {FFlag::DebugLuwuCollections, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
         {FFlag::DebugLuwuBundles, true},
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
