@@ -2272,12 +2272,16 @@ SubtypingResult Subtyping::isCovariantWith(
     return {false};
 }
 
-// Luwu bundles: the positions of the bundle `etv` as one type pack: a fixed size's type arguments, or a `BigBundle`'s pack
-static TypePackId bundlePositionPack(NotNull<TypeArena> arena, const ExternType* etv)
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): whether the pack `tp` holds an error type (`.(Nope, T...)`)
+static bool containsErrorType(TypePackId tp)
 {
-    if (!etv->instantiatedTypePackParams.empty())
-        return etv->instantiatedTypePackParams[0];
-    return arena->addTypePack(etv->instantiatedTypeParams);
+    auto [head, tail] = flatten(tp);
+    for (TypeId ty : head)
+    {
+        if (get<ErrorType>(follow(ty)))
+            return true;
+    }
+    return tail && get<ErrorTypePack>(follow(*tail));
 }
 
 SubtypingResult Subtyping::isCovariantWith(
@@ -2330,6 +2334,10 @@ SubtypingResult Subtyping::isCovariantWith(
             TypeId subArg = follow(subExternType->instantiatedTypeParams[i]);
             TypeId superArg = follow(superExternType->instantiatedTypeParams[i]);
             SubtypingResult argResult = covariant ? isCovariantWith(env, subArg, superArg, scope) : isInvariantWith(env, subArg, superArg, scope);
+            // An argument that's an error type was reported where it was written (`.(Nope)`). The normalizer, which
+            // suppresses an error type in a table's property, doesn't look into a nominal's arguments.
+            if (get<ErrorType>(superArg))
+                argResult.isErrorSuppressing = true;
             anyUnsuppressedMismatch |= !argResult.isSubtype && !argResult.isErrorSuppressing;
             result.andAlso(std::move(argResult));
         }
@@ -2339,6 +2347,8 @@ SubtypingResult Subtyping::isCovariantWith(
             TypePackId subArg = follow(subExternType->instantiatedTypePackParams[i]);
             TypePackId superArg = follow(superExternType->instantiatedTypePackParams[i]);
             SubtypingResult argResult = covariant ? isCovariantWith(env, subArg, superArg, scope) : isInvariantWith(env, subArg, superArg, scope);
+            if (containsErrorType(superArg))
+                argResult.isErrorSuppressing = true;
             anyUnsuppressedMismatch |= !argResult.isSubtype && !argResult.isErrorSuppressing;
             result.andAlso(std::move(argResult));
         }

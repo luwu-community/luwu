@@ -439,8 +439,54 @@ bool isBundlePackCall(const AstExprCall* call)
     return library && library->name == "bundle" && index->index == "pack";
 }
 
-std::optional<std::vector<TypeId>> expectedBundlePositions(const Scope* scope, TypeId expected, size_t count)
+// Luwu bundles: whether the literal `arg` can be a value of the type `position`. Anything that isn't a string or boolean
+// literal, and any type this doesn't look into (a generic, a table), counts as fitting.
+static bool literalFits(const AstExpr* arg, TypeId position)
 {
+    const AstExprConstantString* string = arg->as<AstExprConstantString>();
+    const AstExprConstantBool* boolean = arg->as<AstExprConstantBool>();
+    if (!string && !boolean)
+        return true;
+
+    position = follow(position);
+    if (const UnionType* options = get<UnionType>(position))
+    {
+        for (TypeId option : options->options)
+        {
+            if (literalFits(arg, option))
+                return true;
+        }
+        return false;
+    }
+
+    if (const SingletonType* singleton = get<SingletonType>(position))
+    {
+        if (const StringSingleton* text = get<StringSingleton>(singleton))
+            return string && text->value == std::string_view(string->value.data, string->value.size);
+        const BooleanSingleton* flag = get<BooleanSingleton>(singleton);
+        return boolean && flag && flag->value == boolean->value;
+    }
+
+    if (const PrimitiveType* primitive = get<PrimitiveType>(position))
+    {
+        if (primitive->type == PrimitiveType::String)
+            return string != nullptr;
+        if (primitive->type == PrimitiveType::Boolean)
+            return boolean != nullptr;
+        return false;
+    }
+    return true;
+}
+
+std::optional<std::vector<TypeId>> expectedBundlePositions(
+    TypeArena* arena,
+    const Scope* scope,
+    TypeId expected,
+    const AstExprCall* literal,
+    const AstExpr* completing
+)
+{
+    size_t count = literal->args.size;
     expected = follow(expected);
     if (std::optional<std::vector<TypeId>> positions = bundlePositions(scope, expected))
         return positions;
@@ -450,7 +496,7 @@ std::optional<std::vector<TypeId>> expectedBundlePositions(const Scope* scope, T
     {
         for (TypeId part : parts->parts)
         {
-            if (std::optional<std::vector<TypeId>> positions = expectedBundlePositions(scope, part, count))
+            if (std::optional<std::vector<TypeId>> positions = expectedBundlePositions(arena, scope, part, literal, completing))
                 return positions;
         }
         return std::nullopt;
@@ -460,18 +506,81 @@ std::optional<std::vector<TypeId>> expectedBundlePositions(const Scope* scope, T
     if (!options)
         return std::nullopt;
 
-    std::optional<std::vector<TypeId>> found;
+    // The literal's strings and booleans pick out the bundles it can be: `.(true, 1)` where an
+    // `.(true, number) | .(false, string)` goes is the first. A position of several left can be what it is in any of them.
+    std::vector<std::vector<TypeId>> candidates;
     for (TypeId option : options->options)
     {
         std::optional<std::vector<TypeId>> positions = bundlePositions(scope, option);
         if (!positions || positions->size() != count)
             continue;
-        // two bundles of this size leave the positions ambiguous
-        if (found)
-            return std::nullopt;
-        found = std::move(positions);
+
+        bool fits = true;
+        for (size_t i = 0; i < count && fits; i++)
+            fits = literal->args.data[i] == completing || literalFits(literal->args.data[i], (*positions)[i]);
+        if (fits)
+            candidates.push_back(std::move(*positions));
     }
-    return found;
+    if (candidates.empty())
+        return std::nullopt;
+    if (candidates.size() == 1)
+        return std::move(candidates[0]);
+
+    std::vector<TypeId> merged;
+    for (size_t i = 0; i < count; i++)
+    {
+        std::vector<TypeId> members;
+        for (const std::vector<TypeId>& candidate : candidates)
+            members.push_back(candidate[i]);
+        merged.push_back(arena->addType(UnionType{std::move(members)}));
+    }
+    return merged;
+}
+
+std::optional<BundleShape> bundleShapeOf(TypeId ty)
+{
+    ty = follow(ty);
+    if (const ExternType* etv = get<ExternType>(ty))
+        return bundleShape(etv);
+
+    const IntersectionType* parts = get<IntersectionType>(ty);
+    if (!parts)
+        return std::nullopt;
+    for (TypeId part : parts->parts)
+    {
+        const ExternType* etv = get<ExternType>(follow(part));
+        if (std::optional<BundleShape> shape = etv ? bundleShape(etv) : std::nullopt)
+            return shape;
+    }
+    return std::nullopt;
+}
+
+std::optional<TypeId> readBundlePosition(NotNull<BuiltinTypes> builtinTypes, NotNull<TypeArena> arena, TypeId ty, size_t position)
+{
+    ty = follow(ty);
+    if (const ExternType* etv = get<ExternType>(ty))
+    {
+        std::optional<BundleShape> shape = bundleShape(etv);
+        if (!shape)
+            return std::nullopt;
+        return shape->at(builtinTypes, position).value_or(builtinTypes->errorType);
+    }
+
+    const IntersectionType* parts = get<IntersectionType>(ty);
+    if (!parts)
+        return std::nullopt;
+
+    std::optional<TypeId> result;
+    for (TypeId part : parts->parts)
+    {
+        const ExternType* etv = get<ExternType>(follow(part));
+        std::optional<BundleShape> shape = etv ? bundleShape(etv) : std::nullopt;
+        if (!shape)
+            continue;
+        TypeId read = shape->at(builtinTypes, position).value_or(builtinTypes->errorType);
+        result = result ? simplifyIntersection(builtinTypes, arena, *result, read).result : read;
+    }
+    return result;
 }
 
 std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty)
@@ -508,18 +617,24 @@ std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty
     return std::nullopt;
 }
 
-// Luwu bundles: the bundle class instance whose positions have the types `positions`, or nullopt past the bundle limit
-static std::optional<TypeId> bundleType(const MagicFunctionCallContext& context, std::vector<TypeId> positions)
+// Luwu bundles: the bundle class instance whose positions have the types `positions`, then the types of `rest` when
+// there's a rest, or nullopt past the bundle limit. A bundle with a rest (`.(number, T...)`) has no size the checker
+// knows, so it's a `BigBundle`, which any size fits by position.
+static std::optional<TypeId> bundleType(
+    const MagicFunctionCallContext& context,
+    std::vector<TypeId> positions,
+    std::optional<TypePackId> rest = std::nullopt
+)
 {
     if (positions.size() > kBundleLimit)
         return std::nullopt;
 
-    bool fixed = positions.size() < kBundleClassCount;
+    bool fixed = !rest && positions.size() < kBundleClassCount;
     const Scope* scope = context.constraint->scope.get();
     std::optional<TypeFun> declared = bundleExport(scope, fixed ? kBundleClassNames[positions.size()] : kBigBundleName);
     if (!declared)
         return std::nullopt;
-    if (positions.empty())
+    if (fixed && positions.empty())
         return declared->type;
 
     TypeArena* arena = context.solver->arena;
@@ -528,7 +643,7 @@ static std::optional<TypeId> bundleType(const MagicFunctionCallContext& context,
     if (fixed)
         typeArguments = std::move(positions);
     else
-        packArguments.push_back(arena->addTypePack(std::move(positions)));
+        packArguments.push_back(arena->addTypePack(TypePack{std::move(positions), rest}));
 
     std::vector<TypeId> copiedReferences;
     TypeId instance = instantiateGenericNominal(arena, declared->type, std::move(typeArguments), std::move(packArguments), copiedReferences);
@@ -648,6 +763,27 @@ static std::optional<std::pair<size_t, size_t>> literalRange(const AstExprCall* 
     return std::make_pair(first, last);
 }
 
+// Luwu bundles: the known positions left when a call (`b:sub(2)`, `bundle.unpack(b, 2)`) drops positions from the front
+// of a bundle with a rest. `.(number, T...)` sliced from 2 leaves none, so the result is `.(T...)`. nullopt for a range
+// with an end, which a rest makes unknowable, or a start that isn't a literal within the known positions.
+static std::optional<std::vector<TypeId>> sliceBundleWithRest(const AstExprCall* call, size_t firstArg, const BundleShape& shape)
+{
+    if (call->args.size > firstArg + 1)
+        return std::nullopt;
+
+    size_t first = 1;
+    if (call->args.size > firstArg)
+    {
+        std::optional<size_t> position = literalPosition(call->args.data[firstArg]);
+        if (!position)
+            return std::nullopt;
+        first = *position;
+    }
+    if (first < 1 || first > shape.head.size() + 1)
+        return std::nullopt;
+    return std::vector<TypeId>(shape.head.begin() + (first - 1), shape.head.end());
+}
+
 namespace
 {
 
@@ -686,9 +822,8 @@ struct MagicBundle final : MagicFunction
         {
         case Operation::Pack:
         {
-            if (argTail)
-                return false;
-            if (std::optional<TypeId> bundle = bundleType(context, argTypes))
+            // `bundle.pack(...)` with `...: T...` is a `.(T...)`
+            if (std::optional<TypeId> bundle = bundleType(context, argTypes, argTail))
                 result = arena->addTypePack({*bundle});
             break;
         }
@@ -713,12 +848,25 @@ struct MagicBundle final : MagicFunction
         {
             if (argTypes.empty())
                 return false;
-            std::optional<std::vector<TypeId>> positions = bundlePositions(scope, argTypes[0]);
-            if (!positions)
+            std::optional<BundleShape> shape = bundleShapeOf(argTypes[0]);
+            if (!shape)
                 return false;
 
             // `b:sub(i, j)` doesn't list `b` among the call's arguments; `bundle.unpack(b, i, j)` does
             size_t firstArg = context.callSite->self ? 0 : 1;
+            if (shape->rest)
+            {
+                std::optional<std::vector<TypeId>> slice = sliceBundleWithRest(context.callSite, firstArg, *shape);
+                if (!slice)
+                    return false;
+                if (operation == Operation::Unpack)
+                    result = arena->addTypePack(TypePack{std::move(*slice), shape->rest});
+                else if (std::optional<TypeId> bundle = bundleType(context, std::move(*slice), shape->rest))
+                    result = arena->addTypePack({*bundle});
+                break;
+            }
+
+            const std::vector<TypeId>* positions = &shape->head;
             std::optional<std::pair<size_t, size_t>> range = literalRange(context.callSite, firstArg, positions->size());
             if (!range)
                 return false;

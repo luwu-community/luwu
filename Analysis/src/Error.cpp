@@ -757,6 +757,26 @@ static TypeId unionIn(TypeId ty)
     return found;
 }
 
+// Luwu bundles: what changes a bundle's size, when a cast from one size of bundle to another was tried
+static std::optional<std::string> bundleCastHelp(const TypesAreUnrelated& e)
+{
+    const ExternType* left = get<ExternType>(follow(e.left));
+    const ExternType* right = get<ExternType>(follow(e.right));
+    std::optional<BundleShape> from = left ? bundleShape(left) : std::nullopt;
+    std::optional<BundleShape> to = right ? bundleShape(right) : std::nullopt;
+    bool sizesDiffer = from && to && !from->rest && !to->rest && from->head.size() != to->head.size();
+    if (!sizesDiffer)
+        return std::nullopt;
+
+    size_t given = from->head.size();
+    size_t wanted = to->head.size();
+    if (given > wanted)
+        return "A cast never changes a bundle's size: use ':sub(1, " + std::to_string(wanted) + ")' to keep the first " +
+               MismatchWording::countValues(wanted);
+    return "A cast never changes a bundle's size: use 'bundle.concat' to add the " + MismatchWording::countValues(wanted - given) +
+           " it's missing";
+}
+
 static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionProperty& e)
 {
     TypeId unionTy = unionIn(e.type);
@@ -1561,7 +1581,10 @@ struct ErrorConverter
 
     std::string operator()(const TypesAreUnrelated& e) const
     {
-        return "Cannot cast '" + toString(e.left) + "' into '" + toString(e.right) + "' because the types are unrelated";
+        std::string message = "Cannot cast '" + toString(e.left) + "' into '" + toString(e.right) + "' because the types are unrelated";
+        if (std::optional<std::string> help = bundleCastHelp(e))
+            message += "\n\n" + *help;
+        return message;
     }
 
     std::string operator()(const NormalizationTooComplex&) const
