@@ -149,6 +149,7 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
         {FFlag::DebugLuwuMatchExpressions, true},
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuTraits, true},
         {FFlag::LuwuIfLocal, true},
         {FFlag::LuwuDoExpr, true},
     };
@@ -191,7 +192,15 @@ TEST_CASE_FIXTURE(Fixture, "match_mistakes_get_one_error")
              // the right side of `is` is a pattern, never an expression
              Case{
                  "local x, y = 1, 2\nlocal z = x is not (y)\n",
-                 "Expected a type, class or literal after 'is', got '('",
+                 "Expected this to be an 'is' pattern but got a complex expression. Use class.isinstance for a dynamic check",
+             },
+             Case{
+                 "trait Named\nend\nlocal x = 1\nlocal z = x implements -Named\n",
+                 "Expected this to be an 'implements' pattern but got a complex expression. Use class.implements for a dynamic check",
+             },
+             Case{
+                 "local x = 1\nlocal z = x is not\n",
+                 "Expected a type, class or literal after 'is', got <eof>",
              },
              // types are erased at runtime, so a pattern has no generic arguments to test
              Case{

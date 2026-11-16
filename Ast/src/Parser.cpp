@@ -8440,7 +8440,7 @@ Parser::Pattern Parser::parsePattern()
     if (pattern.implements)
     {
         PatternAlternative trait;
-        trait.operand = parsePatternClass();
+        trait.operand = parsePatternClass(/* implements= */ true);
         trait.location = trait.operand->location;
         pattern.alternatives.push_back(trait);
         pattern.location = Location(start, trait.location);
@@ -8503,7 +8503,7 @@ Parser::PatternAlternative Parser::parsePatternAlternative()
         return alternative;
     }
 
-    alternative.operand = parsePatternClass();
+    alternative.operand = parsePatternClass(/* implements= */ false);
     alternative.isClass = true;
     alternative.location = Location(start, lexer.previousLocation());
     return alternative;
@@ -8511,18 +8511,29 @@ Parser::PatternAlternative Parser::parsePatternAlternative()
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the class or trait in a pattern, a name or a dotted
 // path (`geometry.Point`). It's never an expression: in `x is Cat(name)` the `(` starts a pattern, not a call.
-AstExpr* Parser::parsePatternClass()
+// `implements` says which keyword it follows, for messages.
+AstExpr* Parser::parsePatternClass(bool implements)
 {
     if (lexer.current().type != Lexeme::Name)
     {
         Location location = lexer.current().location;
-        report(location, "Expected a type, class or literal after 'is', got %s", lexer.current().toString().c_str());
+        if (valueEnds(lexer.current()))
+        {
+            const char* expected = implements ? "a trait after 'implements'" : "a type, class or literal after 'is'";
+            report(location, "Expected %s, got %s", expected, lexer.current().toString().c_str());
+            return allocator.alloc<AstExprError>(location, copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
+        }
 
         // an expression here is still parsed, so the code after it doesn't report its leftovers
-        if (valueEnds(lexer.current()))
-            return allocator.alloc<AstExprError>(location, copy<AstExpr*>({}), unsigned(parseErrors.size() - 1));
         AstExpr* written = parseExpr(binaryPriority[AstExprBinary::CompareEq].right);
-        return allocator.alloc<AstExprError>(Location(location, written->location), copy({written}), unsigned(parseErrors.size() - 1));
+        Location writtenLocation(location, written->location);
+        report(
+            writtenLocation,
+            "Expected this to be an '%s' pattern but got a complex expression. Use %s for a dynamic check",
+            implements ? "implements" : "is",
+            implements ? "class.implements" : "class.isinstance"
+        );
+        return allocator.alloc<AstExprError>(writtenLocation, copy({written}), unsigned(parseErrors.size() - 1));
     }
 
     Location start = lexer.current().location;

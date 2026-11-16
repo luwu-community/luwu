@@ -539,7 +539,7 @@ private:
     AstExpr* parseTypeTest(AstExpr* value, const Location& start);
     Pattern parsePattern();
     PatternAlternative parsePatternAlternative();
-    AstExpr* parsePatternClass();
+    AstExpr* parsePatternClass(bool implements);
     void reportPatternTypeArguments();
     AstExpr* buildTypeTest(AstExpr* value, const Pattern& pattern, const Location& start);
     AstExpr* makePatternTest(AstExpr* value, const Pattern& pattern, const Location& start);
