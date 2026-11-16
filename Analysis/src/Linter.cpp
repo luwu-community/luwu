@@ -728,15 +728,23 @@ private:
     unsigned int lastLine;
     // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the line each `do` expression's block starts on
     DenseHashMap<const AstStatBlock*, unsigned int> doExprLines{nullptr};
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the blocks of `match` expressions, whose statements
+    // the parser makes from the header and the arms
+    DenseHashSet<const AstStatBlock*> matchBodies{nullptr};
 
     bool visit(AstExprDo* node) override
     {
         doExprLines[node->body] = node->location.begin.line;
+        if (node->fromMatch)
+            matchBodies.insert(node->body);
         return true;
     }
 
     bool visit(AstStatBlock* node) override
     {
+        if (matchBodies.contains(node))
+            return true;
+
         const unsigned int* doLine = doExprLines.find(node);
 
         for (size_t i = 1; i < node->body.size; ++i)

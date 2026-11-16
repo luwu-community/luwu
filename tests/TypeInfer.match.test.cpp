@@ -392,6 +392,46 @@ TEST_CASE_FIXTURE(Fixture, "a_match_else_arm_can_leave")
     }
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `when <condition> then <value>` is an arm without
+// `case`, for a subject the header names
+TEST_CASE_FIXTURE(ClassesFixture, "a_match_arm_can_start_with_when")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        class Box<T>(public inner: T)
+        end
+
+        local function random_box(roll: number): Box<string?>
+            return match const n = roll
+                when n < 50 then
+                    Box(nil)
+                when n < 100 when n ~= 75 then
+                    Box("most")
+                case is 75 then
+                    Box("75")
+                else
+                    Box(tostring(n))
+        end
+
+        local function size(n: number): string
+            return match n
+                when n < 10 then "small"
+                else "big"
+        end
+
+        print(random_box(3), size(1))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 // Valid Luau that looks like the new syntax parses as before in a Luau file
 TEST_CASE_FIXTURE(Fixture, "match_and_is_stay_names_in_luau_files")
 {

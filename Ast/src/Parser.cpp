@@ -8707,7 +8707,13 @@ bool Parser::matchExpressionFollows()
         if (depth == 0 && subjectStarted && token->location.begin.line > previousLine)
         {
             std::string_view name = token->type == Lexeme::Name ? token->name : "";
-            if (name.empty() || name.size() >= 4 || std::string_view("case").substr(0, name.size()) != name)
+
+            // an arm with no `case`, `when <condition> then <value>`
+            if (name == "when")
+                return true;
+
+            bool typingArm = std::string_view("case").substr(0, name.size()) == name || std::string_view("when").substr(0, name.size()) == name;
+            if (name.empty() || name.size() >= 4 || !typingArm)
                 return false;
 
             unsigned int line = token->location.end.line;
@@ -8731,11 +8737,13 @@ bool Parser::matchExpressionFollows()
 //
 //   match [const name =] value
 //       case [name] [is pattern] [when clause ...] then value
+//       when clause [when clause ...] then value
 //       ...
 //       else value
 //
 // is parsed as the `do` expression it means: the subject bound to a local, then an if-else expression with one arm per
-// `case`, each arm's condition the pattern's test of the subject followed by its `when` clauses. Every pass that handles
+// `case` or `when`, each arm's condition the pattern's test of the subject followed by its `when` clauses. An arm that
+// starts with `when` has no pattern: its first clause is its condition. Every pass that handles
 // `do` and if-else expressions (scopes, narrowing per arm, the compiler's fused class checks) handles a `match`.
 AstExpr* Parser::parseMatchExpr(bool inStatement)
 {
@@ -8798,18 +8806,22 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
     };
     std::vector<Arm> arms;
 
-    while (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "case")
+    while ((lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "case") || whenFollows())
     {
         Arm arm;
         arm.caseLocation = lexer.current().location;
-        nextLexeme(); // case
+        bool startsWithWhen = whenFollows();
 
         // the arm's `when` bindings end with its value
         unsigned int armLocalsBegin = saveLocals();
 
         std::vector<AstIfClause> chain;
-        bool hasPattern = parseCaseHead(subject, chain);
-        arm.catchAll = !hasPattern && !whenFollows();
+        if (!startsWithWhen)
+        {
+            nextLexeme(); // case
+            bool hasPattern = parseCaseHead(subject, chain);
+            arm.catchAll = !hasPattern && !whenFollows();
+        }
 
         while (whenFollows())
         {
@@ -8858,7 +8870,8 @@ AstExpr* Parser::parseMatchExpr(bool inStatement)
     if (const Lexeme& next = lexer.current(); next.type == Lexeme::Name && next.location.begin.line > lexer.previousLocation().end.line)
     {
         std::string_view typed = next.name;
-        if (std::string_view("case").substr(0, typed.size()) == typed || std::string_view("else").substr(0, typed.size()) == typed)
+        bool typingArm = std::string_view("case").substr(0, typed.size()) == typed || std::string_view("when").substr(0, typed.size()) == typed;
+        if (typingArm || std::string_view("else").substr(0, typed.size()) == typed)
         {
             if (reportMissingArm)
                 report(next.location, "%s", missingArm);
