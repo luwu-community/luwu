@@ -47,18 +47,21 @@ if p is not Point then ...         -- not class.isinstance(p, Point)
 if o implements Named then ...     -- class.implements(o, Named)
 ```
 
-The right side of `is` is a pattern made of alternatives joined by `|`. Each alternative is one of:
+The right side of `is` is always a pattern, never an expression: `x is (Cat(name, age))` is an error, not a test against a `Cat` made on the
+spot. A pattern is made of alternatives joined by `|`, and each alternative is one of:
 
-- a primitive tag: `string`, `number`, `boolean`, `buffer`, `vector`, `table`, `function`, `thread`, `userdata`, and Luwu's `object` and `class`. A
-  tag is never looked up as a name: a local named `string` doesn't change what `is string` means;
+- a primitive tag: `string`, `number`, `integer`, `boolean`, `buffer`, `vector`, `table`, `function`, `thread`, `userdata`, and Luwu's `object`
+  and `class`. A tag is never looked up as a name: a local named `string` doesn't change what `is string` means;
+- a builtin class's tag, which `typeof` gives its objects: `bundle`, `vec`, `vecdeque` and `orderedmap`, while their libraries are on;
 - `nil` or `none`, compared with `==`;
 - a literal string, number or boolean, compared with `==`;
-- a class, given as a name or a dotted path such as `geometry.Point` (`class.isinstance`).
+- a class, given as a name or a dotted path such as `geometry.Point` (`class.isinstance`);
+- a bundle pattern, `.(a, b)`.
 
 `x is 1 | 2 | 3` means the `or` of the three tests, and narrows like them. `is not` negates the whole pattern. A tested value that isn't a local is read
 once: `t.kind is "a" | "b"` doesn't read `t.kind` twice. Because `is not` is a fixed pair, `x is not y` never parses as `x is (not y)`.
 
-`implements` takes an expression that must evaluate to a trait (`class.implements`).
+`implements` takes a trait, given as a name or a dotted path like a class (`class.implements`).
 
 ### Destructuring in a test
 
@@ -80,13 +83,36 @@ if b is Box { inner as _ is Some(inner is string) } then
 end
 ```
 
-A field taken apart without a test uses destructuring's `.{}` and `.()`, as in `is Branch {left.{value as left_value}, right}`. Bundles have no
-class to name, and a bundle pattern is written like the `.(1, 2, 3)` that builds one: `x is .(a, b)`.
+A field taken apart without a test uses destructuring's `.{}` and `.()`, as in `is Branch {left.{value as left_value}, right}`. A binding's test
+can be any pattern, so `Cat(name, age is not nil)` and `Event {kind is "join" | "leave"}` work too.
+
+A vector's components are fields, so `is vector {x, y, z}` tests for a vector and binds them (and `w` where vectors have four).
+
+### Bundle patterns
+
+Bundles have no class to name, so a bundle pattern is written like the `.(1, 2, 3)` that builds one. `x is .(a, b)` matches a bundle of exactly
+two values and binds them by position. Put `..` after the elements to match a bundle of at least that many values, and `.. as rest` to bind the
+values after them as a bundle:
+
+```luwu
+const label = match v
+    case is .(name) then name
+    case is .(name, count) when count > 0 then `{count} {name}`
+    case is .(name, .. as rest) then `{name} and {#rest} more`
+    else "not a bundle"
+```
+
+The size is exact on purpose, as in Ruby's, C#'s, Rust's and Python's sequence patterns. Destructuring is lenient instead:
+`const .(x, y) = .(1, 2, 3)` ignores the third value. A table is never a bundle, so `{1, 2}` doesn't match `.(a, b)`.
 
 The names are bound only when the whole condition holds and are visible in the branch it guards, like an `if local` binding. A bound field can be
 falsy (`is Flag {on}` binds `on = false`). Destructuring is allowed only where a binding can be scoped: a whole `if`, `elseif` or `while` condition, a
-`when` clause, or a `case` pattern. Alternatives can destructure only when every alternative binds the same names, as in Rust:
-`x is Move {x, y} | Jump {x, y}` is fine, and `x is Move {x, y} | Stop` is an error. A guard such as `r is Ok(value) and return value` is an error.
+`when` clause, or a `case` pattern. A guard such as `r is Ok(value) and return value` is an error. So is `x is not Cat(name)`: a test that has to fail
+binds nothing.
+
+Alternatives may bind different names. A name that an alternative doesn't bind is `nil` when that alternative matches, like a missing value in
+Lua's multiple assignment, so `.(x, y) | .(x, y, z)` gives `z = nil` for a bundle of two. A name bound by several alternatives gets the union
+of its types, `Cat {name} | Dog {name}` included. This isn't implemented yet: alternatives that bind are an error today.
 
 ### `match` expressions
 
@@ -124,12 +150,15 @@ A `match` behaves as a `do` expression that binds the subject and gives an if-el
 ### Type system
 
 `is` and `implements` refine like the calls they stand for: `x is string` narrows `x` to `string` in the branch, and `p is Point` narrows `p` to
-`Point`. In a `match`, the subject (named or a plain local) is narrowed in each arm. Destructured names get the field types of the tested class. A
-type test that no value of the tested type can pass is a type error at the test.
+`Point`. In a `match`, the subject (named or a plain local) is narrowed in each arm. Destructured names get the field types of the tested class,
+and a binding's test narrows the binding the way a test of a local does. A bundle pattern narrows the value to the bundles in its type, but not yet
+to the bundles of the right size: on `.(A, B) | .(C, D, E)`, the `a` of `.(a, b)` is `A | C`. A type test that no value of the tested type can pass
+is a type error at the test.
 
 ### Editor support
 
 luwu-lsp highlights `match`, `case`, `is` and `implements` in the positions the parser accepts them, and indents `case` arms one level under `match`.
+A tag after `is` or `is not` colors as part of the keyword, and in `is Cat(name)` the class colors as a type and the names as bindings.
 
 ## Compatibility
 
@@ -162,7 +191,7 @@ values has to list each class.
 ## Future work
 
 - Exhaustiveness checking over unions of classes and singletons.
-- `is` with builtin class tags (`is bundle`, `is vec`) without an import.
+- Bindings in alternatives, and narrowing a bundle pattern's value to the bundles of its size.
 - Computing `typeof` once per `match` instead of once per arm, and jump tables for many literal arms.
 
 ## Prior art
@@ -171,5 +200,7 @@ values has to list each class.
 - `case is Type`: Swift. Other marked type tests: Kotlin's `is String` and F#'s `:? string`.
 - `when` guards: Elixir, Erlang, OCaml and F#.
 - Explicit bindings: Swift's `case let`, and Elixir's `^pin` for comparing instead of binding.
+- Sequence patterns of an exact size with an explicit rest: Python's `[x, y, *rest]`, Rust's and C#'s `[x, y, ..]`, Ruby's `in [x, y, *]` and
+  Scala's `Seq(x, y, _*)`. Ruby and JavaScript also make assignment lenient and patterns exact.
 - A named subject: Kotlin's `when (val v = ...)`.
 - A required final arm: OCaml has to parenthesize nested matches because a match without one takes the outer arms.
