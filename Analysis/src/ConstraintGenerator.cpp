@@ -6574,7 +6574,12 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         // Luwu builtin classes: `typeof` names an object of one after what it is ("bundle", "vec")
         std::optional<TypeId> builtinClass;
         if (typeguard->isTypeof)
-            builtinClass = builtinClassTypeofType(arena, globalScope.get(), typeguard->type);
+        {
+            std::vector<TypeId> copiedReferences;
+            builtinClass = builtinClassTypeofType(arena, builtinTypes, globalScope.get(), typeguard->type, copiedReferences);
+            for (TypeId reference : copiedReferences)
+                addConstraint(scope, typeguard->target->location, TypeAliasExpansionConstraint{reference});
+        }
 
         TypeId discriminantTy = builtinTypes->neverType;
         if (typeguard->type == "nil")
