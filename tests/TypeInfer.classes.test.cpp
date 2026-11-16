@@ -7512,6 +7512,124 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_narrows_unknown_to_any_bundle")
     CHECK_EQ(toString(mismatch->givenType), ".(...unknown)");
 }
 
+// Luwu bundles: the flags every bundle test needs
+#define BUNDLE_FLAGS \
+    {FFlag::LuwuClasses, true}, {FFlag::LuwuGenericNominals, true}, {FFlag::DebugLuwuBundles, true}, {FFlag::LuwuNonePrimitive, true}, \
+        {FFlag::LuwuDeclareStatements, true}
+
+// Luwu bundles: `bundle.pack` of a generic pack is a bundle of that pack, and generics solve it by position
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_of_generic_packs")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_FLAGS};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function wrap<T...>(...: T...): bundle.BigBundle<T...>
+            return bundle.pack(...)
+        end
+        local wrapped = wrap(1, "x", true)
+
+        local function first<H, T...>(b: bundle.BigBundle<H, T...>): H
+            return (bundle.unpack(b))
+        end
+        local head = first(bundle.pack(1, "a", true))
+
+        local function rest<T...>(b: bundle.BigBundle<number, T...>): bundle.BigBundle<T...>
+            return b:sub(2)
+        end
+        local tail = rest(bundle.pack(1, "a", true))
+
+        local function size(b: bundle.BigBundle<...unknown>): number
+            return #b
+        end
+        local sizes = size(bundle.pack(1, 2)) + size(bundle.pack()) + size(bundle.pack(1, 2, 3, 4, 5, 6, 7, 8))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("wrapped")), ".(number, string, boolean)");
+    CHECK_EQ(toString(requireType("head")), "number");
+    CHECK_EQ(toString(requireType("tail")), ".(string, boolean)");
+}
+
+// Luwu bundles: `#` works on a generic narrowed to a bundle and on a union of bundles
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_have_a_length_through_generics_and_unions")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_FLAGS};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function size<T>(x: T): number
+            if typeof(x) == "bundle" then
+                return #x
+            end
+            return 0
+        end
+        local function either<T>(x: T | bundle.Bundle2<number, string>): number
+            if typeof(x) == "bundle" then
+                return #x
+            end
+            return 0
+        end
+        local function sizes(x: bundle.Bundle1<number> | bundle.Bundle2<number, string>): number
+            return #x
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu bundles: a literal's strings and booleans pick the bundles of an expected union it can be
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_literals_pick_union_members_by_their_literals")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_FLAGS};
+
+    CheckResult result = check(R"(
+        --!strict
+        type Outcome = bundle.Bundle2<true, number> | bundle.Bundle2<false, string>
+        local function succeed(): Outcome
+            return bundle.pack(true, 1)
+        end
+        local failed: Outcome = bundle.pack(false, "why")
+        local widened = bundle.pack("on", true)
+        local wrong: Outcome = bundle.pack(false, 1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+    CHECK_EQ(toString(requireType("widened")), ".(string, boolean)");
+}
+
+// Luwu bundles: a bundle of the wrong size says both sizes and how to fix it, and a wrong position names it
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_mismatches_say_sizes_and_positions")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_FLAGS, {FFlag::LuwuHelpfulSubtypingErrors, true}};
+
+    CheckResult result = check(R"(
+        --!strict
+        local short: bundle.Bundle2<number, string> = bundle.pack(1)
+        local long: bundle.Bundle2<number, string> = bundle.pack(1, "a", 3)
+        local function takes(p: bundle.Bundle2<number, string>) end
+        takes(bundle.pack(1, "a", true))
+        local p = bundle.pack(1, "a")
+        local wrong: bundle.Bundle2<number, number> = p
+        local down = p :: bundle.Bundle1<number>
+        local up = p :: bundle.Bundle3<number, string, boolean>
+        local unknown: bundle.Bundle1<Nope> = bundle.pack(1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(7, result);
+    CHECK(toString(result.errors[0]).find("A bundle of 1 value is never a bundle of 2 values") != std::string::npos);
+    CHECK(toString(result.errors[1]).find(":sub(1, 2)") != std::string::npos);
+    CHECK(toString(result.errors[2]).find("A bundle of 3 values") != std::string::npos);
+    CHECK(toString(result.errors[3]).find("p.2") != std::string::npos);
+    REQUIRE(get<TypesAreUnrelated>(result.errors[4]));
+    CHECK(toString(result.errors[4]).find(":sub(1, 1)") != std::string::npos);
+    REQUIRE(get<TypesAreUnrelated>(result.errors[5]));
+    CHECK(toString(result.errors[5]).find("bundle.concat") != std::string::npos);
+    // only the unknown type, not a mismatch it causes
+    CHECK(get<UnknownSymbol>(result.errors[6]));
+}
+
 // Luwu builtin classes: `typeof` names a bundle "bundle" and a container after its class, and narrows to them
 TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_narrows_to_builtin_classes")
 {

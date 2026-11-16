@@ -2,6 +2,7 @@
 
 #include "Luau/Simplify.h"
 
+#include "Luau/ApplyTypeFunction.h"
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Clone.h"
 #include "Luau/Common.h"
@@ -53,6 +54,7 @@ struct TypeSimplifier
     // Attempt to intersect the two types.  Does not recurse.  Does not handle
     // unions, intersections, or negations.
     std::optional<TypeId> basicIntersect(TypeId left, TypeId right);
+    std::optional<TypeId> intersectBundleWithPositions(TypeId bundle, TypeId positions);
 
     std::optional<TypeId> basicIntersectWithTruthy(TypeId target) const;
 
@@ -1522,11 +1524,68 @@ TypeId TypeSimplifier::intersect(TypeId left, TypeId right)
     else if (get<NegationType>(right))
         return intersectTypeWithNegation(right, left);
 
+    if (std::optional<TypeId> narrowed = intersectBundleWithPositions(left, right))
+        return *narrowed;
+    if (std::optional<TypeId> narrowed = intersectBundleWithPositions(right, left))
+        return *narrowed;
+
     std::optional<TypeId> res = basicIntersect(left, right);
     if (res)
         return *res;
     else
         return arena->addType(IntersectionType{{left, right}});
+}
+
+// Luwu bundles: a test of a bundle's position refines the bundle with a table of that position (`if b.1 == "ok"` with
+// `{ read 1: "ok" }`), which narrows the position: `.("ok" | "err", number)` becomes `.("ok", number)`, and a bundle
+// whose position can't pass the test becomes `never`. nullopt unless `bundle` is a bundle and every property of
+// `positions` names one of its positions.
+std::optional<TypeId> TypeSimplifier::intersectBundleWithPositions(TypeId bundle, TypeId positions)
+{
+    const ExternType* etv = get<ExternType>(bundle);
+    const TableType* table = get<TableType>(positions);
+    std::optional<BundleShape> shape = etv ? bundleShape(etv) : std::nullopt;
+    if (!shape || !table || table->indexer || table->props.empty())
+        return std::nullopt;
+
+    std::vector<TypeId> head = shape->head;
+    bool changed = false;
+    for (const auto& [name, prop] : table->props)
+    {
+        std::optional<size_t> position = bundlePositionOfName(name);
+        if (!position || !prop.readTy || prop.writeTy)
+            return std::nullopt;
+
+        // a bundle without that position can't pass the test; one with a rest may have it
+        if (*position >= head.size())
+        {
+            if (!shape->rest)
+                return builtinTypes->neverType;
+            continue;
+        }
+
+        TypeId narrowed = intersect(head[*position], *prop.readTy);
+        if (get<NeverType>(follow(narrowed)))
+            return builtinTypes->neverType;
+        changed |= follow(narrowed) != follow(head[*position]);
+        head[*position] = narrowed;
+    }
+
+    if (!changed || !etv->genericTemplate)
+        return bundle;
+
+    std::vector<TypeId> typeArguments;
+    std::vector<TypePackId> packArguments;
+    if (etv->instantiatedTypePackParams.empty())
+        typeArguments = std::move(head);
+    else
+        packArguments.push_back(arena->addTypePack(TypePack{std::move(head), shape->rest}));
+
+    // a bundle class's members only refer to builtin types, so there are no alias references to expand
+    std::vector<TypeId> copiedReferences;
+    TypeId result = instantiateGenericNominal(arena, *etv->genericTemplate, std::move(typeArguments), std::move(packArguments), copiedReferences);
+    LUAU_ASSERT(copiedReferences.empty());
+    return result;
 }
 
 // Luwu: an empty table literal (`{}` in `x or {}`) is already one of `table`'s values when `table` has no required

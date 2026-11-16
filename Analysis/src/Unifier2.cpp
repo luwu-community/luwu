@@ -645,6 +645,12 @@ UnifyResult Unifier2::unify_(TableType* subTable, const TableType* superTable)
 
 UnifyResult Unifier2::unify_(const ExternType* subExternType, const ExternType* superExternType)
 {
+    // Luwu bundles: bundles of two classes unify by position, so `.(1, "a", true)` passed to an `.(H, T...)` solves `H`
+    // and `T...` (see Subtyping's ExternType case)
+    bool bundlesOfTwoClasses = isBundle(subExternType) && isBundle(superExternType) && subExternType->name != superExternType->name;
+    if (bundlesOfTwoClasses)
+        return unify_(bundlePositionPack(arena, subExternType), bundlePositionPack(arena, superExternType));
+
     // Only positionally unify instantiated type parameters when both extern types stem from the
     // same nominal declaration (see LuwuGenericNominals) -- otherwise this pairing is unrelated
     // (e.g. unifying `Dog` against `Cat`) and there's nothing to propagate between them.

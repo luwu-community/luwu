@@ -2126,7 +2126,12 @@ static std::optional<AutocompleteEntryMap> convertRequireSuggestionsToAutocomple
 
 // Luwu bundles: the expected type of the position the innermost node of `ancestry` fills in a bundle literal `.(a, b)`,
 // from the expected type of the whole bundle. nullopt outside a bundle literal or without a bundle type expected.
-static std::optional<TypeId> bundlePositionExpectedType(const Module& module, const std::vector<AstNode*>& ancestry, const ScopePtr& scope)
+static std::optional<TypeId> bundlePositionExpectedType(
+    TypeArena& arena,
+    const Module& module,
+    const std::vector<AstNode*>& ancestry,
+    const ScopePtr& scope
+)
 {
     if (ancestry.size() < 2)
         return std::nullopt;
@@ -2137,7 +2142,8 @@ static std::optional<TypeId> bundlePositionExpectedType(const Module& module, co
         return std::nullopt;
 
     const TypeId* expected = module.astExpectedTypes.find(bundle);
-    std::optional<std::vector<TypeId>> positions = expected ? expectedBundlePositions(scope.get(), *expected, bundle->args.size) : std::nullopt;
+    std::optional<std::vector<TypeId>> positions =
+        expected ? expectedBundlePositions(&arena, scope.get(), *expected, bundle, value) : std::nullopt;
     if (!positions)
         return std::nullopt;
 
@@ -3285,7 +3291,7 @@ AutocompleteResult autocomplete_(
 
         // Luwu bundles: a string in a bundle literal `.(a, b)` completes what its position of the bundle's expected type
         // allows. The bundle is a `bundle.pack` call, whose own argument check records `unknown` for the string.
-        if (std::optional<TypeId> expected = bundlePositionExpectedType(*module, ancestry, scopeAtPosition))
+        if (std::optional<TypeId> expected = bundlePositionExpectedType(*typeArena, *module, ancestry, scopeAtPosition))
             autocompleteStringSingleton(*expected, false, node, position, result);
 
         return {std::move(result), ancestry, AutocompleteContext::String};

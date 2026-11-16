@@ -1351,6 +1351,27 @@ bool isBundle(const ExternType* etv);
 // Luwu bundles: whether `etv` is `.(...unknown)`, the type of a bundle nothing is known about. Every bundle is one.
 bool isAnyBundle(const ExternType* etv);
 
+// Luwu bundles: the types of a bundle's positions. `rest` holds what follows `head` in a bundle whose size the checker
+// doesn't know (`.(number, T...)`).
+struct BundleShape
+{
+    std::vector<TypeId> head;
+    std::optional<TypePackId> rest;
+
+    // The type of the value at 0-based `index`, or nullopt past the end of a bundle without a rest. A rest gives its
+    // variadic type, or `unknown` when it's a generic pack.
+    std::optional<TypeId> at(NotNull<BuiltinTypes> builtinTypes, size_t index) const;
+};
+
+// Luwu bundles: the positions of the bundle `etv`, or nullopt when it isn't one
+std::optional<BundleShape> bundleShape(const ExternType* etv);
+
+// Luwu bundles: the positions of the bundle `etv` as one type pack: a fixed size's type arguments, or a `BigBundle`'s pack
+TypePackId bundlePositionPack(NotNull<TypeArena> arena, const ExternType* etv);
+
+// Luwu bundles: the 0-based position the property name `name` reads (`"1"` is 0), or nullopt when it isn't a position
+std::optional<size_t> bundlePositionOfName(const std::string& name);
+
 // Luwu Traits (rfcs/classes/traits.md): a trait, or an intersection of traits. Two of these may share instances even when neither is a subtype
 // of the other, unlike two classes, which are final.
 bool isTraitLike(const ExternType* ty);
