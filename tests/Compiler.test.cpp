@@ -14314,7 +14314,7 @@ return r.value
     CHECK(escaping.find(" OK\n") != std::string::npos);
 }
 
-// `class.isinstance(r, Ok)`, which `r is Ok.(value)` desugars to, is answered by the result's flag at O2, the level that
+// `class.isinstance(r, Ok)`, which `r is Ok(value)` desugars to, is answered by the result's flag at O2, the level that
 // assumes builtins. The class may be `Ok` or `Err` or an alias of either through any chain of locals.
 TEST_CASE("TryResultVariantTestsStayInRegisters")
 {

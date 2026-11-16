@@ -6201,7 +6201,7 @@ struct Compiler
     }
 
     // Luwu try expressions: `class.isinstance(r, Ok)` or `class.isinstance(r, Err)`, which a result kept in registers
-    // answers from its flag. `is Ok.(value)` desugars to it. Gives whether it tests for Ok and sets `local` to r.
+    // answers from its flag. `is Ok(value)` desugars to it. Gives whether it tests for Ok and sets `local` to r.
     std::optional<bool> tryResultVariantTest(AstExprCall* call, AstExprLocal*& local)
     {
         const int* bfid = builtins.find(call);
