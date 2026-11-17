@@ -874,6 +874,11 @@ enum class IrCmd : uint8_t
     // Note: return values are placed starting from Rn specified in 'A'
     CALL,
 
+    // Tail-call specified function
+    // A: Rn (function, followed by arguments)
+    // B: int (argument count or -1 to use all arguments up to stack top)
+    TAILCALL,
+
     // Return specified values from the function
     // A: Rn (value start)
     // B: int (result count or -1 to return all values up to stack top)

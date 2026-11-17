@@ -98,6 +98,8 @@ LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
+LUAU_FASTFLAG(LuwuNoFenv)
+LUAU_FASTFLAG(DebugLuwuProperTailCalls)
 
 #ifndef LUAU_CONFORMANCE_SOURCE_DIR
 // Walks up from the current directory looking for the Client folder,
@@ -310,6 +312,8 @@ static StateRef runConformance(
     std::string source(std::istreambuf_iterator<char>(stream), {});
 
     stream.close();
+
+    ScopedFastFlag sff{FFlag::LuwuNoFenv, false};
 
     if (!initialLuaState)
         initialLuaState = luaL_newstate();
@@ -2754,6 +2758,7 @@ static int cpcallTest(lua_State* L)
 
 TEST_CASE("ApiCalls")
 {
+    ScopedFastFlag sff{FFlag::LuwuNoFenv, false};
     StateRef globalState = runConformance("apicalls.luau", nullptr, nullptr, lua_newstate(limitedRealloc, nullptr));
     lua_State* L = globalState.get();
 
@@ -6626,6 +6631,324 @@ TEST_CASE("ClassesInterpreterMemberSlotCacheSkipsWideOffsets")
 
     run("farcall", 301);
     CHECK(LUAU_INSN_C(*farCallInsn) == farCallHint);
+}
+
+TEST_CASE("LuwuNoFenv")
+{
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    {
+        ScopedFastFlag sff{FFlag::LuwuNoFenv, true};
+
+        std::string sourceGet = "getfenv()";
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(sourceGet.data(), sourceGet.size(), nullptr, &bytecodeSize);
+        REQUIRE(bytecode);
+        REQUIRE(luau_load(L, "=getfenv_test", bytecode, bytecodeSize, 0) == 0);
+        free(bytecode);
+        CHECK(lua_pcall(L, 0, 0, 0) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(L, -1), "'getfenv' is disabled"));
+        lua_pop(L, 1);
+
+        std::string sourceSet = "setfenv(1, {})";
+        bytecode = luau_compile(sourceSet.data(), sourceSet.size(), nullptr, &bytecodeSize);
+        REQUIRE(bytecode);
+        REQUIRE(luau_load(L, "=setfenv_test", bytecode, bytecodeSize, 0) == 0);
+        free(bytecode);
+        CHECK(lua_pcall(L, 0, 0, 0) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(L, -1), "'setfenv' is disabled"));
+        lua_pop(L, 1);
+
+        // Direct C API calls also raise a Lua error when FFlag::LuwuNoFenv is enabled
+        lua_pushcfunction(L, [](lua_State* L) -> int {
+            lua_pushthread(L);
+            lua_getfenv(L, -1);
+            return 1;
+        }, nullptr);
+        CHECK(lua_pcall(L, 0, 1, 0) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(L, -1), "'getfenv' is disabled"));
+        lua_pop(L, 1);
+
+        lua_pushcfunction(L, [](lua_State* L) -> int {
+            lua_pushthread(L);
+            lua_newtable(L);
+            lua_setfenv(L, -2);
+            return 0;
+        }, nullptr);
+        CHECK(lua_pcall(L, 0, 0, 0) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(L, -1), "'setfenv' is disabled"));
+        lua_pop(L, 1);
+    }
+
+    {
+        ScopedFastFlag sff{FFlag::LuwuNoFenv, false};
+
+        std::string sourceGet = "return type(getfenv()) == 'table'";
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(sourceGet.data(), sourceGet.size(), nullptr, &bytecodeSize);
+        REQUIRE(bytecode);
+        REQUIRE(luau_load(L, "=getfenv_test_enabled", bytecode, bytecodeSize, 0) == 0);
+        free(bytecode);
+        CHECK(lua_pcall(L, 0, 1, 0) == LUA_OK);
+        CHECK(lua_toboolean(L, -1) == 1);
+        lua_pop(L, 1);
+
+        lua_pushcfunction(L, [](lua_State* L) -> int {
+            lua_pushthread(L);
+            lua_getfenv(L, -1);
+            return 1;
+        }, nullptr);
+        CHECK(lua_pcall(L, 0, 1, 0) == LUA_OK);
+        CHECK(lua_istable(L, -1));
+        lua_pop(L, 1);
+    }
+}
+
+TEST_CASE("ProperTailCallsRuntime")
+{
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    auto runSource = [&](const std::string& source, int expectedResults = 0) -> int {
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+        REQUIRE(bytecode);
+        int loadRes = luau_load(L, "=tco_test", bytecode, bytecodeSize, 0);
+        free(bytecode);
+        REQUIRE(loadRes == 0);
+        return lua_pcall(L, 0, expectedResults, 0);
+    };
+
+    // 1. Gating verification: without flags, 100,000 recursive calls overflow stack
+    {
+        ScopedFastFlag sff1{FFlag::LuwuNoFenv, true};
+        ScopedFastFlag sff2{FFlag::DebugLuwuProperTailCalls, false};
+
+        std::string source = R"(
+local function loop(n)
+    if n <= 0 then return "done" end
+    return loop(n - 1)
+end
+return loop(100000)
+)";
+        CHECK(runSource(source, 1) == LUA_ERRRUN);
+        CHECK(strstr(lua_tostring(L, -1), "stack overflow"));
+        lua_pop(L, 1);
+    }
+
+    // 2. With both flags enabled, 1,000,000 recursive calls execute in O(1) stack space
+    {
+        ScopedFastFlag sff1{FFlag::LuwuNoFenv, true};
+        ScopedFastFlag sff2{FFlag::DebugLuwuProperTailCalls, true};
+
+        std::string source = R"(
+local function loop(n)
+    if n <= 0 then return "done", 42 end
+    return loop(n - 1)
+end
+return loop(1000000)
+)";
+        CHECK(runSource(source, 2) == LUA_OK);
+        CHECK_EQ(std::string(lua_tostring(L, -2)), "done");
+        CHECK_EQ(lua_tonumber(L, -1), 42);
+        lua_pop(L, 2);
+
+        // Mutual recursion
+        std::string mutual = R"(
+local is_even, is_odd
+function is_even(n)
+    if n == 0 then return true end
+    return is_odd(n - 1)
+end
+function is_odd(n)
+    if n == 0 then return false end
+    return is_even(n - 1)
+end
+return is_even(1000000), is_odd(1000001)
+)";
+        CHECK(runSource(mutual, 2) == LUA_OK);
+        CHECK(lua_toboolean(L, -2) == 1);
+        CHECK(lua_toboolean(L, -1) == 1);
+        lua_pop(L, 2);
+
+        // Upvalues closed properly before frame reuse
+        std::string upvalues = R"(
+local function make(val)
+    local a = val
+    local b = val * 2
+    local function get() return a + b end
+    local function recurse(n, fn)
+        if n <= 0 then return fn() end
+        return recurse(n - 1, fn)
+    end
+    return recurse(100, get)
+end
+return make(5)
+)";
+        CHECK(runSource(upvalues, 1) == LUA_OK);
+        CHECK_EQ(lua_tonumber(L, -1), 15);
+        lua_pop(L, 1);
+
+        // Variadic forwarding & multret
+        std::string variadic = R"(
+local function sum_four(a, b, c, d)
+    return a + b + c + d
+end
+local function forward(...)
+    return sum_four(...)
+end
+local function multret()
+    return 3, 4
+end
+local function with_multret(a, b)
+    return sum_four(a, b, multret())
+end
+return forward(1, 2, 3, 4), with_multret(1, 2)
+)";
+        CHECK(runSource(variadic, 2) == LUA_OK);
+        CHECK_EQ(lua_tonumber(L, -2), 10);
+        CHECK_EQ(lua_tonumber(L, -1), 10);
+        lua_pop(L, 2);
+
+        // Method call
+        std::string method = R"(
+local obj = { base = 100 }
+function obj:add(x, y)
+    return self.base + x + y
+end
+local function caller(o, x, y)
+    return o:add(x, y)
+end
+return caller(obj, 10, 20)
+)";
+        CHECK(runSource(method, 1) == LUA_OK);
+        CHECK_EQ(lua_tonumber(L, -1), 130);
+        lua_pop(L, 1);
+
+        // C function tail call & metamethod __call
+        std::string cfunc = R"(
+local function tail_pcall(fn, arg)
+    return pcall(fn, arg)
+end
+local ok, res = tail_pcall(function(x) return x * 2 end, 21)
+
+local callable = setmetatable({}, {
+    __call = function(self, x, y)
+        return x * y
+    end
+})
+local function call_obj(o, x, y)
+    return o(x, y)
+end
+
+return ok, res, call_obj(callable, 6, 7)
+)";
+        CHECK(runSource(cfunc, 3) == LUA_OK);
+        CHECK(lua_toboolean(L, -3) == 1);
+        CHECK_EQ(lua_tonumber(L, -2), 42);
+        CHECK_EQ(lua_tonumber(L, -1), 42);
+        lua_pop(L, 3);
+
+        // Disqualification: parenthesized return truncates to single value
+        std::string disqual = R"(
+local function pair() return 10, 20 end
+local function paren() return (pair()) end
+local r1, r2 = paren()
+return r1, r2
+)";
+        CHECK(runSource(disqual, 2) == LUA_OK);
+        CHECK_EQ(lua_tonumber(L, -2), 10);
+        CHECK(lua_isnil(L, -1));
+        lua_pop(L, 2);
+
+        // C callee with > 20 arguments
+        std::string c_many_args = R"(
+local function call_c_many()
+    return math.max(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+end
+return call_c_many()
+)";
+        CHECK(runSource(c_many_args, 1) == LUA_OK);
+        CHECK_EQ(lua_tonumber(L, -1), 25);
+        lua_pop(L, 1);
+
+        // Coroutine yield across C tail call
+        std::string coyield = R"(
+local function worker()
+    return coroutine.yield("from_yield", 99)
+end
+local co = coroutine.create(worker)
+local ok1, r1, r2 = coroutine.resume(co)
+local ok2, r3 = coroutine.resume(co, "resumed_val")
+return ok1, r1, r2, ok2, r3
+)";
+        CHECK(runSource(coyield, 5) == LUA_OK);
+        CHECK(lua_toboolean(L, -5) == 1);
+        CHECK_EQ(std::string(lua_tostring(L, -4)), "from_yield");
+        CHECK_EQ(lua_tonumber(L, -3), 99);
+        CHECK(lua_toboolean(L, -2) == 1);
+        CHECK_EQ(std::string(lua_tostring(L, -1)), "resumed_val");
+        lua_pop(L, 5);
+
+        // Error position preservation for C tail call
+        std::string err_pos = R"(
+local function fails()
+    return error("err_msg", 1)
+end
+local ok, err = pcall(fails)
+return ok, err
+)";
+        CHECK(runSource(err_pos, 2) == LUA_OK);
+        CHECK(lua_toboolean(L, -2) == 0);
+        CHECK(strstr(lua_tostring(L, -1), ":3: err_msg"));
+        lua_pop(L, 2);
+
+        // Frame isTail / istailcall marking via debug.info
+        std::string tail_mark = R"(
+local function target()
+    return debug.info(1, "t")
+end
+local function normal_call()
+    local res = target()
+    return res
+end
+local function tail_call()
+    return target()
+end
+return normal_call(), tail_call()
+)";
+        CHECK(runSource(tail_mark, 2) == LUA_OK);
+        CHECK(lua_toboolean(L, -2) == 0);
+        CHECK(lua_toboolean(L, -1) == 1);
+        lua_pop(L, 2);
+
+        // Traceback includes (...tail calls...) for tail call frames
+        std::string tb_test = R"(
+local function err_leaf()
+    error("tail_err")
+end
+local function intermediate()
+    return err_leaf()
+end
+local function top_caller()
+    return intermediate()
+end
+local ok, trace = xpcall(top_caller, function(e)
+    return debug.traceback(e, 1)
+end)
+return ok, trace
+)";
+        CHECK(runSource(tb_test, 2) == LUA_OK);
+        CHECK(lua_toboolean(L, -2) == 0);
+        const char* trace_str = lua_tostring(L, -1);
+        CHECK(strstr(trace_str, "function err_leaf"));
+        CHECK(strstr(trace_str, "(...tail calls...)"));
+        CHECK(!strstr(trace_str, "function intermediate"));
+        lua_pop(L, 2);
+    }
 }
 
 TEST_SUITE_END();

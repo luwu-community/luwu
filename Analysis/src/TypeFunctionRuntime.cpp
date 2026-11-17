@@ -142,6 +142,12 @@ std::optional<std::string> TypeFunctionRuntime::registerFunction_DEPRECATED(AstS
     lua_xmove(L, global, 1);
     lua_settable(global, LUA_REGISTRYINDEX);
 
+    // Store environment table in the registry
+    lua_pushlightuserdata(global, getTypeFunctionEnvironmentKey(function));
+    lua_pushvalue(L, LUA_GLOBALSINDEX);
+    lua_xmove(L, global, 1);
+    lua_settable(global, LUA_REGISTRYINDEX);
+
     return std::nullopt;
 }
 
@@ -225,6 +231,12 @@ std::optional<TypeFunctionError> TypeFunctionRuntime::registerFunction(AstStatTy
 
     // Store resulting function in the registry
     lua_pushlightuserdata(global, function);
+    lua_xmove(L, global, 1);
+    lua_settable(global, LUA_REGISTRYINDEX);
+
+    // Store environment table in the registry
+    lua_pushlightuserdata(global, getTypeFunctionEnvironmentKey(function));
+    lua_pushvalue(L, LUA_GLOBALSINDEX);
     lua_xmove(L, global, 1);
     lua_settable(global, LUA_REGISTRYINDEX);
 

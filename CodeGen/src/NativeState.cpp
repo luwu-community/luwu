@@ -96,6 +96,7 @@ void initFunctions(NativeContext& context)
     context.getImport = getImport;
 
     context.callFallback = callFallback;
+    context.tailcallFallback = tailcallFallback;
 
     context.executeGETGLOBAL = executeGETGLOBAL;
     context.executeSETGLOBAL = executeSETGLOBAL;

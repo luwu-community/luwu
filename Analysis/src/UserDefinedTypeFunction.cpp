@@ -297,7 +297,15 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
         }
 
         // Build up the environment of the current function, where some might not be visible
-        lua_getfenv(L, -1);
+        lua_pushlightuserdata(L, getTypeFunctionEnvironmentKey(curr.first));
+        lua_gettable(L, LUA_REGISTRYINDEX);
+
+        if (!lua_istable(L, -1))
+        {
+            ctx->ice->ice("user-defined type function environment cannot be found in the registry");
+            return {std::nullopt, Reduction::Erroneous, {}, {}};
+        }
+
         lua_setreadonly(L, -1, false);
 
         for (auto& [name, definition] : typeFunction->userFuncData.environmentFunction)

@@ -13,6 +13,7 @@
 
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAGVARIABLE(LuwuNonePrimitive)
+LUAU_FASTFLAG(LuwuNoFenv)
 
 static void writestring(const char* s, size_t l)
 {
@@ -126,6 +127,9 @@ static void getfunc(lua_State* L, int opt)
 
 static int luaB_getfenv(lua_State* L)
 {
+    if (FFlag::LuwuNoFenv)
+        luaL_error(L, "'getfenv' is disabled");
+
     getfunc(L, 1);
     if (lua_iscfunction(L, -1))             // is a C function?
         lua_pushvalue(L, LUA_GLOBALSINDEX); // return the thread's global env.
@@ -137,6 +141,9 @@ static int luaB_getfenv(lua_State* L)
 
 static int luaB_setfenv(lua_State* L)
 {
+    if (FFlag::LuwuNoFenv)
+        luaL_error(L, "'setfenv' is disabled");
+
     luaL_checktype(L, 2, LUA_TTABLE);
     getfunc(L, 0);
     lua_pushvalue(L, 2);

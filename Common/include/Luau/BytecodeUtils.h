@@ -135,6 +135,7 @@ inline bool isFallthrough(LuauOpcode op)
     switch (op)
     {
     case LOP_RETURN:
+    case LOP_TAILCALL:
     case LOP_JUMP:
     case LOP_JUMPBACK:
     case LOP_JUMPX:

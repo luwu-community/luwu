@@ -124,6 +124,7 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::GET_UPVALUE:
         break;
     case IrCmd::CALL:
+    case IrCmd::TAILCALL:
         // Even if result count is limited, all registers starting from function (ra) might be modified
         invalidateRestoreVmRegs(vmRegOp(OP_A(inst)), -1);
         break;

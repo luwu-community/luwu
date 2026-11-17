@@ -178,6 +178,11 @@ static Closure* auxgetinfo(lua_State* L, const char* what, lua_Debug* ar, Closur
             ar->name = ci ? getfuncname(ci_func(ci)) : getfuncname(f);
             break;
         }
+        case 't':
+        {
+            ar->istailcall = (ci && (ci->flags & LUA_CALLINFO_TAIL)) ? 1 : 0;
+            break;
+        }
         case 'f':
         {
             cl = f;
@@ -784,7 +789,7 @@ const char* lua_debugtrace(lua_State* L)
     size_t offset = 0;
 
     lua_Debug ar;
-    for (int level = 0; lua_getinfo(L, level, "sln", &ar); ++level)
+    for (int level = 0; lua_getinfo(L, level, "slnt", &ar); ++level)
     {
         if (ar.source)
             offset = append(buf, sizeof(buf), offset, ar.short_src);
@@ -804,6 +809,9 @@ const char* lua_debugtrace(lua_State* L)
         }
 
         offset = append(buf, sizeof(buf), offset, "\n");
+
+        if (ar.istailcall)
+            offset = append(buf, sizeof(buf), offset, "(...tail calls...)\n");
 
         if (depth > limit1 + limit2 && level == limit1 - 1)
         {

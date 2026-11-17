@@ -41,6 +41,8 @@ LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
+LUAU_FASTFLAG(LuwuNoFenv)
+LUAU_FASTFLAG(DebugLuwuProperTailCalls)
 
 // May a file use the `--!trust` directive, which lets the compiler act on type annotations it cannot
 // verify (Compiler::trustsTypeAnnotations)? The flag only permits the directive; it never enables trust
@@ -886,7 +888,8 @@ struct Compiler
         bool multRet,
         uint8_t regs,
         int bfid,
-        int bfK = -1
+        int bfK = -1,
+        bool tailCall = false
     )
     {
         LUAU_ASSERT(!expr->self);
@@ -929,6 +932,9 @@ struct Compiler
             }
         }
 
+        if (tailCall)
+            closeLocals(0);
+
         size_t fastcallLabel = bytecode.emitLabel();
 
         bytecode.emitABC(opc, uint8_t(bfid), uint8_t(args[0]), 0);
@@ -943,7 +949,7 @@ struct Compiler
             bytecode.emitAux(bfK >= 0 ? bfK : args[1]);
         }
 
-        // Set up a traditional Lua stack for the subsequent LOP_CALL.
+        // Set up a traditional Lua stack for the subsequent LOP_CALL / LOP_TAILCALL.
         // Note, as with other instructions that immediately follow FASTCALL, these are normally not executed and are used as a fallback for
         // these FASTCALL variants.
         for (size_t i = 0; i < expr->args.size; ++i)
@@ -965,10 +971,18 @@ struct Compiler
         if (!bytecode.patchSkipC(fastcallLabel, callLabel))
             CompileError::raise(expr->func->location, "Exceeded jump distance limit; simplify the code to compile");
 
-        bytecode.emitABC(LOP_CALL, regs, uint8_t(expr->args.size + 1), multRet ? 0 : uint8_t(targetCount + 1));
+        if (tailCall)
+        {
+            bytecode.emitABC(LOP_TAILCALL, regs, uint8_t(expr->args.size + 1), 0);
+            bytecode.emitABC(LOP_RETURN, regs, 0, 0);
+        }
+        else
+        {
+            bytecode.emitABC(LOP_CALL, regs, uint8_t(expr->args.size + 1), multRet ? 0 : uint8_t(targetCount + 1));
+        }
 
         // if we didn't output results directly to target, we need to move them
-        if (!targetTop)
+        if (!targetTop && !tailCall)
         {
             for (size_t i = 0; i < targetCount; ++i)
                 bytecode.emitABC(LOP_MOVE, uint8_t(target + i), uint8_t(regs + i), 0);
@@ -3293,7 +3307,7 @@ struct Compiler
         return true;
     }
 
-    void compileExprCall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop = false, bool multRet = false)
+    void compileExprCall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop = false, bool multRet = false, bool tailCall = false)
     {
         LUAU_ASSERT(targetCount < 255);
         LUAU_ASSERT(!targetTop || unsigned(target + targetCount) == regTop);
@@ -3301,7 +3315,7 @@ struct Compiler
         setDebugLine(expr); // normally compileExpr sets up line info, but compileExprCall can be called directly
 
         // try inlining the function
-        if (options.optimizationLevel >= 2 && !expr->self)
+        if (options.optimizationLevel >= 2 && !expr->self && !tailCall)
         {
             AstExprFunction* func = getFunctionExpr(expr->func);
             Function* fi = func ? functions.find(func) : nullptr;
@@ -3340,7 +3354,7 @@ struct Compiler
 
         // Luwu Classes (rfcs/classes): inline `obj:method()` calls whose receiver class is
         // statically known and whose body can be inlined here (see tryResolveMethodCall).
-        if (options.optimizationLevel >= 2 && expr->self && FFlag::LuwuClasses)
+        if (options.optimizationLevel >= 2 && expr->self && FFlag::LuwuClasses && !tailCall)
         {
             bool trusted = false;
             if (AstExprFunction* mfunc = tryResolveMethodCall(expr, trusted))
@@ -3419,7 +3433,7 @@ struct Compiler
                 if (cid < 0)
                     CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
 
-                return compileExprFastcallN(expr, target, targetCount, targetTop, multRet, regs, LBF_BIT32_EXTRACTK, cid);
+                return compileExprFastcallN(expr, target, targetCount, targetTop, multRet, regs, LBF_BIT32_EXTRACTK, cid, tailCall);
             }
         }
 
@@ -3443,7 +3457,7 @@ struct Compiler
         {
             if (!isExprMultRet(expr->args.data[expr->args.size - 1]))
             {
-                return compileExprFastcallN(expr, target, targetCount, targetTop, multRet, regs, bfid);
+                return compileExprFastcallN(expr, target, targetCount, targetTop, multRet, regs, bfid, -1, tailCall);
             }
             else if (options.optimizationLevel >= 2)
             {
@@ -3451,7 +3465,7 @@ struct Compiler
                 // we can rely on the behavior of the function being the same (none-safe means nil and none are interchangeable)
                 BuiltinInfo info = getBuiltinInfo(bfid);
                 if (int(expr->args.size) == info.params && (info.flags & BuiltinInfo::Flag_NoneSafe) != 0)
-                    return compileExprFastcallN(expr, target, targetCount, targetTop, multRet, regs, bfid);
+                    return compileExprFastcallN(expr, target, targetCount, targetTop, multRet, regs, bfid, -1, tailCall);
             }
         }
 
@@ -3490,6 +3504,9 @@ struct Compiler
 
         setDebugLineEnd(expr->func);
 
+        if (tailCall)
+            closeLocals(0);
+
         if (expr->self)
         {
             AstExprIndexName* fi = expr->func->as<AstExprIndexName>();
@@ -3524,22 +3541,30 @@ struct Compiler
                 CompileError::raise(expr->func->location, "Exceeded jump distance limit; simplify the code to compile");
         }
 
-        // Without deoptimization we cannot break VARARG sequences.
-        // So VARARG producer or consumer cannot be inlined, because it creates a diamond(with slow path).
-        bool canInline = currentFunction->functionDepth != 0 && !multCall && !multRet;
-        if (FFlag::LuauEmitCallFeedback && bfid < 0 && canInline)
+        if (tailCall)
         {
-            uint32_t fbSlot = bytecode.addFbSlot(LuauFeedbackType::LFT_CALLTARGET);
-            bytecode.emitABC(LOP_CALLFB, regs, multCall ? 0 : uint8_t(expr->self + expr->args.size + 1), multRet ? 0 : uint8_t(targetCount + 1));
-            bytecode.emitAux(fbSlot);
+            bytecode.emitABC(LOP_TAILCALL, regs, multCall ? 0 : uint8_t(expr->self + expr->args.size + 1), 0);
+            bytecode.emitABC(LOP_RETURN, regs, 0, 0);
         }
         else
         {
-            bytecode.emitABC(LOP_CALL, regs, multCall ? 0 : uint8_t(expr->self + expr->args.size + 1), multRet ? 0 : uint8_t(targetCount + 1));
+            // Without deoptimization we cannot break VARARG sequences.
+            // So VARARG producer or consumer cannot be inlined, because it creates a diamond(with slow path).
+            bool canInline = currentFunction->functionDepth != 0 && !multCall && !multRet;
+            if (FFlag::LuauEmitCallFeedback && bfid < 0 && canInline)
+            {
+                uint32_t fbSlot = bytecode.addFbSlot(LuauFeedbackType::LFT_CALLTARGET);
+                bytecode.emitABC(LOP_CALLFB, regs, multCall ? 0 : uint8_t(expr->self + expr->args.size + 1), multRet ? 0 : uint8_t(targetCount + 1));
+                bytecode.emitAux(fbSlot);
+            }
+            else
+            {
+                bytecode.emitABC(LOP_CALL, regs, multCall ? 0 : uint8_t(expr->self + expr->args.size + 1), multRet ? 0 : uint8_t(targetCount + 1));
+            }
         }
 
         // if we didn't output results directly to target, we need to move them
-        if (!targetTop)
+        if (!targetTop && !tailCall)
         {
             for (size_t i = 0; i < targetCount; ++i)
                 bytecode.emitABC(LOP_MOVE, uint8_t(target + i), uint8_t(regs + i), 0);
@@ -6363,6 +6388,16 @@ struct Compiler
         if (stat->list.size >= 255)
             CompileError::raise(stat->location, "Exceeded return count limit; simplify the code to compile");
 
+        if (FFlag::LuwuNoFenv && FFlag::DebugLuwuProperTailCalls && stat->list.size == 1 && stat->list.data[0]->is<AstExprCall>() &&
+            !isConstant(stat->list.data[0]) && inlineFrames.empty())
+        {
+            hasMultiRet = true;
+            RegScope rs(this);
+            uint8_t target = regTop;
+            compileExprCall(stat->list.data[0]->as<AstExprCall>(), target, /* targetCount= */ 0, /* targetTop= */ true, /* multRet= */ true, /* tailCall= */ true);
+            return;
+        }
+
         RegScope rs(this);
 
         uint8_t temp = 0;
@@ -8497,7 +8532,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
     trackValues(compiler.globals, compiler.variables, compiler.classLocals, root);
 
     // this visitor tracks calls to getfenv/setfenv and disables some optimizations when they are found
-    if (options.optimizationLevel >= 1 && (names.get("getfenv").value || names.get("setfenv").value))
+    if (!FFlag::LuwuNoFenv && options.optimizationLevel >= 1 && (names.get("getfenv").value || names.get("setfenv").value))
     {
         Compiler::FenvVisitor fenvVisitor(compiler.getfenvUsed, compiler.setfenvUsed);
         root->visit(&fenvVisitor);

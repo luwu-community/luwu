@@ -337,6 +337,10 @@ struct BytecodeGraphSerializer
             bcb.emitAux(getImmInt(insn, 2));
             break;
 
+        case LOP_TAILCALL:
+            bcb.emitABC(LOP_TAILCALL, getRegInput(insn, 1), getImmInt(insn, 0) + 1, 0);
+            break;
+
         case LOP_RETURN:
         {
             LUAU_ASSERT(insn.ops.size() > 1);

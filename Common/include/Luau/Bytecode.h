@@ -552,6 +552,12 @@ enum LuauOpcode
     // AUX: member offset
     LOP_SETOBJECTMEMBER,
 
+    // TAILCALL: perform tail call, reusing current stack frame
+    // A: register where the function object lives, followed by arguments
+    // B: argument count + 1, or 0 to preserve all arguments up to top (MULTRET)
+    // C: unused (0)
+    LOP_TAILCALL,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };
