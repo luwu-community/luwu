@@ -1,7 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+#include "lua.h"
 #include "lualib.h"
 
-#include "lcommon.h"
 #include "lbuffer.h"
 
 #if defined(LUAU_BIG_ENDIAN)
@@ -10,7 +10,7 @@
 
 LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAGVARIABLE(LuwuBufferIsFrozen)
-LUAU_FASTFLAGVARIABLE(LuwuBufferMemcmp)
+LUAU_FASTFLAGVARIABLE(DebugLuwuBufferComparison)
 
 #include <string.h>
 
@@ -280,8 +280,8 @@ static int buffer_copy(lua_State* L)
     return 0;
 }
 
-// Luwu buffer.memcmp (rfcs/buffer-memcmp.md):
-static int buffer_memcmp(lua_State* L)
+// Luwu buffer.order (rfcs/buffer-comparison.md):
+static int buffer_order(lua_State* L)
 {
     size_t b1len = 0;
     void* b1buf = luaL_checkbuffer(L, 1, &b1len);
@@ -307,7 +307,52 @@ static int buffer_memcmp(lua_State* L)
         luaL_error(L, "buffer access out of bounds");
 
     int res = memcmp((char*)b1buf + b1offset, (char*)b2buf + b2offset, count);
-    lua_pushnumber(L, double(res < 0 ? -1 : res > 0 ? 1 : 0));
+    if (res < 0) {
+        lua_pushliteral(L, "less");
+    } else if (res > 0) {
+        lua_pushliteral(L, "greater");
+    } else {
+        lua_pushliteral(L, "same");
+    }
+
+    return 1;
+}
+
+// Luwu buffer.equals (rfcs/buffer-comparison.md):
+static int buffer_equals(lua_State* L)
+{
+    size_t b1len = 0;
+    void* b1buf = luaL_checkbuffer(L, 1, &b1len);
+
+    size_t b2len = 0;
+    void* b2buf = luaL_checkbuffer(L, 2, &b2len);
+
+    if (lua_gettop(L) == 2) {
+        lua_pushboolean(L, b1len == b2len && memcmp(b1buf, b2buf, b1len) == 0);
+        return 1;
+    }
+
+    int b1offset = luaL_checkinteger(L, 3);
+    int b2offset = luaL_checkinteger(L, 4);
+    int count = luaL_checkinteger(L, 5);
+
+    if (count < 0)
+        luaL_error(L, "buffer access out of bounds");
+
+    if (isoutofbounds(b1offset, b1len, unsigned(count)))
+        luaL_error(L, "buffer access out of bounds");
+
+    if (isoutofbounds(b2offset, b2len, unsigned(count)))
+        luaL_error(L, "buffer access out of bounds");
+
+
+    int res = memcmp((char*)b1buf + b1offset, (char*)b2buf + b2offset, count);
+    if (res == 0) {
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+
     return 1;
 }
 
@@ -485,10 +530,13 @@ int luaopen_buffer(lua_State* L)
         lua_setfield(L, -2, "isfrozen");
     }
 
-    if (FFlag::LuwuBufferMemcmp)
+    if (FFlag::DebugLuwuBufferComparison)
     {
-        lua_pushcfunction(L, buffer_memcmp, "memcmp");
-        lua_setfield(L, -2, "memcmp");
+        lua_pushcfunction(L, buffer_order, "order");
+        lua_setfield(L, -2, "order");
+
+        lua_pushcfunction(L, buffer_equals, "equals");
+        lua_setfield(L, -2, "equals");
     }
 
     return 1;

@@ -632,56 +632,108 @@ end
 
 fill()
 
-local function memcmp()
+local function equals()
     local a = buffer.fromstring("abcdef")
     local b = buffer.fromstring("abcdef")
     local c = buffer.fromstring("abcdeg")
 
-    assert(buffer.memcmp(a, b) == 0)
-    assert(buffer.memcmp(a, c) == -1)
-    assert(buffer.memcmp(c, a) == 1)
+    assert(buffer.equals(a, b) == true)
+    assert(buffer.equals(a, c) == false)
+    assert(buffer.equals(c, a) == false)
 
-    assert(buffer.memcmp(
+    assert(buffer.equals(
         buffer.fromstring("xxxxabc"),
         buffer.fromstring("yyyyabc"),
         4,
-        4
-    ) == 0)
+        4,
+        3
+    ) == true)
 
-    assert(buffer.memcmp(
+    assert(buffer.equals(
         buffer.fromstring("messxxx"),
         buffer.fromstring("messyyy"),
         0,
         0,
         4
-    ) == 0)
+    ) == true)
 
-    assert(buffer.memcmp(
+    assert(buffer.equals(
         buffer.fromstring("xxmess"),
         buffer.fromstring("yyyymess"),
         2,
-        4
-    ) == 0)
+        4,
+        3
+    ) == true)
 
-    assert(buffer.memcmp(
-        buffer.fromstring("xxmess"),
-        buffer.fromstring("yyyymessZZ"),
-        2,
-        4
-    ) == 0)
+    assert(buffer.equals(
+        buffer.fromstring("abc"),
+        buffer.fromstring("abcdef"),
+        0,
+        0,
+        3
+    ) == true)
+
+    assert(buffer.equals(
+        buffer.fromstring("abc"),
+        buffer.fromstring("abcdef")
+    ) == false)
 
     -- out of bounds
     local d = buffer.create(10)
     local e = buffer.create(10)
 
-    assert(ecall(function() buffer.memcmp(d, e, -1, 0) end) == "buffer access out of bounds")
-    assert(ecall(function() buffer.memcmp(d, e, 0, -1) end) == "buffer access out of bounds")
-    assert(ecall(function() buffer.memcmp(d, e, 8, 0, 3) end) == "buffer access out of bounds")
-    assert(ecall(function() buffer.memcmp(d, e, 0, 8, 3) end) == "buffer access out of bounds")
-    assert(ecall(function() buffer.memcmp(d, e, 0, 0, -1) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.equals(d, e, -1, 0, 0) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.equals(d, e, 0, -1, 0) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.equals(d, e, 8, 0, 3) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.equals(d, e, 0, 8, 3) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.equals(d, e, 0, 0, -1) end) == "buffer access out of bounds")
 end
 
-memcmp()
+equals()
+
+local function order()
+    local a = buffer.fromstring("abcdef")
+    local b = buffer.fromstring("abcdef")
+    local c = buffer.fromstring("abcdeg")
+
+    assert(buffer.order(a, b) == "same")
+    assert(buffer.order(a, c) == "less")
+    assert(buffer.order(c, a) == "greater")
+
+    assert(buffer.order(
+        buffer.fromstring("xxxxabc"),
+        buffer.fromstring("yyyyabc"),
+        4,
+        4
+    ) == "same")
+
+    assert(buffer.order(
+        buffer.fromstring("messxxx"),
+        buffer.fromstring("messyyy"),
+        0,
+        0,
+        4
+    ) == "same")
+
+    assert(buffer.order(
+        buffer.fromstring("xxmess"),
+        buffer.fromstring("yyyymessZZ"),
+        2,
+        4
+    ) == "same")
+
+    -- out of bounds
+    local d = buffer.create(10)
+    local e = buffer.create(10)
+
+    assert(ecall(function() buffer.order(d, e, -1, 0) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.order(d, e, 0, -1) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.order(d, e, 8, 0, 3) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.order(d, e, 0, 8, 3) end) == "buffer access out of bounds")
+    assert(ecall(function() buffer.order(d, e, 0, 0, -1) end) == "buffer access out of bounds")
+end
+
+order()
 
 local function misc(t16)
   local native_check = is_native_if_supported()

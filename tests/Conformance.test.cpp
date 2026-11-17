@@ -96,7 +96,7 @@ LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
-LUAU_FASTFLAG(LuwuBufferMemcmp)
+LUAU_FASTFLAG(DebugLuwuBufferComparison)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
 
@@ -1266,7 +1266,7 @@ TEST_CASE("Basic")
 
 TEST_CASE("Buffers")
 {
-    ScopedFastFlag bufferMemcmpFlag{FFlag::LuwuBufferMemcmp, true};
+    ScopedFastFlag debugBufferComparisonFlag{FFlag::DebugLuwuBufferComparison, true};
 
     runConformance(
         "buffers.luau",
@@ -1331,15 +1331,19 @@ TEST_CASE("TableDropFlagDisabled")
     lua_close(L);
 }
 
-TEST_CASE("BufferMemcmpFlagDisabled")
+TEST_CASE("DebugBufferComparisonFlagDisabled")
 {
-    ScopedFastFlag bufferMemcmpFlag{FFlag::LuwuBufferMemcmp, false};
+    ScopedFastFlag debugBufferComparisonFlag{FFlag::DebugLuwuBufferComparison, false};
 
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
 
     lua_getglobal(L, "buffer");
-    lua_getfield(L, -1, "memcmp");
+    lua_getfield(L, -1, "order");
+    CHECK(lua_isnil(L, -1));
+
+    lua_getglobal(L, "buffer");
+    lua_getfield(L, -1, "equals");
     CHECK(lua_isnil(L, -1));
 
     lua_close(L);
@@ -2128,7 +2132,7 @@ TEST_CASE("Types")
     ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
     ScopedFastFlag nonePrimitive{FFlag::LuwuNonePrimitive, true};
     ScopedFastFlag tableDropFlag{FFlag::LuwuTableDrop, true};
-    ScopedFastFlag bufferMemcmpFlag{FFlag::LuwuBufferMemcmp, true};
+    ScopedFastFlag debugBufferComparisonFlag{FFlag::DebugLuwuBufferComparison, true};
 
     runConformance(
         "types.luau",
