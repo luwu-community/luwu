@@ -128,6 +128,142 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "require_types")
     REQUIRE_MESSAGE(bool(get<TableType>(hType)), "Expected table but got " << toString(hType));
 }
 
+// Luwu forwarded module types: a module returning another module's value unchanged exports its types too
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_module_forwarding_a_require_forwards_its_types")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    fileResolver.source["game/Real"] = R"(
+        export type Thing = { name: string }
+        return { make = function(): Thing return { name = "x" } end }
+    )";
+    fileResolver.source["game/Returned"] = R"(
+        return require(game.Real)
+    )";
+    fileResolver.source["game/Local"] = R"(
+        local module = require(game.Real)
+        return module
+    )";
+    fileResolver.source["game/Chained"] = R"(
+        return require(game.Returned)
+    )";
+    fileResolver.source["game/Main"] = R"(
+        local returned = require(game.Returned)
+        local viaLocal = require(game.Local)
+        local chained = require(game.Chained)
+        local a: returned.Thing = returned.make()
+        local b: viaLocal.Thing = viaLocal.make()
+        local c: chained.Thing = chained.make()
+    )";
+
+    CheckResult result = getFrontend().check("game/Main");
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    // the forwarded type is the declaring module's own, so hovers and doc comments come from its declaration
+    ModulePtr real = getFrontend().moduleResolver.getModule("game/Real");
+    REQUIRE(real);
+    auto declared = real->exportedTypeBindings.find("Thing");
+    REQUIRE(declared != real->exportedTypeBindings.end());
+    for (const char* forwarding : {"game/Returned", "game/Local", "game/Chained"})
+    {
+        INFO(forwarding);
+        ModulePtr module = getFrontend().moduleResolver.getModule(forwarding);
+        REQUIRE(module);
+        auto it = module->exportedTypeBindings.find("Thing");
+        REQUIRE(it != module->exportedTypeBindings.end());
+        CHECK_EQ(it->second.type, declared->second.type);
+        CHECK_EQ(it->second.definitionLocation, declared->second.definitionLocation);
+        CHECK_EQ(it->second.definitionModuleName, std::optional<ModuleName>{"game/Real"});
+    }
+}
+
+// A forwarded type is an export only: the forwarding module itself can't name it unqualified
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_forwarded_type_isnt_in_the_forwarding_modules_scope")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    fileResolver.source["game/Real"] = R"(
+        export type Thing = { name: string }
+        return {}
+    )";
+    fileResolver.source["game/Link"] = R"(
+        local module = require(game.Real)
+        local thing: Thing = { name = "x" }
+        return module
+    )";
+
+    CheckResult result = getFrontend().check("game/Link");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const UnknownSymbol* unknown = get<UnknownSymbol>(result.errors[0]);
+    REQUIRE(unknown);
+    CHECK_EQ(unknown->name, "Thing");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_forwarding_modules_own_exported_type_wins")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    fileResolver.source["game/Real"] = R"(
+        export type Thing = { name: string }
+        export type Other = boolean
+        return {}
+    )";
+    fileResolver.source["game/Link"] = R"(
+        export type Thing = number
+        return require(game.Real)
+    )";
+    fileResolver.source["game/Main"] = R"(
+        local link = require(game.Link)
+        local thing: link.Thing = 1
+        local other: link.Other = true
+    )";
+
+    CheckResult result = getFrontend().check("game/Main");
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// A returned local that's assigned again, or a value wrapping the module, isn't the required module any more
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_module_returning_a_changed_require_doesnt_forward_its_types")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    fileResolver.source["game/Real"] = R"(
+        export type Thing = { name: string }
+        return {}
+    )";
+    fileResolver.source["game/Reassigned"] = R"(
+        local module = require(game.Real)
+        module = {}
+        return module
+    )";
+    fileResolver.source["game/Wrapped"] = R"(
+        local module = require(game.Real)
+        return { inner = module }
+    )";
+    fileResolver.source["game/Shadowed"] = R"(
+        local module = require(game.Real)
+        local module = {}
+        return module
+    )";
+
+    for (const char* forwarding : {"Reassigned", "Wrapped", "Shadowed"})
+    {
+        INFO(forwarding);
+        fileResolver.source["game/Main"] = std::string("local link = require(game.") + forwarding + ")\nlocal thing: link.Thing = { name = \"x\" }\n";
+        getFrontend().markDirty("game/Main");
+
+        CheckResult result = getFrontend().check("game/Main");
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        const UnknownSymbol* unknown = get<UnknownSymbol>(result.errors[0]);
+        REQUIRE(unknown);
+        CHECK_EQ(unknown->name, "link.Thing");
+    }
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "require_a_variadic_function")
 {
     fileResolver.source["game/A"] = R"(
