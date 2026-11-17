@@ -14,6 +14,8 @@
 
 #include <memory>
 
+#include <stdlib.h>
+
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
@@ -371,6 +373,7 @@ static bool compileFile(
         Luau::AstNameTable names(allocator);
         Luau::ParseOptions parseOptions;
         parseOptions.storeCstData = globalOptions.parseCst;
+        parseOptions.language = languageOfPath(name);
         Luau::ParseResult result = Luau::Parser::parse(source->c_str(), source->size(), names, allocator, parseOptions);
 
         if (!result.errors.empty())

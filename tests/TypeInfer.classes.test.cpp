@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
+#include "ClassesFixture.h"
 #include "Fixture.h"
 
 #include "Luau/BuiltinDefinitions.h"
@@ -16,70 +17,8 @@ LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass);
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
+LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
-namespace
-{
-
-struct ClassesFixture : Fixture
-{
-    const std::string definitions = R"LUAU_SRC(
-@checked declare function require(target: any): any
-declare function sqrt(n: number): number
-declare function tostring<T>(value: T): string
-declare function typeof<T>(value: T): string
-
-declare extern type Duration with
-    read seconds: number
-end
-
-declare class: {
-    isinstance: @checked (o: unknown, c: class) -> boolean,
-    of: @checked (o: unknown) -> class?,
-    name: @checked (o: class | object) -> string,
-    fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)
-}
-)LUAU_SRC";
-    Frontend& getFrontend() override
-    {
-        if (frontend)
-            return *frontend;
-
-        Frontend& f = Fixture::getFrontend();
-        Luau::unfreeze(f.globals.globalTypes);
-
-        f.loadDefinitionFile(f.globals, f.globals.globalScope, definitions, "@test", false);
-        AstName reqName = f.globals.globalNames.names->getOrAdd("require");
-        auto it = f.globals.globalScope->bindings.find(reqName);
-        LUAU_ASSERT(it != f.globals.globalScope->bindings.end());
-        attachTag(it->second.typeId, kRequireTagName);
-        attachMagicFunction(it->second.typeId, std::make_shared<MagicRequire>());
-
-        AstName classLibName = f.globals.globalNames.names->getOrAdd("class");
-        auto classLibIt = f.globals.globalScope->bindings.find(classLibName);
-        LUAU_ASSERT(classLibIt != f.globals.globalScope->bindings.end());
-        if (TableType* ctv = getMutable<TableType>(classLibIt->second.typeId))
-        {
-            auto fieldsIt = ctv->props.find("fields");
-            LUAU_ASSERT(fieldsIt != ctv->props.end() && fieldsIt->second.readTy);
-            attachMagicFunction(*fieldsIt->second.readTy, std::make_shared<MagicClassFields>());
-
-            auto nameIt = ctv->props.find("name");
-            LUAU_ASSERT(nameIt != ctv->props.end() && nameIt->second.readTy);
-            attachMagicFunction(*nameIt->second.readTy, std::make_shared<MagicClassName>());
-        }
-
-        registerTestTypes();
-        Luau::freeze(f.globals.globalTypes);
-
-
-        return *frontend;
-    }
-    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
-    ScopedFastFlag sff_LuauAllowGlobalDeclarationToBeCalledClass{FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true};
-    DOES_NOT_PASS_OLD_SOLVER_GUARD();
-};
-
-} // namespace
 
 TEST_SUITE_BEGIN("TypeInferClasses");
 
@@ -1885,6 +1824,24 @@ TEST_CASE_FIXTURE(ClassesFixture, "missing_key_error_names_the_class_or_object_n
     CHECK_EQ("Key 'age' not found in class 'Dog'", toString(result.errors[1]));
 }
 
+// A compound assignment checks its target as a write and as a read; the typo is reported once.
+TEST_CASE_FIXTURE(ClassesFixture, "misspelled_field_is_one_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        class Player(name: string, level: number)
+            function promote(self)
+                self.levle += 1
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<Typo>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[0]), "Did you mean 'self.level' instead of 'self.levle'?");
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_from_inside_its_own_body")
 {
     ScopedFastFlag sffs[] = {
@@ -2283,6 +2240,7 @@ local a: class<unknown>
 
 TEST_CASE_FIXTURE(ClassesFixture, "class_object_mismatch_says_which_side_is_the_class")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     // Both extern types stringify as the bare name, which used to produce the long-standing
@@ -2302,6 +2260,7 @@ local a: class<Item> = inst
 
 TEST_CASE_FIXTURE(ClassesFixture, "object_class_mismatch_says_which_side_is_the_class")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     CheckResult result = check(R"(
@@ -2377,6 +2336,34 @@ TEST_CASE_FIXTURE(ClassesFixture, "const_fields_are_assigned_only_by_init_itself
     CHECK_EQ(result.errors[0].location.begin.line, 5);
     REQUIRE(get<ConstPropertyAssignment>(result.errors[1]));
     CHECK_EQ(result.errors[1].location.begin.line, 8);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "const_field_written_through_an_alias_of_self_in_init")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // The runtime checks the object, not the register holding it, so `__init` may write a const field
+    // through a local that always holds `self`. A local that is ever reassigned might not, so it is
+    // still reported.
+    CheckResult result = check(R"(
+        class K
+            public const id: number
+            public const tag: string
+            public function __init(self, id: number)
+                local s = self
+                local t = s
+                s.id = id
+                t.tag = "k"
+                local u = self
+                u.id = 2
+                u = K(1)
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<ConstPropertyAssignment>(result.errors[0]));
+    CHECK_EQ(result.errors[0].location.begin.line, 10);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_referring_to_itself_with_a_wrapped_parameter_is_reported")
@@ -2525,6 +2512,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "generic_class_instantiated_with_any_is_compat
 
 TEST_CASE_FIXTURE(ClassesFixture, "generic_class_value_against_its_object_is_spelled_as_class")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuGenericNominals, true},
@@ -2714,6 +2702,160 @@ end
     CHECK_EQ(missing->key, "name");
     REQUIRE_EQ(missing->missing.size(), 1);
     CHECK_EQ(toString(missing->missing[0]), "Dog");
+}
+
+// Luwu Classes (rfcs/classes): a field holding `nil` shows up as `none` in `class.fields`, so `nil` in its type is `none`
+TEST_CASE_FIXTURE(ClassesFixture, "class_fields_types_nil_as_none")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    CheckResult result = check(R"(
+class Profile
+    name = "Ada"
+    nickname: string? = nil
+    gone: nil = nil
+end
+local fields = class.fields(Profile())
+local nickname = fields.nickname
+local name = fields.name
+local gone = fields.gone
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("nickname")), "none | string");
+    CHECK_EQ(toString(requireType("name")), "string");
+    CHECK_EQ(toString(requireType("gone")), "none");
+}
+
+// Luwu: a table in the union that the class can't fit (its `display` method against a `display` field) doesn't take the
+// class out of the true branch
+TEST_CASE_FIXTURE(ClassesFixture, "isinstance_keeps_the_class_beside_a_disjoint_table")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    CheckResult result = check(R"(
+type Input = { padding: string?, display: ("flex" | "grid")? }
+type Other = { margin: string? }
+class Box
+    names: { string } = {}
+    function display(self): string
+        return "box"
+    end
+end
+local function merge(v: Box | Input)
+    if class.isinstance(v, Box) then
+        local x = v
+    end
+end
+local function merge_many(v: Box | Input | Other)
+    if class.isinstance(v, Box) then
+        local y = v
+    end
+end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireTypeAtPosition({11, 18})), "Box");
+    CHECK_EQ(toString(requireTypeAtPosition({16, 18})), "Box");
+}
+
+// Luwu: a default is checked like a local's value, so `{}` fits a table type whose fields are all optional
+TEST_CASE_FIXTURE(ClassesFixture, "empty_table_default_for_an_all_optional_record")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag defaultArguments{FFlag::LuwuDefaultArguments, true};
+    CheckResult result = check(R"(
+type Input = { padding: string?, margin: string? }
+local function plain(_x: Input = {}) end
+class Box() end
+local function either(_x: Box | Input = {}) end
+class Rule(public selector: string, public style: Box | Input = {}) end
+local function wrong(_x: Input = { padding = 1 }) end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 6);
+}
+
+// Luwu: a callee with one `__call` signature is called like a function type, so a call with a wrong argument reports
+// that argument and still gives the signature's return type. Upstream resolves it like an overload set.
+TEST_CASE_FIXTURE(ClassesFixture, "a_misargued_single_call_signature_keeps_its_return_type")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    auto result = check(R"(
+class Cat
+    name: string
+    function __init(self, name: string)
+        self.name = name
+    end
+end
+
+local cat = Cat(1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(Location{{8, 16}, {8, 17}}, result.errors[0].location);
+    CHECK_EQ("Cat", toString(requireType("cat")));
+}
+
+// Luwu: the same for a table with a single `__call`
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_misargued_single_call_metamethod_keeps_its_return_type")
+{
+    auto result = check(R"(
+type Dog = { name: string }
+local Dogs = setmetatable({}, { __call = function(_, name: string): Dog return { name = name } end })
+local dog = Dogs(2)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(Location{{3, 17}, {3, 18}}, result.errors[0].location);
+    CHECK_EQ("Dog", toString(requireType("dog")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "method_call_on_a_union_of_classes")
+{
+    CheckResult result = check(R"(
+        --!strict
+        class Cat(public name: string)
+            public function speak(self): string
+                return "meow"
+            end
+        end
+        class Dog(public name: string)
+            public function speak(self): string
+                return "woof"
+            end
+        end
+
+        local function talk(pet: Cat | Dog): string
+            return pet:speak()
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// A class method takes extra arguments (`...any`) where a table's signature takes none; merged, the method takes none
+TEST_CASE_FIXTURE(ClassesFixture, "method_call_on_a_union_of_a_class_and_a_table")
+{
+    CheckResult result = check(R"(
+        --!strict
+        type Named = { name: (self: Named) -> number }
+        class Cat(public label: string)
+            public function name(self): string
+                return self.label
+            end
+        end
+
+        local function adopt(): Cat | Named
+            return Cat("tom")
+        end
+        local pet = adopt()
+        local n = pet:name()
+        pet:name("extra")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 14);
+    CHECK_EQ(toString(requireType("n")), "number | string");
 }
 
 TEST_SUITE_END();

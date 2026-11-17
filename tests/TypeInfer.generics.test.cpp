@@ -2217,9 +2217,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "generic_pack_and_variadic_mismatch_error")
     CHECK_EQ(toString(res.errors[1]), "Expected this to be '...V', but got 'T...'; the former is a variadic, "
         "and the latter is a generic pack; consider changing the generic to 'T', and the variadic parameter to  '...: T'.");
     CHECK_EQ(toString(res.errors[2]), "Expected this function to take"
-        "\n\t'<DT...>(string, DT...) -> number'"
+        "\n    'string, DT...'"
         "\nbut got"
-        "\n\t'<FT>(string, ...FT) -> number'; "
+        "\n    'string, ...FT'"
         "\nit has a tail of `...FT` in the latter type and `DT...` in the former type, and `...FT` is not a supertype of `DT...`; "
         "the former type has a generic pack, and the latter type has a variadic, consider changing the former generic to `DT` or the latter generic to `FT...`"
     );

@@ -432,7 +432,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_union_methods_work")
             local ty = types.unionof(types.string, types.number, types.boolean)
             if ty:is("union") then
                 -- creating a copy of `ty`
-                local arr = {}
+                -- Annotated: inside a type function, `table.unpack` of an unannotated array filled
+                -- in a loop infers as `...unknown`, which isn't a `...type`.
+                local arr: { type } = {}
                 for _, value in ty:components() do
                     table.insert(arr, value)
                 end
@@ -598,7 +600,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_intersection_methods_work")
             local ty = types.intersectionof(tbl1, tbl2)
             if ty:is("intersection") then
                 -- creating a copy of `ty`
-                local arr = {}
+                -- Annotated: inside a type function, `table.unpack` of an unannotated array filled
+                -- in a loop infers as `...unknown`, which isn't a `...type`.
+                local arr: { type } = {}
                 for index, value in ty:components() do
                     table.insert(arr, value)
                 end
@@ -1181,7 +1185,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_3")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(3, result);
-    CHECK(toString(result.errors[0]) == R"(Unknown global 'fourth'; consider assigning to it first)");
+    CHECK(toString(result.errors[0]) == R"(Unknown variable 'fourth', define it with 'local fourth = value')");
     CHECK(toString(result.errors[1]) == R"('third' type function errored at runtime: [string "first"]:4: attempt to call a nil value)");
 }
 
@@ -1228,7 +1232,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_no_shared_state")
 
     // We are only checking first errors, others are mostly duplicates
     LUAU_REQUIRE_ERROR_COUNT(5, result);
-    CHECK(toString(result.errors[0]) == R"(Unknown global 'glob'; consider assigning to it first)");
+    CHECK(toString(result.errors[0]) == R"(Unknown variable 'glob', define it with 'local glob = value')");
     CHECK(toString(result.errors[1]) == R"('bar' type function errored at runtime: [string "foo"]:4: attempt to modify a readonly table)");
 }
 
@@ -1292,7 +1296,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_illegal_global")
 
     // We are only checking first errors, others are mostly duplicates
     LUAU_REQUIRE_ERROR_COUNT(3, result);
-    CHECK(toString(result.errors[0]) == R"(Unknown global 'gcinfo'; consider assigning to it first)");
+    CHECK(toString(result.errors[0]) == R"(Unknown variable 'gcinfo', define it with 'local gcinfo = value')");
     CHECK(
         toString(result.errors[1]) ==
         R"('illegal' type function errored at runtime: [string "illegal"]:3: this function is not supported in type functions)"
@@ -1452,6 +1456,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "no_eq_field")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "tag_field")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
 
     CheckResult result = check(R"(
@@ -1473,6 +1478,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "tag_field")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_serialization")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
 
     CheckResult result = check(R"(
@@ -2566,7 +2572,7 @@ local function ok(idx: get<>): number return idx end
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(3, result);
-    CHECK(toString(result.errors[0]) == R"(Unknown global 'number'; consider assigning to it first)");
+    CHECK(toString(result.errors[0]) == R"(Unknown variable 'number', define it with 'local number = value')");
 }
 
 TEST_CASE_FIXTURE(ExternTypeFixture, "type_alias_not_enough_arguments")

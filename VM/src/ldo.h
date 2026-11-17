@@ -6,6 +6,7 @@
 #include "lstate.h"
 #include "luaconf.h"
 #include "ldebug.h"
+#include "lfunc.h"
 
 // returns target stack for 'n' extra elements to reallocate
 // if possible, stack size growth factor is 2x
@@ -80,3 +81,12 @@ LUAI_FUNC void luaD_seterrorobj_multi(lua_State* L, int errcode, StkId oldtop, i
 
 LUAI_FUNC l_noret luaD_throw(lua_State* L, int errcode);
 LUAI_FUNC int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud);
+
+// Luwu: calls the C function of `ccl` on the arguments from L->base to L->top. A data function gets its closure's data
+// and argument count without the call through luaF_calldatacfunction.
+LUAU_FORCEINLINE int luaD_callcfunction(lua_State* L, Closure* ccl)
+{
+    if (ccl->c.f == luaF_calldatacfunction)
+        return ccl->fatc.df(L, ccl->fatc.data, int(L->top - L->base));
+    return ccl->c.f(L);
+}

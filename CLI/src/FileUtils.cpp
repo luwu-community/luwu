@@ -3,6 +3,11 @@
 
 #include "Luau/Common.h"
 
+#include <string_view>
+
+#include <errno.h>
+#include <string.h>
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -18,9 +23,6 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #endif
-
-#include <string.h>
-#include <string_view>
 
 #ifdef _WIN32
 static std::wstring fromUtf8(const std::string& path)
@@ -161,6 +163,15 @@ std::optional<std::string> resolvePath(std::string_view path, std::string_view b
         return std::nullopt;
 
     return normalizePath(joinPaths(*baseFilePathParent, path));
+}
+
+Luau::Language languageOfPath(std::string_view path)
+{
+    if (hasFileExtension(path, {".luau"}))
+        return Luau::Language::Luau;
+    if (hasFileExtension(path, {".lua"}))
+        return Luau::Language::Lua;
+    return Luau::Language::Luwu;
 }
 
 bool hasFileExtension(std::string_view name, const std::vector<std::string>& extensions)

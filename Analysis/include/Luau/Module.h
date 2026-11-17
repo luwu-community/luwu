@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include "Luau/Config.h"
 #include "Luau/Error.h"
 #include "Luau/Linter.h"
 #include "Luau/FileResolver.h"
@@ -39,6 +40,8 @@ struct SourceModule
     std::string humanReadableName;
 
     SourceCode::Type type = SourceCode::None;
+    // Luwu: from the module's config when it's parsed.
+    Language language = Language::Luwu;
     std::optional<std::string> environmentName;
     bool cyclic = false;
 
@@ -88,6 +91,8 @@ struct Module
 
     ModuleName name;
     std::string humanReadableName;
+    // Luwu: the source module's language.
+    Language language = Language::Luwu;
 
     TypeArena interfaceTypes;
     // For modules in a require cycle, internalTypes is shared across all members
@@ -143,6 +148,8 @@ struct Module
 
     std::unordered_map<Name, TypeId> declaredGlobals;
     ErrorVec errors;
+    // Luwu: remarks that aren't errors, such as each use of a local left without a type by an error elsewhere
+    std::vector<DiagnosticNote> notes;
     LintResult lintResult;
     Mode mode;
     SourceCode::Type type;
@@ -152,6 +159,11 @@ struct Module
 
     TypePackId returnType = nullptr;
     std::unordered_map<Name, TypeFun> exportedTypeBindings;
+
+    // Luwu forwarded module types: the exported types of the module this one returns unchanged (`return require(path)`).
+    // clonePublicInterface adds them to exportedTypeBindings, after the types this module declares itself. They aren't
+    // in the module scope, so this module can't name them unqualified.
+    std::unordered_map<Name, TypeFun> forwardedTypeBindings;
 
     // Arenas related to the DFG must persist after the DFG no longer exists, as
     // Module objects maintain raw pointers to objects in these arenas.

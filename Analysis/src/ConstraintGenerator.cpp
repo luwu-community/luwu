@@ -84,6 +84,106 @@ static std::optional<AstExpr*> matchRequire(const AstExprCall& call)
     return call.args.data[0];
 }
 
+// Whether `local` is assigned anywhere in the tree a visit starts from, by `=`, a compound assignment or a function
+// statement
+struct LocalAssignmentFinder : AstVisitor
+{
+    const AstLocal* local;
+    bool assigned = false;
+
+    explicit LocalAssignmentFinder(const AstLocal* local)
+        : local(local)
+    {
+    }
+
+    void check(const AstExpr* target)
+    {
+        const AstExprLocal* name = target->as<AstExprLocal>();
+        if (name && name->local == local)
+            assigned = true;
+    }
+
+    bool visit(AstStatAssign* node) override
+    {
+        for (AstExpr* var : node->vars)
+            check(var);
+        return !assigned;
+    }
+
+    bool visit(AstStatCompoundAssign* node) override
+    {
+        check(node->var);
+        return !assigned;
+    }
+
+    bool visit(AstStatFunction* node) override
+    {
+        check(node->name);
+        return !assigned;
+    }
+
+    bool visit(AstNode* node) override
+    {
+        return !assigned;
+    }
+};
+
+// The `require(...)` call that `local` is declared with by a statement of `block`, if it is
+static const AstExprCall* requireInitializer(AstStatBlock* block, const AstLocal* local)
+{
+    for (AstStat* statement : block->body)
+    {
+        const AstStatLocal* declaration = statement->as<AstStatLocal>();
+        if (!declaration)
+            continue;
+
+        for (size_t i = 0; i < declaration->vars.size && i < declaration->values.size; ++i)
+        {
+            if (declaration->vars.data[i] != local)
+                continue;
+
+            const AstExprCall* call = declaration->values.data[i]->as<AstExprCall>();
+            if (call && matchRequire(*call))
+                return call;
+            return nullptr;
+        }
+    }
+    return nullptr;
+}
+
+// Luwu forwarded module types: the path of the module a module root returns unchanged, if it does. That's
+// `return require(path)`, or `return m` for an `m` declared by `local m = require(path)` and never assigned again.
+static std::optional<AstExpr*> forwardedRequirePath(AstStatBlock* block)
+{
+    if (block->body.size == 0)
+        return std::nullopt;
+
+    const AstStatReturn* ret = block->body.data[block->body.size - 1]->as<AstStatReturn>();
+    if (!ret || ret->list.size != 1)
+        return std::nullopt;
+
+    AstExpr* value = ret->list.data[0];
+    while (const AstExprGroup* group = value->as<AstExprGroup>())
+        value = group->expr;
+
+    if (const AstExprCall* call = value->as<AstExprCall>())
+        return matchRequire(*call);
+
+    const AstExprLocal* returned = value->as<AstExprLocal>();
+    if (!returned)
+        return std::nullopt;
+
+    const AstExprCall* initializer = requireInitializer(block, returned->local);
+    if (!initializer)
+        return std::nullopt;
+
+    LocalAssignmentFinder finder{returned->local};
+    block->visit(&finder);
+    if (finder.assigned)
+        return std::nullopt;
+    return matchRequire(*initializer);
+}
+
 
 static const RefinementKey* matchIsInstanceGuard(const AstExprCall& call, NotNull<const DataFlowGraph> dfg)
 {
@@ -354,6 +454,8 @@ void ConstraintGenerator::visitModuleRoot(AstStatBlock* block)
     if (cf == ControlFlow::None)
         addConstraint(scope, block->location, PackSubtypeConstraint{builtinTypes->emptyTypePack, rootScope->returnType});
 
+    forwardRequiredTypes(block);
+
     Checkpoint end = checkpoint(this);
 
     TypeId result = arena->addType(BlockedType{});
@@ -403,6 +505,33 @@ void ConstraintGenerator::visitModuleRoot(AstStatBlock* block)
 
     for (TypeId ty : unionsToSimplify)
         addConstraint(scope, block->location, SimplifyConstraint{ty});
+}
+
+// Luwu forwarded module types: a module whose root returns another module's value unchanged (`return require(path)`)
+// exports that module's types as well. A link file then needs nothing more. A type the forwarding module exports
+// itself wins over a forwarded one of the same name. Upstream exports only the types a module declares.
+void ConstraintGenerator::forwardRequiredTypes(AstStatBlock* block)
+{
+    std::optional<AstExpr*> path = forwardedRequirePath(block);
+    if (!path)
+        return;
+
+    std::optional<ModuleInfo> moduleInfo = moduleResolver->resolveModuleInfo(module->name, **path);
+    if (!moduleInfo)
+        return;
+
+    // a module in a require cycle with this one isn't checked yet
+    for (const RequireCycle& cycle : requireCycles)
+    {
+        if (!cycle.path.empty() && cycle.path.front() == moduleInfo->name)
+            return;
+    }
+
+    ModulePtr required = moduleResolver->getModule(moduleInfo->name);
+    if (!required)
+        return;
+
+    module->forwardedTypeBindings = required->exportedTypeBindings;
 }
 
 void ConstraintGenerator::visitFragmentRoot(const ScopePtr& resumeScope, AstStatBlock* block)
@@ -671,10 +800,21 @@ void ConstraintGenerator::computeRefinement(
         if (eq)
             discriminantTy = createTypeFunctionInstance(builtinTypes->typeFunctions->singletonFunc, {discriminantTy}, {}, scope, location);
 
+        // Luwu: a test on a property (`h.enc`) refines the property and each table it's read from
+        const bool testsProperty = proposition->key->propName.has_value();
+        const TypeId propertyDiscriminantTy = discriminantTy;
+        std::string propertyPath;
+
         for (const RefinementKey* key = proposition->key; key; key = key->parent)
         {
             refis->insert(key->def, {});
             refis->get(key->def)->discriminantTypes.push_back(discriminantTy);
+            if (testsProperty)
+            {
+                refis->get(key->def)->propertyTests.emplace_back(propertyPath, propertyDiscriminantTy);
+                if (key->propName)
+                    propertyPath = propertyPath.empty() ? *key->propName : *key->propName + "." + propertyPath;
+            }
 
             // Reached leaf node
             if (!key->propName)
@@ -843,14 +983,73 @@ void ConstraintGenerator::applyRefinements(const ScopePtr& scope, Location locat
             if (kind != RefinementsOpKind::None)
                 ty = flushConstraints(kind, ty, discriminants);
 
+            if (!partition.propertyTests.empty())
+                ty = refineUnlessContradicted(scope, location, def, *defTy, ty, partition);
+
             if (partition.shouldAppendNilType)
                 ty = createTypeFunctionInstance(builtinTypes->typeFunctions->weakoptionalFunc, {ty}, {}, scope, location);
             updateRValueRefinements(scope, def, ty);
         }
     }
 
+    // Recorded after every def is refined, so each one compares against the tests from before this refinement
+    for (auto& [def, partition] : refinements)
+    {
+        if (partition.propertyTests.empty())
+            continue;
+        Scope::PropertyTests tests;
+        if (const Scope::PropertyTests* earlier = scope->lookupPropertyTests(def))
+            tests = *earlier;
+        for (const auto& [path, discriminant] : partition.propertyTests)
+            tests[path].push_back(discriminant);
+        scope->propertyTests[def] = std::move(tests);
+    }
+
     for (auto& c : constraints)
         addConstraint(scope, location, c);
+}
+
+// Luwu: a test on a property that contradicts an earlier one (`if not h.enc then init(h); if h.enc then`) doesn't make
+// the property, or the tables it's read from, `never`. A call or a write through an alias can change a property
+// between two tests, and the solver tracks neither, so the later test refines the type from before the first one
+// instead. Upstream gives `never`, the same as TypeScript, and then nothing it's used for is checked. A union that runs
+// out of members over several tests (`kind == "a"`, then `elseif kind == "b"`, then `else`) is still `never`: those
+// tests don't contradict each other.
+TypeId ConstraintGenerator::refineUnlessContradicted(
+    const ScopePtr& scope,
+    Location location,
+    DefId def,
+    TypeId unrefined,
+    TypeId refined,
+    const RefinementPartition& partition
+)
+{
+    std::optional<TypeId> base = scope->lookupPropertyRefinementBase(def);
+    const Scope::PropertyTests* earlier = scope->lookupPropertyTests(def);
+    if (!base || !earlier)
+    {
+        scope->propertyRefinementBases[def] = unrefined;
+        return refined;
+    }
+
+    // One intersection per property tested again: it's uninhabited when the tests contradict
+    std::vector<TypeId> args{refined, refined};
+    for (const auto& [path, discriminant] : partition.propertyTests)
+    {
+        auto it = earlier->find(path);
+        if (it == earlier->end())
+            continue;
+        std::vector<TypeId> tests = it->second;
+        tests.push_back(discriminant);
+        args.push_back(createTypeFunctionInstance(builtinTypes->typeFunctions->intersectFunc, std::move(tests), {}, scope, location));
+    }
+    if (args.size() == 2)
+        return refined;
+
+    std::vector<TypeId> fallbackArgs{*base};
+    fallbackArgs.insert(fallbackArgs.end(), partition.discriminantTypes.begin(), partition.discriminantTypes.end());
+    args[1] = createTypeFunctionInstance(builtinTypes->typeFunctions->refineFunc, std::move(fallbackArgs), {}, scope, location);
+    return createTypeFunctionInstance(builtinTypes->typeFunctions->unlessneverFunc, std::move(args), {}, scope, location);
 }
 
 /*
@@ -1740,15 +1939,16 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
 
             AstExpr* require = *maybeRequire;
 
-            auto moduleInfo = moduleResolver->resolveModuleInfo(module->name, *require);
-            if (!moduleInfo)
-                continue;
-
-            ModulePtr module = moduleResolver->getModule(moduleInfo->name);
-            if (!module)
-                continue;
-
             const Name name{statLocal->vars.data[i]->name.value};
+
+            auto moduleInfo = moduleResolver->resolveModuleInfo(module->name, *require);
+            ModulePtr module = moduleInfo ? moduleResolver->getModule(moduleInfo->name) : nullptr;
+            if (!module)
+            {
+                scope->unresolvedRequires.insert(name);
+                continue;
+            }
+
             scope->importedTypeBindings[name] = module->exportedTypeBindings;
             scope->importedModules[name] = moduleInfo->name;
 
@@ -4367,6 +4567,30 @@ void ConstraintGenerator::visitLValue(const ScopePtr& scope, AstExprIndexName* e
     auto apc =
         addConstraint(scope, expr->location, AssignPropConstraint{lhsTy, expr->index.value, rhsType, expr->indexLocation, propTy, incremented});
     getMutable<BlockedType>(propTy)->setOwner(apc);
+
+    forgetPropertyTests(scope, expr, expr->expr, expr->index.value);
+}
+
+// Luwu: an assigned property (`h.enc = make()`) reads as its declared type afterwards, not as what an earlier test on it
+// refined it to. Upstream keeps the test (`not h.enc` still makes `h.enc` `nil`), so the usual lazy initialization,
+// `if not h.enc then h.enc = make() end`, reads `h.enc` as `nil` inside the `if`.
+void ConstraintGenerator::forgetPropertyTests(const ScopePtr& scope, AstExpr* assigned, AstExpr* table, const std::string& name)
+{
+    std::optional<DefId> tableDef = dfg->getDefOptional(table);
+    std::optional<DefId> propertyDef = dfg->getDefOptional(assigned);
+    if (!tableDef || !propertyDef)
+        return;
+
+    const Scope::PropertyTests* tests = scope->lookupPropertyTests(*tableDef);
+    std::optional<TypeId> base = scope->lookupPropertyRefinementBase(*tableDef);
+    if (!tests || !base || !tests->count(name))
+        return;
+
+    TypeId declared = arena->addType(BlockedType{});
+    NotNull<Constraint> hasProp =
+        addConstraint(scope, assigned->location, HasPropConstraint{declared, *base, name, ValueContext::RValue, inConditional(typeContext)});
+    getMutable<BlockedType>(declared)->setOwner(hasProp);
+    updateRValueRefinements(scope, *propertyDef, declared);
 }
 
 void ConstraintGenerator::visitLValue(const ScopePtr& scope, AstExprIndexExpr* expr, TypeId rhsType)
@@ -4382,10 +4606,11 @@ void ConstraintGenerator::visitLValue(const ScopePtr& scope, AstExprIndexExpr* e
         bool incremented = recordPropertyAssignment(lhsTy);
 
         auto apc = addConstraint(
-            scope, expr->location, AssignPropConstraint{lhsTy, std::move(propName), rhsType, expr->index->location, propTy, incremented}
+            scope, expr->location, AssignPropConstraint{lhsTy, propName, rhsType, expr->index->location, propTy, incremented}
         );
         getMutable<BlockedType>(propTy)->setOwner(apc);
 
+        forgetPropertyTests(scope, expr, expr->expr, propName);
         return;
     }
 

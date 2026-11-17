@@ -1909,6 +1909,13 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
     else if (auto it = get<IntersectionType>(fn))
         fn = collapse(it).value_or(fn);
 
+    // Luwu: `v:m()` on a union whose members each have their own `m`, differing only in `self`
+    if (c.callSite && c.callSite->self)
+    {
+        if (std::optional<TypeId> merged = mergeUnionMethods(builtinTypes, NotNull{arena}, fn))
+            fn = *merged;
+    }
+
     bool usedMagic = false;
 
     const FunctionType* ftv = get<FunctionType>(fn);
@@ -1945,9 +1952,27 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
 
     TypeId overloadToUse = fn;
 
+    // Luwu: a callee with one `__call` signature (a class, or a table with a single `__call`) has no overload to choose
+    // either. Upstream resolves it like an overload set, which subtype-tests every argument against the parameters on
+    // every call: a call passing a table literal to a wide record pays for all of its properties. Argument errors are
+    // TypeChecker2's to report, as they are for a function type.
+    std::optional<TypeId> onlyCallSignature;
+    if (!is<FunctionType>(fn))
+    {
+        ErrorVec ignored;
+        std::optional<TypeId> callMetamethod = findMetatableEntry(builtinTypes, ignored, fn, "__call", constraint->location);
+        if (callMetamethod && is<FunctionType>(follow(*callMetamethod)))
+            onlyCallSignature = follow(*callMetamethod);
+    }
+
+    if (onlyCallSignature)
+    {
+        overloadToUse = *onlyCallSignature;
+        argsPack = arena->addTypePack(TypePack{{fn}, argsPack});
+    }
     // If the function we have is already a function type, then there's no
     // point in trying to do overload selection: we're just wasting CPU.
-    if (!is<FunctionType>(fn))
+    else if (!is<FunctionType>(fn))
     {
         auto res = resolver.resolveOverload(
             fn,
@@ -3672,6 +3697,44 @@ bool ConstraintSolver::tryDispatchIterableTable(TypeId iteratorTy, const Iterabl
     {
         unpack(builtinTypes->neverType);
         return true;
+    }
+
+    // Luwu: a local given a table in more than one place is a union of table types where those assignments join
+    // (`data = {}` in one branch of an `if` and `data = { ... }` in the other makes `{ R } | { R }`). When every member
+    // has an indexer, iterating the union gives the union of their keys and of their values. Upstream binds the loop's
+    // variables to the error type, which hides every mistake made with them.
+    if (const UnionType* options = get<UnionType>(iteratorTy))
+    {
+        TypeId keyTy = builtinTypes->neverType;
+        TypeId valueTy = builtinTypes->neverType;
+        bool indexed = true;
+
+        for (TypeId option : options)
+        {
+            option = follow(option);
+            if (isBlocked(option) && !force)
+                return block(option, constraint);
+
+            const TableType* table = get<TableType>(option);
+            if (table && table->state == TableState::Free && !force)
+                return block(option, constraint);
+
+            if (!table || !table->indexer)
+            {
+                indexed = false;
+                break;
+            }
+
+            keyTy = simplifyUnion(constraint->scope, constraint->location, keyTy, table->indexer->indexType);
+            valueTy = simplifyUnion(constraint->scope, constraint->location, valueTy, table->indexer->indexResultType);
+        }
+
+        if (indexed)
+        {
+            TypeId joined =
+                arena->addType(TableType{TableType::Props{}, TableIndexer{keyTy, valueTy}, TypeLevel{}, constraint->scope, TableState::Sealed});
+            return tryDispatchIterableTable(joined, c, constraint, force);
+        }
     }
 
     // Irksome: I don't think we have any way to guarantee that this table

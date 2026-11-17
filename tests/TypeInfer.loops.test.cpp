@@ -301,7 +301,16 @@ TEST_CASE_FIXTURE(Fixture, "for_in_loop_on_error")
         end
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    // Luwu: the third is the first use of `part`, which has no type because of `i_am_not_defined` (NoTypeUse)
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(3, result);
+        CHECK(get<NoTypeUse>(result.errors[2]));
+    }
+    else
+    {
+        LUAU_REQUIRE_ERROR_COUNT(2, result);
+    }
 
     TypeId p = requireType("p");
     if (!FFlag::DebugLuauForceOldSolver)
@@ -1634,6 +1643,42 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "for_in_loop_annotations_apply_inside_lambdas
     REQUIRE(err);
     CHECK_EQ("number", toString(err->wantedType));
     CHECK_EQ("string", toString(err->givenType));
+}
+
+// Luwu: a local given a table in both branches of an `if` is a union of the two table types after it. Iterating it
+// gives the union of their keys and values instead of the error type.
+TEST_CASE_FIXTURE(BuiltinsFixture, "iterating_a_union_of_indexed_tables")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        --!strict
+        type R = { p: boolean }
+        type S = { q: number }
+        local data: { R }
+        if math.random() > 0.5 then
+            data = {}
+        else
+            data = { { p = true } }
+        end
+        for i, r in data do
+            local index: number = i
+            local p: boolean = r.p
+        end
+
+        local function f(t: { R } | { [string]: S })
+            for k, v in t do
+                local key: number | string = k
+                local wrong: R = v
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 18);
+    const TypeMismatch* mismatch = get<TypeMismatch>(result.errors[0]);
+    REQUIRE(mismatch);
+    CHECK_EQ("R | S", toString(mismatch->givenType));
 }
 
 TEST_SUITE_END();

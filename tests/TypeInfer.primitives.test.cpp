@@ -105,6 +105,7 @@ TEST_CASE_FIXTURE(Fixture, "string_function_indirect")
 
 TEST_CASE_FIXTURE(Fixture, "check_methods_of_number")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local x: number = 9999
         function x:y(z: number)
