@@ -4218,7 +4218,13 @@ reentry:
                 int matches = 0;
                 if (ttisclass(rb))
                     matches = ttisobject(ra) && objectvalue(ra)->lclass == classvalue(rb);
-                else if (ttype(ra) == ttype(rb))
+                else if (ttype(ra) != ttype(rb))
+                    matches = 0;
+                else if (ttisnumber(ra))
+                    matches = nvalue(ra) == nvalue(rb);
+                else if (ttisstring(ra))
+                    matches = tsvalue(ra) == tsvalue(rb);
+                else
                     VM_PROTECT(matches = luaV_equalval(L, ra, rb));
 
                 pc += (matches == 1) != (LUAU_INSN_AUX_NOT(aux) != 0) ? LUAU_INSN_D(insn) : 1;

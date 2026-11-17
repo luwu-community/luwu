@@ -320,6 +320,9 @@ do
         return v is name
     end
     assert(same(Point(1, 2), Point) and same("x", "x") and not same("x", "y") and same(nil, nil) and not same(1, "1"))
+    assert(same(2, 2) and not same(2, 3) and not same(0 / 0, 0 / 0) and same(true, true) and not same(Point, Point(1, 2)))
+    local equal_by_metamethod = { __eq = function() return true end }
+    assert(same(setmetatable({}, equal_by_metamethod), setmetatable({}, equal_by_metamethod)) and not same({}, {}))
 
     local function label(v: unknown): string
         return match v

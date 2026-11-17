@@ -2538,7 +2538,8 @@ void translateInstJumpXType(IrBuilder& build, const Instruction* pc, int pcpos)
 void translateInstJumpXMatch(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is Foo` where the compiler can't tell whether
-    // `Foo` holds a class. A class gets JUMPXISA's test, and anything else JUMPIFEQ's generic comparison.
+    // `Foo` holds a class. A class gets JUMPXISA's test. Two numbers or two strings are compared inline, and anything else
+    // takes JUMPIFEQ's generic comparison.
     int ra = LUAU_INSN_A(*pc);
     uint32_t aux = pc[1];
     int rb = aux & 0xff;
@@ -2562,7 +2563,37 @@ void translateInstJumpXMatch(IrBuilder& build, const Instruction* pc, int pcpos)
     IrOp isInstance = build.inst(IrCmd::CLASS_ISINSTANCE, valueTag, valuePtr, classPtr);
     build.inst(IrCmd::JUMP_CMP_INT, isInstance, build.constInt(1), build.cond(IrCondition::Equal), matched, unmatched);
 
+    // values of different types are never equal
     build.beginBlock(compare);
+    IrOp sameType = build.block(IrBlockKind::Internal);
+    IrOp tagA = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    IrOp tagB = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_EQ_TAG, tagA, tagB, sameType, unmatched);
+
+    build.beginBlock(sameType);
+    IrOp numbers = build.block(IrBlockKind::Internal);
+    IrOp notNumbers = build.block(IrBlockKind::Internal);
+    IrOp sameTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    build.inst(IrCmd::JUMP_EQ_TAG, sameTag, build.constTag(LUA_TNUMBER), numbers, notNumbers);
+
+    build.beginBlock(numbers);
+    IrOp va = build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(ra));
+    IrOp vb = build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_CMP_NUM, va, vb, build.cond(IrCondition::NotEqual), unmatched, matched);
+
+    // strings are interned, so equal strings are the same object
+    build.beginBlock(notNumbers);
+    IrOp strings = build.block(IrBlockKind::Internal);
+    IrOp generic = build.block(IrBlockKind::Internal);
+    IrOp otherTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    build.inst(IrCmd::JUMP_EQ_TAG, otherTag, build.constTag(LUA_TSTRING), strings, generic);
+
+    build.beginBlock(strings);
+    IrOp pa = build.inst(IrCmd::LOAD_POINTER, build.vmReg(ra));
+    IrOp pb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_EQ_POINTER, pa, pb, matched, unmatched);
+
+    build.beginBlock(generic);
     build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + 1));
     IrOp equal = build.inst(IrCmd::CMP_ANY, build.vmReg(ra), build.vmReg(rb), build.cond(IrCondition::Equal));
     build.inst(IrCmd::JUMP_CMP_INT, equal, build.constInt(0), build.cond(IrCondition::Equal), unmatched, matched);
