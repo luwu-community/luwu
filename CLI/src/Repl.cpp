@@ -45,6 +45,7 @@
 
 #include <locale.h>
 #include <signal.h>
+#include <stdlib.h>
 
 LUAU_FASTFLAG(DebugLuauTimeTracing)
 LUAU_FASTFLAG(LuauAutoStack)
