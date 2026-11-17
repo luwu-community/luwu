@@ -16,6 +16,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
@@ -135,6 +136,28 @@ print(_)
 
     REQUIRE(1 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Placeholder value '_' is read here; consider using a named variable");
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): `_.{x, y}` names the destructured value `_` for readers who'd rather not
+// write a bare `.{x, y}`; reading its fields is the pattern's job, not a read of the placeholder
+TEST_CASE_FIXTURE(Fixture, "PlaceholderNamedPattern")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    LintResult result = lint(R"(
+local points = { { x = 1, y = 2 } }
+for _, _.{x, y} in points do
+    print(x + y)
+end
+const _.{x} = points[1]
+print(x)
+local _ = 5
+return _
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].text, "Placeholder value '_' is read here; consider using a named variable");
+    CHECK_EQ(result.warnings[0].location.begin.line, 8);
 }
 
 TEST_CASE_FIXTURE(Fixture, "PlaceholderWrite")
@@ -3252,6 +3275,80 @@ a<<"hi">>("hi")
 )");
 
     REQUIRE(0 == result.warnings.size());
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructured_loop_bindings_lint_like_the_names_they_bind")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // The fields are written in the loop's header, not as statements of its body, so only the unused one warns
+    LintResult result = lint(R"(
+local people = {}
+for _, .{name, unused} in people do
+    print(name)
+end
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_LocalUnused);
+    CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
+}
+
+TEST_CASE_FIXTURE(Fixture, "destructuring_lints_like_the_names_it_binds")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // The declaration desugars to several statements on one line, and each unnamed pattern has a hidden local
+    // of the same name; neither is visible in the source, so neither warns. An unused destructured name does.
+    LintResult result = lint(R"(
+local function f(t)
+    local .{a, unused} = t
+    local .{b} = t; print(a, b)
+end
+f({})
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_LocalUnused);
+    CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
+}
+
+// A local holding a class read from a module also binds the class's type, so a type naming it uses it
+TEST_CASE_FIXTURE(Fixture, "locals_read_from_a_field_are_used_by_types_naming_them")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    LintResult result = lint(R"(
+local animals = { Cat = 1, Dog = 2 }
+local Cat = animals.Cat
+local .{Dog, unused} = animals
+local function f(c: Cat, d: Dog)
+    return c, d
+end
+return f
+)");
+
+    REQUIRE_EQ(result.warnings.size(), 1);
+    CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
+}
+
+// `m.Age` uses a `const m = hub.t`, and `type .{X} = other.t` uses `other`
+TEST_CASE_FIXTURE(Fixture, "module_locals_are_used_by_types_reading_them")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    LintResult result = lint(R"(
+local hub = require("./hub")
+local other = require("./other")
+local m = hub.t
+type .{X} = other.t
+local function f(a: m.Age, x: X)
+    return a, x
+end
+return f
+)");
+
+    CHECK_EQ(result.warnings.size(), 0);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "NilNoneComparison")

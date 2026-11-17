@@ -1178,6 +1178,18 @@ const Instruction* executeINITTRAITS(lua_State* L, const Instruction* pc, StkId 
     return pc;
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL for native code (see FALLBACK_GETPOSITIONAL)
+const Instruction* executeGETPOSITIONAL(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+    VM_PROTECT(luaV_getpositional(L, rb, LUAU_INSN_C(insn), ra));
+    return pc;
+}
+
 void executeGETVARARGSMultRet(lua_State* L, const Instruction* pc, StkId base, int rai)
 {
     [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
