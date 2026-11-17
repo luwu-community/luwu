@@ -973,11 +973,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "exported_module_basic")
 
     fileResolver.source["game/A"] = R"(
         --!strict
-        export local version = "1.0.0"
-        export const name = "test module"
-        export local count = 41
-
-        count += 1
+        export version = "1.0.0"
+        export name = "test module"
+        export count = 41 + 1
     )";
 
     fileResolver.source["game/B"] = R"(
@@ -1007,7 +1005,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "exported_module_mutual_recursive_functions")
 
     fileResolver.source["game/A"] = R"(
         --!strict
-        export local a, b
+        local a, b
 
         function a()
             return b() + 1
@@ -1016,6 +1014,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "exported_module_mutual_recursive_functions")
         function b()
             return 42
         end
+
+        export a = a
+        export b = b
     )";
 
     fileResolver.source["game/B"] = R"(
@@ -1037,15 +1038,69 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "exported_module_mutual_recursive_functions")
     CHECK_EQ("(...any) -> number", toString(requireType(b, "b")));
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "exported_module_unassigned_local_stays_nil")
+// Luwu Export Values (rfcs/export-values.md): `export function f` fills a forward-declared `local f`, and the module
+// exports the function
+TEST_CASE_FIXTURE(BuiltinsFixture, "exported_function_fills_a_forward_declaration")
 {
     ScopedFastFlag _[3]{{FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauForceOldSolver, false}, {FFlag::LuauExportValueTypecheck, true}};
 
     fileResolver.source["game/A"] = R"(
         --!strict
-        export local a
-        export local b = function() return 1 end
+        local is_odd
+        export function is_even(n: number): boolean
+            return if n == 0 then true else is_odd(n - 1)
+        end
+        export function is_odd(n: number): boolean
+            return if n == 0 then false else is_even(n - 1)
+        end
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local A = require(game.A)
+
+        local even = A.is_even
+        local odd = A.is_odd
+    )";
+
+    CheckResult aResult = getFrontend().check("game/A");
+    LUAU_REQUIRE_NO_ERRORS(aResult);
+
+    CheckResult bResult = getFrontend().check("game/B");
+    LUAU_REQUIRE_NO_ERRORS(bResult);
+
+    ModulePtr b = getFrontend().moduleResolver.getModule("game/B");
+    CHECK_EQ("(number) -> boolean", toString(requireType(b, "even")));
+    CHECK_EQ("(number) -> boolean", toString(requireType(b, "odd")));
+
+    // Hover shows the docs above both: the export's location is the forward declaration (line 2), and its function type's
+    // definition is the `export function` (line 6)
+    ModulePtr a = getFrontend().moduleResolver.getModule("game/A");
+    std::optional<TypeId> exports = first(a->returnType);
+    REQUIRE(exports);
+    const TableType* exportTable = get<TableType>(follow(*exports));
+    REQUIRE(exportTable);
+    auto isOdd = exportTable->props.find("is_odd");
+    REQUIRE(isOdd != exportTable->props.end());
+    REQUIRE(isOdd->second.location);
+    CHECK_EQ(2, isOdd->second.location->begin.line);
+    REQUIRE(isOdd->second.readTy);
+    const FunctionType* isOddFunction = get<FunctionType>(follow(*isOdd->second.readTy));
+    REQUIRE(isOddFunction);
+    REQUIRE(isOddFunction->definition);
+    CHECK_EQ(6, isOddFunction->definition->definitionLocation.begin.line);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "exported_module_nil_values")
+{
+    ScopedFastFlag _[3]{{FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauForceOldSolver, false}, {FFlag::LuauExportValueTypecheck, true}};
+
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        export a = nil
+        local b = function() return 1 end
         b = nil
+        export b = b
     )";
 
     fileResolver.source["game/B"] = R"(
@@ -1067,7 +1122,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "exported_module_unassigned_local_stays_nil")
     CHECK_EQ("nil", toString(requireType(b, "b")));
 }
 
-// maintain consistency with exported_module_unassigned_local_stays_nil
+// maintain consistency with exported_module_nil_values
 TEST_CASE_FIXTURE(BuiltinsFixture, "returned_module_unassigned_local_stays_nil")
 {
     ScopedFastFlag _[3]{{FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauForceOldSolver, false}, {FFlag::LuauExportValueTypecheck, true}};
@@ -1149,7 +1204,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "exported_multret")
             return 42, "huh", false
         end
 
-        export local a, b, c = huh()
+        export a, b, c = huh()
     )";
 
     fileResolver.source["game/B"] = R"(
@@ -1183,7 +1238,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "exported_partial_multret")
             return "huh", false
         end
 
-        export local a, b, c = 42, huh()
+        export a, b, c = 42, huh()
     )";
 
     fileResolver.source["game/B"] = R"(
