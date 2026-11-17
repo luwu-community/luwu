@@ -4,6 +4,7 @@
 #include "lua.h"
 #include "lapix.h"
 #include "lobject.h"
+#include "lstate.h"
 #include "lualib.h"
 #include "luacode.h"
 #include "luacodegen.h"
@@ -27,6 +28,7 @@
 #include <fstream>
 #include <chrono>
 #include <functional>
+#include <set>
 #include <tuple>
 #include <thread>
 #include <string>
@@ -83,6 +85,8 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
@@ -95,6 +99,9 @@ LUAU_FASTFLAG(LuauCodegenFixTwoResA64Builtin)
 LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
+LUAU_FASTFLAG(DebugLuwuBundles)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
@@ -3064,7 +3071,7 @@ TEST_CASE("ApiPcallMulti")
     CHECK_EQ(std::string(lua_tostring(L, -2)), "traceback2");
     CHECK_EQ(std::string(lua_tostring(L, -1)), "test error");
     lua_pop(L, 3); // pop results
-    
+
     // Test multiple returns where we pass nresults = LUA_MULTRET
     lua_getglobal(L, "errorfunc");
     status = lua_pcallmulti(L, 0, LUA_MULTRET, handler_idx);
@@ -4648,6 +4655,228 @@ TEST_CASE("UserdataDirectAccess")
     );
 }
 
+// Luwu Traits (rfcs/classes/traits.md)
+TEST_CASE("Traits")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        // trait and primary constructor parameter defaults are function parameter defaults
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    runConformance("traits.luwu");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class's copy of a trait method keeps the breakpoints set in the original
+TEST_CASE("TraitsDebugger")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    static int breakhits = 0;
+    breakhits = 0;
+
+    lua_CompileOptions copts = defaultOptions();
+    copts.debugLevel = 2;
+    copts.optimizationLevel = 0;
+
+    runConformance(
+        "traits_debugger.luwu",
+        [](lua_State* L)
+        {
+            // every hit just continues
+            lua_callbacks(L)->debugbreak = [](lua_State* L, lua_Debug* ar)
+            {
+                breakhits++;
+            };
+
+            lua_pushcclosurek(
+                L,
+                [](lua_State* L) -> int
+                {
+                    int line = luaL_checkinteger(L, 1);
+
+                    lua_Debug ar = {};
+                    lua_getinfo(L, lua_stackdepth(L) - 1, "f", &ar);
+
+                    lua_breakpoint(L, -1, line, true);
+                    return 0;
+                },
+                "breakpoint",
+                0,
+                nullptr
+            );
+            lua_setglobal(L, "breakpoint");
+        },
+        nullptr,
+        nullptr,
+        &copts,
+        /* skipCodegen */ true
+    );
+
+    // Cat's copy, Dog's copy, and Cat's again through the trait
+    CHECK(breakhits == 3);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): reloading traits, passing them off as classes, odd member order, traits as
+// values, and classes implementing a trait from chunks the trait's own code loads
+TEST_CASE("CursedClasses")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    runConformance("cursed_classes.luwu");
+}
+
+static std::string joinNames(const std::set<std::string>& names)
+{
+    std::string joined;
+    for (const std::string& name : names)
+        joined += name + " ";
+    return joined;
+}
+
+// The public members a builtin class's objects have in the VM, metamethods included
+static std::string vmClassMembers(const LuauClass* classdef)
+{
+    std::set<std::string> names;
+    for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+    {
+        const TString* name = classdef->offsettomember[i];
+        if (name && !(classdef->memberflags[i] & LBC_CLASSMEMBER_PRIVATE))
+            names.insert(getstr(name));
+    }
+    return joinNames(names);
+}
+
+// The public members the type checker gives the objects of a declared class: their properties, except `__init`, which
+// can't be read, and the metamethods in their metatable
+static std::string declaredObjectMembers(Luau::TypeId objectType)
+{
+    std::set<std::string> names;
+    const Luau::ExternType* object = Luau::get<Luau::ExternType>(Luau::follow(objectType));
+    REQUIRE(object);
+
+    for (const auto& prop : object->props())
+    {
+        if (!prop.second.isPrivate && prop.first != "__init")
+            names.insert(prop.first);
+    }
+
+    if (object->metatable)
+    {
+        const Luau::TableType* metatable = Luau::get<Luau::TableType>(Luau::follow(*object->metatable));
+        REQUIRE(metatable);
+        for (const auto& metamethod : metatable->props)
+            names.insert(metamethod.first);
+    }
+    return joinNames(names);
+}
+
+// The public members of the objects of the class value `classValue` (see declaredObjectMembers)
+static std::string declaredClassMembers(Luau::TypeId classValue)
+{
+    const Luau::ExternType* value = Luau::get<Luau::ExternType>(Luau::follow(classValue));
+    REQUIRE(value);
+    REQUIRE(value->relation);
+    const Luau::Obj* obj = Luau::get_if<Luau::Obj>(&*value->relation);
+    REQUIRE(obj);
+    return declaredObjectMembers(obj->ty);
+}
+
+// The declared class value named `name` in the library table
+static std::optional<Luau::TypeId> declaredClassValue(const Luau::TableType* library, const std::string& name)
+{
+    auto declared = library->props.find(name);
+    if (declared == library->props.end() || !declared->second.readTy)
+        return std::nullopt;
+    return declared->second.readTy;
+}
+
+// Luwu collections and bundles: the builtin definitions declare each class the VM builds, with exactly its public members.
+// A bundle class is a type the `bundle` library exports, since the library's table holds only functions.
+TEST_CASE("CollectionsDeclarationsMatchTheVm")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    Luau::NullFileResolver fileResolver;
+    Luau::NullConfigResolver configResolver;
+    Luau::Frontend frontend{Luau::SolverMode::New, &fileResolver, &configResolver};
+    Luau::registerBuiltinGlobals(frontend, frontend.globals);
+
+    const Luau::TableType* library = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "collections")));
+    REQUIRE(library);
+    const auto& bundleTypes = frontend.globals.globalScope->importedTypeBindings["bundle"];
+
+    StateRef state(luaL_newstate(), lua_close);
+    luaL_openlibs(state.get());
+
+    for (int kind = 0; kind < LUWU_BUILTIN__COUNT; kind++)
+    {
+        const LuauClass* classdef = state->global->builtinclasses[kind];
+        REQUIRE(classdef);
+        std::string name = getstr(classdef->name);
+        INFO(name);
+
+        if (kind <= LUWU_BUILTIN_BIGBUNDLE)
+        {
+            auto declaredBundle = bundleTypes.find(name);
+            REQUIRE(declaredBundle != bundleTypes.end());
+            CHECK_EQ(declaredObjectMembers(declaredBundle->second.type), vmClassMembers(classdef));
+            continue;
+        }
+
+        std::optional<Luau::TypeId> declared = declaredClassValue(library, name);
+        REQUIRE(declared);
+        CHECK_EQ(declaredClassMembers(*declared), vmClassMembers(classdef));
+    }
+}
+
+TEST_CASE("Collections")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    runConformance("collections.luwu");
+}
+
+TEST_CASE("CollectionsFastPaths")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    runConformance("collections_fastpaths.luwu");
+}
+
 TEST_CASE("ClassesExportHoistingRepro")
 {
     ScopedFastFlag sffs[] = {
@@ -4666,6 +4895,8 @@ TEST_CASE("Classes")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
+        // class fields and primary constructor parameters carry attributes
+        {FFlag::LuwuAttributesEverywhere, true},
         // a primary constructor's parameter defaults are function parameter defaults
         {FFlag::LuwuDefaultArguments, true},
         {FFlag::LuwuNonePrimitive, true},
@@ -4749,7 +4980,10 @@ TEST_CASE("ClassesInlining")
 
 TEST_CASE("ClassesNativeCodegen")
 {
-    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
 
     // Deliberately a separate file from classes.luwu: that one contains `@native` functions, and a module
     // with any `@native` function natively compiles only those, so the rest of its protos stay interpreted
@@ -4768,6 +5002,8 @@ static void runClassesFixesConformance(const char* name)
         {FFlag::LuwuGenericNominals, true},
         // names the variable in const-binding errors ("Variable 'self' is constant ...")
         {FFlag::LuauExportValueSyntax, true},
+        // a trait's `__create` is what reaches the C constructor (the constructor closure lifetime case)
+        {FFlag::LuwuTraits, true},
     };
 
     for (int level = 0; level <= 2; ++level)
@@ -4851,12 +5087,106 @@ std::string classesCApiProtected(lua_State* L, std::function<void(lua_State*)> f
 
 } // namespace
 
+// Luwu Traits (rfcs/classes/traits.md): the traits C API, from an embedder context with no Lua frame
+TEST_CASE("TraitsCApi")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    const char* source = R"(
+trait Component
+    final function id(self)
+        return 1
+    end
+
+    function describe(self)
+        return "component"
+    end
+end
+
+trait Card needs Component end
+
+class Ace() implements Card end
+
+class Plain() end
+
+return Component, Card, Ace(), Plain(), Ace
+)";
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    int loadResult = luau_load(L, "=TraitsCApi", bytecode, bytecodeSize, 0);
+    free(bytecode);
+    REQUIRE(loadResult == 0);
+    REQUIRE(lua_pcall(L, 0, 5, 0) == LUA_OK);
+    // stack: Component, Card, an Ace, a Plain, Ace
+
+    SUBCASE("lua_istrait")
+    {
+        CHECK(lua_istrait(L, 1) == 1);
+        CHECK(lua_istrait(L, 2) == 1);
+        CHECK(lua_istrait(L, 5) == 0);
+        CHECK(lua_istrait(L, 3) == 0);
+    }
+
+    SUBCASE("lua_classimplements")
+    {
+        CHECK(lua_classimplements(L, 3, 2) == 1);
+        CHECK(lua_classimplements(L, 3, 1) == 1); // through `Card needs Component`
+        CHECK(lua_classimplements(L, 4, 1) == 0);
+        CHECK(lua_classimplements(L, 5, 1) == 0); // a class isn't an object
+        CHECK(lua_classimplements(L, 10, 1) == 0); // an unused stack slot
+
+        std::string err = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_pushnumber(L, 1);
+                lua_pushnumber(L, 2);
+                lua_classimplements(L, 1, 2);
+            }
+        );
+        CHECK(err == "expected a trait, got number");
+    }
+
+    SUBCASE("lua_ismemberfinal")
+    {
+        CHECK(lua_ismemberfinal(L, 1, "id") == 1);
+        CHECK(lua_ismemberfinal(L, 1, "describe") == 0);
+        CHECK(lua_ismemberfinal(L, 1, "nope") == 0);
+        CHECK(lua_ismemberfinal(L, 3, "id") == 1); // an implementing class keeps the trait's final member
+        CHECK(lua_ismemberfinal(L, 5, "describe") == 0);
+
+        std::string err = classesCApiProtected(
+            L,
+            [](lua_State* L)
+            {
+                lua_pushliteral(L, "hi");
+                lua_ismemberfinal(L, 1, "x");
+            }
+        );
+        CHECK(err == "expected a class or object, got string");
+    }
+
+    CHECK(lua_gettop(L) == 5);
+}
+
 TEST_CASE("ClassesCApi")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuDefaultArguments, true},
         {FFlag::LuwuNonePrimitive, true},
+        // a trait's `__create` is what reaches the C constructor (the debug name case)
+        {FFlag::LuwuTraits, true},
     };
 
     StateRef globalState(luaL_newstate(), lua_close);
@@ -5521,11 +5851,11 @@ Yielder_ = Yielder
         luaL_openlibs(QL);
 
         std::string className(1100, 'N');
-        std::string classSource = "class " + className +
+        // a class constructs through its compiled constructor, which debug.info never hands out; a trait's `__create`
+        // reaches the C constructor
+        std::string classSource = "trait " + className +
                                   "\n"
-                                  "    x: number\n"
-                                  "    function __init(self)\n"
-                                  "        self.x = 1\n"
+                                  "    function __create()\n"
                                   "        LEAKED_CTOR = debug.info(2, 'f')\n"
                                   "    end\n"
                                   "end\n"
@@ -5752,6 +6082,217 @@ counter = Counter { a = 1, b = 2 }
     }
 
     CHECK(namecalls == 1);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class's copy of a default from a trait in the same file is compiled with the
+// module, so native code compiles it too. A copy the VM makes when the class implements the trait never would be, which
+// no behavioral test can see, so check the copy's proto itself.
+TEST_CASE("TraitsSameFileDefaultsCompileNatively")
+{
+    if (!luau_codegen_supported())
+        return;
+
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    luau_codegen_create(L);
+
+    const char* source = R"(
+trait Summing
+    expect public items: { number }
+    public function sum(self): number
+        local total = 0
+        for _, v in self.items do
+            total += v
+        end
+        return total
+    end
+end
+
+class Bag(items: { number }) implements Summing
+    public items
+end
+
+bag = Bag({ 1, 2, 3 })
+traitSum = Summing.sum
+bagSum = Bag.sum
+)";
+
+    lua_CompileOptions compileOptions = {};
+    compileOptions.optimizationLevel = 2;
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), &compileOptions, &bytecodeSize);
+    int loadResult = luau_load(L, "=TraitsSameFileDefaultsCompileNatively", bytecode, bytecodeSize, 0);
+    free(bytecode);
+    REQUIRE(loadResult == 0);
+
+    Luau::CodeGen::CompilationResult nativeResult = Luau::CodeGen::compile(L, -1, defaultCodegenOptions());
+    REQUIRE(nativeResult.result == Luau::CodeGen::CodeGenCompilationResult::Success);
+    REQUIRE(lua_pcall(L, 0, 0, 0) == LUA_OK);
+
+    lua_getglobal(L, "bagSum");
+    const Closure* copy = static_cast<const Closure*>(lua_topointer(L, -1));
+    REQUIRE(copy);
+    REQUIRE(!copy->isC);
+    CHECK(copy->l.p->execdata != nullptr);
+
+    lua_getglobal(L, "bag");
+    CHECK(copy->l.p->ownerclass == static_cast<const LuauObject*>(lua_topointer(L, -1))->lclass);
+
+    // a method read through its trait is the trait's dispatcher, a C function
+    lua_getglobal(L, "traitSum");
+    CHECK(lua_iscfunction(L, -1));
+
+    lua_getglobal(L, "bagSum");
+    lua_getglobal(L, "bag");
+    REQUIRE(lua_pcall(L, 1, 1, 0) == LUA_OK);
+    CHECK(lua_tonumber(L, -1) == 6);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class implementing a trait from another chunk gets copies the VM makes at
+// runtime, after native code compiled the trait's chunk. Each copy runs the native code of the function it copies,
+// nested functions included, without compiling its own (lua_ExecutionCallbacks::functioncopied). A copy of an
+// interpreted function stays interpreted. Invisible to any behavioral test, so check the copies' protos.
+TEST_CASE("TraitsCopiedFromAnotherChunkShareNativeCode")
+{
+    if (!luau_codegen_supported())
+        return;
+
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    luau_codegen_create(L);
+
+    auto run = [&](const char* name, const char* source, bool native)
+    {
+        lua_CompileOptions compileOptions = {};
+        compileOptions.optimizationLevel = 2;
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source, strlen(source), &compileOptions, &bytecodeSize);
+        int loadResult = luau_load(L, name, bytecode, bytecodeSize, 0);
+        free(bytecode);
+        REQUIRE(loadResult == 0);
+
+        if (native)
+        {
+            Luau::CodeGen::CompilationResult nativeResult = Luau::CodeGen::compile(L, -1, defaultCodegenOptions());
+            REQUIRE(nativeResult.result == Luau::CodeGen::CodeGenCompilationResult::Success);
+        }
+
+        REQUIRE(lua_pcall(L, 0, 0, 0) == LUA_OK);
+    };
+
+    run("=nativeTrait", R"(
+trait Summing
+    expect public items: { number }
+    public function sum(self): number
+        local total = 0
+        for _, v in self.items do
+            total += v
+        end
+        return total
+    end
+    public function summer(self): () -> number
+        return function()
+            local total = 0
+            for _, v in self.items do
+                total += v
+            end
+            return total
+        end
+    end
+end
+NativeSumming = Summing
+)",
+        /* native */ true);
+
+    run("=interpretedTrait", R"(
+trait Counting
+    expect public items: { number }
+    public function count(self): number
+        return #self.items
+    end
+end
+InterpretedCounting = Counting
+)",
+        /* native */ false);
+
+    // the class's chunk stays interpreted: only the hook can give its copies native code
+    run("=classes", R"(
+class Bag(items: { number }) implements NativeSumming, InterpretedCounting
+    public items
+end
+bag = Bag({ 1, 2, 3 })
+bagSum = Bag.sum
+bagSummer = Bag.summer
+bagCount = Bag.count
+traitSum = NativeSumming.sum
+traitSummer = NativeSumming.summer
+)",
+        /* native */ false);
+
+    // `Trait.method` reads as a dispatcher whose third upvalue is the trait's own closure, the one classes copy
+    auto traitOwnFunction = [&](const char* global) -> const Closure*
+    {
+        lua_getglobal(L, global);
+        REQUIRE(lua_iscfunction(L, -1));
+        REQUIRE(lua_getupvalue(L, -1, 3));
+        const Closure* own = static_cast<const Closure*>(lua_topointer(L, -1));
+        lua_pop(L, 2);
+        REQUIRE(own);
+        REQUIRE(!own->isC);
+        return own;
+    };
+
+    lua_getglobal(L, "bagSum");
+    const Closure* sum = static_cast<const Closure*>(lua_topointer(L, -1));
+    REQUIRE(sum);
+    REQUIRE(!sum->isC);
+    CHECK(sum->l.p->execdata != nullptr);
+    CHECK(sum->l.p->execdata == traitOwnFunction("traitSum")->l.p->execdata);
+
+    lua_getglobal(L, "bagSummer");
+    const Closure* summer = static_cast<const Closure*>(lua_topointer(L, -1));
+    REQUIRE(summer);
+    REQUIRE(!summer->isC);
+    REQUIRE(summer->l.p->sizep == 1);
+    const Closure* ownSummer = traitOwnFunction("traitSummer");
+    REQUIRE(ownSummer->l.p->sizep == 1);
+    CHECK(summer->l.p->p[0] != ownSummer->l.p->p[0]);
+    CHECK(summer->l.p->p[0]->execdata != nullptr);
+    CHECK(summer->l.p->p[0]->execdata == ownSummer->l.p->p[0]->execdata);
+
+    lua_getglobal(L, "bagCount");
+    const Closure* count = static_cast<const Closure*>(lua_topointer(L, -1));
+    REQUIRE(count);
+    REQUIRE(!count->isC);
+    CHECK(count->l.p->execdata == nullptr);
+
+    lua_getglobal(L, "bagSum");
+    lua_getglobal(L, "bag");
+    REQUIRE(lua_pcall(L, 1, 1, 0) == LUA_OK);
+    CHECK(lua_tonumber(L, -1) == 6);
+    lua_pop(L, 1);
+
+    // the closure the shared native code creates is over the copy's nested proto, and runs natively too
+    lua_getglobal(L, "bagSummer");
+    lua_getglobal(L, "bag");
+    REQUIRE(lua_pcall(L, 1, 1, 0) == LUA_OK);
+    const Closure* created = static_cast<const Closure*>(lua_topointer(L, -1));
+    REQUIRE(created);
+    CHECK(created->l.p == summer->l.p->p[0]);
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK(lua_tonumber(L, -1) == 6);
 }
 
 TEST_CASE("ExportedClasses")
@@ -6692,3 +7233,61 @@ TEST_CASE("ClassesInterpreterMemberSlotCacheSkipsWideOffsets")
 }
 
 TEST_SUITE_END();
+
+// Luwu bundles: an embedder packs and unpacks bundles with no Lua frame
+TEST_CASE("BundleCApi")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    lua_pushnumber(L, 1);
+    lua_pushstring(L, "x");
+    lua_packbundle(L, 2);
+    REQUIRE(lua_gettop(L) == 1);
+    CHECK(std::string(lua_getclassname(L, -1)) == "Bundle2");
+    CHECK(std::string(luaL_tolstring(L, -1, nullptr)) == ".(1, \"x\")");
+    lua_pop(L, 1);
+
+    REQUIRE(lua_unpackbundle(L, -1) == 2);
+    CHECK(lua_tonumber(L, -2) == 1);
+    CHECK(std::string(lua_tostring(L, -1)) == "x");
+    lua_settop(L, 0);
+
+    // anything else isn't a bundle, and pushes nothing
+    lua_newtable(L);
+    CHECK(lua_unpackbundle(L, -1) == -1);
+    CHECK(lua_gettop(L) == 1);
+    lua_settop(L, 0);
+
+    lua_packbundle(L, 0);
+    CHECK(lua_unpackbundle(L, -1) == 0);
+    lua_settop(L, 0);
+
+    // past six values, any size is a `BigBundle`
+    for (int i = 0; i < 13; i++)
+        lua_pushnumber(L, i);
+    lua_packbundle(L, 13);
+    CHECK(std::string(lua_getclassname(L, -1)) == "BigBundle");
+    REQUIRE(lua_unpackbundle(L, -1) == 13);
+    CHECK(lua_tonumber(L, -1) == 12);
+    lua_settop(L, 0);
+
+    std::string tooMany = classesCApiProtected(
+        L,
+        [](lua_State* L)
+        {
+            lua_checkstack(L, 1025);
+            for (int i = 0; i < 1025; i++)
+                lua_pushnumber(L, i);
+            lua_packbundle(L, 1025);
+        }
+    );
+    CHECK(tooMany == "lua_packbundle: a bundle holds at most 1024 values, but got 1025");
+}

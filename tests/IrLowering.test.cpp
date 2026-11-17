@@ -30,6 +30,7 @@ LUAU_FASTFLAG(LuauCodegenA64ExitUseCheck)
 LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 
 #define ensureVectorSize3() \
@@ -1170,7 +1171,7 @@ end
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   %1 = LOAD_TAG R0
-  %2 = GET_TYPE %1
+  %2 = GET_TYPE %1, R0
   STORE_POINTER R3, %2
   STORE_TAG R3, tstring
   %9 = CMP_TAG %1, tnumber, eq
@@ -5103,7 +5104,7 @@ end
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   %1 = LOAD_TAG R1
-  %2 = GET_TYPE %1
+  %2 = GET_TYPE %1, R1
   STORE_POINTER R2, %2
   STORE_TAG R2, tstring
   %6 = LOAD_TAG R0
@@ -5120,7 +5121,7 @@ bb_bytecode_0:
 bb_bytecode_2:
   implicit CHECK_SAFE_ENV exit(10)
   %21 = LOAD_TAG R1
-  %22 = GET_TYPE %21
+  %22 = GET_TYPE %21, R1
   STORE_POINTER R4, %22
   STORE_TAG R4, tstring
   INTERRUPT 15u
@@ -8640,6 +8641,182 @@ bb_linear_17:
     );
 }
 
+TEST_CASE_FIXTURE(LoweringFixture, "CollectionsMethodsRunInlineWithoutACall")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
+    ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
+
+    // Luwu collections: a `Vec` or `VecDeque` method on an untyped receiver runs inline in the object path
+    // (translateStorageMethod). The table path stays as it is, and every slow path joins the one CALL.
+    //
+    // Expected: no CALL or FALLBACK_NAMECALL between CHECK_STORAGE and the JUMP past the call. `push` checks the element
+    // type and the room left, then stores with a barrier. The argument's parts are read from R1, which the MOVE into R4
+    // copied, and the TValue itself from R4.
+    assemblyOptions.includeOutlinedCode = true;
+
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function push(v, x)
+    v:push(x)
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2
+               ),
+        R"(
+; function push($arg0, $arg1) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R1
+  STORE_TVALUE R4, %0
+  CHECK_TAG R0, ttable, bb_fallback_3
+  %4 = LOAD_POINTER R0
+  %5 = GET_HASH_NODE_ADDR %4, 8031801u
+  JUMP_SLOT_MATCH %5, K0 ('push'), bb_5, bb_6
+bb_5:
+  STORE_POINTER R3, %4
+  STORE_TAG R3, ttable
+  %9 = LOAD_TVALUE %5, 0i
+  STORE_TVALUE R2, %9
+  JUMP bb_1
+bb_6:
+  CHECK_NODE_NO_NEXT %5, bb_fallback_2
+  %13 = TRY_CALL_FASTGETTM %4, 0i, bb_fallback_2
+  %14 = LOAD_TAG %13
+  CHECK_TAG %14, ttable, bb_fallback_2
+  %16 = LOAD_POINTER %13
+  %17 = GET_SLOT_NODE_ADDR %16, 1u, K0 ('push')
+  CHECK_SLOT_MATCH %17, K0 ('push'), bb_fallback_2
+  %19 = LOAD_POINTER R0
+  STORE_POINTER R3, %19
+  STORE_TAG R3, ttable
+  %22 = LOAD_TVALUE %17, 0i
+  STORE_TVALUE R2, %22
+  JUMP bb_1
+bb_1:
+  INTERRUPT 3u
+  SET_SAVEDPC 5u
+  CALL R2, 2i, 0i
+  JUMP bb_4
+bb_4:
+  INTERRUPT 5u
+  RETURN R0, 0i
+bb_fallback_3:
+  CHECK_TAG R0, tobject, bb_fallback_2
+  %27 = LOAD_POINTER R0
+  CHECK_STORAGE %27, 1i, bb_fallback_7
+  %29 = LOAD_STORAGE %27
+  %30 = LOAD_TAG R1
+  %31 = LOAD_POINTER R1
+  CHECK_STORAGE_ELEMENT %29, %30, %31, bb_fallback_2
+  %33 = LOAD_STORAGE_INT %29, 0i
+  %34 = LOAD_STORAGE_INT %29, 4i
+  CHECK_CMP_INT %33, %34, u_lt, bb_fallback_2
+  %36 = GET_STORAGE_ENTRY_ADDR %29, %33
+  %37 = LOAD_TVALUE R4
+  STORE_TVALUE %36, %37
+  %39 = ADD_INT %33, 1i
+  STORE_STORAGE_INT %29, 0i, %39
+  BARRIER_OBJ %27, R1, undef
+  JUMP bb_4
+bb_fallback_7:
+  %43 = LOAD_POINTER R0
+  %44 = TRY_OBJECT_NAMECALL_ADDR %43, 1u, K0 ('push'), bb_fallback_2
+  STORE_POINTER R3, %43
+  STORE_TAG R3, tobject
+  %47 = LOAD_TVALUE %44
+  STORE_TVALUE R2, %47
+  JUMP bb_1
+bb_fallback_2:
+  FALLBACK_NAMECALL 1u, R2, R0, K0 ('push')
+  JUMP bb_1
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "CollectionsFastMethodsRunWithoutACall")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
+    ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
+
+    // Luwu collections: a method with an interpreter fast method, like `OrderedMap:get`, runs it through INVOKE_FAST_METHOD
+    // in the untyped receiver's object path. When there's none for the receiver, or it bails, the generic object path and
+    // the CALL follow.
+    assemblyOptions.includeOutlinedCode = true;
+
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function get(m, k)
+    return m:get(k)
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2
+               ),
+        R"(
+; function get($arg0, $arg1) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R1
+  STORE_TVALUE R4, %0
+  CHECK_TAG R0, ttable, bb_fallback_3
+  %4 = LOAD_POINTER R0
+  %5 = GET_HASH_NODE_ADDR %4, 223071u
+  JUMP_SLOT_MATCH %5, K0 ('get'), bb_5, bb_6
+bb_5:
+  STORE_POINTER R3, %4
+  STORE_TAG R3, ttable
+  %9 = LOAD_TVALUE %5, 0i
+  STORE_TVALUE R2, %9
+  JUMP bb_1
+bb_6:
+  CHECK_NODE_NO_NEXT %5, bb_fallback_2
+  %13 = TRY_CALL_FASTGETTM %4, 0i, bb_fallback_2
+  %14 = LOAD_TAG %13
+  CHECK_TAG %14, ttable, bb_fallback_2
+  %16 = LOAD_POINTER %13
+  %17 = GET_SLOT_NODE_ADDR %16, 1u, K0 ('get')
+  CHECK_SLOT_MATCH %17, K0 ('get'), bb_fallback_2
+  %19 = LOAD_POINTER R0
+  STORE_POINTER R3, %19
+  STORE_TAG R3, ttable
+  %22 = LOAD_TVALUE %17, 0i
+  STORE_TVALUE R2, %22
+  JUMP bb_1
+bb_1:
+  INTERRUPT 3u
+  SET_SAVEDPC 4u
+  CALL R2, 2i, -1i
+  JUMP bb_4
+bb_4:
+  INTERRUPT 4u
+  RETURN R2, -1i
+bb_fallback_3:
+  CHECK_TAG R0, tobject, bb_fallback_2
+  %27 = LOAD_POINTER R0
+  %28 = INVOKE_FAST_METHOD %27, 1u, R2, 1i, -1i
+  CHECK_CMP_INT %28, 0i, ge, bb_fallback_7
+  ADJUST_STACK_TO_REG R2, %28
+  JUMP bb_4
+bb_fallback_7:
+  %32 = LOAD_POINTER R0
+  %33 = TRY_OBJECT_NAMECALL_ADDR %32, 1u, K0 ('get'), bb_fallback_2
+  STORE_POINTER R3, %32
+  STORE_TAG R3, tobject
+  %36 = LOAD_TVALUE %33
+  STORE_TVALUE R2, %36
+  JUMP bb_1
+bb_fallback_2:
+  FALLBACK_NAMECALL 1u, R2, R0, K0 ('get')
+  JUMP bb_1
+)"
+    );
+}
+
 TEST_CASE_FIXTURE(LoweringFixture, "ClassIsinstanceKnownTag")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
@@ -8745,6 +8922,40 @@ bb_linear_10:
   RETURN R2, 1i
 )"
     );
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class that implements traits is constructed with NEWOBJECT's ALLOC form, which
+// is lowered natively (a guard and an allocation that copies the constant defaults) rather than run as a fallback.
+TEST_CASE_FIXTURE(LoweringFixture, "ClassWithTraitsAllocatesNatively")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    std::string ir = getCodegenAssembly(
+        R"(
+trait Greets
+    function greet(self)
+        return "hi"
+    end
+end
+
+class P(x: number) implements Greets
+end
+
+local function make(a)
+    local p = P(a)
+    return p.x
+end
+)",
+        /* includeIrTypes= */ false,
+        /* debugLevel= */ 1,
+        /* optimizationLevel= */ 2,
+        /* clipToFirstReturn= */ false
+    );
+
+    INFO(ir);
+    CHECK(ir.find("CHECK_CLASS_ALLOCATABLE") != std::string::npos);
+    CHECK(ir.find("NEW_OBJECT_DEFAULTS") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(LoweringFixture, "ClassConstructionTypesItsRegister")
@@ -8897,6 +9108,17 @@ bb_4:
 bb_6:
   INTERRUPT 8u
   RETURN R4, 1i
+; function Cat($arg0) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R0
+  STORE_TVALUE R3, %0
+  %2 = GET_UPVALUE U0
+  STORE_TVALUE R4, %2
+  FALLBACK_NEWOBJECT 2u, R2, R4, 0i, 1i
+  %5 = LOAD_TVALUE R2
+  STORE_TVALUE R1, %5
+  INTERRUPT 5u
+  RETURN R1, 1i
 )"
     );
 }
@@ -8942,6 +9164,17 @@ bb_bytecode_2:
   STORE_TAG R2, tnumber
   INTERRUPT 7u
   RETURN R2, 1i
+; function C($arg0) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R0
+  STORE_TVALUE R3, %0
+  %2 = GET_UPVALUE U0
+  STORE_TVALUE R4, %2
+  FALLBACK_NEWOBJECT 2u, R2, R4, 0i, 1i
+  %5 = LOAD_TVALUE R2
+  STORE_TVALUE R1, %5
+  INTERRUPT 5u
+  RETURN R1, 1i
 )"
     );
 }
@@ -8965,7 +9198,7 @@ static std::string lowerClassFallbackWithLiveValueA64(Luau::CodeGen::IrCmd fallb
     if (fallback == IrCmd::FALLBACK_NEWOBJECT)
         build.inst(IrCmd::FALLBACK_NEWOBJECT, build.constUint(0), build.vmReg(2), build.vmReg(3), build.constInt(0), build.constInt(0));
     else
-        build.inst(IrCmd::FALLBACK_NEWCLASSMEMBER, build.constUint(0), build.vmReg(2), build.vmReg(3));
+        build.inst(IrCmd::FALLBACK_NEWCLASSMEMBER, build.constUint(0), build.vmReg(2), build.vmReg(3), build.constInt(1));
 
     build.inst(IrCmd::STORE_DOUBLE, build.vmReg(0), sum);
     build.inst(IrCmd::RETURN, build.vmReg(0), build.constInt(1));

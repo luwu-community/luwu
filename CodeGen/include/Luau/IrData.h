@@ -740,6 +740,47 @@ enum class IrCmd : uint8_t
     // B: unsigned int (member offset)
     OBJECT_MEMBER_ADDR,
 
+    // Luwu collections: guard against an object not being a `Vec` or `VecDeque` with a storage block (LuauStorage)
+    // A: pointer (LuauObject)
+    // B: int (LuwuStorageKind, or LUAR_STORAGE_CONTAINER for either)
+    // C: block/vmexit/undef
+    // When undef is specified instead of a block, execution is aborted on check failure
+    CHECK_STORAGE,
+
+    // Luwu collections: load the storage block of an object CHECK_STORAGE accepted
+    // A: pointer (LuauObject)
+    LOAD_STORAGE,
+
+    // Luwu collections: load or store a uint32 field of a storage block
+    // A: pointer (LuauStorage)
+    // B: int (offset of the field)
+    // C: int (STORE_STORAGE_INT: the value)
+    LOAD_STORAGE_INT,
+    STORE_STORAGE_INT,
+
+    // Luwu collections: the address of the slot `B` places from the front of a storage block,
+    // items[(head + B) & (capacity - 1)]
+    // A: pointer (LuauStorage)
+    // B: int
+    GET_STORAGE_ENTRY_ADDR,
+
+    // Luwu collections: run a builtin class's fast method for a NAMECALL and its CALL (invokeFastMethod). Gives the number of
+    // results, or -1 when there is none to run and the call has to be made.
+    // A: pointer (LuauObject, the receiver)
+    // B: unsigned int (pcpos of the NAMECALL)
+    // C: Rn (result start; the arguments start two registers later)
+    // D: int (argument count, `self` not included)
+    // E: int (result count or -1 to leave the stack top to ADJUST_STACK_TO_REG)
+    INVOKE_FAST_METHOD,
+
+    // Luwu collections: guard against a value not having the element type of a storage block
+    // A: pointer (LuauStorage)
+    // B: tag (the value's)
+    // C: pointer (the value's GC object, read when the tag is LUA_TOBJECT)
+    // D: block/vmexit/undef
+    // When undef is specified instead of a block, execution is aborted on check failure
+    CHECK_STORAGE_ELEMENT,
+
     // Luwu Classes (rfcs/classes): guard that NEWOBJECT's FIELDS form can construct this class
     // natively, as a plain member-by-member copy. The compiler guarantees the class's shape (see
     // VM_CASE(LOP_NEWOBJECT)). Two things are left to check at runtime:
@@ -757,6 +798,19 @@ enum class IrCmd : uint8_t
     // (luaR_newobjectuninit). Every member must be stored before anything can collect or observe it.
     // A: pointer (LuauClass)
     NEW_OBJECT,
+
+    // Luwu Traits (rfcs/classes/traits.md): guard that NEWOBJECT's ALLOC form can construct this class natively. The
+    // private constructor rule is CHECK_CLASS_FIELDS_CONSTRUCTIBLE's. Constant defaults are fine, since
+    // NEW_OBJECT_DEFAULTS copies them, but the class's statement has to have implemented its traits
+    // (LuauClass::traitspending). Jumps if a check fails; the fallback then raises the error.
+    // A: pointer (LuauClass)
+    // B: block/vmexit/undef
+    CHECK_CLASS_ALLOCATABLE,
+
+    // Luwu Traits (rfcs/classes/traits.md): allocate an object of a class with its members set to their constant
+    // defaults (luaR_newobject), for NEWOBJECT's ALLOC form.
+    // A: pointer (LuauClass)
+    NEW_OBJECT_DEFAULTS,
 
     // Try to get the address of a static member on a Luwu Classes class object using the cached
     // member slot at the given bytecode position, or jump if the slot is stale (out of range for
@@ -988,7 +1042,35 @@ enum class IrCmd : uint8_t
     // A: unsigned int (bytecode instruction index)
     // B: Rn (class)
     // C: Rn (member value)
+    // D: int (registers read from C on: 1, or twice the entry count of Luwu Traits' IMPLEMENTS form, see
+    //    LBC_NEWCLASSMEMBER_IMPLEMENTS)
     FALLBACK_NEWCLASSMEMBER,
+
+    // Luwu Traits (rfcs/classes/traits.md): LOP_INITTRAITS: lays out the next trait initializer's call frame at C, or
+    // writes nil there once every initializer has run (a jump on C's tag follows). Runs no Luau code.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (how many initializers have run, read and written; the object and the arguments follow it)
+    // C: Rn (the call frame, written)
+    // D: int (how many `implements` arguments there are)
+    FALLBACK_INITTRAITS,
+
+    // Luwu bundles: LOP_GETTABLEBUNDLE or LOP_SETTABLEBUNDLE, a table read or write at a bundle key given by its values.
+    // May run `__index` or `__newindex`.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (target, written, or source)
+    // C: Rn (table)
+    // D: Rn (first of E registers holding the bundle's values)
+    // E: int (how many values)
+    // F: int (1 for a write)
+    FALLBACK_TABLEBUNDLE,
+
+    // Luwu Traits (rfcs/classes/traits.md): LOP_GETQUALIFIED, the class's version of a trait's member. Runs no Luau code,
+    // but raises when the class doesn't implement the trait.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (target, written)
+    // C: Rn (object or class)
+    // D: Rn (trait)
+    FALLBACK_GETQUALIFIED,
 
     // Instruction that passes value through, it is produced by constant folding and users substitute it with the value
     // A: operand of any type
@@ -1073,6 +1155,8 @@ enum class IrCmd : uint8_t
 
     // Returns the string name of a type based on tag, alternative for type(x)
     // A: tag
+    // B: Rn (optional; Luwu Traits (rfcs/classes/traits.md): the value itself, read only when A is the class tag, since a trait is a class
+    //    value whose type is "trait")
     GET_TYPE,
 
     // Returns the string name of a type either from a __type metatable field or just based on the tag, alternative for typeof(x)

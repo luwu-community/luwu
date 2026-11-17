@@ -53,6 +53,7 @@ static bool isUnsafeToSink(IrCmd cmd)
 
     // Reads VM register: STORE_TAG/STORE_TVALUE/etc. to the same VM register
     case IrCmd::GET_TYPEOF:
+    case IrCmd::GET_TYPE:
 
     // Mutates table array part, invalidating reads
     case IrCmd::TABLE_SETNUM:
@@ -1216,7 +1217,16 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::CHECK_OBJECT_CLASS:
         state.checkLiveIns(OP_C(inst), index, true);
         break;
+    case IrCmd::CHECK_STORAGE:
+        // This instruction has two jumps to the exit in the lowering and that prevents exit sync record from being generated
+        state.checkLiveIns(OP_C(inst), index, false);
+        break;
+    case IrCmd::CHECK_STORAGE_ELEMENT:
+        // This instruction has two jumps to the exit in the lowering and that prevents exit sync record from being generated
+        state.checkLiveIns(OP_D(inst), index, false);
+        break;
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+    case IrCmd::CHECK_CLASS_ALLOCATABLE:
         // This instruction has several jumps to the exit in the lowering and that prevents exit sync record from being generated
         state.checkLiveIns(OP_B(inst), index, false);
         break;
@@ -1283,6 +1293,9 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_FORGPREP:
     case IrCmd::FALLBACK_NEWOBJECT:
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
+    case IrCmd::FALLBACK_INITTRAITS:
+    case IrCmd::FALLBACK_GETQUALIFIED:
+    case IrCmd::FALLBACK_TABLEBUNDLE:
         if (state.hasGcoToClear)
             state.flushGcoRegs();
 
@@ -1328,6 +1341,9 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_FORGPREP:
     case IrCmd::FALLBACK_NEWOBJECT:
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
+    case IrCmd::FALLBACK_INITTRAITS:
+    case IrCmd::FALLBACK_GETQUALIFIED:
+    case IrCmd::FALLBACK_TABLEBUNDLE:
         // CALL directly executes a Luau function on the same native stack frame
     case IrCmd::CALL:
         // These instructions use lowering that is not aware of register allocator and demand no active values to exist

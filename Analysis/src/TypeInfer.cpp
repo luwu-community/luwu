@@ -375,7 +375,8 @@ ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStat& program)
         return check(scope, *typefunction);
     else if (auto global = program.as<AstStatDeclareGlobal>())
     {
-        TypeId globalType = resolveType(scope, *global->type);
+        // Luwu Declare Statements (rfcs/declare-statements.md): the new solver gives `declare name` the environment's type
+        TypeId globalType = global->type ? resolveType(scope, *global->type) : anyType;
         Name globalName(global->name.value);
 
         currentModule->declaredGlobals[globalName] = globalType;
@@ -406,6 +407,11 @@ ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStat& program)
     else if (FFlag::LuwuClasses && program.is<AstStatClass>())
     {
         reportError(program.as<AstStatClass>()->name->location, GenericError{"class keyword is illegal here"});
+        return ControlFlow::None;
+    }
+    else if (program.is<AstStatDeclareClass>())
+    {
+        // Luwu Declare Statements (rfcs/declare-statements.md): classes are only checked by the new solver
         return ControlFlow::None;
     }
     else
@@ -1704,7 +1710,7 @@ void TypeChecker::prototype(const ScopePtr& scope, const AstStatDeclareExternTyp
         {
             reportError(
                 declaredExternType.location,
-                GenericError{format("Cannot use non-class type '%s' as a superclass of class '%s'", superName.c_str(), declaredExternType.name.value)}
+                GenericError{format("Cannot use non-extern type '%s' as the supertype of extern type '%s'", superName.c_str(), declaredExternType.name.value)}
             );
             incorrectExternTypeDefinitions.insert(&declaredExternType);
             return;
@@ -1753,7 +1759,7 @@ ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStatDeclareExtern
         TypeId propTy = resolveType(scope, *prop.ty);
 
         bool assignToMetatable = isMetamethod(propName);
-        Luau::ExternType::Props& assignTo = assignToMetatable ? metatable->props : etv->props;
+        Luau::ExternType::Props& assignTo = assignToMetatable ? metatable->props : etv->props();
 
         // Function typeArguments always take 'self', but this isn't reflected in the
         // parsed annotation. Add it here.
@@ -1938,6 +1944,9 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
         result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInstantiate>())
         result = checkExpr(scope, *a);
+    // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
+    else if (auto a = expr.as<AstExprSelfClass>())
+        result = checkExpr(scope, *a->classOf);
     else
         ice("Unhandled AstExpr?");
 
@@ -5146,7 +5155,7 @@ TypeId TypeChecker::checkRequire(const ScopePtr& scope, const ModuleInfo& module
 
     if (module->type != SourceCode::Module)
     {
-        reportError(location, IllegalRequire{module->humanReadableName, "Module is not a ModuleScript.  It cannot be required."});
+        reportError(location, IllegalRequire{module->humanReadableName, "it isn't a ModuleScript"});
         return errorRecoveryType(scope);
     }
 
@@ -5158,7 +5167,7 @@ TypeId TypeChecker::checkRequire(const ScopePtr& scope, const ModuleInfo& module
     std::optional<TypeId> moduleType = first(modulePack);
     if (!moduleType)
     {
-        reportError(location, IllegalRequire{module->humanReadableName, "Module does not return exactly 1 value.  It cannot be required."});
+        reportError(location, IllegalRequire{module->humanReadableName, {}, IllegalRequire::Returns::Nothing});
         return errorRecoveryType(scope);
     }
 
@@ -5442,7 +5451,7 @@ void TypeChecker::diagnoseMissingTableKey(UnknownProperty* utk, TypeErrorData& d
     {
         while (etv)
         {
-            accumulate(etv->props);
+            accumulate(etv->props());
 
             if (!etv->parent)
                 break;
@@ -5894,7 +5903,10 @@ TypeId TypeChecker::resolveTypeWorker(const ScopePtr& scope, const AstType& anno
             else if (prop.access == AstTableAccess::Write)
                 reportError(prop.accessLocation.value_or(Location{}), GenericError{"write keyword is illegal here"});
             else if (prop.access == AstTableAccess::ReadWrite)
+            {
                 props[prop.name.value] = {resolveType(scope, *prop.type), /* deprecated: */ false, {}, std::nullopt, {}, std::nullopt, prop.location};
+                applyDeprecatedAttribute(props[prop.name.value], prop.attributes);
+            }
             else
                 ice("Unexpected property access " + std::to_string(int(prop.access)));
         }

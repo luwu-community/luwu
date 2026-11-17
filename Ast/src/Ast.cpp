@@ -24,6 +24,14 @@ static bool hasAttributeInArray(const AstArray<AstAttr*> attributes, AstAttr::Ty
     return findAttributeInArray(attributes, attributeType) != nullptr;
 }
 
+std::optional<AstAttr::DeprecatedInfo> findDeprecatedInfo(const AstArray<AstAttr*>& attributes)
+{
+    if (const AstAttr* attr = findAttributeInArray(attributes, AstAttr::Type::Deprecated))
+        return attr->deprecatedInfo();
+
+    return std::nullopt;
+}
+
 static void visitTypeList(AstVisitor* visitor, const AstTypeList& list)
 {
     for (AstType* ty : list.types)
@@ -61,7 +69,25 @@ AstAttr::AstAttr(const Location& location, Type type, AstArray<AstExpr*> args, A
 
 void AstAttr::visit(AstVisitor* visitor)
 {
-    visitor->visit(this);
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): upstream visits only the attribute
+    // itself. Its arguments are visited too, for a visitor that opts in to attributes (see AstVisitor).
+    if (visitor->visit(this))
+    {
+        for (AstExpr* arg : args)
+            arg->visit(visitor);
+
+        if (refinedType)
+            refinedType->visit(visitor);
+    }
+}
+
+// Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): upstream never visits a node's
+// attributes. Luwu does, and AstVisitor::visit(AstAttr*) returns false unless a visitor opts in, so only the
+// visitors that look for what is at a position see them.
+static void visitAttributes(const AstArray<AstAttr*>& attributes, AstVisitor* visitor)
+{
+    for (AstAttr* attr : attributes)
+        attr->visit(visitor);
 }
 
 AstAttr::DeprecatedInfo AstAttr::deprecatedInfo() const
@@ -346,7 +372,12 @@ AstExprIndexName::AstExprIndexName(
 void AstExprIndexName::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
+    {
         expr->visit(visitor);
+
+        if (qualifiedTrait)
+            qualifiedTrait->visit(visitor);
+    }
 }
 
 AstExprIndexExpr::AstExprIndexExpr(const Location& location, AstExpr* expr, AstExpr* index)
@@ -410,6 +441,11 @@ void AstExprFunction::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
+        visitAttributes(attributes, visitor);
+
+        for (AstLocal* arg : args)
+            visitAttributes(arg->attributes, visitor);
+
         for (AstLocal* arg : args)
         {
             if (arg->annotation)
@@ -467,6 +503,8 @@ void AstExprTable::visit(AstVisitor* visitor)
     {
         for (const Item& item : items)
         {
+            visitAttributes(item.attributes, visitor);
+
             if (item.key)
                 item.key->visit(visitor);
 
@@ -725,6 +763,18 @@ void AstExprInterpString::visit(AstVisitor* visitor)
     }
 }
 
+AstExprSelfClass::AstExprSelfClass(const Location& location, AstExprCall* classOf)
+    : AstExpr(ClassIndex(), location)
+    , classOf(classOf)
+{
+}
+
+void AstExprSelfClass::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        classOf->visit(visitor);
+}
+
 AstExprInstantiate::AstExprInstantiate(const Location& location, AstExpr* expr, AstArray<AstTypeOrPack> types)
     : AstExpr(ClassIndex(), location)
     , expr(expr)
@@ -917,6 +967,8 @@ void AstStatLocal::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
+        visitAttributes(attributes, visitor);
+
         for (AstLocal* var : vars)
         {
             if (var->annotation)
@@ -1019,6 +1071,8 @@ void AstStatAssign::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
+        visitAttributes(attributes, visitor);
+
         for (AstExpr* lvalue : vars)
             lvalue->visit(visitor);
 
@@ -1111,6 +1165,8 @@ void AstStatTypeAlias::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
+        visitAttributes(attributes, visitor);
+
         for (AstGenericType* el : generics)
         {
             el->visit(visitor);
@@ -1165,7 +1221,7 @@ AstStatDeclareGlobal::AstStatDeclareGlobal(
 
 void AstStatDeclareGlobal::visit(AstVisitor* visitor)
 {
-    if (visitor->visit(this))
+    if (visitor->visit(this) && type)
         type->visit(visitor);
 }
 
@@ -1230,6 +1286,8 @@ void AstStatClass::visit(AstVisitor* visitor)
     LUAU_ASSERT(FFlag::LuwuClasses);
     if (visitor->visit(this))
     {
+        visitAttributes(attributes, visitor);
+
         for (AstGenericType* generic : generics)
             generic->visit(visitor);
 
@@ -1240,6 +1298,8 @@ void AstStatClass::visit(AstVisitor* visitor)
         {
             for (AstLocal* arg : primaryConstructor->args)
             {
+                visitAttributes(arg->attributes, visitor);
+
                 if (arg->annotation)
                     arg->annotation->visit(visitor);
             }
@@ -1251,12 +1311,36 @@ void AstStatClass::visit(AstVisitor* visitor)
             }
         }
 
+        auto visitTraitRefs = [&](const AstArray<AstClassTraitRef>& refs)
+        {
+            for (const AstClassTraitRef& ref : refs)
+            {
+                ref.trait->visit(visitor);
+
+                for (const AstTypeOrPack& param : ref.typeArguments)
+                {
+                    if (param.type)
+                        param.type->visit(visitor);
+                    else if (param.typePack)
+                        param.typePack->visit(visitor);
+                }
+
+                for (AstExpr* arg : ref.args)
+                    arg->visit(visitor);
+            }
+        };
+
+        visitTraitRefs(needs);
+        visitTraitRefs(implements);
+
         for (const auto& member : members)
         {
             Luau::visit(
                 overloaded{
                     [&](const AstClassProperty& prop)
                     {
+                        visitAttributes(prop.attributes, visitor);
+
                         if (prop.ty)
                             prop.ty->visit(visitor);
                         if (prop.defaultValue)
@@ -1264,6 +1348,9 @@ void AstStatClass::visit(AstVisitor* visitor)
                     },
                     [&](const AstClassMethod& method)
                     {
+                        if (method.qualifiedTrait)
+                            method.qualifiedTrait->visit(visitor);
+
                         method.function->visit(visitor);
                     }
                 },
@@ -1331,6 +1418,8 @@ void AstStatDeclareFunction::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
+        visitAttributes(attributes, visitor);
+
         visitTypeList(visitor, params);
         retTypes->visit(visitor);
     }
@@ -1404,6 +1493,67 @@ void AstStatDeclareExternType::visit(AstVisitor* visitor)
     }
 }
 
+AstStatDeclareClass::AstStatDeclareClass(const Location& location, AstStatClass* shape, std::optional<Location> declareLocation)
+    : AstStat(ClassIndex(), location)
+    , shape(shape)
+    , declareLocation(declareLocation)
+{
+    luwuOnly = true;
+}
+
+// Only the declared class's type annotations: its functions have no bodies, and its name is not a local.
+void AstStatDeclareClass::visit(AstVisitor* visitor)
+{
+    if (!visitor->visit(this))
+        return;
+
+    for (AstGenericType* generic : shape->generics)
+        generic->visit(visitor);
+
+    for (AstGenericTypePack* genericPack : shape->genericPacks)
+        genericPack->visit(visitor);
+
+    if (shape->primaryConstructor)
+    {
+        for (AstLocal* arg : shape->primaryConstructor->args)
+        {
+            if (arg->annotation)
+                arg->annotation->visit(visitor);
+        }
+    }
+
+    for (const AstClassMember& member : shape->members)
+    {
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+        {
+            if (prop->ty)
+                prop->ty->visit(visitor);
+        }
+        else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+        {
+            AstExprFunction* function = method->function;
+
+            for (AstGenericType* generic : function->generics)
+                generic->visit(visitor);
+
+            for (AstGenericTypePack* genericPack : function->genericPacks)
+                genericPack->visit(visitor);
+
+            for (AstLocal* arg : function->args)
+            {
+                if (arg->annotation)
+                    arg->annotation->visit(visitor);
+            }
+
+            if (function->varargAnnotation)
+                function->varargAnnotation->visit(visitor);
+
+            if (function->returnAnnotation)
+                function->returnAnnotation->visit(visitor);
+        }
+    }
+}
+
 AstStatError::AstStatError(
     const Location& location,
     const AstArray<AstExpr*>& expressions,
@@ -1470,10 +1620,14 @@ void AstTypeTable::visit(AstVisitor* visitor)
     if (visitor->visit(this))
     {
         for (const AstTableProp& prop : props)
+        {
+            visitAttributes(prop.attributes, visitor);
             prop.type->visit(visitor);
+        }
 
         if (indexer)
         {
+            visitAttributes(indexer->attributes, visitor);
             indexer->indexType->visit(visitor);
             indexer->resultType->visit(visitor);
         }
@@ -1523,6 +1677,8 @@ void AstTypeFunction::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
+        visitAttributes(attributes, visitor);
+
         visitTypeList(visitor, argTypes);
         returnTypes->visit(visitor);
     }

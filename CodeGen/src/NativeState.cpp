@@ -47,6 +47,7 @@ void initFunctions(NativeContext& context)
     context.luaH_new = luaH_new;
     context.luaH_clone = luaH_clone;
     context.luaR_newobjectuninit = luaR_newobjectuninit;
+    context.luaR_newobject = luaR_newobject;
     context.luaH_resizearray = luaH_resizearray;
     context.luaH_setnum = luaH_setnum;
 
@@ -88,6 +89,7 @@ void initFunctions(NativeContext& context)
     context.forgLoopNodeIter = forgLoopNodeIter;
     context.forgLoopNonTableFallback = forgLoopNonTableFallback;
     context.forgLoopNonTableFallback_DEPRECATED = forgLoopNonTableFallback_DEPRECATED;
+    context.invokeFastMethod = invokeFastMethod;
     context.forgPrepXnextFallback = forgPrepXnextFallback;
     context.callProlog = callProlog;
     context.callEpilogC = callEpilogC;
@@ -106,6 +108,9 @@ void initFunctions(NativeContext& context)
     context.executeFORGPREP = executeFORGPREP;
     context.executeNEWOBJECT = executeNEWOBJECT;
     context.executeNEWCLASSMEMBER = executeNEWCLASSMEMBER;
+    context.executeINITTRAITS = executeINITTRAITS;
+    context.executeGETQUALIFIED = executeGETQUALIFIED;
+    context.executeTABLEBUNDLE = executeTABLEBUNDLE;
     context.executeGETVARARGSMultRet = executeGETVARARGSMultRet;
     context.executeGETVARARGSConst = executeGETVARARGSConst;
     context.executeDUPCLOSURE = executeDUPCLOSURE;

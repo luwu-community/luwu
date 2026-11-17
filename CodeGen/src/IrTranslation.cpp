@@ -16,6 +16,7 @@ LUAU_FASTFLAG(LuauCodegenInteger3)
 LUAU_FASTFLAGVARIABLE(LuauCodegenBuilinDeadRange)
 LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuauCallFeedback)
 
 namespace Luau
 {
@@ -405,6 +406,31 @@ void translateInstJumpxEqNil(IrBuilder& build, const Instruction* pc, int pcpos)
 
     IrOp ta = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
     build.inst(IrCmd::JUMP_EQ_TAG, ta, build.constTag(LUA_TNIL), not_ ? next : target, not_ ? target : next);
+
+    // Fallthrough in original bytecode is implicit, so we start next internal block here
+    if (build.isInternalBlock(next))
+        build.beginBlock(next);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): INITTRAITS. The fallback puts the trait initializer runner in A, or nil when the
+// object's class has no trait initializers, and the jump skips the CALL in that case.
+void translateInstInitTraits(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+
+    // the CALL after it runs each initializer from the frame it names (see LOP_INITTRAITS)
+    Instruction call = pc[1];
+    CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+    int frame = LUAU_INSN_A(call);
+    int nargs = LUAU_INSN_B(call) - 2;
+
+    IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
+    IrOp next = build.blockAtInst(pcpos + 1);
+
+    build.inst(IrCmd::FALLBACK_INITTRAITS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(frame), build.constInt(nargs));
+
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(frame));
+    build.inst(IrCmd::JUMP_EQ_TAG, tag, build.constTag(LUA_TNIL), target, next);
 
     // Fallthrough in original bytecode is implicit, so we start next internal block here
     if (build.isInternalBlock(next))
@@ -1934,9 +1960,11 @@ void translateInstGetObjectMember(IrBuilder& build, const Instruction* pc, int p
 // constructed with every field) is lowered natively: allocate uninitialized, then copy each argument
 // register into its member. The copies are ordinary IR stores, so const prop can forward a value that is
 // still unboxed (the `self.x + o.x` computed just before) straight into the member.
+// Luwu Traits (rfcs/classes/traits.md): the ALLOC form is lowered natively too, as an allocation that copies the
+// constant defaults; the instructions after it initialize the rest.
 // In valid bytecode, B holds a class with the shape the compiler picked (VM_CASE(LOP_NEWOBJECT) asserts
 // this), so only the runtime conditions need a guard. Every other case -- the INIT form, the table form,
-// a class with constant defaults, a private constructor used from outside its class -- runs
+// a FIELDS class with constant defaults, a private constructor used from outside its class -- runs
 // executeNEWOBJECT as a fallback.
 // Nothing can collect between the allocation and the last store, and a freshly allocated object is white,
 // so no barrier is needed.
@@ -1952,7 +1980,9 @@ void translateInstNewObject(IrBuilder& build, const Instruction* pc, int pcpos)
         build.inst(IrCmd::FALLBACK_NEWOBJECT, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.constInt(form), build.constInt(int(aux)));
     };
 
-    if (form != LBC_NEWOBJECT_FIELDS)
+    bool allocForm = form == LBC_NEWOBJECT_ALLOC;
+
+    if (form != LBC_NEWOBJECT_FIELDS && !allocForm)
     {
         emitFallback();
         return;
@@ -1962,10 +1992,13 @@ void translateInstNewObject(IrBuilder& build, const Instruction* pc, int pcpos)
     IrOp next = build.blockAtInst(pcpos + getOpLength(LuauOpcode(LOP_NEWOBJECT)));
 
     IrOp classPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
-    build.inst(IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE, classPtr, fallback);
+    build.inst(allocForm ? IrCmd::CHECK_CLASS_ALLOCATABLE : IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE, classPtr, fallback);
 
     build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + getOpLength(LuauOpcode(LOP_NEWOBJECT))));
-    IrOp object = build.inst(IrCmd::NEW_OBJECT, classPtr);
+
+    // Luwu Traits (rfcs/classes/traits.md): ALLOC only allocates, with the constant defaults, and leaves the rest to the
+    // instructions after it (see LBC_NEWOBJECT_ALLOC)
+    IrOp object = build.inst(allocForm ? IrCmd::NEW_OBJECT_DEFAULTS : IrCmd::NEW_OBJECT, classPtr);
 
     for (uint32_t idx = 0; idx < aux; idx++)
     {
@@ -1984,7 +2017,8 @@ void translateInstNewObject(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::JUMP, next);
 }
 
-// The write counterpart; never emitted for a `const` member, so there is no authorization here either.
+// The write counterpart. It writes a `const` member only to initialize an object the code just allocated (see
+// LOP_SETOBJECTMEMBER), so there is no authorization here either.
 void translateInstSetObjectMember(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);
@@ -2174,6 +2208,259 @@ void translateInstCapture(IrBuilder& build, const Instruction* pc, int pcpos)
     }
 }
 
+// Luwu collections: the `Vec` and `VecDeque` methods native code runs inline (translateStorageMethod)
+enum class StorageMethod
+{
+    None,
+    PushBack,
+    PushFront,
+    PopBack,
+    PopFront,
+    Front,
+    Back,
+    At,
+    Set,
+};
+
+struct StorageMethodInfo
+{
+    StorageMethod method = StorageMethod::None;
+    // The containers that have it (LuwuStorageKind), or LUAR_STORAGE_CONTAINER for both
+    int kind = LUAR_STORAGE_NONE;
+    int params = 0;
+};
+
+static StorageMethodInfo storageMethodOf(const TString* name)
+{
+    struct Entry
+    {
+        const char* name;
+        StorageMethodInfo info;
+    };
+
+    static const Entry kMethods[] = {
+        {"push", {StorageMethod::PushBack, LUAR_STORAGE_VEC, 1}},
+        {"pushback", {StorageMethod::PushBack, LUAR_STORAGE_RING, 1}},
+        {"pushfront", {StorageMethod::PushFront, LUAR_STORAGE_RING, 1}},
+        {"pop", {StorageMethod::PopBack, LUAR_STORAGE_VEC, 0}},
+        {"popback", {StorageMethod::PopBack, LUAR_STORAGE_RING, 0}},
+        {"popfront", {StorageMethod::PopFront, LUAR_STORAGE_RING, 0}},
+        {"front", {StorageMethod::Front, LUAR_STORAGE_RING, 0}},
+        {"back", {StorageMethod::Back, LUAR_STORAGE_RING, 0}},
+        {"at", {StorageMethod::At, LUAR_STORAGE_CONTAINER, 1}},
+        {"set", {StorageMethod::Set, LUAR_STORAGE_CONTAINER, 2}},
+    };
+
+    for (const Entry& entry : kMethods)
+    {
+        if (strcmp(getstr(name), entry.name) == 0)
+            return entry.info;
+    }
+    return {};
+}
+
+// Luwu collections: whether a builtin class has a fast method (luaR_FastMethod) named `name` that isn't translated to IR,
+// which INVOKE_FAST_METHOD runs
+static bool isFastMethodName(const TString* name)
+{
+    static const char* const kNames[] = {"get", "has", "set"};
+    for (const char* fastName : kNames)
+    {
+        if (strcmp(getstr(name), fastName) == 0)
+            return true;
+    }
+    return false;
+}
+
+// Writes a call's `nresults` results from `callra` on: when `storage` is given, the entry `offset` places from its
+// front first, then nils. A call taking every result (LUA_MULTRET) gets the entry, or nothing, and the stack top after
+// it. Nothing is loaded for a call that takes no results: the IR keeps instructions nothing uses.
+static void storeStorageResults(IrBuilder& build, int callra, int nresults, IrOp storage = {}, IrOp offset = {})
+{
+    bool hasValue = storage.kind != IrOpKind::None;
+    int stored = nresults == LUA_MULTRET ? int(hasValue) : nresults;
+    for (int i = 0; i < stored; i++)
+    {
+        if (i == 0 && hasValue)
+        {
+            IrOp slot = build.inst(IrCmd::GET_STORAGE_ENTRY_ADDR, storage, offset);
+            build.inst(IrCmd::STORE_TVALUE, build.vmReg(callra), build.inst(IrCmd::LOAD_TVALUE, slot));
+        }
+        else
+        {
+            build.inst(IrCmd::STORE_TAG, build.vmReg(callra + i), build.constTag(LUA_TNIL));
+        }
+    }
+
+    if (nresults == LUA_MULTRET)
+        build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(callra), build.constInt(stored));
+}
+
+// Checks the value in `reg` has the element type of `storage`
+static void checkStorageElement(IrBuilder& build, IrOp storage, int reg, IrOp fallback)
+{
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(reg));
+    IrOp gco = build.inst(IrCmd::LOAD_POINTER, build.vmReg(reg));
+    build.inst(IrCmd::CHECK_STORAGE_ELEMENT, storage, tag, gco, fallback);
+}
+
+// The position from the front (from 0) that the number in `reg` names, when it's one of the entries
+static IrOp checkStoragePosition(IrBuilder& build, IrOp storage, int reg, IrOp fallback)
+{
+    build.loadAndCheckTag(build.vmReg(reg), LUA_TNUMBER, fallback);
+    IrOp position = build.inst(IrCmd::TRY_NUM_TO_INDEX, build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(reg)), fallback);
+    IrOp offset = build.inst(IrCmd::SUB_INT, position, build.constInt(1));
+    IrOp count = build.inst(IrCmd::LOAD_STORAGE_INT, storage, build.constInt(offsetof(LuauStorage, count)));
+    build.inst(IrCmd::CHECK_CMP_INT, offset, count, build.cond(IrCondition::UnsignedLess), fallback);
+    return offset;
+}
+
+// Moves a ring's head by `delta` slots, wrapping around its end
+static void moveStorageHead(IrBuilder& build, IrOp storage, int delta)
+{
+    IrOp head = build.inst(IrCmd::LOAD_STORAGE_INT, storage, build.constInt(offsetof(LuauStorage, head)));
+    IrOp capacity = build.inst(IrCmd::LOAD_STORAGE_INT, storage, build.constInt(offsetof(LuauStorage, capacity)));
+    IrOp mask = build.inst(IrCmd::SUB_INT, capacity, build.constInt(1));
+    IrOp moved = build.inst(IrCmd::ADD_INT, head, delta > 0 ? build.constInt(delta) : mask);
+    build.inst(IrCmd::STORE_STORAGE_INT, storage, build.constInt(offsetof(LuauStorage, head)), build.inst(IrCmd::BITAND_UINT, moved, mask));
+}
+
+// Luwu collections: where to read the tag and value of the argument in `reg` from, for the NAMECALL at `pcpos` whose
+// arguments start at `first`. The compiler fills arguments with MOVEs right before the NAMECALL, and a MOVE copies a
+// whole TValue: reading part of it back right away waits for the store to complete. The MOVE's source holds the same
+// value, so it's read instead when the MOVEs always run right before the NAMECALL and nothing writes the source after.
+static int storageArgumentSource(IrBuilder& build, int pcpos, int reg, int first)
+{
+    // The argument registers the MOVEs after the current one write, as bits from `first`
+    const int kTrackedArguments = 32;
+    uint32_t laterWrites = 0;
+    auto isArgument = [&](int r)
+    {
+        return r >= first && r - first < kTrackedArguments;
+    };
+
+    for (int pos = pcpos; pos > 0 && build.instIndexToBlock[pos] == ~0u; pos--)
+    {
+        // An instruction starts right before `pos` when the builder translated one there
+        if (build.function.bcMapping[pos - 1].irLocation == ~0u)
+            break;
+
+        Instruction insn = build.function.proto->code[pos - 1];
+        int target = LUAU_INSN_A(insn);
+        if (LUAU_INSN_OP(insn) != LOP_MOVE || !isArgument(target))
+            break;
+
+        int source = LUAU_INSN_B(insn);
+        if (target != reg)
+        {
+            laterWrites |= 1u << (target - first);
+            continue;
+        }
+
+        bool sourceOverwritten = isArgument(source) && (laterWrites & (1u << (source - first))) != 0;
+        return sourceOverwritten ? reg : source;
+    }
+
+    return reg;
+}
+
+/*
+ * Luwu collections: a `Vec` or `VecDeque` method on `object` as IR, in place of its NAMECALL and CALL. The storage
+ * block holds the entries (LuauStorage). Anything the IR doesn't handle goes to `fallback`, which makes the call: a
+ * value without the element type, growing, an empty container, a position out of range or not a whole number. So
+ * every error and every first value stays the C method's.
+ */
+static void translateStorageMethod(
+    IrBuilder& build,
+    StorageMethod method,
+    IrOp object,
+    int pcpos,
+    int callra,
+    int nresults,
+    IrOp fallback
+)
+{
+    IrOp storage = build.inst(IrCmd::LOAD_STORAGE, object);
+    IrOp countOffset = build.constInt(offsetof(LuauStorage, count));
+
+    // An argument is copied whole from its own register, and its parts are read from where it came from
+    int arg = callra + 2;
+    int argParts = storageArgumentSource(build, pcpos, arg, arg);
+    int secondParts = storageArgumentSource(build, pcpos, arg + 1, arg);
+
+    switch (method)
+    {
+    case StorageMethod::PushBack:
+    case StorageMethod::PushFront:
+    {
+        checkStorageElement(build, storage, argParts, fallback);
+        IrOp count = build.inst(IrCmd::LOAD_STORAGE_INT, storage, countOffset);
+        IrOp capacity = build.inst(IrCmd::LOAD_STORAGE_INT, storage, build.constInt(offsetof(LuauStorage, capacity)));
+        build.inst(IrCmd::CHECK_CMP_INT, count, capacity, build.cond(IrCondition::UnsignedLess), fallback);
+
+        IrOp offset = count;
+        if (method == StorageMethod::PushFront)
+        {
+            moveStorageHead(build, storage, -1);
+            offset = build.constInt(0);
+        }
+
+        // The barrier goes last: it may call, and nothing is live across it then
+        IrOp slot = build.inst(IrCmd::GET_STORAGE_ENTRY_ADDR, storage, offset);
+        build.inst(IrCmd::STORE_TVALUE, slot, build.inst(IrCmd::LOAD_TVALUE, build.vmReg(arg)));
+        build.inst(IrCmd::STORE_STORAGE_INT, storage, countOffset, build.inst(IrCmd::ADD_INT, count, build.constInt(1)));
+        build.inst(IrCmd::BARRIER_OBJ, object, build.vmReg(argParts), build.undef());
+        storeStorageResults(build, callra, nresults);
+        break;
+    }
+    case StorageMethod::PopBack:
+    case StorageMethod::PopFront:
+    {
+        IrOp count = build.inst(IrCmd::LOAD_STORAGE_INT, storage, countOffset);
+        build.inst(IrCmd::CHECK_CMP_INT, count, build.constInt(0), build.cond(IrCondition::NotEqual), fallback);
+        IrOp remaining = build.inst(IrCmd::SUB_INT, count, build.constInt(1));
+
+        storeStorageResults(build, callra, nresults, storage, method == StorageMethod::PopBack ? remaining : build.constInt(0));
+
+        if (method == StorageMethod::PopFront)
+            moveStorageHead(build, storage, 1);
+        build.inst(IrCmd::STORE_STORAGE_INT, storage, countOffset, remaining);
+        break;
+    }
+    case StorageMethod::Front:
+    case StorageMethod::Back:
+    {
+        IrOp count = build.inst(IrCmd::LOAD_STORAGE_INT, storage, countOffset);
+        build.inst(IrCmd::CHECK_CMP_INT, count, build.constInt(0), build.cond(IrCondition::NotEqual), fallback);
+        if (nresults != 0)
+        {
+            IrOp offset = method == StorageMethod::Back ? build.inst(IrCmd::SUB_INT, count, build.constInt(1)) : build.constInt(0);
+            storeStorageResults(build, callra, nresults, storage, offset);
+        }
+        break;
+    }
+    case StorageMethod::At:
+    {
+        IrOp offset = checkStoragePosition(build, storage, argParts, fallback);
+        storeStorageResults(build, callra, nresults, storage, offset);
+        break;
+    }
+    case StorageMethod::Set:
+    {
+        IrOp offset = checkStoragePosition(build, storage, argParts, fallback);
+        checkStorageElement(build, storage, secondParts, fallback);
+        IrOp slot = build.inst(IrCmd::GET_STORAGE_ENTRY_ADDR, storage, offset);
+        build.inst(IrCmd::STORE_TVALUE, slot, build.inst(IrCmd::LOAD_TVALUE, build.vmReg(arg + 1)));
+        build.inst(IrCmd::BARRIER_OBJ, object, build.vmReg(secondParts), build.undef());
+        storeStorageResults(build, callra, nresults);
+        break;
+    }
+    case StorageMethod::None:
+        CODEGEN_ASSERT(!"no method to translate");
+        break;
+    }
+}
+
 bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);
@@ -2270,6 +2557,31 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
     bool objectSpeculation = FFlag::LuwuClasses && bcTypes.a == LBC_TYPE_ANY;
     IrOp objBlock = objectSpeculation ? build.fallbackBlock(pcpos) : fallback;
 
+    // Luwu collections: a `Vec` or `VecDeque` method runs inline (translateStorageMethod). Then this translation makes
+    // the call on every other path itself, and the builder skips the CALL.
+    int callpc = pcpos + getOpLength(LuauOpcode(LOP_NAMECALL));
+    Instruction call = pc[getOpLength(LuauOpcode(LOP_NAMECALL))];
+    StorageMethodInfo storageMethod;
+    // The builder skips a CALLFB's second word only with call feedback on, and a FASTCALL's fallback needs the CALL it
+    // translates
+    bool callIsSkippable = LUAU_INSN_OP(call) == LOP_CALL || FFlag::LuauCallFeedback;
+    bool invokesFastMethod = false;
+    if (objectSpeculation && callIsSkippable && !build.activeFastcallFallback)
+    {
+        CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALLFB || LUAU_INSN_OP(call) == LOP_CALL);
+        const TString* name = tsvalue(&build.function.proto->k[aux]);
+        StorageMethodInfo candidate = storageMethodOf(name);
+        // The call passes `self` and the arguments, and may take any number of results
+        if (candidate.params == LUAU_INSN_B(call) - 2)
+            storageMethod = candidate;
+
+        // A fast method needs a known argument count, and the NAMECALL's own member cache (not NAMECALLUDATA's)
+        invokesFastMethod = isFastMethodName(name) && LUAU_INSN_B(call) >= 2 && LUAU_INSN_OP(*pc) == LOP_NAMECALL;
+    }
+    bool lowersStorageMethod = storageMethod.method != StorageMethod::None;
+    bool skipsCall = lowersStorageMethod || invokesFastMethod;
+    IrOp afterCall = skipsCall ? build.blockAtInst(callpc + getOpLength(LuauOpcode(LUAU_INSN_OP(call)))) : IrOp{};
+
     IrOp firstFastPathSuccess = build.block(IrBlockKind::Internal);
     IrOp secondFastPath = build.block(IrBlockKind::Internal);
 
@@ -2318,6 +2630,46 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
         // see translateInstGetTableKS
         build.beginBlock(objBlock);
         build.loadAndCheckTag(build.vmReg(rb), LUA_TOBJECT, fallback);
+
+        if (skipsCall)
+        {
+            // Objects of other classes take the generic path, a fallback block like this one
+            IrOp otherObject = build.fallbackBlock(pcpos);
+            int callra = LUAU_INSN_A(call);
+            int nresults = LUAU_INSN_C(call) - 1;
+
+            if (lowersStorageMethod)
+            {
+                IrOp notStorage = invokesFastMethod ? build.fallbackBlock(pcpos) : otherObject;
+                IrOp object = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+                build.inst(IrCmd::CHECK_STORAGE, object, build.constInt(storageMethod.kind), notStorage);
+                translateStorageMethod(build, storageMethod.method, object, pcpos, callra, nresults, fallback);
+                build.inst(IrCmd::JUMP, afterCall);
+
+                if (invokesFastMethod)
+                    build.beginBlock(notStorage);
+            }
+
+            if (invokesFastMethod)
+            {
+                IrOp object = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+                IrOp count = build.inst(
+                    IrCmd::INVOKE_FAST_METHOD,
+                    object,
+                    build.constUint(pcpos),
+                    build.vmReg(callra),
+                    build.constInt(LUAU_INSN_B(call) - 2),
+                    build.constInt(nresults)
+                );
+                build.inst(IrCmd::CHECK_CMP_INT, count, build.constInt(0), build.cond(IrCondition::GreaterEqual), otherObject);
+                if (nresults == LUA_MULTRET)
+                    build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(callra), count);
+                build.inst(IrCmd::JUMP, afterCall);
+            }
+
+            build.beginBlock(otherObject);
+        }
+
         emitObjectNamecall();
     }
 
@@ -2327,7 +2679,19 @@ bool translateInstNamecall(IrBuilder& build, const Instruction* pc, int pcpos)
 
     build.beginBlock(next);
 
-    return false;
+    if (!skipsCall)
+        return false;
+
+    // The CALL as the builder translates it, which every path but the inline method reaches
+    build.function.blockOp(next).startpc = uint32_t(callpc);
+    build.inst(IrCmd::INTERRUPT, build.constUint(callpc));
+    build.inst(IrCmd::SET_SAVEDPC, build.constUint(callpc + (FFlag::LuauCallFeedback ? getOpLength(LuauOpcode(LUAU_INSN_OP(call))) : 1)));
+    build.inst(IrCmd::CALL, build.vmReg(LUAU_INSN_A(call)), build.constInt(LUAU_INSN_B(call) - 1), build.constInt(LUAU_INSN_C(call) - 1));
+    build.inst(IrCmd::JUMP, afterCall);
+
+    // The next instruction goes in the block after the call
+    build.beginBlock(afterCall);
+    return true;
 }
 
 void translateInstAndX(IrBuilder& build, const Instruction* pc, int pcpos, IrOp c)

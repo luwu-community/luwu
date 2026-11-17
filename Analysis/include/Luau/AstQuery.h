@@ -74,6 +74,13 @@ struct FindFullAncestry final : public AstVisitor
 
     bool visit(AstStatFunction* node) override;
 
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): attributes and their arguments
+    // are part of the ancestry.
+    bool visit(AstAttr* attr) override;
+    bool visit(AstExprFunction* node) override;
+    // Luwu Traits (rfcs/classes/traits.md): `Self` is one name, though it holds the `class.of(self)` call it compiles to
+    bool visit(AstExprSelfClass* node) override;
+
     bool visit(AstNode* node) override;
 };
 

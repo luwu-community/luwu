@@ -112,6 +112,9 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
         // While ADJUST_STACK_TO_REG would semantically define the result range, we need to define it immediately
         invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), function.intOp(OP_G(inst)));
         break;
+    case IrCmd::INVOKE_FAST_METHOD:
+        invalidateRestoreVmRegs(vmRegOp(OP_C(inst)), function.intOp(OP_E(inst)));
+        break;
     case IrCmd::DO_ARITH:
     case IrCmd::DO_LEN:
     case IrCmd::GET_TABLE:
@@ -151,6 +154,17 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::FALLBACK_NEWOBJECT:
         invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), function.intOp(OP_D(inst)) == LBC_NEWOBJECT_INIT ? 3 : 1);
         break;
+    case IrCmd::FALLBACK_INITTRAITS:
+        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
+        invalidateRestoreVmRegs(vmRegOp(OP_C(inst)), 2 + function.intOp(OP_D(inst)));
+        break;
+    case IrCmd::FALLBACK_GETQUALIFIED:
+        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
+        break;
+    case IrCmd::FALLBACK_TABLEBUNDLE:
+        if (function.intOp(OP_F(inst)) == 0)
+            invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
+        break;
 
         // Make sure all VmReg referencing instructions are handled explicitly (only register reads here)
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
@@ -182,6 +196,7 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::FALLBACK_PREPVARARGS:
     case IrCmd::ADJUST_STACK_TO_TOP:
     case IrCmd::GET_TYPEOF:
+    case IrCmd::GET_TYPE:
     case IrCmd::NEWCLOSURE:
     case IrCmd::FINDUPVAL:
         break;

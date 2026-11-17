@@ -8,6 +8,10 @@
 
 using namespace Luau;
 
+LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
+
 struct DocumentationSymbolFixture : BuiltinsFixture
 {
     std::optional<DocumentationSymbol> getDocSymbol(const std::string& source, Position position)
@@ -199,6 +203,33 @@ TEST_CASE_FIXTURE(DocumentationSymbolFixture, "parent_class_method")
     CHECK_EQ(symbol, "@test/globaltype/Foo.bar");
 }
 
+// Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is found as itself, not as the `class.of(self)` call it holds
+TEST_CASE_FIXTURE(Fixture, "self_class_value_is_found_as_itself")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    check(R"(
+trait Cloner
+    function kind(self)
+        return Self
+    end
+end
+    )");
+
+    Position position(3, 16);
+    AstNode* node = findNodeAtPosition(*getMainSourceModule(), position);
+    REQUIRE(node);
+    CHECK(node->is<AstExprSelfClass>());
+
+    AstExpr* expr = findExprAtPosition(*getMainSourceModule(), position);
+    REQUIRE(expr);
+    CHECK(expr->is<AstExprSelfClass>());
+
+    std::vector<AstNode*> ancestry = findAstAncestryOfPosition(*getMainSourceModule(), position);
+    REQUIRE(!ancestry.empty());
+    CHECK(ancestry.back()->is<AstExprSelfClass>());
+}
+
 TEST_SUITE_END();
 
 TEST_SUITE_BEGIN("AstQuery");
@@ -224,6 +255,8 @@ bar(foo())
     CHECK_EQ("number", toString(*expectedOty));
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): what's under the cursor in a pattern is what's written there, never the
+// pattern's hidden local
 TEST_CASE_FIXTURE(Fixture, "ast_ancestry_at_eof")
 {
     check(R"(
@@ -425,6 +458,66 @@ TEST_CASE_FIXTURE(Fixture, "interior_binding_location_is_consistent_with_exterio
     REQUIRE(outerCallBinding);
 
     CHECK(outerCallBinding->location == Location{{1, 23}, {1, 27}});
+}
+
+TEST_CASE_FIXTURE(Fixture, "ancestry_reaches_into_attributes")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    check(R"(
+type M = {
+    @[deprecated {reason = "hi"}]
+    bark: () -> (),
+}
+    )");
+
+    auto hasAttr = [](const std::vector<AstNode*>& ancestry)
+    {
+        return std::any_of(
+            ancestry.begin(),
+            ancestry.end(),
+            [](AstNode* node)
+            {
+                return node->is<AstAttr>();
+            }
+        );
+    };
+
+    // The attribute's name.
+    std::vector<AstNode*> ancestry = findAstAncestryOfPosition(*getMainSourceModule(), Position(2, 8), /* includeTypes */ true);
+    REQUIRE(!ancestry.empty());
+    CHECK(ancestry.back()->is<AstAttr>());
+
+    // A key in its arguments.
+    ancestry = findAstAncestryOfPosition(*getMainSourceModule(), Position(2, 19), /* includeTypes */ true);
+    REQUIRE(!ancestry.empty());
+    CHECK(ancestry.back()->is<AstExprConstantString>());
+    CHECK(hasAttr(ancestry));
+}
+
+TEST_CASE_FIXTURE(Fixture, "ancestry_reaches_into_function_attributes")
+{
+    // A function's attributes come before it, outside the function's own location.
+    check(R"(
+@[deprecated {use = "bar"}]
+local function foo() end
+    )");
+
+    std::vector<AstNode*> ancestry = findAstAncestryOfPosition(*getMainSourceModule(), Position(1, 22));
+    REQUIRE(!ancestry.empty());
+    CHECK(ancestry.back()->is<AstExprConstantString>());
+    CHECK(std::any_of(
+        ancestry.begin(),
+        ancestry.end(),
+        [](AstNode* node)
+        {
+            return node->is<AstExprFunction>();
+        }
+    ));
+
+    AstNode* node = findNodeAtPosition(*getMainSourceModule(), Position(1, 22));
+    REQUIRE(node);
+    CHECK(node->is<AstExprConstantString>());
 }
 
 TEST_SUITE_END();

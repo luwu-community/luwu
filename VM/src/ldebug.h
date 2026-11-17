@@ -19,6 +19,10 @@ LUAI_FUNC l_noret luaG_concaterror(lua_State* L, StkId p1, StkId p2);
 LUAI_FUNC l_noret luaG_aritherror(lua_State* L, const TValue* p1, const TValue* p2, TMS op);
 LUAI_FUNC l_noret luaG_ordererror(lua_State* L, const TValue* p1, const TValue* p2, TMS op);
 LUAI_FUNC l_noret luaG_indexerror(lua_State* L, const TValue* p1, const TValue* p2);
+LUAI_FUNC l_noret luaG_indexerroratlua(lua_State* L, const TValue* p1, const TValue* p2);
+// Luwu Classes (rfcs/classes): raises `msg` at the nearest Lua frame, for an error a C function raises on behalf of the
+// Lua code that called it
+LUAI_FUNC l_noret luaG_runerroratlua(lua_State* L, const char* msg);
 LUAI_FUNC l_noret luaG_methoderror(lua_State* L, const TValue* p1, const TString* p2);
 LUAI_FUNC l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2);
 LUAI_FUNC l_noret luaG_instancefieldonclasserror(lua_State* L, const TValue* p1, const TValue* p2);

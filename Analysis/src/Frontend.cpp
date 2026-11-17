@@ -150,7 +150,7 @@ static void generateDocumentationSymbols(TypeId ty, const std::string& rootName)
     }
     else if (ExternType* etv = getMutable<ExternType>(ty))
     {
-        for (auto& [name, prop] : etv->props)
+        for (auto& [name, prop] : etv->props())
         {
             std::string n;
             n.reserve(rootName.size() + 1 + name.size());
@@ -323,7 +323,10 @@ ErrorVec accumulateErrors(
 
 void filterLintOptions(LintOptions& lintOptions, const std::vector<HotComment>& hotcomments, Mode mode)
 {
-    uint64_t ignoreLints = LintWarning::parseMask(hotcomments);
+    LintMask ignoreLints = LintWarning::parseMask(hotcomments);
+
+    // Luwu: `--!lint Name` turns on lints that are off by default; `--!nolint` still wins over it
+    lintOptions.warningMask |= LintWarning::parseEnableMask(hotcomments);
 
     lintOptions.warningMask &= ~ignoreLints;
 
@@ -1231,7 +1234,9 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
         double timestamp = getTimestamp();
 
         std::vector<LintWarning> warnings =
-            Luau::lint(sourceModule.root, *sourceModule.names, environmentScope, module.get(), sourceModule.hotcomments, lintOptions);
+            Luau::lint(
+                sourceModule.root, *sourceModule.names, environmentScope, module.get(), sourceModule.hotcomments, lintOptions, &sourceModule.commentLocations
+            );
 
         moduleInfo.stats.timeLint += getTimestamp() - timestamp;
 

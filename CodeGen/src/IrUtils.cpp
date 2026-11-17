@@ -63,6 +63,9 @@ int getOpLength(LuauOpcode op)
     case LOP_NEWOBJECT:
     case LOP_GETOBJECTMEMBER:
     case LOP_SETOBJECTMEMBER:
+    case LOP_GETQUALIFIED:
+    case LOP_GETTABLEBUNDLE:
+    case LOP_SETTABLEBUNDLE:
         return 2;
 
     default:
@@ -96,6 +99,7 @@ bool isJumpD(LuauOpcode op)
     case LOP_JUMPXEQKS:
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
+    case LOP_INITTRAITS:
         return true;
 
     default:
@@ -162,6 +166,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::LOAD_DOUBLE:
         return IrValueKind::Double;
     case IrCmd::LOAD_INT:
+    case IrCmd::LOAD_STORAGE_INT:
         return IrValueKind::Int;
     case IrCmd::LOAD_FLOAT:
         return IrValueKind::Float;
@@ -175,6 +180,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::LOAD_OWNER_CLASS:
     case IrCmd::TRY_OBJECT_MEMBER_ADDR:
     case IrCmd::OBJECT_MEMBER_ADDR:
+    case IrCmd::LOAD_STORAGE:
+    case IrCmd::GET_STORAGE_ENTRY_ADDR:
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         return IrValueKind::Pointer;
@@ -296,6 +303,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::NEW_TABLE:
     case IrCmd::DUP_TABLE:
     case IrCmd::NEW_OBJECT:
+    case IrCmd::NEW_OBJECT_DEFAULTS:
         return IrValueKind::Pointer;
     case IrCmd::TRY_NUM_TO_INDEX:
         return IrValueKind::Int;
@@ -329,6 +337,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FASTCALL:
         return IrValueKind::None;
     case IrCmd::INVOKE_FASTCALL:
+    case IrCmd::INVOKE_FAST_METHOD:
         return IrValueKind::Int;
     case IrCmd::CHECK_FASTCALL_RES:
     case IrCmd::DO_ARITH:
@@ -351,7 +360,11 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
     case IrCmd::CHECK_OBJECT_CLASS:
+    case IrCmd::CHECK_STORAGE:
+    case IrCmd::CHECK_STORAGE_ELEMENT:
+    case IrCmd::STORE_STORAGE_INT:
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+    case IrCmd::CHECK_CLASS_ALLOCATABLE:
     case IrCmd::CHECK_BUFFER_LEN:
     case IrCmd::CHECK_BUFFER_MUTABLE:
     case IrCmd::CHECK_USERDATA_TAG:
@@ -387,6 +400,9 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FALLBACK_FORGPREP:
     case IrCmd::FALLBACK_NEWOBJECT:
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
+    case IrCmd::FALLBACK_INITTRAITS:
+    case IrCmd::FALLBACK_GETQUALIFIED:
+    case IrCmd::FALLBACK_TABLEBUNDLE:
         return IrValueKind::None;
     case IrCmd::SUBSTITUTE:
         return IrValueKind::Unknown;

@@ -151,6 +151,12 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         // While ADJUST_STACK_TO_REG would semantically define the result range, we need to define it immediately
         visitor.defRange(vmRegOp(OP_B(inst)), function.intOp(OP_G(inst)));
         break;
+    case IrCmd::INVOKE_FAST_METHOD:
+        // Luwu collections: the arguments are read. So are the two registers before them, which may hold the receiver:
+        // when the method bails, nothing is written and the generic path after it reads them.
+        visitor.useRange(vmRegOp(OP_C(inst)), 2 + function.intOp(OP_D(inst)));
+        visitor.defRange(vmRegOp(OP_C(inst)), function.intOp(OP_E(inst)));
+        break;
     case IrCmd::FORGLOOP:
         // First register is not used by instruction, we check that it's still 'nil' with CHECK_TAG
         visitor.use(OP_A(inst), 1);
@@ -203,9 +209,29 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
 
         visitor.defRange(vmRegOp(OP_B(inst)), 3);
         break;
+    case IrCmd::FALLBACK_INITTRAITS:
+        // the count, the object and the arguments; then the count again and the call frame
+        visitor.useRange(vmRegOp(OP_B(inst)), 2 + function.intOp(OP_D(inst)));
+        visitor.def(OP_B(inst));
+        visitor.defRange(vmRegOp(OP_C(inst)), 2 + function.intOp(OP_D(inst)));
+        break;
+    case IrCmd::FALLBACK_GETQUALIFIED:
+        visitor.use(OP_C(inst));
+        visitor.use(OP_D(inst));
+        visitor.def(OP_B(inst));
+        break;
+    case IrCmd::FALLBACK_TABLEBUNDLE:
+        visitor.use(OP_C(inst));
+        visitor.useRange(vmRegOp(OP_D(inst)), function.intOp(OP_E(inst)));
+
+        if (function.intOp(OP_F(inst)) != 0)
+            visitor.use(OP_B(inst));
+        else
+            visitor.def(OP_B(inst));
+        break;
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         visitor.use(OP_B(inst));
-        visitor.use(OP_C(inst));
+        visitor.useRange(vmRegOp(OP_C(inst)), function.intOp(OP_D(inst)));
         break;
     case IrCmd::FALLBACK_NEWOBJECT:
     {
@@ -226,6 +252,12 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
 
             visitor.defRange(ra, 3);
         }
+        else if (form == LBC_NEWOBJECT_APPLY)
+        {
+            // finishes the instance already in ra, reading its argument from the register above
+            visitor.useRange(ra, 1 + count);
+            visitor.def(OP_B(inst));
+        }
         else
         {
             if (count > 0)
@@ -243,6 +275,10 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         break;
     case IrCmd::GET_TYPEOF:
         visitor.use(OP_A(inst));
+        break;
+    case IrCmd::GET_TYPE:
+        if (OP_B(inst).kind == IrOpKind::VmReg)
+            visitor.use(OP_B(inst));
         break;
 
     case IrCmd::FINDUPVAL:

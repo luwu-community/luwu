@@ -54,6 +54,9 @@ struct GeneralizationConstraint
     std::vector<TypeId> interiorTypes;
     bool hasDeprecatedAttribute = false;
     AstAttr::DeprecatedInfo deprecatedInfo;
+    // Luwu: `@nodiscard` (see FunctionType::isNodiscard)
+    bool hasNodiscardAttribute = false;
+    std::string nodiscardReason;
 
     /// If true, never introduce generics.  Always replace free types by their
     /// bounds or unknown. Presently used only to generalize the whole module.
@@ -118,6 +121,10 @@ struct FunctionCallConstraint
     // annotation or a `return` in a function with a declared return type). Used to resolve
     // generics that argument matching alone leaves unconstrained.
     std::optional<TypeId> expectedType;
+
+    // Luwu user-defined refinements: parallel to `discriminantTypes`, each argument's refinement when the call is falsy
+    // (Proposition::negativeDiscriminantTy). Empty with the flag off.
+    std::vector<std::optional<TypeId>> negativeDiscriminantTypes;
 };
 
 // function_check fn argsPack
@@ -324,6 +331,10 @@ struct TypeInstantiationConstraint
     TypeId placeholderType;
     std::vector<TypeId> typeArguments;
     std::vector<TypePackId> typePackArguments;
+
+    // Luwu collections: an empty `Vec()` or `VecDeque()` whose element type comes from its first push. The type argument
+    // only applies when the callee turns out to be one of those classes; any other callee is left as it is.
+    bool fromFirstPush = false;
 };
 
 // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): fills in one member of a generic class instantiation (`Box<number>`) whose type

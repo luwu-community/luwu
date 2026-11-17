@@ -10,6 +10,8 @@
 #include "Luau/Common.h"
 #include "Luau/FileResolver.h"
 #include "Luau/Frontend.h"
+#include "Luau/LinterConfig.h"
+#include "Luau/LuwuOnlyApi.h"
 #include "Luau/TimeTrace.h"
 #include "Luau/ToString.h"
 #include "Luau/Subtyping.h"
@@ -27,6 +29,7 @@
 LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteExport)
@@ -45,12 +48,337 @@ static constexpr std::array<std::string_view, 13> kStatementStartingKeywords_CON
 static constexpr std::array<std::string_view, 14> kStatementStartingKeywords_EXPORT =
     {"while", "if", "local", "repeat", "function", "do", "for", "return", "break", "continue", "type", "export", "const", "export"};
 
-static constexpr std::array<std::string_view, 6> kHotComments = {"nolint", "nocheck", "nonstrict", "strict", "optimize", "native"};
-
-static const std::string kKnownAttributes[] = {"checked", "deprecated", "native"};
-
 namespace Luau
 {
+
+// Attributes are deliberately not part of the visited AST, so they never show up in the ancestry --
+// the enclosing node has to be asked for its own attribute arrays. Calls `visit` with each attribute list
+// the ancestry's nodes carry, innermost node first, along with the position those attributes are written
+// on, and stops at the first list `visit` returns true for.
+template<typename Visit>
+static void forEachAttributeList(const std::vector<AstNode*>& ancestry, Visit visit)
+{
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        AstNode* node = *it;
+
+        if (AstExprFunction* fn = node->as<AstExprFunction>())
+        {
+            if (visit(fn->attributes, AstAttr::Context::Function))
+                return;
+
+            for (AstLocal* arg : fn->args)
+            {
+                if (visit(arg->attributes, AstAttr::Context::Parameter))
+                    return;
+            }
+        }
+        else if (AstStatLocal* local = node->as<AstStatLocal>())
+        {
+            if (visit(local->attributes, AstAttr::Context::Local))
+                return;
+        }
+        else if (AstStatTypeAlias* alias = node->as<AstStatTypeAlias>())
+        {
+            if (visit(alias->attributes, AstAttr::Context::TypeAlias))
+                return;
+        }
+        else if (AstStatAssign* assign = node->as<AstStatAssign>())
+        {
+            if (visit(assign->attributes, AstAttr::Context::Assignment))
+                return;
+        }
+        else if (AstExprTable* table = node->as<AstExprTable>())
+        {
+            for (const AstExprTable::Item& item : table->items)
+            {
+                if (visit(item.attributes, AstAttr::Context::TableField))
+                    return;
+            }
+        }
+        else if (AstTypeTable* tableTy = node->as<AstTypeTable>())
+        {
+            for (const AstTableProp& prop : tableTy->props)
+            {
+                if (visit(prop.attributes, AstAttr::Context::TableTypeField))
+                    return;
+            }
+
+            if (tableTy->indexer && visit(tableTy->indexer->attributes, AstAttr::Context::TableIndexer))
+                return;
+        }
+        else if (AstStatClass* cls = node->as<AstStatClass>())
+        {
+            if (visit(cls->attributes, AstAttr::Context::Class))
+                return;
+
+            for (const AstClassMember& member : cls->members)
+            {
+                if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+                {
+                    if (visit(prop->attributes, AstAttr::Context::ClassField))
+                        return;
+                }
+                else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+                {
+                    if (method->function && visit(method->function->attributes, AstAttr::Context::Function))
+                        return;
+                }
+            }
+
+            if (cls->primaryConstructor)
+            {
+                for (AstLocal* arg : cls->primaryConstructor->args)
+                {
+                    if (visit(arg->attributes, AstAttr::Context::Parameter))
+                        return;
+                }
+            }
+        }
+        else if (AstStatDeclareFunction* declared = node->as<AstStatDeclareFunction>())
+        {
+            if (visit(declared->attributes, AstAttr::Context::Function))
+                return;
+        }
+        else if (AstTypeFunction* fnTy = node->as<AstTypeFunction>())
+        {
+            if (visit(fnTy->attributes, AstAttr::Context::Function))
+                return;
+        }
+    }
+}
+
+// The position the cursor is writing an attribute for, when it sits inside one that is not a known
+// attribute yet.
+static std::optional<AstAttr::Context> findIncompleteAttributeContext(const std::vector<AstNode*>& ancestry, Position position)
+{
+    std::optional<AstAttr::Context> result;
+    forEachAttributeList(
+        ancestry,
+        [&](const AstArray<AstAttr*>& attributes, AstAttr::Context context)
+        {
+            for (AstAttr* attr : attributes)
+            {
+                if (attr->location.begin <= position && position <= attr->location.end && attr->type == AstAttr::Type::Unknown)
+                {
+                    result = context;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    );
+
+    return result;
+}
+
+// The attribute whose arguments the cursor is inside, as in `@[deprecated { | }]`.
+static const AstAttr* findAttributeWithArgumentsAt(const std::vector<AstNode*>& ancestry, Position position)
+{
+    const AstAttr* result = nullptr;
+    forEachAttributeList(
+        ancestry,
+        [&](const AstArray<AstAttr*>& attributes, AstAttr::Context)
+        {
+            for (AstAttr* attr : attributes)
+            {
+                for (AstExpr* arg : attr->args)
+                {
+                    if (arg->location.containsClosed(position))
+                    {
+                        result = attr;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+    );
+
+    return result;
+}
+
+// Luwu: the lint names, without the ones `written` already lists. `All` too when `withAll` (`--!nolint All`).
+static AutocompleteEntryMap autocompleteLintNames(const std::unordered_set<std::string>& written, bool withAll, AutocompleteEntryKind kind)
+{
+    AutocompleteEntryMap result;
+    for (const char* name : kWarningNames)
+    {
+        if (!written.count(name))
+            result[name] = {kind};
+    }
+
+    if (withAll && !written.count("All"))
+        result["All"] = {kind};
+
+    return result;
+}
+
+// Luwu: inside `@[nolint(...)]` or `@[lint(...)]`, past the name: the attribute, and the lints its other arguments name
+static const AstAttr* findLintAttributeArgumentsAt(const std::vector<AstNode*>& ancestry, Position position, std::unordered_set<std::string>& written)
+{
+    const AstAttr* result = nullptr;
+    forEachAttributeList(
+        ancestry,
+        [&](const AstArray<AstAttr*>& attributes, AstAttr::Context)
+        {
+            for (AstAttr* attr : attributes)
+            {
+                bool lintAttribute = attr->type == AstAttr::Type::Nolint || attr->type == AstAttr::Type::Lint;
+                Position nameEnd{attr->location.begin.line, attr->location.begin.column + unsigned(strlen(attr->name.value))};
+                if (!lintAttribute || !(nameEnd < position) || !attr->location.containsClosed(position))
+                    continue;
+
+                for (AstExpr* arg : attr->args)
+                {
+                    if (arg->location.containsClosed(position))
+                        continue;
+                    if (AstExprGlobal* global = arg->as<AstExprGlobal>())
+                        written.insert(global->name.value);
+                    else if (AstExprConstantString* string = arg->as<AstExprConstantString>())
+                        written.insert(std::string(string->value.data, string->value.size));
+                }
+
+                result = attr;
+                return true;
+            }
+
+            return false;
+        }
+    );
+
+    return result;
+}
+
+// Luwu: in `--@[nolint(...)]` or `--@[lint(...)]`, the lint names inside the parentheses that aren't listed yet. `typed`
+// is the comment's content up to the cursor.
+static AutocompleteEntryMap autocompleteAttributeComment(const std::string& typed)
+{
+    const bool nolint = typed.rfind("@[nolint(", 0) == 0;
+    const bool lint = typed.rfind("@[lint(", 0) == 0;
+    const size_t open = typed.find('(');
+    const bool inList = (nolint || lint) && typed.find(')') == std::string::npos;
+    if (!inList)
+        return {};
+
+    // the names before the one being typed, separated by commas
+    std::unordered_set<std::string> written;
+    const std::string list = typed.substr(open + 1);
+    size_t start = 0;
+    for (size_t comma = list.find(','); comma != std::string::npos; comma = list.find(',', start))
+    {
+        const std::string item = list.substr(start, comma - start);
+        const size_t first = item.find_first_not_of(" \t");
+        if (first != std::string::npos)
+            written.insert(item.substr(first, item.find_last_not_of(" \t") - first + 1));
+        start = comma + 1;
+    }
+
+    return autocompleteLintNames(written, nolint, AutocompleteEntryKind::HotComment);
+}
+
+// Luwu: in a comment directive, what can be written at `position`: a directive name after `--!`, a lint name after
+// `--!nolint` or `--!lint`, and an optimization level after `--!optimize`
+static AutocompleteEntryMap autocompleteHotComment(const HotComment& hotComment, Position position)
+{
+    // `content` starts after the `--!` (after the `--` for `--@[nolint(...)]`, whose content includes its '@') and has no
+    // trailing whitespace, so a cursor past its end follows a space
+    const unsigned contentStart = hotComment.location.begin.column + (hotComment.attribute ? 2 : 3);
+    const size_t offset = position.column > contentStart ? position.column - contentStart : 0;
+    std::string typed = hotComment.content.substr(0, std::min(offset, hotComment.content.size()));
+    if (offset > hotComment.content.size())
+        typed += ' ';
+
+    if (hotComment.attribute)
+        return autocompleteAttributeComment(typed);
+
+    AutocompleteEntryMap result;
+    const size_t space = typed.find_first_of(" \t");
+    if (space == std::string::npos)
+    {
+        for (const char* directive : kCommentDirectives)
+            result[directive] = {AutocompleteEntryKind::HotComment};
+        return result;
+    }
+
+    const std::string_view directive = std::string_view(typed).substr(0, space);
+    if (directive == "optimize")
+    {
+        for (const char* level : {"0", "1", "2"})
+            result[level] = {AutocompleteEntryKind::HotComment};
+        return result;
+    }
+
+    if (directive != "nolint" && directive != "lint")
+        return result;
+
+    // the names written before the one being typed
+    std::unordered_set<std::string> written;
+    std::string_view rest = std::string_view(typed).substr(space);
+    const size_t lastSpace = rest.find_last_of(" \t");
+    std::string_view finished = rest.substr(0, lastSpace);
+    size_t start = 0;
+    while (start < finished.size())
+    {
+        size_t wordStart = finished.find_first_not_of(" \t", start);
+        if (wordStart == std::string_view::npos)
+            break;
+        size_t wordEnd = finished.find_first_of(" \t", wordStart);
+        written.insert(std::string(finished.substr(wordStart, wordEnd - wordStart)));
+        start = wordEnd;
+    }
+
+    return autocompleteLintNames(written, directive == "nolint", AutocompleteEntryKind::HotComment);
+}
+
+// The fields an attribute takes that are still left to write, when the cursor is inside the braces of its
+// `{ field = ... }` argument and not in a field's value. Returns an empty map inside a value, and nullopt
+// when the attribute takes no fields or the cursor is not between the braces.
+static std::optional<AutocompleteEntryMap> autocompleteAttributeFields(const AstAttr& attr, Position position)
+{
+    const char* const* fields = nullptr;
+    for (const AttributeInfo& info : getKnownAttributes())
+    {
+        if (info.type == attr.type)
+            fields = info.argumentFields;
+    }
+
+    AstExprTable* table = attr.args.size == 1 ? attr.args.data[0]->as<AstExprTable>() : nullptr;
+    const bool insideBraces = table && table->location.begin < position && position < table->location.end;
+    if (!fields || !insideBraces)
+        return std::nullopt;
+
+    std::unordered_set<std::string> written;
+    for (const AstExprTable::Item& item : table->items)
+    {
+        // `{ us| }` is still a name being typed, which parses as a list entry.
+        const bool typingName = item.kind == AstExprTable::Item::Kind::List && item.value->is<AstExprGlobal>() &&
+                                item.value->location.containsClosed(position);
+        if (typingName)
+            continue;
+
+        if (item.value->location.containsClosed(position))
+            return AutocompleteEntryMap{};
+
+        if (item.kind != AstExprTable::Item::Kind::Record)
+            continue;
+
+        AstExprConstantString* key = item.key->as<AstExprConstantString>();
+        if (key && !key->location.containsClosed(position))
+            written.insert(std::string(key->value.data, key->value.size));
+    }
+
+    AutocompleteEntryMap result;
+    for (const char* const* field = fields; *field; ++field)
+    {
+        if (!written.count(*field))
+            result[*field] = {AutocompleteEntryKind::Property};
+    }
+
+    return result;
+}
 
 static bool alreadyHasParens(const std::vector<AstNode*>& nodes)
 {
@@ -401,10 +729,18 @@ static void autocompleteProps(
         }
     };
 
+    // Luwu Traits (rfcs/classes/traits.md): `__create` and `__implemented` run on the trait itself (`Trait(...)`, and
+    // when a class implements it). A value typed by the trait is an object, which has neither.
+    const char* rootKind = luwuNominalKind(rootTy);
+    bool onObject = rootKind && std::string_view(rootKind) == "object";
+
     auto fillProps = [&](const ExternType::Props& props, const ExternType* owner)
     {
         for (const auto& [name, prop] : props)
         {
+            if (onObject && (name == "__create" || name == "__implemented"))
+                continue;
+
             // We are walking up the class hierarchy, so if we encounter a property that we have
             // already populated, it takes precedence over the property we found just now.
             // `__init` is callable (see classes.md's `reset` example) but deliberately hidden from
@@ -478,7 +814,7 @@ static void autocompleteProps(
     if (auto cls = get<ExternType>(ty))
     {
         containingExternType = containingExternType.value_or(cls);
-        fillProps(cls->props, cls);
+        fillProps(cls->props(), cls);
         if (cls->parent)
             autocompleteProps(module, typeArena, builtinTypes, rootTy, *cls->parent, indexType, nodes, result, seen, containingExternType);
     }
@@ -1370,6 +1706,27 @@ static bool isValidBreakContinueContext(const std::vector<AstNode*>& ancestry, P
     return false;
 }
 
+// Luwu Classes (rfcs/classes/classes.md): checks if we're in top level because
+// we want to only only offer class/trait keywords at top level of module.
+static bool isTopLevelStatementPosition(const std::vector<AstNode*>& ancestry)
+{
+    for (size_t i = 1; i < ancestry.size(); ++i)
+    {
+        AstNode* node = ancestry[i];
+        if (node->is<AstStatBlock>() || node->is<AstExprFunction>() || node->is<AstStatClass>() || node->is<AstStatDeclareClass>())
+            return false;
+    }
+
+    return true;
+}
+
+// Luwu: a Luau or Lua module can't use a global only Luwu has (LuwuOnlyApi), so it isn't offered there. A local of
+// that name is the module's own.
+static bool isLuwuOnlyGlobalIn(const Module& module, const Symbol& name)
+{
+    return module.language != Language::Luwu && !name.local && name.global.value && isLuwuOnlyGlobal(name.global.value);
+}
+
 static AutocompleteEntryMap autocompleteStatement(
     const Module& module,
     const std::vector<AstNode*>& ancestry,
@@ -1392,7 +1749,7 @@ static AutocompleteEntryMap autocompleteStatement(
     {
         for (const auto& [name, binding] : scope->bindings)
         {
-            if (!isBindingLegalAtCurrentPosition(name, binding, position))
+            if (!isBindingLegalAtCurrentPosition(name, binding, position) || isLuwuOnlyGlobalIn(module, name))
                 continue;
 
             std::string n = toString(name);
@@ -1441,6 +1798,15 @@ static AutocompleteEntryMap autocompleteStatement(
             if ((kw != "break" && kw != "continue") || shouldIncludeBreakAndContinue)
                 result.emplace(kw, AutocompleteEntry{AutocompleteEntryKind::Keyword});
         }
+    }
+
+    // classes and traits can only exist in top level code of a module so only
+    // suggest the class and trait keywords there
+    if (FFlag::LuwuClasses && isTopLevelStatementPosition(ancestry))
+    {
+        result.emplace("class", AutocompleteEntry{AutocompleteEntryKind::Keyword});
+        if (FFlag::LuwuTraits)
+            result.emplace("trait", AutocompleteEntry{AutocompleteEntryKind::Keyword});
     }
 
     for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
@@ -1590,7 +1956,7 @@ static AutocompleteContext autocompleteExpression(
         {
             for (const auto& [name, binding] : scope->bindings)
             {
-                if (!isBindingLegalAtCurrentPosition(name, binding, position))
+                if (!isBindingLegalAtCurrentPosition(name, binding, position) || isLuwuOnlyGlobalIn(module, name))
                     continue;
 
                 if (isBeingDefined(ancestry, name))
@@ -1748,6 +2114,37 @@ static std::optional<AutocompleteEntryMap> convertRequireSuggestionsToAutocomple
     return result;
 }
 
+// Luwu bundles: the expected type of the position the innermost node of `ancestry` fills in a bundle literal `.(a, b)`,
+// from the expected type of the whole bundle. nullopt outside a bundle literal or without a bundle type expected.
+static std::optional<TypeId> bundlePositionExpectedType(
+    TypeArena& arena,
+    const Module& module,
+    const std::vector<AstNode*>& ancestry,
+    const ScopePtr& scope
+)
+{
+    if (ancestry.size() < 2)
+        return std::nullopt;
+
+    AstExpr* value = ancestry.back()->asExpr();
+    AstExprCall* bundle = ancestry[ancestry.size() - 2]->as<AstExprCall>();
+    if (!value || !bundle || !isBundlePackCall(bundle))
+        return std::nullopt;
+
+    const TypeId* expected = module.astExpectedTypes.find(bundle);
+    std::optional<std::vector<TypeId>> positions =
+        expected ? expectedBundlePositions(&arena, scope.get(), *expected, bundle, value) : std::nullopt;
+    if (!positions)
+        return std::nullopt;
+
+    for (size_t i = 0; i < bundle->args.size && i < positions->size(); i++)
+    {
+        if (bundle->args.data[i] == value)
+            return (*positions)[i];
+    }
+    return std::nullopt;
+}
+
 static std::optional<AutocompleteEntryMap> autocompleteStringParams(
     const ModulePtr& module,
     const std::vector<AstNode*>& nodes,
@@ -1833,6 +2230,247 @@ static std::optional<AutocompleteEntryMap> autocompleteStringParams(
     }
 
     return std::nullopt;
+}
+
+static std::string typeNameInScope(const ScopePtr& scope, TypeId ty)
+{
+    if (std::optional<Name> name = tryGetTypeNameInScope(scope, ty, true))
+        return *name;
+    return toString(ty);
+}
+
+static std::string functionSignature(const ScopePtr& scope, const FunctionType* fn);
+
+// Luwu Traits (rfcs/classes/traits.md): a trait member as an implementing class writes it: `public name: string`, or
+// `function parse(self, s: string): boolean` and its `end`
+static std::string traitMemberDeclaration(const ScopePtr& scope, const ExternType* traitType, const Name& name, const Property& prop, bool isField)
+{
+    std::string result;
+    if (traitType->traitInfo->hasAccessSpecifiers)
+        result += prop.isPrivate ? "private " : "public ";
+
+    const FunctionType* fn = prop.readTy ? get<FunctionType>(expectedTraitFunction(*prop.readTy)) : nullptr;
+    if (isField || !fn)
+    {
+        if (prop.isConst)
+            result += "const ";
+        result += name;
+        if (prop.readTy)
+            result += ": " + typeNameInScope(scope, *prop.readTy);
+        return result;
+    }
+
+    return result + "function " + name + functionSignature(scope, fn) + "\nend";
+}
+
+// Luwu Classes (rfcs/classes): a function's parameters and returns as its declaration writes them, `(self, s: string): boolean`.
+// `self` is the class's own, so it's left unannotated.
+static std::string functionSignature(const ScopePtr& scope, const FunctionType* fn)
+{
+    std::string result = "(";
+
+    auto [args, tail] = flatten(fn->argTypes);
+    for (size_t i = 0; i < args.size(); ++i)
+    {
+        if (i > 0)
+            result += ", ";
+
+        std::string argName = i < fn->argNames.size() && fn->argNames[i] ? fn->argNames[i]->name : "a" + std::to_string(i);
+
+        if (i == 0 && argName == "self")
+            result += argName;
+        else
+            result += argName + ": " + typeNameInScope(scope, args[i]);
+    }
+
+    if (const VariadicTypePack* variadic = tail ? get<VariadicTypePack>(follow(*tail)) : nullptr; variadic && !variadic->hidden)
+        result += std::string(args.empty() ? "" : ", ") + "...: " + typeNameInScope(scope, variadic->ty);
+
+    result += ")";
+
+    auto [rets, retTail] = flatten(fn->retTypes);
+    size_t returnCount = rets.size() + (retTail ? 1 : 0);
+    if (returnCount > 0)
+    {
+        std::optional<std::string> returnTypes = tryGetTypeNameInScope(scope, fn->retTypes, true);
+        std::string written = returnTypes ? *returnTypes : toString(fn->retTypes);
+        result += returnCount == 1 ? ": " + written : ": (" + written + ")";
+    }
+
+    return result;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): in a class body, each member its traits expect that it doesn't have yet, inserted
+// as its declaration
+static void autocompleteMissingTraitMembers(const ScopePtr& scope, AstStatClass* classStat, AutocompleteEntryMap& result)
+{
+    std::optional<TypeFun> classTypeFun = scope->lookupType(classStat->name->name.value);
+    const ExternType* classType = classTypeFun ? get<ExternType>(follow(classTypeFun->type)) : nullptr;
+    if (!classType)
+        return;
+
+    for (TypeId trait : classType->implementedTraits)
+    {
+        const ExternType* traitType = get<ExternType>(follow(trait));
+        const ClassFieldUserData* traitFields = traitType ? dynamic_cast<const ClassFieldUserData*>(traitType->userData.get()) : nullptr;
+        if (!traitFields || !traitType->traitInfo)
+            continue;
+
+        for (const auto& [name, optional] : traitType->traitInfo->expectations)
+        {
+            const Property* expected = findNominalMember(traitType, name);
+            if (name == "__init" || !expected || findNominalMember(classType, name) || result.count(name))
+                continue;
+
+            AutocompleteEntry entry{AutocompleteEntryKind::Property, expected->readTy};
+            entry.prop = expected;
+            entry.insertText = traitMemberDeclaration(scope, traitType, name, *expected, traitFields->fieldNames.count(name) > 0);
+            result[name] = std::move(entry);
+        }
+    }
+}
+
+// Luwu Classes (rfcs/classes): the metamethods a class or trait may define, with the parameters and returns they're
+// usually written with
+static const char* const kMetamethodSignatures[][2] = {
+    {"__tostring", "(self): string"},
+    {"__eq", "(self, other): boolean"},
+    {"__lt", "(self, other): boolean"},
+    {"__le", "(self, other): boolean"},
+    {"__len", "(self): number"},
+    {"__add", "(self, other)"},
+    {"__sub", "(self, other)"},
+    {"__mul", "(self, other)"},
+    {"__div", "(self, other)"},
+    {"__idiv", "(self, other)"},
+    {"__mod", "(self, other)"},
+    {"__pow", "(self, other)"},
+    {"__unm", "(self)"},
+    {"__concat", "(self, other)"},
+    {"__call", "(self, ...)"},
+    {"__iter", "(self)"},
+};
+
+// Luwu Classes (rfcs/classes): whether a member or primary constructor parameter is written with `public` or `private`, which
+// means every one needs one
+static bool usesAccessSpecifiers(const AstStatClass* classStat)
+{
+    if (classStat->primaryConstructor)
+    {
+        for (const AstClassPrimaryConstructorParamQualifiers& qualifiers : classStat->primaryConstructor->argsQualifiers)
+        {
+            if (qualifiers.qualifierLocation)
+                return true;
+        }
+    }
+
+    for (const auto& member : classStat->members)
+    {
+        if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method->qualifierLocation)
+            return true;
+        if (const AstClassProperty* field = member.get_if<AstClassProperty>(); field && field->qualifierLocation)
+            return true;
+    }
+
+    return false;
+}
+
+// Luwu Classes (rfcs/classes) and Luwu Traits (rfcs/classes/traits.md): the functions a class or trait body could define next
+// and doesn't yet. They're the ones its traits expect or let it override, and when `name` starts with `_`, the metamethods and
+// special functions. `typing` is the function whose name is being written after `function`, and each entry is then the rest
+// of its declaration; without it, each is the whole declaration.
+static void autocompleteMissingFunctions(
+    const ScopePtr& scope,
+    AstStatClass* classStat,
+    const AstClassMethod* typing,
+    std::string_view name,
+    AutocompleteEntryMap& result
+)
+{
+    std::unordered_set<std::string> defined;
+    for (const auto& member : classStat->members)
+    {
+        if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method != typing && !method->qualifiedTrait)
+            defined.insert(method->functionName.value);
+        else if (const AstClassProperty* field = member.get_if<AstClassProperty>(); field && field->name.value != name)
+            defined.insert(field->name.value);
+    }
+
+    std::string access = !typing && usesAccessSpecifiers(classStat) ? "public " : "";
+    auto add = [&](const std::string& entryName, const std::string& signature, const Property* prop, const char* keyword)
+    {
+        if (defined.count(entryName) || result.count(entryName))
+            return;
+
+        AutocompleteEntry entry{AutocompleteEntryKind::Property, prop ? prop->readTy : std::nullopt};
+        // a metamethod has no property, and an entry's `prop` holding nullptr would read as one
+        if (prop)
+            entry.prop = prop;
+        entry.insertText = (typing ? "" : access + keyword) + entryName + signature + "\nend";
+        result[entryName] = std::move(entry);
+    };
+
+    // A class's traits' functions: the expected ones and the ones it may override
+    std::optional<TypeFun> classTypeFun = classStat->isTrait ? std::nullopt : scope->lookupType(classStat->name->name.value);
+    const ExternType* classType = classTypeFun ? get<ExternType>(follow(classTypeFun->type)) : nullptr;
+    for (TypeId trait : classType ? classType->implementedTraits : std::vector<TypeId>{})
+    {
+        const ExternType* traitType = get<ExternType>(follow(trait));
+        const ClassFieldUserData* traitFields = traitType ? dynamic_cast<const ClassFieldUserData*>(traitType->userData.get()) : nullptr;
+        if (!traitFields || !traitType->traitInfo)
+            continue;
+
+        for (const auto& [memberName, prop] : traitType->props())
+        {
+            if (memberName == "__init" || traitFields->fieldNames.count(memberName) || traitType->traitInfo->finals.count(memberName))
+                continue;
+
+            const FunctionType* fn = prop.readTy ? get<FunctionType>(expectedTraitFunction(*prop.readTy)) : nullptr;
+            if (fn)
+                add(memberName, functionSignature(scope, fn), &prop, "function ");
+        }
+    }
+
+    if (name.empty() || name[0] != '_')
+        return;
+
+    bool final = typing && typing->finalLocation;
+    if (!final)
+    {
+        for (const auto& [metamethod, signature] : kMetamethodSignatures)
+            add(metamethod, signature, nullptr, "function ");
+    }
+
+    if (!classStat->isTrait && !classStat->primaryConstructor)
+        add("__init", "(self)", nullptr, "function ");
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait's factory, and its hook for each implementing class, which is always final
+    if (classStat->isTrait && !classStat->primaryConstructor && !final)
+        add("__create", "(...)", nullptr, "function ");
+    if (classStat->isTrait && (!typing || final))
+        add("__implemented", "(cls)", nullptr, "final function ");
+}
+
+// Luwu Classes (rfcs/classes): the class (or trait) and the method being named, when the cursor is after a member's
+// `function` and before its parameter list
+static std::pair<AstStatClass*, const AstClassMethod*> findMethodBeingNamed(const std::vector<AstNode*>& ancestry, Position position)
+{
+    for (size_t i = 0; i + 1 < ancestry.size(); ++i)
+    {
+        AstStatClass* classStat = ancestry[i]->as<AstStatClass>();
+        AstExprFunction* function = classStat ? ancestry[i + 1]->as<AstExprFunction>() : nullptr;
+        if (!function || function->argLocation)
+            continue;
+
+        for (const auto& member : classStat->members)
+        {
+            const AstClassMethod* method = member.get_if<AstClassMethod>();
+            if (method && method->function == function && method->keywordLocation.end <= position)
+                return {classStat, method};
+        }
+    }
+
+    return {nullptr, nullptr};
 }
 
 static AutocompleteResult autocompleteWhileLoopKeywords(std::vector<AstNode*> ancestry)
@@ -2056,19 +2694,53 @@ AutocompleteResult autocomplete_(
     Position position,
     FileResolver* fileResolver,
     StringCompletionCallback callback,
-    bool isInHotComment
+    const HotComment* hotComment
 )
 {
     LUAU_TIMETRACE_SCOPE("Luau::autocomplete_", "AutocompleteCore");
 
-    if (isInHotComment)
+    // Checked before anything else: a cursor inside an unfinished attribute is unambiguous, and the
+    // statement- and expression-shaped branches below would otherwise claim it (an attribute above a
+    // `local` would be read as completing a local declaration). Only the attributes legal in that
+    // position are offered, taken from the parser's registry, so each attribute is suggested exactly
+    // where it declares itself valid.
+    if (std::optional<AstAttr::Context> attributeContext = findIncompleteAttributeContext(ancestry, position))
     {
-        AutocompleteEntryMap result;
+        AutocompleteEntryMap ret;
+        for (const AttributeInfo& info : getKnownAttributes())
+        {
+            if (AstAttr::contextAllows(info.allowedContexts, *attributeContext))
+                ret[info.name] = {AutocompleteEntryKind::Keyword};
+        }
 
-        for (const std::string_view hc : kHotComments)
-            result.emplace(hc, AutocompleteEntry{AutocompleteEntryKind::HotComment});
-        return {std::move(result), ancestry, AutocompleteContext::HotComment};
+        return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }
+
+    // Luwu Classes (rfcs/classes): after a member's `function`, the functions it could be: the rest of their declarations
+    if (auto [classStat, method] = findMethodBeingNamed(ancestry, position); method)
+    {
+        AutocompleteEntryMap ret;
+        std::string_view typed = method->nameLocation.containsClosed(position) ? method->functionName.value : "";
+        autocompleteMissingFunctions(scopeAtPosition, classStat, method, typed, ret);
+        return {std::move(ret), ancestry, AutocompleteContext::Keyword};
+    }
+
+    // Luwu: inside `@[nolint(|)]` or `@[lint(|)]`, the lint names. Its arguments aren't in the ancestry either.
+    std::unordered_set<std::string> writtenLints;
+    if (findLintAttributeArgumentsAt(ancestry, position, writtenLints))
+        return {autocompleteLintNames(writtenLints, /* withAll */ false, AutocompleteEntryKind::Keyword), ancestry, AutocompleteContext::Keyword};
+
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): inside `@[deprecated { | }]`,
+    // the fields the attribute takes. Its arguments aren't in the ancestry either, so without this the
+    // cursor would complete as if it were at the enclosing statement.
+    if (const AstAttr* attr = findAttributeWithArgumentsAt(ancestry, position))
+    {
+        if (std::optional<AutocompleteEntryMap> fields = autocompleteAttributeFields(*attr, position))
+            return {std::move(*fields), ancestry, AutocompleteContext::Property};
+    }
+
+    if (hotComment)
+        return {autocompleteHotComment(*hotComment, position), ancestry, AutocompleteContext::HotComment};
 
     AstNode* node = ancestry.back();
 
@@ -2093,7 +2765,23 @@ AutocompleteResult autocomplete_(
         TypeId ty = follow(*it);
         PropIndexType indexType = indexName->op == ':' ? PropIndexType::Colon : PropIndexType::Point;
 
-        return {autocompleteProps(*module, typeArena, builtinTypes, ty, indexType, ancestry), ancestry, AutocompleteContext::Property};
+        AutocompleteEntryMap props = autocompleteProps(*module, typeArena, builtinTypes, ty, indexType, ancestry);
+
+        // Luwu: a Luau or Lua module can't use what Luwu adds to a library (LuwuOnlyApi), so it isn't offered there
+        if (module->language != Language::Luwu)
+        {
+            AstExprGlobal* global = indexName->expr->as<AstExprGlobal>();
+            std::string_view library = global ? std::string_view(global->name.value) : isString(ty) ? "string" : "";
+            for (auto prop = props.begin(); prop != props.end();)
+            {
+                if (isLuwuOnlyMember(library, prop->first))
+                    prop = props.erase(prop);
+                else
+                    ++prop;
+            }
+        }
+
+        return {std::move(props), ancestry, AutocompleteContext::Property};
     }
     else if (auto typeReference = node->as<AstTypeReference>())
     {
@@ -2224,10 +2912,13 @@ AutocompleteResult autocomplete_(
     else if (AstExprTable* exprTable = parent->as<AstExprTable>();
              exprTable && (node->is<AstExprGlobal>() || node->is<AstExprConstantString>() || node->is<AstExprInterpString>()))
     {
-        for (const auto& [kind, key, value] : exprTable->items)
+        // Not a structured binding, which would have to name every Item field.
+        for (const AstExprTable::Item& item : exprTable->items)
         {
+            AstExpr* key = item.key;
+
             // If item doesn't have a key, maybe the value is actually the key
-            if (key ? key == node : node->is<AstExprGlobal>() && value == node)
+            if (key ? key == node : node->is<AstExprGlobal>() && item.value == node)
             {
                 if (auto it = module->astExpectedTypes.find(exprTable))
                 {
@@ -2333,6 +3024,11 @@ AutocompleteResult autocomplete_(
         if (auto it = module->astExpectedTypes.find(node->asExpr()))
             autocompleteStringSingleton(*it, false, node, position, result);
 
+        // Luwu bundles: a string in a bundle literal `.(a, b)` completes what its position of the bundle's expected type
+        // allows. The bundle is a `bundle.pack` call, whose own argument check records `unknown` for the string.
+        if (std::optional<TypeId> expected = bundlePositionExpectedType(*typeArena, *module, ancestry, scopeAtPosition))
+            autocompleteStringSingleton(*expected, false, node, position, result);
+
         return {std::move(result), ancestry, AutocompleteContext::String};
     }
     else if (stringPartOfInterpString(node, position))
@@ -2342,19 +3038,6 @@ AutocompleteResult autocomplete_(
         AutocompleteEntryMap map;
         return {std::move(map), ancestry, AutocompleteContext::String};
     }
-    else if (AstExprFunction* func = node->as<AstExprFunction>())
-    {
-        for (AstAttr* attr : func->attributes)
-        {
-            if (attr->location.begin <= position && position <= attr->location.end && attr->type == AstAttr::Type::Unknown)
-            {
-                AutocompleteEntryMap ret;
-                for (const auto& attr : kKnownAttributes)
-                    ret[attr.c_str()] = {AutocompleteEntryKind::Keyword};
-                return {std::move(ret), std::move(ancestry), AutocompleteContext::Keyword};
-            }
-        }
-    }
 
     if (node->is<AstExprConstantNumber>())
         return {};
@@ -2363,12 +3046,45 @@ AutocompleteResult autocomplete_(
     // sub-locations, which would have matched a more specific branch above): offer the
     // qualifiers and the `function` keyword, rather than the generic statement keyword list
     // (most of which -- if/local/for/etc -- aren't valid class members).
-    if (node->is<AstStatClass>())
+    if (AstStatClass* classStat = node->as<AstStatClass>())
     {
         AutocompleteEntryMap ret;
         ret["public"] = {AutocompleteEntryKind::Keyword};
         ret["private"] = {AutocompleteEntryKind::Keyword};
         ret["function"] = {AutocompleteEntryKind::Keyword};
+
+        // Luwu Traits (rfcs/classes/traits.md): a trait's members may be expected or final
+        if (classStat->isTrait)
+        {
+            ret["expect"] = {AutocompleteEntryKind::Keyword};
+            ret["final"] = {AutocompleteEntryKind::Keyword};
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): on the declaration's own line, before its first member, the next word may
+        // start its `implements` (a class) or `needs` (a trait) list
+        unsigned headerLine = classStat->name->location.end.line;
+        if (classStat->primaryConstructor)
+            headerLine = classStat->primaryConstructor->argLocation.end.line;
+
+        bool onHeaderLine = position.line == headerLine;
+        if (FFlag::LuwuTraits && onHeaderLine && classStat->isTrait && classStat->needs.size == 0)
+            ret["needs"] = {AutocompleteEntryKind::Keyword};
+        else if (FFlag::LuwuTraits && onHeaderLine && !classStat->isTrait && classStat->implements.size == 0)
+            ret["implements"] = {AutocompleteEntryKind::Keyword};
+
+        if (FFlag::LuwuTraits && !onHeaderLine && !classStat->isTrait)
+            autocompleteMissingTraitMembers(scopeAtPosition, classStat, ret);
+
+        // The word being typed reads as a field: `__` is offered the metamethods
+        std::string_view typed;
+        for (const auto& member : classStat->members)
+        {
+            if (const AstClassProperty* field = member.get_if<AstClassProperty>(); field && field->nameLocation.containsClosed(position))
+                typed = field->name.value;
+        }
+        if (!onHeaderLine)
+            autocompleteMissingFunctions(scopeAtPosition, classStat, nullptr, typed, ret);
+
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }
 

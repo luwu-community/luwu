@@ -10,6 +10,7 @@
 #include "ldo.h"
 #include "ldebug.h"
 #include "ludata.h"
+#include "lclass.h"
 
 #include <string.h>
 
@@ -213,6 +214,8 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
     g->frealloc = f;
     g->ud = ud;
     g->mainthread = L;
+    for (int i = 0; i < LUWU_BUILTIN__COUNT; i++)
+        g->builtinclasses[i] = NULL;
     g->uvhead.u.open.prev = &g->uvhead;
     g->uvhead.u.open.next = &g->uvhead;
     g->GCthreshold = 0; // mark it as unfinished state

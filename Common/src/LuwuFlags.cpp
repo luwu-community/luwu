@@ -7,3 +7,15 @@
 // Luwu Classes (rfcs/classes): enables classes. While it is on, the compiler emits WIP bytecode (version 200),
 // whose format can still change.
 LUAU_FASTFLAGVARIABLE(LuwuClasses)
+
+// Luwu Traits (rfcs/classes/traits.md): enables `trait` declarations and `implements` (in progress). Needs LuwuClasses.
+LUAU_FASTFLAGVARIABLE(LuwuTraits)
+
+// Luwu builtin classes: standard library classes written in C++, in the VM and in Analysis's builtin definitions. So far
+// that's the `collections` library (`OrderedMap`, `Vec`, `VecDeque`). A prototype whose API can still change. Needs
+// LuwuClasses.
+LUAU_FASTFLAGVARIABLE(DebugLuwuBuiltinClasses)
+
+// Luwu bundles: the `bundle` library, its classes, and the compiler's fastcalls and unfolding for it. A prototype whose
+// API can still change. Needs LuwuClasses.
+LUAU_FASTFLAGVARIABLE(DebugLuwuBundles)

@@ -19,6 +19,13 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
+LUAU_FASTFLAG(DebugLuwuBundles)
+LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(LuwuDeclareStatements)
+LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
@@ -1065,6 +1072,192 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_class_member_position_offers_qualifie
     CHECK_EQ(ac.entryMap.count("function"), 1);
     CHECK_EQ(ac.entryMap.count("if"), 0);
     CHECK_EQ(ac.entryMap.count("local"), 0);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_missing_trait_members")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    check(R"(
+        trait HelpInfo
+            expect public const name: string
+            expect private help: string
+        end
+        trait ArgInProgress needs HelpInfo
+            expect phrase: string
+            expect function parse(self, s: string, ...: number): boolean
+        end
+        class Flag implements ArgInProgress
+            phrase = "p"
+            @1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("phrase"), 0);
+    REQUIRE(ac.entryMap.count("parse"));
+    CHECK_EQ(ac.entryMap["parse"].insertText, "function parse(self, s: string, ...: number): boolean\nend");
+    REQUIRE(ac.entryMap.count("name"));
+    CHECK_EQ(ac.entryMap["name"].insertText, "public const name: string");
+    REQUIRE(ac.entryMap.count("help"));
+    CHECK_EQ(ac.entryMap["help"].insertText, "private help: string");
+    CHECK_EQ(ac.entryMap.count("public"), 1);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_missing_functions_after_function")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    const std::string traits = R"(
+        trait Named
+            expect function name(self): string
+            function greet(self): string
+                return "hi"
+            end
+            final function id(self): number
+                return 1
+            end
+        end
+    )";
+
+    // A trait's expected and overridable functions, as the rest of their declarations
+    check(traits + R"(
+        class Cat(public n: string) implements Named
+            public function __tostring(self)
+                return self.n
+            end
+            public function @1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("name"));
+    CHECK_EQ(ac.entryMap["name"].insertText, "name(self): string\nend");
+    REQUIRE(ac.entryMap.count("greet"));
+    CHECK_EQ(ac.entryMap["greet"].insertText, "greet(self): string\nend");
+    CHECK_EQ(ac.entryMap.count("id"), 0);
+    CHECK_EQ(ac.entryMap.count("__eq"), 0);
+
+    // `__` adds the metamethods it doesn't define yet
+    check(traits + R"(
+        class Cat(public n: string) implements Named
+            public function __tostring(self)
+                return self.n
+            end
+            public function __@1
+        end
+    )");
+
+    ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__eq"));
+    CHECK_EQ(ac.entryMap["__eq"].insertText, "__eq(self, other): boolean\nend");
+    CHECK_EQ(ac.entryMap.count("__tostring"), 0);
+    CHECK_EQ(ac.entryMap.count("__init"), 0);
+    CHECK(ac.entryMap.count("name"));
+
+    // `__init` when the class has no constructor yet
+    check(R"(
+        class Point
+            x: number
+            function __@1
+        end
+    )");
+
+    ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__init"));
+    CHECK_EQ(ac.entryMap["__init"].insertText, "__init(self)\nend");
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_metamethods_where_a_member_starts")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // The whole declaration, with `public` when the class writes its access
+    check(R"(
+        class Cat(public n: string)
+            __@1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__len"));
+    CHECK_EQ(ac.entryMap["__len"].insertText, "public function __len(self): number\nend");
+    CHECK(ac.entryMap.count("public"));
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_a_traits_special_functions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    check(R"(
+        trait Shape
+            function __@1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__create"));
+    CHECK_EQ(ac.entryMap["__create"].insertText, "__create(...)\nend");
+    CHECK_EQ(ac.entryMap.count("__implemented"), 0);
+    CHECK_EQ(ac.entryMap.count("__init"), 0);
+
+    // `__implemented` is always final
+    check(R"(
+        trait Shape
+            final function __@1
+        end
+    )");
+
+    ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__implemented"));
+    CHECK_EQ(ac.entryMap["__implemented"].insertText, "__implemented(cls)\nend");
+    CHECK_EQ(ac.entryMap.count("__create"), 0);
+    CHECK_EQ(ac.entryMap.count("__tostring"), 0);
+}
+
+// `__create` and `__implemented` belong to the trait, called through `Trait(...)` and when a class implements it. An
+// object has neither.
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_hides_a_traits_special_functions_on_objects")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    check(R"(
+        trait Path
+            function __create(p: string)
+                return Plain()
+            end
+            final function __implemented(cls) end
+            function join(self) end
+        end
+        class Plain() implements Path end
+        local plain = Plain()
+        local path: Path = plain
+        local a = plain:@1
+        local b = plain.@2
+        local c = path:@3
+        local d = path.@4
+    )");
+
+    for (char marker : {'1', '2', '3', '4'})
+    {
+        INFO(marker);
+        auto ac = autocomplete(marker);
+        CHECK(ac.entryMap.count("join"));
+        CHECK_EQ(ac.entryMap.count("__create"), 0);
+        CHECK_EQ(ac.entryMap.count("__implemented"), 0);
+    }
 }
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_offers_private_class_members_only_inside_their_class")
@@ -3242,6 +3435,103 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons")
     CHECK_EQ(ac.context, AutocompleteContext::String);
 }
 
+// Luwu bundles: a string in a bundle literal completes the singletons its position's expected type allows
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_string_singletons_in_bundle_literals")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    check(R"(
+        type ItemId = "torch" | "coal"
+        local one: bundle.Bundle2<ItemId, number> = bundle.pack("@1", 1)
+        local listed: { bundle.Bundle2<ItemId, number> } = { bundle.pack("@2", 1) }
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("torch"));
+    CHECK(ac.entryMap.count("coal"));
+    CHECK_EQ(ac.context, AutocompleteContext::String);
+
+    ac = autocomplete('2');
+    CHECK(ac.entryMap.count("torch"));
+    CHECK(ac.entryMap.count("coal"));
+}
+
+// Luwu bundles: a literal where a union of bundles goes completes the singletons of the bundles its other values fit
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_bundle_literals_against_unions_of_bundles")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    check(R"(
+        type Event = bundle.Bundle2<"join", number> | bundle.Bundle2<"leave", string> | bundle.Bundle2<"kick", string>
+        local any: Event = bundle.pack("@1", 1)
+        local named: Event = bundle.pack("@2", "spam")
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("join"));
+    CHECK(ac.entryMap.count("leave"));
+    CHECK(ac.entryMap.count("kick"));
+
+    ac = autocomplete('2');
+    CHECK(ac.entryMap.count("leave"));
+    CHECK(ac.entryMap.count("kick"));
+    CHECK(!ac.entryMap.count("join"));
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons_in_trait_arguments")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    check(R"(
+        trait Item(category: "Weapon" | "Tool" | "Currency", max = 10)
+        end
+        class Sword implements Item("@1")
+        end
+    )");
+
+    auto ac = autocomplete('1');
+
+    CHECK(ac.entryMap.count("Weapon"));
+    CHECK(ac.entryMap.count("Tool"));
+    CHECK(ac.entryMap.count("Currency"));
+    CHECK_EQ(ac.context, AutocompleteContext::String);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_implements_and_needs_on_the_declaration_line")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+
+    check(R"(
+        trait T @1
+        end
+        class C(x: number) @2
+            @3
+        end
+    )");
+
+    CHECK_EQ(autocomplete('1').entryMap.count("needs"), 1);
+    CHECK_EQ(autocomplete('1').entryMap.count("implements"), 0);
+    CHECK_EQ(autocomplete('2').entryMap.count("implements"), 1);
+    CHECK_EQ(autocomplete('2').entryMap.count("needs"), 0);
+    // a member's position, on its own line
+    CHECK_EQ(autocomplete('3').entryMap.count("implements"), 0);
+}
+
 TEST_CASE_FIXTURE(ACFixture, "string_singleton_as_table_key_iso")
 {
     check(R"(
@@ -5137,6 +5427,125 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_suggest_hot_comments")
     CHECK(ac.entryMap.count("native"));
     CHECK(ac.entryMap.count("nolint"));
     CHECK(ac.entryMap.count("optimize"));
+    // Luwu: every directive the linter knows
+    CHECK(ac.entryMap.count("lint"));
+    CHECK(ac.entryMap.count("trust"));
+}
+
+// Luwu: after `--!nolint` or `--!lint`, the lint names, without the ones the directive already lists
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_comment_directives")
+{
+    check("--!nolint @1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 1);
+    CHECK_EQ(ac.entryMap.count("All"), 1);
+    CHECK_EQ(ac.entryMap.count("strict"), 0);
+    CHECK_EQ(ac.context, AutocompleteContext::HotComment);
+
+    check("--!nolint LocalUnused Loc@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 0);
+    CHECK_EQ(ac.entryMap.count("LocalShadow"), 1);
+
+    check("--!lint @1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 1);
+    CHECK_EQ(ac.entryMap.count("All"), 0);
+
+    check("--!optimize @1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.size(), 3);
+    CHECK_EQ(ac.entryMap.count("2"), 1);
+
+    check("--!strict @1");
+    ac = autocomplete('1');
+    CHECK(ac.entryMap.empty());
+}
+
+// Luwu: a Luau or Lua module isn't offered what Luwu adds to a library (the LuwuOnlyApi lint's members)
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_luwu_only_members_out_of_luau_modules")
+{
+    ScopedFastFlag tableDrop{FFlag::LuwuTableDrop, true};
+
+    check("local t = table.@1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("drop"), 1);
+
+    configResolver.defaultConfig.language = Language::Luau;
+    check("local t = table.@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("drop"), 0);
+    CHECK_EQ(ac.entryMap.count("insert"), 1);
+}
+
+// Luwu: inside `--@[nolint(...)]`, the comment form Luau and Lua files can write, the lint names not listed yet
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_attribute_comments")
+{
+    check("--\\@[nolint(LocalShadow, @1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::HotComment);
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 1);
+    CHECK_EQ(ac.entryMap.count("LocalShadow"), 0);
+    // directive names belong after `--!`, not here
+    CHECK_EQ(ac.entryMap.count("strict"), 0);
+}
+
+// Luwu: a Luau or Lua module isn't offered a global only Luwu has, but a local of that name is still offered
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_luwu_only_globals_out_of_luau_modules")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    check("local m = coll@1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("collections"), 1);
+
+    configResolver.defaultConfig.language = Language::Luau;
+    check("local m = coll@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("collections"), 0);
+    CHECK_EQ(ac.entryMap.count("table"), 1);
+
+    check(R"(
+        local collections = {}
+        local m = coll@1
+    )");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("collections"), 1);
+}
+
+// Luwu: inside `@[nolint(...)]` and `@[lint(...)]`, the lint names, without the ones the attribute already lists
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_lint_attributes")
+{
+    check(R"(
+        \@[nolint(@1)]
+        local function f() end
+    )");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 1);
+    CHECK_EQ(ac.entryMap.count("local"), 0);
+    CHECK_EQ(ac.context, AutocompleteContext::Keyword);
+
+    check(R"(
+        \@[lint(LocalUnused, Loc@1)]
+        local function f() end
+    )");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 0);
+    CHECK_EQ(ac.entryMap.count("LocalShadow"), 1);
+
+    check(R"(
+        \@[nolint(LocalShadow, @1)]
+        function g() end
+    )");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("LocalShadow"), 0);
+    CHECK_EQ(ac.entryMap.count("LocalUnused"), 1);
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_method_in_unfinished_repeat_body_eof")
@@ -5203,6 +5612,143 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_deprecated_attribute")
     CHECK_EQ(ac.entryMap.count("deprecated"), 1);
     CHECK_EQ(ac.entryMap.count("checked"), 1);
     CHECK_EQ(ac.entryMap.count("native"), 1);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_beyond_functions")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuAttributesEverywhere, true};
+
+    // A local: only the attributes that allow this position are offered, so the function-only ones
+    // are absent rather than suggested and then rejected by the parser.
+    check(R"(
+        \@dep@1
+        local x = 1
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+    CHECK_EQ(ac.entryMap.count("checked"), 0);
+
+    // A type alias.
+    check(R"(
+        \@dep@1
+        type X = number
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+
+    // A field of a table type.
+    check(R"(
+        type X = {
+            \@dep@1 foo: number,
+        }
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+
+    // An entry of a table constructor.
+    check(R"(
+        local t = {
+            \@dep@1 foo = 1,
+        }
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+
+    // A function parameter.
+    check(R"(
+        local function f(\@dep@1 a) return a end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 0);
+
+    // A function still offers the function-only attributes.
+    check(R"(
+        \@dep@1
+        local function f() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("deprecated"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 1);
+    CHECK_EQ(ac.entryMap.count("checked"), 1);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_argument_fields")
+{
+    // Inside the braces, the fields @deprecated takes.
+    check(R"(
+        \@[deprecated { @1 }]
+        function foo() end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("use"), 1);
+    CHECK_EQ(ac.entryMap.count("reason"), 1);
+    CHECK_EQ(ac.entryMap.count("local"), 0);
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+
+    // A field name part of the way written.
+    check(R"(
+        \@[deprecated { us@1 }]
+        function foo() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("use"), 1);
+    CHECK_EQ(ac.entryMap.count("reason"), 1);
+
+    // A field already written is not offered again.
+    check(R"(
+        \@[deprecated { use = "bar", @1 }]
+        function foo() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("use"), 0);
+    CHECK_EQ(ac.entryMap.count("reason"), 1);
+
+    // Inside a field's value there is nothing to offer, rather than the statement completions of the
+    // function the attribute is on.
+    check(R"(
+        \@[deprecated { use = "ba@1" }]
+        function foo() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK(ac.entryMap.empty());
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_argument_fields_beyond_functions")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    check(R"(
+        \@[deprecated { @1 }]
+        local x = 1
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("use"), 1);
+    CHECK_EQ(ac.entryMap.count("reason"), 1);
+
+    check(R"(
+        local t = {
+            \@[deprecated { @1 }] foo = 1,
+        }
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("use"), 1);
+    CHECK_EQ(ac.entryMap.count("reason"), 1);
 }
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_braced_attribute")
@@ -5785,4 +6331,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
     CHECK(ac.entryMap.count("Animator"));
 }
 
+// The value is a call, so its type is a pack (astTypePacks), not a single type
 TEST_SUITE_END();
+
