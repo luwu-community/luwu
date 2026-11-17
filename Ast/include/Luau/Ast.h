@@ -73,10 +73,6 @@ class AstTypePack;
 class AstAttr;
 class AstExprTable;
 
-// Luwu Destructuring (rfcs/destructuring.md): the name of the hidden local an unnamed pattern (`local .{x} = v`)
-// binds its value to. Code can't spell it, so nothing can refer to it.
-constexpr const char* kDestructuredLocalName = "(destructured)";
-
 template<typename T>
 struct AstArray
 {
@@ -103,6 +99,10 @@ struct AstArray
         return std::make_reverse_iterator(begin());
     }
 };
+
+// Luwu Destructuring (rfcs/destructuring.md): the name of the hidden local an unnamed pattern (`local .{x} = v`)
+// binds its value to. Code can't spell it, so nothing can refer to it.
+constexpr const char* kDestructuredLocalName = "(destructured)";
 
 struct AstLocal
 {
@@ -572,6 +572,8 @@ public:
     void visit(AstVisitor* visitor) override;
 };
 
+struct AstDestructurePattern;
+
 class AstExprCall : public AstExpr
 {
 public:
@@ -596,9 +598,14 @@ public:
     AstArray<AstExpr*> args;
     bool self;
     Location argLocation;
+    // Luwu bundles: `.(a, b)`, which the parser writes as `bundle.pack(a, b)` (Parser::parseDotPositional)
+    bool fromDotPositional = false;
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a call the parser wrote for a type test (`x is Point`
     // is `class.isinstance(x, Point)`), not one in the code. Editor features that show a call's parameters skip it.
     bool fromTypeTest = false;
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the `{...}` or `(...)` after the type test's class (`x is Point {x, y}`), kept even with no fields yet so
+    // autocomplete can offer the class's fields there
+    const AstDestructurePattern* typeTestPattern = nullptr;
 };
 
 class AstExprIndexName : public AstExpr
@@ -784,6 +791,9 @@ public:
     Op op;
     AstExpr* left;
     AstExpr* right;
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the size test of a bundle pattern (`#value == 2`),
+    // which narrows `value` to the bundles of that size
+    bool fromBundlePattern = false;
 };
 
 std::string toString(AstExprBinary::Op op);
@@ -1311,14 +1321,14 @@ public:
     // Location of the leading 'for' keyword token only.
     Location forLocation;
 
+    // Luwu If Local (rfcs/control-flow/if-local.md): see AstStatFor::whenGuard. With destructured bindings, `body` starts with
+    // their fields and the guard follows them.
+    AstStatIf* whenGuard = nullptr;
+
     // Luwu Destructuring (rfcs/destructuring.md): the pattern of each binding written as one (`for _, p.{x, y} in ps`),
     // null for a plain name; empty when no binding is a pattern. The loop variable is the pattern's local (hidden for
     // `.{x, y}`), and `body` starts with one `local` per bound name (AstStatLocal::destructuredFromLoop).
     AstArray<AstDestructurePattern*> destructure{nullptr, 0};
-
-    // Luwu If Local (rfcs/control-flow/if-local.md): see AstStatFor::whenGuard. With destructured bindings, `body` starts with
-    // their fields and the guard follows them.
-    AstStatIf* whenGuard = nullptr;
 };
 
 class AstStatAssign : public AstStat
@@ -1897,6 +1907,8 @@ public:
     AstName name;
     Location nameLocation;
     AstArray<AstTypeOrPack> parameters;
+    // Luwu bundles: `.(A, B)`, which the parser writes as `bundle.Bundle2<A, B>` (Parser::parseDotPositionalType)
+    bool fromDotPositional = false;
 };
 
 struct AstTableProp

@@ -115,7 +115,6 @@ void initFunctions(NativeContext& context)
     context.executePUSH = executePUSH;
     context.executePOP = executePOP;
     context.executeWRAPRESULT = executeWRAPRESULT;
-    context.executeGETQUALIFIED = executeGETQUALIFIED;
     context.executeGETVARARGSMultRet = executeGETVARARGSMultRet;
     context.executeGETVARARGSConst = executeGETVARARGSConst;
     context.executeDUPCLOSURE = executeDUPCLOSURE;
