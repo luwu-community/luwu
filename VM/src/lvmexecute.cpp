@@ -1220,8 +1220,7 @@ reentry:
                 }
                 else
                 {
-                    lua_CFunction func = ccl->c.f;
-                    int n = func(L);
+                    int n = luaD_callcfunction(L, ccl);
 
                     // yield
                     if (n < 0)
@@ -1333,8 +1332,7 @@ reentry:
                     if (feedback_slot != LUAU_INSN_FBSLOT_SEALED)
                         VM_PATCH_AUX(pc - 1, LUAU_INSN_FBSLOT_SEALED);
 
-                    lua_CFunction func = ccl->c.f;
-                    int n = func(L);
+                    int n = luaD_callcfunction(L, ccl);
 
                     // yield
                     if (n < 0)
@@ -4132,8 +4130,7 @@ int luau_precall(lua_State* L, StkId func, int nresults)
     }
     else
     {
-        lua_CFunction func = ccl->c.f;
-        int n = func(L);
+        int n = luaD_callcfunction(L, ccl);
 
         // yield
         if (n < 0)
