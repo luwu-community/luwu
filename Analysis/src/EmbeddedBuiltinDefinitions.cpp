@@ -7,6 +7,7 @@ LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(DebugLuwuBufferComparison)
 LUAU_FASTFLAG(LuwuTableDrop)
 
 namespace Luau
@@ -284,6 +285,12 @@ static constexpr const char* kBuiltinDefinitionBufferSrcIsFrozen = R"BUILTIN_SRC
     isfrozen: @checked (b: buffer) -> boolean,
 )BUILTIN_SRC";
 
+// Luwu buffer.order buffer.equals (rfcs/buffer-comparison.md):
+static constexpr const char* kBuiltinDefinitionBufferSrcComparison = R"BUILTIN_SRC(
+    order: @checked (b1: buffer, b2: buffer, offset1: number?, offset2: number?, count: number?) -> "less" | "same" | "greater",
+    equals: @checked (b1: buffer, b2: buffer, offset1: number?, offset2: number?, count: number?) -> boolean,
+)BUILTIN_SRC";
+
 static constexpr const char* kBuiltinDefinitionBufferSrcClose = R"BUILTIN_SRC(
 }
 
@@ -401,6 +408,8 @@ std::string getBuiltinDefinitionSource()
         result += kBuiltinDefinitionBufferSrcInteger;
     if (FFlag::LuwuBufferIsFrozen)
         result += kBuiltinDefinitionBufferSrcIsFrozen;
+    if (FFlag::DebugLuwuBufferComparison)
+        result += kBuiltinDefinitionBufferSrcComparison;
     result += kBuiltinDefinitionBufferSrcClose;
 
     result += kBuiltinDefinitionVectorSrc;
