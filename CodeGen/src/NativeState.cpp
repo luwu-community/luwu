@@ -113,6 +113,7 @@ void initFunctions(NativeContext& context)
     context.executeWRAPRESULT = executeWRAPRESULT;
     context.executeGETQUALIFIED = executeGETQUALIFIED;
     context.executeTABLEBUNDLE = executeTABLEBUNDLE;
+    context.executeGETPOSITIONAL = executeGETPOSITIONAL;
     context.executeGETVARARGSMultRet = executeGETVARARGSMultRet;
     context.executeGETVARARGSConst = executeGETVARARGSConst;
     context.executeDUPCLOSURE = executeDUPCLOSURE;

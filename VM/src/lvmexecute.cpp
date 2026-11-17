@@ -145,7 +145,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
         VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_WRAPRESULT), VM_DISPATCH_OP(LOP_RESULTGET), \
         VM_DISPATCH_OP(LOP_GETQUALIFIED), VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE), VM_DISPATCH_OP(LOP_JUMPXTYPE), \
-        VM_DISPATCH_OP(LOP_JUMPXMATCH),
+        VM_DISPATCH_OP(LOP_JUMPXMATCH), VM_DISPATCH_OP(LOP_GETPOSITIONAL),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -4318,6 +4318,18 @@ reentry:
                 LUAU_ASSERT(ttisstring(name));
 
                 VM_PROTECT(luaR_getqualified(L, ra, rb, rc, tsvalue(name)));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_GETPOSITIONAL)
+            {
+                // Luwu Destructuring (rfcs/destructuring.md): a read of a position, `x.1` or an element of `.(a, b)`
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                int c = LUAU_INSN_C(insn);
+
+                VM_PROTECT(luaV_getpositional(L, rb, c, ra));
                 VM_NEXT();
             }
 

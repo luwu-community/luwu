@@ -723,6 +723,24 @@ struct DiagnosticNote
 // What the error and the note on a use of the local `name` say when it has no type. `origin` is the error behind it.
 std::string noTypeNote(const std::string& name, std::optional<Location> origin);
 
+// Luwu Destructuring (rfcs/destructuring.md): a positional pattern `.(a, b)` on an object of a class without a primary
+// constructor, or past the constructor's last parameter. Both raise at runtime.
+struct PositionalDestructuring
+{
+    // The class read from, or the printed type of a value that isn't an object (`notObject`)
+    Name className;
+    // The position read, 0 for the first
+    size_t position = 0;
+    // The primary constructor's parameters, unset when the class has none
+    std::optional<std::vector<Name>> parameters;
+    // Only objects have positions: `className` is the type of something else, a table say
+    bool notObject = false;
+    // An element of a positional pattern rather than `x.1`
+    bool inPattern = false;
+
+    bool operator==(const PositionalDestructuring& rhs) const;
+};
+
 struct PropertyAccessViolation
 {
     TypeId table;
@@ -1018,7 +1036,8 @@ using TypeErrorData = Variant<
     ConstructorReadByName,
     Typo,
     UnreachableCodeUse,
-    NoTypeUse>;
+    NoTypeUse,
+    PositionalDestructuring>;
 
 struct TypeErrorSummary
 {

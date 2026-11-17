@@ -26,6 +26,7 @@ LUAI_FUNC l_noret luaG_runerroratlua(lua_State* L, const char* msg);
 LUAI_FUNC l_noret luaG_methoderror(lua_State* L, const TValue* p1, const TString* p2);
 LUAI_FUNC l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2);
 LUAI_FUNC l_noret luaG_instancefieldonclasserror(lua_State* L, const TValue* p1, const TValue* p2);
+LUAI_FUNC l_noret luaG_positionalerror(lua_State* L, const LuauClass* classdef, int position);
 LUAI_FUNC l_noret luaG_readonlyerror(lua_State* L);
 LUAI_FUNC l_noret luaG_privateaccesserror(lua_State* L, const TValue* p2, const TString* className);
 LUAI_FUNC l_noret luaG_constassignerror(lua_State* L, const TValue* p2, const TString* className);

@@ -27,6 +27,8 @@ LUAI_FUNC void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId v
 // Luwu Classes (rfcs/classes): luaV_gettable with private members read on behalf of `accessor`
 // (NULL: native code) instead of the running frame's closure.
 LUAI_FUNC void luaV_gettablefor(lua_State* L, const TValue* t, TValue* key, StkId val, const Closure* accessor);
+// Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL's work, element `position` (from 0) of a positional pattern
+LUAI_FUNC void luaV_getpositional(lua_State* L, const TValue* t, int position, StkId val);
 LUAI_FUNC void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val);
 // Luwu bundles: `t[key]` and `t[key] = val` for the bundle key holding the `n` values at `values`, building the bundle
 // only for a metamethod, a table that isn't plain, or a new key

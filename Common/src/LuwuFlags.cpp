@@ -33,3 +33,7 @@ LUAU_FASTFLAGVARIABLE(LuwuTableComprehensions)
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` and the `is` and `implements` patterns (in
 // progress). While it is on, the compiler emits WIP bytecode (version 200), which has LOP_JUMPXTYPE and LOP_JUMPXMATCH.
 LUAU_FASTFLAGVARIABLE(DebugLuwuMatchExpressions)
+
+// Luwu Destructuring (rfcs/destructuring.md): `.{x, y}` and `.(x, y)` patterns. The parser gates the syntax, and while it
+// is on the compiler emits WIP bytecode (version 200), which positional patterns need for LOP_GETPOSITIONAL.
+LUAU_FASTFLAGVARIABLE(LuwuDestructuring)

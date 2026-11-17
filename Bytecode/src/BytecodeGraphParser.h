@@ -1068,6 +1068,12 @@ struct BytecodeGraphParser
                 addImmInput(node, static_cast<int32_t>(aux));
                 break;
 
+            case LOP_GETPOSITIONAL:
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addImmInput(node, static_cast<int32_t>(LUAU_INSN_C(insn)));
+                addProducer(LUAU_INSN_A(insn), nodeOp);
+                break;
+
             case LOP_APPENDTABLE:
                 // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): reads the table and the value, and
                 // updates the count in C

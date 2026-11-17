@@ -2071,6 +2071,30 @@ struct ErrorConverter
                "(...)' is the only way to run it, and reading it here will raise a runtime error";
     }
 
+    std::string operator()(const PositionalDestructuring& e) const
+    {
+        if (e.notObject && e.inPattern)
+            return "'" + e.className + "' has no positions; destructure it by index with '.[...]' instead";
+        if (e.notObject)
+            return "'" + e.className + "' has no positions; index it with '[" + std::to_string(e.position + 1) + "]' instead";
+
+        if (!e.parameters)
+            return "'" + e.className + "' can't be destructured positionally without a primary constructor; take its fields by name with '.{...}'";
+
+        std::string result = "'" + e.className + "' has no position " + std::to_string(e.position + 1) + "; its primary constructor takes ";
+        if (e.parameters->empty())
+            return result + "no parameters";
+
+        result += "only ";
+        for (size_t i = 0; i < e.parameters->size(); ++i)
+        {
+            if (i > 0)
+                result += i + 1 == e.parameters->size() ? " and " : ", ";
+            result += "'" + (*e.parameters)[i] + "'";
+        }
+        return result;
+    }
+
     std::string operator()(const PrivateConstructorAccess& e) const
     {
         return "This class's constructor is private; call a factory function instead of calling the constructor directly";
@@ -2529,6 +2553,12 @@ bool NoTypeUse::operator==(const NoTypeUse& rhs) const
 bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
 {
     return *table == *rhs.table && className == rhs.className;
+}
+
+bool PositionalDestructuring::operator==(const PositionalDestructuring& rhs) const
+{
+    return className == rhs.className && position == rhs.position && parameters == rhs.parameters && notObject == rhs.notObject &&
+           inPattern == rhs.inPattern;
 }
 
 bool PrivateConstructorAccess::operator==(const PrivateConstructorAccess& rhs) const
@@ -3119,6 +3149,9 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     else if constexpr (std::is_same_v<T, ConstructorReadByName>)
         e.table = clone(e.table);
     else if constexpr (std::is_same_v<T, Typo> || std::is_same_v<T, UnreachableCodeUse> || std::is_same_v<T, NoTypeUse>)
+    {
+    }
+    else if constexpr (std::is_same_v<T, PositionalDestructuring>)
     {
     }
     else if constexpr (std::is_same_v<T, UninitializableClassField>)

@@ -13,6 +13,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
 
@@ -1062,6 +1063,7 @@ void BytecodeBuilder::writeClassShape(std::string& ss, const ClassShape& cs) con
     LUAU_ASSERT(cs.propertyFlags.size() == cs.propertyNames.size());
     LUAU_ASSERT(cs.methodFlags.size() == cs.methodNames.size());
     LUAU_ASSERT(cs.propertyDefaults.empty() || cs.propertyDefaults.size() == cs.propertyNames.size());
+    LUAU_ASSERT(cs.propertyPositions.empty() || cs.propertyPositions.size() == cs.propertyNames.size());
 
     writeVarInt(ss, cs.className);
     writeVarInt(ss, cs.propertyNames.size());
@@ -1083,6 +1085,9 @@ void BytecodeBuilder::writeClassShape(std::string& ss, const ClassShape& cs) con
         // class and skip the `__defaults` closure entirely
         if (cs.propertyFlags[i] & LBC_CLASSMEMBER_CONSTDEFAULT)
             writeVarInt(ss, cs.propertyDefaults[i]);
+
+        if (cs.propertyFlags[i] & LBC_CLASSMEMBER_POSITIONAL)
+            writeVarInt(ss, cs.propertyPositions[i]);
     }
     for (size_t i = 0; i < cs.methodNames.size(); i++)
     {
@@ -1535,6 +1540,10 @@ uint8_t BytecodeBuilder::getVersion()
 
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): LOP_JUMPXTYPE and LOP_JUMPXMATCH are WIP bytecode too
     if (FFlag::DebugLuwuMatchExpressions)
+        return LWBC_VERSION_WIP;
+
+    // Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL is WIP bytecode too
+    if (FFlag::LuwuDestructuring)
         return LWBC_VERSION_WIP;
 
     return LWBC_VERSION_TARGET;
@@ -2065,6 +2074,11 @@ void BytecodeBuilder::validateInstructions() const
 
         case LOP_GETOBJECTMEMBER:
         case LOP_SETOBJECTMEMBER:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            break;
+
+        case LOP_GETPOSITIONAL:
             VREG(LUAU_INSN_A(insn));
             VREG(LUAU_INSN_B(insn));
             break;
@@ -2960,6 +2974,10 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_SETOBJECTMEMBER:
         formatAppend(result, "SETOBJECTMEMBER R%d R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++);
+        break;
+
+    case LOP_GETPOSITIONAL:
+        formatAppend(result, "GETPOSITIONAL R%d R%d %d [%d]\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), LUAU_INSN_C(insn) + 1);
         break;
 
     case LOP_NEWOBJECT:
