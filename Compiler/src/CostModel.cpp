@@ -270,6 +270,11 @@ struct CostVisitor : AstVisitor
                 cost += (alternative.operand ? model(alternative.operand) : Cost()) + 1;
             return cost;
         }
+        else if (AstExprTry* expr = node->as<AstExprTry>())
+        {
+            // Luwu try expressions: wrapping the value and jumping over the handler
+            return model(expr->expr) + 3;
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");

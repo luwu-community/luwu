@@ -110,6 +110,8 @@ struct TypeFunctionAnyType
 
 struct TypeFunctionUnknownType
 {
+    // Luwu try expressions: weakunknown, which doesn't absorb the rest of a union
+    bool weak = false;
 };
 
 struct TypeFunctionNeverType
@@ -163,6 +165,9 @@ struct TypeFunctionFunctionType
 
     // Parallel to argTypes.head; nullopt entries mean the parameter has no name.
     std::vector<std::optional<std::string>> argNames;
+
+    // Luwu try expressions: FunctionType::errorHint
+    std::optional<TypeFunctionTypeId> errorHint;
 };
 
 template<typename T>

@@ -992,6 +992,11 @@ struct Printer
             writer.symbol("}");
             advance(expr.location.end);
         }
+        else if (const auto& a = expr.as<AstExprTry>())
+        {
+            writer.keyword("try");
+            visualize(*a->expr);
+        }
         else if (const auto& a = expr.as<AstExprInterpString>())
         {
             const auto* cstNode = lookupCstNode<CstExprInterpString>(a);
@@ -1594,6 +1599,8 @@ struct Printer
                 }
 
                 visualizeTypeAnnotation(*a->type);
+                if (a->errorHint)
+                    visualizeErrorHint(*a->errorHint, cstNode ? cstNode->errorHintPosition : Position::missing());
             }
         }
         else if (const auto& t = program.as<AstStatTypeFunction>())
@@ -2020,7 +2027,7 @@ struct Printer
             advanceBefore(func.argLocation->end, 1);
         writer.symbol(")");
 
-        if (writeTypes && func.returnAnnotation != nullptr)
+        if (writeTypes && (func.returnAnnotation != nullptr || func.errorHint != nullptr))
         {
             if (cstNode)
                 maybeAdvanceAndWrite(cstNode->returnSpecifierPosition, ":");
@@ -2030,7 +2037,11 @@ struct Printer
             if (!cstNode)
                 writer.space();
 
-            visualizeTypePackAnnotation(*func.returnAnnotation, false, false, true);
+            if (func.returnAnnotation)
+                visualizeTypePackAnnotation(*func.returnAnnotation, false, false, true);
+
+            if (func.errorHint)
+                visualizeErrorHint(*func.errorHint, cstNode ? cstNode->errorHintPosition : Position::missing());
         }
 
         visualizeBlock(*func.body);
@@ -2353,6 +2364,19 @@ struct Printer
         }
     }
 
+    // Luwu try expressions: `! E` after a return type
+    void visualizeErrorHint(AstType& errorHint, const Position& bangPosition)
+    {
+        if (bangPosition.hasValue())
+            advance(bangPosition);
+        else
+            writer.space();
+        writer.symbol("!");
+        if (!bangPosition.hasValue())
+            writer.space();
+        visualizeTypeAnnotation(errorHint);
+    }
+
     void visualizeTypeAnnotation(AstType& typeAnnotation)
     {
         advance(typeAnnotation.location.begin);
@@ -2445,6 +2469,9 @@ struct Printer
             writer.symbol("->");
 
             visualizeTypePackAnnotation(*a->returnTypes, false, cstNode == nullptr);
+
+            if (a->errorHint)
+                visualizeErrorHint(*a->errorHint, cstNode ? cstNode->errorHintPosition : Position::missing());
         }
         else if (const auto& a = typeAnnotation.as<AstTypeTable>())
         {

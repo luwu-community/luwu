@@ -1143,6 +1143,11 @@ struct ConstantVisitor : AstVisitor
                     analyze(alternative.operand);
             }
         }
+        else if (AstExprTry* expr = node->as<AstExprTry>())
+        {
+            // Luwu try expressions: a new result object every time, never a constant
+            analyze(expr->expr);
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");

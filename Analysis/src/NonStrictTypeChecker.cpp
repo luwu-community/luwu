@@ -626,6 +626,8 @@ struct NonStrictTypeChecker
             return visit(e->checked, ValueContext::RValue);
         else if (auto e = expr->as<AstExprTableComprehension>())
             return visit(e);
+        else if (auto e = expr->as<AstExprTry>())
+            return visit(e);
         else
         {
             LUAU_ASSERT(!"NonStrictTypeChecker encountered an unknown expression type");
@@ -983,6 +985,13 @@ struct NonStrictTypeChecker
         for (AstExpr* expr : error->expressions)
             visit(expr, ValueContext::RValue);
 
+        return {};
+    }
+
+    // Luwu try expressions: the errors `try` catches are expected, so what its expression needs doesn't flow out
+    NonStrictContext visit(AstExprTry* tryExpr)
+    {
+        visit(tryExpr->expr, ValueContext::RValue);
         return {};
     }
 

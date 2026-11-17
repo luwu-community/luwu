@@ -178,16 +178,23 @@ LUAI_FUNC void luaR_checkconstassign(lua_State* L, const TValue* key, const Luau
 // class with `hasprivatemembers`. It tests the member's own flag bits first, so the out-of-line
 // authorization call only happens for members that are actually private, or for `__init`. `__init` is
 // only ever resolved by name; see luaR_sealclassshape. Worth ~1.3ns per access, interpreted.
+// The interpreter passes `pc`, which is saved before a check that can raise, so the error points at the instruction
+// being run (and a `try` around it catches it). Other callers have saved it already.
 LUAU_FORCEINLINE void luaR_checkprivateaccessfast(
     lua_State* L,
     const TValue* key,
     const LuauClass* classdef,
     const Closure* cl,
-    uint32_t offset
+    uint32_t offset,
+    const Instruction* pc = NULL
 )
 {
     if (LUAU_UNLIKELY((classdef->memberflags[offset] & (LBC_CLASSMEMBER_PRIVATE | LBC_CLASSMEMBER_INITBLOCKED)) != 0))
+    {
+        if (pc)
+            L->ci->savedpc = pc;
         luaR_checkprivateaccess(L, key, classdef, cl, offset);
+    }
 }
 
 LUAU_FORCEINLINE void luaR_checkconstassignfast(
@@ -195,11 +202,16 @@ LUAU_FORCEINLINE void luaR_checkconstassignfast(
     const TValue* key,
     const LuauObject* object,
     const Closure* cl,
-    uint32_t offset
+    uint32_t offset,
+    const Instruction* pc = NULL
 )
 {
     if (LUAU_UNLIKELY((object->lclass->memberflags[offset] & LBC_CLASSMEMBER_CONST) != 0))
+    {
+        if (pc)
+            L->ci->savedpc = pc;
         luaR_checkconstassign(L, key, object, cl, offset);
+    }
 }
 
 /**
@@ -233,6 +245,25 @@ LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const l
  * Luwu method's prologue raises (luaG_selfclasserror) when that isn't an object of `classdef`.
  */
 LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method);
+
+// Luwu builtin classes: an `__init` that fills the object's fields from its arguments in order. A field with no
+// argument for it stays nil.
+LUAI_FUNC int luaR_fieldsinit(lua_State* L);
+
+// Luwu builtin classes: pops the value on top of the stack and adds it to `b` the way a constructor call in `__tostring`
+// shows it: strings quoted, everything else as `tostring` gives it
+LUAI_FUNC void luaR_addshowntop(struct luaL_Strbuf* b);
+
+// Luwu try expressions: a new `Some`, `Ok` or `Err` (`kind`) holding `value`, for the C API and `try`. Raises if the
+// library isn't open.
+LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value);
+
+// Luwu try expressions: LOP_WRAPRESULT. Replaces the value in `ra` with an `Ok` holding it, or with `caught` an `Err`
+// holding the error in `ra` and where it was raised in `ra + 1` to `ra + 3`. Doesn't run the collector.
+LUAI_FUNC void luaR_wrapresult(lua_State* L, StkId ra, bool caught);
+
+// Luwu try expressions: the value a `Some`, `Ok` or `Err` holds, or NULL for any other value
+LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
 
 /**
  * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns

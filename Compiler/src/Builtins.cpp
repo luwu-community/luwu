@@ -11,6 +11,7 @@ LUAU_FASTFLAGVARIABLE(LuauIntegerFastcalls)
 LUAU_FASTFLAGVARIABLE(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(DebugLuwuBundles)
 
 namespace Luau
@@ -101,6 +102,15 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
 {
     if (FFlag::DebugLuwuBundles && builtin.object == "bundle")
         return getBundleFunctionId(builtin);
+
+    // Luwu try expressions: the constructors of options and results. FASTCALL's safe-env guard falls back to the real
+    // call when the global might have been replaced.
+    if (FFlag::DebugLuwuTryExpressions && builtin.isGlobal("Some"))
+        return LBF_OPTION_SOME;
+    if (FFlag::DebugLuwuTryExpressions && builtin.isGlobal("Ok"))
+        return LBF_RESULT_OK;
+    if (FFlag::DebugLuwuTryExpressions && builtin.isGlobal("Err"))
+        return LBF_RESULT_ERR;
 
     if (builtin.isGlobal("assert"))
         return LBF_ASSERT;
@@ -656,6 +666,11 @@ BuiltinInfo getBuiltinInfo(int bfid)
     case LBF_CLASS_OF:
         return {1, 1};
 
+    case LBF_OPTION_SOME:
+    case LBF_RESULT_OK:
+        return {1, 1};
+    case LBF_RESULT_ERR:
+        return {-1, 1}; // the error, then optionally where it was raised
     case LBF_BUNDLE_PACK:
         return {-1, 1}; // 0 to 12 parameters
     case LBF_BUNDLE_UNPACK:

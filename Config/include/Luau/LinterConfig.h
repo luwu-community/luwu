@@ -117,6 +117,7 @@ struct LintWarning
         Code_UnflippedGuard = 81,          // Luwu: `x == nil or return` followed by code using `x`, which is always nil there
         Code_ConfusingGuard = 82,          // Luwu: `x and return`, a long or chained guard statement, or one returning several values
         Code_IsComparison = 83,            // Luwu: `x is "meow"`, a pattern with one value that reads better as `x == "meow"`
+        Code_UncaughtErrors = 84,          // Luwu: a call to a function with error hints outside a `try`. Off by default.
 
         Code__Count
     };
@@ -250,6 +251,7 @@ inline constexpr const char* kWarningNames[] = {
     "UnflippedGuard",
     "ConfusingGuard",
     "IsComparison",
+    "UncaughtErrors",
 };
 // clang-format on
 

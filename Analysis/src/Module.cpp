@@ -319,6 +319,8 @@ struct ClonePublicInterface : Substitution
 
         TypeFun result{std::move(typeParams), std::move(typePackParams), type, tf.definitionLocation};
         result.definitionModuleName = tf.definitionModuleName;
+        if (tf.errorHint)
+            result.errorHint = cloneType(*tf.errorHint);
         return result;
     }
 };

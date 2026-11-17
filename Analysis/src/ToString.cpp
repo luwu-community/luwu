@@ -1056,6 +1056,13 @@ struct TypeStringifier
         if (plural)
             state.emit(")");
 
+        // Luwu try expressions
+        if (ftv.errorHint)
+        {
+            state.emit(" ! ");
+            stringify(*ftv.errorHint);
+        }
+
         state.unsee(&ftv);
     }
 
@@ -2943,6 +2950,13 @@ std::string toStringNamedFunction(const std::string& funcName, const FunctionTyp
 
     if (wrap)
         state.emit(")");
+
+    // Luwu try expressions
+    if (ftv.errorHint)
+    {
+        state.emit(" ! ");
+        tvs.stringify(*ftv.errorHint);
+    }
 
     // Luwu: define the cycle names the signature used, so `t1` above means something.
     emitUsedCycleDefinitions(state, tvs, /* bypassOwnNameOnly */ true);

@@ -143,8 +143,9 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
-        VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_GETQUALIFIED), VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), \
-        VM_DISPATCH_OP(LOP_SETTABLEBUNDLE), VM_DISPATCH_OP(LOP_JUMPXTYPE), VM_DISPATCH_OP(LOP_JUMPXMATCH),
+        VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_WRAPRESULT), VM_DISPATCH_OP(LOP_RESULTGET), \
+        VM_DISPATCH_OP(LOP_GETQUALIFIED), VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE), VM_DISPATCH_OP(LOP_JUMPXTYPE), \
+        VM_DISPATCH_OP(LOP_JUMPXMATCH),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -713,7 +714,7 @@ reentry:
                         if (LUAU_LIKELY(slot < inst->lclass->numberofallmembers && tsvalue(kv) == inst->lclass->offsettomember[slot]))
                         {
                             if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers))
-                                luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
+                                luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot, pc);
                             setobj2s(L, ra, luaR_lookupmemberatoffset(inst, slot));
                             VM_NEXT();
                         }
@@ -722,9 +723,12 @@ reentry:
                         {
                             const TValue* offset = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
                             if (ttisnil(offset))
+                            {
+                                VM_PROTECT_PC();
                                 luaG_missingmembererror(L, rb, kv);
+                            }
                             const uint32_t offsetnum = uint32_t(nvalue(offset));
-                            luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
+                            luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum, pc);
                             setobj2s(L, ra, luaR_lookupmemberatoffset(inst, offsetnum));
                             VM_PATCH_MEMBER_SLOT(pc - 2, offsetnum);
                             VM_NEXT();
@@ -741,7 +745,7 @@ reentry:
                             ))
                         {
                             if (LUAU_UNLIKELY(lco->hasprivatemembers))
-                                luaR_checkprivateaccessfast(L, kv, lco, cl, slot);
+                                luaR_checkprivateaccessfast(L, kv, lco, cl, slot, pc);
                             setobj2s(L, ra, &lco->staticmembers[slot - lco->numberofinstancemembers]);
                             VM_NEXT();
                         }
@@ -750,12 +754,18 @@ reentry:
                         {
                             const TValue* offset = luaH_getstr(lco->memberstooffset, tsvalue(kv));
                             if (ttisnil(offset))
+                            {
+                                VM_PROTECT_PC();
                                 luaG_missingmembererror(L, rb, kv);
+                            }
                             const uint32_t offsetnum = uint32_t(nvalue(offset));
                             // accessing an instance member (field) through the class object itself is an error
                             if (offsetnum < lco->numberofinstancemembers)
+                            {
+                                VM_PROTECT_PC();
                                 luaG_instancefieldonclasserror(L, rb, kv);
-                            luaR_checkprivateaccessfast(L, kv, lco, cl, offsetnum);
+                            }
+                            luaR_checkprivateaccessfast(L, kv, lco, cl, offsetnum, pc);
                             setobj2s(L, ra, &lco->staticmembers[offsetnum - lco->numberofinstancemembers]);
                             VM_PATCH_MEMBER_SLOT(pc - 2, offsetnum);
                             VM_NEXT();
@@ -849,9 +859,9 @@ reentry:
                             if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers))
                             {
                                 if (inst->lclass->hasprivatemembers)
-                                    luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
+                                    luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot, pc);
                                 if (inst->lclass->hasconstmembers)
-                                    luaR_checkconstassignfast(L, kv, inst, cl, slot);
+                                    luaR_checkconstassignfast(L, kv, inst, cl, slot, pc);
                             }
                             setobj2class(L, &luaR_members(inst)[slot], ra);
                             luaC_barrier(L, inst, ra);
@@ -862,16 +872,22 @@ reentry:
                         {
                             const TValue* offset = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
                             if (ttisnil(offset))
+                            {
+                                VM_PROTECT_PC();
                                 luaG_missingmembererror(L, rb, kv);
+                            }
                             const uint32_t offsetnum = uint32_t(nvalue(offset));
                             if (offsetnum >= inst->lclass->numberofinstancemembers)
+                            {
+                                VM_PROTECT_PC();
                                 luaG_indexerror(L, rb, kv);
+                            }
                             if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers))
                             {
                                 if (inst->lclass->hasprivatemembers)
-                                    luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
+                                    luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum, pc);
                                 if (inst->lclass->hasconstmembers)
-                                    luaR_checkconstassignfast(L, kv, inst, cl, offsetnum);
+                                    luaR_checkconstassignfast(L, kv, inst, cl, offsetnum, pc);
                             }
                             setobj2class(L, &luaR_members(inst)[offsetnum], ra);
                             luaC_barrier(L, inst, ra);
@@ -1109,7 +1125,7 @@ reentry:
                     if (slot < inst->lclass->numberofallmembers && tsvalue(kv) == inst->lclass->offsettomember[slot])
                     {
                         if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers))
-                            luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
+                            luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot, pc);
 
                         // Luwu collections: a builtin class's fast method runs here instead of the call that follows
                         if (LUAU_UNLIKELY(inst->lclass->fastmethods != NULL) && inst->lclass->fastmethods[slot])
@@ -1139,9 +1155,12 @@ reentry:
                     {
                         const TValue* offset = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
                         if (ttisnil(offset))
+                        {
+                            VM_PROTECT_PC();
                             luaG_missingmembererror(L, rb, kv);
+                        }
                         const uint32_t offsetnum = uint32_t(nvalue(offset));
-                        luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
+                        luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum, pc);
                         setobj2s(L, ra + 1, rb);
                         setobj2s(L, ra, luaR_lookupmemberatoffset(inst, offsetnum));
                         VM_PATCH_MEMBER_SLOT(pc - 2, offsetnum);
@@ -4255,6 +4274,38 @@ reentry:
                 VM_NEXT();
             }
 
+            VM_CASE(LOP_WRAPRESULT)
+            {
+                // Luwu try expressions: the value of a `try` expression, or the error its protected range caught
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+
+                VM_PROTECT_PC(); // raises when the result library isn't open, and allocates
+                luaR_wrapresult(L, ra, LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR);
+                VM_PROTECT(luaC_checkGC(L));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_RESULTGET)
+            {
+                // Luwu try expressions: `r:ok()` or `r:err()` of a result kept in registers
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                bool isOk = !l_isfalse(rb + LBC_TRYRESULT_OKFLAG);
+                bool wantsOk = LUAU_INSN_C(insn) == LBC_RESULTGET_OK;
+                if (isOk == wantsOk)
+                {
+                    setobj2s(L, ra, rb);
+                }
+                else
+                {
+                    setsymnonevalue(ra);
+                }
+                VM_NEXT();
+            }
+
             VM_CASE(LOP_GETQUALIFIED)
             {
                 // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name`, `Class:Trait.name`
@@ -4350,12 +4401,18 @@ reentry:
 exit:;
 }
 
-void luau_execute(lua_State* L)
+static void executeloop(lua_State* L)
 {
     if (L->singlestep)
         luau_execute<true>(L);
     else
         luau_execute<false>(L);
+}
+
+void luau_execute(lua_State* L)
+{
+    // Luwu try expressions: the catch for errors raised in protected ranges
+    luaD_executetry(L, executeloop);
 }
 
 void luau_finishop(lua_State* L)
