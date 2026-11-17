@@ -1959,7 +1959,7 @@ public:
     // The local holding the matched value: a `case` arm's `match` subject, or a hidden local a pattern that binds reads its
     // value into. Null when `value` is read directly.
     AstLocal* subject;
-    // The `is` or `implements`
+    // The `is`, `is not` or `implements`
     Location keywordLocation;
     // `is not`
     bool negated;

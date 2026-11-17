@@ -8453,6 +8453,7 @@ Parser::Pattern Parser::parsePattern()
     if (lexer.current().type == Lexeme::ReservedNot)
     {
         pattern.negated = true;
+        pattern.keywordLocation = Location(start, lexer.current().location);
         nextLexeme();
     }
 

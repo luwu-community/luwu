@@ -8978,6 +8978,28 @@ local b = x is None
     CHECK(tested->alternatives.data[0].operand->is<AstExprLocal>());
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `is not` is one keyword, so editors report it as one
+TEST_CASE_FIXTURE(Fixture, "is_not_is_one_keyword")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuMatchExpressions, true};
+
+    AstStatBlock* block = parse(R"(
+local a = x is not string
+local b = x is string
+)");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 2);
+
+    AstExprMatchPattern* negated = block->body.data[0]->as<AstStatLocal>()->values.data[0]->as<AstExprMatchPattern>();
+    REQUIRE(negated);
+    CHECK(negated->negated);
+    CHECK_EQ(negated->keywordLocation, Location({1, 12}, {1, 18}));
+
+    AstExprMatchPattern* plain = block->body.data[1]->as<AstStatLocal>()->values.data[0]->as<AstExprMatchPattern>();
+    REQUIRE(plain);
+    CHECK_EQ(plain->keywordLocation, Location({2, 12}, {2, 14}));
+}
+
 TEST_CASE_FIXTURE(Fixture, "for_when_is_stored_as_a_guard_around_the_body")
 {
     ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
