@@ -11,6 +11,7 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuwuStringExtensions)
 
 TEST_SUITE_BEGIN("BuiltinTests");
 
@@ -955,6 +956,64 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "string_lib_self_noself")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "luwu_string_extensions")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    CheckResult result = check(R"(
+        local s = "  key=value  "
+        local trimmed = s:trim()
+        local stripped = string.trimstart(s, " ", "\t")
+        local ended = s:trimend()
+        local starts = s:startswith("key", "  key")
+        local ends = string.endswith(s, "  ")
+        local has = s:contains("=")
+        local replaced = s:replace("=", ": ", 1)
+        local pieces = s:split("=", 2)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("string", toString(requireType("trimmed")));
+    CHECK_EQ("string", toString(requireType("stripped")));
+    CHECK_EQ("string", toString(requireType("ended")));
+    CHECK_EQ("boolean", toString(requireType("starts")));
+    CHECK_EQ("boolean", toString(requireType("ends")));
+    CHECK_EQ("boolean", toString(requireType("has")));
+    CHECK_EQ("string", toString(requireType("replaced")));
+    CHECK_EQ("{string}", toString(requireType("pieces")));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "luwu_string_extensions_need_a_needle")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    CheckResult result = check(R"(
+        local a = ("hello"):startswith()
+        local b = string.contains("hello")
+        local c = ("hello"):trim(1)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK(get<CountMismatch>(result.errors[0]));
+    CHECK(get<CountMismatch>(result.errors[1]));
+    CHECK(get<TypeMismatch>(result.errors[2]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "luwu_string_extensions_flag_off")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, false};
+
+    CheckResult result = check(R"(
+        local a = ("hello"):trim()
+        local b = ("a,b"):split(",", 2)
+    )");
+
+    // trim doesn't exist, and split takes no maxpieces
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(toString(result.errors[0]).find("trim") != std::string::npos);
+    CHECK(get<CountMismatch>(result.errors[1]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "gmatch_definition")
