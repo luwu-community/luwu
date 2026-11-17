@@ -238,6 +238,8 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
     {
         return similar(le->classOf, re->classOf);
     }
+    // Luwu try expressions: `try` runs its expression to catch what it raises, so two are never the same check
+    CASE(AstExprTry) return false;
     else
     {
         LUAU_ASSERT(!"Unknown expression type");
