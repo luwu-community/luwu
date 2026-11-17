@@ -13,6 +13,7 @@
 #include "Luau/DcrLogger.h"
 #include "Luau/ExpectedTypeVisitor.h"
 #include "Luau/FileResolver.h"
+#include "Luau/LuwonSyntax.h"
 #include "Luau/NonStrictTypeChecker.h"
 #include "Luau/NotNull.h"
 #include "Luau/Parser.h"
@@ -50,6 +51,7 @@ LUAU_FLAGVERSION(LuauExportValueTypecheck, 2)
 
 LUAU_FASTFLAGVARIABLE(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuauCFG)
+LUAU_FASTFLAG(LuwuInLuwuDocs)
 LUAU_FASTFLAG(DebugLuauLogCFG)
 LUAU_FASTFLAG(DebugLuauDumpCFGJson)
 LUAU_FASTFLAGVARIABLE(DebugLuauCyclicRequireTypeInference)
@@ -176,6 +178,7 @@ static ParseResult parseSourceForModule(std::string_view source, Luau::SourceMod
     {
         sourceModule.hotcomments = parseResult.hotcomments;
         sourceModule.commentLocations = parseResult.commentLocations;
+        sourceModule.comments = readSourceComments(source, sourceModule.commentLocations);
     }
 
     return parseResult;
@@ -220,6 +223,7 @@ static void persistCheckedTypes(ModulePtr checkedModule, GlobalTypes& globals, S
 
         generateDocumentationSymbols(globalTy.type, documentationSymbol);
         targetScope->exportedTypeBindings[name] = globalTy;
+        targetScope->definitionFileTypeModules[name] = packageName;
 
         typesToPersist.push_back(globalTy.type);
     }
@@ -253,9 +257,8 @@ LoadDefinitionFileResult Frontend::loadDefinitionFile(
     ModulePtr checkedModule =
         check(sourceModule, Mode::Definition, {}, std::nullopt, /*forAutocomplete*/ false, /*recordJsonLog*/ false, dummyStats, {});
 
-    if (checkedModule->errors.size() > 0)
-        return LoadDefinitionFileResult{false, std::move(parseResult), std::move(sourceModule), std::move(checkedModule)};
-
+    // Luwu: type errors don't stop a definition file from loading. Upstream fails the whole file, dropping every
+    // global it declares over one mistake. The errors stay in the module for callers to report.
     persistCheckedTypes(checkedModule, globals, std::move(targetScope), packageName);
 
     return LoadDefinitionFileResult{true, std::move(parseResult), std::move(sourceModule), std::move(checkedModule)};
@@ -910,12 +913,13 @@ std::optional<CheckResult> Frontend::getCheckResult(const ModuleName& name, bool
 
 // How the Frontend parses a module: with comments, in the language its config says, and with errors worded for static
 // analysis.
-static ParseOptions analysisParseOptions(const Config& config)
+static ParseOptions analysisParseOptions(const Config& config, const SourceCode& source)
 {
     ParseOptions opts = config.parseOptions;
     opts.captureComments = true;
     opts.analysisErrors = true;
     opts.language = config.language;
+    opts.luwon = source.luwon;
     return opts;
 }
 
@@ -930,9 +934,10 @@ std::vector<ModuleName> Frontend::getRequiredScripts(const ModuleName& name, con
             return {};
         }
         const Config& config = configResolver->getConfig(name, limits);
-        SourceModule result = parse(name, source->source, analysisParseOptions(config));
+        SourceModule result = parse(name, source->source, analysisParseOptions(config, *source));
         result.type = source->type;
         result.language = config.language;
+        result.luwon = source->luwon;
         require = traceRequires(fileResolver, result.root, name, limits);
     }
     std::vector<std::string> requiredModuleNames;
@@ -1117,6 +1122,83 @@ static void applyInternalLimitScaling(SourceNode& sourceNode, const ModulePtr mo
         sourceNode.autocompleteLimitsMult = std::min(sourceNode.autocompleteLimitsMult * 2.0, 1.0);
 }
 
+// Luwu object notation: a data file can call a class by name (`Point(1, 2)`), and the syntax check can't tell a class
+// from a function. The types can, so a call on anything typed as a function (`print(x)`) is reported here.
+namespace
+{
+
+struct LuwonCallVisitor : AstVisitor
+{
+    const Module& module;
+    std::vector<TypeError> errors;
+
+    explicit LuwonCallVisitor(const Module& module)
+        : module(module)
+    {
+    }
+
+    static bool isFunction(TypeId type)
+    {
+        type = follow(type);
+        if (get<FunctionType>(type))
+            return true;
+
+        const IntersectionType* overloads = get<IntersectionType>(type);
+        if (!overloads)
+            return false;
+
+        for (TypeId part : overloads->parts)
+        {
+            if (!get<FunctionType>(follow(part)))
+                return false;
+        }
+        return true;
+    }
+
+    // A call on its own line is a syntax error already, which says what to write instead
+    bool visit(AstStatExpr* stat) override
+    {
+        if (AstExprCall* call = stat->expr->as<AstExprCall>())
+        {
+            for (AstExpr* arg : call->args)
+                arg->visit(this);
+            return false;
+        }
+        return true;
+    }
+
+    bool visit(AstExprCall* call) override
+    {
+        const AstExprGlobal* callee = call->func->as<AstExprGlobal>();
+        if (!callee || luwonConstructorOf(call) != LuwonConstructor::Class)
+            return true;
+
+        const TypeId* type = module.astTypes.find(call->func);
+        if (type && isFunction(*type))
+        {
+            std::string message = format(
+                "'%s' is a function, and only 'vector.create', 'buffer.fromstring' and classes can be called in a data file",
+                callee->name.value
+            );
+            errors.emplace_back(call->location, module.name, GenericError{std::move(message)});
+        }
+
+        return true;
+    }
+};
+
+} // namespace
+
+static void checkLuwonCalls(const SourceModule& sourceModule, Module& module)
+{
+    if (!sourceModule.root)
+        return;
+
+    LuwonCallVisitor visitor{module};
+    sourceModule.root->visit(&visitor);
+    module.errors.insert(module.errors.end(), visitor.errors.begin(), visitor.errors.end());
+}
+
 void Frontend::checkBuildQueueItem(BuildQueueItem& item)
 {
     BuildQueueModuleInfo& moduleInfo = item.modules[0];
@@ -1221,6 +1303,9 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
     if (item.options.customModuleCheck)
         item.options.customModuleCheck(sourceModule, *module);
 
+    if (sourceModule.luwon && mode != Mode::NoCheck)
+        checkLuwonCalls(sourceModule, *module);
+
     if ((getLuauSolverMode() == SolverMode::New) && mode == Mode::NoCheck)
         module->errors.clear();
 
@@ -1258,6 +1343,8 @@ void Frontend::checkBuildQueueItem(BuildQueueItem& item)
         module->astTypes.clear();
         module->astTypePacks.clear();
         module->astExpectedTypes.clear();
+        module->literalLocals.clear();
+        module->literalAssertions.clear();
         module->astOriginalCallTypes.clear();
         module->astOverloadResolvedTypes.clear();
         module->astForInNextTypes.clear();
@@ -1694,6 +1781,7 @@ ModulePtr check(
         FFlag::DebugLuauCFG ? state.get() : nullptr
     };
 
+    cg.sourceComments = &sourceModule.comments;
     ConstraintSet constraintSet = cg.run(sourceModule.root);
     module->errors = std::move(constraintSet.errors);
     module->constraintGenerationDidNotComplete = cg.recursionLimitMet;
@@ -1807,6 +1895,10 @@ ModulePtr check(
 
         if (FFlag::LuauExportValueSyntax && FFlag::LuauExportValueTypecheck && !module->timeout && !module->cancelled)
             synthesizeExportReturn(builtinTypes, NotNull{module.get()});
+
+        // Luwu doc references: doc comments' code is checked like code, as far as it goes
+        if (FFlag::LuwuInLuwuDocs && !module->timeout && !module->cancelled)
+            checkDocComments(sourceModule, *module, builtinTypes, fileResolver, moduleResolver, limits, mode);
     }
 
     // if the only error we're producing is one about constraint solving being incomplete, we can silence it.
@@ -2011,9 +2103,10 @@ std::pair<SourceNode*, SourceModule*> Frontend::getSourceNode(const ModuleName& 
     }
 
     const Config& config = configResolver->getConfig(name, limits);
-    SourceModule result = parse(name, source->source, analysisParseOptions(config));
+    SourceModule result = parse(name, source->source, analysisParseOptions(config, *source));
     result.type = source->type;
     result.language = config.language;
+    result.luwon = source->luwon;
 
     RequireTraceResult& require = requireTrace[name];
     require = traceRequires(fileResolver, result.root, name, limits);
@@ -2108,6 +2201,11 @@ SourceModule Frontend::parse(const ModuleName& name, std::string_view src, const
     {
         sourceModule.commentLocations = std::move(parseResult.commentLocations);
         sourceModule.hotcomments = std::move(parseResult.hotcomments);
+        sourceModule.comments = readSourceComments(src, sourceModule.commentLocations);
+
+        // Luwu doc references: the references and bindings in doc comments
+        if (FFlag::LuwuInLuwuDocs && sourceModule.root)
+            parseDocComments(sourceModule, src);
     }
 
     return sourceModule;

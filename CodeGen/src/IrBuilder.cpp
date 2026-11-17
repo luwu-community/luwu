@@ -13,7 +13,6 @@
 #include <string.h>
 
 LUAU_FASTFLAG(LuauCallFeedback)
-LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 
 namespace Luau
 {
@@ -709,8 +708,7 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
 
             inst(IrCmd::INTERRUPT, constUint(i));
 
-            if (FFlag::LuauBackedgeHeapCheck)
-                inst(IrCmd::CHECK_GC);
+            inst(IrCmd::CHECK_GC);
 
             loadAndCheckTag(vmReg(ra), LUA_TNIL, fallback);
 
@@ -823,14 +821,6 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         inst(IrCmd::FALLBACK_PRESIZETABLE, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_B(*pc)), constInt(LUAU_INSN_C(*pc)));
         break;
 
-    case LOP_WRAPRESULT:
-        inst(IrCmd::FALLBACK_WRAPRESULT, constUint(i), vmReg(LUAU_INSN_A(*pc)), constInt(LUAU_INSN_B(*pc)));
-        break;
-
-    case LOP_RESULTGET:
-        translateInstResultGet(*this, pc, i);
-        break;
-
     case LOP_GETTABLEBUNDLE:
     case LOP_SETTABLEBUNDLE:
         inst(
@@ -846,6 +836,22 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
 
     case LOP_GETQUALIFIED:
         inst(IrCmd::FALLBACK_GETQUALIFIED, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_B(*pc)), vmReg(LUAU_INSN_C(*pc)));
+        break;
+
+    case LOP_PUSH:
+        translateInstPush(*this, pc, i);
+        break;
+
+    case LOP_POP:
+        translateInstPop(*this, pc, i);
+        break;
+
+    case LOP_WRAPRESULT:
+        inst(IrCmd::FALLBACK_WRAPRESULT, constUint(i), vmReg(LUAU_INSN_A(*pc)), constInt(LUAU_INSN_B(*pc)));
+        break;
+
+    case LOP_RESULTGET:
+        translateInstResultGet(*this, pc, i);
         break;
 
     case LOP_GETOBJECTMEMBER:

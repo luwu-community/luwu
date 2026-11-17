@@ -17,6 +17,8 @@ struct BuiltinTypeFunctions
     TypeFunction notFunc;
     TypeFunction lenFunc;
     TypeFunction unmFunc;
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): the type of `<-container`. Not bound to a type name.
+    TypeFunction popFunc;
 
     TypeFunction addFunc;
     TypeFunction subFunc;
@@ -57,6 +59,9 @@ struct BuiltinTypeFunctions
     // Luwu try expressions: `raises<F>` is what calling F can raise: the error hints of F (each overload's, for an
     // intersection) joined with weakunknown, or weakunknown alone. `try f()` types its error with it.
     TypeFunction raisesFunc;
+
+    // Luwu: `oneof<A, B, ...>`, the union of its arguments where each table member has the others' fields as `nil`
+    TypeFunction oneofFunc;
 
     void addToScope(NotNull<TypeArena> arena, NotNull<Scope> scope) const;
 };

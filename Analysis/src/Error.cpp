@@ -934,6 +934,11 @@ static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionPro
     {
         std::string addNil = "'" + e.key + ": nil' to " + quotedTypes(e.missing) + " so that checking '" + e.key + "' tells the variants apart";
         bullets.push_back((bullets.empty() ? "Add " : "Or add ") + addNil);
+
+        std::string members;
+        for (TypeId option : ut->options)
+            members += (members.empty() ? "" : ", ") + toString(option);
+        bullets.push_back("Or write the type as 'oneof<" + members + ">', which adds each variant's missing fields as 'nil'");
     }
 
     if (bullets.empty())
@@ -2065,6 +2070,18 @@ struct ErrorConverter
         return message;
     }
 
+    std::string operator()(const InconsistentReturn& e) const
+    {
+        return "This function's other " + std::to_string(e.otherReturns) + " codepaths return '" + toString(e.othersReturn) +
+               "', are you sure you meant to return '" + toString(e.returned) +
+               "' here? Explicitly annotate this function's return type to silence";
+    }
+
+    std::string operator()(const DocSyntaxError& e) const
+    {
+        return e.message;
+    }
+
     std::string operator()(const ConstructorReadByName& e) const
     {
         return "Cannot read '__init' of class '" + e.className + "'; constructing the class with '" + e.className +
@@ -2073,6 +2090,8 @@ struct ErrorConverter
 
     std::string operator()(const PositionalDestructuring& e) const
     {
+        if (e.bundleSize)
+            return "'" + e.className + "' has no position " + std::to_string(e.position + 1) + "; it holds " + MismatchWording::countValues(*e.bundleSize);
         if (e.notObject && e.inPattern)
             return "'" + e.className + "' has no positions; destructure it by index with '.[...]' instead";
         if (e.notObject)
@@ -2550,6 +2569,16 @@ bool NoTypeUse::operator==(const NoTypeUse& rhs) const
     return use == rhs.use && name == rhs.name && origin == rhs.origin && originMessage == rhs.originMessage && showHelp == rhs.showHelp;
 }
 
+bool InconsistentReturn::operator==(const InconsistentReturn& rhs) const
+{
+    return otherReturns == rhs.otherReturns && othersReturn == rhs.othersReturn && returned == rhs.returned;
+}
+
+bool DocSyntaxError::operator==(const DocSyntaxError& rhs) const
+{
+    return message == rhs.message;
+}
+
 bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
 {
     return *table == *rhs.table && className == rhs.className;
@@ -2558,7 +2587,7 @@ bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
 bool PositionalDestructuring::operator==(const PositionalDestructuring& rhs) const
 {
     return className == rhs.className && position == rhs.position && parameters == rhs.parameters && notObject == rhs.notObject &&
-           inPattern == rhs.inPattern;
+           inPattern == rhs.inPattern && bundleSize == rhs.bundleSize;
 }
 
 bool PrivateConstructorAccess::operator==(const PrivateConstructorAccess& rhs) const
@@ -3149,6 +3178,14 @@ void copyError(T& e, TypeArena& destArena, CloneState& cloneState)
     else if constexpr (std::is_same_v<T, ConstructorReadByName>)
         e.table = clone(e.table);
     else if constexpr (std::is_same_v<T, Typo> || std::is_same_v<T, UnreachableCodeUse> || std::is_same_v<T, NoTypeUse>)
+    {
+    }
+    else if constexpr (std::is_same_v<T, InconsistentReturn>)
+    {
+        e.othersReturn = clone(e.othersReturn);
+        e.returned = clone(e.returned);
+    }
+    else if constexpr (std::is_same_v<T, DocSyntaxError>)
     {
     }
     else if constexpr (std::is_same_v<T, PositionalDestructuring>)

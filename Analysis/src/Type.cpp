@@ -1354,16 +1354,39 @@ std::optional<size_t> bundlePositionOfName(const std::string& name)
     return size_t(std::stoul(name)) - 1;
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): whether `parent` is a bundle of a fixed size whose
+// positions are all `unknown`, like the `.(unknown, unknown)` a bundle pattern's size test narrows to, and `cls` a
+// bundle of the same size. Bundles can't change, so every bundle of a size is one of those.
+static bool isAnyBundleOfItsSize(const ExternType* cls, const ExternType* parent)
+{
+    if (!isBundle(cls) || !isBundle(parent) || !cls->genericTemplate || !parent->genericTemplate)
+        return false;
+    if (follow(*cls->genericTemplate) != follow(*parent->genericTemplate) || !parent->instantiatedTypePackParams.empty())
+        return false;
+
+    for (TypeId position : parent->instantiatedTypeParams)
+    {
+        if (!get<UnknownType>(follow(position)))
+            return false;
+    }
+    return true;
+}
+
 // The extern type hierarchy walk: `cls` or one of its parents is `parent`, or the same generic nominal type
 static bool isNominalSubclass(const ExternType* cls, const ExternType* parent)
 {
     // Luwu bundles: whatever its class, every bundle is an `.(...unknown)`, which `typeof(x) == "bundle"` narrows to
     if (isAnyBundle(parent) && isBundle(cls))
         return true;
+    if (isAnyBundleOfItsSize(cls, parent))
+        return true;
 
     while (cls)
     {
-        if (cls == parent)
+        // Luwu: classes and traits a type function made are the same when their keys are (ExternType::generatedKey)
+        bool sameGenerated =
+            cls->generatedKey && parent->generatedKey && (cls->generatedKey == parent->generatedKey || *cls->generatedKey == *parent->generatedKey);
+        if (cls == parent || sameGenerated)
             return true;
         else if (FFlag::LuwuGenericNominals && isSameGenericNominalInstantiation(cls, parent))
             return true;
@@ -1606,6 +1629,19 @@ bool hasTag(TypeId ty, const std::string& tagName)
 bool hasTag(const Property& prop, const std::string& tagName)
 {
     return hasTag(prop.tags, tagName);
+}
+
+bool metadataHasTypes(const TypeMetadataTable& metadata)
+{
+    bool hasTypes = false;
+    forEachMetadataType(
+        metadata,
+        [&](TypeId)
+        {
+            hasTypes = true;
+        }
+    );
+    return hasTypes;
 }
 
 bool TypeFun::operator==(const TypeFun& rhs) const

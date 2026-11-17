@@ -17,6 +17,7 @@
 #include "Luau/Subtyping.h"
 #include "Luau/Symbol.h"
 #include "Luau/Type.h"
+#include "Luau/StringUtils.h"
 #include "Luau/TypeChecker2.h"
 #include "Luau/TypeFunction.h"
 #include "Luau/TypeInfer.h"
@@ -34,7 +35,9 @@
  */
 
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
+LUAU_FASTFLAG(LuwuBufferBatched)
 
 namespace Luau
 {
@@ -128,6 +131,19 @@ struct MagicFreeze final : MagicFunction
     bool typeCheck(const MagicFunctionTypeCheckContext& ctx) override;
 };
 
+// Luwu object notation: `luwon.reader({ A, B })`, where two classes with one name are an error
+struct MagicLuwonReader final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+    bool typeCheck(const MagicFunctionTypeCheckContext& ctx) override;
+};
+
 struct MagicFormat final : MagicFunction
 {
     std::optional<WithPredicate<TypePackId>> handleOldSolver(
@@ -182,6 +198,37 @@ struct MagicPcall final : MagicFunction
         WithPredicate<TypePackId>
     ) override;
     bool infer(const MagicFunctionCallContext& ctx) override;
+};
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): `buffer.unpack*(b, offset, count)` returns `count`
+// values, but only the call site knows how many. When the count is a whole number literal we bind the call to a
+// pack of exactly that many numbers rather than the open `...number` pack the API declares: builtin signatures
+// refuse an open pack where they expect arguments, which is what keeps
+// `vector.create(buffer.unpackf32(b, i, 3))` from typechecking even though the count is written as a literal, and
+// no caller can tell how many values an open pack carries. Counts we cannot give an exact pack for - a variable or
+// expression, zero, a non integral value, an `integer` literal such as `3i` which the runtime rejects because the
+// batch is specified in numbers, or a count above kMaxLiteralCount - keep the declared open pack, which still flows
+// into variadic contexts.
+struct MagicUnpack final : MagicFunction
+{
+    // A ceiling on the pack we are willing to materialize, purely to bound the work: the analyzer builds one type
+    // per value and then re-walks that pack while resolving the enclosing call, and measured cost per call grows
+    // roughly linearly to about 16k values (13ms) before turning superlinear and tripping the checker's own
+    // complexity limit at 32k. 4096 keeps a wide margin under that knee and is orders of magnitude past the widest
+    // all-number signature the standard library declares (5 parameters); batches named by a literal this large are
+    // not a real workload, and they keep the open pack instead of costing analysis time.
+    static constexpr int kMaxLiteralCount = 4096;
+
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+
+    // Returns the batch size when this call names one we can give an exact return pack for
+    static std::optional<int> preciseCount(const AstExprCall& callSite);
 };
 
 TypeId makeUnion(TypeArena& arena, std::vector<TypeId>&& types)
@@ -1169,6 +1216,32 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     attachMagicFunction(getGlobalBinding(globals, "rawset"), std::make_shared<MagicRawset>());
     attachMagicFunction(getGlobalBinding(globals, "select"), std::make_shared<MagicSelect>());
 
+    // Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): every `unpack*` shares one magic, since the batch
+    // size is read off the call site rather than off the element type being unpacked
+    if (FFlag::LuwuBufferBatched)
+    {
+        if (TableType* btv = getMutable<TableType>(getGlobalBinding(globals, "buffer")))
+        {
+            static const char* const kUnpackNames[] = {
+                "unpacki8",
+                "unpacku8",
+                "unpacki16",
+                "unpacku16",
+                "unpacki32",
+                "unpacku32",
+                "unpackf32",
+                "unpackf64",
+            };
+
+            for (const char* name : kUnpackNames)
+            {
+                auto it = btv->props.find(name);
+                if (it != btv->props.end())
+                    attachMagicFunction(*it->second.readTy, std::make_shared<MagicUnpack>());
+            }
+        }
+    }
+
     if (TableType* ttv = getMutable<TableType>(getGlobalBinding(globals, "table")))
     {
         if (frontend.getLuauSolverMode() == SolverMode::New)
@@ -1208,8 +1281,11 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     {
         if (TableType* ctv = getMutable<TableType>(getGlobalBinding(globals, "class")))
         {
-            if (auto it = ctv->props.find("fields"); it != ctv->props.end() && it->second.readTy)
+            // Luwu class reflection (rfcs/classes): `class.fields` lists ClassMembers then, as declared
+            if (auto it = ctv->props.find("fields"); it != ctv->props.end() && it->second.readTy && !classReflectionEnabled())
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassFields>());
+            if (auto it = ctv->props.find("member"); it != ctv->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassMember>());
             if (auto it = ctv->props.find("name"); it != ctv->props.end() && it->second.readTy)
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassName>());
             if (auto it = ctv->props.find("of"); it != ctv->props.end() && it->second.readTy)
@@ -1218,6 +1294,15 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassInstanceCheck>());
             if (auto it = ctv->props.find("implements"); it != ctv->props.end() && it->second.readTy)
                 attachMagicFunction(*it->second.readTy, std::make_shared<MagicClassInstanceCheck>());
+        }
+    }
+
+    if (FFlag::LuwuClasses)
+    {
+        if (TableType* luwon = getMutable<TableType>(getGlobalBinding(globals, "luwon")))
+        {
+            if (auto it = luwon->props.find("reader"); it != luwon->props.end() && it->second.readTy)
+                attachMagicFunction(*it->second.readTy, std::make_shared<MagicLuwonReader>());
         }
     }
 
@@ -1281,10 +1366,35 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
         globals.globalTypeFunctionScope->bindings[astName] = globals.globalScope->bindings[astName];
     }
 
-    LoadDefinitionFileResult typeFunctionLoadResult = frontend.loadDefinitionFile(
-        globals, globals.globalTypeFunctionScope, getTypeFunctionDefinitionSource(), "@luau", /* captureComments */ false, false
-    );
-    LUAU_ASSERT(typeFunctionLoadResult.success);
+    // Luwu: only the new solver runs type functions, and their typedefs use what only it understands (`read`)
+    if (frontend.getLuauSolverMode() == SolverMode::New)
+    {
+        LoadDefinitionFileResult typeFunctionLoadResult = frontend.loadDefinitionFile(
+            globals, globals.globalTypeFunctionScope, getTypeFunctionDefinitionSource(), "@luau", /* captureComments */ false, false
+        );
+        LUAU_ASSERT(typeFunctionLoadResult.success);
+
+        // Luwu: `t:is("table")` narrows `t` to the table kind of `type`. Every kind shares the one `is`, so it is still the
+        // magic function when `t` hasn't been narrowed yet.
+        std::optional<TypeFun> typeKinds = globals.globalTypeFunctionScope->lookupType("type");
+        const UnionType* kinds = typeKinds ? get<UnionType>(follow(typeKinds->type)) : nullptr;
+        std::optional<TypeId> sharedIs;
+        for (TypeId kind : kinds ? kinds->options : std::vector<TypeId>{})
+        {
+            TableType* kindTable = getMutable<TableType>(follow(kind));
+            auto is = kindTable ? kindTable->props.find("is") : TableType::Props::iterator{};
+            if (!kindTable || is == kindTable->props.end() || !is->second.readTy)
+                continue;
+
+            if (!sharedIs)
+            {
+                sharedIs = *is->second.readTy;
+                attachMagicFunction(*sharedIs, std::make_shared<MagicTypeFunctionIs>());
+            }
+
+            is->second = Property::readonly(*sharedIs);
+        }
+    }
 
     finalizeGlobalBindings(globals.globalTypeFunctionScope);
 }
@@ -1938,6 +2048,20 @@ TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     };
     stringDotUnpack.isCheckedFunction = true;
 
+    const TypeId splitResult = arena->addType(TableType{{}, TableIndexer{numberType, stringType}, TypeLevel{}, TableState::Sealed});
+    TypeId splitFunc;
+    // Luwu String Extensions (rfcs/string-extensions.md): split takes an optional maximum number of pieces.
+    if (FFlag::LuwuStringExtensions)
+    {
+        splitFunc = makeFunction(
+            *arena, stringType, {}, {}, {optionalString, optionalNumber}, {"sep", "maxpieces"}, {splitResult}, /* checked */ true
+        );
+    }
+    else
+    {
+        splitFunc = makeFunction(*arena, stringType, {}, {}, {optionalString}, {}, {splitResult}, /* checked */ true);
+    }
+
     TableType::Props stringLib = {
         {"byte", {arena->addType(std::move(stringDotByte))}},
         {"char", {arena->addType(std::move(stringDotChar))}},
@@ -1952,17 +2076,7 @@ TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
         {"reverse", {stringToStringType}},
         {"sub", {makeFunction(*arena, stringType, {}, {}, {numberType, optionalNumber}, {}, {stringType}, /* checked */ true)}},
         {"upper", {stringToStringType}},
-        {"split",
-         {makeFunction(
-             *arena,
-             stringType,
-             {},
-             {},
-             {optionalString},
-             {},
-             {arena->addType(TableType{{}, TableIndexer{numberType, stringType}, TypeLevel{}, TableState::Sealed})},
-             /* checked */ true
-         )}},
+        {"split", {splitFunc}},
         {"pack",
          {arena->addType(
              FunctionType{
@@ -1973,6 +2087,40 @@ TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
         {"packsize", {makeFunction(*arena, stringType, {}, {}, {}, {}, {numberType}, /* checked */ true)}},
         {"unpack", {arena->addType(std::move(stringDotUnpack))}},
     };
+
+    if (FFlag::LuwuStringExtensions)
+    {
+        // Luwu String Extensions (rfcs/string-extensions.md): the trims take any number of strings to remove.
+        // startswith, endswith and contains need one needle and take any number of alternatives, so `s:startswith()` is an
+        // error.
+        FunctionType trimFtv{{}, {}, arena->addTypePack(TypePack{{stringType}, stringVariadicList}), oneStringPack, {}, /* hasSelf */ true};
+        trimFtv.argNames = {FunctionArgument{"self", {}}};
+        trimFtv.isCheckedFunction = true;
+        const TypeId trimFunc = arena->addType(std::move(trimFtv));
+
+        const TypePackId needleTestParams = arena->addTypePack(TypePack{{stringType, stringType}, stringVariadicList});
+        FunctionType needleTestFtv{{}, {}, needleTestParams, arena->addTypePack({booleanType}), {}, /* hasSelf */ true};
+        needleTestFtv.argNames = {FunctionArgument{"self", {}}};
+        needleTestFtv.isCheckedFunction = true;
+        const TypeId needleTestFunc = arena->addType(std::move(needleTestFtv));
+
+        stringLib["trim"] = {trimFunc};
+        stringLib["trimstart"] = {trimFunc};
+        stringLib["trimend"] = {trimFunc};
+        stringLib["startswith"] = {needleTestFunc};
+        stringLib["endswith"] = {needleTestFunc};
+        stringLib["contains"] = {needleTestFunc};
+        stringLib["replace"] = {makeFunction(
+            *arena,
+            stringType,
+            {},
+            {},
+            {stringType, stringType, optionalNumber},
+            {"old", "new", "max"},
+            {stringType},
+            /* checked */ true
+        )};
+    }
 
     assignPropDocumentationSymbols(stringLib, "@luau/global/string");
 
@@ -2156,6 +2304,60 @@ std::optional<WithPredicate<TypePackId>> MagicSetMetatable::handleOldSolver(
     return WithPredicate<TypePackId>{arena.addTypePack({target})};
 }
 
+// Luwu: the metamethods a metatable is read for. Each is looked up on the metatable itself, never through its `__index`.
+static constexpr const char* kMetamethods[] = {
+    "__add",     "__sub",  "__mul",      "__div",  "__idiv", "__mod", "__pow", "__unm",  "__concat", "__eq",  "__lt",
+    "__le",      "__len",  "__call",     "__iter", "__tostring", "__newindex", "__metatable", "__mode", "__push", "__pop",
+};
+
+// Luwu: `setmetatable(t, { __index = methods })` where `methods` defines `__push` or `__tostring`: the VM looks those up
+// on the metatable itself, so they never run from `__index`. A methods table with its own `__index` is itself a
+// metatable (`Base.__index = Base` for inheritance), and its metamethods are meant for it, so it isn't reported.
+static void reportMetamethodsOnIndex(const MagicFunctionTypeCheckContext& context)
+{
+    auto it = begin(context.arguments);
+    if (it == end(context.arguments) || ++it == end(context.arguments))
+        return;
+
+    const TableType* metatable = get<TableType>(follow(*it));
+    if (!metatable)
+        return;
+
+    auto index = metatable->props.find("__index");
+    if (index == metatable->props.end() || !index->second.readTy)
+        return;
+
+    const TableType* methods = get<TableType>(follow(*index->second.readTy));
+    if (!methods || methods->props.count("__index"))
+        return;
+
+    // the `__index = ...` value when the metatable is written at the call, or else the metatable
+    Location location = context.callSite->location;
+    if (context.callSite->args.size >= 2)
+    {
+        AstExpr* metatableExpr = context.callSite->args.data[1];
+        location = metatableExpr->location;
+        if (AstExprTable* literal = metatableExpr->as<AstExprTable>())
+        {
+            for (const AstExprTable::Item& item : literal->items)
+            {
+                AstExprConstantString* key = item.key ? item.key->as<AstExprConstantString>() : nullptr;
+                if (key && std::string_view(key->value.data, key->value.size) == "__index")
+                    location = item.value->location;
+            }
+        }
+    }
+
+    // one the metatable also has is a method that shares the metamethod's code, which is fine
+    for (const char* name : kMetamethods)
+    {
+        if (methods->props.count(name) && !metatable->props.count(name))
+            context.typechecker->reportError(
+                GenericError{format("Metamethod '%s' should go directly on the metatable, not on __index", name)}, location
+            );
+    }
+}
+
 bool MagicSetMetatable::infer(const MagicFunctionCallContext&)
 {
     return false;
@@ -2280,6 +2482,8 @@ static void reportMetamethodsMissingSelf(const MagicFunctionTypeCheckContext& co
 
 bool MagicSetMetatable::typeCheck(const MagicFunctionTypeCheckContext& ctx)
 {
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): metamethods in `__index`, then the classes check
+    reportMetamethodsOnIndex(ctx);
     reportMetamethodsMissingSelf(ctx);
     return reportLuwuNominalFirstArgument(ctx);
 }
@@ -2740,6 +2944,156 @@ bool MagicClassFields::infer(const MagicFunctionCallContext& context)
     return true;
 }
 
+std::optional<WithPredicate<TypePackId>> MagicLuwonReader::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicLuwonReader::infer(const MagicFunctionCallContext&)
+{
+    return false;
+}
+
+// A data file names a class by its name, so a reader can't hold two classes with one name. The arguments are still checked
+// as usual.
+bool MagicLuwonReader::typeCheck(const MagicFunctionTypeCheckContext& ctx)
+{
+    AstExprTable* classes = ctx.callSite->args.size > 0 ? ctx.callSite->args.data[0]->as<AstExprTable>() : nullptr;
+    if (!classes)
+        return false;
+
+    struct Seen
+    {
+        TypeId cls;
+        Location location;
+    };
+    DenseHashMap<Name, Seen> seen{""};
+    for (const AstExprTable::Item& item : classes->items)
+    {
+        if (item.kind != AstExprTable::Item::Kind::List)
+            continue;
+
+        TypeId* itemTy = ctx.typechecker->module->astTypes.find(item.value);
+        const ExternType* cls = itemTy ? get<ExternType>(follow(*itemTy)) : nullptr;
+        if (!cls || !cls->root || *cls->root != ctx.builtinTypes->classType)
+            continue;
+
+        const Seen* first = seen.find(cls->name);
+        if (!first)
+            seen[cls->name] = Seen{follow(*itemTy), item.value->location};
+        else if (first->cls == follow(*itemTy))
+            ctx.typechecker->reportError(
+                GenericError{format("'%s' is in this reader twice; remove this one", cls->name.c_str())}, item.value->location
+            );
+        else
+            ctx.typechecker->reportError(
+                GenericError{format(
+                    "Two classes in this reader are named '%s' (the first is on line %d), so a data file couldn't tell them apart",
+                    cls->name.c_str(),
+                    first->location.begin.line + 1
+                )},
+                item.value->location
+            );
+    }
+
+    return false;
+}
+
+// Luwu class reflection (rfcs/classes): the object type of a class or object type, and the member `name` it has: a
+// field, or a function the class or its objects have. nullopt when either isn't known.
+static std::optional<Property> classMemberProperty(NotNull<BuiltinTypes> builtinTypes, TypeId classOrObject, const std::string& name)
+{
+    const ExternType* etv = get<ExternType>(follow(classOrObject));
+    if (!etv)
+        return std::nullopt;
+
+    const ExternType* instance = etv;
+    bool isClassValue = etv->root == builtinTypes->classType || etv->root == builtinTypes->traitType;
+    if (isClassValue && etv->relation)
+    {
+        if (const Obj* obj = get_if<Obj>(&*etv->relation))
+            instance = get<ExternType>(follow(obj->ty));
+    }
+
+    if (instance)
+    {
+        if (const Property* prop = findNominalMember(instance, name))
+            return *prop;
+    }
+
+    if (isClassValue)
+    {
+        if (const Property* prop = findNominalMember(etv, name))
+            return *prop;
+    }
+
+    return std::nullopt;
+}
+
+// The string a call's second argument is written as, when it's a literal
+static std::optional<std::string> literalMemberName(const AstExprCall* call)
+{
+    if (!call || call->args.size < 2)
+        return std::nullopt;
+
+    const AstExprConstantString* name = call->args.data[1]->as<AstExprConstantString>();
+    if (!name)
+        return std::nullopt;
+
+    return std::string(name->value.data, name->value.size);
+}
+
+std::optional<WithPredicate<TypePackId>> MagicClassMember::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicClassMember::infer(const MagicFunctionCallContext& context)
+{
+    const auto& [paramTypes, paramTail] = flatten(context.arguments);
+    std::optional<std::string> name = literalMemberName(context.callSite);
+    if (paramTypes.empty() || !name)
+        return false;
+
+    std::optional<Property> prop = classMemberProperty(context.solver->builtinTypes, paramTypes[0], *name);
+    std::optional<TypeFun> classMember = context.solver->rootScope->lookupType("ClassMember");
+    if (!prop || !prop->readTy || !classMember)
+        return false;
+
+    std::vector<TypeId> copiedReferences;
+    TypeId result = instantiateGenericNominal(context.solver->arena, classMember->type, {*prop->readTy}, {}, copiedReferences);
+    if (!copiedReferences.empty())
+        return false;
+
+    asMutable(context.result)->ty.emplace<BoundTypePack>(context.solver->arena->addTypePack({result}));
+    return true;
+}
+
+bool MagicClassMember::typeCheck(const MagicFunctionTypeCheckContext& context)
+{
+    // `arguments` has the parameters' declared types; the receiver's own type is the argument's
+    std::optional<std::string> name = literalMemberName(context.callSite);
+    TypeId* receiver = name ? context.typechecker->module->astTypes.find(context.callSite->args.data[0]) : nullptr;
+    if (!receiver)
+        return false;
+
+    bool known = get<ExternType>(follow(*receiver)) != nullptr;
+    if (known && !classMemberProperty(context.builtinTypes, *receiver, *name))
+        context.typechecker->reportError(UnknownProperty{*receiver, *name}, context.callSite->args.data[1]->location);
+
+    return false;
+}
+
 std::optional<WithPredicate<TypePackId>> MagicClassName::handleOldSolver(
     struct TypeChecker&,
     const std::shared_ptr<struct Scope>&,
@@ -2982,6 +3336,49 @@ void MagicClassInstanceCheck::refine(const MagicRefinementContext& context)
     emplaceType<BoundType>(asMutable(discriminant), passed);
 }
 
+std::optional<WithPredicate<TypePackId>> MagicTypeFunctionIs::handleOldSolver(
+    struct TypeChecker&,
+    const std::shared_ptr<struct Scope>&,
+    const class AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+bool MagicTypeFunctionIs::infer(const MagicFunctionCallContext&)
+{
+    // the declared signature types the call; this function only refines
+    return false;
+}
+
+void MagicTypeFunctionIs::refine(const MagicRefinementContext& context)
+{
+    // `t:is(tag)` refines its receiver; the tag has to be written out to say which kind it is
+    if (!context.callSite->self || context.discriminantTypes.empty() || !context.discriminantTypes[0] || context.callSite->args.size != 1)
+        return;
+
+    NotNull<BuiltinTypes> builtinTypes = context.solver->builtinTypes;
+    TypeId discriminant = follow(*context.discriminantTypes[0]);
+    LUAU_ASSERT(get<BlockedType>(discriminant));
+
+    const AstExprConstantString* tag = context.callSite->args.data[0]->as<AstExprConstantString>();
+    if (!tag)
+    {
+        emplaceType<BoundType>(asMutable(discriminant), builtinTypes->unknownType);
+        return;
+    }
+
+    // `{ read tag: "table" }`, what `t.tag == "table"` refines `t` by: it picks the kinds with that tag, and its negation in
+    // the else branch only rules out that tag, not a kind whose tag can be several (`Primitive`)
+    NotNull<TypeArena> arena = context.solver->arena;
+    TypeId tagTy = arena->addType(SingletonType{StringSingleton{std::string(tag->value.data, tag->value.size)}});
+
+    TableType tagged{TableState::Sealed, TypeLevel{}, context.scope.get()};
+    tagged.props["tag"] = Property::readonly(tagTy);
+    emplaceType<BoundType>(asMutable(discriminant), arena->addType(std::move(tagged)));
+}
+
 static bool checkRequirePath(TypeChecker& typechecker, AstExpr* expr)
 {
     // require(foo.parent.bar) will technically work, but it depends on legacy goop that
@@ -3071,6 +3468,53 @@ bool MagicRequire::infer(const MagicFunctionCallContext& context)
     }
 
     return false;
+}
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): the old solver is not on Luwu's supported path for this
+// feature, so a literal batch size simply keeps the declared `...number` there
+std::optional<WithPredicate<TypePackId>> MagicUnpack::handleOldSolver(
+    TypeChecker&,
+    const std::shared_ptr<Scope>&,
+    const AstExprCall&,
+    WithPredicate<TypePackId>
+)
+{
+    return std::nullopt;
+}
+
+std::optional<int> MagicUnpack::preciseCount(const AstExprCall& callSite)
+{
+    // the count is the third argument; if it is missing, ordinary argument checking reports that
+    if (callSite.args.size < 3)
+        return std::nullopt;
+
+    const AstExprConstantNumber* count = callSite.args.data[2]->as<AstExprConstantNumber>();
+    if (!count)
+        return std::nullopt;
+
+    // ordered so that the value is only truncated to an int once it is known to be in range, and so that a
+    // value that is not a number at all (NaN, an integer literal) cannot get through
+    if (!(count->value >= 1) || count->value > double(kMaxLiteralCount))
+        return std::nullopt;
+
+    // 3 and 3.0 name a batch size, 2.5 does not
+    if (count->value != double(int(count->value)))
+        return std::nullopt;
+
+    return int(count->value);
+}
+
+bool MagicUnpack::infer(const MagicFunctionCallContext& context)
+{
+    std::optional<int> count = preciseCount(*context.callSite);
+    if (!count)
+        return false;
+
+    std::vector<TypeId> rets(size_t(*count), context.solver->builtinTypes->numberType);
+    TypePackId retPack = context.solver->arena->addTypePack({std::move(rets), std::nullopt});
+
+    asMutable(context.result)->ty.emplace<BoundTypePack>(retPack);
+    return true;
 }
 
 bool matchSetMetatable(const AstExprCall& call)

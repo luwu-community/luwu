@@ -74,11 +74,11 @@
 //   Luwu Traits (rfcs/classes/traits.md): the shape flags varint in LBC_CONSTANT_CLASS_SHAPE (LBC_CLASSSHAPE_TRAIT,
 //   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, NEWCLASSMEMBER's IMPLEMENTS form and
 //   LBF_CLASS_OF.
+//   Luwu Destructuring: GETPOSITIONAL, and LBC_CLASSMEMBER_POSITIONAL with its position in LBC_CONSTANT_CLASS_SHAPE.
 //   Luwu try expressions: LBF_OPTION_SOME to LBF_RESULT_ERR.
 //   Luwu try expressions: WRAPRESULT, RESULTGET, and each function's protected ranges after its inlining cost: a varint count,
 //   then per range the varints start pc, end pc (exclusive) and handler pc, and a byte for the target register.
 //   Luwu bundles: LBF_BUNDLE_PACK and LBF_BUNDLE_UNPACK.
-//   Luwu Destructuring: GETPOSITIONAL, and LBC_CLASSMEMBER_POSITIONAL with its position in LBC_CONSTANT_CLASS_SHAPE.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -643,19 +643,14 @@ enum LuauOpcode
     // AUX: the member's name as a constant string
     LOP_GETQUALIFIED,
 
-    // GETTABLEBUNDLE: Luwu bundles: `t[.(a, b)]` without building the bundle. A table answers from its hash part, and
-    // only a miss in a table with `__index`, or a value that isn't a table, gets a new bundle and an ordinary lookup.
+    // GETPOSITIONAL: Luwu Destructuring (rfcs/destructuring.md): the element at position C + 1 of a positional pattern
+    // `.(a, b)`. For an object, the member at that position of its class (LuauClass::positionalmembers), read with the
+    // same private-access check as reading it by name; a class without a primary constructor, or a position past its
+    // last parameter, raises. For any other value, B[C + 1], like GETTABLEN.
     // A: target register
-    // B: register holding the table
-    // C: first of AUX registers holding the bundle's values
-    // AUX: how many values (1 to the largest fixed-size bundle)
-    LOP_GETTABLEBUNDLE,
-
-    // SETTABLEBUNDLE: Luwu bundles: `t[.(a, b)] = v`, building the bundle only to insert a new key or for a table that
-    // isn't plain
-    // A: source register
-    // B, C and AUX: as in GETTABLEBUNDLE
-    LOP_SETTABLEBUNDLE,
+    // B: register holding the value
+    // C: position - 1 (0..255)
+    LOP_GETPOSITIONAL,
 
     // JUMPXTYPE: Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): jumps when R(A)'s type is the one `type()`
     // names in AUX, as `x is string` checks, without calling `type()`
@@ -676,14 +671,34 @@ enum LuauOpcode
     //   the jump is taken when R(A) doesn't match.
     LOP_JUMPXMATCH,
 
-    // GETPOSITIONAL: Luwu Destructuring (rfcs/destructuring.md): the element at position C + 1 of a positional pattern
-    // `.(a, b)`. For an object, the member at that position of its class (LuauClass::positionalmembers), read with the
-    // same private-access check as reading it by name; a class without a primary constructor, or a position past its
-    // last parameter, raises. For any other value, B[C + 1], like GETTABLEN.
+    // PUSH: Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `A <+ values`. Calls A's `__push` once with every
+    // non-nil value when it has one; otherwise A must be a table, and each non-nil value is stored raw at its length + 1,
+    // like table.insert.
+    // A: register holding the container
+    // B: register holding the first value
+    // C: value count + 1, or 0 for every value from B up to the stack top (a multret call or `...` last)
+    LOP_PUSH,
+
+    // POP: Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `<-B`. Calls B's `__pop` when it has one, keeping
+    // its first result; otherwise B must be a table, and its last element (at its raw length) is removed, like
+    // table.remove. An empty table pops nil.
     // A: target register
-    // B: register holding the value
-    // C: position - 1 (0..255)
-    LOP_GETPOSITIONAL,
+    // B: register holding the container
+    LOP_POP,
+
+    // GETTABLEBUNDLE: Luwu bundles: `t[.(a, b)]` without building the bundle. A table answers from its hash part, and
+    // only a miss in a table with `__index`, or a value that isn't a table, gets a new bundle and an ordinary lookup.
+    // A: target register
+    // B: register holding the table
+    // C: first of AUX registers holding the bundle's values
+    // AUX: how many values (1 to the largest fixed-size bundle)
+    LOP_GETTABLEBUNDLE,
+
+    // SETTABLEBUNDLE: Luwu bundles: `t[.(a, b)] = v`, building the bundle only to insert a new key or for a table that
+    // isn't plain
+    // A: source register
+    // B, C and AUX: as in GETTABLEBUNDLE
+    LOP_SETTABLEBUNDLE,
 
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
@@ -1125,6 +1140,11 @@ enum LuauBuiltinFunction
 
     // Luwu Traits (rfcs/classes/traits.md): class.of(value) -> class?, which `Self` in a trait method calls
     LBF_CLASS_OF,
+
+    // Luwu String Extensions (rfcs/string-extensions.md): string.startswith/endswith/contains(s, needle, ...) -> boolean
+    LBF_STRING_STARTSWITH,
+    LBF_STRING_ENDSWITH,
+    LBF_STRING_CONTAINS,
 
     // Luwu try expressions: constructing a `Some`, `Ok` or `Err` without a call frame
     LBF_OPTION_SOME,

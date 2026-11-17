@@ -273,6 +273,7 @@ std::optional<Ty> follow(std::optional<Ty> ty)
  */
 bool isLiteral(const AstExpr* expr);
 
+// Clip with LuauRelaxConstraintOrderingForFunctionCheck
 /**
  * Given a function call and a mapping from expression to type, determine
  * whether the type of any argument in said call in depends on a blocked types.
@@ -283,7 +284,7 @@ bool isLiteral(const AstExpr* expr);
  * @param astTypes Mapping from AST node to TypeID
  * @returns A vector of blocked types
  */
-std::vector<TypeId> findBlockedArgTypesIn(AstExprCall* expr, NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes);
+std::vector<TypeId> findBlockedArgTypesIn_DEPRECATED(AstExprCall* expr, NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes);
 
 /**
  * Given a scope and a free type, find the closest parent that has a present
@@ -361,6 +362,11 @@ AstExpr* unwrapGroup(AstExpr* expr);
 
 // Returns true if ty is optional, ie if it is a supertype of nil
 bool isOptionalType(TypeId ty, NotNull<BuiltinTypes> builtinTypes);
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): the element type `<+` stores into and `<-` removes from a
+// table raw: an array's element type, or `never` for a table with nothing in it (no indexer or properties). nullopt
+// for any other table.
+std::optional<TypeId> rawArrayElement(const TableType& table, NotNull<BuiltinTypes> builtinTypes);
 
 // These are magic types used in `TypeChecker2` and `NonStrictTypeChecker`
 //
@@ -525,6 +531,16 @@ TypeId withoutFirstParameter(TypeArena& arena, TypeId fnTy);
  * without its arguments in an annotation, whose error was already reported where it is written.
  */
 bool containsErrorType(TypeId ty);
+
+// Luwu literal types: whether `ref` is `literal<B>`, i.e. not a type the code itself named `literal`
+bool isLiteralTypeReference(const Scope& scope, const class AstTypeReference* ref);
+
+// Luwu literal types: the singleton a literal's still-undecided type (`"a"` until it widens to `string`) would keep, for
+// binding it there so it doesn't widen
+std::optional<TypeId> undecidedLiteral(TypeId ty);
+
+// Luwu literal types: the literal parameter an argument at `paramIndex` (counting `self`) is passed to, if any
+const FunctionType::LiteralParameter* findLiteralParameter(const FunctionType& fty, size_t paramIndex);
 
 // Luwu (helpful subtyping errors): gives a member a value for the lifetime of the guard and restores the one it
 // had on every exit, including a `TimeLimitError` or `UserCancelError` thrown through it.

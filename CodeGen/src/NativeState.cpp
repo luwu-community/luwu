@@ -44,7 +44,7 @@ void initFunctions(NativeContext& context)
     context.luaV_concat = luaV_concat;
 
     context.luaH_getn = luaH_getn;
-    context.luaH_new = luaH_new;
+    context.luaH_new = luaH_newatsavedpc;
     context.luaH_clone = luaH_clone;
     context.luaR_newobjectuninit = luaR_newobjectuninit;
     context.luaR_newobject = luaR_newobject;
@@ -112,8 +112,10 @@ void initFunctions(NativeContext& context)
     context.executePRESIZETABLE = executePRESIZETABLE;
     context.executeWRAPRESULT = executeWRAPRESULT;
     context.executeGETQUALIFIED = executeGETQUALIFIED;
-    context.executeTABLEBUNDLE = executeTABLEBUNDLE;
     context.executeGETPOSITIONAL = executeGETPOSITIONAL;
+    context.executePUSH = executePUSH;
+    context.executePOP = executePOP;
+    context.executeTABLEBUNDLE = executeTABLEBUNDLE;
     context.executeGETVARARGSMultRet = executeGETVARARGSMultRet;
     context.executeGETVARARGSConst = executeGETVARARGSConst;
     context.executeDUPCLOSURE = executeDUPCLOSURE;

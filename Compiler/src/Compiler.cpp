@@ -19,12 +19,14 @@
 #include "ValueTracking.h"
 
 #include <algorithm>
+#include <array>
 #include <bitset>
 #include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <string_view>
 
 #include <math.h>
 #include <stdlib.h>
@@ -35,6 +37,21 @@ LUAU_FASTINTVARIABLE(LuauCompileLoopUnrollThresholdMaxBoost, 300)
 LUAU_FASTINTVARIABLE(LuauCompileInlineThreshold, 25)
 LUAU_FASTINTVARIABLE(LuauCompileInlineThresholdMaxBoost, 300)
 LUAU_FASTINTVARIABLE(LuauCompileInlineDepth, 5)
+// Luwu: what the inliner's cost model counts a call as, the saving an inline weighs against the body's cost. Upstream
+// uses 3.
+LUAU_FASTINTVARIABLE(LuwuCompileInlineCallCost, 3)
+// Luwu: the call cost for a function compiled for native code (`--!native` or `@native`), where a call costs more next to
+// the code around it
+LUAU_FASTINTVARIABLE(LuwuCompileInlineNativeCallCost, 16)
+// Luwu: a loop-free function with fewer direct call sites than this gets a higher inlining threshold, scaled by this over
+// its call sites (2 call sites with 4 here: twice the threshold). Inlining adds a copy of the body per call site, so
+// fewer sites can afford a bigger body. 1 turns it off.
+LUAU_FASTINTVARIABLE(LuwuCompileInlineFewCallSites, 6)
+// Luwu: the most instructions inlining may add to one function, however the thresholds and the only-call-site rule are
+// set. It keeps bytecode size bounded: a module grows by at most this much per function. The cost model can't do that
+// on its own because it saturates at 127 and doesn't measure real size. The benchmarks, the classes benches, seal and
+// chimera never spend more than 2048.
+LUAU_FASTINTVARIABLE(LuwuCompileInlineBudget, 4096)
 
 LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuwuDoExpr)
@@ -48,6 +65,7 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
+LUAU_FASTFLAG(LuwuStringExtensions)
 
 // May a file use the `--!trust` directive, which lets the compiler act on type annotations it cannot
 // verify (Compiler::trustsTypeAnnotations)? The flag only permits the directive; it never enables trust
@@ -298,7 +316,13 @@ struct Compiler
         Variable* v = variables.find(local);
 
         if (v && v->written)
-            locals[local].captured = true;
+        {
+            Local& l = locals[local];
+            l.captured = true;
+
+            if (l.allocated)
+                regCaptured[l.reg] = true;
+        }
 
         upvals.push_back(local);
 
@@ -545,6 +569,7 @@ struct Compiler
 
         LUAU_ASSERT(!functions.contains(func));
         LUAU_ASSERT(regTop == 0 && stackSize == 0 && localStack.empty() && upvals.empty());
+        inlinedInstructions = 0;
         if (FFlag::LuauExportValueSyntax)
             currentFunction = func;
 
@@ -767,11 +792,14 @@ struct Compiler
             costModel = modelCost(func->body, func->args.data, func->args.size, builtins, constants);
         }
 
+        uint32_t instructionCount = uint32_t(bytecode.getInstructionCount());
         bytecode.endFunction(uint8_t(stackSize), uint8_t(upvals.size()), protoflags, costModel);
 
         Function& f = functions[func];
         f.id = fid;
         f.upvals = upvals;
+        f.instructionCount = instructionCount;
+        f.hasLoops = hasLoops;
 
         // record information for inlining
         if (options.optimizationLevel >= 2 && !func->vararg && !func->self && !getfenvUsed && !setfenvUsed)
@@ -783,9 +811,17 @@ struct Compiler
             // track functions that only ever return a single value so that we can convert multret calls to fixedret calls
             if (alwaysTerminates(func->body))
             {
-                ReturnVisitor returnVisitor(this);
+                ReturnVisitor returnVisitor(this, func);
                 stat->visit(&returnVisitor);
                 f.returnsOne = returnVisitor.returnsOne;
+                f.returnKind = returnVisitor.returnKind;
+                f.returnLocal = returnVisitor.returnLocal;
+
+                if (f.returnLocal)
+                {
+                    if (Local* lc = locals.find(f.returnLocal); lc && lc->captured)
+                        f.returnLocalCaptured = true;
+                }
             }
         }
 
@@ -955,6 +991,46 @@ struct Compiler
         }
     }
 
+    // The FASTCALL form for a call with `argCount` arguments (1 to 3). `secondIsConstant` picks FASTCALL2K, whose aux is a
+    // constant: the second argument, or a builtin's own constant (bit32.extract's packed field and width).
+    static LuauOpcode fastcallOpcode(size_t argCount, bool secondIsConstant)
+    {
+        if (argCount == 1)
+            return LOP_FASTCALL1;
+        if (secondIsConstant)
+            return LOP_FASTCALL2K;
+        if (argCount == 2)
+            return LOP_FASTCALL2;
+        return LOP_FASTCALL3;
+    }
+
+    // Emits `opc` for `bfid` with operands `args`: registers, or for FASTCALL2K a register and a constant index. `aux2K`,
+    // when set, replaces FASTCALL2K's constant.
+    void emitFastcallN(LuauOpcode opc, int bfid, const uint32_t args[3], int aux2K = -1)
+    {
+        bytecode.emitABC(opc, uint8_t(bfid), uint8_t(args[0]), 0);
+
+        if (opc == LOP_FASTCALL3)
+            bytecode.emitAux(args[1] | (args[2] << 8));
+        else if (opc != LOP_FASTCALL1)
+            bytecode.emitAux(aux2K >= 0 ? uint32_t(aux2K) : args[1]);
+    }
+
+    // Emits the NAMECALL that looks up `method` on the receiver in `selfreg`, leaving the function in `regs` and the
+    // receiver after it
+    void emitNamecall(AstExprIndexName* method, uint8_t regs, uint8_t selfreg)
+    {
+        setDebugLine(method->indexLocation);
+
+        BytecodeBuilder::StringRef iname = sref(method->index);
+        int32_t cid = bytecode.addConstantString(iname);
+        if (cid < 0)
+            CompileError::raise(method->location, "Exceeded constant limit; simplify the code to compile");
+
+        bytecode.emitABC(LOP_NAMECALL, regs, selfreg, uint8_t(BytecodeBuilder::getStringHash(iname)));
+        bytecode.emitAux(cid);
+    }
+
     void compileExprFastcallN(
         AstExprCall* expr,
         uint8_t target,
@@ -972,16 +1048,8 @@ struct Compiler
         LUAU_ASSERT(bfid == LBF_BIT32_EXTRACTK ? bfK >= 0 : bfK < 0);
         LUAU_ASSERT(targetCount < 255);
 
-        LuauOpcode opc = LOP_NOP;
-
-        if (expr->args.size == 1)
-            opc = LOP_FASTCALL1;
-        else if (bfK >= 0 || (expr->args.size == 2 && isConstant(expr->args.data[1])))
-            opc = LOP_FASTCALL2K;
-        else if (expr->args.size == 2)
-            opc = LOP_FASTCALL2;
-        else
-            opc = LOP_FASTCALL3;
+        bool secondIsConstant = bfK >= 0 || (expr->args.size == 2 && isConstant(expr->args.data[1]));
+        LuauOpcode opc = fastcallOpcode(expr->args.size, secondIsConstant);
 
         uint32_t args[3] = {};
 
@@ -1002,23 +1070,17 @@ struct Compiler
             else
             {
                 args[i] = uint8_t(regs + 1 + i);
-                compileExprTempTop(expr->args.data[i], uint8_t(args[i]));
+
+                // We temporarily swap out regTop to have targetTop work correctly here, see compileExprTempTop for info
+                RegScope rs(this, args[i] + 1);
+                args[i] = compileExprAutoTemp(expr->args.data[i], uint8_t(args[i]));
             }
         }
 
         size_t fastcallLabel = bytecode.emitLabel();
 
-        bytecode.emitABC(opc, uint8_t(bfid), uint8_t(args[0]), 0);
-
-        if (opc == LOP_FASTCALL3)
-        {
-            LUAU_ASSERT(bfK < 0);
-            bytecode.emitAux(args[1] | (args[2] << 8));
-        }
-        else if (opc != LOP_FASTCALL1)
-        {
-            bytecode.emitAux(bfK >= 0 ? bfK : args[1]);
-        }
+        LUAU_ASSERT(opc != LOP_FASTCALL3 || bfK < 0);
+        emitFastcallN(opc, bfid, args, bfK);
 
         // Set up a traditional Lua stack for the subsequent LOP_CALL.
         // Note, as with other instructions that immediately follow FASTCALL, these are normally not executed and are used as a fallback for
@@ -1179,16 +1241,30 @@ struct Compiler
 
         // we use a dynamic cost threshold that's based on the fixed limit boosted by the cost advantage we gain due to inlining
         int inlinedCost = computeCost(callCostModel, varc, std::min(int(func->args.size), 8));
-        int baselineCost = computeCost(fi->costModel, nullptr, 0) + 3;
+        bool compilingNative = nativeModule || (currentFunction && currentFunction->hasNativeAttribute());
+        int callCost = compilingNative ? FInt::LuwuCompileInlineNativeCallCost : FInt::LuwuCompileInlineCallCost;
+        int baselineCost = computeCost(fi->costModel, nullptr, 0) + callCost;
         int inlineProfit = (inlinedCost == 0) ? thresholdMaxBoost : std::min(thresholdMaxBoost, 100 * baselineCost / inlinedCost);
 
         int threshold = thresholdBase * inlineProfit / 100;
+
+        // Luwu: fewer call sites raise the threshold of a loop-free function (LuwuCompileInlineFewCallSites). A loop in
+        // the body does enough work per call that the call itself costs little next to it, and a call that runs once
+        // saves nothing worth a bigger body.
+        const unsigned* callSites = directCallSites.find(func);
+        bool fewCallSites = callSites && *callSites > 0 && int(*callSites) < FInt::LuwuCompileInlineFewCallSites;
+        if (fewCallSites && !fi->hasLoops && !callRunsOnce())
+            threshold = threshold * FInt::LuwuCompileInlineFewCallSites / int(*callSites);
+
+        // Luwu: a function with one call site inlines whatever it costs (isOnlyCallSite). Upstream inlines past the cost
+        // only an immediately called function expression.
+        bool onlyCallSite = isOnlyCallSite(func);
 
         if (FFlag::LuauCompileIifeInline)
         {
             bool isIife = unwrapExprOfType<AstExprFunction>(expr->func) != nullptr;
 
-            if (inlinedCost > threshold && !isIife)
+            if (inlinedCost > threshold && !isIife && !onlyCallSite)
             {
                 reportInlineTooExpensive(func, inlinedCost, inlineProfit);
                 return false;
@@ -1196,7 +1272,7 @@ struct Compiler
         }
         else
         {
-            if (inlinedCost > threshold)
+            if (inlinedCost > threshold && !onlyCallSite)
             {
                 reportInlineTooExpensive(func, inlinedCost, inlineProfit);
                 return false;
@@ -1205,6 +1281,25 @@ struct Compiler
 
         const char* inlinedOwner = nullptr;
         const char* inlinedName = describeInlineTarget(func, inlinedOwner);
+
+        // Luwu: the instructions inlining has added to this function so far, counting an inline still being compiled
+        uint32_t spent = inlinedInstructions;
+        if (!inlineFrames.empty())
+            spent += bytecode.getDebugPC() - outermostInlineStartPc;
+
+        if (spent + fi->instructionCount > uint32_t(FInt::LuwuCompileInlineBudget))
+        {
+            bytecode.addDebugRemark(
+                "inlining failed: %s would pass the function's inlining budget (%u of %d instructions spent)",
+                inlinedName,
+                spent,
+                FInt::LuwuCompileInlineBudget.value
+            );
+            return false;
+        }
+
+        if (onlyCallSite && inlinedCost > threshold)
+            bytecode.addDebugRemark("inlining past the cost model: the only call site of a function (cost %d)", inlinedCost);
 
         // Luwu Classes: a method call's remark says how its receiver's class was known, `proven` or `trusted` (from an
         // annotation under `--!trust`), since only a trusted one turns a wrong annotation into a runtime error
@@ -1236,9 +1331,86 @@ struct Compiler
                 int(inlineFrames.size())
             );
 
-        compileInlinedCall(expr, func, target, targetCount, selfExpr);
+        bool outermost = inlineFrames.empty();
+        if (outermost)
+            outermostInlineStartPc = bytecode.getDebugPC();
+
+        compileInlinedCall(expr, func, target, targetCount, selfExpr, onlyCallSite);
+
+        if (outermost)
+            inlinedInstructions += bytecode.getDebugPC() - outermostInlineStartPc;
         return true;
     }
+
+    // Luwu: whether this call is the only time `func`'s body gets compiled into a caller. The function has one direct
+    // call in the module, and that call isn't compiled more than once: not in an unrolled loop and not in a body
+    // inlined at several call sites. A class field's default that calls a function getFunctionExpr finds names a local
+    // besides the constructor's parameters. Such a default stays in `__init` instead of every construction site.
+    // A `@native` function called from code that isn't is left to the cost model: inlining would run its body
+    // interpreted. So is a call in top-level code outside any loop. That call runs once and saves no meaningful call
+    // overhead. A loop-free chunk also runs interpreted (LPF_NATIVE_COLD).
+    bool isOnlyCallSite(AstExprFunction* func)
+    {
+        const unsigned* calls = directCallSites.find(func);
+        if (!calls || *calls != 1 || repeatedCompileDepth > 0)
+            return false;
+
+        if (callRunsOnce())
+            return false;
+
+        bool leavesNativeCode = func->hasNativeAttribute() && currentFunction && !currentFunction->hasNativeAttribute();
+        if (leavesNativeCode)
+            return false;
+
+        for (const InlineFrame& frame : inlineFrames)
+        {
+            if (!frame.onlyCallSite)
+                return false;
+        }
+        return true;
+    }
+
+    // Luwu: the call being compiled is in top-level code outside any loop, so it runs once
+    bool callRunsOnce() const
+    {
+        return currentFunction && currentFunction->functionDepth == 0 && loops.empty();
+    }
+
+    // Luwu: counts the direct calls to each function (see isOnlyCallSite), after the passes getFunctionExpr reads
+    struct CallSiteVisitor : AstVisitor
+    {
+        Compiler* self;
+
+        explicit CallSiteVisitor(Compiler* self)
+            : self(self)
+        {
+        }
+
+        bool visit(AstExprCall* node) override
+        {
+            if (AstExprFunction* func = node->self ? nullptr : self->getFunctionExpr(node->func))
+                self->directCallSites[func]++;
+            return true;
+        }
+    };
+
+    // Luwu: marks code compiled more than once (an unrolled loop's body) while it's compiled. isOnlyCallSite never
+    // takes a call there for its function's only call site.
+    struct RepeatedCompile
+    {
+        Compiler* self;
+
+        explicit RepeatedCompile(Compiler* self)
+            : self(self)
+        {
+            self->repeatedCompileDepth++;
+        }
+
+        ~RepeatedCompile()
+        {
+            self->repeatedCompileDepth--;
+        }
+    };
 
     uint64_t costModelInlinedCall(AstExprCall* expr, AstExprFunction* func, AstExpr* selfExpr = nullptr)
     {
@@ -2056,8 +2228,72 @@ struct Compiler
         bytecode.emitAux(methodNameCid);
     }
 
-    void compileInlinedCall(AstExprCall* expr, AstExprFunction* func, uint8_t target, uint8_t targetCount, AstExpr* selfExpr = nullptr)
+    struct FindRegisterUseByLocal : AstVisitor
     {
+        FindRegisterUseByLocal(Compiler* self, uint8_t reg)
+            : self(self)
+            , reg(reg)
+        {
+        }
+
+        bool visit(AstExprLocal* node) override
+        {
+            if (self->getLocalReg(node->local) == reg)
+                used = true;
+
+            return !used;
+        }
+
+        Compiler* self = nullptr;
+        uint8_t reg = 0;
+        bool used = false;
+    };
+
+    // Luwu: ported from upstream 0.736's LuauCompileMoveElision with 0.742's LuauCompileMoveElisionFix. Whether a local
+    // in `reg` is read by argument `startArg` (unless that argument is the local itself) or by any argument after it.
+    // Luwu numbers the arguments as compileInlinedCall's argAt does, so an inlined method's receiver is argument 0.
+    bool isRegisterUsedInCallArguments(AstExprCall* expr, AstExpr* selfExpr, AstExpr* arg, size_t startArg, uint8_t reg)
+    {
+        FindRegisterUseByLocal visitor(this, reg);
+
+        size_t selfCount = selfExpr ? 1 : 0;
+        size_t providedArgs = expr->args.size + selfCount;
+
+        auto argAt = [&](size_t i) -> AstExpr*
+        {
+            if (selfExpr && i == 0)
+                return selfExpr;
+            return expr->args.data[i - selfCount];
+        };
+
+        // Allow direct use of the target register in the current argument
+        if (arg && getExprLocalReg(arg) != reg)
+            argAt(startArg)->visit(&visitor);
+
+        for (size_t i = startArg + 1; i < providedArgs && !visitor.used; ++i)
+            argAt(i)->visit(&visitor);
+
+        return visitor.used;
+    }
+
+    void compileInlinedCall(
+        AstExprCall* expr,
+        AstExprFunction* func,
+        uint8_t target,
+        uint8_t targetCount,
+        AstExpr* selfExpr = nullptr,
+        bool onlyCallSite = false
+    )
+    {
+        Function* fi = functions.find(func);
+
+        // We try to write result directly to the target register when possible, but there are a few blockers
+        // - function captures a reference to the local that is being returned and might close it
+        // - there might not be a target register (return value is unused)
+        // - target register is captured and might be read before inlined function completes
+        // Luwu: also when the callee has no function info
+        bool noTargetMoveElision = !fi || fi->returnLocalCaptured || targetCount == 0 || regCaptured[target];
+
         RegScope rs(this);
 
         size_t oldLocals = localStack.size();
@@ -2097,6 +2333,10 @@ struct Compiler
             AstLocal* var = func->args.data[i];
             AstExpr* arg = argAt(i);
 
+            // Luwu: not with parameter defaults, which assign into the parameter registers
+            bool canUseParameterTarget =
+                !hasArgDefaults && !noTargetMoveElision && fi->returnKind == ReturnKind::Parameter && fi->returnLocal == var;
+
             if (i + 1 == providedArgs && func->args.size > providedArgs && isExprMultRet(arg))
             {
                 // if the last argument can return multiple values, we need to compute all of them into the remaining arguments
@@ -2121,7 +2361,16 @@ struct Compiler
             {
                 Variable* vv = variables.find(var);
 
-                if (hasArgDefaults || (vv && vv->written))
+                if (vv && vv->written && canUseParameterTarget && !isRegisterUsedInCallArguments(expr, selfExpr, arg, i, target))
+                {
+                    if (arg)
+                        compileExprTemp(arg, target);
+                    else
+                        bytecode.emitABC(LOP_LOADNIL, target, 0, 0);
+
+                    args.push_back({var, target, {Constant::Type_Unknown}, kDefaultAllocPc});
+                }
+                else if (hasArgDefaults || (vv && vv->written))
                 {
                     // If the argument is mutated or this function has default values, we need to allocate a fresh register even if it's a constant.
                     // Default values assign into parameter registers, so reusing a caller local's register would let a default overwrite it, and a
@@ -2156,12 +2405,18 @@ struct Compiler
                     {
                         args.push_back({var, uint8_t(reg), {Constant::Type_Unknown}, kDefaultAllocPc, lv ? lv->init : nullptr});
                     }
+                    else if (canUseParameterTarget && !isRegisterUsedInCallArguments(expr, selfExpr, arg, i, target))
+                    {
+                        compileExprTemp(arg, target);
+
+                        args.push_back({var, target, {Constant::Type_Unknown}, kDefaultAllocPc});
+                    }
                     else
                     {
                         uint8_t temp = allocReg(arg, 1u);
                         uint32_t allocpc = bytecode.getDebugPC();
 
-                        compileExprTemp(arg, temp);
+                        temp = compileExprAutoTemp(arg, temp, target);
 
                         args.push_back({var, temp, {Constant::Type_Unknown}, allocpc, arg});
                     }
@@ -2258,8 +2513,11 @@ struct Compiler
             }
         }
 
+        AstLocal* resultLocal = !noTargetMoveElision && fi->returnKind == ReturnKind::Local ? fi->returnLocal : nullptr;
+
         // the inline frame will be used to compile return statements as well as to reject recursive inlining attempts
-        inlineFrames.push_back({func, oldLocals, target, targetCount});
+        inlineFrames.push_back({func, oldLocals, target, targetCount, resultLocal});
+        inlineFrames.back().onlyCallSite = onlyCallSite;
 
         if (selfProvenClass)
         {
@@ -3149,6 +3407,7 @@ struct Compiler
 
         FieldsExpansion expansion(this, decl);
 
+
         for (size_t i = 0; i < primaryConstructor->args.size; ++i)
         {
             AstExpr* paramDefault = primaryConstructor->argsDefaults.data[i];
@@ -3712,12 +3971,273 @@ struct Compiler
         return true;
     }
 
+    // Luwu String Extensions (rfcs/string-extensions.md): how far isProvenString follows locals to the values that
+    // initialized them
+    static constexpr int kMaxStringProofDepth = 16;
+
+    template<size_t N>
+    static bool isOneOf(AstName name, const char* const (&names)[N])
+    {
+        for (const char* candidate : names)
+        {
+            if (name == candidate)
+                return true;
+        }
+
+        return false;
+    }
+
+    // Luwu String Extensions: the functions of the `string` library, which a method call on a string reaches
+    static bool isStringLibraryFunction(AstName name)
+    {
+        static const char* const kFunctions[] = {
+            "byte", "char", "find", "format", "gmatch", "gsub", "len", "lower", "match", "rep", "reverse", "sub", "upper", "split", "pack",
+            "packsize", "unpack", "trim", "trimstart", "trimend", "startswith", "endswith", "contains", "replace",
+        };
+
+        return isOneOf(name, kFunctions);
+    }
+
+    // Luwu String Extensions: the `string` functions whose first result is always a string
+    static bool returnsString(AstName name)
+    {
+        static const char* const kFunctions[] = {
+            "char", "format", "gsub", "lower", "rep", "reverse", "sub", "upper", "trim", "trimstart", "trimend", "replace",
+        };
+
+        return isOneOf(name, kFunctions);
+    }
+
+    static bool isStringAnnotation(AstType* annotation)
+    {
+        AstTypeReference* ref = annotation ? annotation->as<AstTypeReference>() : nullptr;
+        return ref && !ref->prefix && !ref->hasParameterList && ref->name == "string";
+    }
+
+    bool isNumberConstant(AstExpr* expr)
+    {
+        return isConstant(expr) && getConstant(expr).type == Constant::Type_Number;
+    }
+
+    bool isStringProvenLocal(AstLocal* local)
+    {
+        const bool* proven = stringProvenLocals.find(local);
+        return proven && *proven;
+    }
+
+    // Luwu String Extensions (rfcs/string-extensions.md): does `expr` always evaluate to a string? Literals, the results of
+    // `string` functions that return one (as functions or methods), `tostring`, `type`, `typeof` and `table.concat`, a
+    // concatenation of proven strings and number constants, and a local holding one of those: initialized with one and never
+    // written, or checked by `type(x) == "string"` around the code being compiled. Under `--!trust`, a `string` annotation
+    // counts too.
+    bool isProvenString(AstExpr* expr, int depth = 0)
+    {
+        if (depth > kMaxStringProofDepth)
+            return false;
+
+        while (AstExprGroup* group = expr->as<AstExprGroup>())
+            expr = group->expr;
+
+        if (expr->is<AstExprConstantString>() || expr->is<AstExprInterpString>())
+            return true;
+
+        if (AstExprTypeAssertion* assertion = expr->as<AstExprTypeAssertion>())
+            return (trustsTypeAnnotations() && isStringAnnotation(assertion->annotation)) || isProvenString(assertion->expr, depth + 1);
+
+        if (AstExprBinary* binary = expr->as<AstExprBinary>(); binary && binary->op == AstExprBinary::Concat)
+        {
+            bool leftIsString = isProvenString(binary->left, depth + 1) || isNumberConstant(binary->left);
+            bool rightIsString = isProvenString(binary->right, depth + 1) || isNumberConstant(binary->right);
+            return leftIsString && rightIsString;
+        }
+
+        if (AstExprCall* call = expr->as<AstExprCall>())
+        {
+            if (call->self)
+            {
+                AstExprIndexName* method = call->func->as<AstExprIndexName>();
+                return method && returnsString(method->index) && isProvenString(method->expr, depth + 1);
+            }
+
+            Builtin builtin = getBuiltin(call->func, globals, variables);
+            bool stringFunction = builtin.object == "string" && returnsString(builtin.method);
+            return stringFunction || builtin.isGlobal("tostring") || builtin.isGlobal("type") || builtin.isGlobal("typeof") ||
+                   builtin.isMethod("table", "concat");
+        }
+
+        if (AstExprLocal* le = expr->as<AstExprLocal>())
+        {
+            if (isFrameLocal(le) && isStringProvenLocal(le->local))
+                return true;
+
+            if (trustsTypeAnnotations() && isStringAnnotation(le->local->annotation))
+                return true;
+
+            const Variable* v = variables.find(le->local);
+            return v && !v->written && v->init && isProvenString(v->init, depth + 1);
+        }
+
+        return false;
+    }
+
+    // Luwu String Extensions (rfcs/string-extensions.md): `s:name(...)` as the call `string.name(s, ...)`, built once per
+    // method call, with its builtin recorded in `builtins`. Null when `name` isn't a `string` function (so a typo still
+    // raises "missing method") or `string` can't be imported.
+    AstExprCall* stringFunctionForm(AstExprCall* expr)
+    {
+        AstExprIndexName* method = expr->func->as<AstExprIndexName>();
+        AstName stringName = names.getOrAdd("string");
+
+        bool importable = stringName.value && getGlobalState(globals, stringName) == Global::Default;
+        if (!method || !importable || !isStringLibraryFunction(method->index))
+            return nullptr;
+
+        // Luwu Traits (rfcs/classes/traits.md): `s:Trait:sub()` calls the trait's function, never the string library's
+        if (method->qualifiedTrait)
+            return nullptr;
+
+        if (AstExprCall** cached = stringMethodCalls.find(expr))
+            return *cached;
+
+        AstExpr** args = static_cast<AstExpr**>(synthesizedNodes.allocate(sizeof(AstExpr*) * (expr->args.size + 1)));
+
+        // A receiver is one value, but a call as the last argument passes all of its values: `f():trimend()` must not
+        // become `string.trimend(f())`
+        args[0] = method->expr;
+        if (method->expr->is<AstExprCall>())
+            args[0] = synthesizedNodes.alloc<AstExprGroup>(method->expr->location, method->expr);
+
+        for (size_t i = 0; i < expr->args.size; ++i)
+            args[i + 1] = expr->args.data[i];
+
+        AstExprGlobal* library = synthesizedNodes.alloc<AstExprGlobal>(method->location, stringName);
+        AstExprIndexName* function =
+            synthesizedNodes.alloc<AstExprIndexName>(method->location, library, method->index, method->indexLocation, method->opPosition, '.');
+        AstArray<AstExpr*> callArgs{args, expr->args.size + 1};
+        AstArray<AstTypeOrPack> noTypeArguments{};
+        AstExprCall* call =
+            synthesizedNodes.alloc<AstExprCall>(expr->location, function, callArgs, /* self= */ false, noTypeArguments, expr->argLocation);
+
+        analyzeBuiltins(builtins, globals, variables, options, call, names);
+        stringMethodCalls[expr] = call;
+        return call;
+    }
+
+    // `s:name(...)` on a proven string as its function form, which compiles to an import and, where `name` is a builtin, a
+    // fastcall, with no NAMECALL lookup. Null when it has to stay a method call.
+    AstExprCall* stringMethodAsFunctionCall(AstExprCall* expr)
+    {
+        AstExprIndexName* method = expr->func->as<AstExprIndexName>();
+        if (!method || !isProvenString(method->expr))
+            return nullptr;
+
+        return stringFunctionForm(expr);
+    }
+
+    // Luwu String Extensions: the builtin to try first for a method call on a receiver that may not be a string, or -1.
+    // Only builtins whose fast path takes nothing but a string as its first argument qualify, so any other receiver falls
+    // back to the method call.
+    int stringMethodBuiltin(AstExprCall* expr)
+    {
+        static const char* const kStringOnlyBuiltins[] = {"byte", "len", "sub", "startswith", "endswith", "contains"};
+
+        AstExprIndexName* method = expr->func->as<AstExprIndexName>();
+        if (!method || !isOneOf(method->index, kStringOnlyBuiltins))
+            return -1;
+
+        AstExprCall* functionForm = stringFunctionForm(expr);
+        const int* bfid = functionForm ? builtins.find(functionForm) : nullptr;
+        return bfid ? *bfid : -1;
+    }
+
+    // Luwu String Extensions (rfcs/string-extensions.md): `s:name(...)` where `name` is a string builtin, as that builtin's
+    // fastcall with the method call as its fallback. The builtin takes only a string receiver, so a table or userdata with
+    // its own `name` reaches the NAMECALL and runs that. The fastcall reads its operands from the registers it names, since
+    // the receiver isn't in the call's first argument register until NAMECALL has run.
+    void compileStringMethodFastcall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop, bool multRet, uint8_t regs, int bfid)
+    {
+        AstExprIndexName* method = expr->func->as<AstExprIndexName>();
+        LUAU_ASSERT(method && expr->args.size <= 2);
+
+        size_t operandCount = expr->args.size + 1;
+        bool secondIsConstant = operandCount == 2 && isConstant(expr->args.data[0]);
+        LuauOpcode opc = fastcallOpcode(operandCount, secondIsConstant);
+
+        uint8_t selfreg = regs;
+        if (int reg = getExprLocalReg(method->expr); reg >= 0)
+            selfreg = uint8_t(reg);
+        else
+            compileExprTempTop(method->expr, regs);
+
+        uint32_t operands[3] = {selfreg, 0, 0};
+        for (size_t i = 0; i < expr->args.size; ++i)
+        {
+            AstExpr* arg = expr->args.data[i];
+
+            if (opc == LOP_FASTCALL2K)
+            {
+                int32_t cid = getConstantIndex(arg);
+                if (cid < 0)
+                    CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+                operands[i + 1] = cid;
+            }
+            else if (int reg = getExprLocalReg(arg); reg >= 0)
+            {
+                operands[i + 1] = uint8_t(reg);
+            }
+            else
+            {
+                operands[i + 1] = uint8_t(regs + 2 + i);
+                compileExprTempTop(arg, uint8_t(operands[i + 1]));
+            }
+        }
+
+        if (bytecode.needsDebugRemarks())
+            bytecode.addDebugRemark("builtin string.%s/%d", method->index.value, int(operandCount));
+
+        size_t fastcallLabel = bytecode.emitLabel();
+        emitFastcallN(opc, bfid, operands);
+
+        // the fallback: the arguments where CALL expects them after the receiver, then the method lookup
+        for (size_t i = 0; i < expr->args.size; ++i)
+        {
+            uint8_t argReg = uint8_t(regs + 2 + i);
+
+            if (opc == LOP_FASTCALL2K)
+                emitLoadK(argReg, operands[i + 1]);
+            else if (operands[i + 1] != argReg)
+                bytecode.emitABC(LOP_MOVE, argReg, uint8_t(operands[i + 1]), 0);
+        }
+
+        emitNamecall(method, regs, selfreg);
+
+        size_t callLabel = bytecode.emitLabel();
+        if (!bytecode.patchSkipC(fastcallLabel, callLabel))
+            CompileError::raise(expr->func->location, "Exceeded jump distance limit; simplify the code to compile");
+
+        bytecode.emitABC(LOP_CALL, regs, uint8_t(operandCount + 1), multRet ? 0 : uint8_t(targetCount + 1));
+
+        if (!targetTop)
+        {
+            for (size_t i = 0; i < targetCount; ++i)
+                bytecode.emitABC(LOP_MOVE, uint8_t(target + i), uint8_t(regs + i), 0);
+        }
+    }
+
     void compileExprCall(AstExprCall* expr, uint8_t target, uint8_t targetCount, bool targetTop = false, bool multRet = false)
     {
         LUAU_ASSERT(targetCount < 255);
         LUAU_ASSERT(!targetTop || unsigned(target + targetCount) == regTop);
 
         setDebugLine(expr); // normally compileExpr sets up line info, but compileExprCall can be called directly
+
+        // Luwu String Extensions (rfcs/string-extensions.md): a method call on a proven string compiles exactly as its
+        // function form
+        if (FFlag::LuwuStringExtensions && expr->self && options.optimizationLevel >= 1)
+        {
+            if (AstExprCall* functionForm = stringMethodAsFunctionCall(expr))
+                return compileExprCall(functionForm, target, targetCount, targetTop, multRet);
+        }
 
         // Luwu try expressions: a result kept in registers answers its own `ok`, `err` and `expect`, always with one value
         AstExprLocal* resultLocal = nullptr;
@@ -3829,6 +4349,16 @@ struct Compiler
         {
             if (const int* id = builtins.find(expr); id && *id != LBF_NONE)
                 bfid = *id;
+        }
+
+        // Luwu String Extensions (rfcs/string-extensions.md): a method call that may be on a string tries the string
+        // builtin first (see compileStringMethodFastcall)
+        if (FFlag::LuwuStringExtensions && options.optimizationLevel >= 1 && expr->self)
+        {
+            bool argsFit = expr->args.size <= 2 && (expr->args.size == 0 || !isExprMultRet(expr->args.data[expr->args.size - 1]));
+
+            if (int methodBfid = stringMethodBuiltin(expr); methodBfid >= 0 && argsFit)
+                return compileStringMethodFastcall(expr, target, targetCount, targetTop, multRet, regs, methodBfid);
         }
 
         if (bfid >= 0 && bytecode.needsDebugRemarks())
@@ -3955,16 +4485,15 @@ struct Compiler
             AstExprIndexName* fi = expr->func->as<AstExprIndexName>();
             LUAU_ASSERT(fi);
 
-            setDebugLine(fi->indexLocation);
-
-            BytecodeBuilder::StringRef iname = sref(fi->index);
-            int32_t cid = bytecode.addConstantString(iname);
-            if (cid < 0)
-                CompileError::raise(fi->location, "Exceeded constant limit; simplify the code to compile");
-
             if (fi->qualifiedTrait)
             {
                 // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name(...)`; the trait is in `regs`
+                setDebugLine(fi->indexLocation);
+
+                int32_t cid = bytecode.addConstantString(sref(fi->index));
+                if (cid < 0)
+                    CompileError::raise(fi->location, "Exceeded constant limit; simplify the code to compile");
+
                 bytecode.emitABC(LOP_GETQUALIFIED, regs, selfreg, regs);
                 bytecode.emitAux(cid);
 
@@ -3973,8 +4502,7 @@ struct Compiler
             }
             else
             {
-                bytecode.emitABC(LOP_NAMECALL, regs, selfreg, uint8_t(BytecodeBuilder::getStringHash(iname)));
-                bytecode.emitAux(cid);
+                emitNamecall(fi, regs, selfreg);
 
                 hintTemporaryExprRegType(fi->expr, selfreg, LBC_TYPE_TABLE, /* instLength */ 2);
             }
@@ -5002,10 +5530,12 @@ struct Compiler
             }
 
             // Luwu Destructuring (rfcs/destructuring.md): a positional pattern reads the parameters' fields in parameter
-            // order, which differs from member order when the body restates a parameter
+            // order, which differs from member order when the body restates a parameter.
+            // Luwu Traits (rfcs/classes/traits.md): only a class has positions. A trait's parameters become fields of the
+            // classes implementing it, which have their own constructors.
             shape.propertyPositions.assign(shape.propertyNames.size(), -1);
 
-            for (size_t i = 0; i < decl->primaryConstructor->args.size; ++i)
+            for (size_t i = 0; i < decl->primaryConstructor->args.size && !decl->isTrait; ++i)
             {
                 int offset = classInstanceMemberOffset(decl, decl->primaryConstructor->args.data[i]->name, /* forWrite= */ false);
                 LUAU_ASSERT(offset >= 0 && size_t(offset) < shape.propertyNames.size());
@@ -5541,12 +6071,129 @@ struct Compiler
         std::vector<size_t>& jumps
     )
     {
+        // Luwu Destructuring (rfcs/destructuring.md): an alternative whose fields have patterns of their own matches when
+        // it does and they all do, unless those are clauses of their own after the pattern
+        bool matchesFields = alternative.fields && !pattern->nestedPatternsAreClauses && hasNestedPatterns(*alternative.fields);
+        if (matchesFields)
+        {
+            std::vector<size_t> failed;
+            compileAlternativeItselfJump(pattern, value, alternative, /* whenMatched= */ false, failed);
+            compileNestedPatternJumps(pattern, value, *alternative.fields, failed);
+
+            if (!whenMatched)
+            {
+                jumps.insert(jumps.end(), failed.begin(), failed.end());
+                return;
+            }
+            jumps.push_back(bytecode.emitLabel());
+            bytecode.emitAD(LOP_JUMP, 0, 0);
+            patchJumps(pattern, failed, bytecode.emitLabel());
+            return;
+        }
+
+        compileAlternativeItselfJump(pattern, value, alternative, whenMatched, jumps);
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): does a pattern in `fields`, at any depth, test its field?
+    static bool hasNestedPatterns(const AstDestructurePattern& fields)
+    {
+        if (fields.test)
+            return true;
+        for (const AstDestructureField& field : fields.fields)
+        {
+            if (hasNestedPatterns(field.target))
+                return true;
+        }
+        return false;
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): jumps added to `failed` that are taken when a pattern nested in `fields`
+    // doesn't match the field it's in. Each field is read from `value` into a register first.
+    void compileNestedPatternJumps(AstExprMatchPattern* pattern, uint8_t value, const AstDestructurePattern& fields, std::vector<size_t>& failed)
+    {
+        for (size_t i = 0; i < fields.fields.size; ++i)
+        {
+            const AstDestructureField& field = fields.fields.data[i];
+            if (!hasNestedPatterns(field.target))
+                continue;
+
+            RegScope rs(this);
+            uint8_t fieldValue = allocReg(pattern, 1u);
+            compilePatternFieldRead(pattern, value, fields, i, fieldValue);
+
+            if (field.target.test)
+                compilePatternJumpsOn(field.target.test, fieldValue, failed, /* whenMatched= */ false);
+            compileNestedPatternJumps(pattern, fieldValue, field.target, failed);
+        }
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): field `i` of `fields`, read from `value` into `target` the way the
+    // pattern binds it: by name, by position, by index or by a written key
+    void compilePatternFieldRead(AstExprMatchPattern* pattern, uint8_t value, const AstDestructurePattern& fields, size_t i, uint8_t target)
+    {
+        const AstDestructureField& field = fields.fields.data[i];
+
+        double position = double(i + 1);
+        AstExprConstantNumber* written = field.keyExpr ? field.keyExpr->as<AstExprConstantNumber>() : nullptr;
+        if (written && field.keyIsPosition)
+            position = written->value;
+
+        if (fields.positional || field.keyIsPosition)
+        {
+            bytecode.emitABC(LOP_GETPOSITIONAL, target, value, uint8_t(position - 1));
+        }
+        else if (fields.array)
+        {
+            bytecode.emitABC(LOP_GETTABLEN, target, value, uint8_t(position - 1));
+        }
+        else if (field.keyExpr)
+        {
+            RegScope rs(this);
+            uint8_t key = compileExprAuto(field.keyExpr, rs);
+            bytecode.emitABC(LOP_GETTABLE, target, value, key);
+        }
+        else
+        {
+            BytecodeBuilder::StringRef name = sref(field.key);
+            int32_t cid = bytecode.addConstantString(name);
+            if (cid < 0)
+                CompileError::raise(pattern->location, "Exceeded constant limit; simplify the code to compile");
+            bytecode.emitABC(LOP_GETTABLEKS, target, value, uint8_t(BytecodeBuilder::getStringHash(name)));
+            bytecode.emitAux(cid);
+        }
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a jump added to `jumps` that's taken when `value`
+    // matches `alternative` itself (or with `whenMatched` false, when it doesn't), leaving any patterns in its fields out
+    void compileAlternativeItselfJump(
+        AstExprMatchPattern* pattern,
+        uint8_t value,
+        const AstPatternAlternative& alternative,
+        bool whenMatched,
+        std::vector<size_t>& jumps
+    )
+    {
         RegScope rs(this);
         setDebugLine(alternative.location);
         uint32_t notFlag = whenMatched ? 0 : 0x80000000;
 
+        // Luwu try expressions: a result kept in registers is `Ok` or `Err` by its flag
+        if (std::optional<bool> testsOk = tryResultVariantPattern(pattern, alternative))
+        {
+            AstLocal* result = pattern->subject ? pattern->subject : pattern->value->as<AstExprLocal>()->local;
+            jumps.push_back(bytecode.emitLabel());
+            bytecode.emitAD(*testsOk == whenMatched ? LOP_JUMPIF : LOP_JUMPIFNOT, uint8_t(getLocalReg(result) + kTryResultOkFlag), 0);
+            return;
+        }
+
         switch (alternative.kind)
         {
+        case AstPatternAlternative::Bundle:
+        {
+            compileBundleJump(pattern, value, alternative, whenMatched, jumps);
+            return;
+        }
+
         case AstPatternAlternative::Class:
         {
             // A name holding a constant (`const LIMIT = 10`) compares like the literal
@@ -5585,7 +6232,8 @@ struct Compiler
 
         case AstPatternAlternative::Tag:
         {
-            if (std::optional<uint8_t> type = jumpxTypeFor(alternative.tag))
+            std::optional<uint8_t> type = alternative.tagIsTypeof ? std::nullopt : jumpxTypeFor(alternative.tag);
+            if (type)
             {
                 jumps.push_back(bytecode.emitLabel());
                 bytecode.emitAD(LOP_JUMPXTYPE, value, 0);
@@ -5593,8 +6241,9 @@ struct Compiler
                 return;
             }
 
-            // `class` and `trait`: the name `type()` gives
-            uint8_t name = compileLibraryCall(names.getOrAdd("type"), std::nullopt, value, nullptr, pattern, rs);
+            // `class` and `trait`: the name `type()` gives (or `typeof()`, for a builtin class)
+            const char* function = alternative.tagIsTypeof ? "typeof" : "type";
+            uint8_t name = compileLibraryCall(names.getOrAdd(function), std::nullopt, value, nullptr, pattern, rs);
             int32_t cid = bytecode.addConstantString(sref(alternative.tag));
             if (cid < 0)
                 CompileError::raise(alternative.location, "Exceeded constant limit; simplify the code to compile");
@@ -5663,6 +6312,57 @@ struct Compiler
         if (cid < 0)
             CompileError::raise(operand->location, "Exceeded constant limit; simplify the code to compile");
         return {opc, cid};
+    }
+
+    // Luwu bundles: `.(a, b)` is `typeof(value) == "bundle" and #value == 2` (`>= 2` with `..`)
+    void compileBundleJump(
+        AstExprMatchPattern* pattern,
+        uint8_t value,
+        const AstPatternAlternative& alternative,
+        bool whenMatched,
+        std::vector<size_t>& jumps
+    )
+    {
+        RegScope rs(this);
+        std::vector<size_t> failed;
+
+        uint8_t name = compileLibraryCall(names.getOrAdd("typeof"), std::nullopt, value, nullptr, pattern, rs);
+        int32_t bundleName = bytecode.addConstantString(sref(names.getOrAdd("bundle")));
+        size_t count = alternative.fields ? alternative.fields->fields.size : 0;
+        int32_t countConstant = bytecode.addConstantNumber(double(count));
+        if (bundleName < 0 || countConstant < 0)
+            CompileError::raise(pattern->location, "Exceeded constant limit; simplify the code to compile");
+
+        failed.push_back(bytecode.emitLabel());
+        bytecode.emitAD(LOP_JUMPXEQKS, name, 0);
+        bytecode.emitAux(uint32_t(bundleName) | 0x80000000);
+
+        uint8_t size = allocReg(pattern, 1u);
+        bytecode.emitABC(LOP_LENGTH, size, value, 0);
+        if (alternative.openEnded)
+        {
+            // fewer values than the elements written
+            uint8_t least = allocReg(pattern, 1u);
+            bytecode.emitAD(LOP_LOADK, least, int16_t(countConstant));
+            failed.push_back(bytecode.emitLabel());
+            bytecode.emitAD(LOP_JUMPIFLT, size, 0);
+            bytecode.emitAux(least);
+        }
+        else
+        {
+            failed.push_back(bytecode.emitLabel());
+            bytecode.emitAD(LOP_JUMPXEQKN, size, 0);
+            bytecode.emitAux(uint32_t(countConstant) | 0x80000000);
+        }
+
+        if (!whenMatched)
+        {
+            jumps.insert(jumps.end(), failed.begin(), failed.end());
+            return;
+        }
+        jumps.push_back(bytecode.emitLabel());
+        bytecode.emitAD(LOP_JUMP, 0, 0);
+        patchJumps(pattern, failed, bytecode.emitLabel());
     }
 
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a JUMPXEQK* that compares `value` with the constant
@@ -5753,6 +6453,10 @@ struct Compiler
     {
         AstLocal* local = nullptr;
         AstStatClass* previous = nullptr;
+        // Luwu String Extensions (rfcs/string-extensions.md): an `assert(type(x) == "string")` proof instead of a class
+        // one, and whether the local was proven a string before it
+        bool stringProof = false;
+        bool previousString = false;
     };
 
     void noteAssertProof(AstStat* stat, const AstArray<AstStat*>& body, size_t index, std::vector<AssertProof>& proofs)
@@ -5765,15 +6469,118 @@ struct Compiler
             proofs.push_back({local, existing ? *existing : nullptr});
             isinstanceProvenLocals[local] = decl;
         }
+        else if (AstLocal* stringLocal = matchAssertStringProof(stat, body, index))
+        {
+            proofs.push_back({stringLocal, nullptr, /* stringProof= */ true, isStringProvenLocal(stringLocal)});
+            stringProvenLocals[stringLocal] = true;
+        }
     }
 
     void restoreAssertProofs(std::vector<AssertProof>& proofs)
     {
         // DenseHashMap has no erase; a null entry means "not proven"
         for (size_t i = proofs.size(); i > 0; --i)
-            isinstanceProvenLocals[proofs[i - 1].local] = proofs[i - 1].previous;
+        {
+            const AssertProof& proof = proofs[i - 1];
+
+            if (proof.stringProof)
+                stringProvenLocals[proof.local] = proof.previousString;
+            else
+                isinstanceProvenLocals[proof.local] = proof.previous;
+        }
 
         proofs.clear();
+    }
+
+    // Luwu String Extensions (rfcs/string-extensions.md): the local `expr` checks, when it is `type(x) == "string"` or
+    // `typeof(x) == "string"` (either way round) for a local of this frame that no nested function writes. The caller
+    // must also check that nothing in the proven region writes the local.
+    AstLocal* matchTypeStringCheck(AstExpr* expr)
+    {
+        if (!FFlag::LuwuStringExtensions || !currentFunction)
+            return nullptr;
+
+        while (AstExprGroup* group = expr->as<AstExprGroup>())
+            expr = group->expr;
+
+        AstExprBinary* comparison = expr->as<AstExprBinary>();
+        if (!comparison || comparison->op != AstExprBinary::CompareEq)
+            return nullptr;
+
+        AstExpr* typeCall = comparison->left;
+        AstExpr* typeName = comparison->right;
+        if (typeCall->is<AstExprConstantString>())
+            std::swap(typeCall, typeName);
+
+        AstExprConstantString* name = typeName->as<AstExprConstantString>();
+        AstExprCall* call = typeCall->as<AstExprCall>();
+        const int* bfid = call ? builtins.find(call) : nullptr;
+
+        bool checksType = bfid && (*bfid == LBF_TYPE || *bfid == LBF_TYPEOF) && call->args.size == 1;
+        bool checksString = name && std::string_view(name->value.data, name->value.size) == "string";
+        if (!checksType || !checksString)
+            return nullptr;
+
+        AstExprLocal* le = call->args.data[0]->as<AstExprLocal>();
+        if (!isFrameLocal(le))
+            return nullptr;
+
+        if (const Variable* v = variables.find(le->local); v && v->writtenByNestedFunction)
+            return nullptr;
+
+        return le->local;
+    }
+
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the check in `type(x) == "string" or return` (or `break`, `continue`)
+    // written as a statement, a declaration's value or an assignment's value, which only completes when the check passes
+    static AstExpr* orLeaveCheck(AstStat* stat)
+    {
+        if (AstStatExpr* statExpr = stat->as<AstStatExpr>())
+        {
+            AstExprBinary* orLeave = asOrLeave(statExpr->expr);
+            return orLeave ? orLeave->left : nullptr;
+        }
+
+        const AstArray<AstExpr*>* values = nullptr;
+        if (AstStatLocal* local = stat->as<AstStatLocal>())
+            values = &local->values;
+        else if (AstStatAssign* assign = stat->as<AstStatAssign>())
+            values = &assign->values;
+
+        for (size_t i = 0; values && i < values->size; ++i)
+        {
+            if (AstExprBinary* orLeave = asOrLeave(values->data[i]))
+                return orLeave->left;
+        }
+
+        return nullptr;
+    }
+
+    // `assert(type(x) == "string")` as a statement proves `x` for the rest of the block. Only the builtin `assert`
+    // counts: a module that reassigns the global gets no builtin id for it. `type(x) == "string" or return` proves the
+    // same (see orLeaveCheck).
+    AstLocal* matchAssertStringProof(AstStat* stat, const AstArray<AstStat*>& body, size_t index)
+    {
+        if (AstExpr* check = orLeaveCheck(stat))
+        {
+            AstLocal* local = matchTypeStringCheck(check);
+            if (!local || bodyWritesLocal(body, index + 1, local))
+                return nullptr;
+
+            return local;
+        }
+
+        AstStatExpr* statExpr = stat->as<AstStatExpr>();
+        AstExprCall* call = statExpr ? statExpr->expr->as<AstExprCall>() : nullptr;
+        const int* bfid = call ? builtins.find(call) : nullptr;
+        if (!bfid || *bfid != LBF_ASSERT || call->args.size == 0)
+            return nullptr;
+
+        AstLocal* local = matchTypeStringCheck(call->args.data[0]);
+        if (!local || bodyWritesLocal(body, index + 1, local))
+            return nullptr;
+
+        return local;
     }
 
     // the same question for the tail of a statement list, which is the region an `assert` proves
@@ -6343,6 +7150,16 @@ struct Compiler
             bytecode.emitABC(LOP_MOVE, target, reg, 0);
     }
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    void compileExprPop(AstExprPop* expr, uint8_t target)
+    {
+        RegScope rs(this);
+
+        uint8_t container = compileExprAuto(expr->expr, rs);
+
+        bytecode.emitABC(LOP_POP, target, container, 0);
+    }
+
     void compileExprUnary(AstExprUnary* expr, uint8_t target)
     {
         RegScope rs(this);
@@ -6829,7 +7646,7 @@ struct Compiler
     // `target`, closes the block's captured locals and jumps to the end, the way an inlined function's `return` does
     // (compileInlineReturn). `return`, `break` and `continue` leave through their usual paths: they close upvalues
     // from the local stack, which already holds the block's locals.
-    void compileExprDo(AstExprDo* expr, uint8_t target, bool targetTemp)
+    void compileExprDo(AstExprDo* expr, uint8_t target, bool targetTemp, unsigned bundleSize = 0)
     {
         RegScope rs(this);
 
@@ -6840,7 +7657,7 @@ struct Compiler
             return;
         }
 
-        giveFrames.push_back({target, targetTemp, localStack.size(), {}});
+        giveFrames.push_back({target, targetTemp, localStack.size(), {}, bundleSize});
 
         // The block always ends in a `give`, `return`, `break` or `continue`, so nothing falls through it
         LUAU_ASSERT(alwaysTerminates(expr->body));
@@ -7256,7 +8073,10 @@ struct Compiler
             // block still reads (`x = do ... give x + 1`), so it's never used as scratch before that
             RegScope rs(this);
             GiveFrame& frame = giveFrames.back();
-            compileExpr(stat->value, frame.target, frame.targetTemp);
+            if (frame.bundleSize > 0)
+                compileBundleElements(stat->value->as<AstExprCall>(), frame.target);
+            else
+                compileExpr(stat->value, frame.target, frame.targetTemp);
         }
 
         closeLocals(giveFrames.back().localOffset);
@@ -7442,6 +8262,17 @@ struct Compiler
         return builtinResultVariant(call->args.data[1]);
     }
 
+    // Luwu try expressions: whether `alternative` of `pattern` is `Ok` or `Err` matched against a result kept in registers,
+    // and if so, whether it's `Ok`
+    std::optional<bool> tryResultVariantPattern(AstExprMatchPattern* pattern, const AstPatternAlternative& alternative)
+    {
+        AstExprLocal* local = pattern->value ? pattern->value->as<AstExprLocal>() : nullptr;
+        AstLocal* result = pattern->subject ? pattern->subject : (local && !local->upvalue ? local->local : nullptr);
+        if (!result || !tryResultLocals.contains(result) || alternative.kind != AstPatternAlternative::Class)
+            return std::nullopt;
+        return builtinResultVariant(alternative.operand);
+    }
+
     // Luwu try expressions: a method call or a variant test that a result kept in registers answers itself
     bool isTryResultCall(AstExprCall* call)
     {
@@ -7520,6 +8351,25 @@ struct Compiler
             bytecode.emitAux(cid);
         };
         compileTryResultRead(expr, field, /* okField= */ expr->index == "value", reg, target, targetTemp, readObject);
+    }
+
+    // Luwu try expressions: element `position` of a try result kept in registers, read by a positional pattern
+    // (`r is Ok(value)`). The first is an ok's value or an err's error, which share a register, so it needs no check. The
+    // rest are an err's module, line and traceback.
+    void compileTryResultPositional(AstExpr* expr, size_t position, uint8_t reg, uint8_t target)
+    {
+        LUAU_ASSERT(position < kTryResultRegisters - 1);
+        if (position == 0)
+        {
+            bytecode.emitABC(LOP_MOVE, target, reg, 0);
+            return;
+        }
+
+        auto readObject = [&](uint8_t object)
+        {
+            bytecode.emitABC(LOP_GETPOSITIONAL, target, object, uint8_t(position));
+        };
+        compileTryResultRead(expr, int(position), /* okField= */ false, reg, target, /* targetTemp= */ false, readObject);
     }
 
     // Luwu try expressions: register `field` of a try result kept in registers, which holds a field of the ok variant or
@@ -7983,8 +8833,8 @@ struct Compiler
 
         if (int localReg = getExprLocalReg(object); localReg >= 0) // Locals can be indexed directly
             reg = uint8_t(localReg);
-        else if (targetTemp) // If target is a temp register, we can clobber it which allows us to compute the result directly into it
-            compileExprTemp(object, target);
+        else if (targetTemp) // If target is a temp register, we can compute the result directly into it
+            reg = compileExprAutoTemp(object, target);
         else
             reg = compileExprAuto(object, rs);
 
@@ -8058,10 +8908,18 @@ struct Compiler
 
         if (expr->positional)
         {
+            // Luwu collections: an element of a bundle this code built and destructured is already in a register
+            if (tryCompileUnfoldedBundleRead(expr, target))
+                return;
+
             // Luwu Destructuring (rfcs/destructuring.md): the parser writes the position as a constant, and a pattern has
             // fewer elements than a function has registers
             LUAU_ASSERT(cv.type == Constant::Type_Number && cv.valueNumber >= 1 && cv.valueNumber <= 256);
             size_t position = size_t(cv.valueNumber) - 1;
+
+            // Luwu try expressions: an element of a try result kept in registers
+            if (AstExprLocal* local = expr->expr->as<AstExprLocal>(); local && tryResultLocals.contains(local->local))
+                return compileTryResultPositional(expr, position, getLocalReg(local->local), target);
 
             if (std::optional<ProvenPositionalField> proven = provenPositionalField(expr->expr, position))
             {
@@ -8418,6 +9276,10 @@ struct Compiler
         {
             compileExprTableComprehension(expr, target, targetTemp);
         }
+        else if (AstExprPop* expr = node->as<AstExprPop>())
+        {
+            compileExprPop(expr, target);
+        }
         else if (AstExprInterpString* interpString = node->as<AstExprInterpString>())
         {
             compileExprInterpString(interpString, target, targetTemp);
@@ -8446,18 +9308,51 @@ struct Compiler
         return compileExpr(node, target, /* targetTemp= */ true);
     }
 
+    // Luwu: ported from upstream 0.736's LuauCompileMoveElision, without the flag. Compiles `node` into `target`, unless all
+    // that takes is a MOVE from another register, in which case the MOVE is undone and that register is returned.
+    uint8_t compileExprAutoTemp(AstExpr* node, uint8_t target, uint8_t forbiddenSourceReg = kInvalidReg)
+    {
+        if (options.optimizationLevel == 0)
+        {
+            compileExprTemp(node, target);
+            return target;
+        }
+
+        size_t marker = bytecode.emitLabel();
+        compileExprTemp(node, target);
+
+        // If only a single instruction was generated, check if it's a move of a register that we can elide
+        if (bytecode.emitLabel() == marker + 1)
+        {
+            unsigned insn = bytecode.lastInstruction();
+
+            if (LUAU_INSN_OP(insn) == LOP_MOVE && LUAU_INSN_A(insn) == target)
+            {
+                uint8_t src = LUAU_INSN_B(insn);
+
+                // Captured registers might get modified while the operation is lowered and rely on the move copy to prevent that
+                if (!regCaptured[src] && src != forbiddenSourceReg)
+                {
+                    bytecode.undoEmit(LOP_MOVE);
+                    target = src;
+                }
+            }
+        }
+
+        return target;
+    }
+
     uint8_t compileExprAuto(AstExpr* node, RegScope&)
     {
         // Optimization: directly return locals instead of copying them to a temporary
+        // This can affect side-effect ordering on the register if it is captured
         if (int reg = getExprLocalReg(node); reg >= 0)
             return uint8_t(reg);
 
         // note: the register is owned by the parent scope
         uint8_t reg = allocReg(node, 1u);
 
-        compileExprTemp(node, reg);
-
-        return reg;
+        return compileExprAutoTemp(node, reg);
     }
 
     void compileExprSide(AstExpr* node)
@@ -8951,6 +9846,19 @@ struct Compiler
         std::vector<size_t> elseJump;
         compileConditionValue(stat->condition, nullptr, elseJump, false);
 
+        // Luwu String Extensions (rfcs/string-extensions.md): the then-branch of `if type(x) == "string"` knows `x` is a
+        // string, so its method calls compile as function calls (see stringMethodAsFunctionCall)
+        AstLocal* stringLocal = matchTypeStringCheck(stat->condition);
+        if (stringLocal && regionWritesLocal(stat->thenbody, stringLocal))
+            stringLocal = nullptr;
+
+        bool previousString = false;
+        if (stringLocal)
+        {
+            previousString = isStringProvenLocal(stringLocal);
+            stringProvenLocals[stringLocal] = true;
+        }
+
         compileProvenBranch(
             stat->condition,
             stat->thenbody,
@@ -8959,6 +9867,9 @@ struct Compiler
                 compileStat(stat->thenbody);
             }
         );
+
+        if (stringLocal)
+            stringProvenLocals[stringLocal] = previousString;
 
         if (stat->elsebody && elseJump.size() > 0)
         {
@@ -9256,7 +10167,13 @@ struct Compiler
                 }
         }
 
-        if (!consecutive && stat->list.size > 0)
+        if (!consecutive && stat->list.size == 1 && !isExprMultRet(stat->list.data[0]))
+        {
+            // Single expression return might be able to elide the extra move into the fresh register
+            temp = allocReg(stat, 1u);
+            temp = compileExprAutoTemp(stat->list.data[0], temp);
+        }
+        else if (!consecutive && stat->list.size > 0)
         {
             temp = allocReg(stat, unsigned(stat->list.size));
 
@@ -9299,6 +10216,166 @@ struct Compiler
         return true;
     }
 
+    // Luwu bundles: the most values an unfolded bundle keeps in registers
+    static constexpr unsigned kMaxUnfoldedBundleValues = 12;
+
+    // Luwu bundles: whether the field `field` of a pattern reads a position of a bundle of `size`, as `.{ 2 as b }` does
+    static bool readsBundlePosition(const AstDestructureField& field, unsigned size)
+    {
+        AstExprConstantNumber* position = field.keyExpr ? field.keyExpr->as<AstExprConstantNumber>() : nullptr;
+        return field.keyIsPosition && position && position->value >= 1 && position->value <= double(size);
+    }
+
+    // Luwu collections: the size of the bundle every `give` of `expr` constructs, or 0 when one gives anything else or
+    // the sizes differ. Gives of nested `do` expressions belong to those, except the shorthand's (`x or give v`).
+    unsigned bundleSizeOfGives(AstExprDo* expr)
+    {
+        struct GiveVisitor : AstVisitor
+        {
+            AstExprDo* root;
+            std::vector<AstStatGive*> gives;
+
+            bool visit(AstExprDo* node) override
+            {
+                return node == root || node->shorthand;
+            }
+
+            bool visit(AstExprFunction* node) override
+            {
+                return false;
+            }
+
+            bool visit(AstStatGive* node) override
+            {
+                gives.push_back(node);
+                return false;
+            }
+        };
+
+        GiveVisitor visitor;
+        visitor.root = expr;
+        expr->visit(&visitor);
+
+        unsigned size = 0;
+        for (AstStatGive* give : visitor.gives)
+        {
+            unsigned giveSize = bundleConstructionSize(give->value);
+            if (giveSize == 0 || (size != 0 && giveSize != size))
+                return 0;
+            size = giveSize;
+        }
+        return size;
+    }
+
+    // Luwu collections: the arguments of a bundle construction into consecutive registers from `target`, in order
+    void compileBundleElements(AstExprCall* call, uint8_t target)
+    {
+        LUAU_ASSERT(call);
+        for (size_t i = 0; i < call->args.size; i++)
+        {
+            RegScope rs(this);
+            compileExpr(call->args.data[i], uint8_t(target + i), /* targetTemp= */ true);
+        }
+    }
+
+    // Luwu bundles: `const .(a, b) = .(x, y)` creates no object. The hidden local a destructuring desugars to gets one
+    // register per value, and its position reads become those registers (see compileExprIndexExpr). A `do` expression
+    // unfolds the same way when every `give` builds a bundle of the same size. Like a fastcall, this assumes `bundle` is
+    // the builtin library when the module never assigns it; anything the pattern reads that isn't a position of the
+    // bundle keeps the object.
+    bool tryCompileUnfoldedBundle(AstStatLocal* stat)
+    {
+        AstDestructurePattern* pattern = stat->destructure;
+        if (!pattern || stat->vars.size != 1 || stat->values.size != 1 || stat->vars.data[0] != pattern->local)
+            return false;
+
+        AstLocal* local = pattern->local;
+        if (strcmp(local->name.value, kDestructuredLocalName) != 0)
+            return false;
+
+        AstExpr* value = stat->values.data[0];
+        while (AstExprGroup* group = value->as<AstExprGroup>())
+            value = group->expr;
+
+        AstExprDo* doExpr = value->as<AstExprDo>();
+        unsigned size = doExpr ? bundleSizeOfGives(doExpr) : bundleConstructionSize(value);
+        if (size == 0 || size > kMaxUnfoldedBundleValues)
+            return false;
+
+        // a position past the bundle's end raises, so the object stays
+        if (pattern->positional && pattern->fields.size > size)
+            return false;
+
+        for (const AstDestructureField& field : pattern->fields)
+        {
+            if (!pattern->positional && !readsBundlePosition(field, size))
+                return false;
+        }
+
+        uint8_t reg = allocReg(stat, size);
+        uint32_t allocpc = bytecode.getDebugPC();
+
+        if (doExpr)
+            compileExprDo(doExpr, reg, /* targetTemp= */ true, size);
+        else
+            compileBundleElements(value->as<AstExprCall>(), reg);
+
+        pushLocal(local, reg, allocpc);
+        unfoldedBundles[local] = {reg, size};
+        return true;
+    }
+
+    // Luwu collections: a local bound to an unfolded bundle's element (`local first = (destructured).1`) uses the
+    // element's register, the way `local a = b` reuses `b`'s. Only when nothing writes it, since two bindings can
+    // share an element.
+    bool tryBindBundleElement(AstStatLocal* stat)
+    {
+        if (stat->vars.size != 1 || stat->values.size != 1 || stat->vars.data[0]->isExported)
+            return false;
+
+        std::optional<uint8_t> source = unfoldedBundleElement(stat->values.data[0]);
+        if (!source)
+            return false;
+
+        Variable* lv = variables.find(stat->vars.data[0]);
+        if (lv && lv->written)
+            return false;
+
+        pushLocal(stat->vars.data[0], *source, kDefaultAllocPc);
+        return true;
+    }
+
+    // Luwu collections: the register holding the value `read` takes from an unfolded bundle by position (`.(a, b)`,
+    // `.{ 2 as b }`)
+    std::optional<uint8_t> unfoldedBundleElement(AstExpr* read)
+    {
+        AstExprIndexExpr* element = read->as<AstExprIndexExpr>();
+        if (!element || !element->positional)
+            return std::nullopt;
+
+        AstExprLocal* local = element->expr->as<AstExprLocal>();
+        const UnfoldedBundle* bundle = local ? unfoldedBundles.find(local->local) : nullptr;
+        if (!bundle)
+            return std::nullopt;
+
+        // tryCompileUnfoldedBundle only unfolds a bundle whose every read is one of its positions
+        AstExprConstantNumber* position = element->index->as<AstExprConstantNumber>();
+        LUAU_ASSERT(position && position->value >= 1 && unsigned(position->value) <= bundle->size);
+        return uint8_t(bundle->reg + unsigned(position->value) - 1);
+    }
+
+    // Luwu collections: an element of an unfolded bundle into `target`, a move from the register holding it
+    bool tryCompileUnfoldedBundleRead(AstExpr* read, uint8_t target)
+    {
+        std::optional<uint8_t> source = unfoldedBundleElement(read);
+        if (!source)
+            return false;
+
+        if (target != *source)
+            bytecode.emitABC(LOP_MOVE, target, *source, 0);
+        return true;
+    }
+
     void compileStatLocal(AstStatLocal* stat)
     {
         // Luwu try expressions: a result only ever read through its fields stays in registers
@@ -9310,6 +10387,9 @@ struct Compiler
 
         // Optimization: we don't need to allocate and assign const locals, since their uses will be constant-folded
         if (options.optimizationLevel >= 1 && options.debugLevel <= 1 && areLocalsRedundant(stat))
+            return;
+
+        if (options.optimizationLevel >= 1 && (tryCompileUnfoldedBundle(stat) || tryBindBundleElement(stat)))
             return;
 
         // Optimization: for 1-1 local assignments, we can reuse the register *if* neither local is mutated
@@ -9326,6 +10406,14 @@ struct Compiler
                     pushLocal(stat->vars.data[0], uint8_t(reg), kDefaultAllocPc);
                     return;
                 }
+            }
+
+            // Declaration of a local that becomes the inlined function result can use the return target register
+            if (!inlineFrames.empty() && inlineFrames.back().resultLocal == stat->vars.data[0])
+            {
+                compileExprTemp(stat->values.data[0], inlineFrames.back().target);
+                pushLocal(stat->vars.data[0], inlineFrames.back().target, kDefaultAllocPc);
+                return;
             }
         }
 
@@ -9425,6 +10513,9 @@ struct Compiler
         // record changes on the first iteration to capture the pre-loop state
         exprChanges.clear();
         localChanges.clear();
+
+        // Luwu: the body is compiled once per iteration
+        RepeatedCompile repeated(this);
 
         for (int iv = 0; iv < tripCount; ++iv)
         {
@@ -9684,6 +10775,8 @@ struct Compiler
         size_t oldLocals = localStack.size();
         size_t oldJumps = loopJumps.size();
         loops.push_back({oldLocals, oldLocals, nullptr});
+        // Luwu: the body is compiled once per element
+        RepeatedCompile repeated(this);
 
         for (size_t i = 0; i < unfolded.elements.size(); i++)
         {
@@ -10048,6 +11141,41 @@ struct Compiler
         }
     }
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): the container, then the values left to right into
+    // consecutive registers. A call or `...` last pushes all of its values.
+    void compileStatPush(AstStatPush* stat)
+    {
+        // LOP_PUSH encodes the value count + 1 in a byte, with 0 meaning multret
+        if (stat->values.size >= 255)
+            CompileError::raise(stat->location, "Exceeded push value count limit; simplify the code to compile");
+
+        RegScope rs(this);
+
+        uint8_t container = compileExprAuto(stat->target, rs);
+
+        // Optimization: push one value from wherever it already is, such as a local's register, instead of copying it
+        bool single = stat->values.size == 1 && !isExprMultRet(stat->values.data[0]);
+        if (single)
+        {
+            uint8_t value = compileExprAuto(stat->values.data[0], rs);
+            bytecode.emitABC(LOP_PUSH, container, value, 2);
+            return;
+        }
+
+        uint8_t values = allocReg(stat, unsigned(stat->values.size));
+
+        bool multRet = false;
+        for (size_t i = 0; i < stat->values.size; ++i)
+        {
+            if (i + 1 == stat->values.size)
+                multRet = compileExprTempMultRet(stat->values.data[i], uint8_t(values + i));
+            else
+                compileExprTempTop(stat->values.data[i], uint8_t(values + i));
+        }
+
+        bytecode.emitABC(LOP_PUSH, container, values, multRet ? 0 : uint8_t(stat->values.size + 1));
+    }
+
     void compileStatCompoundAssign(AstStatCompoundAssign* stat)
     {
         RegScope rs(this);
@@ -10294,6 +11422,10 @@ struct Compiler
         {
             compileStatCompoundAssign(stat);
         }
+        else if (AstStatPush* stat = node->as<AstStatPush>())
+        {
+            compileStatPush(stat);
+        }
         else if (AstStatFunction* stat = node->as<AstStatFunction>())
         {
             compileStatFunction(stat);
@@ -10429,6 +11561,8 @@ struct Compiler
         l.debugpc = bytecode.getDebugPC();
         l.allocpc = allocpc == kDefaultAllocPc ? l.debugpc : allocpc;
 
+        regCaptured[reg] = l.captured;
+
         // A local's register is allocated before its initializer runs, and the initializer may use that
         // register as a temporary. For example, `local l: List<number> = List.new()` first loads the *class*
         // into l's register. Codegen prefers a declared type over the type it computed (getRegTag) and guards
@@ -10497,6 +11631,7 @@ struct Compiler
             LUAU_ASSERT(l->allocated);
 
             l->allocated = false;
+            regCaptured[l->reg] = false;
 
             if (options.debugLevel >= 2)
             {
@@ -10708,6 +11843,32 @@ struct Compiler
             return !fieldRead;
         }
 
+        // the bindings a pattern makes read the result by position
+        bool visitsPatternClauses() const override
+        {
+            return true;
+        }
+
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `r is Ok(value)` reads its flag, so the result
+        // doesn't escape when every alternative is `Ok` or `Err`. Any other pattern needs the result's object, and a
+        // `case` arm's subject isn't read anywhere the visitor goes, so it's marked here.
+        bool visit(AstExprMatchPattern* node) override
+        {
+            for (const AstPatternAlternative& alternative : node->alternatives)
+            {
+                bool variant = alternative.kind == AstPatternAlternative::Class && compiler.builtinResultVariant(alternative.operand);
+                if (variant)
+                    continue;
+
+                if (node->subject)
+                    escaped.insert(node->subject);
+                return true;
+            }
+
+            AstExprLocal* local = node->value ? node->value->as<AstExprLocal>() : nullptr;
+            return !(local && !local->upvalue);
+        }
+
         bool visit(AstExprCall* node) override
         {
             // the class names a builtin, so it reads no local, and the tested local doesn't escape
@@ -10728,6 +11889,17 @@ struct Compiler
         {
             escaped.insert(node->local);
             return false;
+        }
+
+        // Luwu try expressions: an element of a positional pattern, at most the four a result has (compileTryResultPositional)
+        bool visit(AstExprIndexExpr* node) override
+        {
+            AstExprLocal* local = node->expr->as<AstExprLocal>();
+            AstExprConstantNumber* position = node->index->as<AstExprConstantNumber>();
+            bool element = node->positional && local && !local->upvalue && position && position->value <= kTryResultRegisters - 1;
+
+            // the local itself isn't visited, so it doesn't count as escaping
+            return !element;
         }
 
         bool visit(AstStatAssign* node) override
@@ -11616,13 +12788,28 @@ struct Compiler
         std::vector<AstLocal*> upvals;
     };
 
+    enum class ReturnKind
+    {
+        None,       // No returns in the function
+        Expression, // Function returns some expression (could be a constant)
+        Parameter,  // Function returns one of its parameters
+        Local,      // Function returns one of its locals
+
+        Unknown // Function has multiple conflicting return kinds or return targets (for Parameter/Local)
+    };
+
     struct ReturnVisitor : AstVisitor
     {
-        Compiler* self;
-        bool returnsOne = true;
+        Compiler* self = nullptr;
+        AstExprFunction* func = nullptr;
 
-        ReturnVisitor(Compiler* self)
+        bool returnsOne = true;
+        ReturnKind returnKind = ReturnKind::None;
+        AstLocal* returnLocal = nullptr; // For Parameter/Local ReturnKind
+
+        ReturnVisitor(Compiler* self, AstExprFunction* func)
             : self(self)
+            , func(func)
         {
         }
 
@@ -11640,10 +12827,51 @@ struct Compiler
             return false;
         }
 
+        // Luwu: ported from upstream 0.736's LuauCompileMoveElision (see compileExprAutoTemp)
+        void merge(ReturnKind kind, AstLocal* local)
+        {
+            if (returnKind == ReturnKind::None)
+            {
+                returnKind = kind;
+                returnLocal = local;
+            }
+            else if (returnKind != kind || returnLocal != local)
+            {
+                returnKind = ReturnKind::Unknown;
+                returnLocal = nullptr;
+            }
+        }
+
         bool visit(AstStatReturn* stat) override
         {
-            returnsOne &= stat->list.size == 1 && !self->isExprMultRet(stat->list.data[0]);
+            if (stat->list.size != 1 || self->isExprMultRet(stat->list.data[0]))
+            {
+                returnsOne = false;
+                returnKind = ReturnKind::Unknown;
+                returnLocal = nullptr;
+                return false;
+            }
 
+            AstExprLocal* exprLocal = unwrapExprOfType<AstExprLocal>(stat->list.data[0]);
+
+            if (!exprLocal || exprLocal->upvalue)
+            {
+                merge(ReturnKind::Expression, nullptr);
+                return false;
+            }
+
+            ReturnKind kind = ReturnKind::Local;
+
+            for (AstLocal* arg : func->args)
+            {
+                if (arg == exprLocal->local)
+                {
+                    kind = ReturnKind::Parameter;
+                    break;
+                }
+            }
+
+            merge(kind, exprLocal->local);
             return false;
         }
     };
@@ -11683,7 +12911,15 @@ struct Compiler
         uint64_t costModel = 0;
         unsigned int stackSize = 0;
         bool canInline = false;
+        // Luwu: the size of the function's own body, what inlining it adds to a caller (LuwuCompileInlineBudget)
+        uint32_t instructionCount = 0;
+        // Luwu: the body has a loop that wasn't unrolled (LuwuCompileInlineFewCallSites)
+        bool hasLoops = false;
         bool returnsOne = false;
+
+        ReturnKind returnKind = ReturnKind::None;
+        AstLocal* returnLocal = nullptr; // For Parameter/Local ReturnKind
+        bool returnLocalCaptured = false;
     };
 
     struct Local
@@ -11742,6 +12978,9 @@ struct Compiler
         uint8_t target;
         uint8_t targetCount;
 
+        // The callee's local that every return returns, declared straight into `target` (compileStatLocal)
+        AstLocal* resultLocal = nullptr;
+
         std::vector<size_t> returnJumps;
 
         // Luwu Classes (rfcs/classes): an inlined method's `self`, when the inline site proved its class
@@ -11749,6 +12988,9 @@ struct Compiler
         AstLocal* provenSelf = nullptr;
         AstStatClass* provenSelfClass = nullptr;
         AstExprFunction* caller = nullptr;
+
+        // Luwu: this body is compiled at its function's only call site (isOnlyCallSite)
+        bool onlyCallSite = false;
     };
 
     struct Capture
@@ -11861,6 +13103,13 @@ struct Compiler
     // Luwu Classes (rfcs/classes): locals proven to be exact instances of a class by the enclosing
     // `class.isinstance` branch being compiled (see compileStatIf / provenIsinstanceClass)
     DenseHashMap<AstLocal*, AstStatClass*> isinstanceProvenLocals{nullptr};
+    // Luwu String Extensions (rfcs/string-extensions.md): locals proven to hold strings by the enclosing
+    // `type(x) == "string"` branch or a preceding assert of it (see compileStatIf / noteAssertProof)
+    DenseHashMap<AstLocal*, bool> stringProvenLocals{nullptr};
+    // Luwu String Extensions: the function-form call compiled in place of each method call on a proven string
+    // (see stringMethodAsFunctionCall), and the arena those calls are built in
+    DenseHashMap<AstExprCall*, AstExprCall*> stringMethodCalls{nullptr};
+    Allocator synthesizedNodes;
     // Classes that declare at least one private member. Their methods inline into outside code only when
     // classInlinedBodyKeepsPrivateAccess holds (see tryResolveMethodCall).
     DenseHashSet<AstStatClass*> classesWithPrivateMembers{nullptr};
@@ -11914,6 +13163,8 @@ struct Compiler
     DenseHashSet<AstLocal*> tryResultLocals{nullptr};
 
     std::vector<AstLocal*> localStack;
+    // Registers holding a local that a closure captures by reference (compileExprAutoTemp doesn't drop their MOVEs)
+    std::array<bool, kMaxRegisterCount> regCaptured{};
     std::vector<AstLocal*> upvals;
     std::vector<LoopJump> loopJumps;
     std::vector<Loop> loops;
@@ -11926,8 +13177,19 @@ struct Compiler
         bool targetTemp;
         size_t localOffset;
         std::vector<size_t> jumps;
+        // Luwu collections: when nonzero, every `give` constructs a bundle this size, and its elements go to
+        // `target` onward instead (see tryCompileUnfoldedBundle)
+        unsigned bundleSize = 0;
     };
     std::vector<GiveFrame> giveFrames;
+
+    // Luwu collections: a destructured bundle's elements, held in consecutive registers instead of an object
+    struct UnfoldedBundle
+    {
+        uint8_t reg;
+        unsigned size;
+    };
+    DenseHashMap<AstLocal*, UnfoldedBundle> unfoldedBundles{nullptr};
 
     // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the comprehensions being compiled, innermost last
     struct ComprehensionFrame
@@ -11944,6 +13206,19 @@ struct Compiler
     // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the longest constant range a comprehension is folded to
     // a literal for (tryCompileConstantComprehension). Past it, the loop is less bytecode than the constants.
     static const int kConstantComprehensionLimit = 64;
+
+    // Luwu: how many direct calls each function has in the module (CallSiteVisitor), and how deep the compiler is in
+    // code it compiles more than once (RepeatedCompile)
+    DenseHashMap<AstExprFunction*, unsigned> directCallSites{nullptr};
+    unsigned repeatedCompileDepth = 0;
+
+    // Luwu: the instructions inlining has added to the function being compiled (LuwuCompileInlineBudget), and where the
+    // outermost inline being compiled began
+    uint32_t inlinedInstructions = 0;
+    uint32_t outermostInlineStartPc = 0;
+
+    // Luwu: the module says `--!native` (LuwuCompileInlineNativeCallCost)
+    bool nativeModule = false;
     // Luwu Classes (rfcs/classes): classes whose initializers are being compiled at a construction site
     // (tryCompileNewObjectFieldParameters), innermost last
     std::vector<AstStatClass*> fieldsExpansionStack;
@@ -11999,6 +13274,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
 
     Compiler compiler(bytecode, options, names);
     compiler.trustTypeAnnotations = trustTypeAnnotations;
+    compiler.nativeModule = (mainFlags & LPF_NATIVE_MODULE) != 0;
 
     // Backing storage for AstExprFunction/AstStatBlock/AstStatReturn/AstStatAssign nodes synthesized
     // by ClassInitDefaultsVisitor (POD classes' `__defaults` functions, and the `__init` a primary
@@ -12149,6 +13425,13 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
 
         // this pass analyzes table assignments to estimate table shapes for initially empty tables
         predictTableShapes(compiler.tableShapes, root);
+    }
+
+    // Luwu: counts each function's direct calls for inlining (Compiler::isOnlyCallSite)
+    if (options.optimizationLevel >= 2)
+    {
+        Compiler::CallSiteVisitor callSiteVisitor(&compiler);
+        root->visit(&callSiteVisitor);
     }
 
     if (const char* const* ptr = options.userdataTypes)

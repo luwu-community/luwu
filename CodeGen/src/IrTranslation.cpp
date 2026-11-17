@@ -14,7 +14,6 @@
 
 LUAU_FASTFLAG(LuauCodegenInteger3)
 LUAU_FASTFLAGVARIABLE(LuauCodegenBuilinDeadRange)
-LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauCallFeedback)
 
@@ -156,8 +155,7 @@ void translateInstJumpBack(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
 
-    if (FFlag::LuauBackedgeHeapCheck)
-        build.inst(IrCmd::CHECK_GC);
+    build.inst(IrCmd::CHECK_GC);
 
     build.inst(IrCmd::JUMP, build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc)));
 }
@@ -390,8 +388,7 @@ void translateInstJumpX(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
 
-    if (FFlag::LuauBackedgeHeapCheck)
-        build.inst(IrCmd::CHECK_GC);
+    build.inst(IrCmd::CHECK_GC);
 
     build.inst(IrCmd::JUMP, build.blockAtInst(pcpos + 1 + LUAU_INSN_E(*pc)));
 }
@@ -1396,8 +1393,7 @@ void translateInstForNLoop(IrBuilder& build, const Instruction* pc, int pcpos)
     if (repeatJumpTarget != loopInfo.startpc)
         build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
 
-    if (FFlag::LuauBackedgeHeapCheck)
-        build.inst(IrCmd::CHECK_GC);
+    build.inst(IrCmd::CHECK_GC);
 
     IrOp stepK = loopInfo.step;
 
@@ -1538,8 +1534,7 @@ void translateInstForGLoopIpairs(IrBuilder& build, const Instruction* pc, int pc
 
     build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
 
-    if (FFlag::LuauBackedgeHeapCheck)
-        build.inst(IrCmd::CHECK_GC);
+    build.inst(IrCmd::CHECK_GC);
 
     // fast-path: builtin table iteration
     IrOp tagA = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
@@ -1707,6 +1702,86 @@ void translateInstAppendTable(IrBuilder& build, const Instruction* pc, int pcpos
 
     build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + 1));
     build.inst(IrCmd::SET_TABLE, build.vmReg(rb), build.vmReg(ra), build.vmReg(rc));
+    build.inst(IrCmd::JUMP, next);
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): one value pushed onto a table without a metatable whose array
+// part has room is stored at its length + 1 inline. Several values, a metatable (which may have __push), a readonly table,
+// a full array part (the table grows) or a non-table go through the interpreter's implementation.
+void translateInstPush(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    int rb = LUAU_INSN_B(*pc);
+    int count = LUAU_INSN_C(*pc) - 1;
+
+    if (count != 1)
+    {
+        build.inst(IrCmd::FALLBACK_PUSH, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.constInt(count));
+        return;
+    }
+
+    IrOp next = build.blockAtInst(pcpos + 1);
+    IrOp fallback = build.fallbackBlock(pcpos);
+
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    build.inst(IrCmd::CHECK_TAG, tag, build.constTag(LUA_TTABLE), fallback);
+
+    IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(ra));
+    build.inst(IrCmd::CHECK_NO_METATABLE, table, fallback);
+
+    // nil pushes nothing; the checks above still ran, so pushing nil onto a non-table raises
+    IrOp store = build.block(IrBlockKind::Internal);
+    IrOp valueTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_EQ_TAG, valueTag, build.constTag(LUA_TNIL), next, store);
+
+    build.beginBlock(store);
+    build.inst(IrCmd::CHECK_READONLY, table, fallback);
+
+    // the length is the 0-based index of the slot after the last element
+    IrOp index = build.inst(IrCmd::TABLE_LEN, table);
+    build.inst(IrCmd::CHECK_ARRAY_SIZE, table, index, fallback);
+
+    IrOp slot = build.inst(IrCmd::GET_ARR_ADDR, table, index);
+    build.inst(IrCmd::STORE_TVALUE, slot, build.inst(IrCmd::LOAD_TVALUE, build.vmReg(rb)));
+    build.inst(IrCmd::BARRIER_TABLE_FORWARD, table, build.vmReg(rb), build.undef());
+
+    FallbackStreamScope scope(build, fallback, next);
+
+    build.inst(IrCmd::FALLBACK_PUSH, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb), build.constInt(count));
+    build.inst(IrCmd::JUMP, next);
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): popping a table without a metatable whose last element is in
+// its array part is inline. An empty table, a metatable (which may have __pop), a readonly table, a last element in the
+// hash part or a non-table go through the interpreter's implementation.
+void translateInstPop(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    int rb = LUAU_INSN_B(*pc);
+
+    IrOp next = build.blockAtInst(pcpos + 1);
+    IrOp fallback = build.fallbackBlock(pcpos);
+
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::CHECK_TAG, tag, build.constTag(LUA_TTABLE), fallback);
+
+    IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+    build.inst(IrCmd::CHECK_NO_METATABLE, table, fallback);
+
+    build.inst(IrCmd::CHECK_READONLY, table, fallback);
+
+    // an empty table's index is -1, which fails the array size check too
+    IrOp index = build.inst(IrCmd::SUB_INT, build.inst(IrCmd::TABLE_LEN, table), build.constInt(1));
+    build.inst(IrCmd::CHECK_ARRAY_SIZE, table, index, fallback);
+
+    // `table` was loaded before A is written, so A can be B's own register
+    IrOp slot = build.inst(IrCmd::GET_ARR_ADDR, table, index);
+    build.inst(IrCmd::STORE_TVALUE, build.vmReg(ra), build.inst(IrCmd::LOAD_TVALUE, slot));
+    build.inst(IrCmd::STORE_TAG, slot, build.constTag(LUA_TNIL));
+
+    FallbackStreamScope scope(build, fallback, next);
+
+    build.inst(IrCmd::FALLBACK_POP, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb));
     build.inst(IrCmd::JUMP, next);
 }
 

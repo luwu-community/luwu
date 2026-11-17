@@ -103,6 +103,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.nodiscardReason = a.nodiscardReason;
             // Luwu user-defined refinements
             clone.truthyRefinement = a.truthyRefinement;
+            // Luwu literal types
+            clone.literalParameters = a.literalParameters;
             // Luwu try expressions
             clone.errorHint = a.errorHint;
             clone.name = a.name;
@@ -120,6 +122,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.instantiatedTypeParams = a.instantiatedTypeParams;
             clone.instantiatedTypePackParams = a.instantiatedTypePackParams;
             clone.tags = a.tags;
+            // Luwu literal types
+            clone.literalFields = a.literalFields;
             return dest.addType(std::move(clone));
         }
         else if constexpr (std::is_same_v<T, MetatableType>)
@@ -169,6 +173,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.implementedTraits = a.implementedTraits;
             clone.traitInfo = a.traitInfo;
             clone.traitIntersection = a.traitIntersection;
+            // Luwu: a class or trait a type function made is still the same one
+            clone.generatedKey = a.generatedKey;
             clone.printsAsBundle = a.printsAsBundle;
             clone.aliasName = a.aliasName;
             if (FFlag::LuwuGenericNominals)
@@ -197,7 +203,12 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
 
     TypeId resTy = visit(go, ty->ty);
     if (resTy != ty)
+    {
         asMutable(resTy)->documentationSymbol = ty->documentationSymbol;
+        // Luwu: only ever adds metadata; a replacement can be an existing type that has its own
+        if (ty->metadata)
+            asMutable(resTy)->metadata = ty->metadata;
+    }
 
     return resTy;
 }
@@ -223,6 +234,33 @@ void Tarjan::visitChildren(TypeId ty, int index)
     if (auto pty = log->pending(ty))
         ty = &pty->pending;
 
+    // Luwu: the types in a type's or a property's metadata are its children too (metadataHasTypes)
+    auto visitMetadata = [&](const std::shared_ptr<const TypeMetadataTable>& metadata)
+    {
+        if (!metadata)
+            return;
+
+        forEachMetadataType(
+            *metadata,
+            [&](TypeId metadataTy)
+            {
+                visitChild(metadataTy);
+            }
+        );
+    };
+    visitMetadata(ty->metadata);
+
+    // Luwu literal types: a function's literal parameters and a table's literal fields
+    auto visitLiteralCheck = [&](const LiteralCheck& check)
+    {
+        check.forEachType(
+            [&](TypeId checkTy)
+            {
+                visitChild(checkTy);
+            }
+        );
+    };
+
     if (const FunctionType* ftv = get<FunctionType>(ty))
     {
         for (TypeId generic : ftv->generics)
@@ -232,6 +270,13 @@ void Tarjan::visitChildren(TypeId ty, int index)
 
         visitChild(ftv->argTypes);
         visitChild(ftv->retTypes);
+
+        // Luwu user-defined refinements and literal types: types held beside the signature. Unvisited, a copy (the
+        // module's public interface is one) keeps pointing into the arena it copied from.
+        if (ftv->truthyRefinement)
+            visitChild(ftv->truthyRefinement->type);
+        for (const FunctionType::LiteralParameter& literal : ftv->literalParameters)
+            visitLiteralCheck(literal);
 
         // Luwu try expressions
         if (ftv->errorHint)
@@ -244,6 +289,7 @@ void Tarjan::visitChildren(TypeId ty, int index)
         {
             visitChild(prop.readTy);
             visitChild(prop.writeTy);
+            visitMetadata(prop.metadata);
         }
 
         if (ttv->indexer)
@@ -257,6 +303,10 @@ void Tarjan::visitChildren(TypeId ty, int index)
 
         for (TypePackId itp : ttv->instantiatedTypePackParams)
             visitChild(itp);
+
+        // Luwu literal types
+        for (const auto& [_, check] : ttv->literalFields)
+            visitLiteralCheck(check);
     }
     else if (const MetatableType* mtv = get<MetatableType>(ty))
     {
@@ -304,6 +354,7 @@ void Tarjan::visitChildren(TypeId ty, int index)
                     visitChild(prop.readTy);
                 if (prop.writeTy)
                     visitChild(prop.writeTy);
+                visitMetadata(prop.metadata);
             }
         }
         else if (substitutesGenericTemplates())
@@ -891,6 +942,30 @@ void Substitution::replaceChildren(TypeId ty)
     if (ty->owningArena != arena)
         return;
 
+    // Luwu: see Tarjan::visitChildren
+    auto replaceMetadata = [&](std::shared_ptr<const TypeMetadataTable>& metadata)
+    {
+        metadata = mapMetadataTypes(
+            metadata,
+            [&](TypeId metadataTy)
+            {
+                return replace(metadataTy);
+            }
+        );
+    };
+    replaceMetadata(asMutable(ty)->metadata);
+
+    // Luwu literal types: see Tarjan::visitChildren
+    auto replaceLiteralCheck = [&](LiteralCheck& check)
+    {
+        check.forEachType(
+            [&](TypeId& checkTy)
+            {
+                checkTy = replace(checkTy);
+            }
+        );
+    };
+
     if (FunctionType* ftv = getMutable<FunctionType>(ty))
     {
         for (TypeId& generic : ftv->generics)
@@ -905,6 +980,11 @@ void Substitution::replaceChildren(TypeId ty)
         if (ftv->truthyRefinement)
             ftv->truthyRefinement->type = replace(ftv->truthyRefinement->type);
 
+        // Luwu literal types: a base or validator can name the function's or its class's generics (`literal<S>`,
+        // `V<literal<string>, T>`)
+        for (FunctionType::LiteralParameter& literal : ftv->literalParameters)
+            replaceLiteralCheck(literal);
+
         // Luwu try expressions: a hint can name the function's generics
         if (ftv->errorHint)
             ftv->errorHint = replace(*ftv->errorHint);
@@ -918,6 +998,7 @@ void Substitution::replaceChildren(TypeId ty)
                 prop.readTy = replace(prop.readTy);
             if (prop.writeTy)
                 prop.writeTy = replace(prop.writeTy);
+            replaceMetadata(prop.metadata);
         }
 
         if (ttv->indexer)
@@ -931,6 +1012,10 @@ void Substitution::replaceChildren(TypeId ty)
 
         for (TypePackId& itp : ttv->instantiatedTypePackParams)
             itp = replace(itp);
+
+        // Luwu literal types
+        for (auto& [_, check] : ttv->literalFields)
+            replaceLiteralCheck(check);
     }
     else if (MetatableType* mtv = getMutable<MetatableType>(ty))
     {
@@ -975,6 +1060,7 @@ void Substitution::replaceChildren(TypeId ty)
                     prop.readTy = replace(prop.readTy);
                 if (prop.writeTy)
                     prop.writeTy = replace(prop.writeTy);
+                replaceMetadata(prop.metadata);
             }
         }
         else if (substitutesGenericTemplates())

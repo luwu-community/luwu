@@ -179,6 +179,18 @@ protected:
         }
     }
 
+    // Luwu: metadata shares its tables, but a type in it belongs to the arena being cloned from (metadataHasTypes)
+    std::shared_ptr<const TypeMetadataTable> cloneMetadata(const std::shared_ptr<const TypeMetadataTable>& metadata)
+    {
+        return mapMetadataTypes(
+            metadata,
+            [&](TypeId ty)
+            {
+                return shallowClone(ty);
+            }
+        );
+    }
+
 public:
     virtual TypeId shallowClone(TypeId ty)
     {
@@ -192,6 +204,7 @@ public:
 
         TypeId target = copyType(arena.get(), ty);
         asMutable(target)->documentationSymbol = ty->documentationSymbol;
+        asMutable(target)->metadata = cloneMetadata(ty->metadata);
 
         resetClonedInstantiation(target, arena.get());
 
@@ -251,6 +264,7 @@ private:
         cloned.tags = p.tags;
         cloned.documentationSymbol = p.documentationSymbol;
         cloned.typeLocation = p.typeLocation;
+        cloned.metadata = cloneMetadata(p.metadata);
         return cloned;
     }
 
@@ -313,6 +327,10 @@ private:
     void cloneChildren(GenericType* t)
     {
         // TODO: clone upper bounds.
+
+        // Luwu literal types
+        if (t->literalBase)
+            t->literalBase = shallowClone(t->literalBase);
     }
 
     void cloneChildren(PrimitiveType* t)
@@ -353,6 +371,21 @@ private:
         // Luwu user-defined refinements
         if (t->truthyRefinement)
             t->truthyRefinement->type = shallowClone(t->truthyRefinement->type);
+
+        // Luwu literal types: the cloner maps each type once, so the placeholder inside the cloned validator is the
+        // cloned placeholder
+        for (FunctionType::LiteralParameter& literal : t->literalParameters)
+            cloneLiteralCheck(literal);
+    }
+
+    void cloneLiteralCheck(LiteralCheck& check)
+    {
+        check.forEachType(
+            [this](TypeId& ty)
+            {
+                ty = shallowClone(ty);
+            }
+        );
     }
 
     void cloneChildren(TableType* t)
@@ -371,6 +404,10 @@ private:
 
         for (TypePackId& tp : t->instantiatedTypePackParams)
             tp = shallowClone(tp);
+
+        // Luwu literal types
+        for (auto& [_, check] : t->literalFields)
+            cloneLiteralCheck(check);
     }
 
     void cloneChildren(MetatableType* t)
@@ -596,6 +633,7 @@ public:
 
         TypeId target = copyType(arena.get(), ty);
         asMutable(target)->documentationSymbol = ty->documentationSymbol;
+        asMutable(target)->metadata = cloneMetadata(ty->metadata);
 
         resetClonedInstantiation(target, arena.get());
 

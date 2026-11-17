@@ -59,6 +59,8 @@ LUAU_FASTFLAGVARIABLE(LuwuExternTypeUseDefinitionScope)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuauCyclicRequireTypeInference)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
+// Luwu literal types: `literal<B>` in parameter and local annotations, and `V<literal<B>>` validators (in progress)
+LUAU_FASTFLAGVARIABLE(LuwuLiteralTypes)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 
@@ -210,11 +212,105 @@ static bool signatureNamesSelf(AstExprFunction* fn)
     return names.found;
 }
 
+// Luwu doc references: the first table or function type written as an argument of a user-defined type function call
+// (`Freeze<{ ... }>`), or null
+static AstType* typeFunctionLiteralArgument(const Scope& scope, AstType* annotation)
+{
+    AstTypeReference* call = annotation->as<AstTypeReference>();
+    if (!call || call->prefix || call->parameters.size == 0)
+        return nullptr;
+
+    std::optional<TypeFun> callee = scope.lookupType(call->name.value);
+    const TypeFunctionInstanceType* function = callee ? get<TypeFunctionInstanceType>(follow(callee->type)) : nullptr;
+    if (!function || !function->userFuncData.definition)
+        return nullptr;
+
+    for (const AstTypeOrPack& param : call->parameters)
+    {
+        if (param.type && (param.type->is<AstTypeTable>() || param.type->is<AstTypeFunction>()))
+            return param.type;
+    }
+
+    return nullptr;
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+static bool isPushOrPopMetamethod(const Name& name)
+{
+    return name == "__push" || name == "__pop";
+}
+
+// Luwu literal types: the `literal<B>` a parameter annotation is, or has among its type arguments (`V<..., literal<B>, ...>`)
+static AstTypeReference* findLiteralReference(const Scope& scope, AstType* annotation)
+{
+    AstTypeReference* outer = annotation->as<AstTypeReference>();
+    if (!outer)
+        return nullptr;
+
+    if (isLiteralTypeReference(scope, outer))
+        return outer;
+
+    for (const AstTypeOrPack& param : outer->parameters)
+    {
+        AstTypeReference* inner = param.type ? param.type->as<AstTypeReference>() : nullptr;
+        if (inner && isLiteralTypeReference(scope, inner))
+            return inner;
+    }
+
+    return nullptr;
+}
+
+std::optional<ConstraintGenerator::ResolvedLiteral> ConstraintGenerator::literalOfType(TypeId ty)
+{
+    if (!FFlag::LuwuLiteralTypes)
+        return std::nullopt;
+
+    ty = follow(ty);
+    if (const GenericType* generic = get<GenericType>(ty); generic && generic->literalBase)
+        return ConstraintGenerator::ResolvedLiteral{generic->literalBase, ty, nullptr};
+
+    // A validator is still an alias expansion while constraints are generated, and a type function once expanded
+    const std::vector<TypeId>* arguments = nullptr;
+    if (const TypeFunctionInstanceType* instance = get<TypeFunctionInstanceType>(ty))
+        arguments = &instance->typeArguments;
+    else if (const PendingExpansionType* pending = get<PendingExpansionType>(ty))
+        arguments = &pending->typeArguments;
+    if (!arguments)
+        return std::nullopt;
+
+    for (TypeId arg : *arguments)
+    {
+        const GenericType* generic = get<GenericType>(follow(arg));
+        if (generic && generic->literalBase)
+            return ConstraintGenerator::ResolvedLiteral{generic->literalBase, follow(arg), ty};
+    }
+
+    return std::nullopt;
+}
+
+// Luwu literal types: where `literal<B>` doesn't work yet, which is everywhere but the annotation of a parameter, a local
+// or a table field, and the type arguments of a validator there
+static const char* literalNotSupportedHereMessage()
+{
+    return "literal<T> only works in the annotation of a function parameter, a local, a table field or a type alias, or as the "
+           "argument of a type function there (`name: Validate<literal<string>>`)";
+}
+
+// Luwu literal types: a union with two literal members could check a literal two ways
+static const char* const kOneLiteralMemberMessage = "a union can have only one literal<T> member";
+
+// Luwu literal types: the variadic type of `...: T`, which is where a variadic parameter's annotation is
+static AstType* variadicParameterAnnotation(AstTypePack* tail)
+{
+    AstTypePackVariadic* variadic = tail ? tail->as<AstTypePackVariadic>() : nullptr;
+    return variadic ? variadic->variadicType : nullptr;
+}
+
 static bool isValidClassMetamethod(const Name& name)
 {
     return name == "__call" || name == "__concat" || name == "__unm" || name == "__add" || name == "__sub" || name == "__mul" || name == "__div" ||
            name == "__mod" || name == "__pow" || name == "__tostring" || name == "__eq" || name == "__lt" || name == "__le" || name == "__iter" ||
-           name == "__len" || name == "__idiv";
+           name == "__len" || name == "__idiv" || isPushOrPopMetamethod(name);
 }
 
 static std::optional<AstExpr*> matchRequire(const AstExprCall& call)
@@ -364,6 +460,10 @@ void forEachConstraint(const Checkpoint& start, const Checkpoint& end, const Con
     }
 }
 
+// Luwu: upstream gives function bodies a second version of this, `addAllAsDependenciesAndChainReturns` ("HACK!! TODO
+// clip"). It also makes each `return` wait for the one before it so that the first `return` decides the function's type.
+// Luwu joins a function's returns (ConstraintSolver::dispatchInferredReturn) and doesn't need them in order.
+
 /**
  * For all constraints [C] from [start] to [end], block dispatching
  * [target] on [C].
@@ -403,37 +503,75 @@ LUAU_NOINLINE void addAllAsReverseDependencies(
     );
 }
 
-/**
- * For all constraints [C] from [start] to [end], block dispatching
- * [target] on [C].
- *
- * HACK: Additionally, chain `PackSubtypeConstraint`s that are tied to return
- * statements in order to preserve some behavior from the old solver.
- */
-LUAU_NOINLINE void addAllAsDependenciesAndChainReturns(
-    const Checkpoint& start,
-    const Checkpoint& end,
-    const ConstraintGenerator* cg,
-    NotNull<Constraint> target
+// Luwu: the shape of `fn`'s returns if its return type is inferred from them. A function with one `return` takes that
+// return's type as it is and needs none.
+std::optional<ConstraintGenerator::ReturnShape> inferredReturnShape(const AstExprFunction* fn)
+{
+    if (fn->returnAnnotation)
+        return std::nullopt;
+
+    std::vector<AstStatReturn*> returns = findOwnReturns(fn);
+    if (returns.size() < 2)
+        return std::nullopt;
+
+    // Which positions some `return` gives a cast to `any`, and which a value of its own. A call or `...` at the end gives
+    // values at its position and every one after it.
+    size_t positions = 0;
+    for (AstStatReturn* ret : returns)
+        positions = std::max(positions, size_t(ret->list.size));
+    if (positions == 0)
+        return std::nullopt;
+
+    std::vector<bool> casts(positions, false);
+    std::vector<bool> ownValues(positions, false);
+    for (AstStatReturn* ret : returns)
+    {
+        for (size_t i = 0; i < ret->list.size; ++i)
+        {
+            AstExpr* value = ret->list.data[i];
+            if (isAnyCast(value))
+            {
+                casts[i] = true;
+                continue;
+            }
+
+            bool givesTheRest = i + 1 == ret->list.size && (value->is<AstExprCall>() || value->is<AstExprVarargs>());
+            for (size_t j = i; j < (givesTheRest ? positions : i + 1); ++j)
+                ownValues[j] = true;
+        }
+    }
+
+    ConstraintGenerator::ReturnShape shape;
+    shape.ignoredAnyCasts.resize(positions);
+    for (size_t i = 0; i < positions; ++i)
+        shape.ignoredAnyCasts[i] = casts[i] && ownValues[i];
+    return shape;
+}
+
+// Luwu: `exprTypes`, the values of `ret`, with each `x :: any` the shape ignores replaced by `never` so it adds nothing to
+// the join
+TypePackId withoutAnyCasts(
+    NotNull<TypeArena> arena,
+    NotNull<BuiltinTypes> builtinTypes,
+    const ConstraintGenerator::ReturnShape& shape,
+    AstStatReturn* ret,
+    TypePackId exprTypes
 )
 {
-    Constraint* previous = nullptr;
-    forEachConstraint(
-        start,
-        end,
-        cg,
-        [cg, target, &previous](const ConstraintPtr& constraint)
+    auto [values, tail] = flatten(exprTypes);
+    bool replaced = false;
+    for (size_t i = 0; i < ret->list.size && i < values.size() && i < shape.ignoredAnyCasts.size(); ++i)
+    {
+        if (shape.ignoredAnyCasts[i] && isAnyCast(ret->list.data[i]))
         {
-            cg->cgraph->addDependencyOf(constraint.get(), target);
-            if (auto psc = get<PackSubtypeConstraint>(*constraint); psc && psc->returns)
-            {
-                if (previous)
-                    cg->cgraph->addDependencyOf(previous, constraint.get());
-
-                previous = constraint.get();
-            }
+            values[i] = builtinTypes->neverType;
+            replaced = true;
         }
-    );
+    }
+
+    if (!replaced)
+        return exprTypes;
+    return arena->addTypePack(TypePack{std::move(values), tail});
 }
 
 struct HasFreeType : TypeOnceVisitor
@@ -1706,6 +1844,9 @@ void ConstraintGenerator::prototypeClass(
     getMutable<ExternType>(externTy)->relation.emplace(Obj{classInstanceTy});
     getMutable<ExternType>(classInstanceTy)->relation.emplace(Klass{externTy});
 
+    attachDeclarationComments(classInstanceTy, classDecl->location);
+    attachDeclarationComments(externTy, classDecl->location);
+
     // Luwu Traits (rfcs/classes/traits.md): `class<Trait>`, the class value of any class implementing the trait (see TraitInfo). It has the trait's
     // functions, expected ones included since every implementing class defines them, and is callable when the trait
     // expects `__init` (typed in visitClass, once that signature is resolved). Its name differs from the trait value's,
@@ -2349,7 +2490,7 @@ void ConstraintGenerator::checkQualifiedImplementation(
     NotNull<Scope> constraintScope{sig.signatureScope ? sig.signatureScope.get() : sig.bodyScope.get()};
     std::unique_ptr<Constraint> c =
         std::make_unique<Constraint>(constraintScope, method.function->location, GeneralizationConstraint{functionType, sig.signature});
-    addAllAsDependenciesAndChainReturns(start, end, this, NotNull{c.get()});
+    addAllAsDependencies(start, end, this, NotNull{c.get()});
 
     NotNull<Constraint> generalization = addConstraint(scope, std::move(c));
     getMutable<BlockedType>(functionType)->setOwner(generalization);
@@ -3547,6 +3688,8 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
         return visit(scope, a);
     else if (auto a = stat->as<AstStatCompoundAssign>())
         return visit(scope, a);
+    else if (auto p = stat->as<AstStatPush>())
+        return visit(scope, p);
     else if (auto f = stat->as<AstStatFunction>())
         return visit(scope, f);
     else if (auto f = stat->as<AstStatLocalFunction>())
@@ -3577,6 +3720,142 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
     }
 }
 
+ConstraintGenerator::ResolvedAnnotation ConstraintGenerator::resolveLocalAnnotation(const ScopePtr& scope, AstLocal* local)
+{
+    if (ResolvedAnnotation* resolved = bundleElementAnnotations.find(local))
+        return *resolved;
+
+    polarity = Polarity::Positive;
+    if (FFlag::LuwuLiteralTypes)
+        return resolveLiteralCheckAnnotation(scope, local->annotation, /* inTypeArguments */ false, /* replaceErrorWithFresh */ false);
+    return ResolvedAnnotation{resolveType(scope, local->annotation, /* inTypeArguments */ false), std::nullopt};
+}
+
+// Luwu bundles: each `.(...)` (Parser::parseDotPositional) that `expr` can evaluate to, looking through parentheses,
+// if-else branches, the values a `do` expression gives and a `match`'s arms
+static void collectDotPositionals(AstExpr* expr, std::vector<AstExprCall*>& out)
+{
+    if (AstExprGroup* group = expr->as<AstExprGroup>())
+    {
+        collectDotPositionals(group->expr, out);
+    }
+    else if (AstExprIfElse* ifElse = expr->as<AstExprIfElse>())
+    {
+        collectDotPositionals(ifElse->trueExpr, out);
+        collectDotPositionals(ifElse->falseExpr, out);
+    }
+    else if (AstExprDo* doExpr = expr->as<AstExprDo>(); doExpr && !doExpr->shorthand)
+    {
+        for (AstStatGive* give : doExpr->gives())
+        {
+            if (!give->item)
+                collectDotPositionals(give->value, out);
+        }
+    }
+    else if (AstExprMatch* match = expr->as<AstExprMatch>())
+    {
+        for (const AstMatchArm& arm : match->arms)
+            collectDotPositionals(arm.value, out);
+    }
+    else if (AstExprCall* call = expr->as<AstExprCall>(); call && call->fromDotPositional)
+    {
+        out.push_back(call);
+    }
+}
+
+// Luwu bundles: how many values the `.(...)` that `expr` evaluates to holds, the first of collectDotPositionals whose size
+// is known. 0 when there's none.
+static size_t dotPositionalSize(AstExpr* expr)
+{
+    std::vector<AstExprCall*> calls;
+    collectDotPositionals(expr, calls);
+
+    for (AstExprCall* call : calls)
+    {
+        if (call->args.size == 0)
+            continue;
+
+        // a last value that's a call or `...` decides the size at runtime
+        AstExpr* last = call->args.data[call->args.size - 1];
+        if (!last->is<AstExprCall>() && !last->is<AstExprVarargs>())
+            return call->args.size;
+    }
+    return 0;
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): a positional pattern on a `.(...)` value gives the bundle its elements'
+// annotations as its expected type, so `const .(format: Format, extension: string) = .("Zip", "zip")` checks "Zip"
+// against `Format` instead of widening it to `string`. An element without an annotation expects nothing, and is `unknown`
+// in the bundle's expected type, which pushes nothing into its value.
+std::optional<TypeId> ConstraintGenerator::expectedBundleType(const ScopePtr& scope, AstStatLocal* statLocal)
+{
+    AstDestructurePattern* pattern = statLocal->destructure;
+    if (!pattern || !pattern->positional || statLocal->vars.size != 1 || statLocal->values.size != 1 || statLocal->vars.data[0]->annotation)
+        return std::nullopt;
+
+    // the bundle class of each fixed size, as the `bundle` library exports them, then `BigBundle` for any larger one
+    static const char* const kBundles[] = {
+        "Bundle0", "Bundle1", "Bundle2", "Bundle3", "Bundle4", "Bundle5", "Bundle6",
+    };
+    static constexpr size_t kBundleCount = sizeof(kBundles) / sizeof(kBundles[0]);
+
+    size_t size = dotPositionalSize(statLocal->values.data[0]);
+    const char* className = size < kBundleCount ? kBundles[size] : "BigBundle";
+    if (size == 0 || pattern->fields.size != size || !globalScope->lookupImportedType("bundle", className))
+        return std::nullopt;
+
+    std::vector<std::optional<TypeId>> elements;
+    std::vector<TypeId> positions;
+    bool annotated = false;
+    for (const AstDestructureField& field : pattern->fields)
+    {
+        AstLocal* local = field.target.location ? nullptr : field.target.local;
+        if (!local || !local->annotation)
+        {
+            elements.push_back(std::nullopt);
+            positions.push_back(builtinTypes->unknownType);
+            continue;
+        }
+
+        ResolvedAnnotation annotation = resolveLocalAnnotation(scope, local);
+        bundleElementAnnotations[local] = annotation;
+        elements.push_back(annotation.type);
+        positions.push_back(annotation.type);
+        annotated = true;
+    }
+
+    if (!annotated)
+        return std::nullopt;
+
+    expectDotPositionalElements(statLocal->values.data[0], elements);
+
+    // a `BigBundle`'s positions are its one type pack
+    std::vector<TypeId> typeArguments;
+    std::vector<TypePackId> packArguments;
+    if (size < kBundleCount)
+        typeArguments = std::move(positions);
+    else
+        packArguments.push_back(arena->addTypePack(std::move(positions)));
+
+    TypeId bundle =
+        arena->addType(PendingExpansionType{AstName{"bundle"}, AstName{className}, std::move(typeArguments), std::move(packArguments)});
+    addConstraint(globalScope, statLocal->location, TypeAliasExpansionConstraint{/* target */ bundle});
+    return bundle;
+}
+
+// Each `.(...)` that `expr` evaluates to (collectDotPositionals) with as many values as there are elements
+void ConstraintGenerator::expectDotPositionalElements(AstExpr* expr, const std::vector<std::optional<TypeId>>& elements)
+{
+    std::vector<AstExprCall*> calls;
+    collectDotPositionals(expr, calls);
+
+    for (AstExprCall* call : calls)
+    {
+        if (call->args.size == elements.size())
+            dotPositionalElementTypes[call] = elements;
+    }
+}
+
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* statLocal)
 {
     std::vector<TypeId> annotatedTypes;
@@ -3588,6 +3867,10 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
 
     std::vector<TypeId> assignees;
     assignees.reserve(statLocal->vars.size);
+
+    // Luwu literal types: a local annotated `literal<B>` takes its value's literal type, so it is inferred like an
+    // unannotated one, with `B` as the expected type
+    std::vector<bool> literalLocals(statLocal->vars.size, false);
 
     // Used to name the first value type, even if it's not placed in varTypes,
     // for the purpose of synthetic name attribution.
@@ -3613,10 +3896,24 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
         if (!firstValueType)
             firstValueType = assignee;
 
+        ResolvedAnnotation annotation{nullptr, std::nullopt};
         if (local->annotation)
+            annotation = resolveLocalAnnotation(scope, local);
+
+        if (annotation.check)
+        {
+            literalLocals[assignees.size() - 1] = true;
+            module->literalLocals[local] = *annotation.check;
+
+            annotatedTypes.push_back(builtinTypes->unknownType);
+            expectedTypes.emplace_back(annotation.type);
+            scope->bindings[local] = Binding{builtinTypes->unknownType, location};
+            inferredBindings[local] = {scope.get(), location, {assignee}};
+        }
+        else if (local->annotation)
         {
             hasAnnotation = true;
-            TypeId annotationTy = resolveType(scope, local->annotation, /* inTypeArguments */ false);
+            TypeId annotationTy = annotation.type;
             annotatedTypes.push_back(annotationTy);
             expectedTypes.emplace_back(annotationTy);
             scope->bindings[local] = Binding{annotationTy, location};
@@ -3640,6 +3937,9 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
         }
     }
 
+    if (std::optional<TypeId> bundle = expectedBundleType(scope, statLocal))
+        expectedTypes[0] = bundle;
+
     Checkpoint start = checkpoint(this);
     TypePackId rvaluePack = checkPack(scope, statLocal->values, expectedTypes).tp;
     Checkpoint end = checkpoint(this);
@@ -3650,13 +3950,26 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
 
     DenseHashSet<BlockedType*> freshBlockedTypes{nullptr};
 
+    for (size_t i = 0; i < statLocal->vars.size && i < head.size(); ++i)
+    {
+        if (!literalLocals[i])
+            continue;
+
+        if (std::optional<TypeId> literal = undecidedLiteral(head[i]))
+            emplaceType<BoundType>(asMutable(follow(head[i])), *literal);
+
+        // The value has to fit `B`. TypeChecker2 reports a value that isn't a literal.
+        if (TypeId* base = module->astResolvedTypes.find(statLocal->vars.data[i]->annotation))
+            addConstraint(scope, statLocal->values.data[std::min(i, statLocal->values.size - 1)]->location, SubtypeConstraint{head[i], *base});
+    }
+
     for (size_t i = 0; i < statLocal->vars.size; ++i)
     {
         LUAU_ASSERT(get<BlockedType>(assignees[i]));
         TypeIds* localDomain = localTypes.find(assignees[i]);
         LUAU_ASSERT(localDomain);
 
-        if (statLocal->vars.data[i]->annotation)
+        if (statLocal->vars.data[i]->annotation && !literalLocals[i])
         {
             localDomain->insert(annotatedTypes[i]);
             if (i >= head.size() && tail)
@@ -3726,12 +4039,12 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
 
     importRequiredTypes(scope, statLocal);
 
-    if (statLocal->values.size > 0)
+    // Luwu: a table or function written as a local's value is that local's own (attachDeclarationComments)
+    for (AstExpr* value : statLocal->values)
     {
-        bindModuleAliases(scope, statLocal);
-
-        if (FFlag::LuwuClasses)
-            bindImportedTypes(scope, statLocal);
+        bool literal = value->is<AstExprTable>() || value->is<AstExprFunction>();
+        if (TypeId* valueTy = literal ? module->astTypes.find(value) : nullptr)
+            attachDeclarationComments(*valueTy, statLocal->location);
     }
 
     return ControlFlow::None;
@@ -3775,6 +4088,11 @@ void ConstraintGenerator::importRequiredTypes(const ScopePtr& scope, AstStatLoca
                 tf = TypeFun{{}, {}, builtinTypes->anyType};
         }
     }
+
+    bindModuleAliases(scope, statLocal);
+
+    if (FFlag::LuwuClasses)
+        bindImportedTypes(scope, statLocal);
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): how deep `hub.a.b` paths to modules a required module exports go, and how
@@ -4226,6 +4544,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocalFuncti
     scope->bindings[function->name] = Binding{functionType, function->name->location};
 
     FunctionSignature sig = checkFunctionSignature(scope, nullptr, function->func, /* expectedType */ std::nullopt, function->name->location);
+    attachDeclarationComments(sig.signature, function->location);
     sig.bodyScope->bindings[function->name] = Binding{sig.signature, function->name->location};
 
     DefId def = dfg->getDef(function->name);
@@ -4244,7 +4563,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocalFuncti
 
     propagateDeprecatedAttributeToConstraint(c->c, function->func);
 
-    addAllAsDependenciesAndChainReturns(start, end, this, NotNull{c.get()});
+    addAllAsDependencies(start, end, this, NotNull{c.get()});
     getMutable<BlockedType>(functionType)->setOwner(addConstraint(scope, std::move(c)));
     module->astTypes[function->func] = functionType;
 
@@ -4258,6 +4577,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatFunction* f
 
     Checkpoint start = checkpoint(this);
     FunctionSignature sig = checkFunctionSignature(scope, nullptr, function->func, /* expectedType */ std::nullopt, function->name->location);
+    attachDeclarationComments(sig.signature, function->location);
 
     DefId def = dfg->getDef(function->name);
 
@@ -4317,7 +4637,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatFunction* f
 
     propagateDeprecatedAttributeToConstraint(c->c, function->func);
 
-    addAllAsDependenciesAndChainReturns(start, end, this, c);
+    addAllAsDependencies(start, end, this, c);
     std::optional<TypeId> existingFunctionTy = follow(lookup(scope, function->name->location, def));
 
     if (AstExprLocal* localName = function->name->as<AstExprLocal>())
@@ -4370,7 +4690,13 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatReturn* ret
     for (TypeId ty : scope->returnType)
         expectedTypes.emplace_back(ty);
     TypePackId exprTypes = checkPack(scope, ret->list, expectedTypes).tp;
-    addConstraint(scope, ret->location, PackSubtypeConstraint{exprTypes, scope->returnType, /*returns*/ true});
+    PackSubtypeConstraint returnConstraint{exprTypes, scope->returnType};
+    if (const ReturnShape* shape = inferredReturnShapes.find(scope->returnType))
+    {
+        returnConstraint.subPack = withoutAnyCasts(arena, builtinTypes, *shape, ret, exprTypes);
+        returnConstraint.inferredReturn = true;
+    }
+    addConstraint(scope, ret->location, std::move(returnConstraint));
 
     exportReturnedTypes(scope, ret);
 
@@ -4466,6 +4792,57 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatAssign* ass
     {
         visitLValue(scope, assign->vars.data[i], valueTypes[i]);
     }
+
+    return ControlFlow::None;
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): see PushConstraint
+ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatPush* push)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+
+    TypeId containerType = check(scope, push->target).ty;
+
+    // A container with a declared element type (`const comments: { Comment } = {}`) is what each value is checked
+    // against, so a table literal is inferred against it like an annotated local's value is.
+    std::optional<TypeId> elementType;
+    const TableType* containerTable = get<TableType>(follow(containerType));
+    if (containerTable && containerTable->indexer && follow(containerTable->indexer->indexType) == builtinTypes->numberType)
+        elementType = containerTable->indexer->indexResultType;
+
+    // The values settle first: an expected type they take on the way (a literal's singletons) is part of what's pushed
+    std::vector<std::optional<TypeId>> expectedTypes(push->values.size, elementType);
+    Checkpoint valuesStart = checkpoint(this);
+    TypePackId valuesPack = checkPack(scope, push->values, expectedTypes).tp;
+    Checkpoint valuesEnd = checkpoint(this);
+
+    // A container whose type isn't known yet passes its element type to the values through the solver, before their own
+    // constraints run, as a parameter's type reaches an argument. A call's values are fixed by its own constraints (a
+    // bundle literal's), so only a call needs it: anything else still takes the element type when it's pushed.
+    bool pushesCall = std::any_of(push->values.begin(), push->values.end(), [](AstExpr* value) { return value->is<AstExprCall>(); });
+    if (!elementType && pushesCall)
+    {
+        TypeId element = arena->addType(BlockedType{});
+        NotNull<Constraint> indexer =
+            addConstraint(scope, push->target->location, HasIndexerConstraint{element, containerType, builtinTypes->numberType});
+        getMutable<BlockedType>(element)->setOwner(indexer);
+
+        for (AstExpr* value : push->values)
+        {
+            TypeId* valueType = module->astTypes.find(value);
+            if (!valueType)
+                continue;
+            NotNull<Constraint> expected = addConstraint(
+                scope,
+                value->location,
+                PushTypeConstraint{element, *valueType, NotNull{&module->astTypes}, NotNull{&module->astExpectedTypes}, NotNull{value}}
+            );
+            addAllAsReverseDependencies(valuesStart, valuesEnd, this, expected);
+        }
+    }
+
+    NotNull<Constraint> pushConstraint = addConstraint(scope, push->location, PushConstraint{containerType, valuesPack});
+    addAllAsDependencies(valuesStart, valuesEnd, this, pushConstraint);
 
     return ControlFlow::None;
 }
@@ -4824,12 +5201,33 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeAlias* 
 
     resolveGenericDefaultParameters(defnScope, alias, bindingIt->second);
 
-    TypeId ty = resolveType(
-        defnScope,
-        alias->type,
-        /* inTypeArguments */ false,
-        /* replaceErrorWithFresh */ false
-    );
+    // Luwu literal types: `type Alias = V<literal<B>>` (or `literal<B>`, or a union with one of those as a member) names a
+    // literal annotation
+    TypeId ty = nullptr;
+    if (FFlag::LuwuLiteralTypes && hasLiteralMember(*defnScope, alias->type))
+    {
+        polarity = Polarity::Positive;
+        ty = resolveLiteralAliasBody(defnScope, alias->type);
+    }
+    else
+        ty = resolveType(
+            defnScope,
+            alias->type,
+            /* inTypeArguments */ false,
+            /* replaceErrorWithFresh */ false
+        );
+
+    // Luwu: a table or function type written out here is this alias's own, so the comments around the alias are about it
+    if (alias->type->is<AstTypeTable>() || alias->type->is<AstTypeFunction>())
+        attachDeclarationComments(ty, alias->location);
+    // Luwu doc references: so is one written as a type function's argument (`type Lib = Freeze<{ ... }>`), which the type
+    // function then sees in its argument's metadata. The declaration runs to the end of that argument, so a comment after
+    // its closing brace is beside it.
+    else if (AstType* literal = typeFunctionLiteralArgument(*defnScope, alias->type))
+    {
+        if (TypeId* literalTy = module->astResolvedTypes.find(literal))
+            attachDeclarationComments(*literalTy, Location{alias->location.begin, literal->location.end});
+    }
 
     // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): a non-generic alias of a generic class instantiation prints
     // as its name (see PendingExpansionType::aliasName)
@@ -4916,7 +5314,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeFunctio
     getMutable<BlockedType>(generalizedTy)->setOwner(gc);
     interiorFreeTypes.pop_back();
 
-    addAllAsDependenciesAndChainReturns(startCheckpoint, endCheckpoint, this, gc);
+    addAllAsDependencies(startCheckpoint, endCheckpoint, this, gc);
     std::optional<TypeId> existingFunctionTy = environmentScope->lookup(function->name);
 
     if (!existingFunctionTy)
@@ -4960,7 +5358,7 @@ static bool isMetamethod(const Name& name)
     return name == "__index" || name == "__newindex" || name == "__call" || name == "__concat" || name == "__unm" || name == "__add" ||
            name == "__sub" || name == "__mul" || name == "__div" || name == "__mod" || name == "__pow" || name == "__tostring" ||
            name == "__metatable" || name == "__eq" || name == "__lt" || name == "__le" || name == "__mode" || name == "__iter" || name == "__len" ||
-           name == "__idiv";
+           name == "__idiv" || isPushOrPopMetamethod(name);
 }
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExternType* declaredExternType)
@@ -5033,6 +5431,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
 
     TypeId externTy =
         arena->addType(ExternType(std::move(className), {}, superTy, std::nullopt, {}, {}, module->name, declaredExternType->location));
+    attachDeclarationComments(externTy, declaredExternType->location);
     ExternType* etv = getMutable<ExternType>(externTy);
 
     TypeId metaTy = arena->addType(TableType{TableState::Sealed, scope->level, scope.get()});
@@ -5315,6 +5714,102 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunc
     return ControlFlow::None;
 }
 
+// Luwu: puts the comments directly above `declaration` (each starting its own line, with no gap) and the first one to the
+// right of its first line into `ty`'s metadata, as
+// `comments = { { prefix = "--", message = "...", location = "above" | "side" }, ... }`, top to bottom. Only a type
+// the declaration made gets them: one shared with other declarations (builtins, an alias of an alias) is left alone.
+void ConstraintGenerator::attachDeclarationComments(TypeId ty, const Location& declaration)
+{
+    ty = follow(ty);
+    bool declaredHere = get<TableType>(ty) || get<FunctionType>(ty) || get<MetatableType>(ty) || get<ExternType>(ty);
+    if (!declaredHere || ty->persistent || ty->metadata)
+        return;
+
+    if (std::shared_ptr<TypeMetadataTable> metadata = declarationComments(declaration))
+        asMutable(ty)->metadata = std::move(metadata);
+}
+
+std::shared_ptr<TypeMetadataTable> ConstraintGenerator::declarationComments(const Location& declaration)
+{
+    if (!sourceComments || sourceComments->empty())
+        return nullptr;
+
+    const std::vector<SourceComment>& comments = *sourceComments;
+    auto onDeclarationLine = std::lower_bound(
+        comments.begin(),
+        comments.end(),
+        declaration.begin.line,
+        [](const SourceComment& comment, unsigned line)
+        {
+            return comment.location.begin.line < line;
+        }
+    );
+
+    std::vector<const SourceComment*> found;
+    size_t aboveCount = 0;
+    unsigned nextLine = declaration.begin.line;
+    for (auto it = onDeclarationLine; it != comments.begin(); --it)
+    {
+        const SourceComment& above = *std::prev(it);
+        if (!above.startsLine || above.location.end.line + 1 != nextLine)
+            break;
+
+        found.push_back(&above);
+        nextLine = above.location.begin.line;
+    }
+    std::reverse(found.begin(), found.end());
+    aboveCount = found.size();
+
+    for (auto it = onDeclarationLine; it != comments.end() && it->location.begin.line == declaration.begin.line; ++it)
+    {
+        if (!it->startsLine && it->location.begin.column > declaration.begin.column)
+        {
+            found.push_back(&*it);
+            break;
+        }
+    }
+
+    // and the first comment after a multi-line declaration's end, on its last line (`} --- the config`)
+    if (declaration.end.line > declaration.begin.line)
+    {
+        auto onLastLine = std::lower_bound(
+            comments.begin(),
+            comments.end(),
+            declaration.end.line,
+            [](const SourceComment& comment, unsigned line)
+            {
+                return comment.location.begin.line < line;
+            }
+        );
+        for (auto it = onLastLine; it != comments.end() && it->location.begin.line == declaration.end.line; ++it)
+        {
+            if (it->location.begin.column >= declaration.end.column)
+            {
+                found.push_back(&*it);
+                break;
+            }
+        }
+    }
+
+    if (found.empty())
+        return nullptr;
+
+    auto list = std::make_shared<TypeMetadataTable>();
+    for (size_t i = 0; i < found.size(); ++i)
+    {
+        auto entry = std::make_shared<TypeMetadataTable>();
+        entry->entries.emplace_back(std::string("prefix"), found[i]->prefix);
+        entry->entries.emplace_back(std::string("message"), found[i]->message);
+        entry->entries.emplace_back(std::string("location"), std::string(i < aboveCount ? "above" : "side"));
+        list->entries.emplace_back(double(i + 1), std::shared_ptr<const TypeMetadataTable>(std::move(entry)));
+    }
+
+    auto metadata = std::make_shared<TypeMetadataTable>();
+    metadata->entries.emplace_back(std::string("comments"), std::shared_ptr<const TypeMetadataTable>(std::move(list)));
+    metadata->docContext = MetadataDocContext{module->name, declaration};
+    return metadata;
+}
+
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatClass* statClass)
 {
     LUAU_ASSERT(FFlag::LuwuClasses);
@@ -5365,6 +5860,8 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
     // the methods below are deliberately not checked in.
     ScopePtr initializerScope = bodyScope;
     std::vector<TypeId> primaryCtorParamTypes;
+    // Luwu literal types: the constructor's literal parameters, counting the class value (or, for `__init`, the instance)
+    std::vector<FunctionType::LiteralParameter> primaryCtorLiteralParams;
 
     // Luwu Traits (rfcs/classes/traits.md): the object `Self` in a trait's defaults is the class of, known by the trait
     if (AstLocal* initSelf = statClass->initSelf)
@@ -5397,7 +5894,19 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
 
             if (param->annotation)
             {
-                paramTy = resolveType(bodyScope, param->annotation, /* inTypeArguments */ false);
+                polarity = Polarity::Positive;
+                size_t literalsBefore = primaryCtorLiteralParams.size();
+                paramTy = resolveParameterAnnotation(
+                    bodyScope,
+                    param->annotation,
+                    i + 1,
+                    /* variadic */ false,
+                    primaryCtorLiteralParams,
+                    /* inTypeArguments */ false,
+                    /* replaceErrorWithFresh */ false
+                );
+                if (primaryCtorLiteralParams.size() > literalsBefore)
+                    module->literalLocals[param] = primaryCtorLiteralParams.back();
 
                 // as with a default function argument, the default has to fit the annotation
                 if (paramDefault)
@@ -5669,7 +6178,7 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                             gc->classGenericPacks.push_back(param.tp);
                     }
 
-                    addAllAsDependenciesAndChainReturns(start, end, this, NotNull{c.get()});
+                    addAllAsDependencies(start, end, this, NotNull{c.get()});
 
                     NotNull<Constraint> generalization = addConstraint(scope, std::move(c));
                     getMutable<BlockedType>(functionType)->setOwner(generalization);
@@ -5742,7 +6251,10 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
 
         // keep the parameter names, so tooling prints `Cat(name: string, age: number)`
         if (FunctionType* newCtorFtv = getMutable<FunctionType>(newCtorTy))
+        {
             newCtorFtv->argNames = argNames;
+            newCtorFtv->literalParameters = primaryCtorLiteralParams;
+        }
 
         if (classDeclRecord->ctorTy && is<BlockedType>(follow(classDeclRecord->ctorTy)))
             emplaceType<BoundType>(asMutable(follow(classDeclRecord->ctorTy)), newCtorTy);
@@ -5757,7 +6269,10 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
         });
 
         if (FunctionType* newInitFtv = getMutable<FunctionType>(newInitTy))
+        {
             newInitFtv->argNames = std::move(argNames);
+            newInitFtv->literalParameters = std::move(primaryCtorLiteralParams);
+        }
 
         if (classDeclRecord->primaryInitTy && is<BlockedType>(follow(classDeclRecord->primaryInitTy)))
             emplaceType<BoundType>(asMutable(follow(classDeclRecord->primaryInitTy)), newInitTy);
@@ -6026,6 +6541,10 @@ InferencePack ConstraintGenerator::checkExprCall(
         addArgument(arg);
 
     std::vector<std::optional<TypeId>> expectedTypesForCall = getExpectedCallTypesForFunctionOverloads(fnType);
+
+    // Luwu Destructuring (rfcs/destructuring.md): a `.(...)` value destructured by an annotated positional pattern
+    if (const std::vector<std::optional<TypeId>>* elements = call->fromDotPositional ? dotPositionalElementTypes.find(call) : nullptr)
+        expectedTypesForCall.assign(elements->begin(), elements->end());
 
     module->astOriginalCallTypes[call->func] = fnType;
 
@@ -6375,6 +6894,8 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
         result = check(scope, table, expectedType);
     else if (auto unary = expr->as<AstExprUnary>())
         result = check(scope, unary);
+    else if (auto pop = expr->as<AstExprPop>())
+        result = check(scope, pop);
     else if (auto binary = expr->as<AstExprBinary>())
         result = check(scope, binary, expectedType);
     else if (auto ifElse = expr->as<AstExprIfElse>())
@@ -6719,7 +7240,7 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprFunction* fun
 
     getMutable<BlockedType>(generalizedTy)->setOwner(gc);
 
-    addAllAsDependenciesAndChainReturns(startCheckpoint, endCheckpoint, this, gc);
+    addAllAsDependencies(startCheckpoint, endCheckpoint, this, gc);
     if (generalize && hasFreeType(sig.signature))
     {
         return Inference{generalizedTy};
@@ -6728,6 +7249,17 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprFunction* fun
     {
         return Inference{sig.signature};
     }
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): see popTypeFunction
+Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprPop* pop)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+
+    TypeId containerType = check(scope, pop->expr).ty;
+    TypeId resultType = createTypeFunctionInstance(builtinTypes->typeFunctions->popFunc, {containerType}, {}, scope, pop->location);
+
+    return Inference{resultType};
 }
 
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprUnary* unary)
@@ -6762,7 +7294,44 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprUnary* unary)
 
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprBinary* binary, std::optional<TypeId> expectedType)
 {
-    return checkAstExprBinary(scope, binary->location, binary->op, binary->left, binary->right, expectedType);
+    Inference result = checkAstExprBinary(scope, binary->location, binary->op, binary->left, binary->right, expectedType);
+    if (RefinementId size = bundleSizeRefinement(scope, binary))
+        result.refinement = result.refinement ? refinementArena.conjunction(result.refinement, size) : size;
+    return result;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a bundle pattern's size test (`#value == 2`) narrows
+// `value` to the bundles of that size, so `.(x, y) | .(x, y, z)` reads `z` only from the bundles that have it. Its
+// discriminant is the bundle class of that size with every position `unknown`, which every bundle of the size is. Bundles
+// past the fixed sizes, and `..` patterns, keep what `typeof(value) == "bundle"` narrowed them to.
+RefinementId ConstraintGenerator::bundleSizeRefinement(const ScopePtr& scope, AstExprBinary* binary)
+{
+    static const char* const kBundles[] = {"Bundle0", "Bundle1", "Bundle2", "Bundle3", "Bundle4", "Bundle5", "Bundle6"};
+    static constexpr size_t kBundleCount = sizeof(kBundles) / sizeof(kBundles[0]);
+
+    if (!binary->fromBundlePattern || binary->op != AstExprBinary::CompareEq)
+        return nullptr;
+
+    AstExprUnary* size = binary->left->as<AstExprUnary>();
+    AstExprConstantNumber* count = binary->right->as<AstExprConstantNumber>();
+    if (!size || size->op != AstExprUnary::Op::Len || !count || count->value < 0 || count->value >= double(kBundleCount))
+        return nullptr;
+
+    const RefinementKey* key = dfg->getRefinementKey(size->expr);
+    std::optional<TypeFun> sized = key ? globalScope->lookupImportedType("bundle", kBundles[size_t(count->value)]) : std::nullopt;
+    if (!sized)
+        return nullptr;
+
+    TypeId sizedTemplate = follow(sized->type);
+    std::vector<TypeId> positions(size_t(count->value), builtinTypes->unknownType);
+    if (positions.empty())
+        return refinementArena.proposition(key, sizedTemplate);
+
+    std::vector<TypeId> copiedReferences;
+    TypeId anyOfSize = instantiateGenericNominal(arena, sizedTemplate, std::move(positions), {}, copiedReferences);
+    for (TypeId reference : copiedReferences)
+        addConstraint(scope, binary->location, TypeAliasExpansionConstraint{reference});
+    return refinementArena.proposition(key, anyOfSize);
 }
 
 Inference ConstraintGenerator::checkAstExprBinary(
@@ -7141,7 +7710,25 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatComprehensi
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTypeAssertion* typeAssert)
 {
     check(scope, typeAssert->expr, std::nullopt);
-    return Inference{resolveType(scope, typeAssert->annotation, /* inTypeArguments */ false)};
+
+    // Luwu literal types: a cast to a literal type is a `B` that passes as a literal (Module::literalAssertions)
+    std::optional<ResolvedLiteral> literal;
+    if (AstTypeReference* literalRef = findLiteralReference(*scope, typeAssert->annotation))
+    {
+        polarity = Polarity::Positive;
+        literal = resolveLiteralAnnotation(scope, typeAssert->annotation, literalRef, /* inTypeArguments */ false, false);
+    }
+    else
+    {
+        TypeId asserted = resolveType(scope, typeAssert->annotation, /* inTypeArguments */ false);
+        literal = literalOfType(asserted);
+        if (!literal)
+            return Inference{asserted};
+    }
+
+    module->astResolvedTypes[typeAssert->annotation] = literal->base;
+    module->literalAssertions.insert(typeAssert);
+    return Inference{literal->base};
 }
 
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprInterpString* interpString)
@@ -7738,6 +8325,8 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     // return type gets propagated to bodyScope.
     returnType = freshTypePack(signatureScope, Polarity::Positive);
     signatureScope->returnType = returnType;
+    if (std::optional<ReturnShape> shape = inferredReturnShape(fn))
+        inferredReturnShapes[returnType] = *shape;
 
     bodyScope = childScope(fn->body, signatureScope);
 
@@ -7765,6 +8354,7 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
 
     std::vector<TypeId> argTypes;
     std::vector<std::optional<FunctionArgument>> argNames;
+    std::vector<FunctionType::LiteralParameter> literalParameters;
     TypePack expectedArgPack;
 
     const FunctionType* expectedFunction = expectedType ? get<FunctionType>(*expectedType) : nullptr;
@@ -7925,7 +8515,19 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
         bool hasSpecifiedArgTy = false;
         if (local->annotation)
         {
-            argTy = resolveType(signatureScope, local->annotation, /* inTypeArguments */ false, /* replaceErrorWithFresh*/ true, Polarity::Negative);
+            polarity = Polarity::Negative;
+            size_t literalsBefore = literalParameters.size();
+            argTy = resolveParameterAnnotation(
+                signatureScope,
+                local->annotation,
+                argTypes.size(),
+                /* variadic */ false,
+                literalParameters,
+                /* inTypeArguments */ false,
+                /* replaceErrorWithFresh*/ true
+            );
+            if (literalParameters.size() > literalsBefore)
+                module->literalLocals[local] = literalParameters.back();
             hasSpecifiedArgTy = true;
         }
         else
@@ -7979,7 +8581,25 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
 
     if (fn->vararg)
     {
-        if (fn->varargAnnotation)
+        // Luwu literal types: also an alias of one, which only resolving it tells apart, so any `...: T` goes this way
+        AstType* variadicAnnotation = FFlag::LuwuLiteralTypes ? variadicParameterAnnotation(fn->varargAnnotation) : nullptr;
+        if (variadicAnnotation)
+        {
+            // The polarity resolveTypePack gives the variadic annotation below
+            polarity = Polarity::Positive;
+            TypeId base = resolveParameterAnnotation(
+                signatureScope,
+                variadicAnnotation,
+                argTypes.size(),
+                /* variadic */ true,
+                literalParameters,
+                /* inTypeArguments */ false,
+                /* replaceErrorWithFresh */ true
+            );
+            varargPack = arena->addTypePack(TypePackVar{VariadicTypePack{base}});
+            module->astResolvedTypePacks[fn->varargAnnotation] = varargPack;
+        }
+        else if (fn->varargAnnotation)
         {
             TypePackId annotationType =
                 resolveTypePack(signatureScope, fn->varargAnnotation, /* inTypeArguments */ false, /* replaceErrorWithFresh */ true);
@@ -8061,6 +8681,7 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     actualFunction.generics = std::move(genericTypes);
     actualFunction.genericPacks = std::move(genericTypePacks);
     actualFunction.argNames = std::move(argNames);
+    actualFunction.literalParameters = std::move(literalParameters);
     actualFunction.hasSelf = FFlag::LuwuClasses ? hasSelf : fn->self != nullptr;
 
     FunctionDefinition defn;
@@ -8132,6 +8753,255 @@ std::optional<FunctionType::TruthyRefinement> ConstraintGenerator::resolveTruthy
     }
 
     return FunctionType::TruthyRefinement{*argIndex, refined};
+}
+
+TypeId ConstraintGenerator::resolveParameterAnnotation(
+    const ScopePtr& scope,
+    AstType* annotation,
+    size_t argIndex,
+    bool variadic,
+    std::vector<FunctionType::LiteralParameter>& literalParameters,
+    bool inTypeArguments,
+    bool replaceErrorWithFresh
+)
+{
+    ResolvedAnnotation resolved = resolveLiteralCheckAnnotation(scope, annotation, inTypeArguments, replaceErrorWithFresh);
+    if (resolved.check)
+        literalParameters.push_back(FunctionType::LiteralParameter{*resolved.check, argIndex, variadic});
+    return resolved.type;
+}
+
+// Luwu literal types: whether `annotation` is a literal annotation, or a union (in parentheses or not) with one as a member
+bool ConstraintGenerator::hasLiteralMember(const Scope& scope, AstType* annotation)
+{
+    if (findLiteralReference(scope, annotation))
+        return true;
+    if (AstTypeGroup* group = annotation->as<AstTypeGroup>())
+        return hasLiteralMember(scope, group->type);
+    if (AstTypeUnion* options = annotation->as<AstTypeUnion>())
+    {
+        for (AstType* option : options->types)
+        {
+            if (hasLiteralMember(scope, option))
+                return true;
+        }
+    }
+    return false;
+}
+
+TypeId ConstraintGenerator::resolveLiteralAliasBody(const ScopePtr& scope, AstType* annotation)
+{
+    TypeId result = nullptr;
+    if (AstTypeReference* literalRef = findLiteralReference(*scope, annotation))
+    {
+        ResolvedLiteral literal = resolveLiteralAnnotation(scope, annotation, literalRef, /* inTypeArguments */ false, false);
+        result = literal.validator ? literal.validator : literal.placeholder;
+    }
+    else if (AstTypeGroup* group = annotation->as<AstTypeGroup>())
+        result = resolveLiteralAliasBody(scope, group->type);
+    else if (AstTypeUnion* options = annotation->as<AstTypeUnion>())
+    {
+        std::vector<TypeId> members;
+        bool seenLiteral = false;
+        for (AstType* option : options->types)
+        {
+            // A member can be an alias of a literal annotation (`CssLength`), so it's resolved before it's counted
+            TypeId member = resolveLiteralAliasBody(scope, option);
+            bool literal = literalOfType(member) || literalUnionOfType(member);
+            if (literal && seenLiteral)
+                reportError(option->location, GenericError{kOneLiteralMemberMessage});
+            seenLiteral = seenLiteral || literal;
+            members.push_back(member);
+        }
+        result = arena->addType(UnionType{std::move(members)});
+    }
+    else
+        return resolveType_(scope, annotation, /* inTypeArguments */ false);
+
+    module->astResolvedTypes[annotation] = result;
+    return result;
+}
+
+std::optional<ConstraintGenerator::ResolvedAnnotation> ConstraintGenerator::literalUnionOfType(TypeId ty)
+{
+    const UnionType* options = get<UnionType>(follow(ty));
+    if (!options)
+        return std::nullopt;
+
+    std::optional<LiteralCheck> check;
+    std::vector<TypeId> members;
+    std::vector<TypeId> alternatives;
+    for (TypeId option : options)
+    {
+        std::optional<ResolvedLiteral> literal = literalOfType(option);
+        if (!literal)
+        {
+            members.push_back(option);
+            alternatives.push_back(option);
+            continue;
+        }
+
+        // Two literal members were reported where the alias is written
+        if (check)
+            return std::nullopt;
+
+        TypeId placeholder = literal->validator ? literal->placeholder : nullptr;
+        check = LiteralCheck{literal->base, literal->validator, placeholder};
+        members.push_back(literal->base);
+    }
+
+    if (!check)
+        return std::nullopt;
+
+    if (alternatives.size() == 1)
+        check->alternatives = alternatives.front();
+    else if (alternatives.size() > 1)
+        check->alternatives = arena->addType(UnionType{std::move(alternatives)});
+    return ResolvedAnnotation{arena->addType(UnionType{std::move(members)}), check};
+}
+
+ConstraintGenerator::ResolvedAnnotation ConstraintGenerator::resolveLiteralCheckAnnotation(
+    const ScopePtr& scope,
+    AstType* annotation,
+    bool inTypeArguments,
+    bool replaceErrorWithFresh
+)
+{
+    // A union with a literal annotation among its members (`V<literal<B>>?`, `V<literal<B>> | Token | number`): a value
+    // that fits the other members passes unchecked
+    if (AstTypeUnion* options = annotation->as<AstTypeUnion>(); options && options->types.size > 1)
+    {
+        std::optional<LiteralCheck> check;
+        std::vector<TypeId> members;
+        std::vector<TypeId> alternatives;
+        for (AstType* option : options->types)
+        {
+            ResolvedAnnotation member = resolveLiteralCheckAnnotation(scope, option, inTypeArguments, replaceErrorWithFresh);
+            members.push_back(member.type);
+            if (!member.check)
+                alternatives.push_back(member.type);
+            else if (check)
+                reportError(option->location, GenericError{kOneLiteralMemberMessage});
+            else
+            {
+                // A nested union's own alternatives (`(V<literal<B>> | Token)?`) are this one's too
+                check = member.check;
+                if (check->alternatives)
+                    alternatives.push_back(check->alternatives);
+            }
+        }
+
+        weakenUnknownMembers(options, members);
+        TypeId unionTy = arena->addType(UnionType{std::move(members)});
+        module->astResolvedTypes[options] = unionTy;
+        // Every member literal (reported above) leaves no alternatives
+        if (check && alternatives.size() == 1)
+            check->alternatives = alternatives.front();
+        else if (check && alternatives.size() > 1)
+            check->alternatives = arena->addType(UnionType{std::move(alternatives)});
+        return ResolvedAnnotation{unionTy, check};
+    }
+
+    if (AstTypeGroup* group = annotation->as<AstTypeGroup>())
+    {
+        ResolvedAnnotation inner = resolveLiteralCheckAnnotation(scope, group->type, inTypeArguments, replaceErrorWithFresh);
+        module->astResolvedTypes[group] = inner.type;
+        return inner;
+    }
+
+    std::optional<ResolvedLiteral> literal;
+    if (AstTypeReference* literalRef = findLiteralReference(*scope, annotation))
+        literal = resolveLiteralAnnotation(scope, annotation, literalRef, inTypeArguments, replaceErrorWithFresh);
+    else
+    {
+        // An alias of one (`type Alias = V<literal<string>>`, then `name: Alias`), or of a union with one as a member
+        TypeId resolved = resolveType_(scope, annotation, inTypeArguments, replaceErrorWithFresh);
+        literal = literalOfType(resolved);
+        if (!literal)
+        {
+            std::optional<ResolvedAnnotation> fromUnion = literalUnionOfType(resolved);
+            if (!fromUnion)
+                return ResolvedAnnotation{resolved, std::nullopt};
+
+            module->astResolvedTypes[annotation] = fromUnion->type;
+            return *fromUnion;
+        }
+    }
+
+    // The annotation declares the value's type, which is `B`. TypeChecker2 checks the value against it.
+    module->astResolvedTypes[annotation] = literal->base;
+
+    TypeId placeholder = literal->validator ? literal->placeholder : nullptr;
+    return ResolvedAnnotation{literal->base, LiteralCheck{literal->base, literal->validator, placeholder}};
+}
+
+ConstraintGenerator::ResolvedLiteral ConstraintGenerator::resolveLiteralAnnotation(
+    const ScopePtr& scope,
+    AstType* annotation,
+    AstTypeReference* literalRef,
+    bool inTypeArguments,
+    bool replaceErrorWithFresh
+)
+{
+    TypeId base = resolveLiteralBase(scope, literalRef, inTypeArguments, replaceErrorWithFresh);
+
+    // A generic so that the solver leaves a validator unreduced: nothing can be known about it until a call supplies the
+    // argument. TypeChecker2::checkLiteralParameters substitutes it. Named as written, so a validator prints as
+    // `V<literal<string>>`.
+    TypeId placeholder = arena->addType(GenericType{scope.get(), "literal<" + toString(base) + ">"});
+    getMutable<GenericType>(placeholder)->literalBase = base;
+
+    if (literalRef == annotation)
+    {
+        module->astResolvedTypes[annotation] = placeholder;
+        return ResolvedLiteral{base, placeholder, nullptr};
+    }
+
+    ScopedMemberValue<std::optional<PendingLiteral>> pending(pendingLiteral, PendingLiteral{literalRef, placeholder});
+    TypeId validator = resolveType_(scope, annotation, inTypeArguments, replaceErrorWithFresh);
+    return ResolvedLiteral{base, placeholder, validator};
+}
+
+TypeId ConstraintGenerator::resolveLiteralBase(const ScopePtr& scope, AstTypeReference* literalRef, bool inTypeArguments, bool replaceErrorWithFresh)
+{
+    TypeId base = builtinTypes->errorType;
+    if (literalRef->parameters.size == 1 && literalRef->parameters.data[0].type)
+        base = resolveType_(scope, literalRef->parameters.data[0].type, inTypeArguments, replaceErrorWithFresh);
+    else
+        reportError(literalRef->location, GenericError{"literal<T> takes exactly one type argument, the type the literal belongs to"});
+
+    module->astResolvedTypes[literalRef] = base;
+    return base;
+}
+
+TypePackId ConstraintGenerator::resolveParameterAnnotations(
+    const ScopePtr& scope,
+    const AstTypeList& params,
+    std::vector<FunctionType::LiteralParameter>& literalParameters,
+    bool inTypeArguments,
+    bool replaceErrorWithFresh
+)
+{
+    std::vector<TypeId> head;
+    for (AstType* param : params.types)
+    {
+        TypeId paramTy =
+            resolveParameterAnnotation(scope, param, head.size(), /* variadic */ false, literalParameters, inTypeArguments, replaceErrorWithFresh);
+        head.push_back(paramTy);
+    }
+
+    std::optional<TypePackId> tail;
+    if (AstType* variadic = variadicParameterAnnotation(params.tailType))
+    {
+        TypeId base =
+            resolveParameterAnnotation(scope, variadic, head.size(), /* variadic */ true, literalParameters, inTypeArguments, replaceErrorWithFresh);
+        tail = arena->addTypePack(TypePackVar{VariadicTypePack{base}});
+        module->astResolvedTypePacks[params.tailType] = *tail;
+    }
+    else if (params.tailType)
+        tail = resolveTypePack_(scope, params.tailType, inTypeArguments, replaceErrorWithFresh);
+
+    return addTypePack(std::move(head), tail);
 }
 
 // Luwu try expressions: `X | unknown` means `X | weakunknown`. Plain `unknown` would absorb X, which can't be what
@@ -8409,6 +9279,20 @@ TypeId ConstraintGenerator::resolveReferenceType(
         return createTypeFunctionInstance(builtinTypes->typeFunctions->objectFunc, {valueTy}, {}, scope, ty->location);
     }
 
+    // Luwu literal types: resolveParameterAnnotation has already resolved `B` and made the placeholder this stands for
+    if (isLiteralTypeReference(*scope, ref))
+    {
+        if (pendingLiteral && pendingLiteral->ref == ref)
+        {
+            module->astResolvedTypes[ty] = pendingLiteral->placeholder;
+            return pendingLiteral->placeholder;
+        }
+
+        reportError(ty->location, GenericError{literalNotSupportedHereMessage()});
+        module->astResolvedTypes[ty] = builtinTypes->errorType;
+        return builtinTypes->errorType;
+    }
+
     std::optional<TypeFun> alias;
 
     if (ref->prefix.has_value())
@@ -8519,6 +9403,7 @@ TypeId ConstraintGenerator::resolveTableType(const ScopePtr& scope, AstType* ty,
 {
     TableType::Props props;
     std::optional<TableIndexer> indexer;
+    std::vector<std::pair<Name, LiteralCheck>> literalFields;
 
     Polarity p = polarity;
     for (const AstTableProp& prop : tab->props)
@@ -8528,9 +9413,25 @@ TypeId ConstraintGenerator::resolveTableType(const ScopePtr& scope, AstType* ty,
         // Set the polarity for the inner type
         polarity = polarityOfAccess(prop.access, p);
 
-        TypeId propTy = resolveType_(scope, prop.type, inTypeArguments);
+        TypeId propTy;
+        if (FFlag::LuwuLiteralTypes)
+        {
+            ResolvedAnnotation resolved = resolveLiteralCheckAnnotation(scope, prop.type, inTypeArguments, /* replaceErrorWithFresh */ false);
+            propTy = resolved.type;
+            if (resolved.check)
+                literalFields.emplace_back(prop.name.value, *resolved.check);
+        }
+        else
+            propTy = resolveType_(scope, prop.type, inTypeArguments);
 
         propRef.typeLocation = prop.location;
+
+        // Luwu doc references: the comments around a field are the property's (Property::metadata), whatever its type. A
+        // table or function type written out as the field's type is the field's own too, so it gets them as well (a value
+        // of it keeps them when it leaves the table).
+        propRef.metadata = declarationComments(prop.location);
+        if (prop.type->is<AstTypeTable>() || prop.type->is<AstTypeFunction>())
+            attachDeclarationComments(propTy, prop.location);
 
         // `@deprecated` on a field of a table type: the DeprecatedApi lint already reports on a
         // Property marked this way, so the attribute only has to reach it.
@@ -8587,6 +9488,7 @@ TypeId ConstraintGenerator::resolveTableType(const ScopePtr& scope, AstType* ty,
 
     ttv->definitionModuleName = module->name;
     ttv->definitionLocation = tab->location;
+    ttv->literalFields = std::move(literalFields);
 
     return tableTy;
 }
@@ -8636,7 +9538,13 @@ TypeId ConstraintGenerator::resolveFunctionType(
 
     Polarity p = polarity;
     polarity = invert(polarity);
-    TypePackId argTypes = resolveTypePack_(signatureScope, &tempArgTypes, inTypeArguments, replaceErrorWithFresh);
+    std::vector<FunctionType::LiteralParameter> literalParameters;
+    TypePackId argTypes = nullptr;
+    // Luwu literal types: a parameter annotated as one, or as an alias of one, which only resolving it tells apart
+    if (FFlag::LuwuLiteralTypes)
+        argTypes = resolveParameterAnnotations(signatureScope, fn->argTypes, literalParameters, inTypeArguments, replaceErrorWithFresh);
+    else
+        argTypes = resolveTypePack_(signatureScope, &tempArgTypes, inTypeArguments, replaceErrorWithFresh);
     polarity = p;
     TypePackId returnTypes = resolveReturnTypePack(signatureScope, fn->returnTypes, inTypeArguments, replaceErrorWithFresh);
 
@@ -8649,6 +9557,7 @@ TypeId ConstraintGenerator::resolveFunctionType(
         declaredHint = resolveType_(signatureScope, fn->errorHint, inTypeArguments, replaceErrorWithFresh);
     ftv.errorHint = returnErrorHint(signatureScope, fn->returnTypes, declaredHint, inTypeArguments);
     ftv.isCheckedFunction = fn->isCheckedFunction();
+    ftv.literalParameters = std::move(literalParameters);
     AstAttr* deprecatedAttr = fn->getAttribute(AstAttr::Type::Deprecated);
     ftv.isDeprecatedFunction = deprecatedAttr != nullptr;
     if (deprecatedAttr)

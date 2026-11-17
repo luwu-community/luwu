@@ -7,6 +7,7 @@ target_sources(Luwu.Common PRIVATE
     Common/include/Luau/DenseHash.h
     Common/include/Luau/ExperimentalFlags.h
     Common/include/Luau/HashUtil.h
+    Common/include/Luau/LuwuFlags.h
     Common/include/Luau/InsertionOrderedMap.h
     Common/include/Luau/SmallVector.h
     Common/include/Luau/StringUtils.h
@@ -29,6 +30,7 @@ target_sources(Luwu.Ast PRIVATE
     Ast/include/Luau/Helpifier.h
     Ast/include/Luau/Lexer.h
     Ast/include/Luau/Location.h
+    Ast/include/Luau/LuwonSyntax.h
     Ast/include/Luau/ParseOptions.h
     Ast/include/Luau/Parser.h
     Ast/include/Luau/ParseResult.h
@@ -41,6 +43,7 @@ target_sources(Luwu.Ast PRIVATE
     Ast/src/Helpifier.cpp
     Ast/src/Lexer.cpp
     Ast/src/Location.cpp
+    Ast/src/LuwonSyntax.cpp
     Ast/src/Parser.cpp
     Ast/src/PrettyPrinter.cpp
 )
@@ -102,10 +105,16 @@ target_sources(Luwu.Config PRIVATE
     Config/include/Luau/Config.h
     Config/include/Luau/LinterConfig.h
     Config/include/Luau/LuauConfig.h
+    Config/include/Luau/Luwon.h
+    Config/include/luwon.h
 
     Config/src/Config.cpp
     Config/src/LinterConfig.cpp
     Config/src/LuauConfig.cpp
+    Config/src/Luwon.cpp
+    Config/src/LuwonJson.cpp
+    Config/src/LuwonLib.cpp
+    Config/src/LuwonWrite.cpp
 )
 
 # Luwu.CodeGen Sources
@@ -228,6 +237,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/DumpCFG.h
     Analysis/include/Luau/TypeStateMap.h
     Analysis/include/Luau/DataFlowGraph.h
+    Analysis/include/Luau/DocRefs.h
     Analysis/include/Luau/DcrLogger.h
     Analysis/include/Luau/Def.h
     Analysis/include/Luau/Documentation.h
@@ -274,6 +284,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/ToDot.h
     Analysis/include/Luau/TopoSortStatements.h
     Analysis/include/Luau/ToString.h
+    Analysis/include/Luau/TypeFormat.h
     Analysis/include/Luau/TxnLog.h
     Analysis/include/Luau/Type.h
     Analysis/include/Luau/TypeArena.h
@@ -326,6 +337,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/DumpCFG.cpp
     Analysis/src/TypeStateMap.cpp
     Analysis/src/DataFlowGraph.cpp
+    Analysis/src/DocRefs.cpp
     Analysis/src/DcrLogger.cpp
     Analysis/src/Def.cpp
     Analysis/src/EmbeddedBuiltinDefinitions.cpp
@@ -367,6 +379,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/ToDot.cpp
     Analysis/src/TopoSortStatements.cpp
     Analysis/src/ToString.cpp
+    Analysis/src/TypeFormat.cpp
     Analysis/src/TxnLog.cpp
     Analysis/src/Type.cpp
     Analysis/src/TypeArena.cpp
@@ -473,10 +486,12 @@ target_sources(isocline PRIVATE
 target_sources(Luwu.CLI.lib PRIVATE
     CLI/include/Luau/FileUtils.h
     CLI/include/Luau/Flags.h
+    CLI/include/Luau/LuwonJsonCommand.h
     CLI/include/Luau/VfsNavigator.h
 
     CLI/src/FileUtils.cpp
     CLI/src/Flags.cpp
+    CLI/src/LuwonJsonCommand.cpp
     CLI/src/VfsNavigator.cpp
 )
 
@@ -500,12 +515,20 @@ endif()
 if(TARGET Luwu.Analyze.CLI)
     # Luwu.Analyze.CLI Sources
     target_sources(Luwu.Analyze.CLI PRIVATE
-        CLI/include/Luau/AnalyzeRequirer.h
-
         CLI/src/Analyze.cpp
-        CLI/src/AnalyzeRequirer.cpp
     )
 endif()
+
+# Luwu Analysis C API sources
+target_sources(Luwu.AnalysisApi PRIVATE
+    AnalysisApi/include/luaanalysis.h
+    CLI/include/Luau/AnalyzeRequirer.h
+    CLI/include/Luau/AnalyzeResolvers.h
+
+    AnalysisApi/src/AnalysisApi.cpp
+    CLI/src/AnalyzeRequirer.cpp
+    CLI/src/AnalyzeResolvers.cpp
+)
 
 if(TARGET Luwu.Ast.CLI)
     # Luwu.Ast.CLI Sources
@@ -554,6 +577,7 @@ if(TARGET Luwu.UnitTest)
         tests/JsonEmitter.test.cpp
         tests/Lexer.test.cpp
         tests/Linter.test.cpp
+        tests/Luwon.test.cpp
         tests/LValue.test.cpp
         tests/MismatchExplanation.test.cpp
         tests/Module.test.cpp
@@ -602,8 +626,10 @@ if(TARGET Luwu.UnitTest)
         tests/TypeInfer.doExpr.test.cpp
         tests/TypeInfer.match.test.cpp
         tests/TypeInfer.tableComprehensions.test.cpp
+        tests/TypeInfer.pushPop.test.cpp
         tests/TypeInfer.ifLocal.test.cpp
         tests/TypeInfer.intersectionTypes.test.cpp
+        tests/TypeInfer.docRefs.test.cpp
         tests/TypeInfer.loops.test.cpp
         tests/TypeInfer.modules.test.cpp
         tests/TypeInfer.negations.test.cpp
@@ -643,6 +669,7 @@ if(TARGET Luwu.Conformance)
         tests/DirectFieldAccess.test.cpp
         tests/FeedbackVector.test.cpp
         tests/IrLowering.test.cpp
+        tests/LuwonLoad.test.cpp
         tests/SharedCodeAllocator.test.cpp
         tests/main.cpp)
 endif()
@@ -661,6 +688,7 @@ if(TARGET Luwu.CLI.Test)
         CLI/src/Repl.cpp
         CLI/src/ReplRequirer.cpp
 
+        tests/AnalysisApi.test.cpp
         tests/RegisterCallbacks.h
         tests/RegisterCallbacks.cpp
         tests/Repl.test.cpp

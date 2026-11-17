@@ -58,6 +58,10 @@ Proto* luaF_newproto(lua_State* L)
 
     f->feedbackvec = NULL;
     f->feedbackvecsize = 0;
+    f->sizetablesites = 0;
+    f->tablesiteslisted = 0;
+    f->tablesites = NULL;
+    f->nextsited = NULL;
     f->tryranges = NULL;
     f->sizetryranges = 0;
     f->funid = 0;
@@ -217,6 +221,9 @@ void luaF_freeproto(lua_State* L, Proto* f, lua_Page* page)
 
     if (f->feedbackvec)
         luaM_freearray(L, f->feedbackvec, f->feedbackvecsize, FeedbackVectorSlot, f->memcat);
+
+    if (f->tablesites)
+        luaM_freearray(L, f->tablesites, f->sizetablesites, TableSite, f->memcat);
 
     if (f->tryranges)
         luaM_freearray(L, f->tryranges, f->sizetryranges, LuauTryRange, f->memcat);

@@ -10,10 +10,11 @@
 
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(DebugLuwuMatchExpressions)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
-LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
 
@@ -560,8 +561,50 @@ void BytecodeBuilder::undoEmit(LuauOpcode op)
     LUAU_ASSERT(!insns.empty());
     LUAU_ASSERT((insns.back() & 0xff) == op);
 
+    // Luwu: ported from upstream 0.738 with LuauCompileMoveElision, which undoes MOVEs after locals may have been
+    // recorded around them. Adjust local ranges referencing this instruction
+    for (size_t i = 0; i < debugLocals.size();)
+    {
+        DebugLocal& l = debugLocals[i];
+
+        // If live range start has been removed, the local never existed
+        if (l.startpc == insns.size())
+        {
+            debugLocals.erase(debugLocals.begin() + i);
+            continue;
+        }
+
+        if (l.endpc == insns.size())
+            l.endpc--;
+        i++;
+    }
+
+    for (size_t i = 0; i < typedLocals.size();)
+    {
+        TypedLocal& l = typedLocals[i];
+
+        // If live range start has been removed, the local never existed
+        if (l.startpc == insns.size())
+        {
+            typedLocals.erase(typedLocals.begin() + i);
+            continue;
+        }
+
+        if (l.endpc == insns.size())
+            l.endpc--;
+        i++;
+    }
+
+    // Remove the instruction
     insns.pop_back();
     lines.pop_back();
+}
+
+unsigned BytecodeBuilder::lastInstruction()
+{
+    LUAU_ASSERT(!insns.empty());
+
+    return insns.back();
 }
 
 size_t BytecodeBuilder::emitLabel()
@@ -1534,6 +1577,10 @@ uint8_t BytecodeBuilder::getVersion()
     if (FFlag::LuwuClasses || FFlag::DebugLuwuTryExpressions)
         return LWBC_VERSION_WIP;
 
+    // Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL is WIP bytecode too
+    if (FFlag::LuwuDestructuring)
+        return LWBC_VERSION_WIP;
+
     // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): LOP_PRESIZETABLE is WIP bytecode too
     if (FFlag::LuwuTableComprehensions)
         return LWBC_VERSION_WIP;
@@ -1542,8 +1589,8 @@ uint8_t BytecodeBuilder::getVersion()
     if (FFlag::DebugLuwuMatchExpressions)
         return LWBC_VERSION_WIP;
 
-    // Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL is WIP bytecode too
-    if (FFlag::LuwuDestructuring)
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_PUSH and LOP_POP are WIP bytecode too
+    if (FFlag::DebugLuwuPoperators)
         return LWBC_VERSION_WIP;
 
     return LWBC_VERSION_TARGET;
@@ -2134,6 +2181,19 @@ void BytecodeBuilder::validateInstructions() const
             VCONST(insns[i + 1], String);
             break;
 
+        case LOP_PUSH:
+        {
+            int count = LUAU_INSN_C(insn) - 1;
+            VREG(LUAU_INSN_A(insn));
+            VREGRANGE(LUAU_INSN_B(insn), count);
+        }
+        break;
+
+        case LOP_POP:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            break;
+
         case LOP_GETTABLEBUNDLE:
         case LOP_SETTABLEBUNDLE:
             VREG(LUAU_INSN_A(insn));
@@ -2237,7 +2297,10 @@ void BytecodeBuilder::validateVariadic() const
             LUAU_ASSERT(!variadicSeq);
             variadicSeq = true;
         }
-        else if ((op == LOP_RETURN && LUAU_INSN_B(insn) == 0) || (op == LOP_SETLIST && LUAU_INSN_C(insn) == 0))
+        else if (
+            (op == LOP_RETURN && LUAU_INSN_B(insn) == 0) || (op == LOP_SETLIST && LUAU_INSN_C(insn) == 0) ||
+            (op == LOP_PUSH && LUAU_INSN_C(insn) == 0)
+        )
         {
             // consumer instruction ends a variadic sequence
             LUAU_ASSERT(variadicSeq);
@@ -2992,6 +3055,18 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         formatAppend(result, "INITTRAITS R%d L%d\n", LUAU_INSN_A(insn), targetLabel);
         break;
 
+    case LOP_APPENDTABLE:
+        formatAppend(result, "APPENDTABLE R%d R%d R%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn));
+        break;
+
+    case LOP_PRESIZETABLE:
+    {
+        static const char* const kForms[] = {"ITER_ARRAY", "ITER_HASH", "RANGE_ARRAY", "RANGE_HASH", "TRIM"};
+        LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_PRESIZE_TRIM);
+        formatAppend(result, "PRESIZETABLE R%d R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), kForms[LUAU_INSN_C(insn)]);
+        break;
+    }
+
     case LOP_WRAPRESULT:
         formatAppend(result, "WRAPRESULT R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR ? "ERR" : "OK");
         break;
@@ -3011,23 +3086,19 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         break;
     }
 
-    case LOP_APPENDTABLE:
-        formatAppend(result, "APPENDTABLE R%d R%d R%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn));
-        break;
-
-    case LOP_PRESIZETABLE:
-    {
-        static const char* const kForms[] = {"ITER_ARRAY", "ITER_HASH", "RANGE_ARRAY", "RANGE_HASH", "TRIM"};
-        LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_PRESIZE_TRIM);
-        formatAppend(result, "PRESIZETABLE R%d R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), kForms[LUAU_INSN_C(insn)]);
-        break;
-    }
-
     case LOP_GETQUALIFIED:
         formatAppend(result, "GETQUALIFIED R%d R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), *code);
         dumpConstant(result, *code, false);
         result.append("]\n");
         code++;
+        break;
+
+    case LOP_PUSH:
+        formatAppend(result, "PUSH R%d R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn) - 1);
+        break;
+
+    case LOP_POP:
+        formatAppend(result, "POP R%d R%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn));
         break;
 
     default:

@@ -634,6 +634,13 @@ struct AstJsonEncoder : public AstVisitor
         case AstPatternAlternative::Trait:
             write("kind", std::string_view("trait"));
             break;
+        case AstPatternAlternative::Bundle:
+            write("kind", std::string_view("bundle"));
+            if (alternative.openEnded)
+                write("openEnded", alternative.openEnded);
+            if (alternative.rest)
+                write("rest", alternative.rest);
+            break;
         }
         write("location", alternative.location);
         if (alternative.operand)
@@ -768,6 +775,18 @@ struct AstJsonEncoder : public AstVisitor
             [&]()
             {
                 PROP(op);
+                PROP(expr);
+            }
+        );
+    }
+
+    void write(class AstExprPop* node)
+    {
+        writeNode(
+            node,
+            "AstExprPop",
+            [&]()
+            {
                 PROP(expr);
             }
         );
@@ -1091,6 +1110,19 @@ struct AstJsonEncoder : public AstVisitor
                 PROP(op);
                 PROP(var);
                 PROP(value);
+            }
+        );
+    }
+
+    void write(class AstStatPush* node)
+    {
+        writeNode(
+            node,
+            "AstStatPush",
+            [&]()
+            {
+                PROP(target);
+                PROP(values);
             }
         );
     }
@@ -1602,6 +1634,12 @@ struct AstJsonEncoder : public AstVisitor
         return false;
     }
 
+    bool visit(class AstExprPop* node) override
+    {
+        write(node);
+        return false;
+    }
+
     bool visit(class AstExprBinary* node) override
     {
         write(node);
@@ -1705,6 +1743,12 @@ struct AstJsonEncoder : public AstVisitor
     }
 
     bool visit(class AstStatCompoundAssign* node) override
+    {
+        write(node);
+        return false;
+    }
+
+    bool visit(class AstStatPush* node) override
     {
         write(node);
         return false;

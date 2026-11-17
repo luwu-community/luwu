@@ -10,6 +10,7 @@
 #include "Luau/Scope.h"
 #include "Luau/TypeArena.h"
 #include "Luau/DataFlowGraph.h"
+#include "Luau/DocRefs.h"
 
 #include <memory>
 #include <vector>
@@ -34,6 +35,21 @@ class AstType;
 class AstTypePack;
 
 /// Root of the AST of a parsed source file
+// Luwu: a comment as a type function sees it in a type's `comments` metadata (ConstraintGenerator::attachDeclarationComments
+// adds whether it's above the declaration or to its side).
+// `prefix` is what opens it (`--`, `---`, `--[[`, `--[==[`) and `message` the rest, trimmed, so a type function can
+// tell docs from other comments by its own conventions.
+struct SourceComment
+{
+    Location location;
+    std::string prefix;
+    std::string message;
+    // nothing but whitespace before it on its line
+    bool startsLine = false;
+};
+
+std::vector<SourceComment> readSourceComments(std::string_view source, const std::vector<Comment>& comments);
+
 struct SourceModule
 {
     ModuleName name; // Module identifier or a filename
@@ -42,6 +58,8 @@ struct SourceModule
     SourceCode::Type type = SourceCode::None;
     // Luwu: from the module's config when it's parsed.
     Language language = Language::Luwu;
+    // Luwu object notation: the module is a `.luwon` data file.
+    bool luwon = false;
     std::optional<std::string> environmentName;
     bool cyclic = false;
 
@@ -54,6 +72,13 @@ struct SourceModule
 
     std::vector<HotComment> hotcomments;
     std::vector<Comment> commentLocations;
+    // Luwu: see SourceComment. Hot comments (`--!strict`) and broken ones are left out.
+    std::vector<SourceComment> comments;
+
+    // Luwu doc references: references and bindings in doc comments, and their syntax errors, which
+    // never stop the module from compiling
+    std::vector<DocComment> docComments;
+    std::vector<ParseError> docParseErrors;
 
     SourceModule()
         : allocator(new Allocator)
@@ -108,9 +133,19 @@ struct Module
 
     std::vector<std::pair<Location, ScopePtr>> scopes; // never empty
 
+    // Luwu doc references: where each name in the doc comments' references is declared
+    std::vector<DocRefTarget> docRefTargets;
+
     DenseHashMap<const AstExpr*, TypeId> astTypes{nullptr};
     DenseHashMap<const AstExpr*, TypePackId> astTypePacks{nullptr};
     DenseHashMap<const AstExpr*, TypeId> astExpectedTypes{nullptr};
+
+    // Luwu literal types: each parameter and local annotated `literal<B>`, `V<literal<B>>` or an alias of either, with its
+    // check. Its value was checked where it was given, so passing it on unchanged passes a literal.
+    DenseHashMap<const AstLocal*, LiteralCheck> literalLocals{nullptr};
+    // Luwu literal types: `x :: literal<B>` (or `:: V<literal<B>>`, or an alias of either), which is a `B` the code says is a
+    // literal: it passes as one, unchecked, like a cast to `any` does
+    DenseHashSet<const AstExpr*> literalAssertions{nullptr};
 
     // For AST nodes that are function calls, this map provides the
     // unspecialized type of the function that was called. If a function call
@@ -140,6 +175,11 @@ struct Module
     DenseHashMap<const AstStat*, TypeId> astCompoundAssignResultTypes{nullptr};
 
     DenseHashMap<TypeId, std::vector<std::pair<Location, TypeId>>> upperBoundContributors{nullptr};
+
+    // Luwu: the return packs of functions whose return type was inferred value by value from their `return` statements
+    // (ConstraintSolver::dispatchInferredReturn). A `return` that gives fewer values than the others gives `nil` for
+    // the rest.
+    DenseHashSet<TypePackId> inferredReturnPacks{nullptr};
 
     // Map AST nodes to the scope they create.  Cannot be NotNull<Scope> because
     // we need a sentinel value for the map.

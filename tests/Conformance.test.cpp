@@ -9,6 +9,7 @@
 #include "luacode.h"
 #include "luacodegen.h"
 #include "luajitinliner.h"
+#include "luwon.h"
 
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/DenseHash.h"
@@ -71,6 +72,7 @@ void luaC_validate(lua_State* L);
 #define lua_pushvector3(L, x, y, z) lua_pushvector(L, x, y, z)
 #endif
 
+LUAU_FASTFLAG(DebugLuwuLuauClassCompat)
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
 LUAU_FASTFLAG(LuauBytecodeFold)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
@@ -89,8 +91,10 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(DebugLuwuMatchExpressions)
+LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
@@ -98,6 +102,7 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuauAutoStack)
 LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauUdataMetatablePinned)
 LUAU_FASTFLAG(LuauGcTraceUdata)
 LUAU_DYNAMIC_FASTFLAG(LuauGcTableStepFix)
@@ -110,6 +115,8 @@ LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(DebugLuwuBufferComparison)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
 
@@ -337,6 +344,9 @@ static StateRef runConformance(
         luau_enable_jit_inliner(L);
 
     luaL_openlibs(L);
+    // Luwu object notation: hosts open `luwon` next to the standard libraries
+    luaopen_luwon(L);
+    lua_pop(L, 1);
 
     // Register a few global functions for conformance tests
     std::vector<luaL_Reg> funcs = {
@@ -1279,6 +1289,8 @@ TEST_CASE("Basic")
 
 TEST_CASE("Buffers")
 {
+    ScopedFastFlag debugBufferComparisonFlag{FFlag::DebugLuwuBufferComparison, true};
+
     runConformance(
         "buffers.luau",
         [](lua_State* L)
@@ -1286,6 +1298,58 @@ TEST_CASE("Buffers")
             setupNativeHelpers(L);
         }
     );
+}
+
+// Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md)
+TEST_CASE("BufferBatched")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+
+    runConformance(
+        "buffer_batched.luwu",
+        [](lua_State* L)
+        {
+            setupNativeHelpers(L);
+        }
+    );
+}
+
+// the whole library addition disappears with the flag off, so an embedder that turns it off gets upstream shapes
+TEST_CASE("BufferBatchedFlagDisabled")
+{
+    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, false};
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    static const char* const kBatchedFunctions[] = {
+        "unpacki8",
+        "unpacku8",
+        "unpacki16",
+        "unpacku16",
+        "unpacki32",
+        "unpacku32",
+        "unpackf32",
+        "unpackf64",
+        "packi8",
+        "packu8",
+        "packi16",
+        "packu16",
+        "packi32",
+        "packu32",
+        "packf32",
+        "packf64",
+    };
+
+    lua_getglobal(L, "buffer");
+
+    for (const char* name : kBatchedFunctions)
+    {
+        lua_getfield(L, -1, name);
+        CHECK_MESSAGE(lua_isnil(L, -1), name);
+        lua_pop(L, 1);
+    }
 }
 
 TEST_CASE("Math")
@@ -1342,6 +1406,24 @@ TEST_CASE("TableDropFlagDisabled")
     lua_close(L);
 }
 
+TEST_CASE("DebugBufferComparisonFlagDisabled")
+{
+    ScopedFastFlag debugBufferComparisonFlag{FFlag::DebugLuwuBufferComparison, false};
+
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+
+    lua_getglobal(L, "buffer");
+    lua_getfield(L, -1, "order");
+    CHECK(lua_isnil(L, -1));
+
+    lua_getglobal(L, "buffer");
+    lua_getfield(L, -1, "equals");
+    CHECK(lua_isnil(L, -1));
+
+    lua_close(L);
+}
+
 TEST_CASE("PatternMatch")
 {
     runConformance("pm.luau");
@@ -1365,6 +1447,53 @@ TEST_CASE("Clear")
 TEST_CASE("Strings")
 {
     runConformance("strings.luau");
+}
+
+TEST_CASE("StringExtensions")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    runConformance("string_extensions.luau");
+}
+
+TEST_CASE("StringExtensionsFlagDisabled")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, false};
+
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+
+    lua_getglobal(L, "string");
+    for (const char* name : {"trim", "trimstart", "trimend", "startswith", "endswith", "contains", "replace"})
+    {
+        lua_getfield(L, -1, name);
+        CHECK_MESSAGE(lua_isnil(L, -1), name);
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+
+    // split ignores a third argument, as upstream's does
+    const char* source = "return #string.split('a,b,c', ',', 2)";
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    REQUIRE(luau_load(L, "=split", bytecode, bytecodeSize, 0) == 0);
+    free(bytecode);
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK(lua_tonumber(L, -1) == 3);
+    lua_pop(L, 1);
+
+    // bytecode compiled with the fastcalls still raises: string.startswith is nil, so the fastcall falls back to calling it
+    std::string fastcallSource = "return string.startswith('abc', 'a')";
+    char* fastcallBytecode = nullptr;
+    {
+        ScopedFastFlag compileWithExtensions{FFlag::LuwuStringExtensions, true};
+        fastcallBytecode = luau_compile(fastcallSource.data(), fastcallSource.size(), nullptr, &bytecodeSize);
+    }
+    REQUIRE(luau_load(L, "=fastcall", fastcallBytecode, bytecodeSize, 0) == 0);
+    free(fastcallBytecode);
+    CHECK(lua_pcall(L, 0, 1, 0) != LUA_OK);
+
+    lua_close(L);
 }
 
 TEST_CASE("StringInterp")
@@ -2125,6 +2254,7 @@ TEST_CASE("Types")
     ScopedFastFlag integerType{FFlag::LuauIntegerType2, true};
     ScopedFastFlag nonePrimitive{FFlag::LuwuNonePrimitive, true};
     ScopedFastFlag tableDropFlag{FFlag::LuwuTableDrop, true};
+    ScopedFastFlag debugBufferComparisonFlag{FFlag::DebugLuwuBufferComparison, true};
 
     runConformance(
         "types.luau",
@@ -3078,7 +3208,7 @@ TEST_CASE("ApiPcallMulti")
     CHECK_EQ(std::string(lua_tostring(L, -2)), "traceback2");
     CHECK_EQ(std::string(lua_tostring(L, -1)), "test error");
     lua_pop(L, 3); // pop results
-
+    
     // Test multiple returns where we pass nresults = LUA_MULTRET
     lua_getglobal(L, "errorfunc");
     status = lua_pcallmulti(L, 0, LUA_MULTRET, handler_idx);
@@ -4663,6 +4793,21 @@ TEST_CASE("UserdataDirectAccess")
 }
 
 // Luwu Traits (rfcs/classes/traits.md)
+// Luwu class reflection (rfcs/classes): class.member, class.fields and ClassMember
+TEST_CASE("ClassMembers")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    runConformance("class_members.luwu");
+}
+
 TEST_CASE("Traits")
 {
     ScopedFastFlag sffs[] = {
@@ -4825,6 +4970,8 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true},
     };
 
     Luau::NullFileResolver fileResolver;
@@ -4854,6 +5001,15 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
             continue;
         }
 
+        // Luwu class reflection (rfcs/classes): `ClassMember` is only a type
+        if (kind == LUWU_BUILTIN_CLASSMEMBER)
+        {
+            std::optional<Luau::TypeFun> declaredType = frontend.globals.globalScope->lookupType(name);
+            REQUIRE(declaredType);
+            CHECK_EQ(declaredObjectMembers(declaredType->type), vmClassMembers(classdef));
+            continue;
+        }
+
         bool isGlobal = kind == LUWU_BUILTIN_SOME || kind == LUWU_BUILTIN_OK || kind == LUWU_BUILTIN_ERR;
         std::optional<Luau::TypeId> declared =
             isGlobal ? std::optional<Luau::TypeId>(Luau::getGlobalBinding(frontend.globals, name.c_str())) : declaredClassValue(library, name);
@@ -4875,6 +5031,25 @@ TEST_CASE("Collections")
     runConformance("collections.luwu");
 }
 
+// Luwu try expressions: `try e case ...`, which needs match expressions and destructuring's patterns
+TEST_CASE("TryExpressionsWithCaseArms")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    runConformance("try_match.luwu");
+    runConformance("try_match_registers.luwu");
+}
+
 TEST_CASE("TryExpressions")
 {
     ScopedFastFlag sffs[] = {
@@ -4886,6 +5061,22 @@ TEST_CASE("TryExpressions")
 
     runConformance("try.luwu");
     runConformance("try_variants.luwu");
+}
+
+// Luwu try expressions: ranges around `do` expressions, which can write locals before they raise and leave the range
+// early
+TEST_CASE("TryExpressionsWithDoExpressions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuTableComprehensions, true},
+    };
+
+    runConformance("try_do.luwu");
 }
 
 TEST_CASE("OptionAndResult")
@@ -5215,6 +5406,50 @@ return Component, Card, Ace(), Plain(), Ace
     }
 
     CHECK(lua_gettop(L) == 5);
+}
+
+TEST_CASE("LuauModulesRunUpstreamClassesWithClassCompat")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuLuauClassCompat, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    // upstream Luau 0.742's class syntax: `public` fields next to unqualified methods, construction by calling, `classof`
+    const char* source = R"(
+class Point
+    public x
+    public y
+
+    function magnitude(self)
+        return math.sqrt(self.x * self.x + self.y * self.y)
+    end
+end
+
+local p = Point { x = 3, y = 4 }
+assert(p:magnitude() == 5)
+assert(class.isinstance(p, Point))
+assert(class.classof(p) == Point)
+return "OK"
+)";
+
+    lua_CompileOptions options = {};
+    options.optimizationLevel = 1;
+    options.debugLevel = 1;
+    options.language = LUA_LANGUAGE_LUAU;
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), &options, &bytecodeSize);
+    int loadResult = luau_load(L, "=LuauClassCompat", bytecode, bytecodeSize, 0);
+    free(bytecode);
+
+    REQUIRE(loadResult == 0);
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK_EQ(std::string(lua_tostring(L, -1)), "OK");
 }
 
 // Luwu try expressions: options and results built and read by an embedder, with no Lua frame
@@ -6981,10 +7216,37 @@ TEST_CASE("DefaultArguments")
     runConformance("defaultarg.luwu");
 }
 
+TEST_CASE("Destructuring")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    runConformance("destructuring.luwu");
+}
+
+TEST_CASE("CollectionsUnfolding")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    runConformance("collections_unfolding.luwu");
+}
+
 TEST_CASE("IfLocal")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
         {FFlag::LuwuNonePrimitive, true},
     };
 
@@ -6996,6 +7258,7 @@ TEST_CASE("LoopWhenChains")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
         {FFlag::LuwuTableComprehensions, true},
         {FFlag::LuwuDoExpr, true},
     };
@@ -7035,9 +7298,21 @@ TEST_CASE("MatchExpressions")
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuTraits, true},
         {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::DebugLuwuBundles, true},
     };
 
     runConformance("match.luwu");
+}
+
+TEST_CASE("PushPopOperators")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuPoperators, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    runConformance("push_pop.luwu");
 }
 
 TEST_CASE("TableFunctionFields")
@@ -7055,16 +7330,6 @@ TEST_CASE("DoExpressionsCursed")
     };
 
     runConformance("do_expr_cursed.luwu");
-}
-
-TEST_CASE("Destructuring")
-{
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuwuDestructuring, true},
-        {FFlag::LuwuClasses, true},
-    };
-
-    runConformance("destructuring.luwu");
 }
 
 TEST_CASE("None")
@@ -7223,8 +7488,8 @@ TEST_CASE("LuwuBytecodeHeader")
     {
         // a WIP feature's flag switches the version to LWBC_VERSION_WIP
         ScopedFastFlag luwuClassesOff{FFlag::LuwuClasses, false};
-        ScopedFastFlag comprehensionsOff{FFlag::LuwuTableComprehensions, false};
         ScopedFastFlag destructuringOff{FFlag::LuwuDestructuring, false};
+        ScopedFastFlag comprehensionsOff{FFlag::LuwuTableComprehensions, false};
         std::string bytecode = Luau::compile("return 1");
         REQUIRE(bytecode.size() > LWBC_HEADER_SIZE);
         CHECK(uint8_t(bytecode[0]) == LWBC_MAGIC);
@@ -7527,4 +7792,95 @@ TEST_CASE("BundleCApi")
         }
     );
     CHECK(tooMany == "lua_packbundle: a bundle holds at most 1024 values, but got 1025");
+}
+
+TEST_CASE("TablePresizingLearnsFromTheLastTableOfASite")
+{
+    // Luwu table presizing: a NEWTABLE starts its table as long as the last table it made got, as long as that table
+    // is alive. A collected last table is forgotten.
+    const std::string source = R"(
+local function make(n)
+    local t = {}
+    for i = 1, n do
+        t[i] = i
+    end
+    return t
+end
+local filled = make(100)
+local after_filled = make(0)
+local after_empty = make(0)
+local after_collected = (function()
+    make(100)
+    collect()
+    return make(0)
+end)()
+-- a full collection that abandons an incremental mark halfway (luaC_fullgc) still forgets the dead table
+local after_abandoned_mark = (function()
+    step()
+    make(100)
+    collect()
+    return make(0)
+end)()
+return filled, after_filled, after_empty, after_collected, after_abandoned_mark
+)";
+
+    for (bool native : {false, true})
+    {
+        if (native && !luau_codegen_supported())
+            continue;
+
+        StateRef globalState(luaL_newstate(), lua_close);
+        lua_State* L = globalState.get();
+        luaL_openlibs(L);
+
+        lua_pushcfunction(
+            L,
+            [](lua_State* L)
+            {
+                lua_gc(L, LUA_GCCOLLECT, 0);
+                return 0;
+            },
+            "collect"
+        );
+        lua_setglobal(L, "collect");
+        lua_pushcfunction(
+            L,
+            [](lua_State* L)
+            {
+                lua_gc(L, LUA_GCSTEP, 1);
+                return 0;
+            },
+            "step"
+        );
+        lua_setglobal(L, "step");
+
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+        int result = luau_load(L, "=TablePresizing", bytecode, bytecodeSize, 0);
+        free(bytecode);
+        REQUIRE(result == LUA_OK);
+
+        if (native)
+        {
+            luau_codegen_create(L);
+            luau_codegen_compile(L, -1);
+        }
+
+        int status = lua_pcall(L, 0, 5, 0);
+        INFO(native);
+        std::string error = status == LUA_OK ? "" : lua_tostring(L, -1);
+        INFO(error);
+        REQUIRE(status == LUA_OK);
+
+        auto sizeArray = [&](int index)
+        {
+            return static_cast<const LuaTable*>(lua_topointer(L, index))->sizearray;
+        };
+
+        CHECK(sizeArray(-5) >= 100);
+        CHECK(sizeArray(-4) >= 100);
+        CHECK(sizeArray(-3) == 0);
+        CHECK(sizeArray(-2) == 0);
+        CHECK(sizeArray(-1) == 0);
+    }
 }

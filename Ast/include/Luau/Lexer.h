@@ -46,6 +46,10 @@ struct Lexeme
         PowAssign,
         ConcatAssign,
 
+        // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `<+`. `<-` syntax: pop's `<-` isn't a lexeme, since
+        // `a<-b` is `a < -b`.
+        Push,
+
         RawString,
         QuotedString,
         Number,

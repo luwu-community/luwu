@@ -3738,6 +3738,13 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeINITTRAITS), uintOp(OP_A(inst)));
         break;
+    case IrCmd::FALLBACK_GETPOSITIONAL:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executeGETPOSITIONAL), uintOp(OP_A(inst)));
+        break;
     case IrCmd::FALLBACK_PRESIZETABLE:
         CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
         CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
@@ -3745,18 +3752,25 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executePRESIZETABLE), uintOp(OP_A(inst)));
         break;
+    case IrCmd::FALLBACK_PUSH:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executePUSH), uintOp(OP_A(inst)));
+        break;
+    case IrCmd::FALLBACK_POP:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executePOP), uintOp(OP_A(inst)));
+        break;
     case IrCmd::FALLBACK_WRAPRESULT:
         CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
 
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeWRAPRESULT), uintOp(OP_A(inst)));
-        break;
-    case IrCmd::FALLBACK_GETPOSITIONAL:
-        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
-        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
-
-        regs.spill(index);
-        emitFallback(build, offsetof(NativeContext, executeGETPOSITIONAL), uintOp(OP_A(inst)));
         break;
     case IrCmd::FALLBACK_FORGPREP:
         regs.spill(index);

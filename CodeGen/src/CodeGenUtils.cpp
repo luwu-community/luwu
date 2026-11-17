@@ -1268,6 +1268,18 @@ const Instruction* executeTABLEBUNDLE(lua_State* L, const Instruction* pc, StkId
     return pc;
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL for native code (see FALLBACK_GETPOSITIONAL)
+const Instruction* executeGETPOSITIONAL(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+    VM_PROTECT(luaV_getpositional(L, rb, LUAU_INSN_C(insn), ra));
+    return pc;
+}
+
 // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): LOP_PRESIZETABLE for native code (see FALLBACK_PRESIZETABLE)
 const Instruction* executePRESIZETABLE(lua_State* L, const Instruction* pc, StkId base, TValue* k)
 {
@@ -1278,6 +1290,36 @@ const Instruction* executePRESIZETABLE(lua_State* L, const Instruction* pc, StkI
     LUAU_ASSERT(ttistable(ra));
 
     VM_PROTECT(luaV_presizetable(L, hvalue(ra), rb, LUAU_INSN_C(insn)));
+    return pc;
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_PUSH for native code (see FALLBACK_PUSH)
+const Instruction* executePUSH(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = &base[LUAU_INSN_B(insn)]; // note: this can point to L->top if c == LUA_MULTRET making VM_REG unsafe to use
+    int c = LUAU_INSN_C(insn) - 1;
+
+    // a multret value list ends at L->top, which luaV_push leaves in place so a __push call goes above it
+    if (c == LUA_MULTRET)
+        c = int(L->top - rb);
+
+    VM_PROTECT(luaV_push(L, ra, rb, c));
+    L->top = L->ci->top;
+    return pc;
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_POP for native code (see FALLBACK_POP)
+const Instruction* executePOP(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+    VM_PROTECT(luaV_pop(L, ra, rb));
     return pc;
 }
 
@@ -1292,18 +1334,6 @@ const Instruction* executeWRAPRESULT(lua_State* L, const Instruction* pc, StkId 
     VM_PROTECT_PC(); // raises when the result library isn't open, and allocates
     luaR_wrapresult(L, ra, LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR);
     VM_PROTECT(luaC_checkGC(L));
-    return pc;
-}
-
-// Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL for native code (see FALLBACK_GETPOSITIONAL)
-const Instruction* executeGETPOSITIONAL(lua_State* L, const Instruction* pc, StkId base, TValue* k)
-{
-    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
-    Instruction insn = *pc++;
-    StkId ra = VM_REG(LUAU_INSN_A(insn));
-    StkId rb = VM_REG(LUAU_INSN_B(insn));
-
-    VM_PROTECT(luaV_getpositional(L, rb, LUAU_INSN_C(insn), ra));
     return pc;
 }
 

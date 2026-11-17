@@ -77,9 +77,10 @@ LuauClass* luaR_newclass(
     classdef->lengthfield = LUAR_NO_LENGTH_FIELD;
     classdef->fastmethods = NULL;
     classdef->qualified = NULL;
-    classdef->typeofname = NULL;
+    classdef->reflection = NULL;
     classdef->positionalmembers = NULL;
     classdef->numberofpositional = -1;
+    classdef->typeofname = NULL;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -215,10 +216,10 @@ size_t luaR_classsize(const LuauClass* classdef)
            // ... plus what it keeps about the traits it implements ...
            (classdef->numtraits * sizeof(LuauClass*)) + (classdef->numtraitinits * (sizeof(TValue) + 2 * sizeof(uint32_t))) +
            (classdef->numoverriddenconsts * sizeof(uint32_t)) +
-           // ... plus a builtin class's fast methods.
-           (classdef->fastmethods ? classdef->numberofallmembers * sizeof(luaR_FastMethod) : 0) +
            // ... plus the offsets of its positional members.
-           (classdef->positionalmembers ? classdef->numberofpositional * sizeof(uint32_t) : 0);
+           (classdef->positionalmembers ? classdef->numberofpositional * sizeof(uint32_t) : 0) +
+           // ... plus a builtin class's fast methods.
+           (classdef->fastmethods ? classdef->numberofallmembers * sizeof(luaR_FastMethod) : 0);
 }
 
 bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
@@ -295,7 +296,7 @@ static const Closure* luaR_callingluafrom(lua_State* L, CallInfo* from)
     return NULL;
 }
 
-static const Closure* luaR_callinglua(lua_State* L)
+const Closure* luaR_callinglua(lua_State* L)
 {
     return luaR_callingluafrom(L, L->ci);
 }
@@ -1081,10 +1082,10 @@ void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
         luaM_freearray(L, classdef->memberflags, classdef->numberofallmembers, uint8_t, classdef->memcat);
     if (classdef->memberdefaults)
         luaM_freearray(L, classdef->memberdefaults, classdef->numberofinstancemembers, TValue, classdef->memcat);
-    if (classdef->fastmethods)
-        luaM_freearray(L, classdef->fastmethods, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
     if (classdef->positionalmembers)
         luaM_freearray(L, classdef->positionalmembers, classdef->numberofpositional, uint32_t, classdef->memcat);
+    if (classdef->fastmethods)
+        luaM_freearray(L, classdef->fastmethods, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
     luaM_freegco(L, classdef, sizeof(LuauClass), classdef->memcat, page);
 }
 
@@ -2958,6 +2959,24 @@ LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_Native
     classdef->offsettomember[count] = initname;
     classdef->memberflags[count] = 0;
     setnvalue(luaH_setstr(L, classdef->memberstooffset, initname), double(count));
+
+    // Luwu Destructuring (rfcs/destructuring.md): fields flagged LBC_CLASSMEMBER_POSITIONAL are read by `.(a, b)`, in
+    // the order of their offsets
+    int numpositional = 0;
+    for (uint32_t idx = 0; idx < numfields; idx++)
+        numpositional += (members[idx].flags & LBC_CLASSMEMBER_POSITIONAL) != 0;
+
+    if (numpositional > 0)
+    {
+        luaR_newpositionalmembers(L, classdef, numpositional);
+
+        int position = 0;
+        for (uint32_t idx = 0; idx < numfields; idx++)
+        {
+            if (members[idx].flags & LBC_CLASSMEMBER_POSITIONAL)
+                classdef->positionalmembers[position++] = idx;
+        }
+    }
 
     luaR_sealclassshape(L, classdef);
 

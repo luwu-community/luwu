@@ -10,6 +10,8 @@
 #include "Luau/Cst.h"
 
 #include <initializer_list>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <tuple>
 
@@ -276,6 +278,7 @@ private:
     bool dotTableMissingBraceFollows();
     bool destructuringAvailable();
     AstStat* parseDestructuring(const Location& start, const Location& keywordLocation, bool isConst, std::optional<Name> name = {});
+    AstExpr* parseDestructuringDeclaration(const Location& start, DestructureTarget& target, Location& equalsLocation);
     void parseDestructurePattern(DestructureTarget& target);
     struct DestructureField;
     DestructureField parseDestructureField();
@@ -398,6 +401,18 @@ private:
 
     // var [`+=' | `-=' | `*=' | `/=' | `%=' | `^=' | `..='] exp
     AstStat* parseCompoundAssignment(AstExpr* initial, AstExprBinary::Op op);
+
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    // var `<+' explist
+    AstStat* parsePush(AstExpr* target);
+    // `<-` syntax: whether the current `<` and the `-` right after it start a pop.
+    bool popFollows();
+    // `<-' exp, the operand parsed like a unary operator's
+    AstExpr* parsePop(unsigned int unaryPriority);
+    // Whether `<<` (or `< <`) opening explicit type arguments follows.
+    bool typeArgumentsFollow();
+    // `<-` syntax: `x <- y` as a statement, which reads like a push with an arrow
+    AstStat* parseMistakenPushArrow(AstExpr* target);
 
     std::tuple<AstLocal*, AstArray<AstLocal*>, AstArray<AstExpr*>> prepareFunctionArguments(const Location& start, bool hasself, const TempVector<Binding>& args);
 
@@ -572,6 +587,8 @@ private:
     // dottable ::= `.' `{' [dotfield {fieldsep dotfield} [fieldsep]] `}'
     // dotfield ::= Name | Name `=' exp
     AstExpr* parseDotTableConstructor();
+    AstExpr* parseDotPositional();
+    AstType* parseDotPositionalType();
 
     // TODO: Add grammar rules here?
     // `guardCondition` is set for the `if` right after `return`: the condition of a `return if c` guard
@@ -583,7 +600,7 @@ private:
     AstStatIf* makeLeaveGuard(AstStat* leave, const Location& ifLocation, AstExpr* condition);
 
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): one alternative of a pattern after `is`, parsed
-    // before anything is tested
+    // before anything is tested or bound, so a pattern nested in a field can be built once the field is bound
     struct PatternAlternative
     {
         Location location;
@@ -592,8 +609,11 @@ private:
         AstExpr* operand = nullptr;
         bool isClass = false;
         bool isTrait = false;
-        // The name `type(value)` gives
+        // The name `type(value)` (or `typeof(value)` for a builtin class) gives
         std::optional<std::string> tag;
+        bool tagIsTypeof = false;
+        // The fields or elements a class pattern binds (`Cat(name)`, `Pod {x}`), or a bundle pattern's elements
+        std::shared_ptr<DestructureTarget> destructure;
     };
     // `is <alternatives>`, `is not <alternatives>` or `implements <traits>`
     struct Pattern
@@ -609,25 +629,67 @@ private:
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` and the `is` / `implements` operators
     bool matchExpressionsAvailable();
     bool patternFollows();
-    AstExpr* parseMatchPatternExpr(AstExpr* value, AstLocal* subject, const Location& start);
-    Pattern parsePattern();
-    PatternAlternative parsePatternAlternative();
+    AstExpr* parseMatchPatternExpr(AstExpr* value, AstLocal* subject, const Location& start, const std::string& written);
+    Pattern parsePattern(const std::string& subject);
+    PatternAlternative parsePatternAlternative(const std::optional<std::string>& subject);
     PatternAlternative parseTraitAlternative();
     bool patternAlternativeFollows(const char* expected);
-    AstExpr* parsePatternClass(bool implements);
-    void reportPatternTypeArguments();
+    void parsePatternFields(DestructureTarget& target);
+    void parseBindingTest(DestructureTarget& target);
+    void rejectPatternAnnotation(DestructureTarget& target);
+    AstExpr* parsePatternClass(bool implements, const std::optional<std::string>& subject);
+    void reportPatternTypeArguments(AstExpr* cls, const std::optional<std::string>& subject);
+    AstStatClass* patternClassDeclaration(AstExpr* cls);
+    std::optional<std::string> typeArgumentPattern(AstStatClass* declaration, const AstArray<AstTypeOrPack>& arguments, AstType* annotation);
+    std::optional<std::string> fieldTestsForTypeArguments(AstExpr* cls, const AstArray<AstTypeOrPack>& arguments);
+    void parseClassPatternFields(PatternAlternative& alternative);
+    const PatternAlternative* bindingAlternative(const Pattern& pattern);
     AstExpr* buildMatchPattern(AstExpr* value, AstLocal* subject, const Pattern& pattern, const Location& start);
+    AstExprMatchPattern* makeMatchPattern(AstExpr* value, AstLocal* subject, const Pattern& pattern, const Location& start);
     AstArray<AstPatternAlternative> patternAlternatives(const Pattern& pattern);
     AstExpr* makePatternCheck(AstExpr* value, const Pattern& pattern, const Location& start);
     AstExpr* makeAlternativeTest(AstExpr* value, const PatternAlternative& alternative, bool negated, const Location& start);
+    AstExpr* bindPattern(AstExpr* value, AstLocal* subject, const Pattern& pattern, const PatternAlternative& binding, const Location& location);
+    AstExprMatchPattern* appendPatternTest(const Pattern& pattern, AstLocal* local, std::vector<AstStat*>& out, const Location& location);
+    AstExpr* makeBundleRest(AstLocal* bundle, size_t count, const Location& location);
+    AstExpr* cloneOperand(AstExpr* operand);
+    AstExpr* useOperand(AstExpr* operand);
+    AstDestructurePattern sourceDestructurePattern(const DestructureTarget& target, const std::vector<AstLocal*>& bound);
+    AstExprMatchPattern* sourcePattern(const Pattern& pattern, AstLocal* local, const std::vector<AstLocal*>& bound);
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): alternatives that bind (appendAlternativesTest)
+    using FieldBody = std::function<AstExpr*(AstLocal*)>;
+    AstExpr* withField(AstLocal* local, const DestructureTarget& target, size_t i, const Location& location, const FieldBody& body);
+    AstExpr* patternCondition(AstLocal* local, const Pattern& pattern, const Location& location);
+    AstExpr* alternativeCondition(AstLocal* local, const PatternAlternative& alternative, const Location& location);
+    AstExpr* fieldsCondition(AstLocal* local, const DestructureTarget& target, const Location& location);
+    bool fieldsHaveTests(const DestructureTarget& target);
+    bool targetBinds(const DestructureTarget& target, AstName name);
+    bool patternBinds(const Pattern& pattern, AstName name);
+    AstExpr* makeUnreachable(const Location& location);
+    AstExpr* patternValue(AstLocal* local, const Pattern& pattern, AstName name, const Location& location);
+    AstExpr* targetValue(AstLocal* local, const DestructureTarget& target, AstName name, const Location& location);
+    AstExprMatchPattern* appendAlternativesTest(const Pattern& pattern, AstLocal* local, std::vector<AstStat*>& out, const Location& location);
+    void collectBoundNames(const DestructureTarget& target, std::vector<Name>& names);
     bool literalPatternFollows();
     std::optional<AstExpr*> parseNothingValue();
+    struct PatternBindings;
+    struct PatternBindingsFrame;
+    void reportTryAroundPattern(AstExprTry* tryExpr, const PatternBindings& bindings);
+    PatternBindingsFrame allowPatternBindings();
+    void appendConditionClauses(
+        std::vector<AstIfClause>& chain,
+        AstExpr* condition,
+        const std::optional<Location>& whenLocation,
+        PatternBindingsFrame outer
+    );
     bool matchExpressionFollows();
-    AstExpr* parseMatchExpr();
+    AstExpr* parseMatchExpr(AstExprTry* tried = nullptr);
+    // Luwu try expressions: set while a `match` subject is parsed, so a `try` there leaves the `case` arms to the `match`
+    bool inMatchSubject = false;
     AstStat* parseMatchStat();
     bool matchStatementFollows();
     bool matchArmFollows();
-    AstMatchSubject parseMatchSubject(const Location& start);
+    AstMatchSubject parseMatchSubject(const Location& start, AstExprTry* tried = nullptr);
     AstMatchArm parseMatchArmHead(AstLocal* subject);
     AstExpr* parseMatchArmValue(const char* introducer, bool& isContinue);
     AstStatBlock* parseMatchArmBlock();
@@ -805,6 +867,8 @@ private:
     // Luwu: reports `feature` where it can't be used, in a Luau module or with its FFlag off (`enabled`). Returns
     // whether it can be used. The syntax is parsed either way, so the rest of the module still checks.
     bool checkLuwuFeature(const Location& location, const LuwuFeature& feature, bool enabled);
+    // Luwu: whether this is a Luau module whose classes follow upstream Luau's syntax (luauClassCompat)
+    bool luauClassModule() const;
     // Luwu: the statement for a Luwu-only one that can't be used, after reporting why (see checkLuwuFeature).
     AstStatError* reportLuwuFeatureStat(const Location& location, const AstArray<AstExpr*>& expressions, const LuwuFeature& feature);
     AstStatClass* getMatchingClass(AstExpr* expr);
@@ -915,6 +979,14 @@ private:
         // `.[a, b]`: `fields` are elements read by index, `value[1]` on, with empty keys
         bool array = false;
         std::vector<DestructureField> fields;
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `name is <pattern>` in a pattern after `is`,
+        // which tests the bound value
+        std::shared_ptr<Pattern> test;
+        // `.(a, b)` after `is`, which tests for a bundle of that many values. `..` after the elements (`openEnded`)
+        // allows more, and `.. as rest` binds them as a bundle.
+        bool bundle = false;
+        bool openEnded = false;
+        std::optional<Name> rest;
     };
     struct DestructureField
     {
@@ -1026,6 +1098,30 @@ private:
     AstName nameMatched;
     AstName nameNone;
     AstName nameNoneGlobal;
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the clauses a binding pattern (`x is Point {x, y}`)
+    // adds to the condition it's in: a hidden local holding the tested value when it isn't a local already, the test,
+    // then one untested binding per name, each followed by the test of a binding tested in turn. `test` is the expression
+    // the condition must be for the bindings to apply.
+    struct PatternBindings
+    {
+        AstExpr* test = nullptr;
+        Location location;
+        // `(...)`, `{...}` or `.(...)`, for messages
+        const char* form = nullptr;
+        std::vector<AstIfClause> clauses;
+    };
+    // Whether a type test here may bind (the condition being parsed is a whole `if`, `when` or `case` condition), and
+    // the bindings it made. Saved and restored around each condition, so a nested one has its own.
+    struct PatternBindingsFrame
+    {
+        bool allowed = false;
+        std::optional<PatternBindings> bindings;
+    };
+    PatternBindingsFrame patternBindings;
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): set while parsing the fields or elements of a pattern
+    // after `is`, where a binding can be tested (`age is number`) and a bundle pattern can end in `..`
+    bool parsingPattern = false;
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;
@@ -1034,6 +1130,20 @@ private:
     AstName nameNil;
     AstName nameContinue;
     AstName nameTrait;
+    // Luwu bundles: `.(a, b)` calls `bundle.pack`, and a `.(A, B)` type names the bundle class of its size
+    static constexpr size_t kFixedBundleSizes = 7;
+    AstName nameBundle;
+    AstName nameBundleClasses[kFixedBundleSizes];
+    AstName nameBigBundle;
+    AstName nameBundlePack;
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `.. as rest` in a bundle pattern reads `bundle.sub(value, n)`
+    AstName nameBundleSub;
+    // and is cast to `.(...unknown)`, which every bundle is
+    AstName nameUnknown;
+    // `error("unreachable")` ends the if-else expression a binding of alternatives reads (Parser::patternValue)
+    AstName nameErrorFunction;
+    // Luwu builtin classes: `is bundle` calls `typeof`
+    AstName nameTypeof;
 
     MatchLexeme endMismatchSuspect;
 
@@ -1043,6 +1153,9 @@ private:
     DenseHashMap<AstName, AstLocal*> localMap;
     std::vector<AstLocal*> localStack;
     DenseHashMap<AstName, AstStatClass*> classesWithinModule{{}};
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the operands of patterns whose node a pattern's
+    // plain-code meaning already uses (useOperand)
+    DenseHashSet<AstExpr*> usedPatternOperands{nullptr};
 
     // Luwu Traits (rfcs/classes/traits.md): the class or trait whose body is being parsed, which `Self` refers to
     struct SelfClassContext
@@ -1151,13 +1264,10 @@ private:
     };
     std::optional<PendingFunctionAttributes> pendingFunctionAttributes;
 
-    // Luwu Declare Statements (rfcs/declare-statements.md): a declaration can desugar to several statements, as
-    // `declare Name: class type Name(...)` does to the class and the global holding it. parseStat returns the first, and
-    // parseBlockNoScope appends these right after it.
-    std::vector<AstStat*> pendingStatements;
-
-    // Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several
-    // statements. parseStat returns the first, and parseBlockNoScope appends these right after it.
+    // Luwu Declare Statements (rfcs/declare-statements.md) and Luwu Destructuring (rfcs/destructuring.md): a
+    // declaration can desugar to several statements, as `declare class Name` does to the class and the global holding it,
+    // and a destructuring to one `local` per name. parseStat returns the first, and parseBlockNoScope appends these right
+    // after it.
     std::vector<AstStat*> pendingStatements;
 };
 

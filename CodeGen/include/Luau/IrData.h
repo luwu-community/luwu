@@ -1062,13 +1062,6 @@ enum class IrCmd : uint8_t
     // D: int (form, LBC_PRESIZE_*)
     FALLBACK_PRESIZETABLE,
 
-    // Luwu try expressions: LOP_WRAPRESULT. Wraps B in an `Ok`, or in the ERR form wraps the caught error in B and where
-    // it was raised (B + 1 to B + 3) in an `Err`. Allocates and runs the collector, but runs no Luau code.
-    // A: unsigned int (bytecode instruction index)
-    // B: Rn (the value, and the result)
-    // C: int (LBC_WRAPRESULT_OK or LBC_WRAPRESULT_ERR)
-    FALLBACK_WRAPRESULT,
-
     // Luwu bundles: LOP_GETTABLEBUNDLE or LOP_SETTABLEBUNDLE, a table read or write at a bundle key given by its values.
     // May run `__index` or `__newindex`.
     // A: unsigned int (bytecode instruction index)
@@ -1093,6 +1086,28 @@ enum class IrCmd : uint8_t
     // B: Rn (dest)
     // C: Rn (value)
     FALLBACK_GETPOSITIONAL,
+
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_PUSH, through the interpreter's implementation. It can
+    // call a __push metamethod.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (the container)
+    // C: Rn (the first value)
+    // D: int (value count, or -1 for every value from C up to L->top)
+    FALLBACK_PUSH,
+
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_POP, through the interpreter's implementation. It can
+    // call a __pop metamethod.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (the target, written)
+    // C: Rn (the container)
+    FALLBACK_POP,
+
+    // Luwu try expressions: LOP_WRAPRESULT. Wraps B in an `Ok`, or in the ERR form wraps the caught error in B and where
+    // it was raised (B + 1 to B + 3) in an `Err`. Allocates and runs the collector, but runs no Luau code.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (the value, and the result)
+    // C: int (LBC_WRAPRESULT_OK or LBC_WRAPRESULT_ERR)
+    FALLBACK_WRAPRESULT,
 
     // Instruction that passes value through, it is produced by constant folding and users substitute it with the value
     // A: operand of any type
@@ -1702,6 +1717,9 @@ struct IrFunction
 
     // Stores register tags that are known after constant propagating through a block, indexed by that block's index
     std::vector<std::vector<uint8_t>> blockExitTags; // blockIdx → tag array
+
+    // Known VM register tag values on fallback entry (intersection of data from each individual jump point)
+    std::vector<std::vector<uint8_t>> fallbackEntryTags;
 
     IrBlock& blockOp(IrOp op)
     {

@@ -23,7 +23,6 @@ LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcTableStepFix, false)
 LUAU_FASTFLAGVARIABLE(LuauGcTraceUdata)
 LUAU_FLAGVERSION(LuauGcTraceUdata, 2)
 LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcMarkUdataAccess, false)
-LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 
 /*
  * Luau uses an incremental non-generational non-moving mark&sweep garbage collector.
@@ -426,6 +425,14 @@ static void traverseproto(global_State* g, Proto* f)
     // uses it as the class (its error path reads the class name).
     if (f->ownerclass)
         markobject(g, f->ownerclass);
+
+    // Luwu table presizing: a site's last table is weak. cleartablesites clears the ones that died, after marking.
+    if (f->sizetablesites > 0 && !f->tablesiteslisted)
+    {
+        f->tablesiteslisted = 1;
+        f->nextsited = g->sitedprotos;
+        g->sitedprotos = f;
+    }
 }
 
 static void traverseclosure(global_State* g, Closure* cl)
@@ -490,6 +497,8 @@ static void traverseclass(global_State* g, LuauClass* classdef)
         markobject(g, classdef->compiledtraitcopies);
     if (classdef->qualified)
         markobject(g, classdef->qualified);
+    if (classdef->reflection)
+        markobject(g, classdef->reflection);
     if (classdef->typeofname)
         markobject(g, classdef->typeofname);
 }
@@ -715,6 +724,33 @@ static void tableresizeprotected(lua_State* L, LuaTable* t, int nhsize)
 /*
 ** clear collected entries from weaktables
 */
+// Luwu table presizing: forgets the last tables of the marked protos' sites that are about to be collected. Only this
+// empties g->sitedprotos: a mark that luaC_fullgc abandons leaves its protos listed, which is safe because the sweep that
+// follows it frees nothing. Emptying the list anywhere else would leave protos marked as listed but off it, never
+// cleared, with sites pointing at freed tables.
+static size_t cleartablesites(global_State* g)
+{
+    size_t work = 0;
+    Proto* p = g->sitedprotos;
+    while (p)
+    {
+        for (int i = 0; i < p->sizetablesites; i++)
+        {
+            LuaTable* last = p->tablesites[i].last;
+            if (last && iswhite(obj2gco(last)))
+                p->tablesites[i].last = NULL;
+        }
+        work += p->sizetablesites * sizeof(TableSite);
+
+        Proto* next = p->nextsited;
+        p->nextsited = NULL;
+        p->tablesiteslisted = 0;
+        p = next;
+    }
+    g->sitedprotos = NULL;
+    return work;
+}
+
 static size_t cleartable(lua_State* L, GCObject* l)
 {
     size_t work = 0;
@@ -1105,6 +1141,7 @@ static size_t atomic(lua_State* L)
     // remove collected objects from weak tables
     work += cleartable(L, g->weak);
     g->weak = NULL;
+    work += cleartablesites(g);
 
 #ifdef LUAI_GCMETRICS
     g->gcmetrics.currcycle.atomictimeclear += recordGcDeltaTime(currts);
@@ -1345,7 +1382,7 @@ size_t luaC_step(lua_State* L, bool assist)
 #endif
 
     // if allocations outpace the GC to require an assist, adjust step size to cover the difference
-    if ((FFlag::LuauBackedgeHeapCheck || LUA_VECTOR_DOUBLE == 1) && assist)
+    if (assist)
     {
         size_t need = debt * g->gcstepmul / 100;
 

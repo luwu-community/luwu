@@ -209,6 +209,8 @@ enum LuwuBuiltinClass
     LUWU_BUILTIN_SOME,
     LUWU_BUILTIN_OK,
     LUWU_BUILTIN_ERR,
+    // Luwu class reflection: `class.ClassMember`
+    LUWU_BUILTIN_CLASSMEMBER,
 
     LUWU_BUILTIN__COUNT
 };
@@ -226,6 +228,7 @@ typedef struct global_State
     GCObject* gray;      // list of gray objects
     GCObject* grayagain; // list of objects to be traversed atomically
     GCObject* weak;      // list of weak tables (to be cleared)
+    struct Proto* sitedprotos; // Luwu table presizing: protos with table sites marked this cycle, whose dead sites to clear
 
     size_t GCthreshold;                       // when totalbytes >= GCthreshold, run GC step
     size_t totalbytes;                        // number of bytes currently allocated

@@ -12,6 +12,7 @@
 #include "Luau/TypeUtils.h"
 #include "Luau/UnknownVariable.h"
 
+#include <map>
 #include <memory>
 
 namespace Luau
@@ -117,6 +118,8 @@ struct TypeChecker2
     DenseHashSet<TypeId> seenTypeFunctionInstances{nullptr};
     // Luwu: see requiredProperties
     DenseHashMap<const TableType*, std::vector<std::string>> requiredPropertiesCache{nullptr};
+    // Luwu: see TypeFunctionContext::reportedApplications
+    std::set<std::string> reportedTypeFunctionApplications;
 
     Normalizer normalizer;
     Subtyping _subtyping;
@@ -263,6 +266,10 @@ private:
     void reportErrorsFromAssigningToNever(AstExpr* lhs, TypeId rhsType);
     void visit(AstStatAssign* assign);
     void visit(AstStatCompoundAssign* stat);
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    void visit(AstStatPush* stat);
+    void visit(AstExprPop* expr);
+    std::optional<TypeId> pushedOrPoppedElement(TypeId containerTy, const struct PushPopOperator& op, const Location& location);
     void visit(AstStatFunction* stat);
     void visit(AstStatLocalFunction* stat);
     void visit(const AstTypeList* typeList);
@@ -330,6 +337,35 @@ private:
     void visitCall(AstExprCall* call);
     void checkContainerConstructor(AstExprCall* call);
     void checkUnionMethodSelves(AstExprIndexName* indexExpr);
+    // Luwu literal types: a value already checked where it was given (a literal parameter or local, a literal field read),
+    // named for messages
+    struct ForwardedLiteral
+    {
+        std::string name;
+        LiteralCheck check;
+    };
+    std::optional<ForwardedLiteral> forwardedLiteral(AstExpr* written);
+    // Luwu literal types: reports `value`, given where `check` applies, if it isn't a literal of `check`'s base or its
+    // validator rejects it. A cast to a literal type and a forwarded value pass.
+    void checkLiteralValue(AstExpr* value, TypeId inferred, const LiteralCheck& check, NotNull<Scope> scope);
+
+    // Luwu literal types: what a validator made of one literal value: its messages, the error it raised, and the type the
+    // value has to fit, when it reduced to one. The same field is often given the same literal (`margin = "0"`).
+    struct ValidatedLiteral
+    {
+        ErrorVec messages;
+        ErrorVec errors;
+        std::optional<TypeId> accepted;
+    };
+    // Keyed by the validator and the literal value (`s:0`, `b:true`)
+    std::map<std::pair<TypeId, std::string>, ValidatedLiteral> validatedLiterals;
+    // Luwu literal types: `value` given for `expected`: a table literal is checked field by field against the literal
+    // fields of `expected` (nested tables too), and any other table must already have been checked against them
+    void checkLiteralFields(AstExpr* value, TypeId expected, NotNull<Scope> scope);
+    // Luwu literal types: a local's value, against the local's literal check or its annotation's literal fields
+    void checkLiteralLocalValue(AstLocal* var, AstExpr* value, TypeId valueType, TypeId annotationType);
+    // Luwu literal types: each argument of a call, against its parameter's literal check or literal fields
+    void checkLiteralArguments(AstExprCall* call, const FunctionType* fty, size_t selfOffset, NotNull<Scope> scope);
     void visit(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);
@@ -381,6 +417,14 @@ private:
         std::optional<std::string> contextVerb = std::nullopt
     );
     void explainError(TypePackId subTy, TypePackId superTy, Location location, const SubtypingResult& result);
+
+    // Luwu: the values `ret` gives, a call or `...` at the end giving its whole pack
+    TypePackId returnedPack(AstStatReturn* ret);
+    // Luwu: the checks on a function whose return type was inferred from its returns (ConstraintSolver::dispatchInferredReturn)
+    void checkInferredReturns(const AstExprFunction* fn);
+    void reportInconsistentReturn(const std::vector<AstStatReturn*>& returns);
+    void reportReturnedKeyTypos(const std::vector<AstStatReturn*>& returns);
+    void reportReturnedStringTypos(const std::vector<AstStatReturn*>& returns);
 
     bool testLiteralOrAstTypeIsSubtype(AstExpr* expr, TypeId expectedType);
 

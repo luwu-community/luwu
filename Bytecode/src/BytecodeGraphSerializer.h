@@ -615,16 +615,25 @@ struct BytecodeGraphSerializer
         case LOP_RESULTGET:
             LUAU_UNREACHABLE();
 
+        case LOP_GETPOSITIONAL:
+            bcb.emitABC(LOP_GETPOSITIONAL, getRegister(insnOp), getRegInput(insn, 0), getImmInt(insn, 1));
+            break;
+
         case LOP_APPENDTABLE:
             bcb.emitABC(LOP_APPENDTABLE, getRegInput(insn, 0), getRegInput(insn, 1), getRegister(insnOp));
             break;
 
-        case LOP_PRESIZETABLE:
-            bcb.emitABC(LOP_PRESIZETABLE, getRegInput(insn, 0), getRegInput(insn, 1), uint8_t(getImmInt(insn, 2)));
+        case LOP_PUSH:
+            LUAU_ASSERT(insn.ops.size() > 2);
+            bcb.emitABC(LOP_PUSH, getRegInput(insn, 1), getRegInput(insn, 2), getImmInt(insn, 0) + 1);
             break;
 
-        case LOP_GETPOSITIONAL:
-            bcb.emitABC(LOP_GETPOSITIONAL, getRegister(insnOp), getRegInput(insn, 0), getImmInt(insn, 1));
+        case LOP_POP:
+            bcb.emitABC(LOP_POP, getRegister(insnOp), getRegInput(insn, 0), 0);
+            break;
+
+        case LOP_PRESIZETABLE:
+            bcb.emitABC(LOP_PRESIZETABLE, getRegInput(insn, 0), getRegInput(insn, 1), uint8_t(getImmInt(insn, 2)));
             break;
 
         case LOP__COUNT:

@@ -20,6 +20,7 @@
 LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceVariadics)
 LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceBetterLambdaHandling)
 LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
+LUAU_FASTFLAG(LuauRelaxConstraintOrderingForFunctionCheck)
 
 namespace Luau
 {
@@ -107,6 +108,22 @@ struct FindFunctionTypeIn : IterativeTypeVisitor
     }
 };
 
+/**
+ * Is this an expression that we can check has an expected type, for now this
+ * is limited to literals (including lambdas, "function literals"), groups
+ * (parenthesized expressions), and if-else expressions.
+ */
+bool isCheckableExpr(const AstExpr* expr)
+{
+    // Luwu bundles: a bundle literal `.(a, b)` is a `bundle.pack` call, and its positions take expected types
+    const AstExprCall* call = expr->as<AstExprCall>();
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match`'s arms take the expected type, like an if-else
+    // expression's branches
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): so do the values a `do` expression gives
+    bool checkableLuwuExpr = expr->is<AstExprMatch>() || expr->is<AstExprDo>();
+    return isLiteral(expr) || expr->is<AstExprGroup>() || expr->is<AstExprIfElse>() || (call && isBundlePackCall(call)) || checkableLuwuExpr;
+}
+
 struct BidirectionalTypePusher
 {
 
@@ -160,6 +177,14 @@ struct BidirectionalTypePusher
         expectedType = follow(expectedType);
         exprType = follow(exprType);
 
+        if (FFlag::LuauRelaxConstraintOrderingForFunctionCheck && !isCheckableExpr(expr))
+        {
+            // NOTE: For now we aren't using the result of this function, so
+            // just return the original expression type.
+            return exprType;
+        }
+
+
         // NOTE: We cannot block on free types here, as that trivially means
         // any recursive function would have a cycle, consider:
         //
@@ -170,7 +195,10 @@ struct BidirectionalTypePusher
         // We'll have a cycle between trying to push `fact`'s type into its
         // arguments and generalizing `fact`.
 
-        if (auto tfit = get<TypeFunctionInstanceType>(expectedType); tfit && tfit->state == TypeFunctionInstanceState::Unsolved)
+        // Luwu: a type function instance from another module (a generic function's `Row<C>`) can't have its state set by
+        // this solver, so it stays Unsolved after this module's reduction gives up on it. Upstream reads the state alone and
+        // re-pushes such an argument until the constraint budget runs out. `isBlocked` also knows what was given up on here.
+        if (get<TypeFunctionInstanceType>(expectedType) && solver->isBlocked(expectedType))
         {
             incompleteInferences.push_back(IncompleteInference{expectedType, exprType, expr});
             return exprType;
@@ -198,18 +226,6 @@ struct BidirectionalTypePusher
             return exprType;
         }
 
-        // Luwu bundles: a bundle literal `.(a, b)` (a `bundle.pack` call) takes each position's expected type, so
-        // `.("torch", 1)` where an `.(ItemId, number)` goes keeps "torch" as a singleton
-        if (auto call = expr->as<AstExprCall>(); call && isBundlePackCall(call))
-        {
-            if (std::optional<std::vector<TypeId>> positions = expectedBundlePositions(solver->arena, constraint->scope.get(), expectedType, call))
-            {
-                for (size_t i = 0; i < call->args.size && i < positions->size(); i++)
-                    pushType((*positions)[i], call->args.data[i]);
-            }
-            return exprType;
-        }
-
         // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): each arm's value, like an if-else expression's branches
         if (auto match = expr->as<AstExprMatch>())
         {
@@ -230,10 +246,26 @@ struct BidirectionalTypePusher
             return exprType;
         }
 
-        if (!isLiteral(expr))
-            // NOTE: For now we aren't using the result of this function, so
-            // just return the original expression type.
+        // Luwu bundles: a bundle literal `.(a, b)` (a `bundle.pack` call) takes each position's expected type, so
+        // `.("torch", 1)` where an `.(ItemId, number)` goes keeps "torch" as a singleton
+        if (auto call = expr->as<AstExprCall>(); call && isBundlePackCall(call))
+        {
+            if (std::optional<std::vector<TypeId>> positions = expectedBundlePositions(solver->arena, constraint->scope.get(), expectedType, call))
+            {
+                for (size_t i = 0; i < call->args.size && i < positions->size(); i++)
+                    pushType((*positions)[i], call->args.data[i]);
+            }
             return exprType;
+        }
+
+        if (!FFlag::LuauRelaxConstraintOrderingForFunctionCheck)
+        {
+            if (!isLiteral(expr))
+                // NOTE: For now we aren't using the result of this function, so
+                // just return the original expression type.
+                return exprType;
+        }
+
 
         if (expr->is<AstExprConstantString>() || expr->is<AstExprConstantNumber>() || expr->is<AstExprConstantBool>() ||
             expr->is<AstExprConstantNil>())

@@ -131,6 +131,10 @@ struct GenericType
     // Luwu Traits (rfcs/classes/traits.md): the `Self` a trait function is generic over. Printed as `Self`, without the
     // `<Self>` the function would otherwise list it in, and `Self & Trait` (its `self`) as just `Self`.
     bool traitSelf = false;
+
+    // Luwu literal types: set on the generic `literal<B>` stands for in a validator (`V<literal<B>>`) or an alias of one, to
+    // `B`. A parameter annotated with such an alias is a literal parameter.
+    TypeId literalBase = nullptr;
 };
 
 // When an equality constraint is found, it is then "bound" to that type,
@@ -367,6 +371,50 @@ struct MagicFunction
     virtual ~MagicFunction() {}
 };
 
+// Luwu literal types: what a value given for `literal<B>`, `V<literal<B>>` or an alias of either must be (a parameter's
+// argument, a local's value, a table field's value). It must be a literal of type `B` (`"-f"`, not a `string`). For
+// `V<literal<B>>`, it is also checked against `validator` with `placeholder` replaced by its literal type, so a user type
+// function can accept or reject the value itself.
+struct LiteralCheck
+{
+    TypeId base = nullptr;
+    // Both null for a bare `literal<B>`. Otherwise `placeholder` is the GenericType `literal<B>` resolved to inside
+    // `validator`.
+    TypeId validator = nullptr;
+    TypeId placeholder = nullptr;
+    // The rest of a union the check is one member of (`nil` for `literal<B>?`, `Token | number` for
+    // `V<literal<B>> | Token | number`): a value that fits it isn't checked. Null when there is none.
+    TypeId alternatives = nullptr;
+
+    // Calls `f` on each type held, for the walks that copy or visit types. A copy that skips them (a module's public
+    // interface is one) leaves them pointing into the arena it copied from.
+    template<typename F>
+    void forEachType(F&& f)
+    {
+        forEachTypeOf(*this, f);
+    }
+
+    template<typename F>
+    void forEachType(F&& f) const
+    {
+        forEachTypeOf(*this, f);
+    }
+
+private:
+    template<typename Check, typename F>
+    static void forEachTypeOf(Check& check, F& f)
+    {
+        f(check.base);
+        if (check.validator)
+        {
+            f(check.validator);
+            f(check.placeholder);
+        }
+        if (check.alternatives)
+            f(check.alternatives);
+    }
+};
+
 struct FunctionType
 {
     // Global monomorphic function
@@ -429,6 +477,16 @@ struct FunctionType
     };
     std::optional<TruthyRefinement> truthyRefinement;
 
+    // Luwu literal types: a parameter annotated `literal<B>` or `V<literal<B>>` has type `B` in the function's argument
+    // pack, which is what its body sees. Its argument at each call is checked as LiteralCheck says.
+    struct LiteralParameter : LiteralCheck
+    {
+        // Counting `self`. For the variadic parameter, the first argument it covers.
+        size_t argIndex = 0;
+        bool variadic = false;
+    };
+    std::vector<LiteralParameter> literalParameters;
+
     // Luwu try expressions: the errors the function says it raises (`! E`), joined with the ones inferred from its body.
     // A hint types a `try` around a call; nothing checks it against what the function really raises.
     std::optional<TypeId> errorHint;
@@ -467,6 +525,8 @@ struct TableIndexer
     TypeId indexResultType;
     bool isReadOnly = false;
 };
+
+struct TypeMetadataTable;
 
 struct Property
 {
@@ -507,6 +567,11 @@ struct Property
 
     Tags tags;
     std::optional<std::string> documentationSymbol;
+
+    // Luwu doc references: the property's own doc comments (`comments`, like a type's metadata): the ones around a field
+    // in a table type, or what a type function set (`setpropertycomments`). A field's type can be shared (`number`), so
+    // they can't live on it.
+    std::shared_ptr<const TypeMetadataTable> metadata;
 
     // DEPRECATED
     // TODO: Kill all constructors in favor of `Property::rw(TypeId read, TypeId write)` and friends.
@@ -576,6 +641,10 @@ struct TableType
     // Some constraints will use this information to decide whether or not they
     // are able to dispatch.
     size_t remainingProps = 0;
+
+    // Luwu literal types: the fields annotated `literal<B>`, `V<literal<B>>` or an alias of either. The property's type is
+    // `B` (or `B?`); a value given for the field is checked as LiteralCheck says, wherever it flows in.
+    std::vector<std::pair<Name, LiteralCheck>> literalFields;
 };
 
 // Represents a metatable attached to a table type. Somewhat analogous to a bound type.
@@ -614,6 +683,20 @@ struct ClassFieldUserData final : ClassUserData
 struct Obj
 {
     TypeId ty;
+};
+
+// Luwu: the identity of a class or trait made by `types.newclass` or `types.newtrait`. `key` spells out its kind, name,
+// members, and the traits it implements or needs. Two generated types with equal keys are the same type. A generated
+// type used in another's members adds only its hash to that key, which keeps keys small.
+struct GeneratedNominalKey
+{
+    std::string key;
+    size_t hash = 0;
+
+    bool operator==(const GeneratedNominalKey& rhs) const
+    {
+        return hash == rhs.hash && key == rhs.key;
+    }
 };
 
 struct Klass
@@ -751,6 +834,10 @@ struct ExternType
     // `needs`), or of the traits a trait's `needs` list names. An object whose class implements a trait is a subtype
     // of it (isSubclass follows these), which is what lets a trait's function take `self` of every implementing class.
     std::vector<TypeId> implementedTraits;
+
+    // Luwu: set on classes and traits made by `types.newclass` or `types.newtrait` (see GeneratedNominalKey).
+    // isNominalSubclass compares it, because the type function making them runs again in every module that uses it.
+    std::shared_ptr<const GeneratedNominalKey> generatedKey;
 
     // Luwu Traits (rfcs/classes/traits.md): set on the object type of a trait. A trait is modeled as a class whose object
     // type implementing classes are subtypes of.
@@ -1070,6 +1157,78 @@ using TypeVariant = Unifiable::Variant<
     NoRefineType,
     TypeFunctionInstanceType>;
 
+// Luwu: what a type function can attach to a type with `type:setmetadata`, plus the `comments` the checker attaches to a
+// declared type (`attachDeclarationComments`). A Lua table's contents, minus what can't outlive a type function run:
+// booleans, numbers, strings, types and tables of those. Types share it when they're copied.
+struct TypeMetadataTable;
+using TypeMetadataValue = Variant<bool, double, std::string, TypeId, std::shared_ptr<const TypeMetadataTable>>;
+
+// Luwu doc references: where the doc comments in a type's metadata were written, so references in them
+// (`[fs.file.read]`) resolve where their author could see those names.
+struct MetadataDocContext
+{
+    ModuleName module;
+    // the declaration the comments were above, or the type function call that set them
+    Location location;
+    // set by a type function rather than read from the source; the source's own doc comments are checked as such
+    bool generated = false;
+};
+
+struct TypeMetadataTable
+{
+    std::vector<std::pair<TypeMetadataValue, TypeMetadataValue>> entries;
+    // Luwu doc references: only on a type's top-level metadata. A type function can't see or set it.
+    std::optional<MetadataDocContext> docContext;
+};
+
+// Luwu: whether `metadata` holds any types. They belong to the arena the metadata was made in, so anything that copies a
+// type or property into another arena (Clone, Substitution) has to copy them along with it.
+bool metadataHasTypes(const TypeMetadataTable& metadata);
+
+// Luwu: calls `f` on every type in `metadata`, nested tables included
+template<typename F>
+void forEachMetadataType(const TypeMetadataTable& metadata, F&& f)
+{
+    auto visitValue = [&](const TypeMetadataValue& value)
+    {
+        if (const TypeId* ty = get_if<TypeId>(&value))
+            f(*ty);
+        else if (const auto* table = get_if<std::shared_ptr<const TypeMetadataTable>>(&value); table && *table)
+            forEachMetadataType(**table, f);
+    };
+
+    for (const auto& [key, value] : metadata.entries)
+    {
+        visitValue(key);
+        visitValue(value);
+    }
+}
+
+// Luwu: a copy of `metadata` with each type in it replaced by `f(type)`. Metadata without types is shared, not copied.
+template<typename F>
+std::shared_ptr<const TypeMetadataTable> mapMetadataTypes(const std::shared_ptr<const TypeMetadataTable>& metadata, F&& f)
+{
+    if (!metadata || !metadataHasTypes(*metadata))
+        return metadata;
+
+    auto mapValue = [&](const TypeMetadataValue& value) -> TypeMetadataValue
+    {
+        if (const TypeId* ty = get_if<TypeId>(&value))
+            return f(*ty);
+        if (const auto* table = get_if<std::shared_ptr<const TypeMetadataTable>>(&value))
+            return mapMetadataTypes(*table, f);
+        return value;
+    };
+
+    auto mapped = std::make_shared<TypeMetadataTable>();
+    mapped->entries.reserve(metadata->entries.size());
+    for (const auto& [key, value] : metadata->entries)
+        mapped->entries.emplace_back(mapValue(key), mapValue(value));
+    mapped->docContext = metadata->docContext;
+
+    return mapped;
+}
+
 struct Type final
 {
     explicit Type(const TypeVariant& ty)
@@ -1093,6 +1252,7 @@ struct Type final
     {
         ty = rhs.ty;
         documentationSymbol = rhs.documentationSymbol;
+        metadata = rhs.metadata;
     }
 
     TypeVariant ty;
@@ -1103,6 +1263,9 @@ struct Type final
     bool persistent = false;
 
     std::optional<std::string> documentationSymbol;
+
+    // Luwu: see TypeMetadataTable
+    std::shared_ptr<const TypeMetadataTable> metadata;
 
     // Pointer to the type arena that allocated this type.
     TypeArena* owningArena = nullptr;

@@ -408,8 +408,10 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FALLBACK_PRESIZETABLE:
     case IrCmd::FALLBACK_WRAPRESULT:
     case IrCmd::FALLBACK_GETQUALIFIED:
-    case IrCmd::FALLBACK_TABLEBUNDLE:
     case IrCmd::FALLBACK_GETPOSITIONAL:
+    case IrCmd::FALLBACK_PUSH:
+    case IrCmd::FALLBACK_POP:
+    case IrCmd::FALLBACK_TABLEBUNDLE:
         return IrValueKind::None;
     case IrCmd::SUBSTITUTE:
         return IrValueKind::Unknown;
@@ -1909,6 +1911,12 @@ void propagateTagsFromPredecessors(
     if (blockIdx >= function.cfg.predecessorsOffsets.size())
         return;
 
+    // Luwu: this and the Dead predecessor skips below come with upstream 0.734's LuauCodegenPropagateFallbackTags. With
+    // fallback blocks propagated, a jump back to the entry block brings tags the function start doesn't have.
+    // Entry block has an implicit edge as the function start and it has no tag info at that moment
+    if (function.entryBlock == blockIdx)
+        return;
+
     BlockIteratorWrapper preds = predecessors(function.cfg, blockIdx);
 
     if (preds.empty())
@@ -1920,6 +1928,9 @@ void propagateTagsFromPredecessors(
 
     for (uint32_t predIdx : preds)
     {
+        if (function.blocks[predIdx].kind == IrBlockKind::Dead)
+            continue;
+
         if (predIdx >= numBlockExitTags)
             return;
 
@@ -1932,6 +1943,9 @@ void propagateTagsFromPredecessors(
 
     for (uint32_t predIdx : preds)
     {
+        if (function.blocks[predIdx].kind == IrBlockKind::Dead)
+            continue;
+
         const std::vector<uint8_t>& predTags = function.blockExitTags[predIdx];
 
         CODEGEN_ASSERT(minRegsKnown <= predTags.size());

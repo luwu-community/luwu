@@ -646,7 +646,8 @@ struct ConstructorReadByName
 // Luwu (helpful subtyping errors): something written where a similar thing was almost certainly meant, when that is the
 // whole problem: a property of a table literal named like one the expected table has and the literal leaves out (table
 // types aren't exact, so an optional one is otherwise never reported, and the value is never read), a string one typo
-// from an expected one (`"LeftCtrl"` for `"LeftControl"`), or a table whose one problem is a misspelled property.
+// from an expected one (`"LeftCtrl"` for `"LeftControl"`), or a table whose one problem is a misspelled property. Also
+// a key or string literal a function returns that its other returns spell differently (`tpye` for `type`).
 struct Typo
 {
     Name written;
@@ -723,6 +724,26 @@ struct DiagnosticNote
 // What the error and the note on a use of the local `name` say when it has no type. `origin` is the error behind it.
 std::string noTypeNote(const std::string& name, std::optional<Location> origin);
 
+// Luwu: in a function whose return type is inferred, the one `return` whose values differ from what all its other
+// returns agree on. It is most likely a mistake rather than a value the function means to return.
+struct InconsistentReturn
+{
+    size_t otherReturns;
+    TypePackId othersReturn;
+    TypePackId returned;
+
+    bool operator==(const InconsistentReturn& rhs) const;
+};
+
+// Luwu doc references: code in a doc comment that doesn't parse, or isn't allowed there (`[f = function() end]`). Its own
+// kind rather than a SyntaxError: the module itself parsed and runs, and nothing should mistake this for a broken file.
+struct DocSyntaxError
+{
+    std::string message;
+
+    bool operator==(const DocSyntaxError& rhs) const;
+};
+
 // Luwu Destructuring (rfcs/destructuring.md): a positional pattern `.(a, b)` on an object of a class without a primary
 // constructor, or past the constructor's last parameter. Both raise at runtime.
 struct PositionalDestructuring
@@ -737,6 +758,8 @@ struct PositionalDestructuring
     bool notObject = false;
     // An element of a positional pattern rather than `x.1`
     bool inPattern = false;
+    // Luwu bundles: the number of values of the bundle read past its end, whose type `className` is
+    std::optional<size_t> bundleSize;
 
     bool operator==(const PositionalDestructuring& rhs) const;
 };
@@ -1037,6 +1060,8 @@ using TypeErrorData = Variant<
     Typo,
     UnreachableCodeUse,
     NoTypeUse,
+    DocSyntaxError,
+    InconsistentReturn,
     PositionalDestructuring>;
 
 struct TypeErrorSummary
@@ -1058,6 +1083,9 @@ struct TypeError
     Location location;
     ModuleName moduleName;
     TypeErrorData data;
+    // Luwu doc references: reported on code in a doc comment (`[fs.file.raed]`), which the module doesn't run. Tools
+    // label these apart from errors in the code (`DocTypeError`, `DocSyntaxError`).
+    bool inDocComment = false;
 
     static int minCode();
     int code() const;

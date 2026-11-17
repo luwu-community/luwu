@@ -32,8 +32,9 @@ LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(LuwuLiteralTypes)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
-LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
@@ -44,6 +45,7 @@ LUAU_FASTFLAG(LuauAutocompleteSkipErrorTypeInUnion)
 LUAU_FASTFLAG(LuauCheckTypeForDeprecated)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 
 using namespace Luau;
 
@@ -517,7 +519,9 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_string_completions")
 
     auto ac = autocomplete('1');
 
-    CHECK_EQ(17, ac.entryMap.size());
+    // Luwu String Extensions (rfcs/string-extensions.md): 7 more methods (trim, trimstart, trimend, startswith, endswith,
+    // contains, replace)
+    CHECK_EQ(FFlag::LuwuStringExtensions ? 24 : 17, ac.entryMap.size());
     LUAU_CHECK_HAS_NO_KEY(ac.entryMap, "drop");
     CHECK_EQ(ac.context, AutocompleteContext::Property);
 }
@@ -1364,6 +1368,35 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_metamethods_where_a_member_sta
     REQUIRE(ac.entryMap.count("__len"));
     CHECK_EQ(ac.entryMap["__len"].insertText, "public function __len(self): number\nend");
     CHECK(ac.entryMap.count("public"));
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_luwon_data_hooks")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    // Luwu object notation: a class that implements `luwon.data` may say how a data file holds it
+    check(R"(
+        class Color(public r: number) implements luwon.data
+            public function __@1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("__todata"));
+    CHECK_EQ(ac.entryMap["__todata"].insertText, "__todata(self)\nend");
+    CHECK(ac.entryMap.count("__fromdata"));
+
+    check(R"(
+        class Color(public r: number)
+            public function __@1
+        end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("__todata"), 0);
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_a_traits_special_functions")
@@ -3506,6 +3539,22 @@ type A<T = @1> = () -> T
     CHECK_EQ(ac.context, AutocompleteContext::Type);
 }
 
+// Luwu literal types: `literal` is resolved by name rather than bound in a scope, so it is offered on its own
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_literal_in_types")
+{
+    ScopedFastFlag literalTypes{FFlag::LuwuLiteralTypes, true};
+
+    check(R"(
+local function f(name: @1) end
+    )");
+
+    auto ac = autocomplete('1');
+
+    CHECK(ac.entryMap.count("literal"));
+    CHECK(ac.entryMap.count("string"));
+    CHECK_EQ(ac.context, AutocompleteContext::Type);
+}
+
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_default_type_pack_parameters")
 {
     check(R"(
@@ -3664,6 +3713,76 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_bundle_literals_against_union
     CHECK(ac.entryMap.count("leave"));
     CHECK(ac.entryMap.count("kick"));
     CHECK(!ac.entryMap.count("join"));
+}
+
+// Luwu bundles: comparing a bundle's position with a string completes the singletons the position can be, which a
+// function's multiple returns put there
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_string_singletons_compared_with_bundle_positions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    check(R"(
+        type Status = "ok" | "err"
+        local function status(): (Status, number)
+            return "ok", 1
+        end
+        local r = .(status())
+        if r.1 == "@1" then
+        end
+        local label = if r.1 == "@2" then 1 else 2
+    )");
+
+    for (char marker : {'1', '2'})
+    {
+        auto ac = autocomplete(marker);
+        CHECK(ac.entryMap.count("ok"));
+        CHECK(ac.entryMap.count("err"));
+        CHECK_EQ(ac.context, AutocompleteContext::String);
+    }
+}
+
+// Luwu bundles: a `.(...)` literal where a union of bundles goes completes their strings, and marks their booleans as
+// fitting
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_dot_positional_literals_against_unions_of_bundles")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    check(R"(
+        type Event = .("join", number) | .("leave", string) | .("kick", string)
+        local any: Event = .("@1", 1)
+        local named: Event = .("@2", "spam")
+        local flagged: .(true, number) | .(false, string) = .(@3)
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("join"));
+    CHECK(ac.entryMap.count("leave"));
+    CHECK(ac.entryMap.count("kick"));
+
+    ac = autocomplete('2');
+    CHECK(ac.entryMap.count("leave"));
+    CHECK(ac.entryMap.count("kick"));
+    CHECK(!ac.entryMap.count("join"));
+
+    ac = autocomplete('3');
+    REQUIRE(ac.entryMap.count("true"));
+    REQUIRE(ac.entryMap.count("false"));
+    CHECK_EQ(ac.entryMap["true"].typeCorrect, TypeCorrectKind::Correct);
+    CHECK_EQ(ac.entryMap["false"].typeCorrect, TypeCorrectKind::Correct);
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons_in_trait_arguments")
@@ -4196,6 +4315,25 @@ s:@1
     REQUIRE(ac.entryMap.count("sub"));
     CHECK(ac.entryMap["sub"].wrongIndexType == false);
     CHECK(ac.entryMap["sub"].indexedWithSelf);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "luwu_string_extensions_are_methods")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    check(R"(
+local s = "hello"
+s:@1
+    )");
+
+    auto ac = autocomplete('1');
+
+    for (const char* name : {"trim", "trimstart", "trimend", "startswith", "endswith", "contains", "replace"})
+    {
+        REQUIRE_MESSAGE(ac.entryMap.count(name), name);
+        CHECK_MESSAGE(ac.entryMap[name].wrongIndexType == false, name);
+        CHECK_MESSAGE(ac.entryMap[name].indexedWithSelf, name);
+    }
 }
 
 TEST_CASE_FIXTURE(ACFixture, "string_prim_non_self_calls_are_avoided")
@@ -5638,6 +5776,28 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_comment_directives")
 }
 
 // Luwu: a Luau or Lua module isn't offered what Luwu adds to a library (the LuwuOnlyApi lint's members)
+// Luwu String Extensions (rfcs/string-extensions.md): nor its string extensions, as methods or library functions
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_string_extensions_out_of_luau_modules")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    check("local s = \"a\"\nlocal t = s:@1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("startswith"), 1);
+
+    configResolver.defaultConfig.language = Language::Luau;
+    check("local s = \"a\"\nlocal t = s:@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("startswith"), 0);
+    CHECK_EQ(ac.entryMap.count("trim"), 0);
+    CHECK_EQ(ac.entryMap.count("upper"), 1);
+
+    check("local t = string.@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("contains"), 0);
+    CHECK_EQ(ac.entryMap.count("sub"), 1);
+}
+
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_luwu_only_members_out_of_luau_modules")
 {
     ScopedFastFlag tableDrop{FFlag::LuwuTableDrop, true};
@@ -6506,84 +6666,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
     CHECK(ac.entryMap.count("Animator"));
 }
 
-// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): every query an editor's hover, docs and autocomplete
-// make answers at every position of `match` expressions and statements, finished or still being typed, without crashing
-TEST_CASE_FIXTURE(ACFixture, "every_query_at_every_position_of_a_match")
-{
-    ScopedFastFlag sffs[] = {
-        {FFlag::DebugLuwuMatchExpressions, true},
-        {FFlag::LuwuIfLocal, true},
-        {FFlag::LuwuDoExpr, true},
-    };
-
-    const char* sources[] = {
-        R"(local function roll(): number
-    return 4
-end
-local function f(v: number | string | nil): number
-    const label = match const n = roll()
-        case is 1 then "one"
-        case m is number when m > 10 when const half = m / 2 then tostring(half)
-        when n < 0 then
-            return 0
-        else "other"
-    match v
-        case is nil then
-            return 0
-        case s is string then
-            print(s, label)
-        when v == 3 then
-            print("three")
-    end
-    match v
-        case is 1 then print(1)
-        else
-            print(v)
-    end
-    return 1
-end
-print(f(1))
-)",
-        "local x = 1\nmatch x\n    case is 1 then\n        print(x)\n",
-        "local x = 1\nmatch const n = x\n    when n\n",
-        "local x = 1\nlocal y = match x\n    case is\n",
-        "local x = 1\nlocal y = match x\n    case is 1 then\n",
-        "match\n",
-        "local x = 1\nmatch x\nend\n",
-    };
-
-    for (const char* source : sources)
-    {
-        INFO(source);
-        check(source);
-
-        ModulePtr module = getMainModule(/* forAutocomplete= */ true);
-        SourceModule* sourceModule = getMainSourceModule();
-        REQUIRE(module);
-        REQUIRE(sourceModule);
-
-        std::vector<std::string_view> lines = split(source, '\n');
-        for (unsigned line = 0; line < lines.size(); ++line)
-        {
-            for (unsigned column = 0; column <= lines[line].size(); ++column)
-            {
-                Position position{line, column};
-                findAstAncestryOfPosition(*sourceModule, position);
-                findAncestryAtPositionForAutocomplete(*sourceModule, position);
-                findExprOrLocalAtPosition(*sourceModule, position);
-                findNodeAtPosition(*sourceModule, position);
-                findScopeAtPosition(*module, position);
-                findBindingAtPosition(*module, *sourceModule, position);
-                Luau::findTypeAtPosition(*module, *sourceModule, position);
-                Luau::findExpectedTypeAtPosition(*module, *sourceModule, position);
-                getDocumentationSymbolAtPosition(*sourceModule, *module, position);
-                autocomplete(line, column);
-            }
-        }
-    }
-}
-
-// The value is a call, so its type is a pack (astTypePacks), not a single type
 TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_complete_the_properties_of_the_value")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
@@ -6692,6 +6774,40 @@ TEST_CASE_FIXTURE(ACFixture, "destructuring_keys_in_loop_bindings_complete_the_e
     CHECK(!ac.entryMap.count("name"));
 }
 
+// The value is a call, so its type is a pack (astTypePacks), not a single type
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "destructuring_keys_complete_a_required_modules_exports")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["Module/A"] = R"(
+export trait Path end
+export class FilePath implements Path end
+export const PathSeparator = "/"
+)";
+    getFrontend().check("Module/A");
+
+    fileResolver.source["Module/B"] = R"(
+local .{Pa} = require(script.Parent.A)
+local .{} = require(script.Parent.A)
+)";
+
+    // after `Pa`, and in the empty pattern
+    for (Position position : {Position{1, 10}, Position{2, 8}})
+    {
+        AutocompleteResult ac = autocomplete("Module/B", position);
+        CHECK_EQ(ac.context, AutocompleteContext::Property);
+        CHECK(ac.entryMap.count("Path"));
+        CHECK(ac.entryMap.count("FilePath"));
+        CHECK(ac.entryMap.count("PathSeparator"));
+    }
+}
+
 TEST_CASE_FIXTURE(ACFixture, "type_destructuring_keys_complete_the_modules_exported_types")
 {
     ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
@@ -6740,6 +6856,97 @@ TEST_CASE_FIXTURE(ACFixture, "destructuring_hidden_local_is_not_suggested")
     CHECK(!ac.entryMap.count(kDestructuredLocalName));
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the `.{...}` after a type test completes the fields of the class it tests for, in a
+// condition and in a `case` pattern
+TEST_CASE_FIXTURE(ACFixture, "type_test_pattern_keys_complete_the_class_fields")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    check(R"(
+        class Point
+            x: number
+            y: number
+        end
+        class Segment
+            start: Point
+            label: string
+        end
+        local function f(p: Point | string, s: Segment | number)
+            if p is Point {@1} then end
+            if p is Point {x, @2} then end
+            if s is Segment {start as .{@3}} then end
+            local _ = match p
+                case is Point {@4} then 1
+                else 2
+        end
+    )");
+
+    AutocompleteResult ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(ac.entryMap.count("y"));
+    CHECK(!ac.entryMap.count("p"));
+
+    ac = autocomplete('2');
+    CHECK(!ac.entryMap.count("x"));
+    CHECK(ac.entryMap.count("y"));
+
+    ac = autocomplete('3');
+    CHECK(ac.entryMap.count("x"));
+    CHECK(!ac.entryMap.count("label"));
+
+    ac = autocomplete('4');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(ac.entryMap.count("y"));
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): an element of a type test's `.(...)` declares a local, so nothing is offered there, and a
+// `.{...}` nested in one completes the field it destructures
+TEST_CASE_FIXTURE(ACFixture, "type_test_positional_pattern_elements_complete_nothing")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    check(R"(
+        class Point(x: number, y: number) end
+        class Segment(start: Point, label: string) end
+        local function f(p: Point | string, s: Segment | number)
+            if p is Point(@1) then end
+            if p is Point(x, @2) then end
+            if s is Segment(start.{@3}) then end
+            local _ = match p
+                case is Point(@4) then 1
+                else 2
+        end
+    )");
+
+    for (char marker : {'1', '2', '4'})
+    {
+        INFO(marker);
+        AutocompleteResult ac = autocomplete(marker);
+        CHECK(ac.entryMap.empty());
+        CHECK_EQ(ac.context, AutocompleteContext::Unknown);
+    }
+
+    AutocompleteResult ac = autocomplete('3');
+    CHECK_EQ(ac.context, AutocompleteContext::Property);
+    CHECK(ac.entryMap.count("x"));
+    CHECK(ac.entryMap.count("y"));
+    CHECK(!ac.entryMap.count("label"));
+}
+
 // Luwu Destructuring (rfcs/destructuring.md): a `.` alone where an expression goes starts a `.{...}` table, so nothing
 // is offered after it, not every global
 TEST_CASE_FIXTURE(ACFixture, "a_bare_dot_in_an_expression_completes_nothing")
@@ -6763,6 +6970,83 @@ TEST_CASE_FIXTURE(ACFixture, "a_bare_dot_in_an_expression_completes_nothing")
 
     ac = autocomplete('1');
     CHECK(ac.entryMap.count("alpha"));
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): every query an editor's hover, docs and autocomplete
+// make answers at every position of `match` expressions and statements, finished or still being typed, without crashing
+TEST_CASE_FIXTURE(ACFixture, "every_query_at_every_position_of_a_match")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    const char* sources[] = {
+        R"(local function roll(): number
+    return 4
+end
+local function f(v: number | string | nil): number
+    const label = match const n = roll()
+        case is 1 then "one"
+        case m is number when m > 10 when const half = m / 2 then tostring(half)
+        when n < 0 then
+            return 0
+        else "other"
+    match v
+        case is nil then
+            return 0
+        case s is string then
+            print(s, label)
+        when v == 3 then
+            print("three")
+    end
+    match v
+        case is 1 then print(1)
+        else
+            print(v)
+    end
+    return 1
+end
+print(f(1))
+)",
+        "local x = 1\nmatch x\n    case is 1 then\n        print(x)\n",
+        "local x = 1\nmatch const n = x\n    when n\n",
+        "local x = 1\nlocal y = match x\n    case is\n",
+        "local x = 1\nlocal y = match x\n    case is 1 then\n",
+        "match\n",
+        "local x = 1\nmatch x\nend\n",
+    };
+
+    for (const char* source : sources)
+    {
+        INFO(source);
+        check(source);
+
+        ModulePtr module = getMainModule(/* forAutocomplete= */ true);
+        SourceModule* sourceModule = getMainSourceModule();
+        REQUIRE(module);
+        REQUIRE(sourceModule);
+
+        std::vector<std::string_view> lines = split(source, '\n');
+        for (unsigned line = 0; line < lines.size(); ++line)
+        {
+            for (unsigned column = 0; column <= lines[line].size(); ++column)
+            {
+                Position position{line, column};
+                findAstAncestryOfPosition(*sourceModule, position);
+                findAncestryAtPositionForAutocomplete(*sourceModule, position);
+                findExprOrLocalAtPosition(*sourceModule, position);
+                findNodeAtPosition(*sourceModule, position);
+                findScopeAtPosition(*module, position);
+                findBindingAtPosition(*module, *sourceModule, position);
+                Luau::findTypeAtPosition(*module, *sourceModule, position);
+                Luau::findExpectedTypeAtPosition(*module, *sourceModule, position);
+                getDocumentationSymbolAtPosition(*sourceModule, *module, position);
+                autocomplete(line, column);
+            }
+        }
+    }
 }
 
 TEST_SUITE_END();

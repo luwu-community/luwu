@@ -301,6 +301,8 @@ struct NonStrictTypeChecker
             return visit(s);
         else if (auto s = stat->as<AstStatCompoundAssign>())
             return visit(s);
+        else if (auto s = stat->as<AstStatPush>())
+            return visit(s);
         else if (auto s = stat->as<AstStatFunction>())
             return visit(s);
         else if (auto s = stat->as<AstStatLocalFunction>())
@@ -482,6 +484,16 @@ struct NonStrictTypeChecker
         return {};
     }
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): the container is read, not assigned
+    NonStrictContext visit(AstStatPush* push)
+    {
+        visit(push->target, ValueContext::RValue);
+        for (AstExpr* value : push->values)
+            visit(value, ValueContext::RValue);
+
+        return {};
+    }
+
     NonStrictContext visit(AstStatFunction* statFn)
     {
         return visit(statFn->func, ValueContext::RValue);
@@ -625,6 +637,8 @@ struct NonStrictTypeChecker
         else if (auto e = expr->as<AstExprMatchPattern>())
             return visit(e->checked, ValueContext::RValue);
         else if (auto e = expr->as<AstExprTableComprehension>())
+            return visit(e);
+        else if (auto e = expr->as<AstExprPop>())
             return visit(e);
         else if (auto e = expr->as<AstExprTry>())
             return visit(e);
@@ -895,6 +909,12 @@ struct NonStrictTypeChecker
         return visit(unary->expr, ValueContext::RValue);
     }
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    NonStrictContext visit(AstExprPop* pop)
+    {
+        return visit(pop->expr, ValueContext::RValue);
+    }
+
     NonStrictContext visit(AstExprBinary* binary)
     {
         NonStrictContext lhs = visit(binary->left, ValueContext::RValue);
@@ -1058,6 +1078,10 @@ struct NonStrictTypeChecker
 
         Scope* scope = findInnermostScope(ty->location);
         LUAU_ASSERT(scope);
+
+        // Luwu literal types: `literal<B>` isn't a type in scope. The constraint generator resolves it and reports misuse.
+        if (isLiteralTypeReference(*scope, ty))
+            return;
 
         std::optional<TypeFun> alias = ty->prefix ? scope->lookupImportedType(ty->prefix->value, ty->name.value) : scope->lookupType(ty->name.value);
 
@@ -1299,24 +1323,7 @@ struct NonStrictTypeChecker
 
     Scope* findInnermostScope(Location location) const
     {
-        Scope* bestScope = module->getModuleScope().get();
-
-        bool didNarrow;
-        do
-        {
-            didNarrow = false;
-            for (auto scope : bestScope->children)
-            {
-                if (scope->location.encloses(location))
-                {
-                    bestScope = scope.get();
-                    didNarrow = true;
-                    break;
-                }
-            }
-        } while (didNarrow && bestScope->children.size() > 0);
-
-        return bestScope;
+        return module->getModuleScope()->findNarrowestScopeContaining(location).get();
     }
 
     std::optional<TypePackId> lookupPackAnnotation(AstTypePack* annotation) const

@@ -22,10 +22,15 @@ LUAU_FASTINT(LuauCompileInlineThreshold)
 LUAU_FASTINT(LuauCompileInlineThresholdMaxBoost)
 LUAU_FASTINT(LuauCompileLoopUnrollThreshold)
 LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
+LUAU_FASTINT(LuwuCompileInlineBudget)
+LUAU_FASTINT(LuwuCompileInlineCallCost)
+LUAU_FASTINT(LuwuCompileInlineFewCallSites)
 LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauCompileIifeInline)
@@ -46,6 +51,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuStringExtensions)
 
 using namespace Luau;
 
@@ -1670,6 +1676,53 @@ RETURN R0 0
 }
 
 // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md)
+TEST_CASE("PushPop")
+{
+    ScopedFastFlag poperators{FFlag::DebugLuwuPoperators, true};
+
+    // values go to consecutive registers after the container; a call or `...` last pushes everything up to the top
+    CHECK_EQ("\n" + compileFunction0(R"(
+local t = {}
+t <+ 1, nil
+t <+ f()
+t <+ 1, ...
+local x = <-t
+local y = <-t.items
+g(x, y)
+)"), R"(
+NEWTABLE R0 0 0
+LOADN R1 1
+LOADNIL R2
+PUSH R0 R1 2
+GETIMPORT R1 1 [f]
+CALL R1 0 -1
+PUSH R0 R1 -1
+LOADN R1 1
+GETVARARGS R2 -1
+PUSH R0 R1 -1
+POP R1 R0
+GETTABLEKS R3 R0 K2 ['items']
+POP R2 R3
+GETIMPORT R3 4 [g]
+MOVE R4 R1
+MOVE R5 R2
+CALL R3 2 0
+RETURN R0 0
+)");
+
+    // one value is pushed from the register it's already in
+    CHECK_EQ("\n" + compileFunction0(R"(
+local t = {}
+local x = 1
+t <+ x
+)"), R"(
+NEWTABLE R0 0 0
+LOADN R1 1
+PUSH R0 R1 1
+RETURN R0 0
+)");
+}
+
 TEST_CASE("TableComprehension")
 {
     ScopedFastFlag comprehensions{FFlag::LuwuTableComprehensions, true};
@@ -4454,6 +4507,7 @@ RETURN R4 1
 
 TEST_CASE("CostModelRemarks")
 {
+
     CHECK_EQ(
         compileWithRemarks(R"(
 local a, b = ...
@@ -7436,14 +7490,13 @@ return x
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
-NEWTABLE R2 0 0
-LOADN R3 1
-SETTABLEN R3 R2 1
-LOADN R3 2
-SETTABLEN R3 R2 2
-LOADN R3 3
-SETTABLEN R3 R2 3
-MOVE R1 R2
+NEWTABLE R1 0 0
+LOADN R2 1
+SETTABLEN R2 R1 1
+LOADN R2 2
+SETTABLEN R2 R1 2
+LOADN R2 3
+SETTABLEN R2 R1 3
 RETURN R1 1
 )"
     );
@@ -7467,14 +7520,13 @@ return x
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
-NEWTABLE R2 0 0
-LOADN R3 1
-SETTABLEN R3 R2 1
-LOADN R3 2
-SETTABLEN R3 R2 2
-LOADN R3 3
-SETTABLEN R3 R2 3
-MOVE R1 R2
+NEWTABLE R1 0 0
+LOADN R2 1
+SETTABLEN R2 R1 1
+LOADN R2 2
+SETTABLEN R2 R1 2
+LOADN R2 3
+SETTABLEN R2 R1 3
 RETURN R1 1
 )"
     );
@@ -7527,9 +7579,8 @@ return x
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
-LOADN R2 42
-ORK R2 R2 K1 [5]
-MOVE R1 R2
+LOADN R1 42
+ORK R1 R1 K1 [5]
 RETURN R1 1
 )"
     );
@@ -7577,8 +7628,7 @@ return y
 DUPCLOSURE R0 K0 ['foo']
 GETVARARGS R1 1
 LOADNIL R1
-MOVE R3 R1
-MOVE R2 R3
+MOVE R2 R1
 RETURN R2 1
 )"
     );
@@ -7630,8 +7680,7 @@ end
                    2
                ),
         R"(
-GETUPVAL R1 0
-MOVE R0 R1
+GETUPVAL R0 0
 RETURN R0 1
 )"
     );
@@ -7759,9 +7808,8 @@ return y
 DUPCLOSURE R0 K0 ['foo']
 LOADNIL R1
 LOADN R1 42
-MOVE R3 R1
 NEWCLOSURE R2 P1
-CAPTURE VAL R3
+CAPTURE VAL R1
 RETURN R2 1
 )"
     );
@@ -8041,9 +8089,8 @@ return x
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
-LOADNIL R2
-LOADN R2 42
-MOVE R1 R2
+LOADNIL R1
+LOADN R1 42
 RETURN R1 1
 )"
     );
@@ -8147,6 +8194,7 @@ RETURN R1 1
     );
 
     // this function has less register pressure but a large cost
+
     CHECK_EQ(
         "\n" + compileFunction(
                    R"(
@@ -8520,9 +8568,8 @@ return y
         R"(
 DUPCLOSURE R0 K0 ['foo']
 GETVARARGS R1 1
-MOVE R3 R1
-LOADN R3 42
-MOVE R2 R3
+MOVE R2 R1
+LOADN R2 42
 RETURN R2 1
 )"
     );
@@ -8551,10 +8598,9 @@ GETVARARGS R1 1
 NEWCLOSURE R2 P1
 CAPTURE REF R1
 SETGLOBAL R2 K1 ['mutator']
-MOVE R3 R1
-GETGLOBAL R4 K1 ['mutator']
-CALL R4 0 0
-MOVE R2 R3
+MOVE R2 R1
+GETGLOBAL R3 K1 ['mutator']
+CALL R3 0 0
 CLOSEUPVALS R1
 RETURN R2 1
 )"
@@ -9067,20 +9113,18 @@ return x, y
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
+LOADN R1 0
+ADDK R1 R1 K1 [1]
+ADDK R1 R1 K2 [2]
+ADDK R1 R1 K3 [3]
+ADDK R1 R1 K4 [4]
+ADDK R1 R1 K5 [5]
 LOADN R2 0
-ADDK R2 R2 K1 [1]
-ADDK R2 R2 K2 [2]
-ADDK R2 R2 K3 [3]
-ADDK R2 R2 K4 [4]
-ADDK R2 R2 K5 [5]
-MOVE R1 R2
-LOADN R3 0
-SUBK R3 R3 K1 [1]
-SUBK R3 R3 K2 [2]
-SUBK R3 R3 K3 [3]
-SUBK R3 R3 K4 [4]
-SUBK R3 R3 K5 [5]
-MOVE R2 R3
+SUBK R2 R2 K1 [1]
+SUBK R2 R2 K2 [2]
+SUBK R2 R2 K3 [3]
+SUBK R2 R2 K4 [4]
+SUBK R2 R2 K5 [5]
 RETURN R1 2
 )"
     );
@@ -9200,11 +9244,10 @@ return x, y
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
-LOADN R2 0
-ADDK R2 R2 K1 [1]
-ADDK R2 R2 K2 [2]
-ADDK R2 R2 K3 [3]
-MOVE R1 R2
+LOADN R1 0
+ADDK R1 R1 K1 [1]
+ADDK R1 R1 K2 [2]
+ADDK R1 R1 K3 [3]
 MOVE R2 R0
 LOADN R3 100
 CALL R2 1 1
@@ -10546,6 +10589,163 @@ JUMPBACK L0
 L3: RETURN R0 0
 )"
     );
+}
+
+TEST_CASE("StringExtensionFastcalls")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction0(R"(
+local s = ...
+return string.startswith(s, "a"), string.endswith(s, "a", "b"), string.contains(s, "a")
+)"),
+        R"(
+GETVARARGS R0 1
+FASTCALL2K 135 R0 K0 L0 ['a']
+MOVE R2 R0
+LOADK R3 K0 ['a']
+GETIMPORT R1 3 [string.startswith]
+CALL R1 2 1
+L0: LOADK R4 K0 ['a']
+LOADK R5 K4 ['b']
+FASTCALL3 136 R0 R4 R5 L1
+MOVE R3 R0
+GETIMPORT R2 6 [string.endswith]
+CALL R2 3 1
+L1: FASTCALL2K 137 R0 K0 L2 ['a']
+MOVE R4 R0
+LOADK R5 K0 ['a']
+GETIMPORT R3 8 [string.contains]
+CALL R3 2 -1
+L2: RETURN R1 -1
+)"
+    );
+}
+
+TEST_CASE("StringMethodsOnProvenStringsCompileAsFunctions")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    // each pair compiles to exactly the same bytecode: an import and a fastcall (or a call), no NAMECALL
+    const std::pair<const char*, const char*> kSameAsFunctionForm[] = {
+        // a literal
+        {R"(return ("abc"):startswith("a"))", R"(return string.startswith("abc", "a"))"},
+        // an unwritten local initialized with one
+        {R"(local s = "abc" return s:upper())", R"(local s = "abc" return string.upper(s))"},
+        // the result of a string function, and a chain of them, where a call receiver passes only its first value
+        {R"(local s = string.rep("a", 3) return s:sub(1, 2))", R"(local s = string.rep("a", 3) return string.sub(s, 1, 2))"},
+        {R"(local s = tostring(...) return s:lower():upper())", R"(local s = tostring(...) return string.upper((string.lower(s))))"},
+        // a concatenation of proven strings and numbers
+        {R"(local s = "a" .. 1 return s:len())", R"(local s = "a" .. 1 return string.len(s))"},
+        // a `type(x) == "string"` branch and assert
+        {R"(local s = ... if type(s) == "string" then return s:len() end return 0)",
+         R"(local s = ... if type(s) == "string" then return string.len(s) end return 0)"},
+        {R"(local s = ... assert(type(s) == "string") return s:find("x"))", R"(local s = ... assert(type(s) == "string") return string.find(s, "x"))"},
+        // a function that isn't a builtin is still called directly
+        {R"(local s = "a" return s:format())", R"(local s = "a" return string.format(s))"},
+    };
+
+    for (const auto& [method, function] : kSameAsFunctionForm)
+        CHECK_MESSAGE(compileFunction0(method) == compileFunction0(function), method);
+
+    // these stay method calls: an unproven receiver, a written local, a branch that writes the local, a name the string
+    // library doesn't have, and a `string` global the module assigns
+    const char* const kStillMethodCalls[] = {
+        R"(local s = ... return s:upper())",
+        R"(local s = "a" s = ... return s:upper())",
+        R"(local s = ... if type(s) == "string" then s = {} return s:upper() end return 0)",
+        R"(return ("abc"):fo())",
+        R"(string = nil return ("abc"):upper())",
+    };
+
+    for (const char* source : kStillMethodCalls)
+        CHECK_MESSAGE(compileFunction0(source).find("NAMECALL") != std::string::npos, source);
+}
+
+TEST_CASE("StringMethodsProvenByOrLeave")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+    ScopedFastFlag doExpressions{FFlag::LuwuDoExpr, true};
+
+    // `type(s) == "string" or return` proves `s` for the rest of the block, as a statement, a declaration's value or an
+    // assignment's value
+    const std::pair<const char*, const char*> kSameAsFunctionForm[] = {
+        {R"(local s = ... typeof(s) == "string" or return 0 return s:len())", R"(local s = ... typeof(s) == "string" or return 0 return string.len(s))"},
+        {R"(local s = ... local ok = type(s) == "string" or return 0 return s:upper())",
+         R"(local s = ... local ok = type(s) == "string" or return 0 return string.upper(s))"},
+        {R"(local s, ok = ... ok = type(s) == "string" or return 0 return s:upper())",
+         R"(local s, ok = ... ok = type(s) == "string" or return 0 return string.upper(s))"},
+    };
+
+    for (const auto& [method, function] : kSameAsFunctionForm)
+        CHECK_MESSAGE(compileFunction0(method) == compileFunction0(function), method);
+}
+
+TEST_CASE("StringMethodsOnTrustedStringAnnotations")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    const char* source = R"(
+local function f(s: string)
+    return s:startswith("a")
+end
+return f
+)";
+
+    // without trust, a `string` annotation proves nothing
+    CHECK(compileFunction(source, 0).find("NAMECALL") != std::string::npos);
+
+    ScopedFastFlag trustAnnotations{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+    CHECK(compileFunction(source, 0).find("NAMECALL") != std::string::npos);
+    CHECK(compileFunction(("--!trust" + std::string(source)).c_str(), 0).find("NAMECALL") == std::string::npos);
+}
+
+TEST_CASE("StringMethodsOnUnprovenReceiversTryTheBuiltin")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+
+    // each builtin is tried with the receiver's register, and falls back to the method call for anything that isn't a
+    // string; `upper` isn't a builtin, so it stays a plain method call
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(s, p)
+    return s:startswith("a"), s:sub(1, 2), s:endswith(p), s:len(), s:upper()
+end
+return f
+)",
+                   0
+               ),
+        R"(
+FASTCALL2K 135 R0 K0 L0 ['a']
+LOADK R4 K0 ['a']
+NAMECALL R2 R0 K1 ['startswith']
+CALL R2 2 1
+L0: LOADN R5 1
+LOADN R6 2
+FASTCALL3 45 R0 R5 R6 L1
+NAMECALL R3 R0 K2 ['sub']
+CALL R3 3 1
+L1: FASTCALL2 136 R0 R1 L2
+MOVE R6 R1
+NAMECALL R4 R0 K3 ['endswith']
+CALL R4 2 1
+L2: FASTCALL1 43 R0 L3
+NAMECALL R5 R0 K4 ['len']
+CALL R5 1 1
+L3: NAMECALL R6 R0 K5 ['upper']
+CALL R6 1 -1
+RETURN R2 -1
+)"
+    );
+}
+
+TEST_CASE("StringMethodsStayMethodCallsWithTheFlagOff")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, false};
+
+    CHECK(compileFunction0(R"(return ("abc"):upper())").find("NAMECALL") != std::string::npos);
 }
 
 TEST_CASE("BuiltinArity")
@@ -14829,7 +15029,7 @@ TEST_CASE("ExportDestructuringStoresTheNamesItBinds")
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuwuDestructuring, true}};
 
     CHECK_EQ(
-        "\n" + compileFunction0("export const .{x, y} = ..."),
+        "\n" + compileFunction0("export .{x, y} = ..."),
         R"(
 GETVARARGS R0 1
 GETTABLEKS R1 R0 K0 ['x']
@@ -15251,6 +15451,112 @@ RETURN R1 1
 )");
 }
 
+// Luwu bundles: destructuring a bundle the code builds creates no object; its bindings are the argument registers
+TEST_CASE("CollectionsBundleDestructuringCreatesNoObject")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuauEmitCallFeedback, false},
+    };
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(a, b)
+    const .(first, second) = bundle.pack(a + 1, b)
+    return first + second
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+ADDK R2 R0 K0 [1]
+MOVE R3 R1
+ADD R4 R2 R3
+RETURN R4 1
+)"
+    );
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function g(x)
+    const .{ 1 as first, 2 as second } = do
+        if x then
+            give bundle.pack(x, 1)
+        end
+        give bundle.pack(2, 3)
+    return first + second
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+JUMPIFNOT R0 L0
+MOVE R1 R0
+LOADN R2 1
+JUMP L1
+L0: LOADN R1 2
+LOADN R2 3
+L1: ADD R3 R1 R2
+RETURN R3 1
+)"
+    );
+
+    // `.(a, b)` builds the same pair, and a positional pattern reads it the same way
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function h(x)
+    const .(name, age) = do
+        local got = "user" .. x
+        give .(got, x * 2)
+    return name, age
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+LOADK R4 K0 ['user']
+MOVE R5 R0
+CONCAT R3 R4 R5
+MOVE R1 R3
+MULK R2 R0 K1 [2]
+RETURN R1 2
+)"
+    );
+
+    // a module that assigns `bundle` keeps the call
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+bundle = nil
+local function f(a, b)
+    const .(first) = bundle.pack(a, b)
+    return first
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+GETGLOBAL R2 K0 ['bundle']
+GETTABLEKS R2 R2 K1 ['pack']
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 1
+GETPOSITIONAL R3 R2 0 [1]
+RETURN R3 1
+)"
+    );
+}
+
 // Luwu try expressions: the expression runs in a protected range of fresh registers and ends wrapped in an `ok`. The
 // range's handler, which only the VM jumps to, wraps the caught error in an `err`.
 TEST_CASE("TryExpressionCompilesToAProtectedRange")
@@ -15338,6 +15644,54 @@ print(r)
 return r.value
 )");
     CHECK(escaping.find(" OK\n") != std::string::npos);
+}
+
+// `r is Ok(v)` on a try result kept in registers: the test reads the flag and the first element is the value or error
+// register, through aliases of `Ok` and `Err` too. An `Err`'s later elements check the flag like its fields.
+TEST_CASE("TryResultPatternsStayInRegisters")
+{
+    ScopedFastFlag sff[]{
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CHECK_EQ("\n" + compileFunction(R"(
+local Success = Ok
+local Failure = Err
+local r = try f()
+if r is Success(v) then
+    return v
+elseif r is Failure(e, module) then
+    return e, module
+end
+return nil
+)", 0, 2),
+        R"(
+try: pc 5 to 7, handler pc 9, R2
+GETIMPORT R0 1 [Ok]
+GETIMPORT R1 3 [Err]
+GETIMPORT R2 5 [f]
+CALL R2 0 1
+LOADB R6 1 +1
+LOADB R6 0
+L0: JUMPIFNOT R6 L1
+MOVE R7 R2
+RETURN R7 1
+L1: JUMPIF R6 L3
+MOVE R7 R2
+JUMPIF R6 L2
+MOVE R8 R3
+RETURN R7 2
+L2: MOVE R9 R2
+WRAPRESULT R9 OK
+GETPOSITIONAL R8 R9 1 [2]
+RETURN R7 2
+L3: LOADNIL R7
+RETURN R7 1
+)");
 }
 
 // `class.isinstance(r, Ok)`, which `r is Ok(value)` desugars to, is answered by the result's flag at O2, the level that
@@ -15823,4 +16177,198 @@ TEST_CASE("LoopOverBundlePackUnfoldsUpToFourElements")
 
     std::string spread = compileFunction("local function f(t, ...) for _, v in bundle.pack(...) do t[v] = true end end", 0, 1);
     CHECK(spread.find("FORGLOOP") != std::string::npos);
+}
+
+// Luwu: how many CALL instructions (CALL or CALLFB) a function's dump has
+static int countCalls(const std::string& dump)
+{
+    int calls = 0;
+    for (size_t at = dump.find("CALL"); at != std::string::npos; at = dump.find("CALL", at + 1))
+    {
+        bool startsLine = at == 0 || dump[at - 1] == '\n';
+        if (startsLine)
+            calls++;
+    }
+    return calls;
+}
+
+// Luwu: a function's body as an inline target the cost model refuses (cost 31 against a threshold of 25)
+#define LUWU_EXPENSIVE_BODY \
+    "    for i = 1, #t do\n" \
+    "        t[i] = t[i] * 2 + 1\n" \
+    "    end\n" \
+    "    t.a = t.a + 1\n" \
+    "    t.b = t.b + 2\n" \
+    "    t.c = t.c + 3\n" \
+    "    t.d = t.d + 4\n" \
+    "    t.e = t.e + 5\n" \
+    "    return t\n"
+
+// Luwu: at O2 a function with one call site inlines whatever the cost model says, unless that call is compiled more
+// than once, runs once anyway, or the function opts out
+TEST_CASE("InlineOnlyCallSiteRegardlessOfCost")
+{
+    // the only call site: inlined
+    const char* once = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                       "local function main(t)\n"
+                       "    big(t)\n"
+                       "end\n";
+    CHECK_EQ(countCalls(compileFunction(once, 1, 2)), 0);
+
+    // two call sites: the cost model decides, and refuses
+    const char* twice = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                        "local function main(t)\n"
+                        "    big(t)\n"
+                        "    big(t)\n"
+                        "end\n";
+    CHECK_EQ(countCalls(compileFunction(twice, 1, 2)), 2);
+
+    // one call site an unrolled loop compiles twice
+    const char* unrolled = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                           "local function main(t)\n"
+                           "    for _ = 1, 2 do\n"
+                           "        big(t)\n"
+                           "    end\n"
+                           "end\n";
+    CHECK_EQ(countCalls(compileFunction(unrolled, 1, 2)), 2);
+
+    // one call site inside a cheap function that is itself inlined at two call sites
+    const char* nested = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                         "local function mid(t)\n"
+                         "    big(t)\n"
+                         "end\n"
+                         "local function main(t)\n"
+                         "    mid(t)\n"
+                         "    mid(t)\n"
+                         "end\n";
+    CHECK_EQ(countCalls(compileFunction(nested, 2, 2)), 2);
+
+    // top-level code runs once outside a loop, and every time inside one
+    const char* topLevel = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                           "local t = {}\n"
+                           "big(t)\n";
+    CHECK_EQ(countCalls(compileFunction(topLevel, 1, 2)), 1);
+    const char* topLevelLoop = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                               "local t = {}\n"
+                               "for _ = 1, #t do\n"
+                               "    big(t)\n"
+                               "end\n";
+    CHECK_EQ(countCalls(compileFunction(topLevelLoop, 1, 2)), 0);
+
+    // O1 never inlines
+    CHECK_EQ(countCalls(compileFunction(once, 1, 1)), 1);
+
+    // a `@native` function called from code that isn't would run its body interpreted
+    const char* native = "@native\n"
+                         "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                         "local function main(t)\n"
+                         "    big(t)\n"
+                         "end\n";
+    CHECK_EQ(countCalls(compileFunction(native, 1, 2)), 1);
+
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
+    const char* optedOut = "@noinline\n"
+                           "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                           "local function main(t)\n"
+                           "    big(t)\n"
+                           "end\n";
+    CHECK_EQ(countCalls(compileFunction(optedOut, 1, 2)), 1);
+}
+
+// Luwu: inlining adds at most LuwuCompileInlineBudget instructions to a function, whatever the cost model allows
+TEST_CASE("InlineBudgetBoundsWhatInliningAdds")
+{
+    const char* source = "local function add(a, b)\n"
+                         "    return a + b\n"
+                         "end\n"
+                         "local function main(x)\n"
+                         "    return add(x, 1) + add(x, 2) + add(x, 3) + add(x, 4)\n"
+                         "end\n";
+
+    // unbounded, every call inlines
+    CHECK_EQ(countCalls(compileFunction(source, 1, 2)), 0);
+
+    // `add` is 2 instructions with its RETURN, checked against what's spent, and each inline emits 1: a budget of 3
+    // fits two
+    ScopedFastInt budget{FInt::LuwuCompileInlineBudget, 3};
+    CHECK_EQ(countCalls(compileFunction(source, 1, 2)), 2);
+}
+
+// Luwu: LuwuCompileInlineCallCost is what a call counts as against the body's cost
+TEST_CASE("InlineCallCostWeighsAgainstTheBody")
+{
+    const char* source = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                         "local function main(t)\n"
+                         "    big(t)\n"
+                         "    big(t)\n"
+                         "end\n";
+
+    CHECK_EQ(countCalls(compileFunction(source, 1, 2)), 2);
+
+    ScopedFastInt callCost{FInt::LuwuCompileInlineCallCost, 32};
+    CHECK_EQ(countCalls(compileFunction(source, 1, 2)), 0);
+}
+
+// Luwu: a loop-free function with fewer call sites than LuwuCompileInlineFewCallSites gets a higher threshold; one
+// with a loop doesn't, since its own work dwarfs the call
+TEST_CASE("InlineFewCallSitesRaiseTheThresholdOfLoopFreeFunctions")
+{
+    const char* loopFree = "local function big(t)\n"
+                           "    t.a = t.a + t.b\n"
+                           "    t.b = t.b + t.c\n"
+                           "    t.c = t.c + t.d\n"
+                           "    t.d = t.d + t.e\n"
+                           "    t.e = t.e + t.f\n"
+                           "    t.f = t.f + t.g\n"
+                           "    t.g = t.g + t.h\n"
+                           "    t.h = t.h + t.i\n"
+                           "    t.i = t.i + t.j\n"
+                           "    t.j = t.j + t.a\n"
+                           "    return t\n"
+                           "end\n"
+                           "local function main(t)\n"
+                           "    big(t)\n"
+                           "    big(t)\n"
+                           "end\n";
+    const char* withLoop = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                           "local function main(t)\n"
+                           "    big(t)\n"
+                           "    big(t)\n"
+                           "end\n";
+
+    {
+        ScopedFastInt off{FInt::LuwuCompileInlineFewCallSites, 1};
+        CHECK_EQ(countCalls(compileFunction(loopFree, 1, 2)), 2);
+        CHECK_EQ(countCalls(compileFunction(withLoop, 1, 2)), 2);
+    }
+
+    ScopedFastInt fewCallSites{FInt::LuwuCompileInlineFewCallSites, 6};
+    CHECK_EQ(countCalls(compileFunction(loopFree, 1, 2)), 0);
+    CHECK_EQ(countCalls(compileFunction(withLoop, 1, 2)), 2);
+}
+
+// Luwu: a class field's default that calls a local function stays in `__init` and isn't copied into every construction.
+// Initializers move to the construction sites only when they name no local but the constructor's parameters.
+TEST_CASE("InlineOnlyCallSiteSkipsClassFieldDefaults")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    const char* source = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                         "class Box(public n: number)\n"
+                         "    public items = big({})\n"
+                         "end\n"
+                         "local a = Box(1)\n"
+                         "local b = Box(2)\n";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+    Luau::ParseOptions parseOptions;
+    parseOptions.language = Luau::Language::Luwu;
+    Luau::compileOrThrow(bcb, source, options, parseOptions);
+
+    // both constructions call `__init`
+    std::string main = bcb.dumpFunction(bcb.getFunctionCount() - 1);
+    CHECK_EQ(countCalls(main), 2);
 }

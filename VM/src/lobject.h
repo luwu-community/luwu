@@ -393,6 +393,14 @@ struct LuauTryRange
 ** Function Prototypes
 */
 // clang-format off
+// Luwu table presizing: what one NEWTABLE instruction learned about the tables it makes
+typedef struct TableSite
+{
+    uint32_t pc;           // the NEWTABLE instruction's index in its proto's code
+    int arrayhint;         // the array size the next table here starts with
+    struct LuaTable* last; // the last table made here, weak: the GC clears it when that table dies (cleartablesites)
+} TableSite;
+
 typedef struct Proto
 {
     CommonHeader;
@@ -450,6 +458,12 @@ typedef struct Proto
     int linedefined;
     int bytecodeid;
     int sizetypeinfo;
+
+    // Luwu table presizing: one TableSite per NEWTABLE instruction, in code order. Made when the proto is loaded.
+    int sizetablesites;
+    uint8_t tablesiteslisted; // whether this proto is on global_State::sitedprotos this GC cycle
+    TableSite* tablesites;
+    struct Proto* nextsited; // next proto on global_State::sitedprotos
 
     FeedbackVectorSlot* feedbackvec;
     uint32_t feedbackvecsize;
@@ -786,9 +800,10 @@ typedef struct LuauClass
     // traverseclass.
     struct LuaTable* qualified;
 
-    // Luwu builtin classes: what `typeof` gives an object of this builtin class ("bundle", "vec", ...), or NULL for
-    // "object". Marked in traverseclass.
-    TString* typeofname;
+    // Luwu class reflection (rfcs/classes): what `class.member` and `class.fields` give through the class, made the first
+    // time: the ClassMember of each member at its offset + 1, and the field lists under "public" and "all". NULL until
+    // then. Marked in traverseclass.
+    struct LuaTable* reflection;
 
     // Luwu Destructuring (rfcs/destructuring.md): what a positional pattern `.(a, b)` reads from an object of this class.
     // `positionalmembers[i]` is the offset of the member at position i: a primary constructor's parameters, in order.
@@ -796,6 +811,10 @@ typedef struct LuauClass
     // and `positionalmembers` is NULL while it's 0 or less. Owned by this class object; freed in luaR_freeclass.
     uint32_t* positionalmembers;
     int numberofpositional;
+
+    // Luwu builtin classes: what `typeof` gives an object of this builtin class ("bundle", "vec", ...), or NULL for
+    // "object". Marked in traverseclass.
+    TString* typeofname;
 
 } LuauClass;
 

@@ -664,6 +664,13 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
         types.a = LBC_TYPE_NUMBER;
         types.result = LBC_TYPE_INTEGER;
         break;
+    case LBF_STRING_STARTSWITH:
+    case LBF_STRING_ENDSWITH:
+    case LBF_STRING_CONTAINS:
+        types.result = LBC_TYPE_BOOLEAN;
+        types.a = LBC_TYPE_STRING;
+        types.b = LBC_TYPE_STRING;
+        break;
     }
 }
 
@@ -1603,8 +1610,9 @@ static void analyzeBytecodeTypesPass(
             case LOP_JUMPXTYPE:
             case LOP_JUMPXMATCH:
             case LOP_SETOBJECTMEMBER:
-            case LOP_SETTABLEBUNDLE:
             case LOP_PRESIZETABLE:
+            case LOP_PUSH:
+            case LOP_SETTABLEBUNDLE:
                 break;
             case LOP_APPENDTABLE:
             {
@@ -1623,6 +1631,26 @@ static void analyzeBytecodeTypesPass(
                 bcType.result = regTags[ra];
                 break;
             }
+            case LOP_GETPOSITIONAL:
+            {
+                // Luwu Destructuring (rfcs/destructuring.md): any element, like GETTABLEN's result
+                int ra = LUAU_INSN_A(*pc);
+                int rb = LUAU_INSN_B(*pc);
+
+                bcType.a = getRegTag(regTags, bcTypeInfo, rb, i);
+
+                regTags[ra] = LBC_TYPE_ANY;
+                bcType.result = regTags[ra];
+                break;
+            }
+            case LOP_POP:
+            {
+                // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): any element, or whatever __pop returns
+                int ra = LUAU_INSN_A(*pc);
+                regTags[ra] = LBC_TYPE_ANY;
+                bcType.result = regTags[ra];
+                break;
+            }
             case LOP_WRAPRESULT:
             {
                 // Luwu try expressions: A gets an `Ok` or an `Err`
@@ -1635,18 +1663,6 @@ static void analyzeBytecodeTypesPass(
             {
                 // Luwu try expressions: A gets the value or error, or none
                 int ra = LUAU_INSN_A(*pc);
-                regTags[ra] = LBC_TYPE_ANY;
-                bcType.result = regTags[ra];
-                break;
-            }
-            case LOP_GETPOSITIONAL:
-            {
-                // Luwu Destructuring (rfcs/destructuring.md): any element, like GETTABLEN's result
-                int ra = LUAU_INSN_A(*pc);
-                int rb = LUAU_INSN_B(*pc);
-
-                bcType.a = getRegTag(regTags, bcTypeInfo, rb, i);
-
                 regTags[ra] = LBC_TYPE_ANY;
                 bcType.result = regTags[ra];
                 break;
@@ -1758,6 +1774,10 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
         break;
     case LOP_APPENDTABLE:
         visit(LUAU_INSN_C(*code), uint8_t(LBC_TYPE_NUMBER));
+        break;
+    case LOP_POP:
+        // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): writes only A, with any element or __pop's result
+        visitRange(ra, 1);
         break;
     case LOP_WRAPRESULT:
         visit(ra, uint8_t(LBC_TYPE_OBJECT));

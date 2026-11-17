@@ -14,6 +14,8 @@
 
 #include <algorithm>
 
+LUAU_FASTFLAG(LuwuLiteralTypes)
+
 namespace Luau
 {
 
@@ -659,7 +661,7 @@ private:
     NotNull<std::vector<TypeId>> toBlock_;
 };
 
-std::vector<TypeId> findBlockedArgTypesIn(AstExprCall* expr, NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes)
+std::vector<TypeId> findBlockedArgTypesIn_DEPRECATED(AstExprCall* expr, NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes)
 {
     std::vector<TypeId> toBlock;
     BlockedTypeInLiteralVisitor v{astTypes, NotNull{&toBlock}};
@@ -932,6 +934,17 @@ AstExpr* unwrapGroup(AstExpr* expr)
         expr = group->expr;
 
     return expr;
+}
+
+std::optional<TypeId> rawArrayElement(const TableType& table, NotNull<BuiltinTypes> builtinTypes)
+{
+    if (table.indexer && isNumber(follow(table.indexer->indexType)))
+        return table.indexer->indexResultType;
+
+    if (!table.indexer && table.props.empty())
+        return builtinTypes->neverType;
+
+    return std::nullopt;
 }
 
 bool isOptionalType(TypeId ty, NotNull<BuiltinTypes> builtinTypes)
@@ -1496,6 +1509,35 @@ const ClassFieldUserData* getClassFieldUserData(TypeId ty)
         return dynamic_cast<const ClassFieldUserData*>(etv->userData.get());
 
     return nullptr;
+}
+
+bool isLiteralTypeReference(const Scope& scope, const AstTypeReference* ref)
+{
+    if (!FFlag::LuwuLiteralTypes || ref->prefix.has_value() || ref->name != "literal" || !ref->hasParameterList)
+        return false;
+
+    return !scope.lookupType("literal");
+}
+
+const FunctionType::LiteralParameter* findLiteralParameter(const FunctionType& fty, size_t paramIndex)
+{
+    for (const FunctionType::LiteralParameter& literal : fty.literalParameters)
+    {
+        bool covers = literal.variadic ? paramIndex >= literal.argIndex : paramIndex == literal.argIndex;
+        if (covers)
+            return &literal;
+    }
+
+    return nullptr;
+}
+
+std::optional<TypeId> undecidedLiteral(TypeId ty)
+{
+    const FreeType* ft = get<FreeType>(follow(ty));
+    if (!ft || !ft->primitiveType || !get<SingletonType>(follow(ft->lowerBound)))
+        return std::nullopt;
+
+    return ft->lowerBound;
 }
 
 } // namespace Luau

@@ -27,8 +27,6 @@ LUAU_FASTFLAGVARIABLE(LuauCIProto)
 LUAU_FASTFLAGVARIABLE(LuauCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauYieldIter2)
 LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
-LUAU_FASTFLAGVARIABLE(LuauBackedgeHeapCheck)
-LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
 
 // Disable c99-designator to avoid the warning in computed goto dispatch table
 #ifdef __clang__
@@ -144,8 +142,8 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
         VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_WRAPRESULT), VM_DISPATCH_OP(LOP_RESULTGET), \
-        VM_DISPATCH_OP(LOP_GETQUALIFIED), VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE), VM_DISPATCH_OP(LOP_JUMPXTYPE), \
-        VM_DISPATCH_OP(LOP_JUMPXMATCH), VM_DISPATCH_OP(LOP_GETPOSITIONAL),
+        VM_DISPATCH_OP(LOP_GETQUALIFIED), VM_DISPATCH_OP(LOP_GETPOSITIONAL), VM_DISPATCH_OP(LOP_JUMPXTYPE), VM_DISPATCH_OP(LOP_JUMPXMATCH), \
+        VM_DISPATCH_OP(LOP_PUSH), VM_DISPATCH_OP(LOP_POP), VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -2646,7 +2644,10 @@ reentry:
 
                 VM_PROTECT_PC(); // luaH_new may fail due to OOM
 
-                sethvalue(L, ra, luaH_new(L, aux, b == 0 ? 0 : (1 << (b - 1))));
+                // Luwu table presizing: the table starts as long as the last one made here got
+                Proto* p = FFlag::LuauCIProto ? L->ci->p : cl->l.p;
+                uint32_t site = uint32_t(pc - 2 - p->code);
+                sethvalue(L, ra, luaH_newatsite(L, p, site, aux, b == 0 ? 0 : (1 << (b - 1))));
                 VM_PROTECT(luaC_checkGC(L));
                 VM_NEXT();
             }
@@ -2728,8 +2729,7 @@ reentry:
             VM_CASE(LOP_FORNLOOP)
             {
                 VM_INTERRUPT();
-                if (FFlag::LuauBackedgeHeapCheck)
-                    VM_CHECK_GC(L);
+                VM_CHECK_GC(L);
                 VM_CASE_INSTRUCTION insn = *pc++;
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(insn));
                 LUAU_ASSERT(ttisnumber(ra + 0) && ttisnumber(ra + 1) && ttisnumber(ra + 2));
@@ -2889,8 +2889,7 @@ reentry:
             VM_CASE(LOP_FORGLOOP)
             {
                 VM_INTERRUPT();
-                if (FFlag::LuauBackedgeHeapCheck)
-                    VM_CHECK_GC(L);
+                VM_CHECK_GC(L);
                 VM_CASE_INSTRUCTION insn = *pc++;
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(insn));
                 uint32_t aux = *pc;
@@ -3209,8 +3208,7 @@ reentry:
             VM_CASE(LOP_JUMPBACK)
             {
                 VM_INTERRUPT();
-                if (FFlag::LuauBackedgeHeapCheck)
-                    VM_CHECK_GC(L);
+                VM_CHECK_GC(L);
                 VM_CASE_INSTRUCTION insn = *pc++;
 
                 pc += LUAU_INSN_D(insn);
@@ -3232,8 +3230,7 @@ reentry:
             VM_CASE(LOP_JUMPX)
             {
                 VM_INTERRUPT();
-                if (FFlag::LuauBackedgeHeapCheck)
-                    VM_CHECK_GC(L);
+                VM_CHECK_GC(L);
                 VM_CASE_INSTRUCTION insn = *pc++;
 
                 pc += LUAU_INSN_E(insn);
@@ -4330,6 +4327,73 @@ reentry:
                 int c = LUAU_INSN_C(insn);
 
                 VM_PROTECT(luaV_getpositional(L, rb, c, ra));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_PUSH)
+            {
+                // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `A <+ values`
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = &base[LUAU_INSN_B(insn)]; // note: this can point to L->top if c == LUA_MULTRET making VM_REG unsafe to use
+                int c = LUAU_INSN_C(insn) - 1;
+
+                // fast path: one value onto a table without a metatable, with room in its array part
+                if (c == 1 && ttistable(ra) && !hvalue(ra)->metatable)
+                {
+                    LuaTable* h = hvalue(ra);
+
+                    if (ttisnil(rb))
+                        VM_NEXT();
+
+                    int n = luaH_getn(h);
+                    if (!h->readonly && unsigned(n) < unsigned(h->sizearray))
+                    {
+                        setobj2t(L, &h->array[n], rb);
+                        luaC_barriert(L, h, rb);
+                        VM_NEXT();
+                    }
+                }
+
+                // a multret value list ends at L->top, which luaV_push leaves in place so a __push call goes above it
+                if (c == LUA_MULTRET)
+                    c = int(L->top - rb);
+
+                VM_PROTECT(luaV_push(L, ra, rb, c));
+                L->top = L->ci->top;
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_POP)
+            {
+                // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `A = <-B`
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                // fast path: a table without a metatable that's empty, or whose last element is in its array part
+                if (ttistable(rb) && !hvalue(rb)->metatable)
+                {
+                    LuaTable* h = hvalue(rb);
+                    int n = luaH_getn(h);
+
+                    if (n == 0)
+                    {
+                        setnilvalue(ra);
+                        VM_NEXT();
+                    }
+
+                    if (!h->readonly && unsigned(n - 1) < unsigned(h->sizearray))
+                    {
+                        // `h` was read before A is written, so A can be B's own register
+                        TValue* slot = &h->array[n - 1];
+                        setobj2s(L, ra, slot);
+                        setnilvalue(slot);
+                        VM_NEXT();
+                    }
+                }
+
+                VM_PROTECT(luaV_pop(L, ra, rb));
                 VM_NEXT();
             }
 

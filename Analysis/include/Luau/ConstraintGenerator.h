@@ -189,6 +189,17 @@ struct ConstraintGenerator
     // global: see the comment there.
     DenseHashSet<AstName> classGlobalNames{AstName{}};
 
+    // Luwu: what the `return` statements of a function whose return type is inferred from them give
+    struct ReturnShape
+    {
+        // Positions where a `return` gives `x :: any` and another gives a value of its own. There the cast is left out
+        // of the join. Where only casts give a value, the value is `any`.
+        std::vector<bool> ignoredAnyCasts;
+    };
+
+    // Luwu: by return pack, the shape of each function whose return type is inferred from its `return` statements
+    DenseHashMap<TypePackId, ReturnShape> inferredReturnShapes{nullptr};
+
     // Luwu Declare Statements (rfcs/declare-statements.md): the placeholder type of each global a non-definition
     // module declares. The whole file sees a declaration, so hoistDeclarations binds these before any code is
     // visited, and the declaration's visit binds its placeholder to the declared type.
@@ -243,6 +254,9 @@ struct ConstraintGenerator
     DcrLogger* logger;
 
     bool recursionLimitMet = false;
+
+    // Luwu: the module's comments, for the `comments` metadata of the types it declares (attachDeclarationComments)
+    const std::vector<SourceComment>* sourceComments = nullptr;
 
     NotNull<ConstraintGraph> cgraph;
 
@@ -499,6 +513,7 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatComprehensionItem* item);
     ControlFlow visit(const ScopePtr& scope, AstStatAssign* assign);
     ControlFlow visit(const ScopePtr& scope, AstStatCompoundAssign* assign);
+    ControlFlow visit(const ScopePtr& scope, AstStatPush* push);
     ControlFlow visit(const ScopePtr& scope, AstStatIf* ifStatement);
 
     // The scopes of a branch with a condition: `chain` for a `when` chain's bindings (null without one), `body` for
@@ -525,6 +540,10 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareGlobal* declareGlobal);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareClass* declaredClass);
     void visitClass(const ScopePtr& scope, AstStatClass* statClass, bool declared);
+
+    void attachDeclarationComments(TypeId ty, const Location& declaration);
+    // Luwu doc references: the comments around a declaration as metadata (`comments`), or null when there are none
+    std::shared_ptr<TypeMetadataTable> declarationComments(const Location& declaration);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareExternType* declaredExternType);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareFunction* global);
     ControlFlow visit(const ScopePtr& scope, AstStatClass* statClass);
@@ -574,7 +593,9 @@ private:
     Inference check(const ScopePtr& scope, AstExprIndexExpr* indexExpr);
     Inference check(const ScopePtr& scope, AstExprFunction* func, std::optional<TypeId> expectedType, bool generalize);
     Inference check(const ScopePtr& scope, AstExprUnary* unary);
+    Inference check(const ScopePtr& scope, AstExprPop* pop);
     Inference check(const ScopePtr& scope, AstExprBinary* binary, std::optional<TypeId> expectedType);
+    RefinementId bundleSizeRefinement(const ScopePtr& scope, AstExprBinary* binary);
     Inference checkAstExprBinary(
         const ScopePtr& scope,
         const Location& location,
@@ -641,6 +662,80 @@ private:
     void recordRaisedError(AstExprCall* call, const std::vector<TypeId>& args);
     void weakenUnknownMembers(AstTypeUnion* annotation, std::vector<TypeId>& members);
     std::optional<FunctionType::TruthyRefinement> resolveTruthyRefinement(const ScopePtr& signatureScope, AstExprFunction* fn);
+
+    // Luwu literal types: a parameter's, local's or table field's annotation, resolved. For `literal<B>`, `V<literal<B>>`,
+    // an alias of either, or one of those followed by `?`, `type` is `B` (or `B?`) and `check` is what a value given for
+    // it must be. Any other annotation resolves as usual, with no check.
+    struct ResolvedAnnotation
+    {
+        TypeId type;
+        std::optional<LiteralCheck> check;
+    };
+    ResolvedAnnotation resolveLiteralCheckAnnotation(const ScopePtr& scope, AstType* annotation, bool inTypeArguments, bool replaceErrorWithFresh);
+    // A local's annotation, resolved once: an element of a positional pattern on a `.(...)` value has it resolved
+    // early, for the bundle's expected type (expectedBundleType)
+    ResolvedAnnotation resolveLocalAnnotation(const ScopePtr& scope, AstLocal* local);
+    DenseHashMap<AstLocal*, ResolvedAnnotation> bundleElementAnnotations{nullptr};
+    std::optional<TypeId> expectedBundleType(const ScopePtr& scope, AstStatLocal* statLocal);
+    // The element annotations of the positional pattern a `.(...)` value is destructured by: each value's expected type
+    DenseHashMap<const AstExprCall*, std::vector<std::optional<TypeId>>> dotPositionalElementTypes{nullptr};
+    void expectDotPositionalElements(AstExpr* expr, const std::vector<std::optional<TypeId>>& elements);
+    // Luwu literal types: an alias of a union with a literal member (`type Length = CssLength | Token | number`), as
+    // resolveLiteralCheckAnnotation resolves the union written out
+    std::optional<ResolvedAnnotation> literalUnionOfType(TypeId ty);
+    // Luwu literal types: an alias body that is a literal annotation or a union with one among its members. A literal
+    // member resolves to its validator (or its placeholder), which use sites recognize (literalOfType).
+    static bool hasLiteralMember(const Scope& scope, AstType* annotation);
+    TypeId resolveLiteralAliasBody(const ScopePtr& scope, AstType* annotation);
+
+    // Luwu literal types: resolves a parameter's annotation (resolveLiteralCheckAnnotation), recording its check in
+    // `literalParameters`
+    TypeId resolveParameterAnnotation(
+        const ScopePtr& scope,
+        AstType* annotation,
+        size_t argIndex,
+        bool variadic,
+        std::vector<FunctionType::LiteralParameter>& literalParameters,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh
+    );
+    // Luwu literal types: resolveParameterAnnotation for each parameter of a function type `(a: A, ...: B) -> R`
+    TypePackId resolveParameterAnnotations(
+        const ScopePtr& scope,
+        const AstTypeList& params,
+        std::vector<FunctionType::LiteralParameter>& literalParameters,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh
+    );
+    // Luwu literal types: an annotation that is `literal<B>` or has it as a type argument (`V<literal<B>>`), resolved. The
+    // placeholder is the generic `literal<B>` stands for, marked with `B`; `validator` is the annotation around it (null for
+    // a bare `literal<B>`).
+    struct ResolvedLiteral
+    {
+        TypeId base;
+        TypeId placeholder;
+        TypeId validator;
+    };
+    // Luwu literal types: what a type an annotation resolved to says about it being a literal parameter: the placeholder of
+    // an alias of `literal<B>`, or a validator applied to one (an alias of `V<literal<B>>`)
+    static std::optional<ResolvedLiteral> literalOfType(TypeId ty);
+    ResolvedLiteral resolveLiteralAnnotation(
+        const ScopePtr& scope,
+        AstType* annotation,
+        AstTypeReference* literalRef,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh
+    );
+
+    // Luwu literal types: `B` of `literal<B>`, reporting a `literal` without exactly one type argument
+    TypeId resolveLiteralBase(const ScopePtr& scope, AstTypeReference* literalRef, bool inTypeArguments, bool replaceErrorWithFresh);
+    // Luwu literal types: the `literal<B>` that resolves to the placeholder while a validator is being resolved
+    struct PendingLiteral
+    {
+        AstTypeReference* ref;
+        TypeId placeholder;
+    };
+    std::optional<PendingLiteral> pendingLiteral;
 
     // Specializations of 'resolveType' below
     TypeId resolveReferenceType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref, bool inTypeArguments, bool replaceErrorWithFresh);

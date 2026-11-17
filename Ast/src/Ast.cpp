@@ -819,12 +819,27 @@ AstExprMatchPattern::AstExprMatchPattern(
 {
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): the expressions and nested patterns in a pattern's fields
+static void visitPatternFields(const AstDestructurePattern& pattern, AstVisitor* visitor)
+{
+    for (const AstDestructureField& field : pattern.fields)
+    {
+        if (field.keyExpr)
+            field.keyExpr->visit(visitor);
+        visitPatternFields(field.target, visitor);
+    }
+
+    if (pattern.test)
+        pattern.test->visit(visitor);
+}
+
 void AstExprMatchPattern::visit(AstVisitor* visitor)
 {
     if (!visitor->visit(this))
         return;
 
-    if (visitor->visitsPatternChecks())
+    // a pattern nested in a field of several alternatives has no plain-code meaning of its own
+    if (visitor->visitsPatternChecks() && checked)
     {
         checked->visit(visitor);
         return;
@@ -836,6 +851,8 @@ void AstExprMatchPattern::visit(AstVisitor* visitor)
     {
         if (alternative.operand)
             alternative.operand->visit(visitor);
+        if (alternative.fields)
+            visitPatternFields(*alternative.fields, visitor);
     }
 }
 
@@ -1014,6 +1031,19 @@ void AstExprTableComprehension::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
         loop->visit(visitor);
+}
+
+AstExprPop::AstExprPop(const Location& location, AstExpr* expr)
+    : AstExpr(ClassIndex(), location)
+    , expr(expr)
+{
+    luwuOnly = true;
+}
+
+void AstExprPop::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        expr->visit(visitor);
 }
 
 AstExprError::AstExprError(const Location& location, const AstArray<AstExpr*>& expressions, unsigned messageIndex)
@@ -1438,6 +1468,26 @@ void AstStatCompoundAssign::visit(AstVisitor* visitor)
     {
         var->visit(visitor);
         value->visit(visitor);
+    }
+}
+
+AstStatPush::AstStatPush(const Location& location, AstExpr* target, const Location& opLocation, const AstArray<AstExpr*>& values)
+    : AstStat(ClassIndex(), location)
+    , target(target)
+    , opLocation(opLocation)
+    , values(values)
+{
+    luwuOnly = true;
+}
+
+void AstStatPush::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+    {
+        target->visit(visitor);
+
+        for (AstExpr* value : values)
+            value->visit(visitor);
     }
 }
 

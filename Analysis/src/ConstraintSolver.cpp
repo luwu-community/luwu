@@ -1,6 +1,8 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/ConstraintSolver.h"
 
+#include "Luau/BuiltinDefinitions.h"
+
 #include "Luau/Anyification.h"
 #include "Luau/ApplyTypeFunction.h"
 #include "Luau/AstUtils.h"
@@ -42,6 +44,7 @@ LUAU_FASTINTVARIABLE(LuauSolverRecursionLimit, 500)
 
 LUAU_FASTFLAGVARIABLE(DebugLuauAssertOnForcedConstraint)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
+LUAU_FASTFLAGVARIABLE(LuauRelaxConstraintOrderingForFunctionCheck)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogSolver)
 LUAU_FASTFLAGVARIABLE(DebugLuauLogBindings)
 LUAU_FASTFLAGVARIABLE(LuauFixPropReadsOnMetatableTypes)
@@ -722,6 +725,8 @@ void ConstraintSolver::run()
     {
         progress = runSolverPass(false);
         if (!progress)
+            progress = reduceRecursiveReturnsWithLowerBounds();
+        if (!progress)
             progress |= runSolverPass(true);
     } while (progress);
 
@@ -741,6 +746,42 @@ void ConstraintSolver::run()
     {
         logger->captureFinalSolverState(rootScope, unsolvedConstraints);
     }
+}
+
+// Luwu: a recursive call gives the function's inferred return values. `return fact(n - 1) * n` makes the return value
+// `'r` hold `mul<'r, number>`, and the reduction and `'r` wait for each other. Once nothing else can make progress,
+// `'r`'s lower bound holds what the function's other returns give (the `1` of `if n <= 1 then return 1 end`). The type
+// function reduces with that. A function whose every return recurses has `never` there and returns `never`.
+// Upstream never meets this because its first `return` binds the return pack to a concrete type. When the recursive
+// `return` comes first, upstream's function returns `never`.
+bool ConstraintSolver::reduceRecursiveReturnsWithLowerBounds()
+{
+    bool unblocked = false;
+
+    for (NotNull<const Constraint> c : unsolvedConstraints)
+    {
+        const ReduceConstraint* reduce = get<ReduceConstraint>(*c);
+        if (!reduce)
+            continue;
+
+        TypeFunctionInstanceType* instance = getMutable<TypeFunctionInstanceType>(follow(reduce->ty));
+        if (!instance)
+            continue;
+
+        for (TypeId& argument : instance->typeArguments)
+        {
+            TypeId slot = follow(argument);
+            const FreeType* free = get<FreeType>(slot);
+            if (!free || !inferredReturnSlots.contains(slot))
+                continue;
+
+            argument = free->lowerBound;
+            cgraph->removeDependencyOf(slot, c.get());
+            unblocked = true;
+        }
+    }
+
+    return unblocked;
 }
 
 void ConstraintSolver::finalizeTypeFunctions()
@@ -1026,6 +1067,8 @@ bool ConstraintSolver::tryDispatch(NotNull<const Constraint> constraint, bool fo
         success = tryDispatch(*uc, constraint);
     else if (auto uc = get<AssignIndexConstraint>(*constraint))
         success = tryDispatch(*uc, constraint);
+    else if (auto pc = get<PushConstraint>(*constraint))
+        success = tryDispatch(*pc, constraint);
     else if (auto uc = get<UnpackConstraint>(*constraint))
         success = tryDispatch(*uc, constraint);
     else if (auto rc = get<ReduceConstraint>(*constraint))
@@ -1069,9 +1112,147 @@ bool ConstraintSolver::tryDispatch(const PackSubtypeConstraint& c, NotNull<const
     else if (isBlocked(c.superPack))
         return block(c.superPack, constraint);
 
+    if (c.inferredReturn)
+    {
+        size_t firstPushed = unsolvedConstraints.size();
+        bool dispatched = dispatchInferredReturn(c, constraint);
+        blockReturnSlotsOnPushedConstraints(c.superPack, firstPushed);
+        return dispatched;
+    }
+
     unify(constraint, c.subPack, c.superPack);
 
     return true;
+}
+
+// Luwu: a function with no return annotation returns what its `return` statements give, joined value by value:
+// `return i` and `return nil` make `number?`. Upstream binds the free return pack to the first `return` that dispatches
+// and dispatches the returns in source order. The first `return` decides the type there, and every other one has to
+// match it. Here the pack holds one free type per value. The first `return` to dispatch makes the pack, a `return` with
+// more values adds to it, and every `return` widens the free types like any lower bound. An expected type (a lambda
+// passed to a call, a method of an annotated table) binds the pack before any `return` dispatches and decides the type
+// as it does upstream.
+bool ConstraintSolver::dispatchInferredReturn(const PackSubtypeConstraint& c, NotNull<const Constraint> constraint)
+{
+    TypePackId returnPack = follow(c.superPack);
+
+    // The pack starts with no values. Each `return` adds the slots it needs.
+    if (const FreeTypePack* free = get<FreeTypePack>(returnPack))
+    {
+        TypePackId slotPack = arena->addTypePack(TypePack{});
+        bind(constraint, returnPack, slotPack);
+        module->inferredReturnPacks.insert(slotPack);
+        inferredReturns[slotPack] = InferredReturn{free->scope};
+        returnPack = slotPack;
+    }
+
+    InferredReturn* inferred = inferredReturns.find(returnPack);
+    TypePack* slots = getMutable<TypePack>(returnPack);
+    if (!inferred || !slots)
+    {
+        unify(constraint, c.subPack, c.superPack);
+        return true;
+    }
+
+    auto [values, valuesTail] = flatten(c.subPack);
+    const VariadicTypePack* variadic = valuesTail ? get<VariadicTypePack>(follow(*valuesTail)) : nullptr;
+
+    // A generic or free pack at the end gives a number of values known only later. It goes to a tail bound once, as
+    // upstream binds the whole return pack.
+    if (valuesTail && !variadic)
+    {
+        if (!slots->tail)
+            slots->tail = arena->freshTypePack(inferred->scope, Polarity::Positive);
+        unify(constraint, c.subPack, returnPack);
+        inferred->fewestValues = std::min(inferred->fewestValues, values.size());
+        return true;
+    }
+
+    // A `return` with more values than there are slots adds slots. A `return` that gave fewer values before gave `nil`
+    // there, and one that ended in a variadic tail may have given one of its values.
+    const VariadicTypePack* slotsTail = slots->tail ? get<VariadicTypePack>(follow(*slots->tail)) : nullptr;
+    while (slots->head.size() < values.size())
+    {
+        TypeId slot = freshReturnSlot(inferred->scope);
+        if (inferred->fewestValues <= slots->head.size())
+            unify(constraint, builtinTypes->nilType, slot);
+        if (slotsTail)
+            unify(constraint, slotsTail->ty, slot);
+        slots->head.push_back(slot);
+    }
+
+    // Past its values, a `return` gives `nil`, or the values of its variadic tail.
+    for (size_t i = 0; i < slots->head.size(); ++i)
+    {
+        if (i < values.size())
+        {
+            unify(constraint, values[i], slots->head[i]);
+            continue;
+        }
+
+        unify(constraint, builtinTypes->nilType, slots->head[i]);
+        if (variadic)
+            unify(constraint, variadic->ty, slots->head[i]);
+    }
+
+    if (variadic)
+    {
+        if (!slots->tail)
+            slots->tail = arena->addTypePack(VariadicTypePack{freshReturnSlot(inferred->scope)});
+
+        if (const VariadicTypePack* tail = get<VariadicTypePack>(follow(*slots->tail)))
+            unify(constraint, variadic->ty, tail->ty);
+        else
+            unify(constraint, *valuesTail, *slots->tail);
+    }
+
+    inferred->fewestValues = std::min(inferred->fewestValues, values.size());
+    return true;
+}
+
+TypeId ConstraintSolver::freshReturnSlot(Scope* scope)
+{
+    TypeId slot = freshType(arena, builtinTypes, scope, Polarity::Positive);
+    inferredReturnSlots.insert(slot);
+    return slot;
+}
+
+// Luwu: the constraints a `return` pushed (`C <: 'r`, for a value still being solved) give its return slots their
+// bounds, but the constraint graph doesn't know that: the slots are made while solving. Without the dependency, a slot is
+// generalized when another `return` finishes, with none of the bounds those constraints were about to give it, and the
+// function returns `unknown` (a static method whose recursive `return C.f()` dispatches first).
+void ConstraintSolver::blockReturnSlotsOnPushedConstraints(TypePackId returnPack, size_t firstPushed)
+{
+    const TypePack* slots = get<TypePack>(follow(returnPack));
+    if (!slots)
+        return;
+
+    for (size_t i = firstPushed; i < unsolvedConstraints.size(); ++i)
+    {
+        for (TypeId slot : slots->head)
+        {
+            slot = follow(slot);
+            if (get<FreeType>(slot) && inferredReturnSlots.contains(slot))
+                cgraph->addDependencyOf(unsolvedConstraints[i].get(), slot);
+        }
+    }
+}
+
+// Luwu: a free tail no `return` filled is empty. Generalized as it is, it would be `...unknown`.
+void ConstraintSolver::finishInferredReturn(NotNull<const Constraint> constraint, TypeId functionTy)
+{
+    const FunctionType* fn = get<FunctionType>(follow(functionTy));
+    if (!fn)
+        return;
+
+    TypePackId returnPack = follow(fn->retTypes);
+    const TypePack* slots = get<TypePack>(returnPack);
+    if (!slots || !slots->tail || !inferredReturns.find(returnPack))
+        return;
+
+    TypePackId tail = follow(*slots->tail);
+    if (get<FreeTypePack>(tail))
+        bind(constraint, tail, builtinTypes->emptyTypePack);
 }
 
 // Luwu Classes (rfcs/classes): a generic class's method as read through the class value, where
@@ -1098,6 +1279,8 @@ bool ConstraintSolver::tryDispatch(const GeneralizationConstraint& c, NotNull<co
         return block(c.sourceType, constraint);
     else if (get<PendingExpansionType>(generalizedType))
         return block(generalizedType, constraint);
+
+    finishInferredReturn(constraint, c.sourceType);
 
     std::optional<TypeId> generalizedTy = generalize(NotNull{arena}, builtinTypes, constraint->scope, generalizedTypes, c.sourceType);
     if (!generalizedTy)
@@ -1908,6 +2091,42 @@ static void patchUnconstrainedGenericsFromDefaults(TypeId overloadFn, NotNull<Sc
 
 static std::optional<TypeId> selectExpectedNominal(const FunctionType* ftv, TypeId expectedType);
 
+// Luwu: the first type function in an argument the solver hasn't reduced yet (`Same<'a>` in `Box<Same<'a>>`)
+struct PendingTypeFunctionFinder : TypeOnceVisitor
+{
+    NotNull<const ConstraintSolver> solver;
+    std::optional<TypeId> found;
+
+    explicit PendingTypeFunctionFinder(NotNull<const ConstraintSolver> solver)
+        : TypeOnceVisitor("PendingTypeFunctionFinder", /* skipBoundTypes */ true)
+        , solver(solver)
+    {
+    }
+
+    bool visit(TypeId ty) override
+    {
+        return !found;
+    }
+
+    bool visit(TypeId ty, const TypeFunctionInstanceType&) override
+    {
+        if (solver->isBlocked(ty))
+            found = ty;
+        return false;
+    }
+
+    // Only an instantiation's type arguments relate it to a parameter. Walking a class's members would only cost time.
+    bool visit(TypeId ty, const ExternType& etv) override
+    {
+        if (etv.genericTemplate)
+        {
+            for (TypeId argument : etv.instantiatedTypeParams)
+                traverse(argument);
+        }
+        return false;
+    }
+};
+
 bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<const Constraint> constraint, bool force)
 {
     TypeId fn = follow(c.fn);
@@ -1960,6 +2179,21 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
 
     if (blocked)
         return false;
+
+    // Luwu: a generic callee's type arguments are fixed from the arguments' types when the call is dispatched. One
+    // still holding an unreduced type function (`Wrap(box)` with `box: Box<Same<'a>>`) would fix `T` before it says
+    // anything, and `T` would come out `unknown`, so the call waits for it. Upstream dispatches the call anyway.
+    const FunctionType* fnType = get<FunctionType>(fn);
+    bool mayInstantiate = !fnType || !fnType->generics.empty() || !fnType->genericPacks.empty();
+    if (mayInstantiate && !force)
+    {
+        PendingTypeFunctionFinder finder{NotNull{this}};
+        for (TypeId t : argsHead)
+            finder.traverse(t);
+
+        if (finder.found)
+            return block(*finder.found, constraint);
+    }
 
     auto collapse = [](const auto* t) -> std::optional<TypeId>
     {
@@ -2311,18 +2545,21 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
     if (isBlocked(argsPack))
         return true;
 
-    // This is expensive as we need to traverse a (potentially large)
-    // literal up front in order to determine if there are any blocked
-    // types, otherwise we may run `matchTypeLiteral` multiple times,
-    // which right now may fail due to being non-idempotent (it
-    // destructively updates the underlying literal type).
-    auto blockedTypes = findBlockedArgTypesIn(c.callSite, c.astTypes);
-    for (TypeId ty : blockedTypes)
+    if (!FFlag::LuauRelaxConstraintOrderingForFunctionCheck)
     {
-        block(ty, constraint);
+        // This is expensive as we need to traverse a (potentially large)
+        // literal up front in order to determine if there are any blocked
+        // types, otherwise we may run `matchTypeLiteral` multiple times,
+        // which right now may fail due to being non-idempotent (it
+        // destructively updates the underlying literal type).
+        auto blockedTypes = findBlockedArgTypesIn_DEPRECATED(c.callSite, c.astTypes);
+        for (TypeId ty : blockedTypes)
+        {
+            block(ty, constraint);
+        }
+        if (!blockedTypes.empty())
+            return false;
     }
-    if (!blockedTypes.empty())
-        return false;
 
     // We know the type of the function and the arguments it expects to receive.
     // We also know the TypeIds of the actual arguments that will be passed.
@@ -2428,6 +2665,15 @@ bool ConstraintSolver::tryDispatch(const FunctionCheckConstraint& c, NotNull<con
             expectedArgTy = follow(*bound);
 
         AstExpr* expr = unwrapGroup(c.callSite->args.data[i]);
+
+        // Luwu literal types: an argument for a `literal<B>` parameter is given its literal type, which also solves a generic
+        // `literal<S>` to it
+        if (findLiteralParameter(*ftv, i + expectedArgOffset))
+        {
+            TypeId argTy = follow(argPackHead[i + typeOffset]);
+            if (std::optional<TypeId> literal = undecidedLiteral(argTy))
+                bind(constraint, argTy, *literal);
+        }
 
         PushTypeResult result = pushTypeInto(
             c.astTypes,
@@ -2938,6 +3184,13 @@ bool ConstraintSolver::tryDispatchPositional(
             continue;
         }
 
+        // Luwu bundles: a bundle's positions are its class's type arguments, and an intersection reads its bundles'
+        if (std::optional<TypeId> read = readBundlePosition(builtinTypes, NotNull{arena}, option, position))
+        {
+            results.push_back(*read);
+            continue;
+        }
+
         const ClassFieldUserData* data = getClassFieldUserData(option);
         if (!data)
         {
@@ -3143,6 +3396,44 @@ bool ConstraintSolver::tryDispatch(const AssignPropConstraint& c, NotNull<const 
     }
 
     bind(constraint, c.propType, builtinTypes->errorType);
+
+    return true;
+}
+
+bool ConstraintSolver::tryDispatch(const PushConstraint& c, NotNull<const Constraint> constraint)
+{
+    const TypeId containerType = follow(c.containerType);
+
+    if (isBlocked(containerType))
+        return block(containerType, constraint);
+
+    if (isBlocked(c.valuesPack))
+        return block(c.valuesPack, constraint);
+
+    // Only a plain table grows from a push. A value with metatables is checked against its `__push` by TypeChecker2.
+    bool plainTable = get<FreeType>(containerType) || get<TableType>(containerType);
+    if (!plainTable)
+        return true;
+
+    auto [values, tail] = flatten(c.valuesPack);
+    if (tail)
+    {
+        if (const VariadicTypePack* variadic = get<VariadicTypePack>(follow(*tail)))
+            values.push_back(variadic->ty);
+    }
+
+    // each value is stored at a new number index; a nil value pushes nothing, so it doesn't widen the element type
+    for (TypeId value : values)
+    {
+        TypeId propType = arena->addType(BlockedType{});
+        NotNull<Constraint> assign = pushConstraint(
+            constraint->scope,
+            constraint->location,
+            AssignIndexConstraint{containerType, builtinTypes->numberType, stripNil(builtinTypes, *arena, value), propType}
+        );
+        getMutable<BlockedType>(propType)->setOwner(assign);
+        inheritBlocks(constraint, assign);
+    }
 
     return true;
 }
@@ -3738,6 +4029,26 @@ void dropWhile(std::vector<T>& vec, Predicate pred)
     vec.erase(vec.begin(), it);
 }
 
+// Luwu: whether a type mentions one generic
+struct GenericFinder : TypeOnceVisitor
+{
+    TypeId generic;
+    bool found = false;
+
+    explicit GenericFinder(TypeId generic)
+        : TypeOnceVisitor("GenericFinder", /* skipBoundTypes */ true)
+        , generic(generic)
+    {
+    }
+
+    bool visit(TypeId ty) override
+    {
+        if (ty == generic)
+            found = true;
+        return !found;
+    }
+};
+
 TypeId ConstraintSolver::instantiateFunctionType(
     TypeId functionTypeId,
     const std::vector<TypeId>& typeArguments,
@@ -3771,9 +4082,31 @@ TypeId ConstraintSolver::instantiateFunctionType(
         replacements[*typeParametersIter++] = typeArgument;
     }
 
+    // Luwu: a generic not given that a parameter uses stays generic, and the call instantiates it as it would with no
+    // type arguments, binding `methods: M` in `attach<<string>>({}, { ... })` to its argument. Upstream made it a free
+    // type here, which nothing settled, so `M` stayed `'a` and nothing could be read off it. One only the return type uses
+    // has no argument to come from, so it's still a free type, inferred from where the result goes.
+    std::pair<std::vector<TypeId>, std::optional<TypePackId>> flattened = flatten(ft->argTypes);
+    const std::vector<TypeId>& parameters = flattened.first;
+    std::optional<TypePackId> variadic = flattened.second;
+    auto usedByParameter = [&](TypeId generic)
+    {
+        GenericFinder finder{generic};
+        for (TypeId parameter : parameters)
+            finder.traverse(parameter);
+        if (variadic)
+            finder.traverse(*variadic);
+        return finder.found;
+    };
+
+    std::vector<TypeId> remainingGenerics;
     while (typeParametersIter != ft->generics.end())
     {
-        replacements[*typeParametersIter++] = freshType(arena, builtinTypes, scope, Polarity::Mixed);
+        TypeId generic = *typeParametersIter++;
+        if (usedByParameter(generic))
+            remainingGenerics.push_back(generic);
+        else
+            replacements[generic] = freshType(arena, builtinTypes, scope, Polarity::Mixed);
     }
 
     DenseHashMap<TypePackId, TypePackId> replacementPacks{nullptr};
@@ -3799,8 +4132,8 @@ TypeId ConstraintSolver::instantiateFunctionType(
     FunctionType* ft2 = getMutable<FunctionType>(clonedFunctionTypeId);
     LUAU_ASSERT(ft != ft2);
 
-    // We instantiate all generics, replacing any with free types.
-    ft2->generics.clear();
+    // The generics given, and the ones only the return type uses, are instantiated; the rest are left for the call.
+    ft2->generics = std::move(remainingGenerics);
 
     // However, we only instantiate as many type pack arguments as are given.
     if (!ft2->genericPacks.empty() && typePackArguments.size() < ft2->genericPacks.size())
