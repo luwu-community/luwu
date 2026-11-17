@@ -448,12 +448,18 @@ void translateInstInitTraits(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);
 
+    // the CALL after it runs each initializer from the frame it names (see LOP_INITTRAITS)
+    Instruction call = pc[1];
+    CODEGEN_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+    int frame = LUAU_INSN_A(call);
+    int nargs = LUAU_INSN_B(call) - 2;
+
     IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
     IrOp next = build.blockAtInst(pcpos + 1);
 
-    build.inst(IrCmd::FALLBACK_INITTRAITS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(ra + 1));
+    build.inst(IrCmd::FALLBACK_INITTRAITS, build.constUint(pcpos), build.vmReg(ra), build.vmReg(frame), build.constInt(nargs));
 
-    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    IrOp tag = build.inst(IrCmd::LOAD_TAG, build.vmReg(frame));
     build.inst(IrCmd::JUMP_EQ_TAG, tag, build.constTag(LUA_TNIL), target, next);
 
     // Fallthrough in original bytecode is implicit, so we start next internal block here

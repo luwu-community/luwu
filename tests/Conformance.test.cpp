@@ -3590,9 +3590,8 @@ return f
                     CHECK(sv == "u42");
                 else if (tt == LUA_TPROTO)
                     CHECK((sv == "proto unnamed:1 =GCDump" || sv == "proto foo:7 =GCDump" || sv == "proto f:4 =GCDump"));
-                // Luwu Traits (rfcs/classes/traits.md): every state has the trait initializer runner (global_State::traitinitrunner)
                 else if (tt == LUA_TFUNCTION)
-                    CHECK((sv == "test" || sv == "unnamed:1 =GCDump" || sv == "foo:7 =GCDump" || sv == "f:4 =GCDump" || sv == "inittraits"));
+                    CHECK((sv == "test" || sv == "unnamed:1 =GCDump" || sv == "foo:7 =GCDump" || sv == "f:4 =GCDump"));
                 else if (tt == LUA_TTHREAD)
                     CHECK(sv == "thread at unnamed:1 =GCDump");
             }
@@ -5063,6 +5062,8 @@ static void runClassesFixesConformance(const char* name)
         {FFlag::LuwuGenericNominals, true},
         // names the variable in const-binding errors ("Variable 'self' is constant ...")
         {FFlag::LuauExportValueSyntax, true},
+        // a trait's `__create` is what reaches the C constructor (the constructor closure lifetime case)
+        {FFlag::LuwuTraits, true},
     };
 
     for (int level = 0; level <= 2; ++level)
@@ -5349,6 +5350,8 @@ TEST_CASE("ClassesCApi")
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuDefaultArguments, true},
         {FFlag::LuwuNonePrimitive, true},
+        // a trait's `__create` is what reaches the C constructor (the debug name case)
+        {FFlag::LuwuTraits, true},
     };
 
     StateRef globalState(luaL_newstate(), lua_close);
@@ -6013,11 +6016,11 @@ Yielder_ = Yielder
         luaL_openlibs(QL);
 
         std::string className(1100, 'N');
-        std::string classSource = "class " + className +
+        // a class constructs through its compiled constructor, which debug.info never hands out; a trait's `__create`
+        // reaches the C constructor
+        std::string classSource = "trait " + className +
                                   "\n"
-                                  "    x: number\n"
-                                  "    function __init(self)\n"
-                                  "        self.x = 1\n"
+                                  "    function __create()\n"
                                   "        LEAKED_CTOR = debug.info(2, 'f')\n"
                                   "    end\n"
                                   "end\n"

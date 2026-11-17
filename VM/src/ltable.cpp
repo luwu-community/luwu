@@ -758,6 +758,24 @@ const TValue* luaH_get(LuaTable* t, const TValue* key)
     }
 }
 
+const TValue* luaH_getbundle(LuaTable* t, const TValue* values, int n)
+{
+    unsigned int hash;
+    if (!luaR_bundlekeyprobe(values, uint32_t(n), &hash))
+        return luaO_nilobject;
+
+    LuaNode* node = hashpow2(t, hash);
+    for (;;)
+    {
+        const TKey* key = gkey(node);
+        if (ttisobject(key) && luaR_bundlekeyequals(objectvalue(key), hash, values, uint32_t(n)))
+            return gval(node);
+        if (gnext(node) == 0)
+            return luaO_nilobject;
+        node += gnext(node);
+    }
+}
+
 TValue* luaH_set(lua_State* L, LuaTable* t, const TValue* key)
 {
     const TValue* p = luaH_get(t, key);

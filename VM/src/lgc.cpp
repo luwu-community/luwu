@@ -477,6 +477,8 @@ static void traverseclass(global_State* g, LuauClass* classdef)
     markobject(g, classdef->metatable);
     if (classdef->instancemetatable)
         markobject(g, classdef->instancemetatable);
+    if (classdef->constructor)
+        markobject(g, classdef->constructor);
     for (uint32_t i = 0; i < classdef->numtraits; i++)
         markobject(g, classdef->traits[i]);
 
@@ -923,8 +925,6 @@ static void markroot(lua_State* L)
     // make global table be traversed before main stack
     markobject(g, g->mainthread->gt);
     markvalue(g, registry(L));
-    if (g->traitinitrunner)
-        markobject(g, g->traitinitrunner);
     for (int i = 0; i < LUWU_BUILTIN__COUNT; i++)
     {
         if (g->builtinclasses[i])

@@ -117,6 +117,7 @@ inline bool canInvalidateSafeEnv(IrCmd cmd)
     case IrCmd::FALLBACK_INITTRAITS:
     case IrCmd::FALLBACK_GETQUALIFIED:
     case IrCmd::FALLBACK_GETPOSITIONAL:
+    case IrCmd::FALLBACK_TABLEBUNDLE:
         return true;
     default:
         break;

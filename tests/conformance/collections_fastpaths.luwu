@@ -571,4 +571,70 @@ do
     assert(not fok and string.find(tostring(ferr), "attempt to call a boolean value", 1, true))
 end
 
+-- Luwu bundles: a table indexed by a bundle literal reads its values from registers (GETTABLEBUNDLE, SETTABLEBUNDLE), and
+-- finds the same entries a real bundle key does
+do
+    local pack = bundle.pack
+    local t = {}
+    local a, b = {}, {}
+
+    t[bundle.pack(a, b)] = 1
+    assert(t[pack(a, b)] == 1 and t[bundle.pack(a, b)] == 1)
+    t[pack(1, "x")] = 2
+    assert(t[bundle.pack(1, "x")] == 2)
+    assert(t[bundle.pack(1, "y")] == nil and t[bundle.pack(b, a)] == nil)
+
+    -- overwriting and compound assignment keep one entry, and nil removes it
+    t[bundle.pack(a, b)] = 5
+    t[bundle.pack(a, b)] += 1
+    assert(t[pack(a, b)] == 6)
+    local count = 0
+    for _ in t do
+        count += 1
+    end
+    assert(count == 2)
+    t[bundle.pack(a, b)] = nil
+    assert(t[pack(a, b)] == nil)
+
+    -- nested bundles and nil values compare by value
+    t[bundle.pack(pack(1, 2), nil)] = "nested"
+    assert(t[bundle.pack(pack(1, 2), nil)] == "nested")
+
+    -- `__index` runs only on a miss, and gets a real bundle as its key
+    local seen
+    local defaults = setmetatable({}, {
+        __index = function(_, key)
+            seen = key
+            return "default"
+        end,
+    })
+    assert(defaults[bundle.pack(3, 4)] == "default" and seen == pack(3, 4))
+    rawset(defaults, pack(3, 4), "raw")
+    seen = nil
+    assert(defaults[bundle.pack(3, 4)] == "raw" and seen == nil)
+
+    -- `__newindex` runs only for a new key
+    local writes = 0
+    local guarded = setmetatable({}, {
+        __newindex = function(target, key, value)
+            writes += 1
+            rawset(target, key, value)
+        end,
+    })
+    guarded[bundle.pack(1)] = 1
+    guarded[bundle.pack(1)] = 2
+    assert(writes == 1 and guarded[pack(1)] == 2)
+
+    -- a readonly table raises, and so does indexing something that isn't a table
+    local frozen = table.freeze({ [pack(1)] = 1 })
+    raises(function()
+        frozen[bundle.pack(1)] = 2
+    end, "readonly")
+    assert(frozen[bundle.pack(1)] == 1)
+    raises(function()
+        local missing = nil
+        return missing[bundle.pack(1)]
+    end, "attempt to index nil")
+end
+
 return "OK"
