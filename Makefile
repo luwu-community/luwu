@@ -116,6 +116,11 @@ ifeq ($(findstring g++,$(shell $(CXX) --version)),g++)
 	CXXFLAGS+=-Wno-maybe-uninitialized
 endif
 
+# libstdc++ 15 and newer mark loops in its algorithms for unrolling, and clang warns when it can't unroll one
+ifeq ($(findstring clang,$(shell $(CXX) --version)),clang)
+	CXXFLAGS+=-Wno-pass-failed
+endif
+
 # enabled in CI; we should be warning free on our main compiler versions but don't guarantee being warning free everywhere
 ifneq ($(werror),)
 	CXXFLAGS+=-Werror
