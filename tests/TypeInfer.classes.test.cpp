@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "ClassesFixture.h"
+#include "Typewriter.h"
 #include "Fixture.h"
 
 #include "Luau/BuiltinDefinitions.h"
@@ -18,6 +19,7 @@ LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 
 
 TEST_SUITE_BEGIN("TypeInferClasses");
@@ -2737,6 +2739,327 @@ local dog = Dogs(2)
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK_EQ(Location{{3, 17}, {3, 18}}, result.errors[0].location);
     CHECK_EQ("Dog", toString(requireType("dog")));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "declared_class_types")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function name(p: Path): string
+            return p:join("x").raw
+        end
+
+        local Path = (nil :: any) :: class<Path>
+        local p = Path("a")
+        local q = Path("a", "/")
+        local r = Path.cwd()
+        local s: string = tostring(q)
+
+        do
+            class type Path(public raw: string, public sep = string)
+                public function join(self, other: string): Path
+                public function cwd(): Path
+                public function __tostring(self): string
+                public function parent(self, levels = number): Path
+            end
+        end
+
+        local up = p:parent()
+        local further = p:parent(2)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("p")), "Path");
+    CHECK_EQ(toString(requireType("r")), "Path");
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "declare_class_declares_the_class_value")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    // `declare` declares a value: the class an embedder provides, along with its type
+    CheckResult result = check(R"(
+        --!strict
+        declare class Semver(public const major: number, private minor: number)
+            public function bump(self): Semver
+        end
+
+        local version = Semver(1, 2)
+        local major: number = version.major
+        local next: Semver = version:bump()
+        version.major = 3
+        local wrong = Semver("a", 2)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(toString(result.errors[0]).find("constant") != std::string::npos);
+    CHECK(result.errors[1].location.begin.line == 10);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_type_declares_no_value")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    // `class type` is the type alone: objects come from elsewhere, and there's no class to call
+    CheckResult result = check(R"(
+        --!strict
+        class type Path(public raw: string)
+        end
+
+        local function name(p: Path): string
+            return p.raw
+        end
+
+        local p = Path("a")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<UnknownSymbol>(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "export_declare_class_exports_the_class_and_its_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuauExportValueSyntax, true},
+        {FFlag::LuauExportValueTypecheck, true},
+    };
+
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        export declare class Semver(public const major: number, public const minor: number)
+        end
+
+        export class type Path(public raw: string)
+        end
+    )";
+
+    // `export declare class` exports the class and its type; `export class type` only the type
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local versions = require(game.A)
+        local version: versions.Semver = versions.Semver(1, 2)
+        local major: number = version.major
+        local path: versions.Path? = nil
+        local wrong = versions.Semver("a", 2)
+        local missing = versions.Path
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(result.errors[0].location.begin.line == 6);
+    CHECK(result.errors[1].location.begin.line == 7);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "declaring_classes_is_typed_without_cascades")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated)\n";
+    checkTypewriting(*this, "", "declare class Semver(public major: number)\n    public function bump(self): Semver\nend", after);
+    checkTypewriting(*this, "", "class type Path(public raw: string)\nend", after);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "declared_class_construction_and_access")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        class type Point
+            x: number
+            y = number
+        end
+
+        class type Counter
+            private count: number
+            public function __init(self, start: number)
+            public function bump(self): number
+        end
+
+        local P = (nil :: any) :: class<Point>
+        local a = P({ x = 1 })
+        local b = P({ x = 1, y = 2 })
+
+        local C = (nil :: any) :: class<Counter>
+        local c = C(1)
+        local n: number = c:bump()
+
+        local missing = P({ y = 2 })
+        local wrong = C("one")
+        local hidden = c.count
+    )");
+
+    // `x` has no default, `start` is a number, and `count` is private
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 21);
+    CHECK_EQ(result.errors[1].location.begin.line, 22);
+    CHECK_EQ(result.errors[2].location.begin.line, 23);
+    CHECK(get<TypeMismatch>(result.errors[1]));
+    CHECK_EQ(toString(result.errors[2]), "Field 'count' of class 'Counter' is private; accessing it here will raise a runtime error");
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "declared_class_has_no_value")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        class type Path
+            raw: string
+        end
+        local p = Path({ raw = "a" })
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    UnknownSymbol* unknown = get<UnknownSymbol>(result.errors[0]);
+    REQUIRE(unknown);
+    CHECK_EQ(unknown->name, "Path");
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "declared_classes_are_scoped_like_types")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        export class type Path(raw: string)
+            function join(self, other: string): Path
+        end
+        class type Hidden
+            name: string
+        end
+        return {} :: { Path: class<Path>, cwd: () -> Path }
+    )";
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local path = require(game.A)
+        local p: path.Path = path.Path("a")
+        local q: path.Path = path.cwd():join("b")
+        type H = path.Hidden
+    )";
+
+    CheckResult result = getFrontend().check("game/B");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    UnknownSymbol* hidden = get<UnknownSymbol>(result.errors[0]);
+    REQUIRE(hidden);
+    CHECK_EQ(hidden->name, "path.Hidden");
+
+    LUAU_REQUIRE_NO_ERRORS(getFrontend().check("game/A"));
+}TEST_CASE_FIXTURE(ClassesFixture, "declared_generic_class")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+    ScopedFastFlag luwuGenericNominals{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        class type List<T>(items: { T })
+            function get(self, index: number): T
+            function push(self, value: T)
+            function map<U>(self, f: (T) -> U): List<U>
+            function empty<V>(): List<V>
+        end
+
+        local List = (nil :: any) :: class<List>
+        local numbers = List({ 1, 2, 3 })
+        local first = numbers:get(1)
+        numbers:push(4)
+        local strings = numbers:map(function(n) return tostring(n) end)
+        local s = strings:get(1)
+        local annotated: List<string> = strings
+        local none = List.empty()
+
+        numbers:push("five")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+    CHECK_EQ(result.errors[0].location.begin.line, 18);
+    CHECK_EQ(toString(requireType("numbers")), "List<number>");
+    CHECK_EQ(toString(requireType("first")), "number");
+    CHECK_EQ(toString(requireType("strings")), "List<string>");
+    CHECK_EQ(toString(requireType("s")), "string");
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_to_a_declared_class")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        class type Path
+            raw: string
+        end
+
+        local Path = (nil :: any) :: class<Path>
+
+        local function describe(x: Path | string): string
+            if class.isinstance(x, Path) then
+                return x.raw
+            end
+            return x
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "isinstance_refines_to_an_imported_declared_class")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        export class type Path
+            raw: string
+        end
+        return {} :: { Path: class<Path> }
+    )";
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local path = require(game.A)
+
+        local function describe(x: path.Path | string): string
+            if class.isinstance(x, path.Path) then
+                return x.raw
+            end
+            return x
+        end
+
+        local function onlyPaths(x: unknown): string?
+            if class.isinstance(x, path.Path) then
+                return x.raw
+            end
+            return nil
+        end
+    )";
+
+    LUAU_REQUIRE_NO_ERRORS(getFrontend().check("game/B"));
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "class_of_a_generic_class_without_type_arguments")
+{
+    ScopedFastFlag luwuGenericNominals{FFlag::LuwuGenericNominals, true};
+
+    CheckResult result = check(R"(
+        --!strict
+        class Box<T>(public value: T)
+            public function get(self): T
+                return self.value
+            end
+        end
+
+        local B: class<Box> = Box
+        local b = B("s")
+        local s = b:get()
+        local specific: class<Box<number>> = Box
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("b")), "Box<string>");
+    CHECK_EQ(toString(requireType("s")), "string");
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "method_call_on_a_union_of_classes")
