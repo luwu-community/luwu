@@ -838,6 +838,21 @@ void* lua_pushcclosurewithdatak(lua_State* L, lua_CFunction fn, const char* debu
     return (void*)cl->fatc.data;
 }
 
+void* lua_pushdatacfunctionk(
+    lua_State* L,
+    lua_DataCFunction fn,
+    const char* debugname,
+    lua_Continuation cont,
+    size_t size,
+    lua_ClosureWithDataFree dtor
+)
+{
+    api_check(L, fn != nullptr);
+    void* data = lua_pushcclosurewithdatak(L, luaF_calldatacfunction, debugname, cont, size, dtor);
+    clvalue(L->top - 1)->fatc.df = fn;
+    return data;
+}
+
 void* lua_getcclosuredata(lua_State* L)
 {
     LUAU_ASSERT(FFlag::LuwuFatCClosure);
@@ -1309,6 +1324,13 @@ int lua_cpcall(lua_State* L, lua_CFunction func, void* ud)
     c.ud = ud;
 
     return luaD_pcall(L, f_Ccall, &c, savestack(L, L->top), 0);
+}
+
+int lua_rawpcall(lua_State* L, int nargs, void (*func)(lua_State* L, void* ud), void* ud)
+{
+    api_check(L, func != nullptr);
+    api_checknelems(L, nargs);
+    return luaD_pcall(L, func, ud, savestack(L, L->top - nargs), 0);
 }
 
 int lua_status(lua_State* L)
@@ -1857,6 +1879,28 @@ int lua_getclassdatashape(lua_State* L, int idx, int* hasmethods)
     }
 
     return shape;
+}
+
+int lua_classof(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    if (!ttisobject(o))
+        return 0;
+
+    luaC_threadbarrier(L);
+    setclassvalue(L, L->top, objectvalue(o)->lclass);
+    api_incr_top(L);
+    return 1;
+}
+
+int lua_classis(lua_State* L, int idx, int classidx)
+{
+    const TValue* cls = index2addr(L, classidx);
+    if (!ttisclass(cls))
+        luaG_runerror(L, "expected a class, got %s", luaT_objtypename(L, cls));
+
+    const TValue* o = index2addr(L, idx);
+    return ttisobject(o) && objectvalue(o)->lclass == classvalue(cls);
 }
 
 static const char* aux_upvalue(StkId fi, int n, TValue** val)
