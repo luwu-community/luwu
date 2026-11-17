@@ -3603,20 +3603,19 @@ NormalizationResult Normalizer::intersectNormalWithTy(
             //
             // In the future, we should allow intersections against more than
             // one table in a union.
-            if (tables.size() == 0)
+
+            // Luwu: the extern types and the table are a union, so the table can't take away what the extern types give.
+            // Upstream intersects the extern types with the table too, so `(Box | Input) & Box` came out `never` whenever
+            // `Input` and `Box` were disjoint, and with more than one table it dropped the extern types. The table part
+            // (`there` with the table's shape) is used when the extern types give nothing; only a table type is a shape an
+            // extern type can have, and `table` (in `~Parent`) holds none.
+            intersectExternTypesWithExternType(nct, there);
+            if (nct.isNever() && tables.size() == 1 && get<TableType>(follow(tables.front())))
             {
-                intersectExternTypesWithExternType(nct, there);
-                here.externTypes = std::move(nct);
-            }
-            else if (tables.size() == 1)
-            {
-                if (nct.isNever())
-                    nct.pushPair(there, {});
-                else
-                    intersectExternTypesWithExternType(nct, there);
+                nct.pushPair(there, {});
                 intersectExternTypesWithShape(nct, tables.front());
-                here.externTypes = std::move(nct);
             }
+            here.externTypes = std::move(nct);
         }
         else
         {
