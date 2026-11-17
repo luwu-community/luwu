@@ -32,6 +32,8 @@
 #include "lmem.h"
 #include "lnumutils.h"
 
+#include "Luau/Bytecode.h"
+
 #include <string.h>
 
 // max size of both array and hash part is 2^MAXBITS
@@ -573,6 +575,62 @@ LuaTable* luaH_new(lua_State* L, int narray, int nhash)
     if (nhash > 0)
         setnodevector(L, t, nhash);
     return t;
+}
+
+// Luwu table presizing: the largest array part a site starts its tables with
+static const int kMaxSiteArrayHint = 1 << 16;
+
+static TableSite* findtablesite(Proto* p, uint32_t pc)
+{
+    // sites are in code order
+    int low = 0;
+    int high = p->sizetablesites - 1;
+    while (low <= high)
+    {
+        int mid = (low + high) / 2;
+        uint32_t midpc = p->tablesites[mid].pc;
+        if (midpc == pc)
+            return &p->tablesites[mid];
+        if (midpc < pc)
+            low = mid + 1;
+        else
+            high = mid - 1;
+    }
+    return NULL;
+}
+
+LuaTable* luaH_newatsite(lua_State* L, Proto* p, uint32_t pc, int narray, int nhash)
+{
+    TableSite* site = findtablesite(p, pc);
+    if (!site)
+        return luaH_new(L, narray, nhash);
+
+    // How long the last table made here got, if it's still alive, is how long this one starts. Its filled length rather
+    // than its capacity, so a site that stops filling its tables sizes back down.
+    if (LuaTable* last = site->last)
+    {
+        int used = luaH_getn(last);
+        site->arrayhint = used < kMaxSiteArrayHint ? used : kMaxSiteArrayHint;
+    }
+
+    LuaTable* t = luaH_new(L, narray > site->arrayhint ? narray : site->arrayhint, nhash);
+    site->last = t;
+    return t;
+}
+
+LuaTable* luaH_newatsavedpc(lua_State* L, int narray, int nhash)
+{
+    // Native code saves the pc after a NEWTABLE before allocating its table (translateInstNewTable). Any other caller
+    // gets a plain table.
+    Closure* cl = clvalue(L->ci->func);
+    if (!cl->isC && L->ci->savedpc)
+    {
+        Proto* p = cl->l.p;
+        uint32_t pc = uint32_t(L->ci->savedpc - p->code) - 1;
+        if (pc < uint32_t(p->sizecode) && LUAU_INSN_OP(p->code[pc]) == LOP_NEWTABLE)
+            return luaH_newatsite(L, p, pc, narray, nhash);
+    }
+    return luaH_new(L, narray, nhash);
 }
 
 void luaH_free(lua_State* L, LuaTable* t, lua_Page* page)
