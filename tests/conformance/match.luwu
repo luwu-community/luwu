@@ -7,6 +7,17 @@ end
 class Circle(public radius: number)
 end
 
+trait NotFlac
+end
+trait Unreadable
+end
+class Mp3() implements NotFlac
+end
+class Broken() implements Unreadable
+end
+class Flac()
+end
+
 -- literals and alternatives, and the subject named for `else`
 local function which(arg: string)
     return match const a = arg
@@ -239,4 +250,27 @@ do
     end
     assert(reads == 1 and captured and captured() == 7)
 end
+
+-- `implements` takes alternatives, in an `if` and in a `case`
+do
+    local function problem(file: unknown)
+        if file implements NotFlac | Unreadable then
+            return "problem"
+        end
+        return "fine"
+    end
+    assert(problem(Mp3()) == "problem" and problem(Broken()) == "problem" and problem(Flac()) == "fine")
+    assert(problem(1) == "fine")
+
+    local reads = 0
+    local function read()
+        reads += 1
+        return Broken()
+    end
+    local described = match read()
+        case implements NotFlac | Unreadable then "problem"
+        else "fine"
+    assert(described == "problem" and reads == 1)
+end
+
 return "OK"

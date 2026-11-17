@@ -61,7 +61,9 @@ spot. A pattern is made of alternatives joined by `|`, and each alternative is o
 `x is 1 | 2 | 3` means the `or` of the three tests, and narrows like them. `is not` negates the whole pattern. A tested value that isn't a local is read
 once: `t.kind is "a" | "b"` doesn't read `t.kind` twice. Because `is not` is a fixed pair, `x is not y` never parses as `x is (not y)`.
 
-`implements` takes a trait, given as a name or a dotted path like a class (`class.implements`).
+`implements` takes a trait, given as a name or a dotted path like a class (`class.implements`). Like `is`, it takes alternatives
+joined by `|`: `file implements NotFlac | Unreadable` is the same as `file implements NotFlac or file implements Unreadable`, and narrows
+`file` to the types that implement either trait. `implements` has no `not` form.
 
 ### Destructuring in a test
 

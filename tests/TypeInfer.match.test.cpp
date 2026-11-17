@@ -280,6 +280,71 @@ TEST_CASE_FIXTURE(ClassesFixture, "is_trait_narrows_for_implements")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `implements A | B` passes when either trait is
+// implemented, and narrows to the classes that implement one of them
+TEST_CASE_FIXTURE(ClassesFixture, "implements_takes_alternatives")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        trait NotFlac
+            expect name: string
+        end
+        trait Unreadable
+            expect name: string
+        end
+        class Mp3(public name: string) implements NotFlac
+        end
+        class Broken(public name: string) implements Unreadable
+        end
+        class Flac(public bits: number)
+        end
+
+        local function problem(file: Mp3 | Broken | Flac): string
+            if file implements NotFlac | Unreadable then
+                return file.name
+            end
+            return "fine"
+        end
+
+        local function described(file: Mp3 | Broken | Flac): string
+            return match file
+                case implements NotFlac | Unreadable then file.name
+                else "fine"
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "implements_needs_a_trait_after_its_bar")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    CheckResult result = check(R"(
+        trait Named
+        end
+        local x = 1
+        local y = x implements Named |
+        local z = y
+    )");
+
+    REQUIRE(result.errors.size() >= 1);
+    const SyntaxError* syntax = get<SyntaxError>(result.errors[0]);
+    REQUIRE(syntax);
+    CHECK_EQ(syntax->message, "Expected a trait after '|'");
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+}
+
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the class after `is` is a name or a dotted path, and
 // `is integer` tests for an integer
 TEST_CASE_FIXTURE(ClassesFixture, "type_tests_name_their_class_by_path")
@@ -500,6 +565,34 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_match_expressions")
     );
     checkTypewriting(*this, kTypewriterBefore, "local n = maybe()\nlocal ok = n is number", kTypewriterAfter);
     checkTypewriting(*this, kTypewriterBefore, "local n = maybe()\nlocal ok = n is 1 | 2 | nil", kTypewriterAfter);
+}
+
+TEST_CASE_FIXTURE(ClassesFixture, "typing_implements_alternatives")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    const char* before = R"(trait Named
+end
+trait Titled
+end
+class Doc() implements Named
+end
+local function any(): Doc?
+    return nil
+end
+)";
+    checkTypewriting(*this, before, "local d = any()\nlocal ok = d implements Named | Titled", kTypewriterAfter);
+    checkTypewriting(
+        *this,
+        before,
+        "local d = any()\nlocal label = match d\n    case implements Named | Titled then \"named\"\n    else \"other\"",
+        kTypewriterAfter
+    );
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match` statement narrows the subject in each arm,

@@ -518,13 +518,15 @@ private:
     struct PatternAlternative
     {
         Location location;
-        // What the value is compared with (`nil`, `none`, a literal), or the class it's an instance of
+        // What the value is compared with (`nil`, `none`, a literal), the class it's an instance of, or the trait it
+        // implements
         AstExpr* operand = nullptr;
         bool isClass = false;
+        bool isTrait = false;
         // The name `type(value)` gives
         std::optional<std::string> tag;
     };
-    // `is <alternatives>`, `is not <alternatives>` or `implements Trait`
+    // `is <alternatives>`, `is not <alternatives>` or `implements <traits>`
     struct Pattern
     {
         Location location;
@@ -539,6 +541,8 @@ private:
     AstExpr* parseTypeTest(AstExpr* value, const Location& start);
     Pattern parsePattern();
     PatternAlternative parsePatternAlternative();
+    PatternAlternative parseTraitAlternative();
+    bool patternAlternativeFollows(const char* expected);
     AstExpr* parsePatternClass(bool implements);
     void reportPatternTypeArguments();
     AstExpr* buildTypeTest(AstExpr* value, const Pattern& pattern, const Location& start);

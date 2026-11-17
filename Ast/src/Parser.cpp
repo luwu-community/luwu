@@ -8421,7 +8421,7 @@ static void retargetTestedValue(AstExpr* test, AstExpr* from, AstExpr* to)
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the rest of `value is <pattern>`, `value is not <pattern>`
-// or `value implements Trait`, from the keyword
+// or `value implements <traits>`, from the keyword
 AstExpr* Parser::parseTypeTest(AstExpr* value, const Location& start)
 {
     checkLuwuFeature(lexer.current().location, kTypeTestFeature, FFlag::DebugLuwuMatchExpressions);
@@ -8430,7 +8430,8 @@ AstExpr* Parser::parseTypeTest(AstExpr* value, const Location& start)
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern from its `is` or `implements`. After `is`
-// come alternatives joined by `|`: `nil`, `none`, a literal, a primitive tag or a class.
+// come alternatives joined by `|`: `nil`, `none`, a literal, a primitive tag or a class. After `implements` come traits
+// joined by `|`.
 Parser::Pattern Parser::parsePattern()
 {
     Pattern pattern;
@@ -8440,11 +8441,11 @@ Parser::Pattern Parser::parsePattern()
 
     if (pattern.implements)
     {
-        PatternAlternative trait;
-        trait.operand = parsePatternClass(/* implements= */ true);
-        trait.location = trait.operand->location;
-        pattern.alternatives.push_back(trait);
-        pattern.location = Location(start, trait.location);
+        pattern.alternatives.push_back(parseTraitAlternative());
+        while (patternAlternativeFollows("a trait"))
+            pattern.alternatives.push_back(parseTraitAlternative());
+
+        pattern.location = Location(start, lexer.previousLocation());
         return pattern;
     }
 
@@ -8455,24 +8456,40 @@ Parser::Pattern Parser::parsePattern()
     }
 
     pattern.alternatives.push_back(parsePatternAlternative());
-
-    // `case is A | is B` joins two patterns, which the `case` parser does
-    while (lexer.current().type == '|' && !isTypeTestKeyword(lexer.lookahead()))
-    {
-        nextLexeme(); // |
-
-        // `n is 1 |` with nothing after it yet: the next line's statement isn't an alternative
-        if (valueEnds(lexer.current()) || nextLineStartsStatement(cantFollowValueName))
-        {
-            report(lexer.previousLocation(), "Expected a pattern after '|'");
-            break;
-        }
-
+    while (patternAlternativeFollows("a pattern"))
         pattern.alternatives.push_back(parsePatternAlternative());
-    }
 
     pattern.location = Location(start, lexer.previousLocation());
     return pattern;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): whether a `|` and another alternative follow, skipping
+// the `|`. `expected` names what should come after it, for the error when nothing does.
+bool Parser::patternAlternativeFollows(const char* expected)
+{
+    // `case is A | is B` joins two patterns, which the `case` parser does
+    if (lexer.current().type != '|' || isTypeTestKeyword(lexer.lookahead()))
+        return false;
+
+    nextLexeme(); // |
+
+    // `n is 1 |` with nothing after it yet: the next line's statement isn't an alternative
+    if (valueEnds(lexer.current()) || nextLineStartsStatement(cantFollowValueName))
+    {
+        report(lexer.previousLocation(), "Expected %s after '|'", expected);
+        return false;
+    }
+    return true;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): one trait after `implements`
+Parser::PatternAlternative Parser::parseTraitAlternative()
+{
+    PatternAlternative trait;
+    trait.operand = parsePatternClass(/* implements= */ true);
+    trait.isTrait = true;
+    trait.location = trait.operand->location;
+    return trait;
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): one alternative of a pattern
@@ -8572,16 +8589,11 @@ AstExpr* Parser::buildTypeTest(AstExpr* value, const Pattern& pattern, const Loc
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the test of `value` that `pattern` describes, without
 // any bindings. `x is 1 | string | Point` is `x == 1 or type(x) == "string" or class.isinstance(x, Point)`, parsed as
 // that so narrowing and the compiler's fused class checks apply as they do to the written-out tests. `is not` negates
-// each alternative and joins them with `and`.
+// each alternative and joins them with `and`. `x implements A | B` is
+// `class.implements(x, A) or class.implements(x, B)`.
 AstExpr* Parser::makePatternTest(AstExpr* value, const Pattern& pattern, const Location& start)
 {
     LUAU_ASSERT(!pattern.alternatives.empty());
-
-    if (pattern.implements)
-    {
-        const PatternAlternative& trait = pattern.alternatives.front();
-        return makeGlobalCall(nameClass, nameImplements, Location(start, trait.location), {value, trait.operand});
-    }
 
     AstExpr* test = makeAlternativeTest(value, pattern.alternatives.front(), pattern.negated, start);
     if (pattern.alternatives.size() == 1)
@@ -8624,7 +8636,8 @@ AstExpr* Parser::makePatternTest(AstExpr* value, const Pattern& pattern, const L
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the test of one alternative: `value == 1`,
-// `type(value) == "string"` or `class.isinstance(value, Point)`. `negated` gives the `is not` test.
+// `type(value) == "string"`, `class.isinstance(value, Point)` or `class.implements(value, Named)`. `negated` gives the
+// `is not` test.
 AstExpr* Parser::makeAlternativeTest(AstExpr* value, const PatternAlternative& alternative, bool negated, const Location& start)
 {
     AstExprBinary::Op compare = negated ? AstExprBinary::CompareNe : AstExprBinary::CompareEq;
@@ -8637,7 +8650,11 @@ AstExpr* Parser::makeAlternativeTest(AstExpr* value, const PatternAlternative& a
     }
 
     AstExpr* test = nullptr;
-    if (alternative.isClass)
+    if (alternative.isTrait)
+    {
+        test = makeGlobalCall(nameClass, nameImplements, location, {value, alternative.operand});
+    }
+    else if (alternative.isClass)
     {
         test = makeGlobalCall(nameClass, nameIsinstance, location, {value, alternative.operand});
     }

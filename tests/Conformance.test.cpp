@@ -6699,6 +6699,7 @@ TEST_CASE("MatchExpressions")
         {FFlag::LuwuIfLocal, true},
         {FFlag::LuwuDoExpr, true},
         {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
         {FFlag::LuwuNonePrimitive, true},
     };
 
