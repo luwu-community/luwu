@@ -5,8 +5,8 @@
 #include "Luau/StringUtils.h"
 
 #include <algorithm>
+#include <stdlib.h>
 #include <string.h>
-#include <climits>
 
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
