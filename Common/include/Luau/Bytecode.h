@@ -75,6 +75,7 @@
 //   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, NEWCLASSMEMBER's IMPLEMENTS form and
 //   LBF_CLASS_OF.
 //   Luwu Destructuring: GETPOSITIONAL, and LBC_CLASSMEMBER_POSITIONAL with its position in LBC_CONSTANT_CLASS_SHAPE.
+//   Luwu bundles: LBF_BUNDLE_PACK and LBF_BUNDLE_UNPACK.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -1065,6 +1066,10 @@ enum LuauBuiltinFunction
     LBF_STRING_STARTSWITH,
     LBF_STRING_ENDSWITH,
     LBF_STRING_CONTAINS,
+
+    // Luwu bundles: `bundle.pack` and `bundle.unpack` without a call frame
+    LBF_BUNDLE_PACK,
+    LBF_BUNDLE_UNPACK,
 };
 
 // Capture type, used in LOP_CAPTURE

@@ -144,10 +144,56 @@ bool forgLoopNodeIter(lua_State* L, LuaTable* h, int index, TValue* ra)
     return false;
 }
 
+// One step of a loop over a builtin container: 1 to repeat, 0 at the end
+static int forgLoopCollection(lua_State* L, TValue* ra, int aux)
+{
+    if (!luaR_collectionnext(L, ra))
+        return 0;
+
+    for (int i = 2; i < aux; ++i)
+        setnilvalue(ra + 3 + i);
+    return 1;
+}
+
+/*
+ * Luwu collections: runs the fast method (luaR_FastMethod) of the NAMECALL at `pcpos` on `object`, for INVOKE_FAST_METHOD.
+ * The arguments start at `ra + 2` and the results go to `ra`; missing ones up to `nresults` become nil. Returns how many
+ * the method gave, or -1 when the NAMECALL's cached member has no fast method or the method bails. Then native code
+ * makes the call, and the fallback it misses into caches the member for the next time.
+ */
+int invokeFastMethod(lua_State* L, LuauObject* object, uint32_t pcpos, int ra, int nargs, int nresults)
+{
+    const LuauClass* classdef = object->lclass;
+    if (!classdef->fastmethods)
+        return -1;
+
+    const Proto* proto = clvalue(L->ci->func)->l.p;
+    const Instruction* pc = proto->code + pcpos;
+    LUAU_ASSERT(LUAU_INSN_OP(*pc) == LOP_NAMECALL);
+    uint8_t slot = LUAU_INSN_C(*pc);
+    uint32_t nameconstant = pc[1];
+    bool cached = slot < classdef->numberofallmembers && classdef->offsettomember[slot] == tsvalue(&proto->k[nameconstant]);
+    if (!cached || !classdef->fastmethods[slot])
+        return -1;
+
+    StkId res = L->base + ra;
+    int n = classdef->fastmethods[slot](L, object, res, res + 2, nargs);
+    if (n < 0)
+        return -1;
+
+    for (int i = n; i < nresults; i++)
+        setnilvalue(res + i);
+    return n;
+}
+
 int forgLoopNonTableFallback(lua_State* L, int insnA, int aux)
 {
     TValue* base = L->base;
     TValue* ra = VM_REG(insnA);
+
+    // Luwu collections: a builtin container's loop (luaR_collectionprep), stepped without a call
+    if (LUAU_UNLIKELY(ttisboolean(ra)))
+        return forgLoopCollection(L, ra, aux);
 
     // note: it's safe to push arguments past top for complicated reasons (see lvmexecute.cpp)
     setobj2s(L, ra + 3 + 2, ra + 2);
@@ -176,6 +222,10 @@ bool forgLoopNonTableFallback_DEPRECATED(lua_State* L, int insnA, int aux)
 {
     TValue* base = L->base;
     TValue* ra = VM_REG(insnA);
+
+    // Luwu collections: a builtin container's loop (luaR_collectionprep), stepped without a call
+    if (LUAU_UNLIKELY(ttisboolean(ra)))
+        return forgLoopCollection(L, ra, aux);
 
     // note: it's safe to push arguments past top for complicated reasons (see lvmexecute.cpp)
     setobj2s(L, ra + 3 + 2, ra + 2);
@@ -726,7 +776,7 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                 luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
                 if (LUAU_UNLIKELY(inst->lclass->hasconstmembers))
                     luaR_checkconstassignfast(L, kv, inst, cl, slot);
-                setobj2class(L, &inst->members[slot], ra);
+                setobj2class(L, &luaR_members(inst)[slot], ra);
                 luaC_barrier(L, inst, ra);
                 return pc;
             }
@@ -741,7 +791,7 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                 luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
                 if (LUAU_UNLIKELY(inst->lclass->hasconstmembers))
                     luaR_checkconstassignfast(L, kv, inst, cl, offsetnum);
-                setobj2class(L, &inst->members[offsetnum], ra);
+                setobj2class(L, &luaR_members(inst)[offsetnum], ra);
                 luaC_barrier(L, inst, ra);
                 patchCachedMemberSlot(pc - 2, offsetnum);
                 return pc;
@@ -924,18 +974,25 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
         // Luwu Classes (rfcs/classes): an object's __iter lives on its class's instance metatable. Native code
         // runs every generic for loop's prep through here, so this has to match VM_CASE(LOP_FORGPREP) in
         // lvmexecute.cpp.
+        // Luwu collections: a builtin container's loop needs no `__iter` (luaR_collectionprep)
+        bool collection = false;
         if (FFlag::LuwuClasses && LUAU_UNLIKELY(fn == NULL && ttisobject(ra)))
         {
-            fn = luaT_gettmbyobj(L, ra, TM_ITER);
+            collection = luaR_collectionprep(L, ra);
+            fn = collection ? NULL : luaT_gettmbyobj(L, ra, TM_ITER);
             // if the metamethod is not present, error.
-            if (ttisnil(fn))
+            if (!collection && ttisnil(fn))
             {
                 VM_PROTECT_PC();
                 luaG_typeerror(L, ra, "iterate over");
             }
         }
 
-        if (fn)
+        if (collection)
+        {
+            // luaR_collectionprep set up the registers
+        }
+        else if (fn)
         {
             setobj2s(L, ra + 1, ra);
             setobj2s(L, ra, fn);
@@ -950,7 +1007,9 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
             ra = VM_REG(LUAU_INSN_A(insn));
 
             // protect against __iter returning nil, since nil is used as a marker for builtin iteration in FORGLOOP
-            if (ttisnil(ra))
+            // Luwu collections: booleans too, which mark a builtin container's loop (luaR_collectionprep). It raises the
+            // same error before the first step that calling it in FORGLOOP would.
+            if (ttisnil(ra) || ttisboolean(ra))
             {
                 VM_PROTECT_PC(); // next call always errors
                 luaG_typeerror(L, ra, "call");
@@ -1040,7 +1099,7 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
         LuauObject* object = luaR_newobjectuninit(L, classdef);
 
         for (uint32_t idx = 0; idx < aux; idx++)
-            setobj(L, &object->members[idx], ra + 1 + idx);
+            setobj(L, &luaR_members(object)[idx], ra + 1 + idx);
 
         setobjectvalue(L, ra, object);
 
@@ -1071,7 +1130,7 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
             StkId value = ra + 1 + idx;
 
             if (!ttisnil(value))
-                setobj(L, &object->members[idx], value);
+                setobj(L, &luaR_members(object)[idx], value);
         }
     }
     else if (aux == 1)

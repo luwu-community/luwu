@@ -28,6 +28,7 @@
 #include "lstate.h"
 #include "ldebug.h"
 #include "lgc.h"
+#include "lclass.h"
 #include "lmem.h"
 #include "lnumutils.h"
 
@@ -201,6 +202,11 @@ static LuaNode* mainposition(const LuaTable* t, const TValue* key)
         return hashnone(t);
     case LUA_TLIGHTUSERDATA:
         return hashpointer(t, pvalue(key));
+    case LUA_TOBJECT:
+        // Luwu bundles: a bundle hashes by its values, so an equal bundle finds its entry
+        if (luaR_isbundle(objectvalue(key)))
+            return hashpow2(t, luaR_keyhash(objectvalue(key)));
+        return hashpointer(t, gcvalue(key));
     default:
         return hashpointer(t, gcvalue(key));
     }

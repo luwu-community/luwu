@@ -13,6 +13,8 @@ bool forgLoopNodeIter(lua_State* L, LuaTable* h, int index, TValue* ra);
 int forgLoopNonTableFallback(lua_State* L, int insnA, int aux);
 bool forgLoopNonTableFallback_DEPRECATED(lua_State* L, int insnA, int aux);
 
+int invokeFastMethod(lua_State* L, LuauObject* object, uint32_t pcpos, int ra, int nargs, int nresults);
+
 void forgPrepXnextFallback(lua_State* L, TValue* ra, int pc);
 
 Closure* callProlog(lua_State* L, TValue* ra, StkId argtop, int nresults);
