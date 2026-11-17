@@ -3378,6 +3378,29 @@ return f, limit
     CHECK(warningsWithCode(result, LintWarning::Code_LocalUnused).empty());
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): DuplicateCondition compares every condition of an `if`
+// chain, `is` patterns and `match` expressions included
+TEST_CASE_FIXTURE(BuiltinsFixture, "DuplicateConditionComparesPatternsAndMatch")
+{
+    ScopedFastFlag matchExpressions{FFlag::DebugLuwuMatchExpressions, true};
+
+    LintResult result = lint(R"(
+local function f(v: number | string)
+    if v is number then
+        return 1
+    elseif v is string then
+        return 2
+    elseif match v case is "x" then true else false then
+        return 3
+    end
+    return 0
+end
+return f
+)");
+
+    CHECK(warningsWithCode(result, LintWarning::Code_DuplicateCondition).empty());
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "NonePatternIgnoresLocals")
 {
     ScopedFastFlag matchExpressions{FFlag::DebugLuwuMatchExpressions, true};

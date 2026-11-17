@@ -247,6 +247,9 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
     CASE(AstExprDo) return false;
     // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): each evaluation builds a new table
     CASE(AstExprTableComprehension) return false;
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): patterns can bind names and arms run code
+    CASE(AstExprMatchPattern) return false;
+    CASE(AstExprMatch) return false;
     else
     {
         LUAU_ASSERT(!"Unknown expression type");
