@@ -5299,7 +5299,17 @@ struct Compiler
                 return;
             }
 
-            // `none`, which is a global
+            // `none` is a primitive value, so its pattern checks the type and never reads the global
+            AstExprGlobal* global = alternative.operand->as<AstExprGlobal>();
+            if (global && global->name == "none")
+            {
+                jumps.push_back(bytecode.emitLabel());
+                bytecode.emitAD(LOP_JUMPXTYPE, value, 0);
+                bytecode.emitAux(LBC_TYPE_SYMNONE | notFlag);
+                return;
+            }
+
+            // `None`, which is a global
             uint8_t operand = compileExprAuto(alternative.operand, rs);
             jumps.push_back(bytecode.emitLabel());
             bytecode.emitAD(whenMatched ? LOP_JUMPIFEQ : LOP_JUMPIFNOTEQ, value, 0);

@@ -301,6 +301,34 @@ do
     assert(notTags(true) and notTags({}) and not notTags("s") and not notTags(1))
 end
 
+-- `x is none` checks for the primitive like `x is string` does, whatever a local, the global or the function's
+-- environment calls `none`
+do
+    local real_none = none
+    local function is_none(v: unknown): boolean
+        return v is none
+    end
+    assert(is_none(real_none) and not is_none(nil) and not is_none(false))
+
+    do
+        local none = "walrus"
+        local function shadowed(v: unknown): boolean
+            return v is none
+        end
+        assert(shadowed(real_none) and not shadowed("walrus"))
+    end
+
+    none = "walrus"
+    assert(is_none(real_none) and not is_none("walrus"))
+    none = real_none
+
+    local function in_env(v: unknown): boolean
+        return v is not none
+    end
+    setfenv(in_env, setmetatable({ none = 42 }, { __index = getfenv(1) }))
+    assert(in_env(42) and not in_env(real_none))
+end
+
 -- a name that holds something other than a class compares like a literal, and one holding a class tests instances
 do
     const LIMIT = 10

@@ -623,7 +623,8 @@ enum LuauOpcode
     // A: value register
     // D: jump offset (-32768..32767)
     // AUX: the type as an LBC_TYPE_* in bits 0..7: BOOLEAN, NUMBER, INTEGER, STRING, TABLE, FUNCTION, THREAD, USERDATA
-    //   (light userdata included, as `type()` says "userdata" for both), VECTOR, BUFFER or OBJECT. Bit 31 is the NOT flag
+    //   (light userdata included, as `type()` says "userdata" for both), VECTOR, BUFFER, OBJECT or SYMNONE (`x is none`,
+    //   since `none` is a primitive value whatever the global holds). Bit 31 is the NOT flag
     //   (LUAU_INSN_AUX_NOT): when set, the jump is taken when the type differs.
     LOP_JUMPXTYPE,
 

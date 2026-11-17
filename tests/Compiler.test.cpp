@@ -14860,6 +14860,30 @@ RETURN R2 1
 )");
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `none` is a primitive, so `x is none` checks the type and
+// reads no global or local named `none`
+TEST_CASE("NonePatternChecksTheType")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+    };
+
+    const char* source = R"(
+local none = "walrus"
+local function f(v: unknown): boolean
+    return v is none
+end
+return f
+)";
+
+    CHECK_EQ("\n" + compileFunction(source, 0, 2), R"(
+JUMPXTYPE R0 L0 ['none']
+LOADB R1 0 +1
+L0: LOADB R1 1
+L1: RETURN R1 1
+)");
+}
+
 TEST_CASE("PatternsCompileToOneJumpPerAlternative")
 {
     ScopedFastFlag sffs[] = {

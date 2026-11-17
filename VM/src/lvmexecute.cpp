@@ -263,6 +263,8 @@ static LUAU_FORCEINLINE bool hasbytecodetype(const TValue* v, uint32_t type)
         return ttisbuffer(v);
     case LBC_TYPE_OBJECT:
         return ttisobject(v);
+    case LBC_TYPE_SYMNONE:
+        return ttissymnone(v);
     default:
         LUAU_ASSERT(!"JUMPXTYPE can't test this type");
         return false;

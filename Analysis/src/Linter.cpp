@@ -1162,6 +1162,9 @@ private:
     DenseHashMap<AstName, AstLocal*> imports;
     DenseHashMap<AstName, Global> globals;
     DenseHashMap<AstName, AstStatClass*> classes;
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `none` in a pattern, which is the primitive whatever a
+    // local named `none` holds
+    std::vector<AstExprGlobal*> nonePatterns;
 
     LintLocalHygiene()
         : locals(NULL)
@@ -1174,6 +1177,7 @@ private:
     void report()
     {
         reportUnusedLoopVariables();
+        reportNonePatterns();
 
         for (auto& l : locals)
         {
@@ -1207,6 +1211,31 @@ private:
                     l.first->name.value
                 );
         }
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is none` in a module that declares a local named
+    // `none`. The pattern checks for the primitive like `x is string` does, which a reader could take for the local.
+    void reportNonePatterns()
+    {
+        AstLocal* declared = nullptr;
+        for (auto& l : locals)
+        {
+            bool earlier = !declared || l.first->location.begin < declared->location.begin;
+            if (l.first->name == "none" && earlier)
+                declared = l.first;
+        }
+
+        if (!declared)
+            return;
+
+        for (AstExprGlobal* none : nonePatterns)
+            emitWarning(
+                *context,
+                LintWarning::Code_LocalShadow,
+                none->location,
+                "'none' in a pattern always checks against the 'none' primitive, not the local declared at line %d",
+                declared->location.begin.line + 1
+            );
     }
 
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `case limit` where `limit` is a local, or a global this
@@ -1478,6 +1507,18 @@ private:
         else
             l.used = true;
 
+        return true;
+    }
+
+    bool visit(AstExprMatchPattern* node) override
+    {
+        for (const AstPatternAlternative& alternative : node->alternatives)
+        {
+            bool isValue = alternative.kind == AstPatternAlternative::Value && alternative.operand;
+            AstExprGlobal* global = isValue ? alternative.operand->as<AstExprGlobal>() : nullptr;
+            if (global && global->name == "none")
+                nonePatterns.push_back(global);
+        }
         return true;
     }
 

@@ -191,6 +191,8 @@ inline const char* getJumpxTypeName(uint8_t type)
         return "buffer";
     case LBC_TYPE_OBJECT:
         return "object";
+    case LBC_TYPE_SYMNONE:
+        return "none";
     default:
         return nullptr;
     }

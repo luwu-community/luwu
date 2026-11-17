@@ -3378,6 +3378,24 @@ return f, limit
     CHECK(warningsWithCode(result, LintWarning::Code_LocalUnused).empty());
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "NonePatternIgnoresLocals")
+{
+    ScopedFastFlag matchExpressions{FFlag::DebugLuwuMatchExpressions, true};
+
+    LintResult result = lint(R"(
+local none = "walrus"
+local function f(v)
+    return v is none, v is not none | nil
+end
+return f, none
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_LocalShadow);
+    REQUIRE_EQ(warnings.size(), 2);
+    CHECK_EQ(warnings[0].text, "'none' in a pattern always checks against the 'none' primitive, not the local declared at line 2");
+    CHECK_EQ(warnings[0].location, Location(Position(3, 16), Position(3, 20)));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "IsComparison")
 {
     ScopedFastFlag sffs[] = {
