@@ -1666,4 +1666,38 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "for_in_over_a_generic_array_gives_values_tha
     CHECK_EQ("<T>({T}) -> {T & ~nil}", toString(requireType("filter")));
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_function_in_a_for_in_header_returns_its_own_values")
+{
+    CheckResult result = check(R"(
+        --!strict
+        local function listdir(path: string, filter: (path: string) -> boolean): { string }
+            return {}
+        end
+
+        local function collect(target: string, into: { string })
+            if target == "" then
+                return
+            end
+            for _, path in listdir(target, function(p: string): boolean
+                return p ~= "skip"
+            end) do
+                table.insert(into, path)
+            end
+        end
+
+        local function wrong(target: string): number
+            for _, path in listdir(target, function(p: string): boolean
+                return 1
+            end) do
+            end
+            return 0
+        end
+    )");
+
+    // each function's `return` is checked against its own return type: only `return 1` in `wrong`'s filter is wrong
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 19);
+    CHECK(get<TypeMismatch>(result.errors[0]));
+}
+
 TEST_SUITE_END();

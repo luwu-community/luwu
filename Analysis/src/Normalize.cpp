@@ -3476,6 +3476,16 @@ NormalizationResult Normalizer::intersectNormals(NormalizedType& here, const Nor
     return NormalizationResult::True;
 }
 
+// Luwu: `{ read tag: "x" }`, one read-only singleton property and nothing else (MagicTypeFunctionIs)
+static bool isTagTable(const TableType& table)
+{
+    if (table.props.size() != 1 || table.indexer)
+        return false;
+
+    const Property& prop = table.props.begin()->second;
+    return prop.readTy && !prop.writeTy && get<SingletonType>(follow(*prop.readTy));
+}
+
 NormalizationResult Normalizer::intersectNormalWithTy(
     NormalizedType& here,
     TypeId there,
@@ -3744,6 +3754,30 @@ NormalizationResult Normalizer::intersectNormalWithTy(
         {
             here.tyvars = std::move(tyvars);
             return intersectNormalWithTy(here, nt->ty, seenTablePropPairs, seenSetTypes);
+        }
+        else if (const TableType* tagged = get<TableType>(t); tagged && isTagTable(*tagged))
+        {
+            // Luwu: `~{ read tag: "x" }`, the else branch of `t:is("x")` in a type function (MagicTypeFunctionIs). A table
+            // whose `tag` is exactly "x" can't be in it. Any other table may be, so it stays, which is sound: it only
+            // narrows less (negating other tables still isn't implemented).
+            const auto& [key, prop] = *tagged->props.begin();
+            const SingletonType* excluded = get<SingletonType>(follow(*prop.readTy));
+
+            TypeIds kept;
+            for (TypeId table : here.tables)
+            {
+                const TableType* tt = get<TableType>(follow(table));
+                auto tag = tt ? tt->props.find(key) : TableType::Props::const_iterator{};
+
+                const SingletonType* value = nullptr;
+                if (tt && tag != tt->props.end() && tag->second.readTy)
+                    value = get<SingletonType>(follow(*tag->second.readTy));
+
+                if (!value || !(*value == *excluded))
+                    kept.insert(table);
+            }
+
+            here.tables = std::move(kept);
         }
         else
         {
