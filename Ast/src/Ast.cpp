@@ -129,8 +129,16 @@ std::string toString(AstAttr::Type type)
         return "native";
     case AstAttr::Type::Deprecated:
         return "deprecated";
-    case AstAttr::Type::DebugNoinline:
-        return "debugNoinline";
+    case AstAttr::Type::Noinline:
+        return "noinline";
+    case AstAttr::Type::Truthy:
+        return "truthy";
+    case AstAttr::Type::Nolint:
+        return "nolint";
+    case AstAttr::Type::Lint:
+        return "lint";
+    case AstAttr::Type::Nodiscard:
+        return "nodiscard";
     default:
         return "unknown";
     }
@@ -145,8 +153,16 @@ std::optional<AstAttr::Type> fromString<AstAttr::Type>(std::string_view s)
         return AstAttr::Type::Native;
     if (s == "deprecated")
         return AstAttr::Type::Deprecated;
-    if (s == "debugNoinline")
-        return AstAttr::Type::DebugNoinline;
+    if (s == "noinline")
+        return AstAttr::Type::Noinline;
+    if (s == "truthy")
+        return AstAttr::Type::Truthy;
+    if (s == "nolint")
+        return AstAttr::Type::Nolint;
+    if (s == "lint")
+        return AstAttr::Type::Lint;
+    if (s == "nodiscard")
+        return AstAttr::Type::Nodiscard;
     if (s == "unknown")
         return AstAttr::Type::Unknown;
     return std::nullopt;
