@@ -33,6 +33,7 @@ LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 // Defined by the VM, which introduces `none`; without it there is nothing to mix up with `nil`.
 LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 
 namespace Luau
 {
@@ -9848,6 +9849,88 @@ private:
     }
 };
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is "meow"` or `x is not LIMIT`, a pattern with one
+// value that reads better as `x == "meow"` or `x ~= LIMIT`. A union of values (`x is "Meow" | "meow"`) saves repeating `x`
+// and isn't reported, and neither is a `case` arm.
+class LintIsComparison : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintIsComparison pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // Every value of the type is a primitive or a singleton, so a name holding one can't be a class
+    static bool holdsPlainValues(TypeId ty)
+    {
+        ty = follow(ty);
+        if (get<PrimitiveType>(ty) || get<SingletonType>(ty))
+            return true;
+
+        const UnionType* options = get<UnionType>(ty);
+        if (!options)
+            return false;
+
+        for (TypeId option : options)
+        {
+            if (!holdsPlainValues(option))
+                return false;
+        }
+        return true;
+    }
+
+    // `nil` or `none`, which a pattern checks for like a type (`x is None`)
+    static bool isNothing(TypeId ty)
+    {
+        const PrimitiveType* primitive = get<PrimitiveType>(follow(ty));
+        return primitive && (primitive->type == PrimitiveType::NilType || primitive->type == PrimitiveType::NoneType);
+    }
+
+    // A literal other than `nil` and `none`, or a name holding other plain values, with nothing destructured from it. Type
+    // checks (`x is string`) are never comparisons.
+    bool comparesOneValue(const AstPatternAlternative& alternative)
+    {
+        AstExpr* operand = alternative.operand;
+        if (!operand || alternative.location != operand->location)
+            return false;
+
+        if (alternative.kind == AstPatternAlternative::Value)
+            return operand->is<AstExprConstantString>() || operand->is<AstExprConstantNumber>() || operand->is<AstExprConstantBool>();
+
+        std::optional<TypeId> type = alternative.kind == AstPatternAlternative::Class ? context->getType(operand) : std::nullopt;
+        return type && !isNothing(*type) && holdsPlainValues(*type);
+    }
+
+    // The operand as the user wrote it: a string keeps its quotes, which the printer turns into single quotes
+    static std::string operandText(AstExpr* operand)
+    {
+        const AstExprConstantString* string = operand->as<AstExprConstantString>();
+        if (!string || string->quoteStyle != AstExprConstantString::QuoteStyle::QuotedSimple)
+            return toString(operand);
+        return "\"" + std::string(string->value.data, string->value.size) + "\"";
+    }
+
+    bool visit(AstExprMatchPattern* node) override
+    {
+        bool comparison = node->value && !node->implements && node->alternatives.size == 1 && comparesOneValue(node->alternatives.data[0]);
+        if (comparison)
+        {
+            std::string value = toString(node->value);
+            std::string operand = operandText(node->alternatives.data[0].operand);
+            emitWarning(
+                *context, LintWarning::Code_IsComparison, node->location, "Did you mean '%s %s %s'?", value.c_str(), node->negated ? "~=" : "==", operand.c_str()
+            );
+        }
+        return true;
+    }
+};
+
 // Luwu: a computed value stored in a local and overwritten, in the same block, before anything reads it. The work that
 // produced it was for nothing, which usually means a use of it was forgotten. Only computed values count (calls,
 // arithmetic, ...): `local x = 0` then `x = f()` is just a default.
@@ -10152,6 +10235,7 @@ static LintWarning::Code lintGroupOf(LintWarning::Code code)
     case LintWarning::Code_InlineOrLeave:
     case LintWarning::Code_LuaGuard:
     case LintWarning::Code_ConfusingGuard:
+    case LintWarning::Code_IsComparison:
         return LintWarning::Code_Style;
     case LintWarning::Code_DuplicateKey:
     case LintWarning::Code_DuplicateProperty:
@@ -10669,6 +10753,9 @@ std::vector<LintWarning> lint(
 
     if (FFlag::LuwuDoExpr && context.warningEnabled(LintWarning::Code_OrReturnComma))
         LintOrReturnComma::process(context);
+
+    if (FFlag::DebugLuwuMatchExpressions && context.warningEnabled(LintWarning::Code_IsComparison))
+        LintIsComparison::process(context);
 
     // UnflippedGuard also checks plain `if` guards, so it runs without do expressions
     LintDoExpressions::Enabled doExpressions;

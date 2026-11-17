@@ -3378,6 +3378,40 @@ return f, limit
     CHECK(warningsWithCode(result, LintWarning::Code_LocalUnused).empty());
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "IsComparison")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    LintResult result = lint(R"(
+class Point(public x: number)
+end
+local LIMIT = 10
+local function f(x: unknown, path: string, expected_path: string, other_path: string)
+    print(x is not "meow")
+    print(path is expected_path)
+    print(x is LIMIT)
+    -- not reported: unions, nil, classes, types and case arms
+    print(x is not "Meow" | "meow")
+    print(path is expected_path | other_path)
+    print(x is nil, x is Point, x is string)
+    return match x
+        case is "meow" then 1
+        else 2
+end
+return f
+)");
+
+    std::vector<LintWarning> warnings = warningsWithCode(result, LintWarning::Code_IsComparison);
+    REQUIRE_EQ(warnings.size(), 3);
+    CHECK_EQ(warnings[0].text, "Did you mean 'x ~= \"meow\"'?");
+    CHECK_EQ(warnings[0].location, Location(Position(5, 10), Position(5, 25)));
+    CHECK_EQ(warnings[1].text, "Did you mean 'path == expected_path'?");
+    CHECK_EQ(warnings[2].text, "Did you mean 'x == LIMIT'?");
+}
+
 TEST_CASE_FIXTURE(Fixture, "UnflippedGuardInAnIf")
 {
     LintResult result = lint(R"(
