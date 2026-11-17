@@ -14,6 +14,8 @@
 #include "Luau/TypeUtils.h"
 #include "Luau/Unifier2.h"
 
+#include <stdlib.h>
+
 LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceVariadics)
 LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceBetterLambdaHandling)
 LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
@@ -78,8 +80,8 @@ struct FindFunctionTypeIn : IterativeTypeVisitor
                 return false;
             }
 
-            int candidateDistance = std::abs(int(size(candidate->argTypes)) - numberOfLambdaParameters);
-            int thisDistance = std::abs(int(size(ftv.argTypes)) - numberOfLambdaParameters);
+            int candidateDistance = abs(int(size(candidate->argTypes)) - numberOfLambdaParameters);
+            int thisDistance = abs(int(size(ftv.argTypes)) - numberOfLambdaParameters);
 
             if (thisDistance < candidateDistance)
             {
@@ -94,7 +96,7 @@ struct FindFunctionTypeIn : IterativeTypeVisitor
         else
         {
             if (candidate == nullptr ||
-                std::abs(int(size(candidate->argTypes)) - numberOfLambdaParameters) > std::abs(int(size(ftv.argTypes)) - numberOfLambdaParameters))
+                abs(int(size(candidate->argTypes)) - numberOfLambdaParameters) > abs(int(size(ftv.argTypes)) - numberOfLambdaParameters))
             {
                 candidate = get<FunctionType>(ty);
                 return false;
