@@ -1489,7 +1489,7 @@ uint8_t BytecodeBuilder::getVersion()
     if (FFlag::LuwuTableComprehensions)
         return LWBC_VERSION_WIP;
 
-    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): LOP_JUMPXTYPE is WIP bytecode too
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): LOP_JUMPXTYPE and LOP_JUMPXMATCH are WIP bytecode too
     if (FFlag::DebugLuwuMatchExpressions)
         return LWBC_VERSION_WIP;
 
@@ -2006,6 +2006,13 @@ void BytecodeBuilder::validateInstructions() const
             VJUMP(LUAU_INSN_D(insn));
             LUAU_ASSERT((insns[i + 1] & ~(0xffu | 0x80000000u)) == 0);
             LUAU_ASSERT(getJumpxTypeName(insns[i + 1] & 0xff));
+            break;
+
+        case LOP_JUMPXMATCH:
+            VREG(LUAU_INSN_A(insn));
+            VJUMP(LUAU_INSN_D(insn));
+            VREG(insns[i + 1] & 0xff);
+            LUAU_ASSERT((insns[i + 1] & ~(0xffu | 0x80000000u)) == 0);
             break;
 
         case LOP_GETOBJECTMEMBER:
@@ -2856,6 +2863,11 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_JUMPXTYPE:
         formatAppend(result, "JUMPXTYPE R%d L%d%s ['%s']\n", LUAU_INSN_A(insn), targetLabel, LUAU_INSN_AUX_NOT(*code) ? " NOT" : "", getJumpxTypeName(*code & 0xff));
+        code++;
+        break;
+
+    case LOP_JUMPXMATCH:
+        formatAppend(result, "JUMPXMATCH R%d R%d L%d%s\n", LUAU_INSN_A(insn), *code & 0xff, targetLabel, LUAU_INSN_AUX_NOT(*code) ? " NOT" : "");
         code++;
         break;
 

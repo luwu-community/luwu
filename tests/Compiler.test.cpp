@@ -14816,6 +14816,50 @@ print(Greeter)
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the compiler compiles a pattern itself: the value is
 // read once, a tag is one JUMPXTYPE, a class one JUMPXISA (after which fields are constant offsets), and a literal one
 // JUMPXEQK*
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a name in a pattern compares like a literal when it holds
+// a constant, tests instances with JUMPXISA when it's a class, and is tested by JUMPXMATCH otherwise
+TEST_CASE("PatternNamesPickTheirTestByWhatTheyHold")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+    };
+
+    const char* source = R"(
+class Point(public x: number)
+end
+const LIMIT = 10
+local kinds = { header = 4 }
+local function f(v: unknown, other: unknown)
+    if v is LIMIT then
+        return 1
+    elseif v is Point then
+        return 2
+    elseif v is not kinds.header | other then
+        return 3
+    end
+    return 4
+end
+return f
+)";
+
+    CHECK_EQ("\n" + compileFunction(source, 0, 2), R"(
+JUMPXEQKN R0 K0 L0 NOT [10]
+LOADN R2 1
+RETURN R2 1
+L0: GETUPVAL R2 0
+JUMPXISA R0 R2 L1 NOT
+LOADN R2 2
+RETURN R2 1
+L1: JUMPXEQKN R0 K1 L2 [4]
+JUMPXMATCH R0 R1 L2
+LOADN R2 3
+RETURN R2 1
+L2: LOADN R2 4
+RETURN R2 1
+)");
+}
+
 TEST_CASE("PatternsCompileToOneJumpPerAlternative")
 {
     ScopedFastFlag sffs[] = {

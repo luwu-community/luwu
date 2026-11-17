@@ -8558,7 +8558,8 @@ AstExpr* Parser::parsePatternClass(bool implements)
 
     Location start = lexer.current().location;
     AstExpr* path = parseNameExpr("class name");
-    while (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+    // a `.` with no name after it (`x is kinds.` while typing) is reported once, as in an expression
+    while (lexer.current().type == '.' && lexer.lookahead().type != '(' && lexer.lookahead().type != '{')
     {
         Position opPosition = lexer.current().location.begin;
         nextLexeme();
@@ -8676,7 +8677,8 @@ AstExpr* Parser::makePatternCheck(AstExpr* value, const Pattern& pattern, const 
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the test of one alternative: `value == 1`,
 // `type(value) == "string"`, `class.isinstance(value, Point)` or `class.implements(value, Named)`. `negated` gives the
-// `is not` test.
+// `is not` test. The type checker narrows `class.isinstance(value, LIMIT)` like `==` when `LIMIT` holds something other
+// than a class. Without classes, a name is checked as `==`.
 AstExpr* Parser::makeAlternativeTest(AstExpr* value, const PatternAlternative& alternative, bool negated, const Location& start)
 {
     AstExprBinary::Op compare = negated ? AstExprBinary::CompareNe : AstExprBinary::CompareEq;
@@ -8693,7 +8695,7 @@ AstExpr* Parser::makeAlternativeTest(AstExpr* value, const PatternAlternative& a
     {
         test = makeGlobalCall(nameClass, nameImplements, location, {value, alternative.operand});
     }
-    else if (alternative.isClass)
+    else if (alternative.isClass && FFlag::LuwuClasses)
     {
         test = makeGlobalCall(nameClass, nameIsinstance, location, {value, alternative.operand});
     }

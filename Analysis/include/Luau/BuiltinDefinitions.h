@@ -75,6 +75,10 @@ struct MagicClassOf final : MagicFunction
 // their second argument. It's done by the function's type rather than by spelling, so an alias refines too (`const is =
 // class.isinstance`), as it fuses in the compiler (getBuiltin follows the local). Exposed for the same reason as
 // MagicClassFields.
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `class.isinstance(x, Foo)` written by the parser for
+// `x is Foo`, where `Foo` may hold any value
+bool isPatternIsinstance(const AstExprCall& call);
+
 struct MagicClassInstanceCheck final : MagicFunction
 {
     std::optional<WithPredicate<TypePackId>> handleOldSolver(

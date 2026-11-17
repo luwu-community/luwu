@@ -2279,6 +2279,12 @@ static bool isAnyClassOrTraitValue(NotNull<BuiltinTypes> builtinTypes, TypeId ty
     return false;
 }
 
+bool isPatternIsinstance(const AstExprCall& call)
+{
+    const AstExprIndexName* callee = call.func->as<AstExprIndexName>();
+    return call.fromPattern && callee && callee->index == "isinstance" && call.args.size == 2;
+}
+
 void MagicClassInstanceCheck::refine(const MagicRefinementContext& context)
 {
     // The value checked is the first argument. A method call (`lib:isinstance(c)`) puts `lib` there, which is not what
@@ -2302,6 +2308,23 @@ void MagicClassInstanceCheck::refine(const MagicRefinementContext& context)
         passed = builtinTypes->objectType;
 
     TypeId discriminant = follow(*context.discriminantTypes[0]);
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a name in `x is LIMIT` that holds something other
+    // than a class matches a value equal to it. A matched value has the name's type. A value that didn't match can
+    // still have it, unless the type has only one value (`"Ok"`, `true`, `nil`).
+    if (passed == builtinTypes->errorType && isPatternIsinstance(*context.callSite))
+    {
+        TypeId operand = follow(argTypes[1]);
+        LUAU_ASSERT(get<BlockedType>(discriminant));
+        emplaceType<BoundType>(asMutable(discriminant), operand);
+
+        bool oneValue = get<SingletonType>(operand) || isNil(operand);
+        std::optional<TypeId> negative = context.negativeDiscriminantTypes.empty() ? std::nullopt : context.negativeDiscriminantTypes[0];
+        if (!oneValue && negative && get<BlockedType>(follow(*negative)))
+            emplaceType<BoundType>(asMutable(follow(*negative)), builtinTypes->noRefineType);
+        return;
+    }
+
     LUAU_ASSERT(get<BlockedType>(discriminant));
     emplaceType<BoundType>(asMutable(discriminant), passed);
 }

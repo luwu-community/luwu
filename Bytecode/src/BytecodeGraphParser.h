@@ -550,6 +550,13 @@ struct BytecodeGraphParser
                     addImmInput(node, static_cast<int32_t>(aux & 0xff));
                     break;
 
+                case LOP_JUMPXMATCH:
+                    addVmRegInput(node, LUAU_INSN_A(insn));
+                    addImmInput(node, static_cast<bool>(aux >> 31));
+                    addJumpInput(node, jumpTarget);
+                    addVmRegInput(node, aux & 0xff);
+                    break;
+
                 case LOP_INITTRAITS:
                     // Luwu Traits (rfcs/classes/traits.md): reads the object in A + 1, jumps over the CALL after it, and
                     // otherwise writes the runner to A
@@ -799,6 +806,7 @@ struct BytecodeGraphParser
             case LOP_JUMPXEQKS:
             case LOP_JUMPXISA:
             case LOP_JUMPXTYPE:
+            case LOP_JUMPXMATCH:
             case LOP_INITTRAITS:
             case LOP_JUMPIF:
             case LOP_JUMPIFNOT:

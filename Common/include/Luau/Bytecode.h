@@ -627,6 +627,15 @@ enum LuauOpcode
     //   (LUAU_INSN_AUX_NOT): when set, the jump is taken when the type differs.
     LOP_JUMPXTYPE,
 
+    // JUMPXMATCH: Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): jumps when R(A) matches a name in a
+    // pattern (`x is Foo`) the compiler can't resolve. When the name holds a class, R(A) matches an instance of it as
+    // JUMPXISA tests. Otherwise R(A) matches a value equal to it as JUMPIFEQ compares.
+    // A: value register
+    // D: jump offset (-32768..32767)
+    // AUX: the register holding the name's value in bits 0..7. Bit 31 is the NOT flag (LUAU_INSN_AUX_NOT): when set,
+    //   the jump is taken when R(A) doesn't match.
+    LOP_JUMPXMATCH,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };

@@ -1920,7 +1920,7 @@ struct AstPatternAlternative
         Value,
         // A primitive tag (`string`, `integer`, `object`): what `type()` gives
         Tag,
-        // A class, as a name or a dotted path: the value is an instance of it
+        // A name or a dotted path: the value is an instance of it when it holds a class, and equal to it otherwise
         Class,
         // A trait after `implements`: the value's class implements it
         Trait,

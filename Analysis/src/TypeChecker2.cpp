@@ -3969,6 +3969,12 @@ void TypeChecker2::visit(AstExprCall* call)
     if (call->fromPattern)
         checkImpossiblePattern(call);
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a name in `x is LIMIT` that holds something other
+    // than a class or trait is compared with `==`. It isn't a wrong argument to the `class.isinstance` call.
+    bool comparesByValue = isPatternIsinstance(*call) && !objectTypeOfClassValue(builtinTypes, lookupType(call->args.data[1]));
+    if (comparesByValue)
+        return;
+
     visitCall(call);
 }
 

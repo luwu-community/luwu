@@ -144,7 +144,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
         VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_GETQUALIFIED), \
-        VM_DISPATCH_OP(LOP_JUMPXTYPE),
+        VM_DISPATCH_OP(LOP_JUMPXTYPE), VM_DISPATCH_OP(LOP_JUMPXMATCH),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -4202,6 +4202,26 @@ reentry:
 
                 bool matches = hasbytecodetype(ra, aux & 0xff);
                 pc += matches != (LUAU_INSN_AUX_NOT(aux) != 0) ? LUAU_INSN_D(insn) : 1;
+                VM_ASSERT_PC(pc);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_JUMPXMATCH)
+            {
+                // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is Foo` where the compiler can't
+                // tell whether `Foo` holds a class
+                Instruction insn = *pc++;
+                uint32_t aux = *pc;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(aux & 0xff);
+
+                int matches = 0;
+                if (ttisclass(rb))
+                    matches = ttisobject(ra) && objectvalue(ra)->lclass == classvalue(rb);
+                else if (ttype(ra) == ttype(rb))
+                    VM_PROTECT(matches = luaV_equalval(L, ra, rb));
+
+                pc += (matches == 1) != (LUAU_INSN_AUX_NOT(aux) != 0) ? LUAU_INSN_D(insn) : 1;
                 VM_ASSERT_PC(pc);
                 VM_NEXT();
             }

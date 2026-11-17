@@ -5235,19 +5235,29 @@ struct Compiler
         {
         case AstPatternAlternative::Class:
         {
-            if (!FFlag::LuwuClasses)
+            // A name holding a constant (`const LIMIT = 10`) compares like the literal
+            if (const Constant* cv = constants.find(alternative.operand); cv && cv->type != Constant::Type_Unknown)
             {
-                uint8_t result = compileLibraryCall(nameClass(), names.getOrAdd("isinstance"), value, alternative.operand, pattern, rs);
-                jumps.push_back(bytecode.emitLabel());
-                bytecode.emitAD(whenMatched ? LOP_JUMPIF : LOP_JUMPIFNOT, result, 0);
+                compileConstantEqualityJump(value, alternative.operand, *cv, notFlag, jumps);
                 return;
             }
 
-            uint8_t classReg = compileExprAuto(alternative.operand, rs);
-            bool classIsKnown = isClassBoundAt(alternative.operand);
+            uint8_t operand = compileExprAuto(alternative.operand, rs);
+
+            // A name the compiler can't resolve may hold a class or any other value
+            AstStatClass* decl = classBindingOf(alternative.operand);
+            if (!decl)
+            {
+                jumps.push_back(bytecode.emitLabel());
+                bytecode.emitAD(LOP_JUMPXMATCH, value, 0);
+                bytecode.emitAux(uint32_t(operand) | notFlag);
+                return;
+            }
+
+            bool classIsKnown = isClassBoundAt(decl, alternative.operand->location);
             jumps.push_back(bytecode.emitLabel());
             bytecode.emitAD(LOP_JUMPXISA, value, 0);
-            bytecode.emitAux(uint32_t(classReg) | (whenMatched ? LBC_JUMPXISA_JUMPIFINSTANCE : 0u) | (classIsKnown ? 0u : LBC_JUMPXISA_CHECKCLASS));
+            bytecode.emitAux(uint32_t(operand) | (whenMatched ? LBC_JUMPXISA_JUMPIFINSTANCE : 0u) | (classIsKnown ? 0u : LBC_JUMPXISA_CHECKCLASS));
             return;
         }
 

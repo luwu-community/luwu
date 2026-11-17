@@ -301,4 +301,34 @@ do
     assert(notTags(true) and notTags({}) and not notTags("s") and not notTags(1))
 end
 
+-- a name that holds something other than a class compares like a literal, and one holding a class tests instances
+do
+    const LIMIT = 10
+    local kinds = { streaminfo = 0, padding = 1, point = Point }
+
+    local function other(v: unknown): boolean
+        return v is not kinds.streaminfo | kinds.padding | LIMIT
+    end
+    assert(not other(0) and not other(1) and not other(10) and other(2) and other("0") and other(nil))
+
+    local function point(v: unknown): boolean
+        return v is kinds.point
+    end
+    assert(point(Point(1, 2)) and not point(Point) and not point(1))
+
+    local function same(v: unknown, name: unknown): boolean
+        return v is name
+    end
+    assert(same(Point(1, 2), Point) and same("x", "x") and not same("x", "y") and same(nil, nil) and not same(1, "1"))
+
+    local function label(v: unknown): string
+        return match v
+            case is kinds.streaminfo then "streaminfo"
+            case is LIMIT | kinds.point then "limit or point"
+            else "other"
+    end
+    assert(label(0) == "streaminfo" and label(10) == "limit or point" and label(Point(1, 2)) == "limit or point")
+    assert(label(1) == "other")
+end
+
 return "OK"

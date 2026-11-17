@@ -5363,6 +5363,9 @@ InferencePack ConstraintGenerator::checkExprCall(
 
     // Each argument the call could refine gets a discriminant the solver binds once it knows the function.
     // Luwu user-defined refinements: and, with DebugLuwuUserDefinedRefinements on, one for when the call is falsy.
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern's test gets one too. `x is LIMIT` failing
+    // says nothing about `x`'s type.
+    bool refinesWhenFalsy = FFlag::DebugLuwuUserDefinedRefinements || call->fromPattern;
     auto addArgument = [&](AstExpr* arg)
     {
         exprArgs.push_back(arg);
@@ -5376,7 +5379,7 @@ InferencePack ConstraintGenerator::checkExprCall(
         }
 
         TypeId discriminantTy = arena->addType(BlockedType{});
-        TypeId negativeDiscriminantTy = FFlag::DebugLuwuUserDefinedRefinements ? arena->addType(BlockedType{}) : nullptr;
+        TypeId negativeDiscriminantTy = refinesWhenFalsy ? arena->addType(BlockedType{}) : nullptr;
         returnRefinements.push_back(refinementArena.implicitProposition(key, discriminantTy, negativeDiscriminantTy));
         discriminantTypes.emplace_back(discriminantTy);
         negativeDiscriminantTypes.emplace_back(negativeDiscriminantTy ? std::optional<TypeId>{negativeDiscriminantTy} : std::nullopt);
@@ -5664,7 +5667,7 @@ InferencePack ConstraintGenerator::checkExprCall(
         &module->astOverloadResolvedTypes,
         FFlag::LuwuGenericNominals ? expectedType : std::nullopt,
     };
-    if (FFlag::DebugLuwuUserDefinedRefinements)
+    if (refinesWhenFalsy)
         callConstraintData.negativeDiscriminantTypes = std::move(negativeDiscriminantTypes);
 
     NotNull<Constraint> callConstraint = addConstraint(scope, call->func->location, std::move(callConstraintData));

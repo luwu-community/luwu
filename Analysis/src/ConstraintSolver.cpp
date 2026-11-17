@@ -1974,7 +1974,9 @@ bool ConstraintSolver::tryDispatch(const FunctionCallConstraint& c, NotNull<cons
         if (ftv->magic && c.callSite)
         {
             usedMagic = ftv->magic->infer(MagicFunctionCallContext{NotNull{this}, constraint, NotNull{c.callSite}, c.argsPack, result});
-            ftv->magic->refine(MagicRefinementContext{constraint->scope, c.callSite, c.discriminantTypes, NotNull{this}, argsPack});
+            ftv->magic->refine(
+                MagicRefinementContext{constraint->scope, c.callSite, c.discriminantTypes, NotNull{this}, argsPack, c.negativeDiscriminantTypes}
+            );
         }
 
         // Luwu user-defined refinements: `@[truthy(param, Type)]` refines the argument for `param` when the call

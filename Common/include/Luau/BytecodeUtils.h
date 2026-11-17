@@ -48,6 +48,7 @@ inline int getOpLength(LuauOpcode op)
     case LOP_SETOBJECTMEMBER:
     case LOP_GETQUALIFIED:
     case LOP_JUMPXTYPE:
+    case LOP_JUMPXMATCH:
         return 2;
 
     default:
@@ -99,6 +100,7 @@ inline bool isJumpD(LuauOpcode op)
     case LOP_JUMPXISA:
     case LOP_INITTRAITS:
     case LOP_JUMPXTYPE:
+    case LOP_JUMPXMATCH:
         return true;
 
     default:

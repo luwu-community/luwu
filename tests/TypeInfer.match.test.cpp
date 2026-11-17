@@ -102,6 +102,46 @@ TEST_CASE_FIXTURE(ClassesFixture, "is_and_implements_narrow_like_the_class_libra
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a name in a pattern that holds something other than a
+// class narrows like `==`: to the name's type when it matches, and only for a single value when it doesn't
+TEST_CASE_FIXTURE(ClassesFixture, "pattern_names_holding_values_narrow_like_equality")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        local KINDS = { streaminfo = 0, padding = 1 }
+        local OK = "ok" :: "ok"
+
+        local function matched(kind: number | string): number
+            if kind is KINDS.streaminfo then
+                return kind
+            end
+            return 0
+        end
+
+        local function unmatched(kind: number | string): number
+            if kind is not KINDS.streaminfo | KINDS.padding then
+                local still: string = kind
+                return 0
+            end
+            return kind
+        end
+
+        local function single(status: "ok" | "failed"): "failed"
+            if status is not OK then
+                return status
+            end
+            return "failed"
+        end
+    )");
+
+    // a number other than both kinds still reaches the first branch
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 13);
+}
+
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern no value can match is reported once, at the
 // test, and the code it guards adds nothing about the tested value being 'never'
 TEST_CASE_FIXTURE(ClassesFixture, "a_pattern_that_never_matches_is_one_error")
@@ -565,6 +605,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_match_expressions")
     );
     checkTypewriting(*this, kTypewriterBefore, "local n = maybe()\nlocal ok = n is number", kTypewriterAfter);
     checkTypewriting(*this, kTypewriterBefore, "local n = maybe()\nlocal ok = n is 1 | 2 | nil", kTypewriterAfter);
+    checkTypewriting(*this, kTypewriterBefore, "local LIMITS = { low = 1 }\nlocal n = maybe()\nlocal ok = n is not LIMITS.low | nil", kTypewriterAfter);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "typing_implements_alternatives")

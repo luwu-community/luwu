@@ -89,6 +89,7 @@ void translateInstCmpProto(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstCheckSelfClass(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstJumpXIsa(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstJumpXType(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstJumpXMatch(IrBuilder& build, const Instruction* pc, int pcpos);
 
 void beforeInstForNPrep(IrBuilder& build, const Instruction* pc, int pcpos);
 void afterInstForNLoop(IrBuilder& build, const Instruction* pc);

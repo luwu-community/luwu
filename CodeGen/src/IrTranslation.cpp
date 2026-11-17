@@ -2535,6 +2535,43 @@ void translateInstJumpXType(IrBuilder& build, const Instruction* pc, int pcpos)
         build.beginBlock(next);
 }
 
+void translateInstJumpXMatch(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is Foo` where the compiler can't tell whether
+    // `Foo` holds a class. A class gets JUMPXISA's test, and anything else JUMPIFEQ's generic comparison.
+    int ra = LUAU_INSN_A(*pc);
+    uint32_t aux = pc[1];
+    int rb = aux & 0xff;
+    bool not_ = LUAU_INSN_AUX_NOT(aux) != 0;
+
+    IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
+    IrOp next = build.blockAtInst(pcpos + 2);
+    IrOp matched = not_ ? next : target;
+    IrOp unmatched = not_ ? target : next;
+
+    IrOp isClass = build.block(IrBlockKind::Internal);
+    IrOp compare = build.block(IrBlockKind::Internal);
+
+    IrOp operandTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_EQ_TAG, operandTag, build.constTag(LUA_TCLASS), isClass, compare);
+
+    build.beginBlock(isClass);
+    IrOp valueTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    IrOp valuePtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(ra));
+    IrOp classPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+    IrOp isInstance = build.inst(IrCmd::CLASS_ISINSTANCE, valueTag, valuePtr, classPtr);
+    build.inst(IrCmd::JUMP_CMP_INT, isInstance, build.constInt(1), build.cond(IrCondition::Equal), matched, unmatched);
+
+    build.beginBlock(compare);
+    build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + 1));
+    IrOp equal = build.inst(IrCmd::CMP_ANY, build.vmReg(ra), build.vmReg(rb), build.cond(IrCondition::Equal));
+    build.inst(IrCmd::JUMP_CMP_INT, equal, build.constInt(0), build.cond(IrCondition::Equal), unmatched, matched);
+
+    // Fallthrough in original bytecode is implicit, so we start next internal block here
+    if (build.isInternalBlock(next))
+        build.beginBlock(next);
+}
+
 void translateInstJumpXIsa(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     // Luwu Classes (rfcs/classes): fused class.isinstance(value, class) test-and-branch. Without
