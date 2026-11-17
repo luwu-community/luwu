@@ -17,6 +17,7 @@
 #include "Luau/RepeatedTypeNames.h"
 #include "Luau/Metamethods.h"
 #include "Luau/Normalize.h"
+#include "Luau/BuiltinTypeFunctions.h"
 #include "Luau/OverloadResolver.h"
 #include "Luau/Subtyping.h"
 #include "Luau/TimeTrace.h"
@@ -28,6 +29,7 @@
 #include "Luau/TypeFwd.h"
 #include "Luau/TypePack.h"
 #include "Luau/TypePath.h"
+#include "Luau/TypeInfer.h"
 #include "Luau/TypeUtils.h"
 #include "Luau/Typos.h"
 #include "Luau/TypeOrPack.h"
@@ -553,6 +555,10 @@ bool TypeChecker2::hasBreak(AstStat* node)
         return false;
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+    if (node->is<AstStatMatch>())
+        return Luau::hasBreak(node);
+
     return false;
 }
 
@@ -572,9 +578,14 @@ const AstStat* TypeChecker2::getFallthrough(const AstStat* node)
         return getFallthrough(stat->body.data[stat->body.size - 1]);
     }
 
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `if (do return x) then` returns before the branch
+    if (findDoEndingStatement(node))
+        return nullptr;
+
     if (const AstStatIf* stat = node->as<AstStatIf>())
     {
-        if (const AstStat* thenf = getFallthrough(stat->thenbody))
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a then-branch that never runs doesn't fall through
+        if (const AstStat* thenf = findDoBlockingThenBranch(stat) ? nullptr : getFallthrough(stat->thenbody))
             return thenf;
 
         if (stat->elsebody)
@@ -587,6 +598,10 @@ const AstStat* TypeChecker2::getFallthrough(const AstStat* node)
         else
             return stat;
     }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+    if (node->is<AstStatMatch>())
+        return Luau::getFallthrough(node);
 
     if (node->is<AstStatReturn>())
         return nullptr;
@@ -601,7 +616,7 @@ const AstStat* TypeChecker2::getFallthrough(const AstStat* node)
 
     if (const AstStatWhile* stat = node->as<AstStatWhile>())
     {
-        if (AstExprConstantBool* expr = stat->condition->as<AstExprConstantBool>())
+        if (AstExprConstantBool* expr = stat->clauses.size == 0 ? stat->condition->as<AstExprConstantBool>() : nullptr)
         {
             if (expr->value && !hasBreak(stat->body))
                 return nullptr;
@@ -776,6 +791,8 @@ void TypeChecker2::visit(AstStat* stat)
         return visit(s);
     else if (auto s = stat->as<AstStatIf>())
         return visit(s);
+    else if (auto s = stat->as<AstStatMatch>())
+        return visit(s);
     else if (auto s = stat->as<AstStatWhile>())
         return visit(s);
     else if (auto s = stat->as<AstStatRepeat>())
@@ -785,6 +802,10 @@ void TypeChecker2::visit(AstStat* stat)
     else if (auto s = stat->as<AstStatContinue>())
         return visit(s);
     else if (auto s = stat->as<AstStatReturn>())
+        return visit(s);
+    else if (auto s = stat->as<AstStatGive>())
+        return visit(s);
+    else if (auto s = stat->as<AstStatComprehensionItem>())
         return visit(s);
     else if (auto s = stat->as<AstStatExpr>())
         return visit(s);
@@ -830,21 +851,68 @@ void TypeChecker2::visit(AstStatBlock* block)
         visit(statement);
 }
 
-void TypeChecker2::visit(AstStatIf* ifStatement)
+// Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain's declarations are checked like any `local`, and its plain
+// conditions like the condition of an ordinary `if`.
+void TypeChecker2::visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses)
 {
+    if (clauses.size == 0)
     {
         InConditionalContext flipper{&typeContext};
-        visit(ifStatement->condition, ValueContext::RValue);
+        visit(condition, ValueContext::RValue);
+        return;
     }
+
+    for (const AstIfClause& clause : clauses)
+    {
+        if (clause.declaration)
+        {
+            visit(clause.declaration);
+        }
+        else
+        {
+            InConditionalContext flipper{&typeContext};
+            visit(clause.expr, ValueContext::RValue);
+        }
+    }
+}
+
+void TypeChecker2::visit(AstStatIf* ifStatement)
+{
+    visitIfCondition(ifStatement->condition, ifStatement->clauses);
 
     visit(ifStatement->thenbody);
     if (ifStatement->elsebody)
         visit(ifStatement->elsebody);
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+void TypeChecker2::visit(const AstMatchSubject& subject)
+{
+    if (subject.declaration)
+        visit(subject.declaration);
+    else
+        visit(subject.value, ValueContext::RValue);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+void TypeChecker2::visit(AstStatMatch* match)
+{
+    visit(match->subject);
+
+    for (const AstMatchArm& arm : match->arms)
+    {
+        if (arm.condition)
+            visitIfCondition(arm.condition, arm.clauses);
+        visit(arm.body);
+    }
+}
+
 void TypeChecker2::visit(AstStatWhile* whileStatement)
 {
-    visit(whileStatement->condition, ValueContext::RValue);
+    if (whileStatement->clauses.size != 0)
+        visitIfCondition(whileStatement->condition, whileStatement->clauses);
+    else
+        visit(whileStatement->condition, ValueContext::RValue);
     visit(whileStatement->body);
 }
 
@@ -864,6 +932,8 @@ void TypeChecker2::visit(AstStatContinue*) {}
 enum class FallthroughKind
 {
     IfWithoutElse,
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match` statement with no `else` or catch-all arm
+    MatchWithoutElse,
     Loop,
     CodePath,
 };
@@ -882,6 +952,8 @@ static FallthroughSite classifyFallthrough(const AstStat* fallthrough)
     constexpr unsigned whileKeywordLength = 5;
     constexpr unsigned repeatKeywordLength = 6;
 
+    constexpr unsigned matchKeywordLength = 5;
+
     if (const AstStatIf* ifStat = fallthrough->as<AstStatIf>(); ifStat && !ifStat->elsebody)
         return {FallthroughKind::IfWithoutElse, ifStat->ifLocation};
 
@@ -889,6 +961,9 @@ static FallthroughSite classifyFallthrough(const AstStat* fallthrough)
     {
         return Location{statement.begin, Position{statement.begin.line, statement.begin.column + length}};
     };
+
+    if (fallthrough->is<AstStatMatch>())
+        return {FallthroughKind::MatchWithoutElse, keyword(fallthrough->location, matchKeywordLength)};
 
     if (fallthrough->is<AstStatWhile>())
         return {FallthroughKind::Loop, keyword(fallthrough->location, whileKeywordLength)};
@@ -907,6 +982,8 @@ static std::string describeFallthrough(FallthroughKind kind, TypePackId expected
     {
     case FallthroughKind::IfWithoutElse:
         return "This 'if' has no 'else', so the code path that skips it doesn't " + returns;
+    case FallthroughKind::MatchWithoutElse:
+        return "This 'match' has no 'else', so the code path where no arm matches doesn't " + returns;
     case FallthroughKind::Loop:
         return "This loop may not run, so the code path that skips it doesn't " + returns;
     case FallthroughKind::CodePath:
@@ -1024,6 +1101,29 @@ static std::optional<std::string> explainReturnCountMismatch(TypePackId givenTp,
            "Consider adding 'return nil', or annotating the return type as '()' if it is meant to return nothing.";
 }
 
+// Luwu: a `return` that gives at least one value may leave off trailing values the function declares as optional,
+// the same rule a call already follows for trailing optional arguments. `return nil` ends an iterator declared
+// `(): (number?, { number }?)`. Upstream requires every declared value (`return nil, nil`), which for an iterator with
+// a long multiret means `return nil, nil, nil, nil, nil, nil`. A bare `return` still doesn't satisfy `-> nil` or
+// `-> (number?, string?)`: returning nothing is not returning `nil`.
+static void padOmittedOptionalReturns(std::vector<TypeId>& actualHead, std::optional<TypePackId> actualTail, TypePackId expectedRetType)
+{
+    if (actualHead.empty() || actualTail)
+        return;
+
+    auto [expectedHead, _] = flatten(expectedRetType);
+    if (actualHead.size() >= expectedHead.size())
+        return;
+
+    for (size_t i = actualHead.size(); i < expectedHead.size(); ++i)
+    {
+        if (!isOptional(expectedHead[i]))
+            return;
+    }
+
+    actualHead.insert(actualHead.end(), expectedHead.begin() + actualHead.size(), expectedHead.end());
+}
+
 void TypeChecker2::visit(AstStatReturn* ret)
 {
     Scope* scope = findInnermostScope(ret->location);
@@ -1108,6 +1208,7 @@ void TypeChecker2::visit(AstStatReturn* ret)
     // we double error.
     if (isSubtype)
     {
+        padOmittedOptionalReturns(actualHead, actualTail, expectedRetType);
         auto reconstructedRetType = module->internalTypes->addTypePack(TypePack{std::move(actualHead), std::move(actualTail)});
         testReturnPack(reconstructedRetType, expectedRetType, ret->location);
     }
@@ -3044,6 +3145,12 @@ void TypeChecker2::visit(AstExpr* expr, ValueContext context)
         return visit(e);
     else if (auto e = expr->as<AstExprIfElse>())
         return visit(e);
+    else if (auto e = expr->as<AstExprDo>())
+        return visit(e);
+    else if (auto e = expr->as<AstExprMatch>())
+        return visit(e);
+    else if (auto e = expr->as<AstExprTableComprehension>())
+        return visit(e);
     else if (auto e = expr->as<AstExprInstantiate>())
         return visit(e);
     else if (auto e = expr->as<AstExprInterpString>())
@@ -3332,6 +3439,24 @@ static AstType* parameterAnnotation(
         return nullptr;
 
     return fn->args.data[argIndex]->annotation;
+}
+
+// Luwu: `debug.profilebegin or fallback` and `(x :: any) or fallback` give a union with an `*error-type*` member
+// and a `~(false?)` one, because `any` (and an error) refined by truthiness splits that way. Normalizing that union
+// loses the error, so upstream reports "Cannot call a value of type ~(false?) in union" on every call of it: a second
+// error for a mistake already reported where the error came from, or for an `any` the user chose.
+static bool hasErrorSuppressingMember(TypeId ty)
+{
+    const UnionType* ut = get<UnionType>(follow(ty));
+    if (!ut)
+        return false;
+
+    for (TypeId member : ut)
+    {
+        if (get<ErrorType>(member) || get<AnyType>(member))
+            return true;
+    }
+    return false;
 }
 
 void TypeChecker2::appendArgumentTypes(TypePack& args, AstExprCall* call)
@@ -3681,7 +3806,12 @@ void TypeChecker2::visitCall(AstExprCall* call)
             }
             else if (const auto errorVec = get_if<ErrorVec>(&reasons))
             {
-                reportErrors(*errorVec);
+                for (const TypeError& error : *errorVec)
+                {
+                    const CannotCallNonFunction* uncallable = get<CannotCallNonFunction>(error);
+                    if (!uncallable || !hasErrorSuppressingMember(uncallable->ty))
+                        reportError(error);
+                }
             }
             else
                 LUAU_ASSERT(!"Unreachable");
@@ -3822,7 +3952,52 @@ void TypeChecker2::visit(AstExprCall* call)
             visit(arg, ValueContext::RValue);
     }
 
+    if (call->fromTypeTest)
+        checkImpossibleTypeTest(call);
+
     visitCall(call);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a type test's operand for a message. A value `is` read
+// into a hidden local (`(matched)`, `(destructured)`) has no name a user wrote.
+static std::string typeTestOperandName(std::optional<std::string> name, const char* fallback)
+{
+    if (!name || name->empty() || (*name)[0] == '(')
+        return fallback;
+    return "'" + *name + "'";
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is C`, where no value of x's type can be a C. The
+// test is always false, so the code it guards never runs. That's reported here once, and the tested local counts as
+// reported (improperlyUsedLocals), so the reads it guards don't add a "'x' is 'never' here" each.
+void TypeChecker2::checkImpossibleTypeTest(AstExprCall* call)
+{
+    AstExprIndexName* callee = call->func->as<AstExprIndexName>();
+    if (!callee || callee->index != "isinstance" || call->args.size != 2)
+        return;
+
+    TypeId valueTy = follow(lookupType(call->args.data[0]));
+    if (is<AnyType, UnknownType, ErrorType, NeverType, FreeType, BlockedType, GenericType>(valueTy))
+        return;
+
+    std::optional<TypeId> objectTy = objectTypeOfClassValue(builtinTypes, lookupType(call->args.data[1]));
+    if (!objectTy || normalizer.isIntersectionInhabited(valueTy, *objectTy) != NormalizationResult::False)
+        return;
+
+    std::string value = typeTestOperandName(bindingName(call->args.data[0]), "This value");
+    std::string type = typeTestOperandName(bindingName(call->args.data[1]), "this class");
+    std::string message = value + " can never be " + type + ": it's '" + toString(valueTy) + "'";
+
+    // `x is ok` on a value that isn't a result is usually a call missing its `try`
+    const ExternType* objectClass = get<ExternType>(follow(*objectTy));
+    bool resultVariant = objectClass && (objectClass->name == "ok" || objectClass->name == "err");
+    if (resultVariant)
+        message += ". Write 'try' before the call to test its result";
+
+    reportError(GenericError{std::move(message)}, call->location);
+
+    if (const AstExprLocal* tested = call->args.data[0]->as<AstExprLocal>())
+        improperlyUsedLocals.insert(tested->local);
 }
 
 std::optional<TypeId> TypeChecker2::tryStripUnionFromNil(TypeId ty) const
@@ -5440,12 +5615,84 @@ void TypeChecker2::visit(AstExprTypeAssertion* expr)
 void TypeChecker2::visit(AstExprIfElse* expr)
 {
     InConditionalContext inContext(&typeContext, TypeContext::Default);
-    {
-        InConditionalContext inContext(&typeContext, TypeContext::Condition);
-        visit(expr->condition, ValueContext::RValue);
-    }
+    visitIfCondition(expr->condition, expr->clauses);
     visit(expr->trueExpr, ValueContext::RValue);
     visit(expr->falseExpr, ValueContext::RValue);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+void TypeChecker2::visit(AstExprMatch* expr)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+    visit(expr->subject);
+
+    for (const AstMatchArm& arm : expr->arms)
+    {
+        if (arm.condition)
+            visitIfCondition(arm.condition, arm.clauses);
+        visit(arm.value, ValueContext::RValue);
+    }
+}
+
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
+void TypeChecker2::visit(AstExprDo* expr)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+    visit(expr->body);
+}
+
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
+void TypeChecker2::visit(AstStatGive* give)
+{
+    if (give->item)
+        visit(give->item);
+    else
+        visit(give->value, ValueContext::RValue);
+}
+
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the loop is checked like any loop, then the item against the
+// table's indexer, which an annotation may have decided. A nil value adds nothing, so the value may be nil even when
+// the element type isn't.
+void TypeChecker2::visit(AstExprTableComprehension* expr)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+    visit(expr->loop);
+
+    const TableType* ttv = get<TableType>(follow(lookupType(expr)));
+    if (!ttv || !ttv->indexer)
+        return;
+
+    // A `do` item whose `give`s write keys adds the items of those `give`s
+    if (expr->item->givenItems.size == 0)
+        checkComprehensionItem(expr->item, *ttv->indexer);
+
+    for (AstStatComprehensionItem* given : expr->item->givenItems)
+        checkComprehensionItem(given, *ttv->indexer);
+}
+
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): one item against the table's indexer
+void TypeChecker2::checkComprehensionItem(AstStatComprehensionItem* item, const TableIndexer& indexer)
+{
+    if (item->key)
+        testIsSubtype(lookupType(item->key), indexer.indexType, item->key->location);
+
+    // Accepted against `element | nil`, but reported against the element type, which is what the reader wrote. Checked as
+    // a literal like a list literal's items, so `tags = {}` fits a `{ string }` property.
+    TypeId valueType = lookupType(item->value);
+    TypeId elementOrNil = module->internalTypes->addType(UnionType{{indexer.indexResultType, builtinTypes->nilType}});
+    NotNull<Scope> scope{findInnermostScope(item->value->location)};
+
+    if (!subtyping->isSubtype(valueType, elementOrNil, scope).isSubtype)
+        testPotentialLiteralIsSubtype(item->value, indexer.indexResultType);
+}
+
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): see visit(AstExprTableComprehension*)
+void TypeChecker2::visit(AstStatComprehensionItem* item)
+{
+    if (item->key)
+        visit(item->key, ValueContext::RValue);
+
+    visit(item->value, ValueContext::RValue);
 }
 
 void TypeChecker2::visit(AstExprInstantiate* explicitTypeInstantiation)
@@ -7389,6 +7636,14 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
         passes &= testPotentialLiteralIsSubtype(ifElse->falseExpr, expectedType);
         return passes;
     }
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): each arm's value, like an if-else expression's branches
+    else if (auto match = expr->as<AstExprMatch>())
+    {
+        bool passes = true;
+        for (const AstMatchArm& arm : match->arms)
+            passes &= testPotentialLiteralIsSubtype(arm.value, expectedType);
+        return passes;
+    }
     else if (auto binExpr = expr->as<AstExprBinary>(); binExpr && binExpr->op == AstExprBinary::Or)
     {
         // In this case: `{ ... } or { ... }` is literal _enough_ that
@@ -7670,7 +7925,10 @@ void TypeChecker2::testIsSubtypeForInStat(const TypeId iterFunc, const TypeId pr
 void TypeChecker2::reportError(TypeErrorData data, const Location& location)
 {
     if (auto utk = get_if<UnknownProperty>(&data))
+    {
+        utk->language = module->language;
         diagnoseMissingTableKey(utk, data);
+    }
 
     // Luwu (helpful subtyping errors): an expected/got error names the long types it would print twice.
     if (FFlag::LuwuHelpfulSubtypingErrors)
