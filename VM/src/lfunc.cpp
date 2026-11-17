@@ -114,7 +114,15 @@ Closure* luaF_newFatCclosure(lua_State* L, size_t sz, LuaTable* e)
     c->fatc.debugname = NULL;
     c->fatc.dtor = NULL;
     c->fatc.size = sz;
+    c->fatc.df = NULL;
     return c;
+}
+
+int luaF_calldatacfunction(lua_State* L)
+{
+    Closure* cl = clvalue(L->ci->func);
+    LUAU_ASSERT(cl->isC == 2 && cl->fatc.df);
+    return cl->fatc.df(L, cl->fatc.data, int(L->top - L->base));
 }
 
 UpVal* luaF_findupval(lua_State* L, StkId level)

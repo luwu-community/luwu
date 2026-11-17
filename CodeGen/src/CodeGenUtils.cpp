@@ -411,8 +411,7 @@ Closure* callFallback(lua_State* L, StkId ra, StkId argtop, int nresults)
     }
     else
     {
-        lua_CFunction func = ccl->c.f;
-        int n = func(L);
+        int n = luaD_callcfunction(L, ccl);
 
         // yield
         if (n < 0)
