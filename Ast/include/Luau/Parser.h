@@ -162,7 +162,8 @@ private:
         Location loc,
         const char* attributeName,
         const TempVector<AstAttr*>& attributes,
-        const AstArray<AstExpr*>& args
+        const AstArray<AstExpr*>& args,
+        AstAttr::Context context
     );
 
     Location getAttributeStartLocation(
@@ -172,17 +173,56 @@ private:
     );
 
     // attrlist = '@[' parattr {',' parattr} ']'
-    void parseAttrList(TempVector<AstAttr*>& attributes, TempVector<CstAttrList*>* cstAttrLists);
+    void parseAttrList(TempVector<AstAttr*>& attributes, TempVector<CstAttrList*>* cstAttrLists, AstAttr::Context context);
+
+    // A bare `@name` cannot take arguments; `@[name ...]` is the form that does. When arguments
+    // follow one anyway this reports precisely and parses them, so the attribute still means what was
+    // intended and that is the only error. Returns false when nothing was misplaced.
+    bool parseMisplacedBareAttributeArgs(const char* name, AstAttr::Context context, AstArray<AstExpr*>& args, Location& argsLocation);
 
     // attribute ::= '@' NAME | attrlist
-    void parseAttribute_DEPRECATED(TempVector<AstAttr*>& attribute); // TODO: Clip with LuauCstAttr
-    void parseAttribute(TempVector<AstAttr*>& attribute);
+    void parseAttribute_DEPRECATED(TempVector<AstAttr*>& attribute, AstAttr::Context context); // TODO: Clip with LuauCstAttr
+    void parseAttribute(TempVector<AstAttr*>& attribute, AstAttr::Context context);
 
     // attributes ::= {attribute}
-    AstArray<AstAttr*> parseAttributes(TempVector<CstAttrList*>* cstAttrLists = nullptr);
+    // `context` is the syntactic position being parsed; an attribute that doesn't allow it is
+    // reported here, so callers never have to check which attributes they can accept.
+    AstArray<AstAttr*> parseAttributes(AstAttr::Context context, TempVector<CstAttrList*>* cstAttrLists = nullptr);
+
+    // Re-checks already-parsed attributes against the position they turned out to be on. Used where
+    // the position isn't known until after the attributes are consumed, i.e. statements.
+    void validateAttributeContexts(const AstArray<AstAttr*>& attributes, AstAttr::Context context);
+
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): for `--@[...]` comments over a statement
+    // no attribute applies to.
+    void reportStatementAttributes(const AstArray<AstAttr*>& attributes);
+
+    // False for an attribute from a `--@[...]` comment when a compiler is parsing: valid Luau has to keep compiling.
+    bool reportsAttributeErrors(const AstAttr* attr) const;
+
+    // "Attribute '@x' can only be applied to ..." / "... cannot be applied to ...".
+    void reportAttributeNotAllowed(const Location& location, const char* attributeName, const char* allowedPositionsHint, AstAttr::Context context);
+
+    // Attribute arguments must be literals. Reports the first argument that isn't one, unless parsing them already
+    // reported an error. Returns whether every argument is a literal.
+    bool checkAttributeArgsAreLiterals(const AstArray<AstExpr*>& args, const Location& argsLocation, size_t errorsBeforeArgs);
 
     // `first` followed by `second`, for attributes written on both sides of an access specifier.
     AstArray<AstAttr*> concatAttributes(const AstArray<AstAttr*>& first, const AstArray<AstAttr*>& second);
+
+    // True if an attribute begins at the current lexeme, i.e. a member/field/parameter is attributed. A
+    // `--@[...]` comment right before the lexeme counts.
+    bool attributesFollow() const;
+
+    // True if the current lexeme is an `@name` or `@[`, not counting comments.
+    bool attributeLexemeFollows() const;
+
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): the attributes in the `--@[...]`
+    // comments right before the current lexeme, parsed as if written there. Empty when there are none.
+    AstArray<AstAttr*> takeCommentAttributes(AstAttr::Context context);
+
+    // Reports an attribute written as `@...` in a Luau or Lua module on a position upstream can't parse attributes on.
+    void checkAttributeLanguage(const Location& location, const char* attributeName, bool hasArguments, AstAttr::Context context);
 
     // attributes local function Name funcbody
     // attributes function funcname funcbody
@@ -194,7 +234,7 @@ private:
     // local namelist [`=' explist]
     AstStat* parseLocal(
         const Location start,
-        const Position keywordPosition,
+        const Location& keywordLocation,
         const AstArray<AstAttr*>& attributes,
         bool isConst,
         TempVector<CstAttrList*>* cstAttrLists = nullptr
@@ -204,9 +244,20 @@ private:
     AstStat* parseReturn();
 
     // type Name `=' Type
-    AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition, const Location& typeKeywordLocation);
+    AstStat* parseTypeAlias(
+        const Location& start,
+        bool exported,
+        Position typeKeywordPosition,
+        const Location& typeKeywordLocation,
+        const AstArray<AstAttr*>& attributes = {nullptr, 0}
+    );
 
-    AstStat* parseClassStat(const Location& start, bool exported, const Location& classKeywordLocation);
+    AstStat* parseClassStat(
+        const Location& start,
+        bool exported,
+        const Location& classKeywordLocation,
+        const AstArray<AstAttr*>& classAttributes = {nullptr, 0}
+    );
 
     // True when the class body is looking at something that reads as a statement rather than a class
     // member, which means the class was never closed. See its definition.
@@ -236,7 +287,7 @@ private:
 
     AstStat* parseExportValue(
         const Location& start,
-        const Position keywordPosition,
+        const Location& keywordLocation,
         const AstArray<AstAttr*>& attributes,
         TempVector<CstAttrList*>* cstAttrLists = nullptr
     );
@@ -272,7 +323,9 @@ private:
     void parseExprList(TempVector<AstExpr*>& result, TempVector<Position>* commaPositions = nullptr);
 
     // binding ::= Name [`:` Type] [`=` Default]
-    Binding parseBinding(bool isConst = false, bool allowDefault = false);
+    // `allowAttributes` is set for parameter lists only; a `local` or `for` binding cannot carry
+    // attributes (an attribute on a local goes above the `local` keyword, on the statement).
+    Binding parseBinding(bool isConst = false, bool allowDefault = false, bool allowAttributes = false);
     AstArray<Position> extractAnnotationColonPositions(const TempVector<Binding>& bindings);
 
     // bindinglist ::= (binding | `...') {`,' bindinglist}
@@ -284,7 +337,8 @@ private:
         AstArray<Position>* commaPositions = nullptr,
         Position* initialCommaPosition = nullptr,
         Position* varargAnnotationColonPosition = nullptr,
-        bool isConst = false
+        bool isConst = false,
+        bool allowAttributes = false
     );
 
     AstType* parseOptionalType();
@@ -554,19 +608,22 @@ private:
         Position colonPosition;
         bool isConst;
         AstExpr* defaultValue;
+        AstArray<AstAttr*> attributes;
 
         explicit Binding(
             const Name& name,
             AstType* annotation = nullptr,
             Position colonPosition = {0, 0},
             bool isConst = false,
-            AstExpr* defaultValue = nullptr
+            AstExpr* defaultValue = nullptr,
+            AstArray<AstAttr*> attributes = {nullptr, 0}
         )
             : name(name)
             , annotation(annotation)
             , colonPosition(colonPosition)
             , isConst(isConst)
             , defaultValue(defaultValue)
+            , attributes(attributes)
         {
         }
     };
@@ -575,9 +632,18 @@ private:
 
     Lexer lexer;
     Allocator& allocator;
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): for the parser over a `--@[...]` comment
+    AstNameTable& names;
 
     std::vector<Comment> commentLocations;
     std::vector<HotComment> hotcomments;
+
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): the `--@[...]` comments between the
+    // previous lexeme and the current one, for takeCommentAttributes.
+    std::vector<Lexeme> pendingCommentAttributes;
+
+    // True in the parser takeCommentAttributes runs over a comment's text. Its attributes skip checkAttributeLanguage.
+    bool parsingCommentAttributes = false;
 
     bool hotcommentHeader = true;
 
@@ -633,6 +699,16 @@ private:
     std::string scratchData;
 
     CstNodeMap cstNodeMap;
+
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): attributes a table entry parsed
+    // in front of `function`, which belong to the function expression parseSimpleExpr parses next rather than to
+    // the entry.
+    struct PendingFunctionAttributes
+    {
+        AstArray<AstAttr*> attributes;
+        TempVector<CstAttrList*>* cstAttrLists;
+    };
+    std::optional<PendingFunctionAttributes> pendingFunctionAttributes;
 };
 
 } // namespace Luau
