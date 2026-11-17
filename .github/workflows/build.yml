@@ -136,7 +136,7 @@ jobs:
     strategy:
       max-parallel: 3
       matrix:
-        os: [{name: macos, version: macos-latest}, {name: macos-arm, version: macos-14}]
+        os: [{name: macos, version: macos-latest}, {name: macos-arm, version: macos-15}]
         compiler: *unix-compilers
     name: ${{matrix.os.name}} with ${{matrix.compiler.name}}
     runs-on: ${{matrix.os.version}}

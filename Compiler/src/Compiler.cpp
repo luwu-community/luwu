@@ -24,6 +24,7 @@
 #include <string>
 
 #include <math.h>
+#include <stdlib.h>
 
 LUAU_FASTINTVARIABLE(LuauCompileLoopUnrollThreshold, 25)
 LUAU_FASTINTVARIABLE(LuauCompileLoopUnrollThresholdMaxBoost, 300)
