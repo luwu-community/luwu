@@ -209,6 +209,8 @@ enum LuwuBuiltinClass
     LUWU_BUILTIN_SOME,
     LUWU_BUILTIN_OK,
     LUWU_BUILTIN_ERR,
+    // Luwu class reflection: `class.ClassMember`
+    LUWU_BUILTIN_CLASSMEMBER,
 
     LUWU_BUILTIN__COUNT
 };

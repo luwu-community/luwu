@@ -77,6 +77,7 @@ LuauClass* luaR_newclass(
     classdef->lengthfield = LUAR_NO_LENGTH_FIELD;
     classdef->fastmethods = NULL;
     classdef->qualified = NULL;
+    classdef->reflection = NULL;
     classdef->positionalmembers = NULL;
     classdef->numberofpositional = -1;
     classdef->typeofname = NULL;
@@ -295,7 +296,7 @@ static const Closure* luaR_callingluafrom(lua_State* L, CallInfo* from)
     return NULL;
 }
 
-static const Closure* luaR_callinglua(lua_State* L)
+const Closure* luaR_callinglua(lua_State* L)
 {
     return luaR_callingluafrom(L, L->ci);
 }

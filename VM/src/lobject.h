@@ -800,6 +800,11 @@ typedef struct LuauClass
     // traverseclass.
     struct LuaTable* qualified;
 
+    // Luwu class reflection (rfcs/classes): what `class.member` and `class.fields` give through the class, made the first
+    // time: the ClassMember of each member at its offset + 1, and the field lists under "public" and "all". NULL until
+    // then. Marked in traverseclass.
+    struct LuaTable* reflection;
+
     // Luwu Destructuring (rfcs/destructuring.md): what a positional pattern `.(a, b)` reads from an object of this class.
     // `positionalmembers[i]` is the offset of the member at position i: a primary constructor's parameters, in order.
     // `numberofpositional` is -1 for a class whose objects can't be destructured positionally (no primary constructor),

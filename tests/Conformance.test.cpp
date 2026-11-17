@@ -93,6 +93,7 @@ LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(DebugLuwuMatchExpressions)
+LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
@@ -4791,6 +4792,21 @@ TEST_CASE("UserdataDirectAccess")
 }
 
 // Luwu Traits (rfcs/classes/traits.md)
+// Luwu class reflection (rfcs/classes): class.member, class.fields and ClassMember
+TEST_CASE("ClassMembers")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    runConformance("class_members.luwu");
+}
+
 TEST_CASE("Traits")
 {
     ScopedFastFlag sffs[] = {
@@ -4953,6 +4969,8 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
         {FFlag::LuwuNonePrimitive, true},
         {FFlag::LuwuDeclareStatements, true},
         {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true},
     };
 
     Luau::NullFileResolver fileResolver;
@@ -4979,6 +4997,15 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
             auto declaredBundle = bundleTypes.find(name);
             REQUIRE(declaredBundle != bundleTypes.end());
             CHECK_EQ(declaredObjectMembers(declaredBundle->second.type), vmClassMembers(classdef));
+            continue;
+        }
+
+        // Luwu class reflection (rfcs/classes): `ClassMember` is only a type
+        if (kind == LUWU_BUILTIN_CLASSMEMBER)
+        {
+            std::optional<Luau::TypeFun> declaredType = frontend.globals.globalScope->lookupType(name);
+            REQUIRE(declaredType);
+            CHECK_EQ(declaredObjectMembers(declaredType->type), vmClassMembers(classdef));
             continue;
         }
 
