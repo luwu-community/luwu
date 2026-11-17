@@ -707,6 +707,14 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         translateInstInitTraits(*this, pc, i);
         break;
 
+    case LOP_APPENDTABLE:
+        translateInstAppendTable(*this, pc, i);
+        break;
+
+    case LOP_PRESIZETABLE:
+        inst(IrCmd::FALLBACK_PRESIZETABLE, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_B(*pc)), constInt(LUAU_INSN_C(*pc)));
+        break;
+
     case LOP_GETTABLEBUNDLE:
     case LOP_SETTABLEBUNDLE:
         inst(
@@ -719,6 +727,7 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
             constInt(LUAU_INSN_OP(*pc) == LOP_SETTABLEBUNDLE)
         );
         break;
+
     case LOP_GETQUALIFIED:
         inst(IrCmd::FALLBACK_GETQUALIFIED, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_B(*pc)), vmReg(LUAU_INSN_C(*pc)));
         break;
@@ -737,6 +746,14 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
 
     case LOP_JUMPXISA:
         translateInstJumpXIsa(*this, pc, i);
+        break;
+
+    case LOP_JUMPXTYPE:
+        translateInstJumpXType(*this, pc, i);
+        break;
+
+    case LOP_JUMPXMATCH:
+        translateInstJumpXMatch(*this, pc, i);
         break;
 
     case LOP_CMPPROTO:

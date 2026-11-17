@@ -19,3 +19,11 @@ LUAU_FASTFLAGVARIABLE(DebugLuwuBuiltinClasses)
 // Luwu bundles: the `bundle` library, its classes, and the compiler's fastcalls and unfolding for it. A prototype whose
 // API can still change. Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(DebugLuwuBundles)
+
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): `{ for ... in ... when ... give item }` (in progress). While it
+// is on, the compiler emits WIP bytecode (version 200), which has LOP_PRESIZETABLE.
+LUAU_FASTFLAGVARIABLE(LuwuTableComprehensions)
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` and the `is` and `implements` patterns (in
+// progress). While it is on, the compiler emits WIP bytecode (version 200), which has LOP_JUMPXTYPE and LOP_JUMPXMATCH.
+LUAU_FASTFLAGVARIABLE(DebugLuwuMatchExpressions)

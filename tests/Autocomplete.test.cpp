@@ -1,4 +1,5 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+#include "Luau/AstQuery.h"
 #include "Luau/Autocomplete.h"
 #include "Luau/AutocompleteTypes.h"
 #include "Luau/BuiltinDefinitions.h"
@@ -18,6 +19,7 @@
 LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
@@ -25,6 +27,10 @@ LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
@@ -698,7 +704,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     )");
 
     auto ac4 = autocomplete('1');
-    CHECK_EQ(ac4.entryMap.count("do"), 0);
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do` also starts a value, so it's offered where one goes
+    CHECK_EQ(ac4.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac4.entryMap.count("end"), 0);
     CHECK_EQ(ac4.context, AutocompleteContext::Expression);
 
@@ -708,7 +715,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
 
     auto ac5 = autocomplete('1');
     CHECK_EQ(ac5.entryMap.count("math"), 1);
-    CHECK_EQ(ac5.entryMap.count("do"), 0);
+    CHECK_EQ(ac5.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac5.entryMap.count("end"), 0);
     CHECK_EQ(ac5.context, AutocompleteContext::Expression);
 
@@ -717,7 +724,9 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     )");
 
     auto ac6 = autocomplete('1');
-    CHECK_EQ(ac6.entryMap.size(), 1);
+    // Luwu If Local (rfcs/control-flow/if-local.md): a loop's header can also be followed by a `when` chain
+    CHECK_EQ(ac6.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
+    CHECK_EQ(ac6.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac6.entryMap.count("do"), 1);
     CHECK_EQ(ac6.context, AutocompleteContext::Keyword);
 
@@ -737,7 +746,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     {
         auto ac8 = autocomplete('1' + i);
         CHECK_EQ(ac8.entryMap.count("Foo"), 1);
-        CHECK_EQ(ac8.entryMap.count("do"), 0);
+        CHECK_EQ(ac8.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     }
 
     check(R"(local Foo = 1
@@ -748,7 +757,7 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_middle_keywords")
     {
         auto ac9 = autocomplete('1' + i);
         CHECK_EQ(ac9.entryMap.count("Foo"), 1);
-        CHECK_EQ(ac9.entryMap.count("do"), 0);
+        CHECK_EQ(ac9.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     }
 }
 
@@ -781,7 +790,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_in_middle_keywords")
 
     auto ac3 = autocomplete('1');
     CHECK_EQ(ac3.entryMap.count("table"), 1);
-    CHECK_EQ(ac3.entryMap.count("do"), 0);
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do` also starts a value, so it's offered where one goes
+    CHECK_EQ(ac3.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac3.context, AutocompleteContext::Expression);
 
     check(R"(
@@ -789,7 +799,9 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_in_middle_keywords")
     )");
 
     auto ac4 = autocomplete('1');
-    CHECK_EQ(ac4.entryMap.size(), 1);
+    // Luwu If Local (rfcs/control-flow/if-local.md): a loop's header can also be followed by a `when` chain
+    CHECK_EQ(ac4.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
+    CHECK_EQ(ac4.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac4.entryMap.count("do"), 1);
     CHECK_EQ(ac4.context, AutocompleteContext::Keyword);
 
@@ -798,7 +810,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_for_in_middle_keywords")
     )");
 
     auto ac5 = autocomplete('1');
-    CHECK_EQ(ac5.entryMap.size(), 1);
+    CHECK_EQ(ac5.entryMap.size(), FFlag::LuwuIfLocal ? 2 : 1);
+    CHECK_EQ(ac5.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac5.entryMap.count("do"), 1);
     CHECK_EQ(ac5.context, AutocompleteContext::Keyword);
 
@@ -832,7 +845,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac1 = autocomplete('1');
-    CHECK_EQ(ac1.entryMap.count("do"), 0);
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do` also starts a value, so it's offered where one goes
+    CHECK_EQ(ac1.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac1.entryMap.count("end"), 0);
     CHECK_EQ(ac1.context, AutocompleteContext::Expression);
 
@@ -841,7 +855,9 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac2 = autocomplete('1');
-    CHECK_EQ(3, ac2.entryMap.size());
+    // Luwu If Local (rfcs/control-flow/if-local.md): a loop's header can also be followed by a `when` chain
+    CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac2.entryMap.size());
+    CHECK_EQ(ac2.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac2.entryMap.count("do"), 1);
     CHECK_EQ(ac2.entryMap.count("and"), 1);
     CHECK_EQ(ac2.entryMap.count("or"), 1);
@@ -860,7 +876,8 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac4 = autocomplete('1');
-    CHECK_EQ(3, ac4.entryMap.size());
+    CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac4.entryMap.size());
+    CHECK_EQ(ac4.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac4.entryMap.count("do"), 1);
     CHECK_EQ(ac4.entryMap.count("and"), 1);
     CHECK_EQ(ac4.entryMap.count("or"), 1);
@@ -871,9 +888,145 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_while_middle_keywords")
     )");
 
     auto ac5 = autocomplete('1');
-    CHECK_EQ(ac5.entryMap.count("do"), 0);
+    CHECK_EQ(ac5.entryMap.count("do"), FFlag::LuwuDoExpr ? 1 : 0);
     CHECK_EQ(ac5.entryMap.count("true"), 1);
     CHECK_EQ(ac5.entryMap.count("false"), 1);
+}
+
+// Luwu If Local (rfcs/control-flow/if-local.md)
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_local_keywords")
+{
+    ScopedFastFlag luwuIfLocal{FFlag::LuwuIfLocal, true};
+
+    check(R"(
+        if   @1
+    )");
+
+    auto ac1 = autocomplete('1');
+    CHECK_EQ(ac1.entryMap.count("local"), 1);
+    CHECK_EQ(ac1.entryMap.count("const"), 1);
+
+    check(R"(
+        if x t@1
+    )");
+
+    auto ac2 = autocomplete('1');
+    CHECK_EQ(ac2.entryMap.count("then"), 1);
+    CHECK_EQ(ac2.entryMap.count("when"), 1);
+
+    // the cursor after a later clause is past the condition too, not inside it
+    check(R"(
+        if local a = f() when a > 1 t@1
+    )");
+
+    auto ac3 = autocomplete('1');
+    CHECK_EQ(ac3.entryMap.count("then"), 1);
+    CHECK_EQ(ac3.entryMap.count("when"), 1);
+    CHECK_EQ(ac3.context, AutocompleteContext::Keyword);
+
+    // a binding is visible to the clauses after it
+    check(R"(
+        local function f() return 1 end
+        if local abc = f() when ab@1
+    )");
+
+    auto ac4 = autocomplete('1');
+    CHECK_EQ(ac4.entryMap.count("abc"), 1);
+}
+
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_loop_when_keywords")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuTableComprehensions, true},
+    };
+
+    struct Case
+    {
+        const char* source;
+        std::vector<const char*> expected;
+    };
+
+    const Case cases[] = {
+        {"for i = 1, 10 @1", {"do", "when"}},
+        {"for _, v in xs @1", {"do", "when"}},
+        {"for _, v in xs when v > 1 @1", {"do", "when"}},
+        {"for i = 1, 10 when local j = i @1", {"do", "when"}},
+        {"while   @1", {"local", "const"}},
+        {"while x @1", {"do", "when"}},
+        {"while local x = f() @1", {"do", "when"}},
+        {"while local x = f() when x > 1 @1", {"do", "when"}},
+        {"local t = { for _, v in xs @1 }", {"give", "do", "when", "for"}},
+        {"local t = { for _, v in xs when v > 1 @1 }", {"give", "do", "when", "for"}},
+    };
+
+    for (const Case& c : cases)
+    {
+        check(c.source);
+        AutocompleteResult ac = autocomplete('1');
+        INFO(std::string(c.source));
+
+        for (const char* keyword : c.expected)
+        {
+            INFO(std::string(keyword));
+            CHECK_EQ(ac.entryMap.count(keyword), 1);
+        }
+    }
+
+    // a binding in a loop's chain is visible to the clauses after it and to the body
+    check(R"(
+        local function f() return 1 end
+        while local abc = f() when ab@1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("abc"), 1);
+
+    check(R"(
+        local function f() return 1 end
+        for i = 1, 2 when local abc = f() do
+            print(ab@1)
+        end
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("abc"), 1);
+}
+
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_give_inside_do_expressions")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    check(R"(
+        local x = do
+            local a = 1
+            @1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("give"), 1);
+
+    check(R"(
+        local x = do
+            local f = function()
+                @1
+            end
+            give 1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("give"), 0);
+
+    check(R"(
+        local a = 1
+        @1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("give"), 0);
+}
+
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do` where a value goes, so typing it doesn't complete to a name
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_do_where_a_value_goes")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    check(R"(
+        local DirectoryPath = 1
+        const prefix = d@1
+    )");
+    CHECK_EQ(autocomplete('1').entryMap.count("do"), 1);
 }
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_middle_keywords")
@@ -911,10 +1064,12 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_if_middle_keywords")
     )");
 
     auto ac3 = autocomplete('1');
-    CHECK_EQ(3, ac3.entryMap.size());
+    // Luwu If Local (rfcs/control-flow/if-local.md): `when` can also follow a condition
+    CHECK_EQ(FFlag::LuwuIfLocal ? 4 : 3, ac3.entryMap.size());
     CHECK_EQ(ac3.entryMap.count("then"), 1);
     CHECK_EQ(ac3.entryMap.count("and"), 1);
     CHECK_EQ(ac3.entryMap.count("or"), 1);
+    CHECK_EQ(ac3.entryMap.count("when"), FFlag::LuwuIfLocal ? 1 : 0);
     CHECK_EQ(ac3.context, AutocompleteContext::Keyword);
 
     check(R"(
@@ -6329,6 +6484,83 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
 
     auto ac = autocomplete('1');
     CHECK(ac.entryMap.count("Animator"));
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): every query an editor's hover, docs and autocomplete
+// make answers at every position of `match` expressions and statements, finished or still being typed, without crashing
+TEST_CASE_FIXTURE(ACFixture, "every_query_at_every_position_of_a_match")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    const char* sources[] = {
+        R"(local function roll(): number
+    return 4
+end
+local function f(v: number | string | nil): number
+    const label = match const n = roll()
+        case is 1 then "one"
+        case m is number when m > 10 when const half = m / 2 then tostring(half)
+        when n < 0 then
+            return 0
+        else "other"
+    match v
+        case is nil then
+            return 0
+        case s is string then
+            print(s, label)
+        when v == 3 then
+            print("three")
+    end
+    match v
+        case is 1 then print(1)
+        else
+            print(v)
+    end
+    return 1
+end
+print(f(1))
+)",
+        "local x = 1\nmatch x\n    case is 1 then\n        print(x)\n",
+        "local x = 1\nmatch const n = x\n    when n\n",
+        "local x = 1\nlocal y = match x\n    case is\n",
+        "local x = 1\nlocal y = match x\n    case is 1 then\n",
+        "match\n",
+        "local x = 1\nmatch x\nend\n",
+    };
+
+    for (const char* source : sources)
+    {
+        INFO(source);
+        check(source);
+
+        ModulePtr module = getMainModule(/* forAutocomplete= */ true);
+        SourceModule* sourceModule = getMainSourceModule();
+        REQUIRE(module);
+        REQUIRE(sourceModule);
+
+        std::vector<std::string_view> lines = split(source, '\n');
+        for (unsigned line = 0; line < lines.size(); ++line)
+        {
+            for (unsigned column = 0; column <= lines[line].size(); ++column)
+            {
+                Position position{line, column};
+                findAstAncestryOfPosition(*sourceModule, position);
+                findAncestryAtPositionForAutocomplete(*sourceModule, position);
+                findExprOrLocalAtPosition(*sourceModule, position);
+                findNodeAtPosition(*sourceModule, position);
+                findScopeAtPosition(*module, position);
+                findBindingAtPosition(*module, *sourceModule, position);
+                Luau::findTypeAtPosition(*module, *sourceModule, position);
+                Luau::findExpectedTypeAtPosition(*module, *sourceModule, position);
+                getDocumentationSymbolAtPosition(*sourceModule, *module, position);
+                autocomplete(line, column);
+            }
+        }
+    }
 }
 
 // The value is a call, so its type is a pack (astTypePacks), not a single type

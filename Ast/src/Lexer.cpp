@@ -424,6 +424,51 @@ Lexeme Lexer::lookahead()
     return result;
 }
 
+Lexeme Lexer::lookaheadSecond()
+{
+    return lookaheadBy(2);
+}
+
+Lexeme Lexer::lookaheadThird()
+{
+    return lookaheadBy(3);
+}
+
+Lexeme Lexer::lookaheadBy(unsigned int count)
+{
+    constexpr unsigned int kMaxLookahead = 3;
+    LUAU_ASSERT(count >= 2 && count <= kMaxLookahead);
+
+    unsigned int currentOffset = offset;
+    unsigned int currentLine = line;
+    unsigned int currentLineOffset = lineOffset;
+    Lexeme currentLexeme = lexeme;
+    Location currentPrevLocation = prevLocation;
+
+    // `count` lexemes can only close the last `count` braces, or open new ones, so only those are kept
+    size_t currentBraceStackSize = braceStack.size();
+    size_t untouchedBraces = currentBraceStackSize >= count ? currentBraceStackSize - count : 0;
+    BraceType lastBraces[kMaxLookahead] = {BraceType::Normal, BraceType::Normal, BraceType::Normal};
+    for (size_t i = untouchedBraces; i < currentBraceStackSize; ++i)
+        lastBraces[i - untouchedBraces] = braceStack[i];
+
+    for (unsigned int i = 1; i < count; ++i)
+        next();
+    Lexeme result = next();
+
+    offset = currentOffset;
+    line = currentLine;
+    lineOffset = currentLineOffset;
+    lexeme = currentLexeme;
+    prevLocation = currentPrevLocation;
+
+    braceStack.resize(untouchedBraces);
+    for (size_t i = untouchedBraces; i < currentBraceStackSize; ++i)
+        braceStack.push_back(lastBraces[i - untouchedBraces]);
+
+    return result;
+}
+
 bool Lexer::isReserved(const std::string& word)
 {
     for (int i = Lexeme::Reserved_BEGIN; i < Lexeme::Reserved_END; ++i)

@@ -39,6 +39,8 @@ LUAI_FUNC void luaV_callTM(lua_State* L, int nparams, int res);
 // Prepares a call on a value that isn't a function: its `__call` metamethod, or a class's constructor. Returns how many
 // slots the arguments moved up.
 LUAI_FUNC int luaV_tryfuncTM(lua_State* L, StkId func, StkId argtop);
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): LOP_PRESIZETABLE's work, for the interpreter and native code
+LUAI_FUNC void luaV_presizetable(lua_State* L, LuaTable* t, const TValue* rb, int form);
 
 LUAI_FUNC void luau_execute(lua_State* L);
 LUAI_FUNC void luau_finishop(lua_State* L);

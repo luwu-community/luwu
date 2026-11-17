@@ -3699,6 +3699,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.invalidateRegisterRange(vmRegOp(OP_C(inst)), 2 + function.intOp(OP_D(inst)));
         state.invalidateHeap();
         break;
+    case IrCmd::FALLBACK_PRESIZETABLE:
+        // writes no registers and runs no Luau code, but reallocates the table's array and hash parts
+        state.invalidateHeapTableData();
+        state.invalidateTableArraySize();
+        break;
     case IrCmd::FALLBACK_GETQUALIFIED:
         // writes the function, and runs nothing
         state.invalidate(OP_B(inst));

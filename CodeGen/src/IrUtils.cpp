@@ -59,6 +59,8 @@ int getOpLength(LuauOpcode op)
     case LOP_CALLFB:
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
+    case LOP_JUMPXTYPE:
+    case LOP_JUMPXMATCH:
     case LOP_CHECKSELFCLASS:
     case LOP_NEWOBJECT:
     case LOP_GETOBJECTMEMBER:
@@ -99,6 +101,8 @@ bool isJumpD(LuauOpcode op)
     case LOP_JUMPXEQKS:
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
+    case LOP_JUMPXTYPE:
+    case LOP_JUMPXMATCH:
     case LOP_INITTRAITS:
         return true;
 
@@ -401,6 +405,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FALLBACK_NEWOBJECT:
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
     case IrCmd::FALLBACK_INITTRAITS:
+    case IrCmd::FALLBACK_PRESIZETABLE:
     case IrCmd::FALLBACK_GETQUALIFIED:
     case IrCmd::FALLBACK_TABLEBUNDLE:
         return IrValueKind::None;
