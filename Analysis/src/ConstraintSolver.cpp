@@ -4079,6 +4079,44 @@ bool ConstraintSolver::tryDispatchIterableTable(TypeId iteratorTy, const Iterabl
         return true;
     }
 
+    // Luwu: a local given a table in more than one place is a union of table types where those assignments join
+    // (`data = {}` in one branch of an `if` and `data = { ... }` in the other makes `{ R } | { R }`). When every member
+    // has an indexer, iterating the union gives the union of their keys and of their values. Upstream binds the loop's
+    // variables to the error type, which hides every mistake made with them.
+    if (const UnionType* options = get<UnionType>(iteratorTy))
+    {
+        TypeId keyTy = builtinTypes->neverType;
+        TypeId valueTy = builtinTypes->neverType;
+        bool indexed = true;
+
+        for (TypeId option : options)
+        {
+            option = follow(option);
+            if (isBlocked(option) && !force)
+                return block(option, constraint);
+
+            const TableType* table = get<TableType>(option);
+            if (table && table->state == TableState::Free && !force)
+                return block(option, constraint);
+
+            if (!table || !table->indexer)
+            {
+                indexed = false;
+                break;
+            }
+
+            keyTy = simplifyUnion(constraint->scope, constraint->location, keyTy, table->indexer->indexType);
+            valueTy = simplifyUnion(constraint->scope, constraint->location, valueTy, table->indexer->indexResultType);
+        }
+
+        if (indexed)
+        {
+            TypeId joined =
+                arena->addType(TableType{TableType::Props{}, TableIndexer{keyTy, valueTy}, TypeLevel{}, constraint->scope, TableState::Sealed});
+            return tryDispatchIterableTable(joined, c, constraint, force);
+        }
+    }
+
     // Irksome: I don't think we have any way to guarantee that this table
     // type never has a metatable.
 
