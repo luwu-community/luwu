@@ -14,6 +14,8 @@
 #include "Luau/TypeUtils.h"
 #include "Luau/Unifier2.h"
 
+#include <cstdlib>
+
 LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceVariadics)
 LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceBetterLambdaHandling)
 LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
