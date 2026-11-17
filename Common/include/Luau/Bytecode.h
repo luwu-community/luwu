@@ -75,6 +75,9 @@
 //   LBC_CLASSSHAPE_IMPLEMENTS), the EXPECTED, OPTIONAL and FINAL member flags, NEWCLASSMEMBER's IMPLEMENTS form and
 //   LBF_CLASS_OF.
 //   Luwu Destructuring: GETPOSITIONAL, and LBC_CLASSMEMBER_POSITIONAL with its position in LBC_CONSTANT_CLASS_SHAPE.
+//   Luwu try expressions: LBF_OPTION_SOME to LBF_RESULT_ERR.
+//   Luwu try expressions: WRAPRESULT, RESULTGET, and each function's protected ranges after its inlining cost: a varint count,
+//   then per range the varints start pc, end pc (exclusive) and handler pc, and a byte for the target register.
 //   Luwu bundles: LBF_BUNDLE_PACK and LBF_BUNDLE_UNPACK.
 
 // # Bytecode type information history
@@ -644,6 +647,20 @@ enum LuauOpcode
     // B: register holding the container
     LOP_POP,
 
+    // WRAPRESULT: Luwu try expressions: wraps a value in an `Ok` or an `Err`. A `try` expression ends with the `Ok` form,
+    // and its protected range's handler starts with the `Err` form: when the VM resumes there, it has put the caught
+    // error in A and where it was raised in A + 1 to A + 3 (module, line, traceback).
+    // A: register holding the value, and receiving the result
+    // B: LBC_WRAPRESULT_OK or LBC_WRAPRESULT_ERR
+    LOP_WRAPRESULT,
+
+    // RESULTGET: Luwu try expressions: `r:ok()` or `r:err()` of a `try` result the compiler keeps in registers instead of
+    // an object: its value or error at B, and at B + LBC_TRYRESULT_OKFLAG whether it's an `ok`
+    // A: target register
+    // B: the result's first register
+    // C: LBC_RESULTGET_OK (the value of an ok, else none) or LBC_RESULTGET_ERR (the error of an err, else none)
+    LOP_RESULTGET,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };
@@ -679,6 +696,25 @@ enum LuauOpcode
 // Auxiliary NOT: 1-bit negation flag
 // Used in LOP_JUMPXEQK* instructions
 #define LUAU_INSN_AUX_NOT(aux) ((aux) >> 31)
+
+// Luwu try expressions: operand B of LOP_WRAPRESULT
+enum LuauWrapResultForm
+{
+    LBC_WRAPRESULT_OK = 0,
+    // The error in A, then its module, line and traceback in A + 1 to A + 3
+    LBC_WRAPRESULT_ERR = 1,
+};
+
+// Luwu try expressions: operand C of LOP_RESULTGET
+enum LuauResultGetForm
+{
+    LBC_RESULTGET_OK = 0,
+    LBC_RESULTGET_ERR = 1,
+};
+
+// Luwu try expressions: a result kept in registers holds its value or error, the three registers LOP_WRAPRESULT's `err`
+// form reads, then whether it's an `ok`
+#define LBC_TRYRESULT_OKFLAG 4
 
 // Luwu Classes (rfcs/classes): JUMPXISA aux flags (see LOP_JUMPXISA)
 // Jump when the value is an instance of the class, rather than when it is not
@@ -1066,6 +1102,11 @@ enum LuauBuiltinFunction
     LBF_STRING_STARTSWITH,
     LBF_STRING_ENDSWITH,
     LBF_STRING_CONTAINS,
+
+    // Luwu try expressions: constructing a `Some`, `Ok` or `Err` without a call frame
+    LBF_OPTION_SOME,
+    LBF_RESULT_OK,
+    LBF_RESULT_ERR,
 
     // Luwu bundles: `bundle.pack` and `bundle.unpack` without a call frame
     LBF_BUNDLE_PACK,

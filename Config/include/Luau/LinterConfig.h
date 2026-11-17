@@ -117,7 +117,8 @@ struct LintWarning
         Code_UnflippedGuard = 81,          // Luwu: `x == nil or return` followed by code using `x`, which is always nil there
         Code_LuaStringHelper = 82,         // Luwu: `s:sub(1, #p) == p` and the like, which `s:startswith(p)` and friends do
         Code_StringOperations = 83,        // Luwu: a string library call that `""` makes pointless or wrong (`s:startswith("")`)
-        Code_ConfusingGuard = 84,          // Luwu: `x and return`, a long or chained guard statement, or one returning several values
+        Code_UncaughtErrors = 84,          // Luwu: a call to a function with error hints outside a `try`. Off by default.
+        Code_ConfusingGuard = 85,          // Luwu: `x and return`, a long or chained guard statement, or one returning several values
 
         Code__Count
     };
@@ -251,6 +252,7 @@ inline constexpr const char* kWarningNames[] = {
     "UnflippedGuard",
     "LuaStringHelper",
     "StringOperations",
+    "UncaughtErrors",
     "ConfusingGuard",
 };
 // clang-format on

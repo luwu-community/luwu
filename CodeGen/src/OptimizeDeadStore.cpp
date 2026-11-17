@@ -1295,6 +1295,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
     case IrCmd::FALLBACK_INITTRAITS:
     case IrCmd::FALLBACK_PRESIZETABLE:
+    case IrCmd::FALLBACK_WRAPRESULT:
     case IrCmd::FALLBACK_GETQUALIFIED:
     case IrCmd::FALLBACK_GETPOSITIONAL:
     case IrCmd::FALLBACK_PUSH:
@@ -1312,6 +1313,9 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
 
     case IrCmd::MARK_DEAD:
         state.markUnusedAtExit(vmRegOp(OP_A(inst)), function.intOp(OP_B(inst)));
+        break;
+    case IrCmd::MARK_TRY_READS:
+        state.useRange(vmRegOp(OP_A(inst)), function.intOp(OP_B(inst)));
         break;
 
     default:

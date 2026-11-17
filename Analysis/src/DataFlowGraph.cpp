@@ -1214,6 +1214,8 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExpr* e)
             return visitExpr(m);
         else if (auto c = e->as<AstExprTableComprehension>())
             return visitExpr(c);
+        else if (auto t = e->as<AstExprTry>())
+            return visitExpr(t);
         else if (auto error = e->as<AstExprError>())
             return visitExpr(error);
         else
@@ -1714,6 +1716,13 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatGive* g)
     }
 
     return ControlFlow::Returns;
+}
+
+DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprTry* t)
+{
+    visitExpr(t->expr);
+
+    return {defArena->freshCell(Symbol{}, t->location), nullptr};
 }
 
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprInterpString* i)

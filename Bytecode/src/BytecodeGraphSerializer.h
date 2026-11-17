@@ -613,6 +613,11 @@ struct BytecodeGraphSerializer
             bcb.emitABC(LOP_PRESIZETABLE, getRegInput(insn, 0), getRegInput(insn, 1), uint8_t(getImmInt(insn, 2)));
             break;
 
+        case LOP_WRAPRESULT:
+        case LOP_RESULTGET:
+            // Luwu try expressions: the parser refuses functions with protected ranges
+            LUAU_UNREACHABLE();
+
         case LOP__COUNT:
             LUAU_UNREACHABLE();
         }

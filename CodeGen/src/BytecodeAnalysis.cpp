@@ -400,10 +400,13 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
         types.result = LBC_TYPE_BOOLEAN;
         types.b = LBC_TYPE_CLASS;
         break;
+    case LBF_OPTION_SOME:
+    case LBF_RESULT_OK:
+    case LBF_RESULT_ERR:
     case LBF_BUNDLE_PACK:
     case LBF_BUNDLE_UNPACK:
-        // Luwu collections and bundles: FASTCALL's fallback calls whatever the library holds, so the result could be
-        // anything
+        // Luwu collections, bundles and try expressions: FASTCALL's fallback calls whatever the library or global holds,
+        // so the result could be anything
         types.result = LBC_TYPE_ANY;
         break;
     case LBF_TABLE_UNPACK:
@@ -1645,6 +1648,22 @@ static void analyzeBytecodeTypesPass(
                 bcType.result = regTags[ra];
                 break;
             }
+            case LOP_WRAPRESULT:
+            {
+                // Luwu try expressions: A gets an `Ok` or an `Err`
+                int ra = LUAU_INSN_A(*pc);
+                regTags[ra] = LBC_TYPE_OBJECT;
+                bcType.result = regTags[ra];
+                break;
+            }
+            case LOP_RESULTGET:
+            {
+                // Luwu try expressions: A gets the value or error, or none
+                int ra = LUAU_INSN_A(*pc);
+                regTags[ra] = LBC_TYPE_ANY;
+                bcType.result = regTags[ra];
+                break;
+            }
             case LOP_GETOBJECTMEMBER:
             {
                 // Luwu Classes (rfcs/classes): the member's type is unknown here, like GETTABLEKS's result
@@ -1756,6 +1775,12 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
         // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): writes only A, with any element or __pop's result
         visitRange(ra, 1);
         break;
+    case LOP_WRAPRESULT:
+        visit(ra, uint8_t(LBC_TYPE_OBJECT));
+        break;
+    case LOP_RESULTGET:
+        visit(ra, uint8_t(LBC_TYPE_ANY));
+        break;
     case LOP_NAMECALL:
     case LOP_NAMECALLUDATA:
         visitRange(ra, 2);
@@ -1836,6 +1861,22 @@ static bool updateLocalTypeCandidates(
     std::vector<uint8_t> typedJoin(bcTypeInfo.regTypes.size(), kNoWrite);
     std::vector<bool> untypedWrite(bcTypeInfo.regTypes.size(), false);
 
+    auto recordWrite = [&](int reg, uint8_t type, int pc)
+    {
+        BytecodeRegTypeInfo* regType = findRegType(bcTypeInfo, uint8_t(reg), pc);
+        if (!regType)
+            return;
+
+        size_t index = regType - bcTypeInfo.regTypes.data();
+
+        if (type == LBC_TYPE_ANY)
+            untypedWrite[index] = true;
+        else if (typedJoin[index] == kNoWrite || typedJoin[index] == type)
+            typedJoin[index] = type;
+        else
+            typedJoin[index] = LBC_TYPE_ANY;
+    };
+
     for (int pc = 0; pc < function.proto->sizecode; pc += getOpLength(LuauOpcode(LUAU_INSN_OP(function.proto->code[pc]))))
     {
         visitBytecodeRegWrites(
@@ -1844,20 +1885,18 @@ static bool updateLocalTypeCandidates(
             pc,
             [&](int reg, uint8_t type)
             {
-                BytecodeRegTypeInfo* regType = findRegType(bcTypeInfo, uint8_t(reg), pc);
-                if (!regType)
-                    return;
-
-                size_t index = regType - bcTypeInfo.regTypes.data();
-
-                if (type == LBC_TYPE_ANY)
-                    untypedWrite[index] = true;
-                else if (typedJoin[index] == kNoWrite || typedJoin[index] == type)
-                    typedJoin[index] = type;
-                else
-                    typedJoin[index] = LBC_TYPE_ANY;
+                recordWrite(reg, type, pc);
             }
         );
+    }
+
+    // Luwu try expressions: resuming at a handler writes the caught error and where it was raised (see LOP_WRAPRESULT)
+    for (int i = 0; i < function.proto->sizetryranges; i++)
+    {
+        const LuauTryRange& range = function.proto->tryranges[i];
+
+        for (int reg = range.target; reg < range.target + 4; reg++)
+            recordWrite(reg, LBC_TYPE_ANY, int(range.handlerpc));
     }
 
     bool changed = false;

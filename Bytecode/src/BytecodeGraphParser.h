@@ -1136,6 +1136,12 @@ struct BytecodeGraphParser
                 addVmConstInput(node, aux);
                 break;
 
+            case LOP_WRAPRESULT:
+            case LOP_RESULTGET:
+                // Luwu try expressions: a function with protected ranges isn't rebuilt, since the graph has nowhere to
+                // keep them
+                return false;
+
 
             case LOP__COUNT:
                 LUAU_UNREACHABLE();

@@ -124,6 +124,9 @@ public:
     void pushDebugLocal(StringRef name, uint8_t reg, uint32_t startpc, uint32_t endpc);
     void pushDebugUpval(StringRef name);
 
+    // Luwu try expressions: an error raised while running [startpc, endpc) resumes at handlerpc, with the error in target
+    void pushTryRange(uint32_t startpc, uint32_t endpc, uint32_t handlerpc, uint8_t target);
+
     size_t getInstructionCount() const;
     size_t getTotalInstructionCount() const;
     uint32_t getDebugPC() const;
@@ -277,6 +280,14 @@ protected:
         unsigned int name;
     };
 
+    struct TryRange
+    {
+        uint32_t startpc;
+        uint32_t endpc;
+        uint32_t handlerpc;
+        uint8_t target;
+    };
+
     struct TypedLocal
     {
         LuauBytecodeType type;
@@ -343,6 +354,7 @@ protected:
     int debugLine = 0;
 
     std::vector<DebugLocal> debugLocals;
+    std::vector<TryRange> tryRanges;
     std::vector<DebugUpval> debugUpvals;
 
     std::vector<TypedLocal> typedLocals;
