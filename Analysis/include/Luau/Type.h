@@ -131,6 +131,10 @@ struct GenericType
     // Luwu Traits (rfcs/classes/traits.md): the `Self` a trait function is generic over. Printed as `Self`, without the
     // `<Self>` the function would otherwise list it in, and `Self & Trait` (its `self`) as just `Self`.
     bool traitSelf = false;
+
+    // Luwu literal types: set on the generic `literal<B>` stands for in a validator (`V<literal<B>>`) or an alias of one, to
+    // `B`. A parameter annotated with such an alias is a literal parameter.
+    TypeId literalBase = nullptr;
 };
 
 // When an equality constraint is found, it is then "bound" to that type,
@@ -364,6 +368,50 @@ struct MagicFunction
     virtual ~MagicFunction() {}
 };
 
+// Luwu literal types: what a value given for `literal<B>`, `V<literal<B>>` or an alias of either must be (a parameter's
+// argument, a local's value, a table field's value). It must be a literal of type `B` (`"-f"`, not a `string`). For
+// `V<literal<B>>`, it is also checked against `validator` with `placeholder` replaced by its literal type, so a user type
+// function can accept or reject the value itself.
+struct LiteralCheck
+{
+    TypeId base = nullptr;
+    // Both null for a bare `literal<B>`. Otherwise `placeholder` is the GenericType `literal<B>` resolved to inside
+    // `validator`.
+    TypeId validator = nullptr;
+    TypeId placeholder = nullptr;
+    // The rest of a union the check is one member of (`nil` for `literal<B>?`, `Token | number` for
+    // `V<literal<B>> | Token | number`): a value that fits it isn't checked. Null when there is none.
+    TypeId alternatives = nullptr;
+
+    // Calls `f` on each type held, for the walks that copy or visit types. A copy that skips them (a module's public
+    // interface is one) leaves them pointing into the arena it copied from.
+    template<typename F>
+    void forEachType(F&& f)
+    {
+        forEachTypeOf(*this, f);
+    }
+
+    template<typename F>
+    void forEachType(F&& f) const
+    {
+        forEachTypeOf(*this, f);
+    }
+
+private:
+    template<typename Check, typename F>
+    static void forEachTypeOf(Check& check, F& f)
+    {
+        f(check.base);
+        if (check.validator)
+        {
+            f(check.validator);
+            f(check.placeholder);
+        }
+        if (check.alternatives)
+            f(check.alternatives);
+    }
+};
+
 struct FunctionType
 {
     // Global monomorphic function
@@ -425,6 +473,16 @@ struct FunctionType
         TypeId type;
     };
     std::optional<TruthyRefinement> truthyRefinement;
+
+    // Luwu literal types: a parameter annotated `literal<B>` or `V<literal<B>>` has type `B` in the function's argument
+    // pack, which is what its body sees. Its argument at each call is checked as LiteralCheck says.
+    struct LiteralParameter : LiteralCheck
+    {
+        // Counting `self`. For the variadic parameter, the first argument it covers.
+        size_t argIndex = 0;
+        bool variadic = false;
+    };
+    std::vector<LiteralParameter> literalParameters;
 
     // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
     std::optional<std::string> name;
@@ -576,6 +634,10 @@ struct TableType
     // Some constraints will use this information to decide whether or not they
     // are able to dispatch.
     size_t remainingProps = 0;
+
+    // Luwu literal types: the fields annotated `literal<B>`, `V<literal<B>>` or an alias of either. The property's type is
+    // `B` (or `B?`); a value given for the field is checked as LiteralCheck says, wherever it flows in.
+    std::vector<std::pair<Name, LiteralCheck>> literalFields;
 };
 
 // Represents a metatable attached to a table type. Somewhat analogous to a bound type.
