@@ -2,6 +2,7 @@
 #include "Luau/Linter.h"
 
 #include "Luau/AstQuery.h"
+#include "Luau/AstUtils.h"
 #include "Luau/LinterConfig.h"
 #include "Luau/LuwuOnlyApi.h"
 #include "Luau/Module.h"
@@ -25,6 +26,8 @@ LUAU_FASTINTVARIABLE(LuauSuggestionDistance, 4)
 LUAU_FASTFLAGVARIABLE(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAGVARIABLE(LuwuTableRemoveFootgunLint)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 // Defined by the VM, which introduces `none`; without it there is nothing to mix up with `nil`.
 LUAU_FASTFLAG(LuwuNonePrimitive)
 
@@ -229,6 +232,10 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
     CASE(AstExprInstantiate)
     {
         return similar(le->expr, re->expr);
+    }
+    CASE(AstExprSelfClass)
+    {
+        return similar(le->classOf, re->classOf);
     }
     else
     {
@@ -927,8 +934,9 @@ private:
             *context,
             LintWarning::Code_LocalShadow,
             local->location,
-            "Variable '%s' shadows class '%s' declared at line %d",
+            "Variable '%s' shadows %s '%s' declared at line %d",
             local->name.value,
+            (*cls)->isTrait ? "trait" : "class",
             (*cls)->name->name.value,
             (*cls)->name->location.begin.line + 1
         );
@@ -1409,6 +1417,12 @@ private:
             return Kind_Primitive;
 
         if (name == "vector")
+            return Kind_Primitive;
+
+        // Luwu Classes (rfcs/classes): `type` and `typeof` answer "class" and "object", and "trait" for a trait's value
+        if (FFlag::LuwuClasses && (name == "class" || name == "object"))
+            return Kind_Primitive;
+        if (FFlag::LuwuClasses && FFlag::LuwuTraits && name == "trait")
             return Kind_Primitive;
 
         if (std::optional<TypeFun> maybeTy = context->scope->lookupType(name))
@@ -4640,7 +4654,8 @@ private:
 
         bool visit(AstStatClass* node) override
         {
-            classes->insert(node->name->name.value);
+            if (!node->isTrait)
+                classes->insert(node->name->name.value);
             return true;
         }
     };
@@ -5418,13 +5433,15 @@ private:
         if (externType->parent)
             result += " extends " + toString(*externType->parent, exact);
 
-        for (const auto& [name, prop] : externType->props)
+        for (const auto& [name, prop] : externType->props())
         {
             result += "; " + name;
             if (prop.isPrivate)
                 result += " private";
             if (prop.isConst)
                 result += " const";
+            if (prop.isFinal)
+                result += " final";
             if (prop.readTy)
                 result += " read " + toString(*prop.readTy, exact);
             if (prop.writeTy)
@@ -7599,6 +7616,15 @@ private:
         size_t implicitParameters = 0;
     };
 
+    // Luwu Traits (rfcs/classes/traits.md): calling a trait runs its `__create`, a factory that may hand its arguments to
+    // classes taking more than it declares
+    static bool isTraitValue(const ExternType* value)
+    {
+        const Obj* object = value->relation ? value->relation->get_if<Obj>() : nullptr;
+        const ExternType* instance = object ? get<ExternType>(follow(object->ty)) : nullptr;
+        return instance && isTraitLike(instance);
+    }
+
     std::optional<Callee> calleeOf(AstExprCall* call) const
     {
         std::optional<TypeId> calleeType = context->getType(call->func);
@@ -7611,6 +7637,9 @@ private:
             return Callee{function, self};
 
         const ExternType* cls = get<ExternType>(callee);
+        if (cls && isTraitValue(cls))
+            return std::nullopt;
+
         const TableType* metatable = cls && cls->metatable ? get<TableType>(follow(*cls->metatable)) : nullptr;
         if (!metatable)
             return std::nullopt;
@@ -7714,6 +7743,73 @@ private:
             name.c_str(),
             passes.c_str()
         );
+        return true;
+    }
+};
+
+// Luwu Traits (rfcs/classes/traits.md): a trait method returning `self`, or a new object of self's class
+// (`class.of(self)(...)`), with the trait as its return type. That type forgets self's class and its other traits;
+// `Self` keeps them. Returning `self` is right; the return type is what to fix, so that is where it is reported. With
+// the return type left out, a method returning `self` already returns `Self`.
+class LintReturnSelf : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        LintReturnSelf pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // The return type annotation of a method that says it returns the trait
+    static std::optional<Location> traitReturnType(const AstClassMethod& method, AstName trait)
+    {
+        AstExprFunction* fn = method.function;
+        if (!fn->returnAnnotation)
+            return std::nullopt;
+
+        AstTypePackExplicit* pack = fn->returnAnnotation->as<AstTypePackExplicit>();
+        if (!pack || pack->typeList.types.size != 1 || pack->typeList.tailType)
+            return std::nullopt;
+
+        AstTypeReference* ref = pack->typeList.types.data[0]->as<AstTypeReference>();
+        if (!ref || ref->prefix || ref->name != trait)
+            return std::nullopt;
+
+        return ref->location;
+    }
+
+    bool visit(AstStatClass* cls) override
+    {
+        if (!cls->isTrait)
+            return true;
+
+        for (const AstClassMember& member : cls->members)
+        {
+            const AstClassMethod* method = member.get_if<AstClassMethod>();
+            AstExprFunction* fn = method ? method->function : nullptr;
+            if (!fn || method->expectLocation)
+                continue;
+
+            std::optional<Location> returnType = traitReturnType(*method, cls->name->name);
+            if (returnType && returnsSelf(fn, methodSelf(fn)))
+                emitWarning(
+                    *context,
+                    LintWarning::Code_ReturnSelf,
+                    *returnType,
+                    "Did you mean to return 'Self' here?\n\n"
+                    "Help (method returns trait instead of Self):\n"
+                    "  - Returning '%s' here loses self's class and any other traits on it\n"
+                    "  - Callers rely on knowing self's class to pass into other functions\n"
+                    "  - Return 'Self' here so the type checker knows to use the class type instead of the trait type",
+                    cls->name->name.value
+                );
+        }
+
         return true;
     }
 };
@@ -8537,6 +8633,9 @@ std::vector<LintWarning> lint(
 
     if (context.warningEnabled(LintWarning::Code_ExtraArguments))
         LintExtraArguments::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_ReturnSelf))
+        LintReturnSelf::process(context);
 
     if (context.anyWarningEnabled(
             {LintWarning::Code_NewValueComparison, LintWarning::Code_TableTruthiness, LintWarning::Code_DiscardedResult}

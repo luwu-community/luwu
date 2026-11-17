@@ -1733,6 +1733,12 @@ static const TValue* findclassmember(lua_State* L, int idx, const char* memberna
     return luaH_getstr((*classdef)->memberstooffset, luaS_new(L, membername));
 }
 
+int lua_istrait(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    return ttisclass(o) && classvalue(o)->istrait;
+}
+
 void lua_newobject(lua_State* L, int idx)
 {
     StkId cls = index2addr(L, idx);
@@ -1746,6 +1752,16 @@ void lua_newobject(lua_State* L, int idx)
     luaC_threadbarrier(L);
 
     LuauClass* classdef = classvalue(cls);
+
+    luaR_checktraitsimplemented(L, classdef);
+
+    // Luwu Traits (rfcs/classes/traits.md): constructing a trait calls its `__create`, which replaces the trait in its slot with its result
+    if (classdef->istrait)
+    {
+        setobj2s(L, cls, luaR_traitcreate(L, classdef));
+        lua_call(L, nargs, 1);
+        return;
+    }
 
     // Construction runs here instead of through the class's `__call`. Doing it here skips the private
     // constructor check, because the embedder is trusted. It also reads `__init` by offset rather than
@@ -1800,6 +1816,44 @@ int lua_ismemberconst(lua_State* L, int idx, const char* membername)
     uint32_t offsetnum = uint32_t(nvalue(offset));
     // functions (static members) are always immutable
     return offsetnum >= classdef->numberofinstancemembers || (classdef->memberflags[offsetnum] & LBC_CLASSMEMBER_CONST) != 0;
+}
+
+// Whether a trait the class implements, directly or through `needs`, declares `name` final. The class's own copy of a
+// trait's function doesn't carry the trait's `final` flag.
+static bool finalintrait(const LuauClass* classdef, TString* name)
+{
+    for (uint32_t i = 0; i < classdef->numtraits; i++)
+    {
+        const LuauClass* trait = classdef->traits[i];
+        const TValue* offset = luaH_getstr(trait->memberstooffset, name);
+        if (!ttisnil(offset) && (trait->memberflags[uint32_t(nvalue(offset))] & LBC_CLASSMEMBER_FINAL))
+            return true;
+    }
+
+    return false;
+}
+
+int lua_ismemberfinal(lua_State* L, int idx, const char* membername)
+{
+    LuauClass* classdef;
+    const TValue* offset = findclassmember(L, idx, membername, &classdef);
+    if (ttisnil(offset))
+        return 0;
+
+    if (classdef->memberflags[uint32_t(nvalue(offset))] & LBC_CLASSMEMBER_FINAL)
+        return 1;
+
+    return finalintrait(classdef, luaS_new(L, membername));
+}
+
+int lua_classimplements(lua_State* L, int idx, int traitidx)
+{
+    const TValue* trait = index2addr(L, traitidx);
+    if (!ttisclass(trait) || !classvalue(trait)->istrait)
+        luaG_runerror(L, "expected a trait, got %s", luaT_objtypename(L, trait));
+
+    const TValue* o = index2addr(L, idx);
+    return ttisobject(o) && luaR_implements(objectvalue(o)->lclass, classvalue(trait));
 }
 
 const char* lua_getclassname(lua_State* L, int idx)
