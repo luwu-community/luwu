@@ -15,3 +15,6 @@ LUA_API int lua_findunuseduserdatatag(lua_State* L);
 // Finds a light userdata tag that has not been associated with a name.
 // Returns -1 if none were found.
 LUA_API int lua_findunusedlightuserdatatag(lua_State* L);
+
+// Auxilary method to get the namecall string + atom + len
+LUA_API const char* lua_namecallwithlen(lua_State* L, int* atom, size_t* len);

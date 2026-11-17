@@ -1890,6 +1890,30 @@ uintptr_t lua_encodepointer(lua_State* L, uintptr_t p)
     return uintptr_t((g->ptrenckey[0] * p + g->ptrenckey[2]) ^ (g->ptrenckey[1] * p + g->ptrenckey[3]));
 }
 
+int lua_cstackdepth(lua_State* L)
+{
+    return L->nCcalls;
+}
+
+int lua_cstacklimit(lua_State* L)
+{
+    return LUAI_MAXCCALLS;
+}
+
+void lua_cstackreserve(lua_State* L, int n)
+{
+    api_check(L, n >= 0);
+    if (n >= LUAI_MAXCCALLS - int(L->nCcalls))
+        luaG_runerror(L, "C stack overflow");
+    L->nCcalls = (unsigned short)(L->nCcalls + n);
+}
+
+void lua_cstackrelease(lua_State* L, int n)
+{
+    api_check(L, n >= 0 && int(L->nCcalls) - n >= int(L->baseCcalls));
+    L->nCcalls = (unsigned short)(L->nCcalls - n);
+}
+
 int lua_refpool(lua_State* L, int idx)
 {
     LUAU_ASSERT(FFlag::LuwuManagedReferences2);
