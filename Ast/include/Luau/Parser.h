@@ -489,6 +489,8 @@ private:
     // Luwu: reports `feature` where it can't be used, in a Luau module or with its FFlag off (`enabled`). Returns
     // whether it can be used. The syntax is parsed either way, so the rest of the module still checks.
     bool checkLuwuFeature(const Location& location, const LuwuFeature& feature, bool enabled);
+    // Luwu: whether this is a Luau module whose classes follow upstream Luau's syntax (luauClassCompat)
+    bool luauClassModule() const;
     // Luwu: the statement for a Luwu-only one that can't be used, after reporting why (see checkLuwuFeature).
     AstStatError* reportLuwuFeatureStat(const Location& location, const AstArray<AstExpr*>& expressions, const LuwuFeature& feature);
     AstStatClass* getMatchingClass(AstExpr* expr);

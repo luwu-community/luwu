@@ -17,6 +17,8 @@ LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTINT(LuauTypeLengthLimit)
 LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_DYNAMIC_FASTFLAG(DebugLuauReportReturnTypeVariadicWithTypeSuffix)
+LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(DebugLuwuLuauClassCompat)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuauIntegerType2)
@@ -2275,6 +2277,43 @@ TEST_CASE_FIXTURE(Fixture, "disabled_luwu_features_say_which_fflag_enables_them"
     result = tryParse("class Point end");
     REQUIRE(!result.errors.empty());
     CHECK_EQ(result.errors[0].getMessage(), "attempt to use disabled Luwu feature classes; enable via FFlag 'LuwuClasses'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "luau_modules_with_class_compat_parse_upstream_class_syntax")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // upstream Luau's classes leave methods unqualified next to `public` fields
+    const std::string source = R"(
+class Point
+    public x
+    function magnitude(self) return self.x end
+end
+)";
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+
+    {
+        ScopedFastFlag classCompat{FFlag::DebugLuwuLuauClassCompat, true};
+        CHECK(tryParse(source, luau).errors.empty());
+
+        // a Luwu module keeps Luwu's rule
+        ParseResult luwu = tryParse(source);
+        REQUIRE_EQ(luwu.errors.size(), 1);
+        CHECK(luwu.errors[0].getMessage().find("This class mixes explicit and implicit 'public'") == 0);
+    }
+
+    // upstream's own class flag asks for the same
+    {
+        ScopedFastFlag upstreamClasses{FFlag::DebugLuauUserDefinedClasses, true};
+        CHECK(tryParse(source, luau).errors.empty());
+    }
+
+    // without class compat, classes are Luwu-only in a Luau module
+    ParseResult withoutCompat = tryParse(source, luau);
+    REQUIRE(!withoutCompat.errors.empty());
+    CHECK_EQ(withoutCompat.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: classes");
 }
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_luwu_only")
