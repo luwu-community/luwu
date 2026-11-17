@@ -5177,7 +5177,12 @@ struct Compiler
     {
         RegScope rs(this);
         uint8_t value = compilePatternValue(pattern, rs);
+        compilePatternJumpsOn(pattern, value, jumps, whenMatched);
+    }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): compilePatternJumps on the value in register `value`
+    void compilePatternJumpsOn(AstExprMatchPattern* pattern, uint8_t value, std::vector<size_t>& jumps, bool whenMatched)
+    {
         const AstArray<AstPatternAlternative>& alternatives = pattern->alternatives;
         LUAU_ASSERT(alternatives.size > 0);
 
@@ -5197,11 +5202,12 @@ struct Compiler
         patchJumps(pattern, matched, bytecode.emitLabel());
     }
 
-    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the register holding the value `pattern` matches.
-    // A `case` arm's is the `match` subject's, which is in this frame's registers unless it's an upvalue.
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the register holding the value `pattern` matches:
+    // its subject's when it has one (a `case` arm's `match` subject, or the hidden local a pattern that binds read the
+    // value into), which is in this frame's registers unless it's an upvalue, and otherwise its value's
     uint8_t compilePatternValue(AstExprMatchPattern* pattern, RegScope& rs)
     {
-        if (pattern->value)
+        if (!pattern->subject)
             return compileExprAuto(pattern->value, rs);
 
         if (int reg = getLocalReg(pattern->subject); reg >= 0)

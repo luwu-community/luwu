@@ -748,6 +748,12 @@ struct TableMutationTracker : AstVisitor
 
 struct ConstantVisitor : AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the clauses a pattern makes are compiled like any other
+    bool visitsPatternClauses() const override
+    {
+        return true;
+    }
+
     DenseHashMap<AstExpr*, Constant>& constants;
     DenseHashMap<AstLocal*, Variable>& variables;
     DenseHashMap<AstLocal*, Constant>& locals;

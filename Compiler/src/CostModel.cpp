@@ -98,6 +98,12 @@ struct Cost
 
 struct CostVisitor : AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the clauses a pattern makes are compiled like any other
+    bool visitsPatternClauses() const override
+    {
+        return true;
+    }
+
     const DenseHashMap<AstExprCall*, int>& builtins;
     const DenseHashMap<AstExpr*, Constant>& constants;
 

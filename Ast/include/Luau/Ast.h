@@ -1956,7 +1956,8 @@ public:
 
     // The matched value as written, or null in a `case` arm
     AstExpr* value;
-    // The `match` subject a `case` arm's pattern matches, or null outside one
+    // The local holding the matched value: a `case` arm's `match` subject, or a hidden local a pattern that binds reads its
+    // value into. Null when `value` is read directly.
     AstLocal* subject;
     // The `is` or `implements`
     Location keywordLocation;
