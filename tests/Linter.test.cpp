@@ -4104,6 +4104,29 @@ return nil
     CHECK_EQ(found[0].location, Location({2, 11}, {2, 23}));
 }
 
+// Luwu try expressions: DuplicateCondition compares every condition of an `if` chain, `try` expressions included
+TEST_CASE_FIXTURE(BuiltinsFixture, "DuplicateConditionComparesTryExpressions")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    LintResult result = lint(R"(
+local function g(): number
+    return 1
+end
+local function f()
+    if try g() then
+        return 1
+    elseif try g() then
+        return 2
+    end
+    return 0
+end
+return f
+)");
+
+    CHECK(warningsWithCode(result, LintWarning::Code_DuplicateCondition).empty());
+}
+
 // Luwu: `--@[nolint(...)]` is the attribute as a comment, for Luau and Lua files, which upstream couldn't parse with
 // `@[nolint]` in them. It covers the statement after it.
 TEST_CASE_FIXTURE(BuiltinsFixture, "LintAttributeComments")
