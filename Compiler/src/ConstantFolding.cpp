@@ -1124,6 +1124,11 @@ struct ConstantVisitor : AstVisitor
                 analyze(arm.value);
             }
         }
+        else if (AstExprPop* expr = node->as<AstExprPop>())
+        {
+            // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): a pop mutates its container, so it's never a constant
+            analyze(expr->expr);
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");
