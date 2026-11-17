@@ -1046,12 +1046,23 @@ enum class IrCmd : uint8_t
     //    LBC_NEWCLASSMEMBER_IMPLEMENTS)
     FALLBACK_NEWCLASSMEMBER,
 
-    // Luwu Traits (rfcs/classes/traits.md): LOP_INITTRAITS's test: writes the trait initializer runner to B, or nil when
-    // the object's class has no trait initializers (a jump on B's tag follows). Runs no Luau code.
+    // Luwu Traits (rfcs/classes/traits.md): LOP_INITTRAITS: lays out the next trait initializer's call frame at C, or
+    // writes nil there once every initializer has run (a jump on C's tag follows). Runs no Luau code.
     // A: unsigned int (bytecode instruction index)
-    // B: Rn (the runner's register, written)
-    // C: Rn (object)
+    // B: Rn (how many initializers have run, read and written; the object and the arguments follow it)
+    // C: Rn (the call frame, written)
+    // D: int (how many `implements` arguments there are)
     FALLBACK_INITTRAITS,
+
+    // Luwu bundles: LOP_GETTABLEBUNDLE or LOP_SETTABLEBUNDLE, a table read or write at a bundle key given by its values.
+    // May run `__index` or `__newindex`.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (target, written, or source)
+    // C: Rn (table)
+    // D: Rn (first of E registers holding the bundle's values)
+    // E: int (how many values)
+    // F: int (1 for a write)
+    FALLBACK_TABLEBUNDLE,
 
     // Luwu Traits (rfcs/classes/traits.md): LOP_GETQUALIFIED, the class's version of a trait's member. Runs no Luau code,
     // but raises when the class doesn't implement the trait.

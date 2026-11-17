@@ -28,11 +28,17 @@ LUAI_FUNC void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId v
 // (NULL: native code) instead of the running frame's closure.
 LUAI_FUNC void luaV_gettablefor(lua_State* L, const TValue* t, TValue* key, StkId val, const Closure* accessor);
 LUAI_FUNC void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val);
+// Luwu bundles: `t[key]` and `t[key] = val` for the bundle key holding the `n` values at `values`, building the bundle
+// only for a metamethod, a table that isn't plain, or a new key
+LUAI_FUNC void luaV_gettablebundle(lua_State* L, StkId t, StkId values, int n, StkId val);
+LUAI_FUNC void luaV_settablebundle(lua_State* L, StkId t, StkId values, int n, StkId val);
 LUAI_FUNC void luaV_concat(lua_State* L, int total, int last);
 LUAI_FUNC void luaV_getimport(lua_State* L, LuaTable* env, TValue* k, StkId res, uint32_t id, bool propagatenil);
 LUAI_FUNC void luaV_prepareFORN(lua_State* L, StkId plimit, StkId pstep, StkId pinit);
 LUAI_FUNC void luaV_callTM(lua_State* L, int nparams, int res);
-LUAI_FUNC void luaV_tryfuncTM(lua_State* L, StkId func);
+// Prepares a call on a value that isn't a function: its `__call` metamethod, or a class's constructor. Returns how many
+// slots the arguments moved up.
+LUAI_FUNC int luaV_tryfuncTM(lua_State* L, StkId func, StkId argtop);
 
 LUAI_FUNC void luau_execute(lua_State* L);
 LUAI_FUNC void luau_finishop(lua_State* L);

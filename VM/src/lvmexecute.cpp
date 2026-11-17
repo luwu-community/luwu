@@ -142,7 +142,8 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
-        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), VM_DISPATCH_OP(LOP_GETQUALIFIED),
+        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), VM_DISPATCH_OP(LOP_GETQUALIFIED), \
+        VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -1190,8 +1191,7 @@ reentry:
                     // slow-path: not a function call
                     VM_PROTECT_PC(); // luaV_tryfuncTM may fail
 
-                    luaV_tryfuncTM(L, ra);
-                    argtop++; // __call adds an extra self
+                    argtop += luaV_tryfuncTM(L, ra, argtop); // __call adds an extra self
                 }
 
                 Closure* ccl = clvalue(ra);
@@ -1294,8 +1294,7 @@ reentry:
 
                     VM_PROTECT_PC(); // luaV_tryfuncTM may fail
 
-                    luaV_tryfuncTM(L, ra);
-                    argtop++; // __call adds an extra self
+                    argtop += luaV_tryfuncTM(L, ra, argtop); // __call adds an extra self
                 }
 
                 Closure* ccl = clvalue(ra);
@@ -3843,6 +3842,14 @@ reentry:
                     VM_NEXT();
                 }
 
+                // Luwu Classes (rfcs/classes): the function a call on the class runs
+                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_CONSTRUCTOR)
+                {
+                    VM_PROTECT_PC();
+                    luaR_setconstructor(L, classvalue(ra), rc);
+                    VM_NEXT();
+                }
+
                 // Luwu Traits (rfcs/classes/traits.md): the class's compiled copy of a trait's function
                 if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
                 {
@@ -3951,12 +3958,27 @@ reentry:
                 // before its trait fields are initialized.
                 bool fieldsform = form == LBC_NEWOBJECT_FIELDS;
                 bool allocform = form == LBC_NEWOBJECT_ALLOC;
+                bool applyform = form == LBC_NEWOBJECT_APPLY;
                 LUAU_ASSERT(ttisclass(classReg));
 
                 LuauClass* classdef = classvalue(classReg);
+
+                // The APPLY form finishes a POD object the ALLOC form started: the site has stored its trait fields and
+                // defaults since, and the argument, when there is one, is in the register above the object.
+                if (applyform)
+                {
+                    LUAU_ASSERT(ttisobject(ra) && objectvalue(ra)->lclass == classdef && !classdef->hascustominit && aux <= 1);
+
+                    if (aux == 1)
+                        VM_PROTECT(luaR_applyobjectargument(L, classdef, objectvalue(ra), ra + 1));
+
+                    VM_NEXT();
+                }
+
                 bool onlyprimaryinit = !(classdef->hascustominit && !classdef->hasprimaryinit);
                 LUAU_ASSERT((fieldsform || allocform) ? onlyprimaryinit : classdef->hascustominit == custominit);
-                LUAU_ASSERT(custominit || !classdef->haspoddefaultsfn);
+                // a class with computed field defaults is only constructed by a site that evaluates them (ALLOC, then APPLY)
+                LUAU_ASSERT(custominit || allocform || !classdef->haspoddefaultsfn);
                 LUAU_ASSERT(!classdef->istrait);
                 LUAU_ASSERT(custominit || allocform || classdef->numtraits == 0);
                 LUAU_ASSERT(!fieldsform || classdef->numberofinstancemembers == aux);
@@ -3973,15 +3995,15 @@ reentry:
                 }
 
                 // Luwu Classes (rfcs/classes): a private `__init` is only callable from inside its
-                // own class. The `__call` path gets that from luaR_createobject, and NEWOBJECT exists
-                // to skip that C frame, so without this the fast path would be a hole in `private`.
+                // own class. A call on the class checks that before running its constructor
+                // (luaR_prepareclasscall), and NEWOBJECT skips that call, so without this the fast path
+                // would be a hole in `private`.
                 //
                 // `cl` is the closure to ask: this instruction *is* the constructing code, running in
-                // the frame that wrote it. luaR_createobject has to walk for the nearest Lua frame
+                // the frame that wrote it. A call on the class has to walk for the nearest Lua frame
                 // instead (luaR_callinglua), because its immediate caller is `pcall` for
-                // `pcall(SomeClass, ...)`. NEWOBJECT is only emitted for a direct, statically resolved
-                // `ClassName(...)`, so pcall'd and aliased construction still goes through
-                // luaR_createobject.
+                // `pcall(SomeClass, ...)`. Inside the class's constructor, `cl` belongs to the class,
+                // so this always passes there: the call that ran the constructor checked its caller.
                 //
                 // The INIT form needs this too: it reads `__init` straight out of staticmembers, with
                 // no per-member check of its own.
@@ -4041,13 +4063,7 @@ reentry:
                 }
                 else if (aux == 1)
                 {
-                    StkId arg = ra + 1;
-
-                    // a table carrying a metatable needs the generic, __index-aware path
-                    if (LUAU_LIKELY(ttistable(arg) && hvalue(arg)->metatable == NULL))
-                        luaR_applyobjectfields(L, classdef, object, hvalue(arg));
-                    else
-                        VM_PROTECT(luaR_applyobjectfieldsslow(L, classdef, object, arg));
+                    VM_PROTECT(luaR_applyobjectargument(L, classdef, object, ra + 1));
                 }
 
                 luaC_barrierfast(L, object);
@@ -4104,23 +4120,55 @@ reentry:
                 VM_NEXT();
             }
 
-            VM_CASE(LOP_INITTRAITS)
+            VM_CASE(LOP_GETTABLEBUNDLE)
             {
-                // Luwu Traits (rfcs/classes/traits.md): sets up the call that initializes the object's trait fields, or
-                // skips it when no trait has a field to compute, which is most classes
                 Instruction insn = *pc++;
+                uint32_t aux = *pc++;
                 StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                StkId rc = VM_REG(LUAU_INSN_C(insn));
 
-                LUAU_ASSERT(ttisobject(ra + 1));
-
-                if (!objectvalue(ra + 1)->lclass->traitinits)
+                // fast-path: a plain table answers without the bundle, but only once the bundle library is open, since
+                // building one raises until then
+                bool bundlesopen = L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0] != NULL;
+                if (LUAU_LIKELY(bundlesopen && ttistable(rb) && !hvalue(rb)->metatable))
                 {
-                    pc += LUAU_INSN_D(insn);
-                    LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
+                    setobj2s(L, ra, luaH_getbundle(hvalue(rb), rc, int(aux)));
                     VM_NEXT();
                 }
 
-                setclvalue(L, ra, L->global->traitinitrunner);
+                VM_PROTECT(luaV_gettablebundle(L, rb, rc, int(aux), ra));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_SETTABLEBUNDLE)
+            {
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                StkId rc = VM_REG(LUAU_INSN_C(insn));
+
+                VM_PROTECT(luaV_settablebundle(L, rb, rc, int(aux), ra));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_INITTRAITS)
+            {
+                // Luwu Traits (rfcs/classes/traits.md): lays out the CALL after it for the next trait initializer, or
+                // jumps past the loop once every one has run, which is at once for most classes
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+
+                Instruction call = *pc;
+                LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+                StkId frame = VM_REG(LUAU_INSN_A(call));
+
+                if (luaR_nexttraitinit(L, ra, frame, LUAU_INSN_B(call) - 2))
+                    VM_NEXT();
+
+                pc += LUAU_INSN_D(insn);
+                LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
                 VM_NEXT();
             }
 
@@ -4225,8 +4273,8 @@ int luau_precall(lua_State* L, StkId func, int nresults)
 {
     if (!ttisfunction(func))
     {
-        luaV_tryfuncTM(L, func);
-        // L->top is incremented by tryfuncTM
+        luaV_tryfuncTM(L, func, L->top);
+        // L->top is incremented by tryfuncTM when it adds an argument
     }
 
     Closure* ccl = clvalue(func);

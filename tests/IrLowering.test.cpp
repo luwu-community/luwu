@@ -9108,6 +9108,17 @@ bb_4:
 bb_6:
   INTERRUPT 8u
   RETURN R4, 1i
+; function Cat($arg0) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R0
+  STORE_TVALUE R3, %0
+  %2 = GET_UPVALUE U0
+  STORE_TVALUE R4, %2
+  FALLBACK_NEWOBJECT 2u, R2, R4, 0i, 1i
+  %5 = LOAD_TVALUE R2
+  STORE_TVALUE R1, %5
+  INTERRUPT 5u
+  RETURN R1, 1i
 )"
     );
 }
@@ -9153,6 +9164,17 @@ bb_bytecode_2:
   STORE_TAG R2, tnumber
   INTERRUPT 7u
   RETURN R2, 1i
+; function C($arg0) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R0
+  STORE_TVALUE R3, %0
+  %2 = GET_UPVALUE U0
+  STORE_TVALUE R4, %2
+  FALLBACK_NEWOBJECT 2u, R2, R4, 0i, 1i
+  %5 = LOAD_TVALUE R2
+  STORE_TVALUE R1, %5
+  INTERRUPT 5u
+  RETURN R1, 1i
 )"
     );
 }

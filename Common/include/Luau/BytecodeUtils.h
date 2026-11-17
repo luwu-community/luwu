@@ -47,6 +47,8 @@ inline int getOpLength(LuauOpcode op)
     case LOP_GETOBJECTMEMBER:
     case LOP_SETOBJECTMEMBER:
     case LOP_GETQUALIFIED:
+    case LOP_GETTABLEBUNDLE:
+    case LOP_SETTABLEBUNDLE:
         return 2;
 
     default:

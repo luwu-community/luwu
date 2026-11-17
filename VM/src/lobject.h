@@ -631,6 +631,11 @@ typedef struct LuauClass
     // is added via luaR_addclassmember.
     LuaTable* instancemetatable;
 
+    // The function calling the class runs: the compiler builds it from the class declaration, and a call on the class
+    // value runs it in place of the `__call` metamethod (luaV_tryfuncTM). NULL for a class built from C and for a
+    // trait, which construct through `__call`.
+    Closure* constructor;
+
     // Number of instance members that we expect instances of this class object
     // to have.
     uint32_t numberofinstancemembers;
@@ -721,7 +726,7 @@ typedef struct LuauClass
     uint32_t numtraits;
 
     // Luwu Traits (rfcs/classes/traits.md): how construction initializes the fields the class gets from its traits
-    // (LOP_INITTRAITS, luaR_newtraitinitrunner). NULL when no trait has a field that needs computing. Owned by this class;
+    // (LOP_INITTRAITS, luaR_nexttraitinit). NULL when no trait has a field that needs computing. Owned by this class;
     // marked in traverseclass.
     // - `traitinits` holds the class's copy of each trait's `__traitinit`, in dependency order: a trait's needed traits
     //   come before it, so an overriding trait's value is the one left in the field.
