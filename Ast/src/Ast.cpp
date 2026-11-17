@@ -600,6 +600,9 @@ static void visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& cl
 
     for (const AstIfClause& clause : clauses)
     {
+        if (clause.fromPattern && !visitor->visitsPatternClauses())
+            continue;
+
         if (clause.declaration)
             clause.declaration->visit(visitor);
         else
@@ -634,6 +637,45 @@ void AstExprIfElse::visit(AstVisitor* visitor)
         visitCondition(visitor);
         trueExpr->visit(visitor);
         falseExpr->visit(visitor);
+    }
+}
+
+AstExprMatchPattern::AstExprMatchPattern(
+    const Location& location,
+    AstExpr* value,
+    AstLocal* subject,
+    const Location& keywordLocation,
+    bool negated,
+    bool implements,
+    const AstArray<AstPatternAlternative>& alternatives
+)
+    : AstExpr(ClassIndex(), location)
+    , value(value)
+    , subject(subject)
+    , keywordLocation(keywordLocation)
+    , negated(negated)
+    , implements(implements)
+    , alternatives(alternatives)
+{
+}
+
+void AstExprMatchPattern::visit(AstVisitor* visitor)
+{
+    if (!visitor->visit(this))
+        return;
+
+    if (visitor->visitsPatternChecks())
+    {
+        checked->visit(visitor);
+        return;
+    }
+
+    if (value)
+        value->visit(visitor);
+    for (const AstPatternAlternative& alternative : alternatives)
+    {
+        if (alternative.operand)
+            alternative.operand->visit(visitor);
     }
 }
 

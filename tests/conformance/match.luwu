@@ -273,4 +273,32 @@ do
     assert(described == "problem" and reads == 1)
 end
 
+-- each tag is one instruction, which matches exactly what type() says
+do
+    local function tags(v: unknown): string
+        return match v
+            case is boolean then "boolean"
+            case is number then "number"
+            case is string then "string"
+            case is table then "table"
+            case is function then "function"
+            case is thread then "thread"
+            case is userdata then "userdata"
+            case is vector then "vector"
+            case is buffer then "buffer"
+            case is object then "object"
+            case is class then "class"
+            else "other"
+    end
+    for _, v in { true, 1, "s", {}, print, coroutine.create(print), newproxy(), vector.create(1, 2, 3), buffer.create(1), Point(1, 2), Point } do
+        assert(tags(v) == type(v), `{type(v)} matched as {tags(v)}`)
+    end
+    assert(tags(nil) == "other")
+
+    local function notTags(v: unknown): boolean
+        return v is not string | number
+    end
+    assert(notTags(true) and notTags({}) and not notTags("s") and not notTags(1))
+end
+
 return "OK"

@@ -59,6 +59,7 @@ int getOpLength(LuauOpcode op)
     case LOP_CALLFB:
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
+    case LOP_JUMPXTYPE:
     case LOP_CHECKSELFCLASS:
     case LOP_NEWOBJECT:
     case LOP_GETOBJECTMEMBER:
@@ -97,6 +98,7 @@ bool isJumpD(LuauOpcode op)
     case LOP_JUMPXEQKS:
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
+    case LOP_JUMPXTYPE:
     case LOP_INITTRAITS:
         return true;
 

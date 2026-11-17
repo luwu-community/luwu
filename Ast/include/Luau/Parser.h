@@ -530,6 +530,8 @@ private:
     struct Pattern
     {
         Location location;
+        // The `is` or `implements`
+        Location keywordLocation;
         bool negated = false;
         bool implements = false;
         std::vector<PatternAlternative> alternatives;
@@ -537,16 +539,17 @@ private:
 
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` and the `is` / `implements` operators
     bool matchExpressionsAvailable();
-    bool typeTestFollows();
-    AstExpr* parseTypeTest(AstExpr* value, const Location& start);
+    bool patternFollows();
+    AstExpr* parseMatchPatternExpr(AstExpr* value, AstLocal* subject, const Location& start);
     Pattern parsePattern();
     PatternAlternative parsePatternAlternative();
     PatternAlternative parseTraitAlternative();
     bool patternAlternativeFollows(const char* expected);
     AstExpr* parsePatternClass(bool implements);
     void reportPatternTypeArguments();
-    AstExpr* buildTypeTest(AstExpr* value, const Pattern& pattern, const Location& start);
-    AstExpr* makePatternTest(AstExpr* value, const Pattern& pattern, const Location& start);
+    AstExpr* buildMatchPattern(AstExpr* value, AstLocal* subject, const Pattern& pattern, const Location& start);
+    AstArray<AstPatternAlternative> patternAlternatives(const Pattern& pattern);
+    AstExpr* makePatternCheck(AstExpr* value, const Pattern& pattern, const Location& start);
     AstExpr* makeAlternativeTest(AstExpr* value, const PatternAlternative& alternative, bool negated, const Location& start);
     bool literalPatternFollows();
     std::optional<AstExpr*> parseNothingValue();
@@ -563,8 +566,8 @@ private:
     void recordArmContinues(AstArray<AstMatchArm>& arms, const std::vector<size_t>& continues);
     bool parseCaseHead(AstLocal* subject, std::vector<AstIfClause>& chain);
     bool checkCaseBindingName(const Name& name);
-    AstExpr* parseMatchPattern(AstLocal* subject);
-    AstExpr* parseMatchAlternative(AstLocal* subject, bool reportMissingIs);
+    AstExpr* parseCasePattern(AstLocal* subject);
+    AstExpr* parseCaseAlternative(AstLocal* subject, bool reportMissingIs);
     AstExprCall* makeGlobalCall(AstName library, std::optional<AstName> function, const Location& location, std::initializer_list<AstExpr*> args);
     // Luwu: a missing `then`/`else` in an if-else expression is reported on its keyword (see parseIfElseExpr)
     enum class IfElseKeyword

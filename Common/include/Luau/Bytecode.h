@@ -618,6 +618,15 @@ enum LuauOpcode
     // AUX: the member's name as a constant string
     LOP_GETQUALIFIED,
 
+    // JUMPXTYPE: Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): jumps when R(A)'s type is the one `type()`
+    // names in AUX, as `x is string` checks, without calling `type()`
+    // A: value register
+    // D: jump offset (-32768..32767)
+    // AUX: the type as an LBC_TYPE_* in bits 0..7: BOOLEAN, NUMBER, INTEGER, STRING, TABLE, FUNCTION, THREAD, USERDATA
+    //   (light userdata included, as `type()` says "userdata" for both), VECTOR, BUFFER or OBJECT. Bit 31 is the NOT flag
+    //   (LUAU_INSN_AUX_NOT): when set, the jump is taken when the type differs.
+    LOP_JUMPXTYPE,
+
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
 };

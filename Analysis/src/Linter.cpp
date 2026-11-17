@@ -1064,25 +1064,6 @@ private:
     {
         visit(static_cast<AstExpr*>(node));
 
-        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a type test's hidden local and the test it gives
-        // are parts of the statement around it, not statements
-        if (node->fromTypeTest)
-        {
-            for (AstStat* stmt : node->body->body)
-            {
-                if (AstStatLocal* hidden = stmt->as<AstStatLocal>())
-                {
-                    for (AstExpr* value : hidden->values)
-                        value->visit(this);
-                }
-                else if (AstStatGive* give = stmt->as<AstStatGive>())
-                    give->value->visit(this);
-            }
-
-            stack.back().lastLine = std::max(stack.back().lastLine, node->location.end.line);
-            return false;
-        }
-
         Location outer = stack.back().start;
 
         for (AstStat* stmt : node->body->body)
@@ -1130,6 +1111,13 @@ private:
 class LintLocalHygiene : AstVisitor
 {
 public:
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `case` arm's name is declared by a clause the arm
+    // makes, which this lint checks like any other local
+    bool visitsPatternClauses() const override
+    {
+        return true;
+    }
+
     LUAU_NOINLINE static void process(LintContext& context)
     {
         LintLocalHygiene pass;
@@ -4634,6 +4622,13 @@ private:
 class LintNameShadow : AstVisitor
 {
 public:
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `case` arm's name is declared by a clause the arm
+    // makes, which this lint checks like any other local
+    bool visitsPatternClauses() const override
+    {
+        return true;
+    }
+
     struct Enabled
     {
         bool keyword = false;

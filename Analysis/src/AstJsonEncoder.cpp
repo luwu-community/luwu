@@ -560,6 +560,8 @@ struct AstJsonEncoder : public AstVisitor
             write("declaration", clause.declaration);
         else
             write("expr", clause.expr);
+        if (clause.fromPattern)
+            write("fromPattern", clause.fromPattern);
         popComma(c);
         writeRaw("}");
     }
@@ -601,12 +603,63 @@ struct AstJsonEncoder : public AstVisitor
             write("clauses", arm.clauses);
         if (arm.catchAll)
             write("catchAll", arm.catchAll);
+        if (arm.binding)
+            write("binding", arm.binding);
         if (arm.value)
             write("value", arm.value);
         if (arm.body)
             write("body", arm.body);
         popComma(c);
         writeRaw("}");
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+    void write(const AstPatternAlternative& alternative)
+    {
+        writeRaw("{");
+        bool c = pushComma();
+        writeType("AstPatternAlternative");
+        switch (alternative.kind)
+        {
+        case AstPatternAlternative::Value:
+            write("kind", std::string_view("value"));
+            break;
+        case AstPatternAlternative::Tag:
+            write("kind", std::string_view("tag"));
+            write("tag", alternative.tag);
+            break;
+        case AstPatternAlternative::Class:
+            write("kind", std::string_view("class"));
+            break;
+        case AstPatternAlternative::Trait:
+            write("kind", std::string_view("trait"));
+            break;
+        }
+        write("location", alternative.location);
+        if (alternative.operand)
+            write("operand", alternative.operand);
+        popComma(c);
+        writeRaw("}");
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the pattern as written, never `checked`
+    void write(class AstExprMatchPattern* node)
+    {
+        writeNode(
+            node,
+            "AstExprMatchPattern",
+            [&]()
+            {
+                if (node->value)
+                    PROP(value);
+                if (node->subject)
+                    write("subject", node->subject);
+                PROP(keywordLocation);
+                PROP(negated);
+                PROP(implements);
+                PROP(alternatives);
+            }
+        );
     }
 
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
@@ -1447,6 +1500,12 @@ struct AstJsonEncoder : public AstVisitor
     }
 
     bool visit(class AstExprMatch* node) override
+    {
+        write(node);
+        return false;
+    }
+
+    bool visit(class AstExprMatchPattern* node) override
     {
         write(node);
         return false;

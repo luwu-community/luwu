@@ -11,6 +11,7 @@
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
 
@@ -1488,6 +1489,10 @@ uint8_t BytecodeBuilder::getVersion()
     if (FFlag::LuwuTableComprehensions)
         return LWBC_VERSION_WIP;
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): LOP_JUMPXTYPE is WIP bytecode too
+    if (FFlag::DebugLuwuMatchExpressions)
+        return LWBC_VERSION_WIP;
+
     return LWBC_VERSION_TARGET;
 }
 
@@ -1994,6 +1999,13 @@ void BytecodeBuilder::validateInstructions() const
             VJUMP(LUAU_INSN_D(insn));
             VREG(insns[i + 1] & 0xff); // class register lives in the low byte of aux
             LUAU_ASSERT((insns[i + 1] & ~(0xffu | LBC_JUMPXISA_JUMPIFINSTANCE | LBC_JUMPXISA_CHECKCLASS)) == 0);
+            break;
+
+        case LOP_JUMPXTYPE:
+            VREG(LUAU_INSN_A(insn));
+            VJUMP(LUAU_INSN_D(insn));
+            LUAU_ASSERT((insns[i + 1] & ~(0xffu | 0x80000000u)) == 0);
+            LUAU_ASSERT(getJumpxTypeName(insns[i + 1] & 0xff));
             break;
 
         case LOP_GETOBJECTMEMBER:
@@ -2840,6 +2852,11 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
             formatAppend(result, "CHECKSELFCLASS R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code);
         dumpConstant(result, int(*code++), false);
         formatAppend(result, "]%s\n", LUAU_INSN_C(insn) ? " SELF" : "");
+        break;
+
+    case LOP_JUMPXTYPE:
+        formatAppend(result, "JUMPXTYPE R%d L%d%s ['%s']\n", LUAU_INSN_A(insn), targetLabel, LUAU_INSN_AUX_NOT(*code) ? " NOT" : "", getJumpxTypeName(*code & 0xff));
+        code++;
         break;
 
     case LOP_JUMPXISA:

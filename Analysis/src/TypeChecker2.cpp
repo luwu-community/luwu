@@ -116,6 +116,12 @@ namespace
 
 struct DeclarationCollector : AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    bool visitsPatternChecks() const override
+    {
+        return true;
+    }
+
     TypeChecker2::DeclarationIndex& index;
 
     explicit DeclarationCollector(TypeChecker2::DeclarationIndex& index)
@@ -1014,6 +1020,12 @@ static std::string describeFallthrough(FallthroughKind kind, TypePackId expected
 // and the wrong thing to say about one that never returns anything -- there is only the one codepath.
 struct ReturnStatementFinder : public AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    bool visitsPatternChecks() const override
+    {
+        return true;
+    }
+
     bool found = false;
 
     bool visit(AstStatReturn*) override
@@ -2867,6 +2879,12 @@ void TypeChecker2::visit(AstStatClass* stat)
         // the parser makes a reference to the class from before its declaration a global.
         struct ConstructorCallFinder : AstVisitor
         {
+            // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+            bool visitsPatternChecks() const override
+            {
+                return true;
+            }
+
             AstLocal* classLocal = nullptr;
             bool found = false;
 
@@ -3143,6 +3161,9 @@ void TypeChecker2::visit(AstExpr* expr, ValueContext context)
         return visit(e);
     else if (auto e = expr->as<AstExprMatch>())
         return visit(e);
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    else if (auto e = expr->as<AstExprMatchPattern>())
+        return visit(e->checked, ValueContext::RValue);
     else if (auto e = expr->as<AstExprTableComprehension>())
         return visit(e);
     else if (auto e = expr->as<AstExprInstantiate>())
@@ -3945,15 +3966,15 @@ void TypeChecker2::visit(AstExprCall* call)
             visit(arg, ValueContext::RValue);
     }
 
-    if (call->fromTypeTest)
-        checkImpossibleTypeTest(call);
+    if (call->fromPattern)
+        checkImpossiblePattern(call);
 
     visitCall(call);
 }
 
-// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a type test's operand for a message. A value `is` read
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern's operand for a message. A value `is` read
 // into a hidden local (`(matched)`, `(destructured)`) has no name a user wrote.
-static std::string typeTestOperandName(std::optional<std::string> name, const char* fallback)
+static std::string patternOperandName(std::optional<std::string> name, const char* fallback)
 {
     if (!name || name->empty() || (*name)[0] == '(')
         return fallback;
@@ -3963,7 +3984,7 @@ static std::string typeTestOperandName(std::optional<std::string> name, const ch
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is C`, where no value of x's type can be a C. The
 // test is always false, so the code it guards never runs. That's reported here once, and the tested local counts as
 // reported (improperlyUsedLocals), so the reads it guards don't add a "'x' is 'never' here" each.
-void TypeChecker2::checkImpossibleTypeTest(AstExprCall* call)
+void TypeChecker2::checkImpossiblePattern(AstExprCall* call)
 {
     AstExprIndexName* callee = call->func->as<AstExprIndexName>();
     if (!callee || callee->index != "isinstance" || call->args.size != 2)
@@ -3977,8 +3998,8 @@ void TypeChecker2::checkImpossibleTypeTest(AstExprCall* call)
     if (!objectTy || normalizer.isIntersectionInhabited(valueTy, *objectTy) != NormalizationResult::False)
         return;
 
-    std::string value = typeTestOperandName(bindingName(call->args.data[0]), "This value");
-    std::string type = typeTestOperandName(bindingName(call->args.data[1]), "this class");
+    std::string value = patternOperandName(bindingName(call->args.data[0]), "This value");
+    std::string type = patternOperandName(bindingName(call->args.data[1]), "this class");
     std::string message = value + " can never be " + type + ": it's '" + toString(valueTy) + "'";
 
     // `x is ok` on a value that isn't a result is usually a call missing its `try`
@@ -4094,6 +4115,12 @@ namespace
 // included: a reassigned one may hold another object when the write runs.
 struct SelfAliasCollector : AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    bool visitsPatternChecks() const override
+    {
+        return true;
+    }
+
     DenseHashSet<const AstLocal*> aliases{nullptr};
     DenseHashSet<const AstLocal*> written{nullptr};
 
@@ -8430,6 +8457,12 @@ std::optional<Location> TypeChecker2::annotationError(AstNode* annotation)
     // The names an annotation refers to without a module prefix
     struct NameFinder : AstVisitor
     {
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+        bool visitsPatternChecks() const override
+        {
+            return true;
+        }
+
         std::vector<AstName> names;
 
         bool visit(AstType*) override

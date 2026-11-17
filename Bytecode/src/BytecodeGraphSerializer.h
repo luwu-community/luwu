@@ -534,6 +534,12 @@ struct BytecodeGraphSerializer
             );
             break;
 
+        case LOP_JUMPXTYPE:
+            recordJump(insn, 2);
+            bcb.emitAD(LOP_JUMPXTYPE, getRegInput(insn, 0), 0);
+            bcb.emitAux(static_cast<uint32_t>(getImmBool(insn, 1)) << 31 | static_cast<uint32_t>(getImmInt(insn, 3)));
+            break;
+
         case LOP_IDIV:
             bcb.emitABC(LOP_IDIV, getRegister(insnOp), getRegInput(insn, 0), getRegInput(insn, 1));
             break;

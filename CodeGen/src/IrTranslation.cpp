@@ -2500,6 +2500,41 @@ void translateInstCmpProto(IrBuilder& build, const Instruction* pc, int pcpos)
         build.beginBlock(next);
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): JUMPXTYPE is a tag compare. `userdata` takes two, since
+// `type()` says "userdata" for light userdata too.
+void translateInstJumpXType(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    uint32_t aux = pc[1];
+    bool not_ = LUAU_INSN_AUX_NOT(aux) != 0;
+
+    IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
+    IrOp next = build.blockAtInst(pcpos + 2);
+    IrOp matched = not_ ? next : target;
+    IrOp unmatched = not_ ? target : next;
+
+    uint8_t type = uint8_t(aux & 0xff);
+    std::optional<uint8_t> tag = tryGetLuauTagForBcType(type, /* ignoreOptionalPart= */ false);
+    CODEGEN_ASSERT(tag);
+
+    IrOp loaded = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    if (type == LBC_TYPE_USERDATA)
+    {
+        IrOp notFullUserdata = build.block(IrBlockKind::Internal);
+        build.inst(IrCmd::JUMP_EQ_TAG, loaded, build.constTag(LUA_TUSERDATA), matched, notFullUserdata);
+        build.beginBlock(notFullUserdata);
+        build.inst(IrCmd::JUMP_EQ_TAG, loaded, build.constTag(LUA_TLIGHTUSERDATA), matched, unmatched);
+    }
+    else
+    {
+        build.inst(IrCmd::JUMP_EQ_TAG, loaded, build.constTag(*tag), matched, unmatched);
+    }
+
+    // Fallthrough in original bytecode is implicit, so we start next internal block here
+    if (build.isInternalBlock(next))
+        build.beginBlock(next);
+}
+
 void translateInstJumpXIsa(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     // Luwu Classes (rfcs/classes): fused class.isinstance(value, class) test-and-branch. Without

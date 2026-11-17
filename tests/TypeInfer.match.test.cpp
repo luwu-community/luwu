@@ -102,9 +102,9 @@ TEST_CASE_FIXTURE(ClassesFixture, "is_and_implements_narrow_like_the_class_libra
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a type test no value can pass is reported once, at the
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern no value can match is reported once, at the
 // test, and the code it guards adds nothing about the tested value being 'never'
-TEST_CASE_FIXTURE(ClassesFixture, "a_type_test_that_never_passes_is_one_error")
+TEST_CASE_FIXTURE(ClassesFixture, "a_pattern_that_never_matches_is_one_error")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuwuMatchExpressions, true},
@@ -347,7 +347,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "implements_needs_a_trait_after_its_bar")
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the class after `is` is a name or a dotted path, and
 // `is integer` tests for an integer
-TEST_CASE_FIXTURE(ClassesFixture, "type_tests_name_their_class_by_path")
+TEST_CASE_FIXTURE(ClassesFixture, "patterns_name_their_class_by_path")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuwuMatchExpressions, true},
@@ -678,8 +678,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_match_statement_without_else_can_fall_thro
     CHECK(toString(result.errors[1]).find("This 'match' has no 'else'") != std::string::npos);
 }
 
-// A guard statement can start with a type test, and narrows after it like the written-out test
-TEST_CASE_FIXTURE(BuiltinsFixture, "a_guard_can_start_with_a_type_test")
+// A guard statement can start with a pattern, and narrows after it like the written-out test
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_guard_can_start_with_a_pattern")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuwuMatchExpressions, true},
@@ -697,7 +697,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_guard_can_start_with_a_type_test")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "typing_a_guard_that_starts_with_a_type_test")
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_a_guard_that_starts_with_a_pattern")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuwuMatchExpressions, true},
@@ -743,7 +743,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "is_with_alternatives_narrows_the_value")
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "a_leave_first_guard_condition_can_be_a_type_test")
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_leave_first_guard_condition_can_be_a_pattern")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuwuMatchExpressions, true},
@@ -761,7 +761,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_leave_first_guard_condition_can_be_a_type_
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "typing_a_leave_first_guard_whose_condition_is_a_type_test")
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_a_leave_first_guard_whose_condition_is_a_pattern")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuwuMatchExpressions, true},

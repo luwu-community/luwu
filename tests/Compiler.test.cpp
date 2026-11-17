@@ -38,6 +38,7 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
@@ -14810,6 +14811,80 @@ print(Greeter)
 
 print(Greeter)
 )", 2));
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the compiler compiles a pattern itself: the value is
+// read once, a tag is one JUMPXTYPE, a class one JUMPXISA (after which fields are constant offsets), and a literal one
+// JUMPXEQK*
+TEST_CASE("PatternsCompileToOneJumpPerAlternative")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+    };
+
+    const char* source = R"(
+class Point(public x: number, public y: number)
+end
+local function f(v: unknown)
+    if v is string then
+        return 1
+    elseif v is Point then
+        return v.x
+    elseif v is 1 | "two" | nil then
+        return 3
+    elseif v is not number | boolean then
+        return 4
+    end
+    return 5
+end
+local function g(v: unknown): boolean
+    return v is userdata
+end
+local function h(v: unknown): boolean
+    return v is integer | buffer
+end
+return f, g, h
+)";
+
+    CHECK_EQ("\n" + compileFunction(source, 0, 2), R"(
+JUMPXTYPE R0 L0 NOT ['string']
+LOADN R1 1
+RETURN R1 1
+L0: GETUPVAL R1 0
+JUMPXISA R0 R1 L1 NOT
+GETOBJECTMEMBER R1 R0 0
+RETURN R1 1
+L1: JUMPXEQKN R0 K1 L2 [1]
+JUMPXEQKS R0 K2 L2 ['two']
+JUMPXEQKNIL R0 L3 NOT
+L2: LOADN R1 3
+RETURN R1 1
+L3: JUMPXTYPE R0 L4 ['number']
+JUMPXTYPE R0 L4 ['boolean']
+LOADN R1 4
+RETURN R1 1
+L4: LOADN R1 5
+RETURN R1 1
+)");
+
+    // one alternative ends like a comparison, which native code fuses into a single compare
+    CHECK_EQ("\n" + compileFunction(source, 1, 2), R"(
+JUMPXTYPE R0 L0 ['userdata']
+LOADB R1 0 +1
+L0: LOADB R1 1
+L1: RETURN R1 1
+)");
+
+    // several don't, since other jumps reach the loads
+    CHECK_EQ("\n" + compileFunction(source, 2, 2), R"(
+JUMPXTYPE R0 L0 ['integer']
+JUMPXTYPE R0 L0 ['buffer']
+LOADB R1 0
+RETURN R1 1
+L0: LOADB R1 1
+RETURN R1 1
+)");
 }
 
 TEST_SUITE_END();

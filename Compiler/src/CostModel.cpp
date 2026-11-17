@@ -256,6 +256,14 @@ struct CostVisitor : AstVisitor
 
             return cost;
         }
+        else if (AstExprMatchPattern* expr = node->as<AstExprMatchPattern>())
+        {
+            // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the value, then a test per alternative
+            Cost cost = expr->value ? model(expr->value) : Cost();
+            for (const AstPatternAlternative& alternative : expr->alternatives)
+                cost += (alternative.operand ? model(alternative.operand) : Cost()) + 1;
+            return cost;
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");

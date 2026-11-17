@@ -1124,6 +1124,19 @@ struct ConstantVisitor : AstVisitor
                 analyze(arm.value);
             }
         }
+        else if (AstExprMatchPattern* expr = node->as<AstExprMatchPattern>())
+        {
+            // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the value and the operands are folded, so a
+            // literal operand is a constant to compare with, and the pattern itself is never a constant
+            if (expr->value)
+                analyze(expr->value);
+
+            for (const AstPatternAlternative& alternative : expr->alternatives)
+            {
+                if (alternative.operand)
+                    analyze(alternative.operand);
+            }
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");

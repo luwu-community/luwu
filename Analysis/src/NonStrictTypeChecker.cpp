@@ -620,6 +620,9 @@ struct NonStrictTypeChecker
             return visit(e);
         else if (auto e = expr->as<AstExprMatch>())
             return visitMatch(e->subject, e->arms);
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+        else if (auto e = expr->as<AstExprMatchPattern>())
+            return visit(e->checked, ValueContext::RValue);
         else if (auto e = expr->as<AstExprTableComprehension>())
             return visit(e);
         else

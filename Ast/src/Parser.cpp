@@ -41,9 +41,7 @@ LUAU_FASTFLAGVARIABLE(LuwuAttributesEverywhere)
 LUAU_FASTFLAGVARIABLE(LuwuIfLocal)
 // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do ... give exp` expressions. Experimental.
 LUAU_FASTFLAGVARIABLE(LuwuDoExpr)
-// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` expressions and the `is` / `is not` /
-// `implements` operators, in Luwu files. In progress; off by default until the design settles.
-LUAU_FASTFLAGVARIABLE(DebugLuwuMatchExpressions)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 
 namespace
 {
@@ -947,9 +945,9 @@ AstStat* Parser::parseStat()
     AstExpr* expr = parsePrimaryExpr(/* asStatement= */ true);
 
     // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `x or return v`, `f() or continue` and the like as statements. An
-    // expression statement is otherwise always a call, so no Luau statement starts like this. A type test counts too:
+    // expression statement is otherwise always a call, so no Luau statement starts like this. A pattern counts too:
     // `r is Ok and return 1`.
-    bool operatorFollows = !expr->is<AstExprError>() && (parseBinaryOp(lexer.current()) || typeTestFollows());
+    bool operatorFollows = !expr->is<AstExprError>() && (parseBinaryOp(lexer.current()) || patternFollows());
     if (operatorFollows)
         return parseOrLeaveStatement(parseBinaryTail(expr, start, 0), errorsBeforeExpr);
 
@@ -6993,13 +6991,13 @@ AstExpr* Parser::parseBinaryTail(AstExpr* expr, const Location& start, unsigned 
         op = checkBinaryConfusables(binaryPriority, limit);
 
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is T` and `x implements T` bind like `==`
-    const unsigned int typeTestPriority = binaryPriority[AstExprBinary::CompareEq].left;
+    const unsigned int patternPriority = binaryPriority[AstExprBinary::CompareEq].left;
 
-    while ((op && binaryPriority[*op].left > limit) || (!op && typeTestPriority > limit && typeTestFollows()))
+    while ((op && binaryPriority[*op].left > limit) || (!op && patternPriority > limit && patternFollows()))
     {
         if (!op)
         {
-            expr = parseTypeTest(expr, start);
+            expr = parseMatchPatternExpr(expr, /* subject= */ nullptr, start);
             op = parseBinaryOp(lexer.current());
             incrementRecursionCounter("expression");
             continue;
@@ -8313,22 +8311,22 @@ static std::optional<std::string> primitiveTagAt(const Lexeme& lexeme)
     return std::nullopt;
 }
 
-// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `is` or `implements`, the keywords that start a type test
-static bool isTypeTestKeyword(const Lexeme& lexeme)
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `is` or `implements`, the keywords that start a pattern
+static bool isPatternKeyword(const Lexeme& lexeme)
 {
     return lexeme.type == Lexeme::Name && (AstName(lexeme.name) == "is" || AstName(lexeme.name) == "implements");
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): only in Luwu files. In a Luau file `x is` and `match x` still parse as upstream
 // (`local a = x is = 1` is two statements there). A Luwu file parses them even with the flag off, so parseMatchExpr and
-// parseTypeTest can say the flag is off instead of the rest of the expression cascading into syntax errors.
+// parseMatchPatternExpr can say the flag is off instead of the rest of the expression cascading into syntax errors.
 bool Parser::matchExpressionsAvailable()
 {
     return options.language == Language::Luwu;
 }
 
 const LuwuFeature kMatchFeature{"'match' expressions", /* plural= */ true, "DebugLuwuMatchExpressions"};
-const LuwuFeature kTypeTestFeature{"'is' and 'implements' type tests", /* plural= */ true, "DebugLuwuMatchExpressions"};
+const LuwuFeature kPatternFeature{"'is' and 'implements' patterns", /* plural= */ true, "DebugLuwuMatchExpressions"};
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): whether a literal a pattern compares with starts here:
 // a string, a number, `true` or `false`
@@ -8342,11 +8340,11 @@ bool Parser::literalPatternFollows()
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `is` or `implements` after an operand, followed by a
 // name, `not`, `function`, `nil` or a literal. Anything else after it (`is = 1`, `is(f)`, `is.x`) is a statement using
-// a variable named `is`, which Luau code may have on the same line, so it's never a type test. Only Luwu files have
-// type tests, so `x is "s"` is one there even though `is "s"` would call a function named `is` in Luau.
-bool Parser::typeTestFollows()
+// a variable named `is`, which Luau code may have on the same line, so it's never a pattern. Only Luwu files have
+// patterns, so `x is "s"` is one there even though `is "s"` would call a function named `is` in Luau.
+bool Parser::patternFollows()
 {
-    if (!matchExpressionsAvailable() || !isTypeTestKeyword(lexer.current()))
+    if (!matchExpressionsAvailable() || !isPatternKeyword(lexer.current()))
         return false;
 
     const Lexeme& next = lexer.lookahead();
@@ -8364,11 +8362,11 @@ AstExprCall* Parser::makeGlobalCall(AstName library, std::optional<AstName> func
         callee = allocator.alloc<AstExprIndexName>(location, callee, *function, location, location.begin, '.');
 
     AstExprCall* call = allocator.alloc<AstExprCall>(location, callee, copy(args), false, AstArray<AstTypeOrPack>{nullptr, 0}, location);
-    call->fromTypeTest = true;
+    call->fromPattern = true;
     return call;
 }
 
-// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `nil`, `none` or `None`, the values a type test or
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `nil`, `none` or `None`, the values a pattern or
 // pattern compares with directly, as itself. `none` is the global, never a local that shadows it. `None` is the global
 // holding `none`, but a local named `None` (a user's `class None`) is a class to test against like any other.
 std::optional<AstExpr*> Parser::parseNothingValue()
@@ -8396,7 +8394,7 @@ std::optional<AstExpr*> Parser::parseNothingValue()
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): points `test`'s reads of `from` at `to` instead.
-// `test` is one the type test parser built, so the value is only ever an operand of a comparison, a call or a `not`.
+// `test` is one the pattern parser built, so the value is only ever an operand of a comparison, a call or a `not`.
 static void retargetTestedValue(AstExpr* test, AstExpr* from, AstExpr* to)
 {
     if (AstExprBinary* binary = test->as<AstExprBinary>())
@@ -8422,11 +8420,13 @@ static void retargetTestedValue(AstExpr* test, AstExpr* from, AstExpr* to)
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the rest of `value is <pattern>`, `value is not <pattern>`
 // or `value implements <traits>`, from the keyword
-AstExpr* Parser::parseTypeTest(AstExpr* value, const Location& start)
+AstExpr* Parser::parseMatchPatternExpr(AstExpr* value, AstLocal* subject, const Location& start)
 {
-    checkLuwuFeature(lexer.current().location, kTypeTestFeature, FFlag::DebugLuwuMatchExpressions);
+    // a `case` arm's pattern is inside a `match`, which already said when the feature is off
+    if (!subject)
+        checkLuwuFeature(lexer.current().location, kPatternFeature, FFlag::DebugLuwuMatchExpressions);
     Pattern pattern = parsePattern();
-    return buildTypeTest(value, pattern, start);
+    return buildMatchPattern(value, subject, pattern, start);
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern from its `is` or `implements`. After `is`
@@ -8436,6 +8436,7 @@ Parser::Pattern Parser::parsePattern()
 {
     Pattern pattern;
     Location start = lexer.current().location;
+    pattern.keywordLocation = start;
     pattern.implements = AstName(lexer.current().name) == "implements";
     nextLexeme(); // is / implements
 
@@ -8468,7 +8469,7 @@ Parser::Pattern Parser::parsePattern()
 bool Parser::patternAlternativeFollows(const char* expected)
 {
     // `case is A | is B` joins two patterns, which the `case` parser does
-    if (lexer.current().type != '|' || isTypeTestKeyword(lexer.lookahead()))
+    if (lexer.current().type != '|' || isPatternKeyword(lexer.lookahead()))
         return false;
 
     nextLexeme(); // |
@@ -8580,10 +8581,47 @@ void Parser::reportPatternTypeArguments()
     report(Location(start, lexer.previousLocation()), "Patterns cannot have generic parameters (types are erased at runtime)");
 }
 
-// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the test of `value` that `pattern` describes
-AstExpr* Parser::buildTypeTest(AstExpr* value, const Pattern& pattern, const Location& start)
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `value` matched against `pattern`, or in a `case` arm
+// (no `value`), the match's `subject`. The node carries what the pattern means as plain code (makePatternCheck) for
+// the type checker, which reads a `case` arm's subject where the arm starts.
+AstExpr* Parser::buildMatchPattern(AstExpr* value, AstLocal* subject, const Pattern& pattern, const Location& start)
 {
-    return makePatternTest(value, pattern, start);
+    AstExpr* matched = value ? value : allocator.alloc<AstExprLocal>(start, subject, /* upvalue= */ false);
+    AstExpr* checked = makePatternCheck(matched, pattern, start);
+
+    Location location(start, pattern.location);
+    AstExprMatchPattern* node = allocator.alloc<AstExprMatchPattern>(
+        location, value, subject, pattern.keywordLocation, pattern.negated, pattern.implements, patternAlternatives(pattern)
+    );
+    node->checked = checked;
+    return node;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `pattern`'s alternatives as the AST stores them
+AstArray<AstPatternAlternative> Parser::patternAlternatives(const Pattern& pattern)
+{
+    std::vector<AstPatternAlternative> alternatives;
+    for (const PatternAlternative& parsed : pattern.alternatives)
+    {
+        AstPatternAlternative alternative;
+        alternative.location = parsed.location;
+        alternative.operand = parsed.operand;
+        if (parsed.tag)
+        {
+            alternative.kind = AstPatternAlternative::Tag;
+            alternative.tag = names.getOrAdd(parsed.tag->c_str());
+        }
+        else if (parsed.isTrait)
+        {
+            alternative.kind = AstPatternAlternative::Trait;
+        }
+        else if (parsed.isClass)
+        {
+            alternative.kind = AstPatternAlternative::Class;
+        }
+        alternatives.push_back(alternative);
+    }
+    return copy(alternatives.data(), alternatives.size());
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the test of `value` that `pattern` describes, without
@@ -8591,7 +8629,7 @@ AstExpr* Parser::buildTypeTest(AstExpr* value, const Pattern& pattern, const Loc
 // that so narrowing and the compiler's fused class checks apply as they do to the written-out tests. `is not` negates
 // each alternative and joins them with `and`. `x implements A | B` is
 // `class.implements(x, A) or class.implements(x, B)`.
-AstExpr* Parser::makePatternTest(AstExpr* value, const Pattern& pattern, const Location& start)
+AstExpr* Parser::makePatternCheck(AstExpr* value, const Pattern& pattern, const Location& start)
 {
     LUAU_ASSERT(!pattern.alternatives.empty());
 
@@ -8631,7 +8669,7 @@ AstExpr* Parser::makePatternTest(AstExpr* value, const Pattern& pattern, const L
     AstStatGive* give = allocator.alloc<AstStatGive>(test->location, test);
     AstExprDo* node = allocator.alloc<AstExprDo>(location, allocator.alloc<AstStatBlock>(location, copy<AstStat*>({declaration, give})));
     node->luwuOnly = true;
-    node->fromTypeTest = true;
+    node->fromPattern = true;
     return node;
 }
 
@@ -8881,8 +8919,14 @@ AstMatchArm Parser::parseMatchArmHead(AstLocal* subject)
 
     LUAU_ASSERT(!chain.empty());
     arm.condition = chain.front().expr;
-    if (chain.size() > 1)
+    // A `case` head's made-up clauses are only skipped by visitors in a chain (AstIfClause::fromPattern)
+    if (chain.size() > 1 || chain.front().fromPattern)
         arm.clauses = copy(chain.data(), chain.size());
+    for (const AstIfClause& clause : chain)
+    {
+        if (clause.local && clause.local->isCaseBinding)
+            arm.binding = clause.local;
+    }
 
     if (lexer.current().type == Lexeme::ReservedThen)
         arm.thenLocation = lexer.current().location;
@@ -9085,7 +9129,7 @@ bool Parser::parseCaseHead(AstLocal* subject, std::vector<AstIfClause>& chain)
     const Lexeme& next = lexer.current();
     Lexeme::Type after = lexer.lookahead().type;
     bool patternWithoutIs = after == '.' || after == '(' || after == '[' || after == ':' || after == '{';
-    bool named = next.type == Lexeme::Name && !isTypeTestKeyword(next) && !patternWithoutIs;
+    bool named = next.type == Lexeme::Name && !isPatternKeyword(next) && !patternWithoutIs;
 
     std::optional<Name> name;
     if (named)
@@ -9098,6 +9142,7 @@ bool Parser::parseCaseHead(AstLocal* subject, std::vector<AstIfClause>& chain)
         {
             AstIfClause rejected;
             rejected.expr = allocator.alloc<AstExprConstantBool>(written.location, true);
+            rejected.fromPattern = true;
             chain.push_back(rejected);
             return true;
         }
@@ -9106,11 +9151,16 @@ bool Parser::parseCaseHead(AstLocal* subject, std::vector<AstIfClause>& chain)
     }
 
     AstIfClause test;
-    bool hasPattern = !name || isTypeTestKeyword(lexer.current());
+    bool hasPattern = !name || isPatternKeyword(lexer.current());
     if (hasPattern)
-        test.expr = parseMatchPattern(subject);
+    {
+        test.expr = parseCasePattern(subject);
+    }
     else
+    {
         test.expr = allocator.alloc<AstExprConstantBool>(name->location, true);
+        test.fromPattern = true;
+    }
     chain.push_back(test);
 
     if (!name)
@@ -9129,6 +9179,7 @@ bool Parser::parseCaseHead(AstLocal* subject, std::vector<AstIfClause>& chain)
     clause.local = local;
     clause.expr = value;
     clause.tested = false;
+    clause.fromPattern = true;
     chain.push_back(clause);
 
     return hasPattern;
@@ -9167,30 +9218,28 @@ bool Parser::checkCaseBindingName(const Name& name)
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `case` pattern after `is`, alternatives joined by `|`,
 // as a test of the subject
-AstExpr* Parser::parseMatchPattern(AstLocal* subject)
+AstExpr* Parser::parseCasePattern(AstLocal* subject)
 {
     // a pattern written without `is` gets one error, however many alternatives it has
     size_t errorsBefore = parseErrors.size();
-    AstExpr* test = parseMatchAlternative(subject, /* reportMissingIs= */ true);
+    AstExpr* test = parseCaseAlternative(subject, /* reportMissingIs= */ true);
     while (lexer.current().type == '|')
     {
         nextLexeme();
-        AstExpr* next = parseMatchAlternative(subject, parseErrors.size() == errorsBefore);
+        AstExpr* next = parseCaseAlternative(subject, parseErrors.size() == errorsBefore);
         test = allocator.alloc<AstExprBinary>(Location(test->location, next->location), AstExprBinary::Or, test, next);
     }
 
     return test;
 }
 
-// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): one alternative of a `case` pattern, a type test.
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): one alternative of a `case` pattern.
 // Anything else is a pattern written without its `is`.
-AstExpr* Parser::parseMatchAlternative(AstLocal* subject, bool reportMissingIs)
+AstExpr* Parser::parseCaseAlternative(AstLocal* subject, bool reportMissingIs)
 {
     Location start = lexer.current().location;
-    AstExpr* subjectValue = allocator.alloc<AstExprLocal>(start, subject, false);
-
-    if (isTypeTestKeyword(lexer.current()))
-        return parseTypeTest(subjectValue, start);
+    if (isPatternKeyword(lexer.current()))
+        return parseMatchPatternExpr(/* value= */ nullptr, subject, start);
 
     // still parsed, so the arm after it is too
     AstExpr* bad = parseExpr(binaryPriority[AstExprBinary::CompareEq].right);

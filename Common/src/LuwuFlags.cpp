@@ -14,3 +14,7 @@ LUAU_FASTFLAGVARIABLE(LuwuTraits)
 // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): `{ for ... in ... when ... give item }` (in progress). While it
 // is on, the compiler emits WIP bytecode (version 200), which has LOP_PRESIZETABLE.
 LUAU_FASTFLAGVARIABLE(LuwuTableComprehensions)
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` and the `is` and `implements` patterns (in
+// progress). While it is on, the compiler emits WIP bytecode (version 200), which has LOP_JUMPXTYPE.
+LUAU_FASTFLAGVARIABLE(DebugLuwuMatchExpressions)

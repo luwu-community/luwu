@@ -1591,6 +1591,7 @@ static void analyzeBytecodeTypesPass(
             case LOP_NEWCLASSMEMBER:
             case LOP_CHECKSELFCLASS:
             case LOP_JUMPXISA:
+            case LOP_JUMPXTYPE:
             case LOP_SETOBJECTMEMBER:
             case LOP_PRESIZETABLE:
                 break;

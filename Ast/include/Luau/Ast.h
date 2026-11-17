@@ -592,9 +592,9 @@ public:
     AstArray<AstExpr*> args;
     bool self;
     Location argLocation;
-    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a call the parser wrote for a type test (`x is Point`
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a call the parser wrote for a pattern (`x is Point`
     // is `class.isinstance(x, Point)`), not one in the code. Editor features that show a call's parameters skip it.
-    bool fromTypeTest = false;
+    bool fromPattern = false;
 };
 
 class AstExprIndexName : public AstExpr
@@ -808,8 +808,13 @@ struct AstIfClause
     // The `when` before this clause. Unset on the first clause.
     std::optional<Location> whenLocation;
     // False for a binding that holds its value whatever it is, with no truthiness test: a field a pattern binds after
-    // a type test (`x is Point {x, y}`), which has to bind even when the field is `false`.
+    // a pattern (`x is Point {x, y}`), which has to bind even when the field is `false`.
     bool tested = true;
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): made by a pattern rather than written: a hidden local
+    // holding the matched value, a name the pattern binds, or a `case` arm's name. The type checker and the compiler see
+    // it like any clause. An AstVisitor skips it unless it asks for it (visitsPatternClauses): the AstExprMatchPattern or
+    // AstMatchArm holds what was written.
+    bool fromPattern = false;
 };
 
 class AstExprIfElse : public AstExpr
@@ -1893,8 +1898,8 @@ public:
     bool shorthand = false;
 
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): made by `x is A | B` to read a value that isn't a
-    // local once (see Parser::makePatternTest). The body is that value's hidden `local` and a `give` of the test.
-    bool fromTypeTest = false;
+    // local once (see Parser::makePatternCheck). The body is that value's hidden `local` and a `give` of the test.
+    bool fromPattern = false;
 
     // Does every path leave it with `return`, `break` or `continue`, so it never has a value? True for the shorthand,
     // and for a `do` expression with no `give` of its own.
@@ -1903,6 +1908,69 @@ public:
     // The `give`s that give this expression's value, the shorthand's included: not those of a nested `do` expression
     // or function
     std::vector<class AstStatGive*> gives() const;
+};
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): one alternative of a pattern, the alternatives joined by
+// `|` after `is` or `implements`
+struct AstPatternAlternative
+{
+    enum Kind
+    {
+        // `nil`, `none` or a literal, compared with `==`
+        Value,
+        // A primitive tag (`string`, `integer`, `object`): what `type()` gives
+        Tag,
+        // A class, as a name or a dotted path: the value is an instance of it
+        Class,
+        // A trait after `implements`: the value's class implements it
+        Trait,
+    };
+
+    Kind kind = Value;
+    Location location;
+    // The literal, `nil` or `none` for a Value, the class or trait as written for a Class or Trait, null for a Tag
+    AstExpr* operand = nullptr;
+    // A Tag's name
+    AstName tag;
+};
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `value is <pattern>`, `value is not <pattern>` or
+// `value implements <traits>`. A `case` arm's pattern has no value: it matches the `match`'s subject.
+class AstExprMatchPattern : public AstExpr
+{
+public:
+    LUAU_RTTI(AstExprMatchPattern)
+
+    AstExprMatchPattern(
+        const Location& location,
+        AstExpr* value,
+        AstLocal* subject,
+        const Location& keywordLocation,
+        bool negated,
+        bool implements,
+        const AstArray<AstPatternAlternative>& alternatives
+    );
+
+    // The value and each alternative's operand, or `checked` for a visitor that asks for it (visitsPatternChecks)
+    void visit(AstVisitor* visitor) override;
+
+    // The matched value as written, or null in a `case` arm
+    AstExpr* value;
+    // The `match` subject a `case` arm's pattern matches, or null outside one
+    AstLocal* subject;
+    // The `is` or `implements`
+    Location keywordLocation;
+    // `is not`
+    bool negated;
+    // `implements`: every alternative is a Trait
+    bool implements;
+    AstArray<AstPatternAlternative> alternatives;
+
+    // What the pattern means as plain code, which the type checker checks: `x is 1 | string` is
+    // `x == 1 or type(x) == "string"`, and `x is Point` is `class.isinstance(x, Point)`. The value is read in it once for
+    // each alternative, and those reads aren't in the source, so only the type checker's visitors visit it
+    // (AstVisitor::visitsPatternChecks).
+    AstExpr* checked = nullptr;
 };
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the value a `match` tests, from its header
@@ -1940,6 +2008,9 @@ struct AstMatchArm
     std::optional<Location> thenLocation;
     // `case name` with no pattern and no `when`, which matches every value like `else`
     bool catchAll = false;
+    // The name in `case name ...`, which holds the subject for the arm, or null. Its declaration is a clause that
+    // AstVisitor skips (AstIfClause::fromPattern).
+    AstLocal* binding = nullptr;
     // The arm's value in an AstExprMatch, null in an AstStatMatch
     AstExpr* value = nullptr;
     // The arm's block in an AstStatMatch, null in an AstExprMatch
@@ -2157,6 +2228,22 @@ class AstVisitor
 public:
     virtual ~AstVisitor() {}
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): does this visitor visit what a pattern means as plain
+    // code (AstExprMatchPattern::checked) instead of the pattern as written? The type checker's passes do, since that's
+    // what they check. Tools that work on the source and the compiler, which compiles the pattern itself, don't.
+    virtual bool visitsPatternChecks() const
+    {
+        return false;
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): does this visitor visit the clauses a pattern makes
+    // (AstIfClause::fromPattern)? Tools that work on the source don't. The type checker's passes and the compiler's
+    // analyses of locals do, so every local they see has its declaration.
+    virtual bool visitsPatternClauses() const
+    {
+        return visitsPatternChecks();
+    }
+
     virtual bool visit(class AstNode*)
     {
         return true;
@@ -2268,6 +2355,10 @@ public:
         return visit(static_cast<AstExpr*>(node));
     }
     virtual bool visit(class AstExprMatch* node)
+    {
+        return visit(static_cast<AstExpr*>(node));
+    }
+    virtual bool visit(class AstExprMatchPattern* node)
     {
         return visit(static_cast<AstExpr*>(node));
     }

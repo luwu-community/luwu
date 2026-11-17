@@ -180,6 +180,10 @@ static const AstExprDo* findAlwaysLeavingDo(const AstExpr* expr)
     if (const AstExprMatch* match = expr->as<AstExprMatch>())
         return findAlwaysLeavingDo(match->subject.value);
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): only the matched value can leave
+    if (const AstExprMatchPattern* pattern = expr->as<AstExprMatchPattern>())
+        return pattern->value ? findAlwaysLeavingDo(pattern->value) : nullptr;
+
     if (const AstExprIndexName* index = expr->as<AstExprIndexName>())
         return findAlwaysLeavingDo(index->expr);
 
@@ -2201,6 +2205,9 @@ WithPredicate<TypeId> TypeChecker::checkExpr(const ScopePtr& scope, const AstExp
         checkMatch(scope, a->location, a->subject, a->arms);
         result = WithPredicate{anyType};
     }
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    else if (auto a = expr.as<AstExprMatchPattern>())
+        result = checkExpr(scope, *a->checked);
     else if (auto a = expr.as<AstExprTableComprehension>())
         result = checkExpr(scope, *a);
     else if (auto a = expr.as<AstExprInterpString>())

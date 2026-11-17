@@ -76,6 +76,12 @@ static bool isTraitRecord(const ClassDeclRecord* record)
 // Luwu Traits (rfcs/classes/traits.md): finds a `Self` in the annotations it visits
 struct NamesSelf : AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    bool visitsPatternChecks() const override
+    {
+        return true;
+    }
+
     bool found = false;
 
     bool visit(AstType* ty) override
@@ -378,6 +384,12 @@ bool hasFreeType(TypeId ty)
 
 struct GlobalNameCollector : public AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    bool visitsPatternChecks() const override
+    {
+        return true;
+    }
+
     DenseHashSet<AstName> names;
 
     GlobalNameCollector()
@@ -398,6 +410,12 @@ struct GlobalNameCollector : public AstVisitor
 // with its result.
 struct TypeFunctionEnvGlobalBinder : AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    bool visitsPatternChecks() const override
+    {
+        return true;
+    }
+
     NotNull<Scope> environmentScope;
     NotNull<const DataFlowGraph> dfg;
     // The type function whose body is being visited, and whether the visit is inside one of its `for ... in` headers.
@@ -5728,6 +5746,9 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
         result = check(scope, doExpr, expectedType);
     else if (auto match = expr->as<AstExprMatch>())
         result = check(scope, match, expectedType);
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    else if (auto pattern = expr->as<AstExprMatchPattern>())
+        result = check(scope, pattern->checked);
     else if (auto comprehension = expr->as<AstExprTableComprehension>())
         result = check(scope, comprehension, expectedType);
     else if (auto typeAssert = expr->as<AstExprTypeAssertion>())
@@ -8114,6 +8135,12 @@ TypeId ConstraintGenerator::makeIntersect(const ScopePtr& scope, Location locati
 
 struct GlobalPrepopulator : AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    bool visitsPatternChecks() const override
+    {
+        return true;
+    }
+
     const NotNull<Scope> globalScope;
     const NotNull<TypeArena> arena;
     const NotNull<const DataFlowGraph> dfg;

@@ -31,7 +31,7 @@ Dispatching on a value's type in Luau means `typeof(x) == "string"` or `class.is
 needs on separate lines. Choosing a value from several cases means a local assigned in every branch of an `if` chain, or a lookup table that can't
 hold conditions.
 
-Type tests written as operators read like what they check, and a test that binds the fields it needs keeps the binding next to the check that makes
+Patterns written as operators read like what they check, and a pattern that binds the fields it needs keeps the binding next to the check that makes
 it safe.
 
 ## Design
@@ -190,8 +190,8 @@ end
 and a binding's test narrows the binding the way a test of a local does. A bundle pattern narrows the value to the bundles of its size, so on
 `.(A, B) | .(C, D, E)` the `a` of `.(a, b)` is `A`; a pattern of more than six values, or one with `..`, narrows to every bundle. A name that
 alternatives bind gets the union of the types they give it, and is optional when an alternative doesn't bind it: in
-`Cat(name, lives) | Dog(name)`, `name` is a `string` and `lives` a `number?`. A type test that no value of the tested type can pass is a type
-error at the test.
+`Cat(name, lives) | Dog(name)`, `name` is a `string` and `lives` a `number?`. A pattern that no value of the matched type can match is a type
+error at the pattern.
 
 ### Editor support
 
@@ -202,7 +202,7 @@ A tag after `is` or `is not` colors as part of the keyword, and in `is Cat(name)
 
 The operators and `match` are Luwu-only and parse only in Luwu files. In Luau files, `local a = x is = 1` and `local a = match b = 1` keep their
 Luau meaning. In Luwu files `is`, `implements`, `case` and `match` stay valid names wherever the operator reading can't apply: `match` is a match
-expression only when a `case` or `when` arm follows its subject, and `is` starts a type test only before a name, `not`, a literal or
+expression only when a `case` or `when` arm follows its subject, and `is` starts a pattern only before a name, `not`, a literal or
 `function`. A statement that starts with `match` followed on the same line by anything but an assignment, an index or call arguments
 is a `match` statement.
 
@@ -227,7 +227,7 @@ A pattern whose alternatives bind names tests the alternatives again for each na
   where `Cat(name)` can't be a call. Bundle patterns keep it because `.(a, b)` is how a bundle is written everywhere.
 - **Binding a bare name that's already taken** (Python's `case FOO:`) silently shadows `FOO`. A `case` name binds, and the names that are
   always meant as tests are errors.
-- **`:` as a runtime type test** in patterns was rejected. `:` is a static, erased annotation everywhere else.
+- **`:` as a runtime check** in patterns was rejected. `:` is a static, erased annotation everywhere else.
 - **An optional `else`** when the type checker proves the arms exhaustive is open. Requiring `else` keeps nested matches safe.
 
 ## Future work

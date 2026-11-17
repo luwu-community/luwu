@@ -3,6 +3,7 @@
 
 #include "Luau/Ast.h"
 #include "Luau/BytecodeBuilder.h"
+#include "Luau/BytecodeUtils.h"
 #include "Luau/Common.h"
 #include "Luau/Parser.h"
 #include "Luau/InsertionOrderedMap.h"
@@ -5157,6 +5158,223 @@ struct Compiler
         return true;
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the LBC_TYPE_* JUMPXTYPE tests for `is <tag>`, or
+    // nothing when only `type()` can tell (`class` and `trait`, which share a VM tag)
+    static std::optional<uint8_t> jumpxTypeFor(AstName tag)
+    {
+        for (uint8_t type = LBC_TYPE_NIL; type < LBC_TYPE_ANY; ++type)
+        {
+            if (const char* name = getJumpxTypeName(type); name && tag == name)
+                return type;
+        }
+        return std::nullopt;
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): jumps added to `jumps` that are taken when `pattern`
+    // matches (or with `whenMatched` false, when it doesn't), falling through otherwise. The value is read into a
+    // register once, and each alternative is one test-and-jump on it.
+    void compilePatternJumps(AstExprMatchPattern* pattern, std::vector<size_t>& jumps, bool whenMatched)
+    {
+        RegScope rs(this);
+        uint8_t value = compilePatternValue(pattern, rs);
+
+        const AstArray<AstPatternAlternative>& alternatives = pattern->alternatives;
+        LUAU_ASSERT(alternatives.size > 0);
+
+        // `is not` matches when no alternative does
+        if (whenMatched != pattern->negated)
+        {
+            for (const AstPatternAlternative& alternative : alternatives)
+                compileAlternativeJump(pattern, value, alternative, /* whenMatched= */ true, jumps);
+            return;
+        }
+
+        // Jumping when no alternative matches: one that matches skips the jump
+        std::vector<size_t> matched;
+        for (size_t i = 0; i + 1 < alternatives.size; ++i)
+            compileAlternativeJump(pattern, value, alternatives.data[i], /* whenMatched= */ true, matched);
+        compileAlternativeJump(pattern, value, alternatives.data[alternatives.size - 1], /* whenMatched= */ false, jumps);
+        patchJumps(pattern, matched, bytecode.emitLabel());
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the register holding the value `pattern` matches.
+    // A `case` arm's is the `match` subject's, which is in this frame's registers unless it's an upvalue.
+    uint8_t compilePatternValue(AstExprMatchPattern* pattern, RegScope& rs)
+    {
+        if (pattern->value)
+            return compileExprAuto(pattern->value, rs);
+
+        if (int reg = getLocalReg(pattern->subject); reg >= 0)
+            return uint8_t(reg);
+
+        AstExprLocal subject(pattern->location, pattern->subject, /* upvalue= */ true);
+        return compileExprAuto(&subject, rs);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a jump added to `jumps` that's taken when `value`
+    // matches `alternative` (or with `whenMatched` false, when it doesn't)
+    void compileAlternativeJump(
+        AstExprMatchPattern* pattern,
+        uint8_t value,
+        const AstPatternAlternative& alternative,
+        bool whenMatched,
+        std::vector<size_t>& jumps
+    )
+    {
+        RegScope rs(this);
+        setDebugLine(alternative.location);
+        uint32_t notFlag = whenMatched ? 0 : 0x80000000;
+
+        switch (alternative.kind)
+        {
+        case AstPatternAlternative::Class:
+        {
+            if (!FFlag::LuwuClasses)
+            {
+                uint8_t result = compileLibraryCall(nameClass(), names.getOrAdd("isinstance"), value, alternative.operand, pattern, rs);
+                jumps.push_back(bytecode.emitLabel());
+                bytecode.emitAD(whenMatched ? LOP_JUMPIF : LOP_JUMPIFNOT, result, 0);
+                return;
+            }
+
+            uint8_t classReg = compileExprAuto(alternative.operand, rs);
+            bool classIsKnown = isClassBoundAt(alternative.operand);
+            jumps.push_back(bytecode.emitLabel());
+            bytecode.emitAD(LOP_JUMPXISA, value, 0);
+            bytecode.emitAux(uint32_t(classReg) | (whenMatched ? LBC_JUMPXISA_JUMPIFINSTANCE : 0u) | (classIsKnown ? 0u : LBC_JUMPXISA_CHECKCLASS));
+            return;
+        }
+
+        case AstPatternAlternative::Trait:
+        {
+            uint8_t result = compileLibraryCall(nameClass(), names.getOrAdd("implements"), value, alternative.operand, pattern, rs);
+            jumps.push_back(bytecode.emitLabel());
+            bytecode.emitAD(whenMatched ? LOP_JUMPIF : LOP_JUMPIFNOT, result, 0);
+            return;
+        }
+
+        case AstPatternAlternative::Tag:
+        {
+            if (std::optional<uint8_t> type = jumpxTypeFor(alternative.tag))
+            {
+                jumps.push_back(bytecode.emitLabel());
+                bytecode.emitAD(LOP_JUMPXTYPE, value, 0);
+                bytecode.emitAux(*type | notFlag);
+                return;
+            }
+
+            // `class` and `trait`: the name `type()` gives
+            uint8_t name = compileLibraryCall(names.getOrAdd("type"), std::nullopt, value, nullptr, pattern, rs);
+            int32_t cid = bytecode.addConstantString(sref(alternative.tag));
+            if (cid < 0)
+                CompileError::raise(alternative.location, "Exceeded constant limit; simplify the code to compile");
+
+            jumps.push_back(bytecode.emitLabel());
+            bytecode.emitAD(LOP_JUMPXEQKS, name, 0);
+            bytecode.emitAux(uint32_t(cid) | notFlag);
+            return;
+        }
+
+        case AstPatternAlternative::Value:
+        {
+            if (const Constant* cv = constants.find(alternative.operand); cv && cv->type != Constant::Type_Unknown)
+            {
+                compileConstantEqualityJump(value, alternative.operand, *cv, notFlag, jumps);
+                return;
+            }
+
+            // `none`, which is a global
+            uint8_t operand = compileExprAuto(alternative.operand, rs);
+            jumps.push_back(bytecode.emitLabel());
+            bytecode.emitAD(whenMatched ? LOP_JUMPIFEQ : LOP_JUMPIFNOTEQ, value, 0);
+            bytecode.emitAux(operand);
+            return;
+        }
+        }
+    }
+
+    // Luwu: the JUMPXEQK* that compares a register with the constant `operand` folds to, and its aux constant
+    std::pair<LuauOpcode, int32_t> getConstantEqualityJump(AstExpr* operand, const Constant& cv)
+    {
+        LuauOpcode opc = LOP_NOP;
+        int32_t cid = -1;
+        switch (cv.type)
+        {
+        case Constant::Type_Nil:
+            opc = LOP_JUMPXEQKNIL;
+            cid = 0;
+            break;
+        case Constant::Type_Boolean:
+            opc = LOP_JUMPXEQKB;
+            cid = cv.valueBoolean;
+            break;
+        case Constant::Type_Number:
+            opc = LOP_JUMPXEQKN;
+            cid = getConstantIndex(operand);
+            break;
+        case Constant::Type_String:
+            opc = LOP_JUMPXEQKS;
+            cid = getConstantIndex(operand);
+            break;
+        default:
+            LUAU_ASSERT(!"Unexpected constant type");
+        }
+
+        if (cid < 0)
+            CompileError::raise(operand->location, "Exceeded constant limit; simplify the code to compile");
+        return {opc, cid};
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a JUMPXEQK* that compares `value` with the constant
+    // `operand` folds to. `notFlag` jumps when they differ.
+    void compileConstantEqualityJump(uint8_t value, AstExpr* operand, const Constant& cv, uint32_t notFlag, std::vector<size_t>& jumps)
+    {
+        auto [opc, cid] = getConstantEqualityJump(operand, cv);
+        jumps.push_back(bytecode.emitLabel());
+        bytecode.emitAD(opc, value, 0);
+        bytecode.emitAux(uint32_t(cid) | notFlag);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `library.function(value, argument)`, or
+    // `library(value)` with no function, on the global `library` even where a local shadows it, for the code at `site`.
+    // Gives the register holding its first result.
+    uint8_t compileLibraryCall(
+        AstName library,
+        std::optional<AstName> function,
+        uint8_t value,
+        AstExpr* argument,
+        AstNode* site,
+        RegScope& rs
+    )
+    {
+        unsigned argumentCount = argument ? 2 : 1;
+        uint8_t base = allocReg(site, 1 + argumentCount);
+        const Location& location = site->location;
+
+        AstExprGlobal global(location, library);
+        if (function)
+        {
+            AstExprIndexName callee(location, &global, *function, location, location.begin, '.');
+            compileExprTemp(&callee, base);
+        }
+        else
+        {
+            compileExprTemp(&global, base);
+        }
+
+        bytecode.emitABC(LOP_MOVE, uint8_t(base + 1), value, 0);
+        if (argument)
+            compileExprTemp(argument, uint8_t(base + 2));
+
+        bytecode.emitABC(LOP_CALL, base, uint8_t(argumentCount + 1), 2);
+        return base;
+    }
+
+    AstName nameClass()
+    {
+        return names.getOrAdd("class");
+    }
+
     // Luwu Classes (rfcs/classes): does `region` write `local`, as AssignmentVisitor defines a write?
     // Used to bound a `class.isinstance` proof to a region no same-frame write can cross (see
     // matchIsinstanceProvenLocal). Writes from a nested function can run whenever that function is called,
@@ -5240,6 +5458,10 @@ struct Compiler
         while (AstExprGroup* group = expr->as<AstExprGroup>())
             expr = group->expr;
 
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `c is C` proves what `class.isinstance(c, C)` does
+        if (AstExprMatchPattern* pattern = expr->as<AstExprMatchPattern>())
+            return matchClassPattern(pattern, local);
+
         AstExprCall* call = expr->as<AstExprCall>();
         if (!call || call->args.size != 2)
             return nullptr;
@@ -5256,6 +5478,45 @@ struct Compiler
         if (!isFrameLocal(le))
             return nullptr;
 
+        return provableClass(le->local, call->args.data[1], local);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the class `pattern` tests a local against, when it's
+    // exactly `c is C` for a local of this frame and a class declared in this module. In a `case` arm the local is the
+    // `match`'s subject.
+    AstStatClass* matchClassPattern(AstExprMatchPattern* pattern, AstLocal*& local)
+    {
+        if (pattern->negated || pattern->alternatives.size != 1)
+            return nullptr;
+
+        const AstPatternAlternative& alternative = pattern->alternatives.data[0];
+        if (alternative.kind != AstPatternAlternative::Class || !isKnownClassExpr(alternative.operand))
+            return nullptr;
+
+        AstLocal* tested = pattern->subject;
+        if (pattern->value)
+        {
+            AstExpr* value = pattern->value;
+            while (AstExprGroup* group = value->as<AstExprGroup>())
+                value = group->expr;
+
+            AstExprLocal* le = value->as<AstExprLocal>();
+            if (!isFrameLocal(le))
+                return nullptr;
+            tested = le->local;
+        }
+        else if (getLocalReg(tested) < 0)
+        {
+            return nullptr;
+        }
+
+        return provableClass(tested, alternative.operand, local);
+    }
+
+    // Luwu Classes (rfcs/classes): the class `classExpr` names, as what a check proves `tested` to be, unless a function
+    // nested in this one can write `tested`
+    AstStatClass* provableClass(AstLocal* tested, AstExpr* classExpr, AstLocal*& local)
+    {
         // A write from a function nested inside this one runs whenever that closure is called. No region
         // of this function excludes it, so no proof about this local can stand.
         //
@@ -5265,10 +5526,9 @@ struct Compiler
         // Getting this wrong is not a missed optimization: the inline site skips CHECKSELFCLASS for a
         // proven receiver, so a stale proof would read constant field offsets off whatever the local now
         // holds.
-        if (Variable* v = variables.find(le->local); v && v->writtenByNestedFunction)
+        if (Variable* v = variables.find(tested); v && v->writtenByNestedFunction)
             return nullptr;
 
-        AstExpr* classExpr = call->args.data[1];
         while (AstExprGroup* group = classExpr->as<AstExprGroup>())
             classExpr = group->expr;
 
@@ -5276,7 +5536,7 @@ struct Compiler
         if (!decl)
             return nullptr;
 
-        local = le->local;
+        local = tested;
         return *decl;
     }
 
@@ -5382,38 +5642,8 @@ struct Compiler
             const Constant* cv = constants.find(right);
             LUAU_ASSERT(cv && cv->type != Constant::Type_Unknown);
 
-            LuauOpcode opc = LOP_NOP;
-            int32_t cid = -1;
             uint32_t flip = (expr->op == AstExprBinary::CompareEq) == not_ ? 0x80000000 : 0;
-
-            switch (cv->type)
-            {
-            case Constant::Type_Nil:
-                opc = LOP_JUMPXEQKNIL;
-                cid = 0;
-                break;
-
-            case Constant::Type_Boolean:
-                opc = LOP_JUMPXEQKB;
-                cid = cv->valueBoolean;
-                break;
-
-            case Constant::Type_Number:
-                opc = LOP_JUMPXEQKN;
-                cid = getConstantIndex(right);
-                break;
-
-            case Constant::Type_String:
-                opc = LOP_JUMPXEQKS;
-                cid = getConstantIndex(right);
-                break;
-
-            default:
-                LUAU_ASSERT(!"Unexpected constant type");
-            }
-
-            if (cid < 0)
-                CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+            auto [opc, cid] = getConstantEqualityJump(right, *cv);
 
             size_t jumpLabel = bytecode.emitLabel();
 
@@ -5648,6 +5878,15 @@ struct Compiler
                 return;
         }
 
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is a test-and-jump per alternative
+        if (AstExprMatchPattern* pattern = node->as<AstExprMatchPattern>())
+        {
+            if (target)
+                bytecode.emitABC(LOP_LOADB, *target, onlyTruth ? 1 : 0, 0);
+            compilePatternJumps(pattern, skipJump, onlyTruth);
+            return;
+        }
+
         if (AstExprGroup* expr = node->as<AstExprGroup>())
         {
             compileConditionValue(expr->expr, target, skipJump, onlyTruth);
@@ -5677,6 +5916,9 @@ struct Compiler
         const Constant* cv = constants.find(node);
 
         if (cv && cv->type != Constant::Type_Unknown)
+            return true;
+
+        if (node->is<AstExprMatchPattern>())
             return true;
 
         if (AstExprBinary* expr = node->as<AstExprBinary>())
@@ -6128,6 +6370,33 @@ struct Compiler
         size_t elseLabel = bytecode.emitLabel();
         emitClauseFailureClose(closeReg);
         patchJumps(match, elseJump, elseLabel);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern's result as a boolean in `target`. One
+    // alternative ends like a comparison (`LOADB 0 +1`, then `LOADB 1`), which native code turns into a single compare.
+    // That shortcut assumes only the jump right before the two loads reaches them, so with several alternatives the
+    // false result jumps over the true one instead.
+    void compileExprMatchPattern(AstExprMatchPattern* expr, uint8_t target)
+    {
+        std::vector<size_t> matched;
+        compilePatternJumps(expr, matched, /* whenMatched= */ true);
+
+        std::vector<size_t> done;
+        if (expr->alternatives.size == 1)
+        {
+            bytecode.emitABC(LOP_LOADB, target, 0, 1);
+        }
+        else
+        {
+            bytecode.emitABC(LOP_LOADB, target, 0, 0);
+            done.push_back(bytecode.emitLabel());
+            bytecode.emitAD(LOP_JUMP, 0, 0);
+        }
+
+        size_t matchedLabel = bytecode.emitLabel();
+        bytecode.emitABC(LOP_LOADB, target, 1, 0);
+        patchJumps(expr, matched, matchedLabel);
+        patchJumps(expr, done, bytecode.emitLabel());
     }
 
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the subject, then the arms as an if-else chain whose
@@ -7462,6 +7731,10 @@ struct Compiler
         else if (AstExprMatch* expr = node->as<AstExprMatch>())
         {
             compileExprMatch(expr, target, targetTemp);
+        }
+        else if (AstExprMatchPattern* expr = node->as<AstExprMatchPattern>())
+        {
+            compileExprMatchPattern(expr, target);
         }
         else if (AstExprTableComprehension* expr = node->as<AstExprTableComprehension>())
         {

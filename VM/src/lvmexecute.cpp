@@ -143,7 +143,8 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
-        VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_GETQUALIFIED),
+        VM_DISPATCH_OP(LOP_PRESIZETABLE), VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_GETQUALIFIED), \
+        VM_DISPATCH_OP(LOP_JUMPXTYPE),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -232,6 +233,40 @@ LUAU_NOINLINE void luau_callhook(lua_State* L, lua_Hook hook, void* userdata)
 inline bool luau_skipstep(uint8_t op)
 {
     return op == LOP_PREPVARARGS || op == LOP_BREAK;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): does `type(v)` give the name of `type`, an LBC_TYPE_*
+// that JUMPXTYPE tests?
+static LUAU_FORCEINLINE bool hasbytecodetype(const TValue* v, uint32_t type)
+{
+    switch (type)
+    {
+    case LBC_TYPE_BOOLEAN:
+        return ttisboolean(v);
+    case LBC_TYPE_NUMBER:
+        return ttisnumber(v);
+    case LBC_TYPE_INTEGER:
+        return ttisinteger(v);
+    case LBC_TYPE_STRING:
+        return ttisstring(v);
+    case LBC_TYPE_TABLE:
+        return ttistable(v);
+    case LBC_TYPE_FUNCTION:
+        return ttisfunction(v);
+    case LBC_TYPE_THREAD:
+        return ttisthread(v);
+    case LBC_TYPE_USERDATA:
+        return ttisuserdata(v) || ttislightuserdata(v);
+    case LBC_TYPE_VECTOR:
+        return ttisvector(v);
+    case LBC_TYPE_BUFFER:
+        return ttisbuffer(v);
+    case LBC_TYPE_OBJECT:
+        return ttisobject(v);
+    default:
+        LUAU_ASSERT(!"JUMPXTYPE can't test this type");
+        return false;
+    }
 }
 
 static LUAU_NOINLINE void luau_setupcci(lua_State* L, int nresults, StkId fun)
@@ -4154,6 +4189,19 @@ reentry:
                 bool jumpIfInstance = (aux & LBC_JUMPXISA_JUMPIFINSTANCE) != 0;
 
                 pc += isInstance == jumpIfInstance ? LUAU_INSN_D(insn) : 1;
+                VM_ASSERT_PC(pc);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_JUMPXTYPE)
+            {
+                // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is string` without calling type()
+                Instruction insn = *pc++;
+                uint32_t aux = *pc;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+
+                bool matches = hasbytecodetype(ra, aux & 0xff);
+                pc += matches != (LUAU_INSN_AUX_NOT(aux) != 0) ? LUAU_INSN_D(insn) : 1;
                 VM_ASSERT_PC(pc);
                 VM_NEXT();
             }

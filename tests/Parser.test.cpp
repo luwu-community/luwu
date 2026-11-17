@@ -8930,7 +8930,7 @@ TEST_CASE_FIXTURE(Fixture, "match_without_the_flag_says_how_to_enable_it")
         R"(
 local function which(arg: string)
     return match const a = arg
-        case "p" | "patch" then "patch"
+        case is "p" | "patch" then "patch"
         else `other:{a}`
 end
 local is_string = x is string
@@ -8941,7 +8941,7 @@ local is_string = x is string
     REQUIRE_EQ(result.errors.size(), 2);
     CHECK_EQ(
         result.errors[1].getMessage(),
-        "attempt to use disabled Luwu feature 'is' and 'implements' type tests; enable via FFlag 'DebugLuwuMatchExpressions'"
+        "attempt to use disabled Luwu feature 'is' and 'implements' patterns; enable via FFlag 'DebugLuwuMatchExpressions'"
     );
 }
 
@@ -8961,19 +8961,21 @@ local b = x is None
 
     AstStatLocal* global = block->body.data[0]->as<AstStatLocal>();
     REQUIRE(global);
-    AstExprBinary* compare = global->values.data[0]->as<AstExprBinary>();
-    REQUIRE(compare);
-    CHECK_EQ(compare->op, AstExprBinary::CompareEq);
-    AstExprGlobal* none = compare->right->as<AstExprGlobal>();
+    AstExprMatchPattern* compared = global->values.data[0]->as<AstExprMatchPattern>();
+    REQUIRE(compared);
+    REQUIRE_EQ(compared->alternatives.size, 1);
+    CHECK(compared->alternatives.data[0].kind == AstPatternAlternative::Value);
+    AstExprGlobal* none = compared->alternatives.data[0].operand->as<AstExprGlobal>();
     REQUIRE(none);
     CHECK_EQ(std::string(none->name.value), "None");
 
     AstStatLocal* shadowed = block->body.data[2]->as<AstStatLocal>();
     REQUIRE(shadowed);
-    AstExprCall* test = shadowed->values.data[0]->as<AstExprCall>();
-    REQUIRE(test);
-    REQUIRE_EQ(test->args.size, 2);
-    CHECK(test->args.data[1]->is<AstExprLocal>());
+    AstExprMatchPattern* tested = shadowed->values.data[0]->as<AstExprMatchPattern>();
+    REQUIRE(tested);
+    REQUIRE_EQ(tested->alternatives.size, 1);
+    CHECK(tested->alternatives.data[0].kind == AstPatternAlternative::Class);
+    CHECK(tested->alternatives.data[0].operand->is<AstExprLocal>());
 }
 
 TEST_CASE_FIXTURE(Fixture, "for_when_is_stored_as_a_guard_around_the_body")

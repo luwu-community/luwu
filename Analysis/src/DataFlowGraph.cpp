@@ -1194,6 +1194,9 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExpr* e)
             return visitExpr(d);
         else if (auto m = e->as<AstExprMatch>())
             return visitExpr(m);
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+        else if (auto p = e->as<AstExprMatchPattern>())
+            return visitExpr(p->checked);
         else if (auto c = e->as<AstExprTableComprehension>())
             return visitExpr(c);
         else if (auto error = e->as<AstExprError>())
