@@ -155,11 +155,18 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
         invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), function.intOp(OP_D(inst)) == LBC_NEWOBJECT_INIT ? 3 : 1);
         break;
     case IrCmd::FALLBACK_INITTRAITS:
+        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
+        invalidateRestoreVmRegs(vmRegOp(OP_C(inst)), 2 + function.intOp(OP_D(inst)));
+        break;
     case IrCmd::FALLBACK_GETQUALIFIED:
         invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
         break;
     case IrCmd::FALLBACK_WRAPRESULT:
         invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
+        break;
+    case IrCmd::FALLBACK_TABLEBUNDLE:
+        if (function.intOp(OP_F(inst)) == 0)
+            invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
         break;
 
         // Make sure all VmReg referencing instructions are handled explicitly (only register reads here)

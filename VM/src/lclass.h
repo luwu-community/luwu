@@ -90,6 +90,10 @@ LUAI_FUNC void luaR_applyobjectfields(lua_State* L, LuauClass* classdef, LuauObj
  */
 LUAI_FUNC void luaR_applyobjectfieldsslow(lua_State* L, LuauClass* classdef, LuauObject* object, const TValue* arg);
 
+// Luwu Classes (rfcs/classes): stores the fields `arg`, the POD constructor's argument, names into `object`. May run an
+// `__index` metamethod, so callers protect it like a call.
+LUAI_FUNC void luaR_applyobjectargument(lua_State* L, LuauClass* classdef, LuauObject* object, const TValue* arg);
+
 /**
  * The POD constructor for the C API (lua_newobject), where nothing it calls may yield: runs `classdef`'s
  * `__implements` (its trait fields) and `__defaults` if it has them, then applies the fields of
@@ -151,6 +155,15 @@ LUAU_FORCEINLINE bool luaR_hasprivateconstructor(const LuauClass* classdef)
  * test luaR_hasprivateconstructor first.
  */
 LUAI_FUNC void luaR_checkprivateconstructor(lua_State* L, const LuauClass* classdef, const Closure* cl);
+
+// Luwu Classes (rfcs/classes): makes `fn`, a function the compiler built from the class declaration, what a call on the
+// class runs (LuauClass::constructor)
+LUAI_FUNC void luaR_setconstructor(lua_State* L, LuauClass* classdef, const TValue* fn);
+
+// Luwu Classes (rfcs/classes): prepares a call on the class in `func`, with its arguments up to `argtop`, to run the
+// class's constructor in its place. Raises for a private constructor called from outside the class, and for a class
+// without `__init` given more than one argument. Returns false for a class without a constructor.
+LUAI_FUNC bool luaR_prepareclasscall(lua_State* L, StkId func, StkId argtop);
 
 /**
  * Errors if the member at `offset` of `object` is const, unless the writer is the object's class's
@@ -358,7 +371,9 @@ LUAU_FORCEINLINE double luaR_objectlength(const LuauObject* object)
 }
 
 /**
- * Callback for creating objects. This is written as a Lua API function and expects the stack to be:
+ * The `__call` metamethod of every class, which constructs a class without a compiled constructor (one built from C)
+ * and calls a trait's `__create`. A class with a constructor never reaches it (luaR_prepareclasscall). This is
+ * written as a Lua API function and expects the stack to be:
  *
  *  [ BASE ]
  *  - A class value
@@ -394,7 +409,7 @@ LUAI_FUNC const TValue* luaR_traitcreate(lua_State* L, const LuauClass* trait);
  *  - raises when a member is provided twice, a final function is redefined, or an expectation isn't met by the
  *    finished class (presence, field or function, access specifier, `const`);
  *  - copies the traits' constant field defaults into the class's, and gives the class a copy of each trait's
- *    `__traitinit` for the fields that have to be computed per construction (luaR_newtraitinitrunner).
+ *    `__traitinit` for the fields that have to be computed per construction (luaR_nexttraitinit).
  * May call the traits' `__needs` functions.
  */
 LUAI_FUNC void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint32_t n);
@@ -408,12 +423,13 @@ LUAI_FUNC void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId lis
 LUAI_FUNC void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, const LuauClass* trait, TString* name, const TValue* copy);
 
 /**
- * Luwu Traits (rfcs/classes/traits.md): the C function LOP_INITTRAITS calls to compute the fields an object gets from its
- * class's traits that don't have a constant default (those are already in place, see luaR_newobject). Called with the
- * object and the class's `implements` arguments, it runs the class's copy of each trait's `__traitinit` in dependency
- * order, and each may yield. The state makes one (global_State::traitinitrunner).
+ * Luwu Traits (rfcs/classes/traits.md): one run of LOP_INITTRAITS, which computes the fields an object gets from its
+ * class's traits that don't have a constant default (those are already in place, see luaR_newobject). `state` holds how
+ * many initializers have run, then the object and the class's `nargs` `implements` arguments. Lays out the call of the
+ * class's copy of the next trait's `__traitinit` at `frame` and returns true, or, once every initializer has run, puts
+ * back the overridden constant fields and returns false.
  */
-LUAI_FUNC Closure* luaR_newtraitinitrunner(lua_State* L);
+LUAI_FUNC bool luaR_nexttraitinit(lua_State* L, StkId state, StkId frame, int nargs);
 
 /**
  * Luwu Traits (rfcs/classes/traits.md): records `fn` as `classdef`'s qualified implementation of the member `name` of
@@ -449,6 +465,11 @@ LUAI_FUNC bool luaR_bundletooheavy(const LuauObject* bundle);
 LUAI_FUNC LuauObject* luaR_newbundleuninit(lua_State* L, int size, const char* what);
 // Luwu bundles: computes the key of a bundle luaR_newbundleuninit made, once its values are set
 LUAI_FUNC void luaR_sealbundle(LuauObject* bundle);
+// Luwu bundles: the hash a bundle holding the `n` values at `values` would get, for a lookup that doesn't build it. False
+// when that bundle would be too heavy to compare by value, so it would equal no key.
+LUAI_FUNC bool luaR_bundlekeyprobe(const TValue* values, uint32_t n, unsigned int* hash);
+// Luwu bundles: whether `bundle`, a table key, equals a bundle holding the `n` values at `values` whose hash is `hash`
+LUAI_FUNC bool luaR_bundlekeyequals(const LuauObject* bundle, unsigned int hash, const TValue* values, uint32_t n);
 
 // Luwu bundles: the number of values in the bundle `value`, or -1 when it isn't a bundle
 LUAI_FUNC int luaR_bundlesize(const TValue* value);

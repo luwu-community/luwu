@@ -3697,8 +3697,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.invalidateUserCall();
         break;
     case IrCmd::FALLBACK_INITTRAITS:
-        // writes the runner or nil, and runs nothing; the CALL after it runs the initializers
+        // writes the count and the call frame, and puts back overridden constant fields; the CALL after it runs the
+        // initializer
         state.invalidate(OP_B(inst));
+        state.invalidateRegisterRange(vmRegOp(OP_C(inst)), 2 + function.intOp(OP_D(inst)));
+        state.invalidateHeap();
         break;
     case IrCmd::FALLBACK_WRAPRESULT:
         // writes the result, and its allocation can run the collector
@@ -3708,6 +3711,12 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::FALLBACK_GETQUALIFIED:
         // writes the function, and runs nothing
         state.invalidate(OP_B(inst));
+        break;
+    case IrCmd::FALLBACK_TABLEBUNDLE:
+        // a read writes its target, and either can run `__index` or `__newindex`
+        if (function.intOp(OP_F(inst)) == 0)
+            state.invalidate(OP_B(inst));
+        state.invalidateUserCall();
         break;
     case IrCmd::FALLBACK_NEWOBJECT:
         // Construction writes the instance (and, for a user __init, the frame it lays out above it),

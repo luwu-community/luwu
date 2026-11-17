@@ -3722,9 +3722,18 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeGETQUALIFIED), uintOp(OP_A(inst)));
         break;
+    case IrCmd::FALLBACK_TABLEBUNDLE:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_D(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executeTABLEBUNDLE), uintOp(OP_A(inst)));
+        break;
     case IrCmd::FALLBACK_INITTRAITS:
         CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
         CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_D(inst).kind == IrOpKind::Constant);
 
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeINITTRAITS), uintOp(OP_A(inst)));
