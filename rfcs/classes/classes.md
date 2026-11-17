@@ -1002,6 +1002,17 @@ Returns the constness of `membername` on the `class` or `object` at `idx`. Retur
 
 Returns the class name (the name of the identifier the class binding was declared with) of the class or object at `idx`. If the value at `idx` is an `object`, follows the class pointer to find the class that object is an instance of. The returned string is valid for the lifetime of the class--users should clone it immediately if they plan on keeping it around for a while.
 
+### `int lua_classof(lua_State* L, int idx);`
+
+The C API's `class.of`. Pushes the class of the `object` at `idx` and returns 1. Returns 0 and pushes nothing for any other value, including a
+`class`.
+
+### `int lua_classis(lua_State* L, int idx, int classidx);`
+
+The C API's `class.is`. Returns 1 if the value at `idx` is an `object` of exactly the `class` at `classidx`, and 0 otherwise. Raises an error if the
+value at `classidx` is not a class. Class names aren't unique, so use this rather than comparing `lua_getclassname` results to check an object's
+class.
+
 ## Compatibility
 
 Classes are backwards compatible with Luau 0.730 and all previous versions of Luwu. Classes are not forward compatible with upstream Luau's own implementation of the classes feature, but there is a narrow subset of classes that would be valid in both languages:
