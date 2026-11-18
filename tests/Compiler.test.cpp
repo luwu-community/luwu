@@ -14352,7 +14352,8 @@ local function plain(x) return x end
 @noinline
 local function kept(x) return x end
 
-return plain(1) + kept(2)
+-- reading `plain` keeps its body, which is stubbed once inlining compiles every call to it
+return plain(1) + kept(2), plain
 )",
         options
     );
