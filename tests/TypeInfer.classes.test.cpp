@@ -3148,6 +3148,10 @@ TEST_CASE_FIXTURE(ClassesFixture, "declaring_classes_is_typed_without_cascades")
     const char* after = "\nlocal unrelated = 1\nprint(unrelated)\n";
     checkTypewriting(*this, "", "declare class Semver(public major: number)\n    public function bump(self): Semver\nend", after);
     checkTypewriting(*this, "", "class type Path(public raw: string)\nend", after);
+
+    // Mixing `declare class` with `class type` reports one parse error that stays up while the body is typed
+    checkTypewriting(*this, "", "declare class type Cat\n    name: string\nend", after, {"the type alone"});
+    checkTypewriting(*this, "", "export declare class type Cat\n    name: string\nend", after, {"the type alone"});
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "declared_class_construction_and_access")

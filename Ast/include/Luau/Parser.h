@@ -315,7 +315,12 @@ private:
     // varlist `=' explist
     AstStat* parseAssignment(AstExpr* initial);
 
-    void reportRedundantExportKeyword(const Location& keywordLocation, const char* keyword, AstStatLocal* stat);
+    void reportRedundantExportKeyword(
+        const Location& keywordLocation,
+        const char* keyword,
+        AstStatLocal* stat,
+        size_t errorsBeforeDeclaration
+    );
     void reportValuelessExports(AstStatBlock* root);
     AstStat* parseExportValue(
         const Location& start,
