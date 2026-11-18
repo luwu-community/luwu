@@ -2866,6 +2866,13 @@ end
 export currentConfig: Config = createConfig(false, 5)
     )");
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    // `export local` and `export const` are parse errors, but the keyword is still printed as written
+    code = (R"(
+export   local x = 5
+export  const y = 6
+    )");
+    CHECK_EQ(code, prettyPrint(code, {}, true, /* ignoreParseErrors= */ true).code);
 }
 
 TEST_CASE("pretty_print_incomplete_expr_group")

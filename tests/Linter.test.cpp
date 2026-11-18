@@ -588,6 +588,19 @@ local unused = 1
     CHECK_EQ(result.warnings[0].text, "Variable 'unused' is never used; prefix with '_' to silence");
 }
 
+// Luwu Export Values (rfcs/export-values.md): `export local` is a parse error that still declares a const, so ConstLocal
+// doesn't ask for `const` too
+TEST_CASE_FIXTURE(Fixture, "export_local_is_const_to_lints")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}};
+
+    LintResult result = lint(R"(--!lint ConstLocal
+export local version = "1.0"
+)");
+
+    CHECK(warningsWithCode(result, LintWarning::Code_ConstLocal).empty());
+}
+
 TEST_CASE_FIXTURE(Fixture, "FunctionUnused")
 {
     ScopedFastFlag sff{FFlag::LuauFunctionUnusedRecursiveLinting, true};
