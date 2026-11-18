@@ -491,6 +491,8 @@ is interested in classical inheritance with `open class` and `extends`.
 
 - An `implements` keyword operator alongside the `is` keyword operator.
 - Method delegation via composition as an alternative for inheritance that allows preservation of internal implementation details.
+- Enums as a sealed version of traits. Any class in any module can implement a trait, but an enum's declaration lists every variant it
+  will ever have. Code matching on an enum can then check that it handles every variant.
 
 ## Prior art (required only for syntax and semantics changing RFCs)
 
