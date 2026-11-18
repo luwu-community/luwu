@@ -8735,7 +8735,7 @@ TEST_CASE_FIXTURE(LoweringFixture, "CollectionsFastMethodsRunWithoutACall")
 
     // Luwu collections: a method with an interpreter fast method, like `OrderedMap:get`, runs it through INVOKE_FAST_METHOD
     // in the untyped receiver's object path. When there's none for the receiver, or it bails, the generic object path and
-    // the CALL follow.
+    // the CALL follow. `get` is a `Vec` and `VecDeque` method too, so the inline storage read comes first.
     assemblyOptions.includeOutlinedCode = true;
 
     CHECK_EQ(
@@ -8789,17 +8789,32 @@ bb_4:
 bb_fallback_3:
   CHECK_TAG R0, tobject, bb_fallback_2
   %27 = LOAD_POINTER R0
-  %28 = INVOKE_FAST_METHOD %27, 1u, R2, 1i, -1i
-  CHECK_CMP_INT %28, 0i, ge, bb_fallback_7
-  ADJUST_STACK_TO_REG R2, %28
+  CHECK_STORAGE %27, 3i, bb_fallback_8
+  %29 = LOAD_STORAGE %27
+  CHECK_TAG R1, tnumber, bb_fallback_2
+  %32 = LOAD_DOUBLE R1
+  %33 = TRY_NUM_TO_INDEX %32, bb_fallback_2
+  %34 = SUB_INT %33, 1i
+  %35 = LOAD_STORAGE_INT %29, 0i
+  CHECK_CMP_INT %34, %35, u_lt, bb_fallback_2
+  %37 = GET_STORAGE_ENTRY_ADDR %29, %34
+  %38 = LOAD_TVALUE %37
+  STORE_TVALUE R2, %38
+  ADJUST_STACK_TO_REG R2, 1i
+  JUMP bb_4
+bb_fallback_8:
+  %42 = LOAD_POINTER R0
+  %43 = INVOKE_FAST_METHOD %42, 1u, R2, 1i, -1i
+  CHECK_CMP_INT %43, 0i, ge, bb_fallback_7
+  ADJUST_STACK_TO_REG R2, %43
   JUMP bb_4
 bb_fallback_7:
-  %32 = LOAD_POINTER R0
-  %33 = TRY_OBJECT_NAMECALL_ADDR %32, 1u, K0 ('get'), bb_fallback_2
-  STORE_POINTER R3, %32
+  %47 = LOAD_POINTER R0
+  %48 = TRY_OBJECT_NAMECALL_ADDR %47, 1u, K0 ('get'), bb_fallback_2
+  STORE_POINTER R3, %47
   STORE_TAG R3, tobject
-  %36 = LOAD_TVALUE %33
-  STORE_TVALUE R2, %36
+  %51 = LOAD_TVALUE %48
+  STORE_TVALUE R2, %51
   JUMP bb_1
 bb_fallback_2:
   FALLBACK_NAMECALL 1u, R2, R0, K0 ('get')

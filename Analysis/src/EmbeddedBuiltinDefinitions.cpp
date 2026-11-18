@@ -515,7 +515,8 @@ class type Vec<T>
     public function push(self, value: T, ...: T)
     public function extend(self, items: {T})
     public function pop(self): T?
-    public function at(self, position: number): T?
+    public function at(self, position: number): T
+    public function get(self, position: number): T?
     public function set(self, position: number, value: T)
     public function insert(self, position: number, value: T)
     public function remove(self, position: number): T
@@ -535,7 +536,8 @@ class type VecDeque<T>
     public function popback(self): T?
     public function front(self): T?
     public function back(self): T?
-    public function at(self, position: number): T?
+    public function at(self, position: number): T
+    public function get(self, position: number): T?
     public function set(self, position: number, value: T)
     public function clear(self)
     public function __len(self): number
