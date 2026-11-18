@@ -14254,6 +14254,14 @@ TEST_CASE("InlineOnlyCallSiteRegardlessOfCost")
                         "end\n";
     CHECK_EQ(countCalls(compileFunction(twice, 1, 2)), 2);
 
+    // one call site, but the function is also returned: inlining would copy its body instead of moving it
+    const char* returned = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                           "local function main(t)\n"
+                           "    big(t)\n"
+                           "end\n"
+                           "return big, main\n";
+    CHECK_EQ(countCalls(compileFunction(returned, 1, 2)), 1);
+
     // one call site an unrolled loop compiles twice
     const char* unrolled = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
                            "local function main(t)\n"

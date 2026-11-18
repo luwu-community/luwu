@@ -1233,8 +1233,10 @@ struct Compiler
 
     // Luwu: whether this call is the only time `func`'s body gets compiled into a caller. The function has one direct
     // call in the module, and that call isn't compiled more than once: not in an unrolled loop and not in a body
-    // inlined at several call sites. A class field's default that calls a function getFunctionExpr finds names a local
-    // besides the constructor's parameters. Such a default stays in `__init` instead of every construction site.
+    // inlined at several call sites. The call must also be the only use of the function: it calls a local that isn't
+    // exported and that nothing else reads, so the inlined body replaces the function (stubUncalledFunctions) instead
+    // of copying it. A class field's default that calls a function getFunctionExpr finds names a local besides the
+    // constructor's parameters. Such a default stays in `__init` instead of every construction site.
     // A `@native` function called from code that isn't is left to the cost model: inlining would run its body
     // interpreted. So is a call in top-level code outside any loop. That call runs once and saves no meaningful call
     // overhead. A loop-free chunk also runs interpreted (LPF_NATIVE_COLD).
@@ -1242,6 +1244,15 @@ struct Compiler
     {
         const unsigned* calls = directCallSites.find(func);
         if (!calls || *calls != 1 || !callCompiledOnce())
+            return false;
+
+        AstLocal* const* callee = onlyCallSiteCallees.find(func);
+        if (!callee || !*callee || (*callee)->isExported)
+            return false;
+
+        const unsigned* reads = localReads.find(*callee);
+        bool callIsOnlyUse = reads && *reads == 1;
+        if (!callIsOnlyUse)
             return false;
 
         if (callRunsOnce())
@@ -1284,8 +1295,21 @@ struct Compiler
 
         bool visit(AstExprCall* node) override
         {
-            if (AstExprFunction* func = node->self ? nullptr : self->getFunctionExpr(node->func))
-                self->directCallSites[func]++;
+            AstExprFunction* func = node->self ? nullptr : self->getFunctionExpr(node->func);
+            if (!func)
+                return true;
+
+            self->directCallSites[func]++;
+
+            // a callee reached any other way (a constant table's field, a cast) may be used elsewhere
+            AstExprLocal* callee = node->func->as<AstExprLocal>();
+            self->onlyCallSiteCallees[func] = callee ? callee->local : nullptr;
+            return true;
+        }
+
+        bool visit(AstExprLocal* node) override
+        {
+            self->localReads[node->local]++;
             return true;
         }
     };
@@ -8650,6 +8674,11 @@ struct Compiler
     // code it compiles more than once (RepeatedCompile)
     DenseHashMap<AstExprFunction*, unsigned> directCallSites{nullptr};
     unsigned repeatedCompileDepth = 0;
+
+    // Luwu: the local each function's direct call names (null when the callee isn't a plain local), and how many times
+    // each local is read, for isOnlyCallSite
+    DenseHashMap<AstExprFunction*, AstLocal*> onlyCallSiteCallees{nullptr};
+    DenseHashMap<AstLocal*, unsigned> localReads{nullptr};
 
     // Luwu: the instructions inlining has added to the function being compiled (LuwuCompileInlineBudget), and where the
     // outermost inline being compiled began
