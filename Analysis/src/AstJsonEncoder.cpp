@@ -634,6 +634,13 @@ struct AstJsonEncoder : public AstVisitor
         case AstPatternAlternative::Trait:
             write("kind", std::string_view("trait"));
             break;
+        case AstPatternAlternative::Bundle:
+            write("kind", std::string_view("bundle"));
+            if (alternative.openEnded)
+                write("openEnded", alternative.openEnded);
+            if (alternative.rest)
+                write("rest", alternative.rest);
+            break;
         }
         write("location", alternative.location);
         if (alternative.operand)
