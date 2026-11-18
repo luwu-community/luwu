@@ -551,4 +551,10 @@ private:
     T previous;
 };
 
+/**
+ * Luwu Classes (rfcs/classes): what Analysis knows about a class beyond its props, when `ty` is the type of its
+ * objects. Null for any other type, extern types included.
+ */
+const ClassFieldUserData* getClassFieldUserData(TypeId ty);
+
 } // namespace Luau
