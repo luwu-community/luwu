@@ -256,9 +256,8 @@ LoadDefinitionFileResult Frontend::loadDefinitionFile(
     ModulePtr checkedModule =
         check(sourceModule, Mode::Definition, {}, std::nullopt, /*forAutocomplete*/ false, /*recordJsonLog*/ false, dummyStats, {});
 
-    if (checkedModule->errors.size() > 0)
-        return LoadDefinitionFileResult{false, std::move(parseResult), std::move(sourceModule), std::move(checkedModule)};
-
+    // Luwu: type errors don't stop a definition file from loading. Upstream fails the whole file, dropping every
+    // global it declares over one mistake. The errors stay in the module for callers to report.
     persistCheckedTypes(checkedModule, globals, std::move(targetScope), packageName);
 
     return LoadDefinitionFileResult{true, std::move(parseResult), std::move(sourceModule), std::move(checkedModule)};
