@@ -8149,9 +8149,12 @@ TEST_CASE_FIXTURE(Fixture, "export_local_and_const_are_errors")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
 
-    matchParseError("export local x = 5", "Remove 'local' here; exports are always const");
-    matchParseError("export const x = 5", "Remove 'const' here; exports are always const");
-    matchParseError("export const function f() end", "Remove 'const' here; exports are always const");
+    const std::string exportLocal =
+        "Luwu does not support 'export local' syntax (exported values are always const), use a local binding and export it later";
+    const std::string exportConst = "Remove this 'const' keyword, exported values are always const";
+    matchParseError("export local x = 5", exportLocal);
+    matchParseError("export const x = 5", exportConst);
+    matchParseError("export const function f() end", exportConst);
     const std::string hoistHint =
         "Forward declare a local binding to export a hoisted function: local f; ... export function f() ... end";
     matchParseError("export x", "Exported values are const and must be initialized");
@@ -8198,12 +8201,45 @@ export const y = 6
 export z = x + y
     )");
     REQUIRE_EQ(2, result.errors.size());
+    CHECK_EQ(result.errors[0].getLocation(), Location{{1, 7}, {1, 12}});
+    CHECK_EQ(result.errors[1].getLocation(), Location{{2, 7}, {2, 12}});
     REQUIRE(result.root != nullptr);
-    CHECK_EQ(3, result.root->body.size);
+    REQUIRE_EQ(3, result.root->body.size);
+
+    // Both declare a const export, and the AST keeps the keyword that was written
+    for (size_t i = 0; i < 2; ++i)
+    {
+        AstStatLocal* declared = result.root->body.data[i]->as<AstStatLocal>();
+        REQUIRE(declared != nullptr);
+        CHECK(declared->isConst);
+        CHECK(declared->isExported);
+        CHECK_EQ(declared->exportWrittenAsLocal, i == 0);
+        REQUIRE(declared->keywordLocation);
+        CHECK_EQ(*declared->keywordLocation, result.errors[i].getLocation());
+        REQUIRE_EQ(1, declared->vars.size);
+        CHECK(declared->vars.data[0]->isConst);
+        CHECK(declared->vars.data[0]->isExported);
+    }
+
+    // Assigning an `export local` reports it like assigning any const
+    ParseResult reassigned = tryParse("export local x = 5\nx = 6");
+    REQUIRE_EQ(2, reassigned.errors.size());
+    CHECK_EQ(reassigned.errors[1].getMessage(), "Variable 'x' is constant and may not be reassigned");
+
+    // `export local function f()` is exported like `export function f()`, with one error
+    ParseResult localFunction = tryParse("export local function f() end\nprint(f)");
+    REQUIRE_EQ(1, localFunction.errors.size());
+    CHECK_EQ(localFunction.errors[0].getMessage(), "'export' must be followed by an identifier or 'function'; try removing 'local'");
+    REQUIRE(localFunction.root != nullptr);
+    REQUIRE_EQ(2, localFunction.root->body.size);
+    AstStatLocalFunction* exportedFunction = localFunction.root->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(exportedFunction != nullptr);
+    CHECK(exportedFunction->name->isExported);
+    CHECK(exportedFunction->name->isConst);
 
     ParseOptions luau;
     luau.language = Language::Luau;
-    for (const char* source : {"export x = 5", "export function f() end", "export local x = 5"})
+    for (const char* source : {"export x = 5", "export function f() end", "export local x = 5", "export local x", "export const x"})
     {
         INFO(source);
         ParseResult inLuau = tryParse(source, luau);
