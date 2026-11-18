@@ -16,6 +16,7 @@ class AstStat;
 class AstNameTable;
 struct TypeChecker;
 struct Module;
+struct Comment;
 
 using ScopePtr = std::shared_ptr<struct Scope>;
 
@@ -31,7 +32,9 @@ std::vector<LintWarning> lint(
     const ScopePtr& env,
     const Module* module,
     const std::vector<HotComment>& hotcomments,
-    const LintOptions& options
+    const LintOptions& options,
+    // Luwu: the module's comments, for lints that read them (AnyCast takes a comment as the reason for a cast)
+    const std::vector<Comment>* comments = nullptr
 );
 
 std::vector<AstName> getDeprecatedGlobals(const AstNameTable& names);
