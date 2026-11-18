@@ -21,11 +21,41 @@ inline size_t luaR_bundleallocsize(uint32_t size)
     return luaR_objectsize(size) + sizeof(LuauBundleKey);
 }
 
-// The size of `object`'s allocation, which a bundle's key makes larger than its members need
+// Luwu Native Classes (rfcs/native-classes.md): the allocation of an object with native data, its members followed by
+// a LuauNativeData header and `nativesize` bytes
+inline size_t luaR_nativeallocsize(uint32_t nummembers, uint32_t nativesize)
+{
+    return luaR_objectsize(nummembers) + sizeof(LuauNativeData) + nativesize;
+}
+
+// Luwu Native Classes (rfcs/native-classes.md): the header of the native data that follows `object`'s members, or NULL
+// when it has none
+inline LuauNativeData* luaR_nativedata(LuauObject* object)
+{
+    if (object->storagekind != LUAR_STORAGE_NATIVE)
+        return NULL;
+    return reinterpret_cast<LuauNativeData*>(luaR_members(object) + object->numberofmembers);
+}
+
+inline const LuauNativeData* luaR_nativedata(const LuauObject* object)
+{
+    return luaR_nativedata(const_cast<LuauObject*>(object));
+}
+
+// Luwu Native Classes (rfcs/native-classes.md): the embedder's bytes in `object`, or NULL when it has no native data
+inline void* luaR_objectdata(LuauObject* object)
+{
+    LuauNativeData* native = luaR_nativedata(object);
+    return native ? native + 1 : NULL;
+}
+
+// The size of `object`'s allocation, which a bundle's key or native data makes larger than its members need
 inline size_t luaR_objectallocsize(const LuauObject* object)
 {
     if (object->storagekind == LUAR_STORAGE_BUNDLE)
         return luaR_bundleallocsize(object->numberofmembers);
+    if (const LuauNativeData* native = luaR_nativedata(object))
+        return luaR_nativeallocsize(object->numberofmembers, native->size);
     return luaR_objectsize(object->numberofmembers);
 }
 
@@ -227,6 +257,13 @@ struct luaR_NativeMember
  * like a class without `__init`. Names must outlive the state: methods use them as their debug names.
  */
 LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init);
+
+/**
+ * Luwu Native Classes (rfcs/native-classes.md): gives every object of `classdef` constructed from now on `size` bytes of
+ * native data, zeroed, whose destructor is the one set for `tag` (lua_setobjectdtor). The destructor runs once, when the
+ * object is freed, whether or not its construction finished.
+ */
+LUAI_FUNC void luaR_setclassnativedata(LuauClass* classdef, uint32_t size, int tag);
 
 /**
  * Luwu builtin classes: the object a C method of `classdef` was called on, its first argument. Raises the error a

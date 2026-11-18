@@ -776,6 +776,11 @@ typedef struct LuauClass
     // "object". Marked in traverseclass.
     TString* typeofname;
 
+    // Luwu Native Classes (rfcs/native-classes.md): the number of bytes of native data each new object gets after its
+    // members, zeroed, and the tag that picks their destructor. 0 bytes for a class without native data.
+    uint32_t nativesize;
+    uint8_t nativetag;
+
 } LuauClass;
 
 #define LUAR_NO_LENGTH_FIELD UINT32_MAX
@@ -816,6 +821,9 @@ enum LuwuStorageKind
     // Luwu bundles: no storage block. The values are the object's members, and a LuauBundleKey follows them in the same
     // allocation (luaR_bundlekey).
     LUAR_STORAGE_BUNDLE = 4,
+    // Luwu Native Classes (rfcs/native-classes.md): no storage block. A LuauNativeData header follows the members in the
+    // same allocation, and the embedder's bytes follow it (luaR_objectdata).
+    LUAR_STORAGE_NATIVE = 8,
 };
 
 // Luwu collections: the kinds that own a storage block
@@ -830,6 +838,16 @@ typedef struct LuauBundleKey
     // The number of values and bundles in the tree it unfolds to, itself included. Saturates at UINT32_MAX.
     uint32_t weight;
 } LuauBundleKey;
+
+// Luwu Native Classes (rfcs/native-classes.md): the header of an object's native data. The object stores the size and
+// the tag itself because a sweep can free the class first.
+typedef struct LuauNativeData
+{
+    uint32_t size;
+    // Picks the destructor (global_State::objectdtors)
+    uint8_t tag;
+    uint8_t padding[3];
+} LuauNativeData;
 
 // Luwu collections: the entries of a `Vec` or `VecDeque`, in a block the object owns from its first value on. The
 // object's first member points to it as light userdata, and is nil before the first value. It's allocated with luaM_

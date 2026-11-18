@@ -1943,6 +1943,29 @@ int lua_classis(lua_State* L, int idx, int classidx)
     return ttisobject(o) && objectvalue(o)->lclass == classvalue(cls);
 }
 
+void lua_setobjectdtor(lua_State* L, int tag, lua_Destructor dtor)
+{
+    api_check(L, unsigned(tag) < LUA_OTAG_LIMIT);
+    L->global->objectdtors[tag] = dtor;
+}
+
+lua_Destructor lua_getobjectdtor(lua_State* L, int tag)
+{
+    api_check(L, unsigned(tag) < LUA_OTAG_LIMIT);
+    return L->global->objectdtors[tag];
+}
+
+void* lua_toobjectdata(lua_State* L, int idx, int tag)
+{
+    const TValue* o = index2addr(L, idx);
+    if (!ttisobject(o))
+        return NULL;
+
+    LuauObject* object = objectvalue(o);
+    const LuauNativeData* native = luaR_nativedata(object);
+    return native && native->tag == tag ? luaR_objectdata(object) : NULL;
+}
+
 static const char* aux_upvalue(StkId fi, int n, TValue** val)
 {
     Closure* f;
