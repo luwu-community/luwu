@@ -1281,6 +1281,43 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "exported_function_fills_a_forward_declaratio
     CHECK_EQ(6, isOddFunction->definition->definitionLocation.begin.line);
 }
 
+// Luwu Export Values (rfcs/export-values.md): `export local` and `export const` are parse errors that still export a const
+TEST_CASE_FIXTURE(BuiltinsFixture, "export_local_and_const_still_export")
+{
+    ScopedFastFlag _[3]{{FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauForceOldSolver, false}, {FFlag::LuauExportValueTypecheck, true}};
+
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        local bar, y = 1, "two"
+        export local foo = bar
+        export const c = y
+        print(foo, c)
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local A = require(game.A)
+
+        local foo = A.foo
+        local c = A.c
+    )";
+
+    // The two parse errors and nothing else
+    CheckResult aResult = getFrontend().check("game/A");
+    LUAU_REQUIRE_ERROR_COUNT(2, aResult);
+    for (const TypeError& error : aResult.errors)
+        CHECK(get<SyntaxError>(error));
+    CHECK_EQ(3, aResult.errors[0].location.begin.line);
+    CHECK_EQ(4, aResult.errors[1].location.begin.line);
+
+    CheckResult bResult = getFrontend().check("game/B");
+    LUAU_REQUIRE_NO_ERRORS(bResult);
+
+    ModulePtr b = getFrontend().moduleResolver.getModule("game/B");
+    CHECK_EQ("number", toString(requireType(b, "foo")));
+    CHECK_EQ("string", toString(requireType(b, "c")));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "exported_module_nil_values")
 {
     ScopedFastFlag _[3]{{FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauForceOldSolver, false}, {FFlag::LuauExportValueTypecheck, true}};

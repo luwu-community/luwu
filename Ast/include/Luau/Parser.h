@@ -363,6 +363,9 @@ private:
     bool traitsEnabled() const;
     void declareClassValue(AstStatClass* shape, AstName valueType, const Location& declareLocation);
     bool startsClassType();
+    bool classFollowsOpen(const Location& openLocation);
+    AstStat* reportOpenClass(const Location& openLocation, AstStat* stat);
+    AstExpr* parseClassRefExpr();
     AstStat* parseClassType(const Location& start, const Location& classKeywordLocation, bool exported, bool isTrait = false);
     bool legacyDeclareClass();
     void skipClassOnlyExternTypeKeywords();
@@ -373,7 +376,12 @@ private:
     // varlist `=' explist
     AstStat* parseAssignment(AstExpr* initial);
 
-    void reportRedundantExportKeyword(const Location& keywordLocation, const char* keyword, AstStatLocal* stat);
+    void reportRedundantExportKeyword(
+        const Location& keywordLocation,
+        const char* keyword,
+        AstStatLocal* stat,
+        size_t errorsBeforeDeclaration
+    );
     void reportValuelessExports(AstStatBlock* root);
     AstStat* parseExportValue(
         const Location& start,
