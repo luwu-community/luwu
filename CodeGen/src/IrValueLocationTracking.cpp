@@ -3,6 +3,8 @@
 
 #include "Luau/IrDump.h"
 #include "Luau/IrUtils.h"
+#include "Luau/IrVisitUseDef.h"
+#include "Luau/generated/IrCmdEffects.h"
 
 LUAU_FASTFLAG(LuauCodegenDseRestoreHints)
 
@@ -81,213 +83,99 @@ void IrValueLocationTracking::processStoreLocationHint(const StoreLocationHint* 
     }
 }
 
-void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
+void IrValueLocationTracking::applyLocationEffect(IrInst& inst, uint32_t instIdx, const IrLocationEffect& effect)
 {
-    switch (inst.cmd)
+    IrOp op = getOp(inst, effect.op);
+
+    switch (effect.kind)
     {
-    case IrCmd::STORE_TAG:
+    case IrLocationEffectKind::None:
+        break;
+    case IrLocationEffectKind::Invalidate:
+        invalidateRestoreOp(op, /*skipValueInvalidation*/ false);
+        break;
+    case IrLocationEffectKind::InvalidateKeepValues:
         // Tag update is a bit tricky, restore operations of values are not affected
-        invalidateRestoreOp(OP_A(inst), /*skipValueInvalidation*/ true);
+        invalidateRestoreOp(op, /*skipValueInvalidation*/ true);
         break;
-    case IrCmd::STORE_EXTRA:
-        // While extra field update doesn't invalidate some of the values, it can invalidate a vector type field
-        invalidateRestoreOp(OP_A(inst), /*skipValueInvalidation*/ false);
+    case IrLocationEffectKind::InvalidateRange:
+        invalidateRestoreVmRegs(vmRegOp(op) + effect.offset, getVmEffectCount(function, inst, effect.count));
         break;
-    case IrCmd::STORE_POINTER:
-    case IrCmd::STORE_DOUBLE:
-    case IrCmd::STORE_INT:
-    case IrCmd::STORE_INT64:
-    case IrCmd::STORE_VECTOR:
-    case IrCmd::STORE_TVALUE:
-    case IrCmd::STORE_SPLIT_TVALUE:
-        invalidateRestoreOp(OP_A(inst), /*skipValueInvalidation*/ false);
-        break;
-    case IrCmd::ADJUST_STACK_TO_REG:
-        invalidateRestoreVmRegs(vmRegOp(OP_A(inst)), -1);
-        break;
-    case IrCmd::FASTCALL:
-        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), function.intOp(OP_D(inst)));
-        break;
-    case IrCmd::INVOKE_FASTCALL:
-        // While ADJUST_STACK_TO_REG would semantically define the result range, we need to define it immediately
-        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), function.intOp(OP_G(inst)));
-        break;
-    case IrCmd::DO_ARITH:
-    case IrCmd::DO_LEN:
-    case IrCmd::GET_TABLE:
-    case IrCmd::GET_CACHED_IMPORT:
-        invalidateRestoreOp(OP_A(inst), /*skipValueInvalidation*/ false);
-        break;
-    case IrCmd::CONCAT:
-        invalidateRestoreVmRegs(vmRegOp(OP_A(inst)), function.uintOp(OP_B(inst)));
-        break;
-    case IrCmd::GET_UPVALUE:
-        break;
-    case IrCmd::CALL:
-        // Even if result count is limited, all registers starting from function (ra) might be modified
-        invalidateRestoreVmRegs(vmRegOp(OP_A(inst)), -1);
-        break;
-    case IrCmd::FORGLOOP:
-    case IrCmd::FORGLOOP_FALLBACK:
-        // Even if result count is limited, all registers starting from iteration index (ra+2) might be modified
-        invalidateRestoreVmRegs(vmRegOp(OP_A(inst)) + 2, -1);
-        break;
-    case IrCmd::FALLBACK_GETGLOBAL:
-    case IrCmd::FALLBACK_GETTABLEKS:
-        invalidateRestoreOp(OP_B(inst), /*skipValueInvalidation*/ false);
-        break;
-    case IrCmd::FALLBACK_NAMECALL:
-        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 2);
-        break;
-    case IrCmd::FALLBACK_GETVARARGS:
-        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), function.intOp(OP_C(inst)));
-        break;
-    case IrCmd::FALLBACK_DUPCLOSURE:
-        invalidateRestoreOp(OP_B(inst), /*skipValueInvalidation*/ false);
-        break;
-    case IrCmd::FALLBACK_FORGPREP:
-        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 3);
-        break;
-    case IrCmd::FALLBACK_NEWOBJECT:
-        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), function.intOp(OP_D(inst)) == LBC_NEWOBJECT_INIT ? 3 : 1);
-        break;
+    case IrLocationEffectKind::RestoreFromLoad:
+        if (op.kind == IrOpKind::VmReg)
+            invalidateRestoreOp(op, /*skipValueInvalidation*/ false);
 
-        // Make sure all VmReg referencing instructions are handled explicitly (only register reads here)
-    case IrCmd::FALLBACK_NEWCLASSMEMBER:
-    case IrCmd::LOAD_TAG:
-    case IrCmd::LOAD_POINTER:
-    case IrCmd::LOAD_DOUBLE:
-    case IrCmd::LOAD_INT64:
-    case IrCmd::LOAD_INT:
-    case IrCmd::LOAD_FLOAT:
-    case IrCmd::LOAD_TVALUE:
-    case IrCmd::CMP_ANY:
-    case IrCmd::CMP_TAG:
-    case IrCmd::JUMP_IF_TRUTHY:
-    case IrCmd::JUMP_IF_FALSY:
-    case IrCmd::JUMP_EQ_TAG:
-    case IrCmd::SELECT_INT64:
-    case IrCmd::SET_TABLE:
-    case IrCmd::SET_UPVALUE:
-    case IrCmd::INTERRUPT:
-    case IrCmd::BARRIER_OBJ:
-    case IrCmd::BARRIER_TABLE_FORWARD:
-    case IrCmd::CLOSE_UPVALS:
-    case IrCmd::CAPTURE:
-    case IrCmd::SETLIST:
-    case IrCmd::RETURN:
-    case IrCmd::FORGPREP_XNEXT_FALLBACK:
-    case IrCmd::FALLBACK_SETGLOBAL:
-    case IrCmd::FALLBACK_SETTABLEKS:
-    case IrCmd::FALLBACK_PREPVARARGS:
-    case IrCmd::ADJUST_STACK_TO_TOP:
-    case IrCmd::GET_TYPEOF:
-    case IrCmd::NEWCLOSURE:
-    case IrCmd::FINDUPVAL:
+        recordRestoreOp(instIdx, op);
         break;
+    case IrLocationEffectKind::RestoreFromStore:
+        // If this is not the last use of the stored value, we can restore it from this new location
+        // Additionally, even if it's a last use, it might allow its argument to be restored
+        if (IrOp value = getOp(inst, effect.valueOp); value.kind == IrOpKind::Inst)
+        {
+            IrInst& source = function.instOp(value);
 
-        // These instructions read VmReg only after optimizeMemoryOperandsX64
-    case IrCmd::CHECK_TAG:
-    case IrCmd::CHECK_TRUTHY:
-    case IrCmd::ADD_NUM:
-    case IrCmd::SUB_NUM:
-    case IrCmd::MUL_NUM:
-    case IrCmd::DIV_NUM:
-    case IrCmd::IDIV_NUM:
-    case IrCmd::MOD_NUM:
-    case IrCmd::MIN_NUM:
-    case IrCmd::MAX_NUM:
-    case IrCmd::JUMP_CMP_NUM:
-    case IrCmd::FLOOR_NUM:
-    case IrCmd::CEIL_NUM:
-    case IrCmd::ROUND_NUM:
-    case IrCmd::SQRT_NUM:
-    case IrCmd::ABS_NUM:
+            if (source.lastUse != instIdx || canRematerializeArguments(source))
+                recordRestoreOp(value.index, op);
+        }
         break;
-
-    default:
-        // All instructions which reference registers have to be handled explicitly
-        for (auto& op : inst.ops)
-            CODEGEN_ASSERT(op.kind != IrOpKind::VmReg);
+    case IrLocationEffectKind::Rematerialize:
+        recordRematerialization(instIdx, op, effect.conversion);
         break;
     }
 }
 
+void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
+{
+    const IrCmdEffects& effects = getInstEffects(function, inst);
+
+    if (!effects.declaresLocations)
+    {
+        // All instructions which reference registers declare facts (or (location-tracking :none))
+        for (auto& op : inst.ops)
+            CODEGEN_ASSERT(op.kind != IrOpKind::VmReg);
+        return;
+    }
+
+    applyLocationEffect(inst, kInvalidInstIdx, effects.locationBefore);
+}
+
 void IrValueLocationTracking::afterInstLowering(IrInst& inst, uint32_t instIdx)
 {
-    switch (inst.cmd)
+    applyLocationEffect(inst, instIdx, getInstEffects(function, inst).locationAfter);
+}
+
+// A result recomputed from operand `source` (NUM_TO_INT/NUM_TO_UINT of a double loaded from a VM register): it can be
+// restored by applying `conversion` to that register's value
+void IrValueLocationTracking::recordRematerialization(uint32_t instIdx, IrOp source, IrCmd conversion)
+{
+    if (source.kind == IrOpKind::Inst)
     {
-    case IrCmd::LOAD_TAG:
-    case IrCmd::LOAD_POINTER:
-    case IrCmd::LOAD_DOUBLE:
-    case IrCmd::LOAD_INT:
-    case IrCmd::LOAD_INT64:
-    case IrCmd::LOAD_TVALUE:
-        if (OP_A(inst).kind == IrOpKind::VmReg)
-            invalidateRestoreOp(OP_A(inst), /*skipValueInvalidation*/ false);
+        ValueRestoreLocation ownerLoc = function.findRestoreLocation(source.index, /* limitToCurrentBlock */ true);
 
-        recordRestoreOp(instIdx, OP_A(inst));
-        break;
-    case IrCmd::STORE_POINTER:
-    case IrCmd::STORE_DOUBLE:
-    case IrCmd::STORE_INT:
-    case IrCmd::STORE_INT64:
-    case IrCmd::STORE_TVALUE:
-        // If this is not the last use of the stored value, we can restore it from this new location
-        // Additionally, even if it's a last use, it might allow its argument to be restored
-        if (OP_B(inst).kind == IrOpKind::Inst)
+        if (ownerLoc.op.kind == IrOpKind::VmReg && ownerLoc.kind == IrValueKind::Double && ownerLoc.conversionCmd == IrCmd::NOP && !ownerLoc.lazy)
         {
-            IrInst& source = function.instOp(OP_B(inst));
+            int reg = vmRegOp(ownerLoc.op);
 
-            if (source.lastUse != instIdx || canRematerializeArguments(source))
-                recordRestoreOp(OP_B(inst).index, OP_A(inst));
-        }
-        break;
-    case IrCmd::STORE_SPLIT_TVALUE:
-        // If this is not the last use of the stored value, we can restore it from this new location
-        // Additionally, even if it's a last use, it might allow its argument to be restored
-        if (OP_C(inst).kind == IrOpKind::Inst)
-        {
-            IrInst& source = function.instOp(OP_C(inst));
-
-            if (source.lastUse != instIdx || canRematerializeArguments(source))
-                recordRestoreOp(OP_C(inst).index, OP_A(inst));
-        }
-        break;
-    case IrCmd::NUM_TO_UINT:
-    case IrCmd::NUM_TO_INT:
-        if (OP_A(inst).kind == IrOpKind::Inst)
-        {
-            ValueRestoreLocation ownerLoc = function.findRestoreLocation(OP_A(inst).index, /* limitToCurrentBlock */ true);
-
-            if (ownerLoc.op.kind == IrOpKind::VmReg && ownerLoc.kind == IrValueKind::Double && ownerLoc.conversionCmd == IrCmd::NOP && !ownerLoc.lazy)
+            if (!function.cfg.captured.regs.test(reg) && vmRegDependent[reg] == kInvalidInstIdx)
             {
-                int reg = vmRegOp(ownerLoc.op);
+                function.recordRestoreLocation(instIdx, {ownerLoc.op, IrValueKind::Double, conversion});
 
-                if (!function.cfg.captured.regs.test(reg) && vmRegDependent[reg] == kInvalidInstIdx)
+                vmRegDependent[reg] = instIdx;
+
+                if (logger && logger->options.includeRegSpills)
                 {
-                    IrCmd forwardCmd = inst.cmd == IrCmd::NUM_TO_UINT ? IrCmd::UINT_TO_NUM : IrCmd::INT_TO_NUM;
-                    function.recordRestoreLocation(instIdx, {ownerLoc.op, IrValueKind::Double, forwardCmd});
+                    const char* conv = getConversionCmdSuffix(conversion);
 
-                    vmRegDependent[reg] = instIdx;
-
-                    if (logger && logger->options.includeRegSpills)
-                    {
-                        const char* conv = getConversionCmdSuffix(forwardCmd);
-
-                        logger->formatAppendWithPrefix("  ; %%%u can be restored from R%d%s\n", instIdx, reg, conv);
-                    }
+                    logger->formatAppendWithPrefix("  ; %%%u can be restored from R%d%s\n", instIdx, reg, conv);
                 }
             }
         }
-        break;
-    default:
-        break;
     }
 }
 
 void IrValueLocationTracking::recordRestoreOp(uint32_t instIdx, IrOp location)
 {
+
     IrInst& inst = function.instructions[instIdx];
 
     if (location.kind == IrOpKind::VmReg)
@@ -339,6 +227,7 @@ void IrValueLocationTracking::recordRestoreOp(uint32_t instIdx, IrOp location)
 
 void IrValueLocationTracking::invalidateRestoreOp(IrOp location, bool skipValueInvalidation)
 {
+
     if (location.kind == IrOpKind::VmReg)
     {
         int reg = vmRegOp(location);
@@ -428,6 +317,7 @@ void IrValueLocationTracking::invalidateRestoreOp(IrOp location, bool skipValueI
 
 void IrValueLocationTracking::invalidateRestoreVmRegs(int start, int count)
 {
+
     int end = count == -1 ? 255 : start + count;
 
     if (end > maxReg)

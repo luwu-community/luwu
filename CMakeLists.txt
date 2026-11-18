@@ -128,6 +128,7 @@ target_link_libraries(Luwu.Analysis PRIVATE Luwu.Compiler Luwu.VM)
 
 target_compile_features(Luwu.CodeGen PRIVATE cxx_std_17)
 target_include_directories(Luwu.CodeGen PUBLIC CodeGen/include)
+target_include_directories(Luwu.CodeGen PRIVATE CodeGen/src)
 target_link_libraries(Luwu.CodeGen PRIVATE Luwu.VM Luwu.VM.Internals) # Code generation needs VM internals
 target_link_libraries(Luwu.CodeGen PUBLIC Luwu.Common)
 

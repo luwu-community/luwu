@@ -297,6 +297,20 @@ void AssemblyBuilderX64::movsx(RegisterX64 lhs, OperandX64 rhs)
     commit();
 }
 
+void AssemblyBuilderX64::movsxd(RegisterX64 lhs, OperandX64 rhs)
+{
+    if (logText)
+        log("movsxd", lhs, rhs);
+
+    SizeX64 size = rhs.cat == CategoryX64::reg ? rhs.base.size : rhs.memSize;
+    CODEGEN_ASSERT(lhs.size == SizeX64::qword && size == SizeX64::dword);
+
+    placeRex(lhs, rhs);
+    place(0x63);
+    placeRegAndModRegMem(lhs, rhs);
+    commit();
+}
+
 void AssemblyBuilderX64::movzx(RegisterX64 lhs, OperandX64 rhs)
 {
     if (logText)
@@ -1043,6 +1057,21 @@ void AssemblyBuilderX64::vminss(OperandX64 dst, OperandX64 src1, OperandX64 src2
 void AssemblyBuilderX64::vcmpeqsd(OperandX64 dst, OperandX64 src1, OperandX64 src2)
 {
     placeAvx("vcmpeqsd", dst, src1, src2, 0x00, 0xc2, false, AVX_0F, AVX_F2);
+}
+
+void AssemblyBuilderX64::vcmpsd(OperandX64 dst, OperandX64 src1, OperandX64 src2, uint8_t predicate)
+{
+    placeAvx("vcmpsd", dst, src1, src2, predicate, 0xc2, false, AVX_0F, AVX_F2);
+}
+
+void AssemblyBuilderX64::vcmpss(OperandX64 dst, OperandX64 src1, OperandX64 src2, uint8_t predicate)
+{
+    placeAvx("vcmpss", dst, src1, src2, predicate, 0xc2, false, AVX_0F, AVX_F3);
+}
+
+void AssemblyBuilderX64::vcmpps(OperandX64 dst, OperandX64 src1, OperandX64 src2, uint8_t predicate)
+{
+    placeAvx("vcmpps", dst, src1, src2, predicate, 0xc2, false, AVX_0F, AVX_NP);
 }
 
 void AssemblyBuilderX64::vcmpltsd(OperandX64 dst, OperandX64 src1, OperandX64 src2)

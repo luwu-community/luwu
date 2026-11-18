@@ -1,0 +1,146 @@
+~ Runs the VM's implementation of the instruction at pc: NativeContext function `name` (L, pc, base, k)
+(define-syntax vm-fallback
+  (syntax-rules ()
+    [(_ name pc)
+     (vm:fallback name pc)]))
+
+~ Load a value from global table at specified key
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (dest)
+~ C: Kn (key)
+(define-ircmd FALLBACK_GETGLOBAL
+  (operands [pc :const-uint] [ra :Rn] [k :Kn])
+  (class :effect)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (facts (writes (vm-slot ra)))
+  (lowering (lower-fallback-getglobal pc ra k)))
+
+~ Store a value into global table at specified key
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (value)
+~ C: Kn (key)
+(define-ircmd FALLBACK_SETGLOBAL
+  (operands [pc :const-uint] [ra :Rn] [k :Kn])
+  (class :effect)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (facts (reads (vm-slot ra)))
+  (lowering (lower-fallback-setglobal pc ra k)))
+
+~ Load a value from table at specified key
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (dest)
+~ C: Rn (table)
+~ D: Kn (key)
+(define-ircmd FALLBACK_GETTABLEKS
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
+  (class :effect)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (facts (reads (vm-slot rb)) (writes (vm-slot ra)))
+  (lowering (lower-fallback-gettableks pc ra rb k)))
+
+~ Store a value into a table at specified key
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (value)
+~ C: Rn (table)
+~ D: Kn (key)
+(define-ircmd FALLBACK_SETTABLEKS
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
+  (class :effect)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (facts (reads (vm-slot ra) (vm-slot rb)))
+  (lowering (lower-fallback-settableks pc ra rb k)))
+
+~ Load function from source register using name into target register and copying source register into target register + 1
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (target)
+~ C: Rn (source)
+~ D: Kn (name)
+(define-ircmd FALLBACK_NAMECALL
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn] [k :Kn])
+  (class :effect)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (facts (reads (vm-slot rb)) (writes (vm-slots ra 2)))
+  (lowering (lower-fallback-namecall pc ra rb k)))
+
+~ Prepare stack for variadic functions so that GETVARARGS works correctly
+~ A: unsigned int (bytecode instruction index)
+~ B: int (numparams)
+(define-ircmd FALLBACK_PREPVARARGS
+  (operands [pc :const-uint] [numparams :int])
+  (class :effect)
+  (facts (no-vm-effects))
+  (lowering (lower-fallback-prepvarargs pc numparams)))
+
+~ Copy variables into the target registers from vararg storage for current function
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (dest start)
+~ C: int (count)
+(define-ircmd FALLBACK_GETVARARGS
+  (operands [pc :const-uint] [ra :Rn] [count :const-int])
+  (class :effect)
+  (facts (writes (vm-slots ra count)))
+  (lowering (lower-fallback-getvarargs pc ra count)))
+
+~ Create closure from a pre-created function object (reusing it unless environments diverge)
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (dest)
+~ C: Kn (prototype)
+(define-ircmd FALLBACK_DUPCLOSURE
+  (operands [pc :const-uint] [ra :Rn] [k :Kn])
+  (class :effect)
+  (facts (writes (vm-slot ra)))
+  (heap-effects :may-gc :reenters-vm)
+  (lowering (lower-fallback-dupclosure pc ra k)))
+
+~ Prepare loop variables for a generic for loop, jump to the loop back edge unconditionally
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (loop state start, updates Rn Rn+1 Rn+2)
+~ C: block
+(define-ircmd FALLBACK_FORGPREP
+  (operands [pc :const-uint] [ra :Rn] [loop :block])
+  (class :terminator)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (facts (reads (vm-slots ra 3)) (writes (vm-slots ra 3)))
+  (dead-store :visit)
+  (lowering (lower-fallback-forgprep pc ra loop)))
+
+~ Luwu Classes (rfcs/classes): construct an instance of a statically resolved class, using the
+~ same C implementation the interpreter uses. It covers the forms the native lowering doesn't
+~ handle, and the cases where the native lowering's guard misses. Unlike a bare exit, native
+~ execution continues after it instead of leaving the rest of the function to the interpreter, and
+~ register liveness stays honest.
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (instance destination, also the base of the constructor's register window)
+~ C: Rn (class)
+~ D: int (form: LBC_NEWOBJECT_DEFAULT, LBC_NEWOBJECT_INIT or LBC_NEWOBJECT_FIELDS)
+~ E: int (AUX: argument count for DEFAULT and INIT, field count for FIELDS)
+(define-ircmd FALLBACK_NEWOBJECT
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn] [form :const-int] [count :const-int])
+  (class :effect)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (facts
+    (reads (vm-slot rb))
+    ; The registers above the instance hold the constructor arguments (DEFAULT and INIT) or one value per field (FIELDS);
+    ; INIT also fills in __init and self for the CALL the compiler emits behind this instruction
+    (cond [(= form :LBC_NEWOBJECT_INIT)
+           (when (> count 0) (reads (vm-slots (+ ra 3) count)))
+           (writes (vm-slots ra 3))]
+          [else
+           (when (> count 0) (reads (vm-slots (+ ra 1) count)))
+           ; invalidated as a range like INIT's, which also covers ra+1 (invalidateRestoreVmRegs includes start + count)
+           (writes (vm-slot ra))
+           (may-write (vm-slots ra 1))]))
+  (lowering (lower-fallback-newobject pc ra rb form count)))
+
+~ Luwu Classes (rfcs/classes): add a member (a method, a primary constructor's synthesized
+~ __init, or a __defaults closure) to a class under construction. Runs as a C fallback for the
+~ same reason as FALLBACK_NEWOBJECT.
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn (class)
+~ C: Rn (member value)
+(define-ircmd FALLBACK_NEWCLASSMEMBER
+  (operands [pc :const-uint] [ra :Rn] [rb :Rn])
+  (class :effect)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (facts (reads (vm-slot ra) (vm-slot rb)))
+  (lowering (lower-fallback-newclassmember pc ra rb)))

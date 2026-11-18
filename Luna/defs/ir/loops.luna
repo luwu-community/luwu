@@ -1,0 +1,52 @@
+~ Return specified values from the function
+~ A: Rn (value start)
+~ B: int (result count or -1 to return all values up to stack top)
+(define-ircmd RETURN
+  (operands [ra :Rn] [count :const-int])
+  (class :terminator)
+  (facts (reads (vm-slots ra count)))
+  (lowering (lower-return ra count)))
+
+~ Adjust loop variables for one iteration of a generic for loop, jump back to the loop header if loop needs to continue
+~ A: Rn (loop variable start, updates Rn+2 and 'B' number of registers starting from Rn+3)
+~ B: int (loop variable count, if more than 2, registers starting from Rn+5 are set to nil)
+~ C: block (repeat)
+~ D: block (exit)
+(define-ircmd FORGLOOP
+  (operands [ra :Rn] [nvars :const-int] [loop :block] [exit :block])
+  (class :terminator)
+  (facts
+    (reads (vm-slot (+ ra 1)) (vm-slot (+ ra 2)))
+    (writes (vm-slot (+ ra 2)) (vm-slots (+ ra 3) nvars))
+    (may-write (vm-slots (+ ra 2) :to-top)))
+  (heap-effects :reenters-vm)
+  (dead-store :visit)
+  (lowering (lower-forgloop ra nvars loop exit)))
+
+~ Handle LOP_FORGLOOP fallback when variable being iterated is not a table
+~ A: Rn (loop state start, updates Rn+2 and 'B' number of registers starting from Rn+3)
+~ B: int (loop variable count and a MSB set when it's an ipairs-like iteration loop)
+~ C: block (repeat)
+~ D: block (exit)
+(define-ircmd FORGLOOP_FALLBACK
+  (operands [ra :Rn] [nvars :const-int] [loop :block] [exit :block])
+  (class :terminator)
+  (heap-effects :invalidates-safe-env :may-gc :reenters-vm)
+  (facts
+    (reads (vm-slots ra 3))
+    (writes (vm-slot (+ ra 2)) (vm-slots (+ ra 3) (low-byte nvars)))
+    (may-write (vm-slots (+ ra 2) :to-top)))
+  (dead-store :visit)
+  (lowering (lower-forgloop-fallback ra nvars loop exit)))
+
+~ Fallback for generic for loop preparation when iterating over builtin pairs/ipairs
+~ It raises an error if 'B' register is not a function
+~ A: unsigned int (bytecode instruction index)
+~ B: Rn
+~ C: block (forgloop location)
+(define-ircmd FORGPREP_XNEXT_FALLBACK
+  (operands [pc :const-uint] [ra :Rn] [target :block])
+  (class :terminator)
+  (facts (reads (vm-slot ra)))
+  (dead-store :visit)
+  (lowering (lower-forgprep-xnext-fallback pc ra target)))

@@ -4,6 +4,7 @@
 #include "Luau/Bytecode.h"
 #include "Luau/Common.h"
 #include "Luau/IrData.h"
+#include "Luau/generated/IrCmdInfo.h"
 
 #include <optional>
 
@@ -20,128 +21,7 @@ bool isJumpD(LuauOpcode op);
 bool isSkipC(LuauOpcode op);
 bool isFastCall(LuauOpcode op);
 int getJumpTarget(uint32_t insn, uint32_t pc);
-IrValueKind getCmdValueKind(IrCmd cmd);
 IrValueKind getConstValueKind(const IrConst& constant);
-
-inline bool isBlockTerminator(IrCmd cmd)
-{
-    switch (cmd)
-    {
-    case IrCmd::JUMP:
-    case IrCmd::JUMP_IF_TRUTHY:
-    case IrCmd::JUMP_IF_FALSY:
-    case IrCmd::JUMP_EQ_TAG:
-    case IrCmd::JUMP_CMP_INT:
-    case IrCmd::JUMP_EQ_POINTER:
-    case IrCmd::JUMP_CMP_NUM:
-    case IrCmd::JUMP_CMP_FLOAT:
-    case IrCmd::JUMP_FORN_LOOP_COND:
-    case IrCmd::JUMP_SLOT_MATCH:
-    case IrCmd::RETURN:
-    case IrCmd::FORGLOOP:
-    case IrCmd::FORGLOOP_FALLBACK:
-    case IrCmd::FORGPREP_XNEXT_FALLBACK:
-    case IrCmd::FALLBACK_FORGPREP:
-    case IrCmd::JUMP_CMP_PROTOID:
-        return true;
-    default:
-        break;
-    }
-
-    return false;
-}
-
-inline bool isNonTerminatingJump(IrCmd cmd)
-{
-    switch (cmd)
-    {
-    case IrCmd::TRY_NUM_TO_INDEX:
-    case IrCmd::TRY_CALL_FASTGETTM:
-    case IrCmd::CHECK_FASTCALL_RES:
-    case IrCmd::CHECK_TAG:
-    case IrCmd::CHECK_TRUTHY:
-    case IrCmd::CHECK_READONLY:
-    case IrCmd::CHECK_NO_METATABLE:
-    case IrCmd::CHECK_SAFE_ENV:
-    case IrCmd::CHECK_ARRAY_SIZE:
-    case IrCmd::CHECK_SLOT_MATCH:
-    case IrCmd::CHECK_NODE_NO_NEXT:
-    case IrCmd::CHECK_NODE_VALUE:
-    case IrCmd::CHECK_OBJECT_CLASS:
-    case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
-    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
-    case IrCmd::TRY_CLASS_MEMBER_ADDR:
-    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
-    case IrCmd::CHECK_BUFFER_LEN:
-    case IrCmd::CHECK_USERDATA_TAG:
-    case IrCmd::CHECK_CMP_NUM:
-    case IrCmd::CHECK_CMP_INT:
-    case IrCmd::CHECK_CMP_INT64:
-    case IrCmd::CHECK_DIV_INT64:
-        return true;
-    default:
-        break;
-    }
-
-    return false;
-}
-
-inline bool hasResult(IrCmd cmd)
-{
-    return getCmdValueKind(cmd) != IrValueKind::None;
-}
-
-inline bool canInvalidateSafeEnv(IrCmd cmd)
-{
-    switch (cmd)
-    {
-    case IrCmd::CMP_ANY:
-    case IrCmd::DO_ARITH:
-    case IrCmd::DO_LEN:
-    case IrCmd::GET_TABLE:
-    case IrCmd::SET_TABLE:
-    case IrCmd::CONCAT: // TODO: if only strings and numbers are concatenated, there will be no user calls
-    case IrCmd::CALL:
-    case IrCmd::FORGLOOP_FALLBACK:
-    case IrCmd::FALLBACK_GETGLOBAL:
-    case IrCmd::FALLBACK_SETGLOBAL:
-    case IrCmd::FALLBACK_GETTABLEKS:
-    case IrCmd::FALLBACK_SETTABLEKS:
-    case IrCmd::FALLBACK_NAMECALL:
-    case IrCmd::FALLBACK_FORGPREP:
-    case IrCmd::FALLBACK_NEWOBJECT:
-    case IrCmd::FALLBACK_NEWCLASSMEMBER:
-        return true;
-    default:
-        break;
-    }
-
-    return false;
-}
-
-inline bool isPseudo(IrCmd cmd)
-{
-    // Instructions that are used for internal needs and are not a part of final lowering
-    return cmd == IrCmd::NOP || cmd == IrCmd::SUBSTITUTE || cmd == IrCmd::MARK_USED || cmd == IrCmd::MARK_DEAD;
-}
-
-inline bool hasSideEffects(IrCmd cmd)
-{
-    if (cmd == IrCmd::INVOKE_FASTCALL)
-        return true;
-
-    if (isPseudo(cmd))
-        return false;
-
-    // Instructions that don't produce a result most likely have other side-effects to make them useful
-    // Right now, a full switch would mirror the 'hasResult' function, so we use this simple condition
-    return !hasResult(cmd);
-}
-
-inline bool producesDirtyHighRegisterBits(IrCmd cmd)
-{
-    return cmd == IrCmd::NUM_TO_UINT || cmd == IrCmd::INVOKE_FASTCALL || cmd == IrCmd::CMP_ANY;
-}
 
 // Returns a condition that for 'a op b' will result in '!(a op b)'
 inline IrCondition getNegatedCondition(IrCondition cond)

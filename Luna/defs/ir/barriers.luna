@@ -1,0 +1,36 @@
+~ Store TValue into a function upvalue
+~ A: UPn
+~ B: TValue
+~ C: tag/undef (tag of the value that was written)
+(define-ircmd SET_UPVALUE
+  (operands [up :UPn] [val :tvalue] [tag :tag|:undef])
+  (class :effect)
+  (facts (no-vm-effects))
+  (lowering (lower-set-upvalue up val tag)))
+
+~ Handle GC write barrier (forward)
+~ A: pointer (GCObject)
+~ B: Rn (TValue that was written to the object)
+~ C: tag/undef (tag of the value that was written)
+(define-ircmd BARRIER_OBJ
+  (operands [obj :pointer] [ra :Rn] [tag :tag|:undef])
+  (class :effect)
+  (facts (reads (tvalue ra)))
+  (lowering (lower-barrier-obj obj ra tag)))
+
+~ Handle GC write barrier (backwards) for a write into a table
+~ A: pointer (LuaTable)
+(define-ircmd BARRIER_TABLE_BACK
+  (operands [table :pointer])
+  (class :effect)
+  (lowering (lower-barrier-table-back table)))
+
+~ Handle GC write barrier (forward) for a write into a table
+~ A: pointer (LuaTable)
+~ B: Rn or Kn (TValue that was written to the object)
+~ C: tag/undef (tag of the value that was written)
+(define-ircmd BARRIER_TABLE_FORWARD
+  (operands [table :pointer] [ra :Rn|:Kn] [tag :tag|:undef])
+  (class :effect)
+  (facts (reads (tvalue ra)))
+  (lowering (lower-barrier-table-forward table ra tag)))

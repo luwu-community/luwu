@@ -17,11 +17,13 @@
 #include "EmitCommon.h"
 #include "IrLoweringA64.h"
 #include "IrLoweringX64.h"
+#include "IrValidation.h"
 
 #include "lobject.h"
 #include "lstate.h"
 
 #include <algorithm>
+#include <type_traits>
 #include <vector>
 
 LUAU_FASTFLAG(DebugCodegenOptSize)
@@ -366,6 +368,7 @@ inline bool lowerIr(
 )
 {
     optimizeMemoryOperandsX64(ir.function);
+    verifyIr(ir.function, IrValidationTarget::X64, "optimizeMemoryOperandsX64");
 
     X64::IrLoweringX64 lowering(logger, build, helpers, ir.function, stats);
 
@@ -389,6 +392,12 @@ inline bool lowerIr(
 }
 
 template<typename AssemblyBuilder>
+constexpr IrValidationTarget validationTarget()
+{
+    return std::is_same_v<AssemblyBuilder, X64::AssemblyBuilderX64> ? IrValidationTarget::X64 : IrValidationTarget::A64;
+}
+
+template<typename AssemblyBuilder>
 inline bool lowerFunction(
     IrBuilder& ir,
     LogBuilder* logger,
@@ -405,6 +414,8 @@ inline bool lowerFunction(
 
     if (options.compilationOptions.nopPadding && proto != nullptr)
         ir.function.jitRngState = jitRngSeed(uintptr_t(proto));
+
+    verifyIr(ir.function, validationTarget<AssemblyBuilder>(), "IR building");
 
     killUnusedBlocks(ir.function);
 
@@ -441,6 +452,7 @@ inline bool lowerFunction(
     computeCfgInfo(ir.function);
 
     constPropInBlockChains(ir);
+    verifyIr(ir.function, validationTarget<AssemblyBuilder>(), "constPropInBlockChains");
 
     if (!FFlag::DebugCodegenOptSize)
     {
@@ -454,6 +466,7 @@ inline bool lowerFunction(
         }
 
         createLinearBlocks(ir);
+        verifyIr(ir.function, validationTarget<AssemblyBuilder>(), "createLinearBlocks");
 
         if (stats)
         {
@@ -464,6 +477,7 @@ inline bool lowerFunction(
     }
 
     markDeadStoresInBlockChains(ir);
+    verifyIr(ir.function, validationTarget<AssemblyBuilder>(), "markDeadStoresInBlockChains");
 
     // Recompute the CFG predecessors/successors to match block uses after optimizations
     computeCfgBlockEdges(ir.function);

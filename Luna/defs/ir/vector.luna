@@ -1,0 +1,139 @@
+~ For each lane in the vector, select B if C == D, otherwise select A
+~ A, B: TValue (endpoints)
+~ C, D: TValue (condition arguments)
+(define-ircmd SELECT_VEC
+  (operands [a :tvalue] [b :tvalue] [c :tvalue] [d :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-select-vec a b c d)))
+
+~ Add/Sub/Mul/Div/Idiv two vectors
+~ A, B: TValue (vector)
+(define-ircmd ADD_VEC
+  (operands [a :tvalue] [b :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-add-vec a b)))
+
+~ Add/Sub/Mul/Div/Idiv two vectors
+~ A, B: TValue (vector)
+(define-ircmd SUB_VEC
+  (operands [a :tvalue] [b :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-sub-vec a b)))
+
+~ Add/Sub/Mul/Div/Idiv two vectors
+~ A, B: TValue (vector)
+(define-ircmd MUL_VEC
+  (operands [a :tvalue] [b :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-mul-vec a b)))
+
+~ Add/Sub/Mul/Div/Idiv two vectors
+~ A, B: TValue (vector)
+(define-ircmd DIV_VEC
+  (operands [a :tvalue] [b :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-div-vec a b)))
+
+~ Add/Sub/Mul/Div/Idiv two vectors
+~ A, B: TValue (vector)
+(define-ircmd IDIV_VEC
+  (operands [a :tvalue] [b :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-idiv-vec a b)))
+
+~ Lanewise A * B + C
+~ A, B, C: TValue (vector)
+(define-ircmd MULADD_VEC
+  (operands [a :tvalue] [b :tvalue] [c :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-muladd-vec a b c)))
+
+~ Negate a vector
+~ A: TValue (vector)
+(define-ircmd UNM_VEC
+  (operands [a :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-unm-vec a)))
+
+~ Get the minimum/maximum of two vector elements
+~ If one of the element values is NaN, 'B' is returned as the result
+~ A, B: TValue (vector)
+(define-ircmd MIN_VEC
+  (operands [a :tvalue] [b :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-min-vec a b)))
+
+~ Get the minimum/maximum of two vector elements
+~ If one of the element values is NaN, 'B' is returned as the result
+~ A, B: TValue (vector)
+(define-ircmd MAX_VEC
+  (operands [a :tvalue] [b :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-max-vec a b)))
+
+~ Round vector elements to negative infinity
+~ A: TValue (vector)
+(define-ircmd FLOOR_VEC
+  (operands [a :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-floor-vec a)))
+
+~ Round vector elements to positive infinity
+~ A: TValue (vector)
+(define-ircmd CEIL_VEC
+  (operands [a :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-ceil-vec a)))
+
+~ Get absolute value of vector elements
+~ A: TValue (vector)
+(define-ircmd ABS_VEC
+  (operands [a :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-abs-vec a)))
+
+~ Compute dot product between two vectors as a float number (use FLOAT_TO_NUM to convert to double)
+~ A, B: TValue (vector)
+(define-ircmd DOT_VEC
+  (operands [a :tvalue] [b :tvalue])
+  (result :float)
+  (class :value)
+  (lowering (lower-dot-vec a b)))
+
+~ Extract a component of a vector (use FLOAT_TO_NUM to convert to double)
+~ A: TValue (vector)
+~ B: int (0-3 index)
+(define-ircmd EXTRACT_VEC
+  (operands [a :tvalue] [lane :int])
+  (result :float)
+  (class :value)
+  (lowering (lower-extract-vec a lane)))
+
+~ Converts a float number to a vector with the value in X/Y/Z (use NUM_TO_FLOAT to convert from double)
+~ A: float
+(define-ircmd FLOAT_TO_VEC
+  (operands [a :float])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-float-to-vec a)))
+
+~ Adds VECTOR type tag to a vector, preserving X/Y/Z components
+~ A: TValue
+(define-ircmd TAG_VECTOR
+  (operands [a :tvalue])
+  (result :tvalue)
+  (class :value)
+  (lowering (lower-tag-vector a)))

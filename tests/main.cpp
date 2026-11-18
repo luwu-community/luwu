@@ -42,6 +42,8 @@ bool verbose = false;
 // Default optimization level for conformance test; can be overridden via -On
 int optimizationLevel = 1;
 
+LUAU_FASTFLAG(DebugCodegenVerifyIr)
+
 // Run conformance tests with native code generation
 bool codegen = false;
 
@@ -371,6 +373,9 @@ static void initSystem()
 int main(int argc, char** argv)
 {
     initSystem();
+
+    // Check IR against the define-ircmd operand kinds (Luna/defs/ir) in every codegen test; --fflags can turn it off
+    FFlag::DebugCodegenVerifyIr.value = true;
 
     Luau::assertHandler() = testAssertionHandler;
 

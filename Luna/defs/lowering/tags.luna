@@ -1,0 +1,151 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-not-any tag val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list tag val)))
+        (gen:if (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:assert (gen:== (tag-val tag) (gen:name :LUA_TBOOLEAN)))
+            (gen:build :eor (result-reg) (reg-op val) 1))
+          (gen:block
+            (gen:let ([not-bool (:type "Label")]
+                      [exit (:type "Label")])
+              (gen:build :cmp (reg-op tag) (gen:cast "uint16_t" (gen:name :LUA_TBOOLEAN)))
+              (gen:build :b (gen:enum :ConditionA64 :NotEqual) not-bool)
+              (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+                (gen:block
+                  (gen:if (gen:== (int-val val) 0)
+                    (gen:block
+                      (gen:build :mov (result-reg) 1))
+                    (gen:block
+                      (gen:build :mov (result-reg) 0))))
+                (gen:block
+                  (gen:build :eor (result-reg) (reg-op val) 1)))
+              (gen:build :b exit)
+              (gen:build :setLabel not-bool)
+              (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+                (gen:build :cmp (reg-op tag) (gen:cast "uint16_t" (gen:name :LUA_TNIL)))
+                (gen:build :cset temp (gen:enum :ConditionA64 :Equal))
+                (gen:build :cmp (reg-op tag) (gen:cast "uint16_t" (gen:name :LUA_TSYMNONE)))
+                (gen:build :cset (result-reg) (gen:enum :ConditionA64 :Equal))
+                (gen:build :orr (result-reg) (result-reg) temp)
+                (gen:build :setLabel exit))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocRegOrReuse (gen:enum :SizeX64 :dword) cpp:index (gen:init-list tag val)))
+        (gen:let ([save-one (:type "Label")]
+                  [save-zero (:type "Label")]
+                  [exit (:type "Label")])
+          (gen:if (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:assert (gen:== (tag-val tag) (gen:name :LUA_TBOOLEAN))))
+            (gen:block
+              (gen:build :cmp (reg-op tag) (gen:name :LUA_TNIL))
+              (gen:build :jcc (gen:enum :ConditionX64 :Equal) save-one)
+              (gen:build :cmp (reg-op tag) (gen:name :LUA_TSYMNONE))
+              (gen:build :jcc (gen:enum :ConditionX64 :Equal) save-one)
+              (gen:build :cmp (reg-op tag) (gen:name :LUA_TBOOLEAN))
+              (gen:build :jcc (gen:enum :ConditionX64 :NotEqual) save-zero)))
+          (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:if (gen:== (int-val val) 0)
+                (gen:block
+                  (gen:build :jmp save-one))))
+            (gen:block
+              (gen:build :cmp (reg-op val) 0)
+              (gen:build :jcc (gen:enum :ConditionX64 :Equal) save-one)))
+          (gen:build :setLabel save-zero)
+          (gen:build :mov (result-reg) 0)
+          (gen:build :jmp exit)
+          (gen:build :setLabel save-one)
+          (gen:build :mov (result-reg) 1)
+          (gen:build :setLabel exit)))]))
+
+(define (lower-cmp-tag a b cond)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReuse (gen:enum :KindA64 :w) cpp:index (gen:init-list a b)))
+        (gen:assert (gen:|| (gen:== (gen:call :conditionOp cond) (gen:enum :IrCondition :Equal)) (gen:== (gen:call :conditionOp cond) (gen:enum :IrCondition :NotEqual))))
+        (gen:let ([a-reg (gen:? (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (reg-op a) (gen:? (gen:== (gen:field a :kind) (gen:enum :IrOpKind :VmReg)) (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w)) (a64:reg :noreg)))])
+          (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :VmReg))
+            (gen:block
+              (gen:let ([addr (gen:method cpp:lowering :tempAddr a (gen:offsetof :TValue.tt))])
+                (gen:build :ldr a-reg addr)))
+            (gen:block
+              (gen:if (gen:! (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)))
+                (gen:block
+                  (gen:assert (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant)))))))
+          (gen:let ([b-reg (gen:? (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Inst)) (reg-op b) (gen:? (gen:== (gen:field b :kind) (gen:enum :IrOpKind :VmReg)) (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w)) (a64:reg :noreg)))])
+            (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :VmReg))
+              (gen:block
+                (gen:let ([addr (gen:method cpp:lowering :tempAddr b (gen:offsetof :TValue.tt))])
+                  (gen:build :ldr b-reg addr)))
+              (gen:block
+                (gen:if (gen:! (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Inst)))
+                  (gen:block
+                    (gen:assert (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant)))))))
+            (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Constant))
+              (gen:block
+                (gen:build :cmp b-reg (gen:cast "uint16_t" (tag-val a)))
+                (gen:build :cset (result-reg) (gen:call :getInverseCondition (gen:call :getConditionInt (gen:call :conditionOp cond)))))
+              (gen:if (gen:== (gen:field b :kind) (gen:enum :IrOpKind :Constant))
+                (gen:block
+                  (gen:build :cmp a-reg (gen:cast "uint16_t" (tag-val b)))
+                  (gen:build :cset (result-reg) (gen:call :getConditionInt (gen:call :conditionOp cond))))
+                (gen:block
+                  (gen:build :cmp a-reg b-reg)
+                  (gen:build :cset (result-reg) (gen:call :getConditionInt (gen:call :conditionOp cond)))))))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :dword) cpp:index))
+        (gen:build :xor_ (result-reg) (result-reg))
+        (gen:assert (gen:|| (gen:== (gen:call :conditionOp cond) (gen:enum :IrCondition :Equal)) (gen:== (gen:call :conditionOp cond) (gen:enum :IrCondition :NotEqual))))
+        (gen:if (gen:&& (gen:== (tag-val b) (gen:name :LUA_TNIL)) (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)))
+          (gen:block
+            (gen:build :test (reg-op a) (reg-op a)))
+          (gen:block
+            (gen:build :cmp (gen:method cpp:lowering :memRegTagOp a) (tag-val b))))
+        (gen:build :setcc (gen:call :getConditionInt (gen:call :conditionOp cond)) (gen:call :byteReg (result-reg))))]))
+
+(define (lower-jump-if-truthy a if-true if-false)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+          (gen:build :ldr temp (a64:mem (a64:reg :rBase) (gen:+ (gen:* (gen:call :vmRegOp a) (gen:sizeof "TValue")) (gen:offsetof :TValue.tt))))
+          (gen:assert (gen:== (gen:name :LUA_TNIL) 0))
+          (gen:build :cbz temp (label-of if-false))
+          (gen:build :cmp temp (gen:cast "uint16_t" (gen:name :LUA_TSYMNONE)))
+          (gen:build :b (gen:enum :ConditionA64 :Equal) (label-of if-false))
+          (gen:build :cmp temp (gen:cast "uint16_t" (gen:name :LUA_TBOOLEAN)))
+          (gen:build :b (gen:enum :ConditionA64 :NotEqual) (label-of if-true))
+          (gen:build :ldr temp (a64:mem (a64:reg :rBase) (gen:+ (gen:* (gen:call :vmRegOp a) (gen:sizeof "TValue")) (gen:offsetof :TValue.value))))
+          (gen:build :cbnz temp (label-of if-true))
+          (gen:method cpp:lowering :jumpOrFallthrough (block-of if-false) cpp:next)))]
+    [:x64
+      (gen:seq
+        (gen:call :jumpIfTruthy cpp:build (gen:call :vmRegOp a) (label-of if-true) (label-of if-false))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of if-false) cpp:next))]))
+
+(define (lower-jump-if-falsy a if-false if-true)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+          (gen:build :ldr temp (a64:mem (a64:reg :rBase) (gen:+ (gen:* (gen:call :vmRegOp a) (gen:sizeof "TValue")) (gen:offsetof :TValue.tt))))
+          (gen:assert (gen:== (gen:name :LUA_TNIL) 0))
+          (gen:build :cbz temp (label-of if-false))
+          (gen:build :cmp temp (gen:cast "uint16_t" (gen:name :LUA_TSYMNONE)))
+          (gen:build :b (gen:enum :ConditionA64 :Equal) (label-of if-false))
+          (gen:build :cmp temp (gen:cast "uint16_t" (gen:name :LUA_TBOOLEAN)))
+          (gen:build :b (gen:enum :ConditionA64 :NotEqual) (label-of if-true))
+          (gen:build :ldr temp (a64:mem (a64:reg :rBase) (gen:+ (gen:* (gen:call :vmRegOp a) (gen:sizeof "TValue")) (gen:offsetof :TValue.value))))
+          (gen:build :cbz temp (label-of if-false))
+          (gen:method cpp:lowering :jumpOrFallthrough (block-of if-true) cpp:next)))]
+    [:x64
+      (gen:seq
+        (gen:call :jumpIfFalsy cpp:build (gen:call :vmRegOp a) (label-of if-false) (label-of if-true))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of if-true) cpp:next))]))

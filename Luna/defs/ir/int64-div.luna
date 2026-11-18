@@ -1,0 +1,58 @@
+~ Signed truncating division
+~ A, B: int64
+(define-ircmd DIV_INT64
+  (operands [a :int64] [b :int64])
+  (result :int64)
+  (class :value)
+  (lowering (lower-div-int64 a b)))
+
+~ Signed floored division
+~ A, B: int64
+(define-ircmd IDIV_INT64
+  (operands [a :int64] [b :int64])
+  (result :int64)
+  (class :value)
+  (lowering (lower-idiv-int64 a b)))
+
+~ Unsigned division
+~ A, B: int64
+(define-ircmd UDIV_INT64
+  (operands [a :int64] [b :int64])
+  (result :int64)
+  (class :value)
+  (lowering (lower-udiv-int64 a b)))
+
+~ Signed truncating remainder
+~ A, B: int64
+(define-ircmd REM_INT64
+  (operands [a :int64] [b :int64])
+  (result :int64)
+  (class :value)
+  (lowering (lower-rem-int64 a b)))
+
+~ Unsigned remainder
+~ A, B: int64
+(define-ircmd UREM_INT64
+  (operands [a :int64] [b :int64])
+  (result :int64)
+  (class :value)
+  (lowering (lower-urem-int64 a b)))
+
+~ Signed floored modulus
+~ A, B: int64
+(define-ircmd MOD_INT64
+  (operands [a :int64] [b :int64])
+  (result :int64)
+  (class :value)
+  (lowering (lower-mod-int64 a b)))
+
+~ Guard against int64 RFC behavior
+~ If b is 0, throws a division by zero error.
+~ If a is -2^63 and b is -1, throws an overflow error.
+~ A, B: int64
+~ C: block/vmexit/undef
+(define-ircmd CHECK_DIV_INT64
+  (operands [a :int64] [b :int64] [fail :block|:vmexit|:undef])
+  (class :guard)
+  (dead-store :live-ins-no-exit-sync)
+  (lowering (lower-check-div-int64 a b fail)))

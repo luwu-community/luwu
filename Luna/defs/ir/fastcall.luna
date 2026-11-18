@@ -1,0 +1,51 @@
+~ Execute fastcall builtin function with 1 argument in-place
+~ This is used for a few builtins that can have more than 1 result and cannot be represented as a regular instruction
+~ A: unsigned int (builtin id)
+~ B: Rn (result start)
+~ C: Rn (first argument)
+~ D: int (result count)
+(define-ircmd FASTCALL
+  (operands [bfid :const-uint] [ra :Rn] [arg :Rn] [nresults :const-int])
+  (class :effect)
+  (facts (reads (vm-slot arg)) (writes (vm-slots ra nresults)))
+  (lowering (lower-fastcall bfid ra arg nresults)))
+
+~ Call the fastcall builtin function
+~ A: unsigned int (builtin id)
+~ B: Rn (result start)
+~ C: Rn (argument start)
+~ D: Rn or Kn or undef (optional second argument)
+~ E: Rn or Kn or undef (optional third argument)
+~ F: int (argument count or -1 to use all arguments up to stack top)
+~ G: int (result count or -1 to preserve all results and adjust stack top)
+(define-ircmd INVOKE_FASTCALL
+  (operands [bfid :const-uint]
+            [ra :Rn]
+            [arg :Rn]
+            [args :Rn|:Kn|:undef]
+            [arg3 :Rn|:Kn|:undef]
+            [nparams :const-int]
+            [nresults :const-int])
+  (result :int)
+  (class :value)
+  (flags :deprecated/has-side-effects :dirty-high-bits)
+  (facts
+    (cond [(= nparams -1) (reads (varargs arg))]
+          ; only LOP_FASTCALL3 has a third argument; without one in arg3, the arguments are consecutive registers
+          [(and (>= nparams 3) (kind? arg3 :Undef)) (reads (vm-slots arg nparams))]
+          [(>= nparams 3) (reads (vm-slot arg) (tvalue args) (tvalue arg3))]
+          [(= nparams 2) (reads (vm-slot arg) (tvalue args))]
+          [(= nparams 1) (reads (vm-slot arg))])
+    ; ADJUST_STACK_TO_REG would semantically define the result range; this defines it immediately
+    (writes (vm-slots ra nresults)))
+  (lowering (lower-invoke-fastcall bfid ra arg args arg3 nparams nresults)))
+
+~ Calls native libm function with 1 or 2 arguments
+~ A: builtin function ID
+~ B: double
+~ C: double/int (optional, 2nd argument)
+(define-ircmd INVOKE_LIBM
+  (operands [func :const-uint] [a :double] [b :double|:int])
+  (result :double)
+  (class :value)
+  (lowering (lower-invoke-libm func a b)))

@@ -1,0 +1,252 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-store-tag a tag)
+  (case (current-target)
+    [:a64
+     (gen:let ([addr (gen:method cpp:lowering :tempAddr a (gen:offsetof :TValue.tt))])
+       (gen:if (constant? tag)
+         (gen:if (gen:== (tag-val tag) 0)
+           (gen:build :str (a64:reg :wzr) addr)
+           (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+             (gen:build :mov temp (tag-val tag))
+             (gen:build :str temp addr)))
+         (gen:build :str (reg-op tag) addr)))]
+    [:x64
+     (gen:build :mov (gen:method cpp:lowering :tvalueMemOp a (gen:offsetof :TValue.tt) (gen:enum :SizeX64 :dword))
+                    (gen:? (constant? tag)
+                           (gen:call :OperandX64 (gen:cast :int (tag-val tag)))
+                           (gen:method cpp:lowering :memRegTagOp tag)))]))
+
+(define (lower-store-extra a extra)
+  (case (current-target)
+    [:a64
+     (gen:let ([addr (gen:method cpp:lowering :tempAddr a (gen:offsetof :TValue.extra))])
+       (gen:if (gen:&& (constant? extra) (gen:== (int-val extra) 0))
+         (gen:build :str (a64:reg :wzr) addr)
+         (gen:build :str (gen:method cpp:lowering :tempInt extra) addr)))]
+    [:x64
+     (gen:build :mov (gen:method cpp:lowering :tvalueMemOp a (gen:offsetof :TValue.extra) (gen:enum :SizeX64 :dword))
+                    (gen:method cpp:lowering :memRegUintOp extra))]))
+
+(define (lower-store-pointer a val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([addr (gen:method cpp:lowering :tempAddr a (gen:offsetof :TValue.value))])
+          (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:assert (gen:== (int-val val) 0))
+              (gen:build :str (a64:reg :xzr) addr))
+            (gen:block
+              (gen:build :str (reg-op val) addr)))))]
+    [:x64
+      (gen:seq
+        (gen:let ([value-lhs (gen:? (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:call :OperandX64 (gen:index (gen:name :qword) (gen:+ (reg-op a) (gen:offsetof :TValue.value)))) (gen:call :OperandX64 (gen:call :luauRegValue (gen:call :vmRegOp a))))])
+          (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:assert (gen:== (int-val val) 0))
+              (gen:build :mov value-lhs 0))
+            (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Inst))
+              (gen:block
+                (gen:build :mov value-lhs (reg-op val)))
+              (gen:block
+                (gen:assert (gen:! (gen:string "Unsupported instruction form"))))))))]))
+
+(define (lower-store-double a val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([addr (gen:method cpp:lowering :tempAddr a (gen:offsetof :TValue.value))])
+          (gen:if (gen:&& (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant)) (gen:== (gen:call :getDoubleBits (double-val val)) 0))
+            (gen:block
+              (gen:build :str (a64:reg :xzr) addr))
+            (gen:block
+              (gen:let ([temp (gen:method cpp:lowering :tempDouble val)])
+                (gen:build :str temp addr))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([value-lhs (gen:? (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:call :OperandX64 (gen:index (gen:name :qword) (gen:+ (reg-op a) (gen:offsetof :TValue.value)))) (gen:call :OperandX64 (gen:call :luauRegValue (gen:call :vmRegOp a))))])
+          (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+                (gen:build :vmovsd (x64:scoped-reg tmp) (gen:build :f64 (double-val val)))
+                (gen:build :vmovsd value-lhs (x64:scoped-reg tmp))))
+            (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Inst))
+              (gen:block
+                (gen:build :vmovsd value-lhs (reg-op val)))
+              (gen:block
+                (gen:assert (gen:! (gen:string "Unsupported instruction form"))))))))]))
+
+(define (lower-store-int a val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([addr (gen:method cpp:lowering :tempAddr a (gen:offsetof :TValue.value))])
+          (gen:if (gen:&& (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant)) (gen:== (int-val val) 0))
+            (gen:block
+              (gen:build :str (a64:reg :wzr) addr))
+            (gen:block
+              (gen:let ([temp (gen:method cpp:lowering :tempInt val)])
+                (gen:build :str temp addr))))))]
+    [:x64
+      (gen:seq
+        (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:build :mov (gen:call :luauRegValueInt (gen:call :vmRegOp a)) (int-val val)))
+          (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Inst))
+            (gen:block
+              (gen:build :mov (gen:call :luauRegValueInt (gen:call :vmRegOp a)) (reg-op val)))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]))
+
+(define (lower-store-int64 a val)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([addr (gen:method cpp:lowering :tempAddr a (gen:offsetof :TValue.value))])
+          (gen:if (gen:&& (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant)) (gen:== (int64-val val) 0))
+            (gen:block
+              (gen:build :str (a64:reg :xzr) addr))
+            (gen:block
+              (gen:let ([temp (gen:method cpp:lowering :tempInt64 val)])
+                (gen:build :str temp addr))))))]
+    [:x64
+      (gen:seq
+        (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+          (gen:block
+            (gen:if (gen:&& (gen:>= (int64-val val) (gen:name :INT32_MIN)) (gen:<= (int64-val val) (gen:name :INT32_MAX)))
+              (gen:block
+                (gen:build :mov (gen:call :luauRegValueInt64 (gen:call :vmRegOp a)) (gen:cast "int32_t" (int64-val val))))
+              (gen:block
+                (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+                  (gen:build :mov64 (x64:scoped-reg tmp) (int64-val val))
+                  (gen:build :mov (gen:call :luauRegValueInt64 (gen:call :vmRegOp a)) (x64:scoped-reg tmp))))))
+          (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Inst))
+            (gen:block
+              (gen:build :mov (gen:call :luauRegValueInt64 (gen:call :vmRegOp a)) (reg-op val)))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]))
+
+(define (lower-store-vector a x y z tag)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([temp1 (gen:method cpp:lowering :tempFloat x)])
+          (gen:let ([temp2 (gen:method cpp:lowering :tempFloat y)])
+            (gen:let ([temp3 (gen:method cpp:lowering :tempFloat z)])
+              (gen:let ([addr (gen:method cpp:lowering :tempAddr a (gen:offsetof :TValue.value))])
+                (gen:assert (gen:&& (gen:&& (gen:== (gen:field addr :kind) (gen:enum :AddressKindA64 :imm)) (gen:== (gen:% (gen:field addr :data) 4) 0)) (gen:<= (gen:/ (gen:cast "unsigned" (gen:+ (gen:field addr :data) 8)) 4) (gen:name :AddressA64::kMaxOffset))))
+                (gen:build :str temp1 (a64:mem (gen:field addr :base) (gen:+ (gen:field addr :data) 0)))
+                (gen:build :str temp2 (a64:mem (gen:field addr :base) (gen:+ (gen:field addr :data) 4)))
+                (gen:build :str temp3 (a64:mem (gen:field addr :base) (gen:+ (gen:field addr :data) 8)))
+                (gen:if (gen:call :HAS_OP_E cpp:inst)
+                  (gen:block
+                    (gen:let ([temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+                      (gen:build :mov temp (tag-val tag))
+                      (gen:build :str temp (gen:method cpp:lowering :tempAddr a (gen:offsetof :TValue.tt)))))))))))]
+    [:x64
+      (gen:seq
+        (gen:method cpp:lowering :storeFloat (gen:call :luauRegValueVector (gen:call :vmRegOp a) 0) x)
+        (gen:method cpp:lowering :storeFloat (gen:call :luauRegValueVector (gen:call :vmRegOp a) 1) y)
+        (gen:method cpp:lowering :storeFloat (gen:call :luauRegValueVector (gen:call :vmRegOp a) 2) z)
+        (gen:if (gen:call :HAS_OP_E cpp:inst)
+          (gen:block
+            (gen:build :mov (gen:call :luauRegTag (gen:call :vmRegOp a)) (tag-val tag)))))]))
+
+(define (lower-store-tvalue a val offset)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([addr-offset (:type "int") (gen:? (gen:call :HAS_OP_C cpp:inst) (int-val offset) 0)]
+                  [addr (gen:method cpp:lowering :tempAddr a addr-offset)])
+          (gen:build :str (reg-op val) addr)))]
+    [:x64
+      (gen:seq
+        (gen:let ([addr-offset (:type "int") (gen:? (gen:call :HAS_OP_C cpp:inst) (int-val offset) 0)])
+          (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :VmReg))
+            (gen:block
+              (gen:build :vmovups (gen:call :luauReg (gen:call :vmRegOp a)) (reg-op val)))
+            (gen:if (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst))
+              (gen:block
+                (gen:build :vmovups (gen:index (gen:name :xmmword) (gen:+ (reg-op a) addr-offset)) (reg-op val)))
+              (gen:block
+                (gen:assert (gen:! (gen:string "Unsupported instruction form"))))))))]))
+
+(define (lower-store-split-tvalue a tag val offset)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([addr-offset (:type "int") (gen:? (gen:call :HAS_OP_D cpp:inst) (int-val offset) 0)]
+                  [tempt (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))]
+                  [addrt (gen:method cpp:lowering :tempAddr a (gen:+ (gen:offsetof :TValue.tt) addr-offset))])
+          (gen:build :mov tempt (tag-val tag))
+          (gen:build :str tempt addrt)
+          (gen:let ([addr (gen:method cpp:lowering :tempAddr a (gen:+ (gen:offsetof :TValue.value) addr-offset))])
+            (gen:if (gen:== (tag-val tag) (gen:name :LUA_TBOOLEAN))
+              (gen:block
+                (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+                  (gen:block
+                    (gen:assert (gen:== (gen:name :LUA_TBOOLEAN) 1))
+                    (gen:if (gen:!= (int-val val) 0)
+                      (gen:block
+                        (gen:build :str tempt addr))
+                      (gen:block
+                        (gen:build :str (a64:reg :wzr) addr))))
+                  (gen:block
+                    (gen:build :str (reg-op val) addr))))
+              (gen:if (gen:== (tag-val tag) (gen:name :LUA_TNUMBER))
+                (gen:block
+                  (gen:let ([temp (gen:method cpp:lowering :tempDouble val)])
+                    (gen:build :str temp addr)))
+                (gen:if (gen:== (tag-val tag) (gen:name :LUA_TINTEGER))
+                  (gen:block
+                    (gen:let ([temp (gen:method cpp:lowering :tempInt64 val)])
+                      (gen:build :str temp addr)))
+                  (gen:if (gen:call :isGCO (tag-val tag))
+                    (gen:block
+                      (gen:build :str (reg-op val) addr))
+                    (gen:block
+                      (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([addr-offset (:type "int") (gen:? (gen:call :HAS_OP_D cpp:inst) (int-val offset) 0)]
+                  [tag-lhs (gen:? (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:call :OperandX64 (gen:index (gen:name :dword) (gen:+ (gen:+ (reg-op a) (gen:offsetof :TValue.tt)) addr-offset))) (gen:call :OperandX64 (gen:call :luauRegTag (gen:call :vmRegOp a))))])
+          (gen:build :mov tag-lhs (tag-val tag))
+          (gen:if (gen:== (tag-val tag) (gen:name :LUA_TBOOLEAN))
+            (gen:block
+              (gen:let ([value-lhs (gen:? (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:call :OperandX64 (gen:index (gen:name :dword) (gen:+ (gen:+ (reg-op a) (gen:offsetof :TValue.value)) addr-offset))) (gen:call :OperandX64 (gen:call :luauRegValueInt (gen:call :vmRegOp a))))])
+                (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+                  (gen:block
+                    (gen:build :mov value-lhs (int-val val)))
+                  (gen:block
+                    (gen:build :mov value-lhs (reg-op val))))))
+            (gen:if (gen:== (tag-val tag) (gen:name :LUA_TNUMBER))
+              (gen:block
+                (gen:let ([value-lhs (gen:? (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:call :OperandX64 (gen:index (gen:name :qword) (gen:+ (gen:+ (reg-op a) (gen:offsetof :TValue.value)) addr-offset))) (gen:call :OperandX64 (gen:call :luauRegValue (gen:call :vmRegOp a))))])
+                  (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+                    (gen:block
+                      (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :xmmword))])
+                        (gen:build :vmovsd (x64:scoped-reg tmp) (gen:build :f64 (double-val val)))
+                        (gen:build :vmovsd value-lhs (x64:scoped-reg tmp))))
+                    (gen:block
+                      (gen:build :vmovsd value-lhs (reg-op val))))))
+              (gen:if (gen:== (tag-val tag) (gen:name :LUA_TINTEGER))
+                (gen:block
+                  (gen:let ([value-lhs (gen:? (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:call :OperandX64 (gen:index (gen:name :qword) (gen:+ (gen:+ (reg-op a) (gen:offsetof :TValue.value)) addr-offset))) (gen:call :OperandX64 (gen:call :luauRegValueInt64 (gen:call :vmRegOp a))))])
+                    (gen:if (gen:== (gen:field val :kind) (gen:enum :IrOpKind :Constant))
+                      (gen:block
+                        (gen:if (gen:&& (gen:>= (int64-val val) (gen:name :INT32_MIN)) (gen:<= (int64-val val) (gen:name :INT32_MAX)))
+                          (gen:block
+                            (gen:build :mov value-lhs (gen:cast "int32_t" (int64-val val))))
+                          (gen:block
+                            (gen:let ([tmp (gen:call "ScopedRegX64" cpp:regs (gen:enum :SizeX64 :qword))])
+                              (gen:build :mov64 (x64:scoped-reg tmp) (int64-val val))
+                              (gen:build :mov value-lhs (x64:scoped-reg tmp))))))
+                      (gen:block
+                        (gen:build :mov value-lhs (reg-op val))))))
+                (gen:if (gen:call :isGCO (tag-val tag))
+                  (gen:block
+                    (gen:let ([value-lhs (gen:? (gen:== (gen:field a :kind) (gen:enum :IrOpKind :Inst)) (gen:call :OperandX64 (gen:index (gen:name :qword) (gen:+ (gen:+ (reg-op a) (gen:offsetof :TValue.value)) addr-offset))) (gen:call :OperandX64 (gen:call :luauRegValue (gen:call :vmRegOp a))))])
+                      (gen:build :mov value-lhs (reg-op val))))
+                  (gen:block
+                    (gen:assert (gen:! (gen:string "Unsupported instruction form"))))))))))]))
