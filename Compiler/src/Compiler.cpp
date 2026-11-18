@@ -44,9 +44,9 @@ LUAU_FASTINTVARIABLE(LuwuCompileInlineNativeCallCost, 16)
 LUAU_FASTINTVARIABLE(LuwuCompileInlineFewCallSites, 6)
 // Luwu: the most instructions inlining may add to one function, however the thresholds and the only-call-site rule are
 // set. It keeps bytecode size bounded: a module grows by at most this much per function. The cost model can't do that
-// on its own because it saturates at 127 and doesn't measure real size. The benchmarks, the classes benches, seal and
-// chimera never spend more than 2048.
-LUAU_FASTINTVARIABLE(LuwuCompileInlineBudget, 4096)
+// on its own because it saturates at 127 and doesn't measure real size. 512 keeps the inlining wins the inliner-fast
+// benches measured (`collide` still inlines fully), and only 42 of 368 Luau files reach it.
+LUAU_FASTINTVARIABLE(LuwuCompileInlineBudget, 512)
 
 LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -95,6 +95,7 @@ static const uint32_t kMaxInstructionCount = 1'000'000'000;
 static const uint8_t kInvalidReg = 255;
 
 static const uint32_t kDefaultAllocPc = ~0u;
+static const size_t kNoClosureEdge = ~size_t(0);
 
 void escapeAndAppend(std::string& buffer, const char* str, size_t len)
 {
@@ -249,7 +250,12 @@ struct Compiler
     {
         Local* l = locals.find(local);
 
-        return l && l->allocated ? l->reg : -1;
+        if (!l || !l->allocated)
+            return -1;
+
+        // Luwu: markUnreadClosures finds the local functions whose closures nothing reads
+        l->read = true;
+        return l->reg;
     }
 
     uint8_t getUpval(AstLocal* local)
@@ -526,6 +532,7 @@ struct Compiler
 
         bool self = func->self != 0;
         uint32_t fid = bytecode.beginFunction(uint8_t(self + func->args.size), func->vararg);
+        currentFunctionId = fid;
 
         setDebugLine(func);
 
@@ -1215,6 +1222,7 @@ struct Compiler
         if (outermost)
             outermostInlineStartPc = bytecode.getDebugPC();
 
+        fi->inlined = true;
         compileInlinedCall(expr, func, target, targetCount, selfExpr, onlyCallSite);
 
         if (outermost)
@@ -3735,7 +3743,8 @@ struct Compiler
         return true;
     }
 
-    void compileExprFunction(AstExprFunction* expr, uint8_t target)
+    // Luwu: returns the closure's index in closureEdges
+    size_t compileExprFunction(AstExprFunction* expr, uint8_t target)
     {
         RegScope rs(this);
 
@@ -3817,6 +3826,9 @@ struct Compiler
         {
             bytecode.emitABC(LOP_CAPTURE, uint8_t(c.type), c.data, 0);
         }
+
+        closureEdges.push_back({currentFunctionId, expr, true});
+        return closureEdges.size() - 1;
     }
 
     void compileClassDeclaration(AstStatClass* decl)
@@ -6199,9 +6211,7 @@ struct Compiler
         if (AstExprLocal* expr = getExprLocal(node))
         {
             // note: this can't check expr->upvalue because upvalues may be upgraded to locals during inlining
-            Local* l = locals.find(expr->local);
-
-            return l && l->allocated ? l->reg : -1;
+            return getLocalReg(expr->local);
         }
         else if (FFlag::LuwuClasses)
         {
@@ -7373,9 +7383,13 @@ struct Compiler
                 pushLocal(stat->name, var, kDefaultAllocPc);
                 if (FFlag::LuauExportValueSyntax)
                     checkExportedLocal(stat->name, stat->location);
-                compileExprFunction(stat->func, var);
+                size_t closure = compileExprFunction(stat->func, var);
 
                 Local& l = locals[stat->name];
+
+                // Luwu: when inlining compiled every call, nothing reads the local (markUnreadClosures)
+                if (options.optimizationLevel >= 2)
+                    l.closureEdge = closure;
 
                 // we *have* to pushLocal before we compile the function, since the function may refer to the local as an upvalue
                 // however, this means the debugpc for the local is at an instruction where the local value hasn't been computed yet
@@ -7469,6 +7483,8 @@ struct Compiler
 
         l.reg = reg;
         l.allocated = true;
+        l.read = false;
+        l.closureEdge = kNoClosureEdge;
         l.debugpc = bytecode.getDebugPC();
         l.allocpc = allocpc == kDefaultAllocPc ? l.debugpc : allocpc;
 
@@ -7529,9 +7545,80 @@ struct Compiler
         }
     }
 
+    // Luwu: a local function's closure is never called when nothing read the local in its scope: inlining compiled
+    // every call to it, or it has none. The closure is still made, but stubUncalledFunctions can drop its body.
+    void markUnreadClosures(size_t start)
+    {
+        LUAU_ASSERT(start <= localStack.size());
+
+        for (size_t i = start; i < localStack.size(); ++i)
+        {
+            Local* l = locals.find(localStack[i]);
+            LUAU_ASSERT(l);
+
+            if (l->closureEdge != kNoClosureEdge && !l->read)
+                closureEdges[l->closureEdge].called = false;
+        }
+    }
+
+    // Luwu: replaces the body of every inlined function none of whose closures can be called, since inlining copied it
+    // wherever it's called. A local function that's never called keeps its body: that's dead code the user wrote. Only
+    // a local function's closures can be marked unread, so every other function counts as one that can run, whatever
+    // made it (a class method, the main chunk).
+    void stubUncalledFunctions()
+    {
+        DenseHashSet<uint32_t> candidates{~0u};
+        for (const ClosureEdge& edge : closureEdges)
+        {
+            const Function* f = functions.find(edge.function);
+            LUAU_ASSERT(f);
+
+            if (!edge.called && f->inlined)
+                candidates.insert(f->id);
+        }
+
+        if (candidates.empty())
+            return;
+
+        DenseHashSet<uint32_t> live{~0u};
+        for (const auto& entry : functions)
+        {
+            if (!candidates.contains(entry.second.id))
+                live.insert(entry.second.id);
+        }
+
+        // a closure that can be called, made by a live function, makes its child live; repeat until nothing changes,
+        // for nested closures
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+
+            for (const ClosureEdge& edge : closureEdges)
+            {
+                uint32_t child = functions.find(edge.function)->id;
+
+                bool makesLive = edge.called && live.contains(edge.parent) && !live.contains(child);
+                if (makesLive)
+                {
+                    live.insert(child);
+                    changed = true;
+                }
+            }
+        }
+
+        for (uint32_t fid : candidates)
+        {
+            if (!live.contains(fid))
+                bytecode.stubFunction(fid);
+        }
+    }
+
     void popLocals(size_t start)
     {
         LUAU_ASSERT(start <= localStack.size());
+
+        markUnreadClosures(start);
 
         for (size_t i = start; i < localStack.size(); ++i)
         {
@@ -7541,7 +7628,10 @@ struct Compiler
 
             l->allocated = false;
 
-            if (options.debugLevel >= 2)
+            // Luwu: a debugger mustn't call a closure whose body may have been stubbed
+            bool closureUnread = l->closureEdge != kNoClosureEdge && !closureEdges[l->closureEdge].called;
+
+            if (options.debugLevel >= 2 && !closureUnread)
             {
                 uint32_t debugpc = bytecode.getDebugPC();
 
@@ -8351,6 +8441,8 @@ struct Compiler
         uint32_t instructionCount = 0;
         // Luwu: the body has a loop that wasn't unrolled (LuwuCompileInlineFewCallSites)
         bool hasLoops = false;
+        // Luwu: the body was inlined into a caller somewhere (stubUncalledFunctions)
+        bool inlined = false;
         bool returnsOne = false;
     };
 
@@ -8359,6 +8451,9 @@ struct Compiler
         uint8_t reg = 0;
         bool allocated = false;
         bool captured = false;
+        // Luwu: getLocalReg handed out the register, and the closure in closureEdges a local function statement made
+        bool read = false;
+        size_t closureEdge = kNoClosureEdge;
         uint32_t debugpc = 0;
         uint32_t allocpc = 0;
     };
@@ -8555,6 +8650,18 @@ struct Compiler
 
     // Luwu: the module says `--!native` (LuwuCompileInlineNativeCallCost)
     bool nativeModule = false;
+
+    // Luwu: a closure compileExprFunction made in the code of the function with id `parent`. `called` is cleared when
+    // nothing reads the local function it was made for (markUnreadClosures).
+    struct ClosureEdge
+    {
+        uint32_t parent;
+        AstExprFunction* function;
+        bool called;
+    };
+
+    std::vector<ClosureEdge> closureEdges;
+    uint32_t currentFunctionId = ~0u;
     // Luwu Classes (rfcs/classes): classes whose initializers are being compiled at a construction site
     // (tryCompileNewObjectFieldParameters), innermost last
     std::vector<AstStatClass*> fieldsExpansionStack;
@@ -8783,6 +8890,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
     LUAU_ASSERT(mainf && mainf->upvals.empty());
 
     bytecode.setMainFunction(mainid);
+    compiler.stubUncalledFunctions();
     bytecode.finalize();
 }
 

@@ -100,6 +100,10 @@ public:
 
     void patchAux(size_t targetAux, int32_t newValue);
 
+    // Luwu: replaces a finished function with one that only returns, for a function whose closures are never called.
+    // Its id stays, so closure instructions and child lists don't change.
+    void stubFunction(uint32_t fid);
+
     void foldJumps();
     std::vector<uint32_t> expandJumps();
 

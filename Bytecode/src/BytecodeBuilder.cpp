@@ -620,6 +620,54 @@ void BytecodeBuilder::patchAux(size_t targetAux, int32_t newValue)
     insns[targetAux] = newValue;
 }
 
+void BytecodeBuilder::stubFunction(uint32_t fid)
+{
+    LUAU_ASSERT(currentFunction == ~0u);
+    LUAU_ASSERT(fid < functions.size() && fid != mainFunction);
+
+    Function& func = functions[fid];
+
+    // The stub keeps the upvalue count, since its closures are still created and capture upvalues
+    func.numparams = 0;
+    func.isvararg = false;
+    func.typeinfo.clear();
+
+    // RETURN R0 0
+    uint32_t insn = LOP_RETURN | (1 << 16);
+
+    if (dumpFunctionPtr)
+    {
+        func.dump = "RETURN R0 0\n";
+        func.dumpinstoffs = {0, int(func.dump.size())};
+    }
+
+    if (encoder)
+        encoder->encode(&insn, 1);
+
+    std::string& ss = func.data;
+    ss.clear();
+
+    writeByte(ss, func.maxstacksize);
+    writeByte(ss, func.numparams);
+    writeByte(ss, func.numupvalues);
+    writeByte(ss, func.isvararg);
+    writeByte(ss, 0); // flags
+    writeVarInt(ss, 0); // type info
+
+    writeVarInt(ss, 1);
+    writeInt(ss, insn);
+
+    writeVarInt(ss, 0); // constants
+    writeVarInt(ss, 0); // child protos
+
+    writeVarInt(ss, func.debuglinedefined);
+    writeVarInt(ss, func.debugname);
+    writeByte(ss, 0); // line info
+    writeByte(ss, 0); // debug info
+
+    writeVarInt(ss, 0); // feedback slots
+}
+
 void BytecodeBuilder::setFunctionTypeInfo(std::string value)
 {
     functions[currentFunction].typeinfo = std::move(value);
