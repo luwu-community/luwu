@@ -719,6 +719,10 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         translateInstSetObjectMember(*this, pc, i);
         break;
 
+    case LOP_GETPOSITIONAL:
+        translateInstGetPositional(*this, pc, i);
+        break;
+
     case LOP_CHECKSELFCLASS:
         translateInstCheckSelfClass(*this, pc, i);
         break;
