@@ -75,6 +75,9 @@ end
 function vecs.at(list, position)
     return list:at(position)
 end
+function vecs.get(list, position)
+    return list:get(position)
+end
 function vecs.set(list, position, value)
     list:set(position, value)
 end
@@ -107,6 +110,9 @@ function deques.back(queue)
 end
 function deques.at(queue, position)
     return queue:at(position)
+end
+function deques.get(queue, position)
+    return queue:get(position)
 end
 function deques.set(queue, position, value)
     queue:set(position, value)
@@ -169,19 +175,28 @@ do
     for _ = 1, 3 do
         const first, second = vecs.attwo(list, 1)
         assert(first == 10 and second == nil)
-        assert(select("#", vecs.at(list, 1)) == 1 and select("#", vecs.at(list, 500)) == 1)
+        assert(select("#", vecs.at(list, 1)) == 1 and select("#", vecs.get(list, 500)) == 1)
         assert(vecs.pushcount(list, 1010) == 0 and vecs.pop(list) == 1010)
     end
 
-    -- positions that aren't whole numbers in range give nil
+    -- positions that aren't whole numbers in range give nil from `get`, and raise from `at`
     for _, position in { 0, -1, 101, 1.5, 0 / 0, math.huge, -math.huge } do
-        assert(vecs.at(list, position) == nil)
+        assert(vecs.get(list, position) == nil)
+        raises(function()
+            vecs.at(list, position)
+        end, "is out of range 1 to 100")
     end
+    raises(function()
+        vecs.at(list, 101)
+    end, "position 101 is out of range 1 to 100; get(101) returns nil instead of raising")
     -- a numeric string is converted, like any number argument
-    assert(vecs.at(list, "2") == 20)
+    assert(vecs.at(list, "2") == 20 and vecs.get(list, "2") == 20)
     raises(function()
         vecs.at(list, {})
     end, "invalid argument #2 to 'at'")
+    raises(function()
+        vecs.get(list, {})
+    end, "invalid argument #2 to 'get'")
 
     -- arguments from a multret call
     list:push(table.unpack({ 1010 }))
@@ -203,7 +218,10 @@ do
     for i = 100, 1, -1 do
         assert(vecs.pop(list) == if i == 3 then 33 else i * 10)
     end
-    assert(#list == 0 and vecs.pop(list) == nil and vecs.at(list, 1) == nil)
+    assert(#list == 0 and vecs.pop(list) == nil and vecs.get(list, 1) == nil)
+    raises(function()
+        vecs.at(list, 1)
+    end, "position 1 is out of range 1 to 0")
 end
 
 -- vecdeque: entries stay in order while the ring wraps and grows
@@ -237,7 +255,10 @@ do
     const empty = collections.VecDeque()
     for _ = 1, 3 do
         assert(deques.popfront(empty) == nil and deques.popback(empty) == nil)
-        assert(deques.front(empty) == nil and deques.back(empty) == nil and deques.at(empty, 1) == nil)
+        assert(deques.front(empty) == nil and deques.back(empty) == nil and deques.get(empty, 1) == nil)
+        raises(function()
+            deques.at(empty, 1)
+        end, "position 1 is out of range 1 to 0")
     end
     raises(function()
         deques.set(empty, 1, 1)
@@ -300,9 +321,9 @@ do
 
         assert(#list == #listmodel and #queue == #queuemodel)
         const position = random(#listmodel + 2) - 1
-        assert(vecs.at(list, position) == listmodel[position])
+        assert(vecs.get(list, position) == listmodel[position])
         const qposition = random(#queuemodel + 2) - 1
-        assert(deques.at(queue, qposition) == queuemodel[qposition])
+        assert(deques.get(queue, qposition) == queuemodel[qposition])
         assert(deques.front(queue) == queuemodel[1] and deques.back(queue) == queuemodel[#queuemodel])
     end
 

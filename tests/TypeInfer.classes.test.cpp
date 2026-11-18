@@ -6379,6 +6379,36 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "collections_classes_are_typed_from_their_dec
     CHECK_EQ(toString(requireType("front")), "string?");
 }
 
+// Luwu collections: `at` raises for a position out of range, so it gives the element type, and `get` gives nil there
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_at_gives_the_element_and_get_an_optional")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local list = collections.Vec<<number>>()
+        local queue = collections.VecDeque<<string>>()
+        local listat = list:at(1)
+        local listget = list:get(1)
+        local queueat = queue:at(1)
+        local queueget = queue:get(1)
+        local sum: number = list:at(1) + list:at(2)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("listat")), "number");
+    CHECK_EQ(toString(requireType("listget")), "number?");
+    CHECK_EQ(toString(requireType("queueat")), "string");
+    CHECK_EQ(toString(requireType("queueget")), "string?");
+}
+
 // Luwu collections: Vec and VecDeque take their values as arguments, OrderedMap takes `.(key, value)` bundles, and the
 // element types come from them
 TEST_CASE_FIXTURE(BuiltinsFixture, "collections_constructors_type_their_elements_from_their_arguments")
