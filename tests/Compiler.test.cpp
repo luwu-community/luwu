@@ -16294,6 +16294,65 @@ TEST_CASE("InlineBudgetBoundsWhatInliningAdds")
     CHECK_EQ(countCalls(compileFunction(source, 1, 2)), 2);
 }
 
+// Luwu: a function inlined wherever it's called keeps no body of its own, since nothing calls its closure
+TEST_CASE("InlinedFunctionWithoutCallsKeepsNoBody")
+{
+    const char* inlined = R"(
+local function add(a, b)
+    return a + b
+end
+local function main(x)
+    return add(x, 1)
+end
+)";
+    CHECK_EQ("\n" + compileFunction(inlined, 0, 2), R"(
+RETURN R0 0
+)");
+
+    // main is never called and never inlined, so it keeps its body; so does every function at O1
+    CHECK_EQ("\n" + compileFunction(inlined, 1, 2), R"(
+ADDK R1 R0 K0 [1]
+RETURN R1 1
+)");
+    CHECK_EQ("\n" + compileFunction(inlined, 0, 1), R"(
+ADD R2 R0 R1
+RETURN R2 1
+)");
+
+    // a closure that's read can be called
+    const char* escapes = R"(
+local function add(a, b)
+    return a + b
+end
+local function main(x)
+    return add(x, 1), add
+end
+)";
+    CHECK_EQ("\n" + compileFunction(escapes, 0, 2), R"(
+ADD R2 R0 R1
+RETURN R2 1
+)");
+
+    // a local function in an inlined body: its closure in `outer` is never made, and its closure in main is never read
+    const char* nested = R"(
+local function outer(x)
+    local function inner(y)
+        return y * 2
+    end
+    return inner(x) + 1
+end
+local function main(x)
+    return outer(x)
+end
+)";
+    CHECK_EQ("\n" + compileFunction(nested, 0, 2), R"(
+RETURN R0 0
+)");
+    CHECK_EQ("\n" + compileFunction(nested, 1, 2), R"(
+RETURN R0 0
+)");
+}
+
 // Luwu: LuwuCompileInlineCallCost is what a call counts as against the body's cost
 TEST_CASE("InlineCallCostWeighsAgainstTheBody")
 {

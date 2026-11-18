@@ -108,6 +108,10 @@ assert(string.replace("a\0b", "\0", "-") == "a-b")
 assert(("hello"):replace("l", "L") == "heLLo")
 assert(raises(string.replace, "hello", "", "x"))
 assert(raises(string.replace, "hello", "l", "x", -1))
+-- a maximum no string can reach replaces every occurrence, and NaN is an error
+assert(string.replace("aaaa", "a", "b", math.huge) == "bbbb")
+assert(string.replace("aaaa", "a", "b", 2^40) == "bbbb")
+assert(select(2, pcall(string.replace, "aaaa", "a", "b", 0/0)):find("can't be NaN"))
 
 -- split's maxpieces argument: at most that many pieces, the last holding the rest
 assert(eq(string.split("a,b,c", ",", 2), { "a", "b,c" }))
@@ -119,6 +123,9 @@ assert(eq(string.split("abc", "", 2), { "a", "bc" }))
 assert(eq(string.split("abc", "", 1), { "abc" }))
 assert(eq(string.split("key = a = b", " = ", 2), { "key", "a = b" }))
 assert(raises(string.split, "a,b", ",", 0))
+assert(eq(string.split("a,b,c", ",", math.huge), { "a", "b", "c" }))
+assert(eq(string.split("a,b,c", ",", 2^40), { "a", "b", "c" }))
+assert(select(2, pcall(string.split, "a,b", ",", 0/0)):find("can't be NaN"))
 
 -- method calls on proven strings compile as function calls and behave the same
 local literal = "Hello"

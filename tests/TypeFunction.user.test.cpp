@@ -18,6 +18,7 @@ LUAU_FASTFLAG(LuauSubtypingMissingPropertiesAsNil)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
+LUAU_FASTFLAG(LuauIndexingIntoErrorGivesError)
 LUAU_FASTFLAG(LuauTypeFunctionTableIndexerIsReadOnly)
 LUAU_DYNAMIC_FASTINT(LuauTypeFunctionSerdeIterationLimit)
 LUAU_FASTFLAG(LuauUdtfCreateSingletonFixErrorMessage)
@@ -5587,6 +5588,9 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_children_of_type_aliases_stay_frozen")
     ScopedFastFlag reuse{FFlag::LuauUdtfReuseTypeUserdatas, true};
     // Luwu: upstream 0.743 always freezes; Luwu (synced to 0.731) still flags it
     ScopedFastFlag frozen{FFlag::LuauTypeFunctionSupportsFrozen, true};
+    // Luwu: with this flag, `Config` has no type in the type function's body, so `inner:setproperty` also reports
+    // NoTypeUse. This test checks the runtime error.
+    ScopedFastFlag errorIndexing{FFlag::LuauIndexingIntoErrorGivesError, false};
 
     CheckResult result = check(R"(
         type Config = { inner: { a: number } }

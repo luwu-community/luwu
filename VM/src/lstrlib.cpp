@@ -5,6 +5,7 @@
 #include "lstring.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -1079,6 +1080,24 @@ static int str_format(lua_State* L)
     return 1;
 }
 
+// Luwu String Extensions (rfcs/string-extensions.md): reads the optional count `split` and `replace` take. Returns
+// false for no limit: nil, or a count no string can reach, like `math.huge`.
+static bool optlimit(lua_State* L, int arg, double minimum, const char* belowMinimum, int* limit)
+{
+    if (lua_isnoneornil(L, arg))
+        return false;
+
+    double count = luaL_checknumber(L, arg);
+    luaL_argcheck(L, count == count, arg, "can't be NaN");
+    luaL_argcheck(L, count >= minimum, arg, belowMinimum);
+
+    if (count >= double(INT_MAX))
+        return false;
+
+    *limit = int(count);
+    return true;
+}
+
 static int str_split(lua_State* L)
 {
     size_t haystackLen;
@@ -1088,9 +1107,8 @@ static int str_split(lua_State* L)
 
     // Luwu String Extensions (rfcs/string-extensions.md): an optional maximum number of pieces. The last piece holds the
     // rest of the string.
-    bool limited = FFlag::LuwuStringExtensions && !lua_isnoneornil(L, 3);
-    int maxPieces = limited ? luaL_checkinteger(L, 3) : 0;
-    luaL_argcheck(L, !limited || maxPieces >= 1, 3, "must be at least 1");
+    int maxPieces = 0;
+    bool limited = FFlag::LuwuStringExtensions && optlimit(L, 3, 1, "must be at least 1", &maxPieces);
     bool stoppedEarly = false;
 
     const char* begin = haystack;
@@ -1330,9 +1348,8 @@ static int str_replace(lua_State* L)
     const char* replacement = luaL_checklstring(L, 3, &newLength);
     luaL_argcheck(L, oldLength > 0, 2, "can't be an empty string");
 
-    bool limited = !lua_isnoneornil(L, 4);
-    int maxReplacements = limited ? luaL_checkinteger(L, 4) : 0;
-    luaL_argcheck(L, !limited || maxReplacements >= 0, 4, "can't be negative");
+    int maxReplacements = 0;
+    bool limited = optlimit(L, 4, 0, "can't be negative", &maxReplacements);
 
     const char* end = s + length;
     const char* match = lmemfind(s, length, old, oldLength);
