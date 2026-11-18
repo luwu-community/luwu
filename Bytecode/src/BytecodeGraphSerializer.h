@@ -566,6 +566,11 @@ struct BytecodeGraphSerializer
             bcb.emitAux(getVmConstInputAux(insn, 4));
             break;
 
+        case LOP_GETQUALIFIED:
+            bcb.emitABC(LOP_GETQUALIFIED, getRegister(insnOp), getRegInput(insn, 0), getRegInput(insn, 1));
+            bcb.emitAux(getVmConstInputAux(insn, 2));
+            break;
+
         case LOP_GETOBJECTMEMBER:
             bcb.emitABC(LOP_GETOBJECTMEMBER, getRegister(insnOp), getRegInput(insn, 0), 0);
             bcb.emitAux(getImmInt(insn, 1));
@@ -579,6 +584,12 @@ struct BytecodeGraphSerializer
         case LOP_NEWOBJECT:
             bcb.emitABC(LOP_NEWOBJECT, getRegister(insnOp), getRegInput(insn, 0), uint8_t(getImmInt(insn, 1)));
             bcb.emitAux(getImmInt(insn, 2));
+            break;
+
+        case LOP_INITTRAITS:
+            // the runner's register is the one below the object's
+            recordJump(insn, 1);
+            bcb.emitAD(LOP_INITTRAITS, uint8_t(getRegInput(insn, 0) - 1), 0);
             break;
 
         case LOP__COUNT:
