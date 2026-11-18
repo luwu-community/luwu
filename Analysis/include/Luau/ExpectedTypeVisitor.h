@@ -11,6 +11,12 @@ namespace Luau
 
 struct ExpectedTypeVisitor : public AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+    bool visitsPatternChecks() const override
+    {
+        return true;
+    }
+
 
     explicit ExpectedTypeVisitor(
         NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes,
