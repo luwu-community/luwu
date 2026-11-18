@@ -5,6 +5,7 @@
 #include "lapix.h"
 #include "lobject.h"
 #include "lstate.h"
+#include "lclass.h"
 #include "lualib.h"
 #include "luacode.h"
 #include "luacodegen.h"
@@ -6050,6 +6051,144 @@ Yielder_ = Yielder
         lua_close(QL);
         for (void* block : quarantine.freed)
             free(block);
+    }
+}
+
+// The native data ClassesNativeData gives its objects
+struct NativeDataPayload
+{
+    int* destroyed;
+    double value;
+};
+
+static void destroyNativeDataPayload(lua_State* L, void* data)
+{
+    NativeDataPayload* payload = static_cast<NativeDataPayload*>(data);
+    if (payload->destroyed)
+        (*payload->destroyed)++;
+}
+
+// Pushes an object of the global class `name`, constructed from C with no arguments
+static void newNativeDataObject(lua_State* L, const char* name)
+{
+    lua_getglobal(L, name);
+    lua_newobject(L, -1);
+}
+
+TEST_CASE("ClassesNativeData")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+    };
+
+    const int handleTag = 3;
+    const int otherTag = 4;
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    lua_setobjectdtor(L, handleTag, destroyNativeDataPayload);
+    CHECK(bool(lua_getobjectdtor(L, handleTag) == destroyNativeDataPayload));
+    CHECK(bool(lua_getobjectdtor(L, otherTag) == nullptr));
+
+    const luaR_NativeMember members[] = {
+        {"label", nullptr, 0, nullptr},
+    };
+
+    LuauClass* handle = luaR_newnativeclass(L, "Handle", members, 1, nullptr);
+    luaR_setclassnativedata(handle, sizeof(NativeDataPayload), handleTag);
+    lua_setglobal(L, "Handle");
+
+    LuauClass* other = luaR_newnativeclass(L, "Other", members, 1, nullptr);
+    luaR_setclassnativedata(other, sizeof(NativeDataPayload), otherTag);
+    lua_setglobal(L, "Other");
+
+    luaR_newnativeclass(L, "Plain", members, 1, nullptr);
+    lua_setglobal(L, "Plain");
+
+    int destroyed = 0;
+
+    SUBCASE("New objects get zeroed data and keep it through collections")
+    {
+        newNativeDataObject(L, "Handle");
+        NativeDataPayload* payload = static_cast<NativeDataPayload*>(lua_toobjectdata(L, -1, handleTag));
+        REQUIRE(payload);
+        CHECK(payload->destroyed == nullptr);
+        CHECK(payload->value == 0);
+        payload->destroyed = &destroyed;
+        payload->value = 42;
+
+        // churn the heap so the collections free something next to it
+        for (int i = 0; i < 1000; i++)
+        {
+            newNativeDataObject(L, "Plain");
+            lua_pop(L, 1);
+        }
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        lua_gc(L, LUA_GCCOLLECT, 0);
+
+        CHECK(lua_toobjectdata(L, -1, handleTag) == payload);
+        CHECK(payload->value == 42);
+        CHECK(destroyed == 0);
+
+        // the member is still an ordinary field
+        lua_pushliteral(L, "first");
+        lua_setfield(L, -2, "label");
+        lua_getfield(L, -1, "label");
+        CHECK(strcmp(lua_tostring(L, -1), "first") == 0);
+    }
+
+    SUBCASE("Reading data with another tag or from another value gives NULL")
+    {
+        newNativeDataObject(L, "Handle");
+        CHECK(lua_toobjectdata(L, -1, otherTag) == nullptr);
+        newNativeDataObject(L, "Other");
+        CHECK(lua_toobjectdata(L, -1, handleTag) == nullptr);
+        CHECK(lua_toobjectdata(L, -1, otherTag) != nullptr);
+        newNativeDataObject(L, "Plain");
+        CHECK(lua_toobjectdata(L, -1, 0) == nullptr);
+        CHECK(lua_toobjectdata(L, -1, handleTag) == nullptr);
+        lua_pushnumber(L, 1);
+        CHECK(lua_toobjectdata(L, -1, handleTag) == nullptr);
+        lua_getglobal(L, "Handle");
+        CHECK(lua_toobjectdata(L, -1, handleTag) == nullptr);
+    }
+
+    SUBCASE("Constructing from Luwu code gives the object data")
+    {
+        const char* source = "return Handle()";
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+        int loadResult = luau_load(L, "=ClassesNativeData", bytecode, bytecodeSize, 0);
+        free(bytecode);
+        REQUIRE(loadResult == 0);
+        REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+
+        NativeDataPayload* payload = static_cast<NativeDataPayload*>(lua_toobjectdata(L, -1, handleTag));
+        REQUIRE(payload);
+        CHECK(payload->destroyed == nullptr);
+    }
+
+    SUBCASE("The destructor runs once when the object is collected")
+    {
+        newNativeDataObject(L, "Handle");
+        static_cast<NativeDataPayload*>(lua_toobjectdata(L, -1, handleTag))->destroyed = &destroyed;
+        lua_pop(L, 1);
+
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        CHECK(destroyed == 1);
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        CHECK(destroyed == 1);
+    }
+
+    SUBCASE("The destructor runs once when the state is closed")
+    {
+        newNativeDataObject(L, "Handle");
+        static_cast<NativeDataPayload*>(lua_toobjectdata(L, -1, handleTag))->destroyed = &destroyed;
+        lua_setglobal(L, "kept");
+
+        globalState.reset();
+        CHECK(destroyed == 1);
     }
 }
 

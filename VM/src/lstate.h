@@ -285,6 +285,10 @@ typedef struct global_State
     lua_UserdataMark udatamark[LUA_UTAG_LIMIT]; // gc callbacks allowing the embedder to mark underlying native objects for the given userdata
     LuaTable* udatamt[LUA_UTAG_LIMIT]; // metatables for tagged userdata
 
+    // Luwu Native Classes (rfcs/native-classes.md): for each native data tag, the function that runs when an object
+    // carrying such data is freed
+    lua_Destructor objectdtors[LUA_OTAG_LIMIT];
+
     TValue weakregistry; // backing table for lua_weakref/lua_weakunref/lua_getweakref
     int weakregistryfree; // next free slot in weakregistry
     lua_EmbedderGc embeddergc; // embedder GC callback for keeping weak references alive
