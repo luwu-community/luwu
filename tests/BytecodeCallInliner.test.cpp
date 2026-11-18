@@ -18,6 +18,8 @@ using namespace Luau;
 using namespace Luau::Bytecode;
 
 LUAU_FASTFLAG(LuauEmitCallFeedback)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 
 namespace
 {
@@ -1437,6 +1439,44 @@ TEST_CASE_FIXTURE(BytecodeInlinerFixture, "graph_builds_loop_exit_phi_for_downst
             for (BcOp in : inst.ops)
                 CHECK_FALSE(isLoadNil(in));
         }
+}
+
+TEST_CASE_FIXTURE(BytecodeInlinerFixture, "graph_refuses_trait_forms_of_newclassmember")
+{
+    ScopedFastFlag sff[] = {{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    // The chunk's `implements` list and its copy of `greet` are NEWCLASSMEMBER's IMPLEMENTS and TRAITCOPY forms, which
+    // read different operands than a plain member add: the graph would rewrite them as one.
+    std::string_view src = R"(
+        trait Greeter
+            function greet(self)
+                return "hello"
+            end
+        end
+
+        class Cat implements Greeter
+            name = "whiskers"
+        end
+    )";
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = Parser::parse(src.data(), src.size(), names, allocator, ParseOptions{});
+    REQUIRE(result.errors.empty());
+
+    BytecodeBuilder bcb;
+    bcb.setDumpFlags(BytecodeBuilder::Dump_Code);
+    compileOrThrow(bcb, result, names, CompileOptions{});
+
+    strings = extractStringTable(bcb);
+    std::vector<std::string_view> table;
+    for (std::string& s : strings)
+        table.push_back(s);
+
+    REQUIRE(bcb.getFunctionCount() > 0);
+    uint32_t chunk = bcb.getFunctionCount() - 1;
+    CHECK(bcb.dumpFunction(chunk).find("NEWCLASSMEMBER") != std::string::npos);
+    CHECK_FALSE(Bytecode::fromFunctionBytecode(bcb.getFunctionData(chunk), table));
 }
 
 TEST_SUITE_END();
