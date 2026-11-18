@@ -1271,6 +1271,10 @@ public:
     {
         return destructuredFrom || destructuredFromLoop;
     }
+
+    // Luwu Export Values (rfcs/export-values.md): set for `export local x = v`, a parse error that still declares a const
+    // export. `keywordLocation` is then the `local` keyword.
+    bool exportWrittenAsLocal = false;
 };
 
 class AstStatFor : public AstStat
@@ -1809,6 +1813,11 @@ public:
     std::optional<Location> needsLocation = std::nullopt;
     // Luwu Traits (rfcs/classes/traits.md): a trait's `needs` list; entries never have trait arguments. Always empty on a class.
     AstArray<AstClassTraitRef> needs{nullptr, 0};
+    // Luwu Classes (rfcs/classes): upstream Luau's `open class` and `extends Base`, which are parse errors since Luwu has
+    // no inheritance. They're kept so tools can rewrite upstream classes. Null and nullopt when not written.
+    std::optional<Location> openLocation = std::nullopt;
+    std::optional<Location> extendsLocation = std::nullopt;
+    AstExpr* extendsBase = nullptr;
 };
 
 // Luwu Declare Statements (rfcs/declare-statements.md): `[export] declare class`, a class that exists at runtime but

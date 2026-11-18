@@ -1394,7 +1394,7 @@ struct Printer
                 if (a->keywordLocation.has_value())
                 {
                     advance(a->keywordLocation->begin);
-                    writer.keyword(a->isConst ? "const" : "local");
+                    writer.keyword(a->isConst && !a->exportWrittenAsLocal ? "const" : "local");
                 }
             }
             else if (a->isConst)

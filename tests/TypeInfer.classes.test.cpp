@@ -42,6 +42,30 @@ LUAU_FASTFLAG(LuwuNonePrimitive)
 
 TEST_SUITE_BEGIN("TypeInferClasses");
 
+// Luwu Classes (rfcs/classes): upstream Luau's `open` and `extends` are parse errors, and the class is still checked
+TEST_CASE_FIXTURE(ClassesFixture, "open_and_extends_are_only_parse_errors")
+{
+    CheckResult result = check(R"(
+        open class Foo extends Bar
+            public x: string
+            public y: number
+            function fooer(self)
+                print(self.x)
+            end
+        end
+        local foo = Foo { x = "a", y = 1 }
+        foo:fooer()
+        local n: number = foo.x
+    )");
+
+    // the two parse errors, then the mismatch on the last line, which shows the class was checked
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK(get<SyntaxError>(result.errors[0]));
+    CHECK(get<SyntaxError>(result.errors[1]));
+    CHECK(get<TypeMismatch>(result.errors[2]));
+    CHECK_EQ(result.errors[2].location.begin.line, 10);
+}
+
 TEST_CASE_FIXTURE(ClassesFixture, "Point_tostring")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
@@ -3272,6 +3296,12 @@ TEST_CASE_FIXTURE(ClassesFixture, "declaring_classes_is_typed_without_cascades")
     const char* after = "\nlocal unrelated = 1\nprint(unrelated)\n";
     checkTypewriting(*this, "", "declare class Semver(public major: number)\n    public function bump(self): Semver\nend", after);
     checkTypewriting(*this, "", "class type Path(public raw: string)\nend", after);
+
+    // Mixing `declare class` with `class type` reports one parse error that stays up while the body is typed
+    checkTypewriting(*this, "", "declare class type Cat\n    name: string\nend", after, {"the type alone"});
+    checkTypewriting(*this, "", "export declare class type Cat\n    name: string\nend", after, {"the type alone"});
+    ScopedFastFlag luwuTraits{FFlag::LuwuTraits, true};
+    checkTypewriting(*this, "", "export declare trait type Pet\n    name: string\nend", after, {"the type alone"});
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "declared_class_construction_and_access")

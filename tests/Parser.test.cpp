@@ -5496,17 +5496,68 @@ TEST_CASE_FIXTURE(Fixture, "class_extends_is_rejected")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
-    // no inheritance: `extends` gets its own error rather than parsing as two bare fields
+    // no inheritance: `extends` gets one error rather than parsing as bare fields, and the base stays in the AST
     ParseResult result = tryParse(R"(
-        class Base end
+        local m = {}
         class Derived extends Base end
-        class WithCtor(x: number) extends Base end
+        class WithCtor(x: number) extends m.Base
+            public y: number
+        end
+        class Indexed extends m["Base"] end
+        class Literal extends "Base" end
     )");
 
-    REQUIRE_EQ(result.errors.size(), 2);
-    CHECK_EQ(result.errors[0].getMessage(), "Luwu classes don't support classical inheritance ('extends'); consider composing your classes (holding an object of another class in your class) or waiting for Luwu traits");
-    CHECK_EQ(result.errors[0].getLocation().begin.line, 2);
-    CHECK_EQ(result.errors[1].getLocation().begin.line, 3);
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Luwu classes can't extend 'Base': give 'Derived' a field holding a 'Base', or put what they share in a trait and write 'implements' "
+        "instead of 'extends'"
+    );
+    CHECK_EQ(result.errors[0].getLocation(), Location{{2, 22}, {2, 34}});
+    CHECK_EQ(result.errors[1].getLocation(), Location{{3, 34}, {3, 48}});
+    CHECK_NE(result.errors[1].getMessage().find("'m.Base'"), std::string::npos);
+    CHECK_EQ(result.errors[2].getLocation(), Location{{6, 22}, {6, 39}});
+    CHECK_EQ(result.errors[3].getLocation(), Location{{7, 22}, {7, 36}});
+
+    REQUIRE_EQ(result.root->body.size, 5);
+    AstStatClass* derived = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(derived);
+    REQUIRE(derived->extendsLocation);
+    CHECK_EQ(*derived->extendsLocation, Location{{2, 22}, {2, 29}});
+    REQUIRE(derived->extendsBase);
+    CHECK(derived->extendsBase->is<AstExprGlobal>());
+
+    AstStatClass* withCtor = result.root->body.data[2]->as<AstStatClass>();
+    REQUIRE(withCtor);
+    CHECK(withCtor->primaryConstructor);
+    CHECK_EQ(withCtor->members.size, 1);
+    REQUIRE(withCtor->extendsBase);
+    AstExprIndexName* qualified = withCtor->extendsBase->as<AstExprIndexName>();
+    REQUIRE(qualified);
+    CHECK(qualified->expr->is<AstExprLocal>());
+
+    AstStatClass* indexed = result.root->body.data[3]->as<AstStatClass>();
+    REQUIRE(indexed);
+    REQUIRE(indexed->extendsBase);
+    CHECK(indexed->extendsBase->is<AstExprIndexExpr>());
+
+    AstStatClass* literal = result.root->body.data[4]->as<AstStatClass>();
+    REQUIRE(literal);
+    REQUIRE(literal->extendsBase);
+    CHECK(literal->extendsBase->is<AstExprConstantString>());
+
+    // A visitor sees the base, so `m` counts as used
+    struct FindsLocals : AstVisitor
+    {
+        size_t found = 0;
+        bool visit(AstExprLocal*) override
+        {
+            found++;
+            return true;
+        }
+    } findsLocals;
+    withCtor->visit(&findsLocals);
+    CHECK_EQ(findsLocals.found, 1);
 
     // and a field named `extends` is rejected as a keyword member name, not accepted as a field
     ParseResult field = tryParse(R"(
@@ -5515,6 +5566,44 @@ TEST_CASE_FIXTURE(Fixture, "class_extends_is_rejected")
         end
     )");
     CHECK_EQ(field.errors.size(), 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_open_is_rejected")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // upstream Luau's `open class` is one error, and the class still parses
+    ParseResult result = tryParse(R"(
+        open class Animal
+            public name: string
+        end
+        export open class Pet
+            public owner: string
+        end
+        local open = 1
+        print(open)
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].getMessage(), "Remove 'open' here: 'open class' is an upstream Luau feature for inheritance, not a Luwu feature");
+    CHECK_EQ(result.errors[0].getLocation(), Location{{1, 8}, {1, 12}});
+    CHECK_EQ(result.errors[1].getLocation(), Location{{4, 15}, {4, 19}});
+
+    REQUIRE_EQ(result.root->body.size, 4);
+    AstStatClass* animal = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(animal);
+    CHECK_EQ(animal->name->name, "Animal");
+    CHECK_EQ(animal->members.size, 1);
+    REQUIRE(animal->openLocation);
+    CHECK_EQ(*animal->openLocation, Location{{1, 8}, {1, 12}});
+    CHECK_EQ(animal->location.begin, Position{1, 8});
+
+    AstStatClass* pet = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(pet);
+    CHECK(pet->exported);
+    CHECK(pet->name->isExported);
+    REQUIRE(pet->openLocation);
+    CHECK_EQ(*pet->openLocation, Location{{4, 15}, {4, 19}});
 }
 
 TEST_CASE_FIXTURE(Fixture, "class_implements_is_rejected")
@@ -9013,9 +9102,12 @@ TEST_CASE_FIXTURE(Fixture, "export_local_and_const_are_errors")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
 
-    matchParseError("export local x = 5", "Remove 'local' here; exports are always const");
-    matchParseError("export const x = 5", "Remove 'const' here; exports are always const");
-    matchParseError("export const function f() end", "Remove 'const' here; exports are always const");
+    const std::string exportLocal =
+        "Luwu does not support 'export local' syntax (exported values are always const), use a local binding and export it later";
+    const std::string exportConst = "Remove this 'const' keyword, exported values are always const";
+    matchParseError("export local x = 5", exportLocal);
+    matchParseError("export const x = 5", exportConst);
+    matchParseError("export const function f() end", exportConst);
     const std::string hoistHint =
         "Forward declare a local binding to export a hoisted function: local f; ... export function f() ... end";
     matchParseError("export x", "Exported values are const and must be initialized");
@@ -9062,12 +9154,45 @@ export const y = 6
 export z = x + y
     )");
     REQUIRE_EQ(2, result.errors.size());
+    CHECK_EQ(result.errors[0].getLocation(), Location{{1, 7}, {1, 12}});
+    CHECK_EQ(result.errors[1].getLocation(), Location{{2, 7}, {2, 12}});
     REQUIRE(result.root != nullptr);
-    CHECK_EQ(3, result.root->body.size);
+    REQUIRE_EQ(3, result.root->body.size);
+
+    // Both declare a const export, and the AST keeps the keyword that was written
+    for (size_t i = 0; i < 2; ++i)
+    {
+        AstStatLocal* declared = result.root->body.data[i]->as<AstStatLocal>();
+        REQUIRE(declared != nullptr);
+        CHECK(declared->isConst);
+        CHECK(declared->isExported);
+        CHECK_EQ(declared->exportWrittenAsLocal, i == 0);
+        REQUIRE(declared->keywordLocation);
+        CHECK_EQ(*declared->keywordLocation, result.errors[i].getLocation());
+        REQUIRE_EQ(1, declared->vars.size);
+        CHECK(declared->vars.data[0]->isConst);
+        CHECK(declared->vars.data[0]->isExported);
+    }
+
+    // Assigning an `export local` reports it like assigning any const
+    ParseResult reassigned = tryParse("export local x = 5\nx = 6");
+    REQUIRE_EQ(2, reassigned.errors.size());
+    CHECK_EQ(reassigned.errors[1].getMessage(), "Variable 'x' is constant and may not be reassigned");
+
+    // `export local function f()` is exported like `export function f()`, with one error
+    ParseResult localFunction = tryParse("export local function f() end\nprint(f)");
+    REQUIRE_EQ(1, localFunction.errors.size());
+    CHECK_EQ(localFunction.errors[0].getMessage(), "'export' must be followed by an identifier or 'function'; try removing 'local'");
+    REQUIRE(localFunction.root != nullptr);
+    REQUIRE_EQ(2, localFunction.root->body.size);
+    AstStatLocalFunction* exportedFunction = localFunction.root->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(exportedFunction != nullptr);
+    CHECK(exportedFunction->name->isExported);
+    CHECK(exportedFunction->name->isConst);
 
     ParseOptions luau;
     luau.language = Language::Luau;
-    for (const char* source : {"export x = 5", "export function f() end", "export local x = 5"})
+    for (const char* source : {"export x = 5", "export function f() end", "export local x = 5", "export local x", "export const x"})
     {
         INFO(source);
         ParseResult inLuau = tryParse(source, luau);
@@ -10822,11 +10947,13 @@ TEST_CASE_FIXTURE(Fixture, "declare_trait_mistakes")
         "declare trait type Handler\nend",
         "Write 'trait type Handler' for the type alone, or 'declare trait Handler' for the trait and its type: 'declare' declares a value"
     );
+    onlyError("export declare trait type Handler\nend", "Remove 'declare' to export the type alone: write 'export trait type Handler'");
     onlyError("trait type A\n    expect x = number\nend", "Expected fields can't have default values");
     onlyError("trait type A\n    c\nend", "Declared trait field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
     onlyError("trait type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
     onlyError("trait type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
     onlyError("trait type A implements B\nend", "Traits can't implement traits; did you mean 'needs'?");
+    onlyError("trait A extends B\nend", "Traits can't extend traits; did you mean 'needs'?");
 
     // `export` goes first
     Allocator allocator;
@@ -10969,6 +11096,21 @@ TEST_CASE_FIXTURE(Fixture, "declared_types_are_written_out_and_never_shadowed")
         "declare class type Path\nend",
         "Write 'class type Path' for the type alone, or 'declare class Path' for the class and its type: 'declare' declares a value"
     );
+
+    // With `export`, removing `declare` gives `export class type Path`. The error is on `declare`, and the statement is
+    // still the exported type.
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult exported = parseSource(allocator, names, "export declare class type Path\n    raw: string\nend\nprint(1)");
+    REQUIRE_EQ(exported.errors.size(), 1);
+    CHECK_EQ(exported.errors[0].getMessage(), "Remove 'declare' to export the type alone: write 'export class type Path'");
+    CHECK_EQ(exported.errors[0].getLocation(), Location{{0, 7}, {0, 14}});
+    REQUIRE_EQ(exported.root->body.size, 2);
+    AstStatDeclareClass* exportedType = exported.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(exportedType);
+    CHECK(exportedType->shape->exported);
+    CHECK_EQ(exportedType->shape->name->name, "Path");
+    CHECK_EQ(exportedType->shape->members.size, 1);
     onlyError("class type A\n    c\nend", "Declared class field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
 
     const std::string declaredOnLine1 = "Type 'A' is declared on line 1, and a declared type can't be shadowed";
