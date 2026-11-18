@@ -128,6 +128,8 @@ const char* const kDeclareExportNestedError =
 const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead";
 const char* const kDeclareClassTypeError =
     "Write 'class type %s' for the type alone, or 'declare class %s' for the class and its type: 'declare' declares a value";
+// `export class type Name` is how an exported type alone is written, so only `declare` is in the way
+const char* const kExportDeclareClassTypeError = "Remove 'declare' to export the type alone: write 'export class type %s'";
 const char* const kDeclareExportOrderError = "'export' goes before 'declare': write 'export declare'";
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
@@ -3364,11 +3366,13 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
     if (exportLocation)
     {
         bool exportsType = declaresClass() || (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "extern");
-        if (!exportsType)
-        {
+        // With nothing declarable after `declare` (`export declare` still being typed), the missing declaration is the
+        // one error
+        bool declaresSomething = lexer.current().type == Lexeme::Name || lexer.current().type == Lexeme::ReservedFunction;
+        if (!exportsType && declaresSomething)
             report(*exportLocation, "%s", kDeclareExportValueError);
+        if (!exportsType)
             exportLocation.reset();
-        }
     }
 
     if (declaresClass())
@@ -3379,7 +3383,12 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         // `declare class Name` declares the class: its type, and the global holding it, the way `class Name` defines both.
         // `declare class type Name` mixes that with `class type Name` (the type alone); report it and parse the type.
         bool typeKeyword = lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "type" && lexer.lookahead().type == Lexeme::Name;
-        if (typeKeyword)
+        if (typeKeyword && exportKeywordLocation)
+        {
+            report(start, kExportDeclareClassTypeError, lexer.lookahead().name);
+            nextLexeme();
+        }
+        else if (typeKeyword)
         {
             report(Location(classKeywordLocation, lexer.current().location), kDeclareClassTypeError, lexer.lookahead().name, lexer.lookahead().name);
             nextLexeme();
@@ -4035,18 +4044,42 @@ AstStat* Parser::parseAssignment(AstExpr* initial)
 
 // Luwu Export Values (rfcs/export-values.md): `local` or `const` after `export`, which every export already is. An
 // exported local without a value waits for reportValuelessExports, which knows whether the module assigns it later.
-void Parser::reportRedundantExportKeyword(const Location& keywordLocation, const char* keyword, AstStatLocal* stat)
+void Parser::reportRedundantExportKeyword(
+    const Location& keywordLocation,
+    const char* keyword,
+    AstStatLocal* stat,
+    size_t errorsBeforeDeclaration
+)
 {
     // Outside a Luwu module the export itself is the error
     if (options.language != Language::Luwu)
         return;
 
-    // A value-less `export const x` was already recorded by parseLocal
+    // A declaration that's still being typed reports that first
+    if (parseErrors.size() > errorsBeforeDeclaration)
+        return;
+
+    // parseLocal already recorded a value-less export. `export local x` is how upstream forward declares an export.
     bool valueless = stat && stat->values.size == 0 && stat->vars.size > 0;
-    if (valueless && strcmp(keyword, "local") == 0)
-        valuelessExports.push_back({keywordLocation, stat, /* writtenAsLocal= */ true});
+    bool writtenAsLocal = strcmp(keyword, "local") == 0;
+    if (valueless && writtenAsLocal)
+    {
+        for (ValuelessExport& recorded : valuelessExports)
+        {
+            if (recorded.stat == stat)
+            {
+                recorded.location = keywordLocation;
+                recorded.writtenAsLocal = true;
+            }
+        }
+    }
+    else if (writtenAsLocal)
+        report(
+            keywordLocation,
+            "Luwu does not support 'export local' syntax (exported values are always const), use a local binding and export it later"
+        );
     else if (!valueless)
-        report(keywordLocation, "Remove '%s' here; exports are always const", keyword);
+        report(keywordLocation, "Remove this 'const' keyword, exported values are always const");
 }
 
 // Luwu Export Values (rfcs/export-values.md): an export without a value usually lacks one by mistake. Written as
@@ -4054,6 +4087,10 @@ void Parser::reportRedundantExportKeyword(const Location& keywordLocation, const
 // declaration instead.
 void Parser::reportValuelessExports(AstStatBlock* root)
 {
+    // Outside a Luwu module the export itself is the error
+    if (options.language != Language::Luwu)
+        return;
+
     for (const ValuelessExport& valueless : valuelessExports)
     {
         AstStatLocal* stat = valueless.stat;
@@ -4192,18 +4229,28 @@ AstStat* Parser::parseExportValue(
     {
         Location localKeywordLocation = lexer.current().location;
 
-        if (lexer.lookahead().type == Lexeme::ReservedFunction)
+        nextLexeme();
+
+        // Luwu: the function is parsed as `export function f()`. Upstream leaves `local` unread and parses a binding
+        // list from it, which reports a second error.
+        if (lexer.current().type == Lexeme::ReservedFunction)
         {
             report(start, "'export' must be followed by an identifier or 'function'; try removing 'local'");
-            // still parse the function for error recovery
-            return parseLocal(start, localKeywordLocation, {nullptr, 0}, true);
+            return exportFunctionStat();
         }
 
         // Luwu Export Values (rfcs/export-values.md): exports are always const, so `export local` is an error. Upstream
-        // exports a mutable local, which raises anyway once its module returns and freezes the export table.
-        AstStat* stat = exportLocalStat(parseLocal(start, keywordLocation, {nullptr, 0}, false), localKeywordLocation);
+        // exports a mutable local, which raises anyway once its module returns and freezes the export table. The
+        // declaration is still parsed as a const export.
+        size_t errorsBeforeDeclaration = parseErrors.size();
+        parsingExport = true;
+        AstStat* stat = exportLocalStat(parseLocal(start, start, {nullptr, 0}, true), localKeywordLocation);
+        parsingExport = false;
         if (AstStatLocal* localStat = stat->as<AstStatLocal>())
-            reportRedundantExportKeyword(localKeywordLocation, "local", localStat);
+        {
+            localStat->exportWrittenAsLocal = true;
+            reportRedundantExportKeyword(localKeywordLocation, "local", localStat, errorsBeforeDeclaration);
+        }
         return stat;
     }
     else if (lexer.current().type == Lexeme::ReservedFunction)
@@ -4213,24 +4260,22 @@ AstStat* Parser::parseExportValue(
     else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const")
     {
         // Luwu Export Values (rfcs/export-values.md): exports are always const, so `const` after `export` is an error. The
-        // declaration is parsed without it.
+        // declaration is parsed as `export x = v`, with `keywordLocation` at the `const`.
         Location constKeywordLocation = lexer.current().location;
         nextLexeme();
 
         if (lexer.current().type == Lexeme::ReservedFunction)
         {
-            reportRedundantExportKeyword(constKeywordLocation, "const", nullptr);
+            reportRedundantExportKeyword(constKeywordLocation, "const", nullptr, parseErrors.size());
             return exportFunctionStat();
         }
 
+        size_t errorsBeforeDeclaration = parseErrors.size();
         parsingExport = true;
-        AstStat* stat = exportLocalStat(parseLocal(start, start, {nullptr, 0}, true), start);
+        AstStat* stat = exportLocalStat(parseLocal(start, start, {nullptr, 0}, true), constKeywordLocation);
         parsingExport = false;
         if (AstStatLocal* localStat = stat->as<AstStatLocal>())
-        {
-            localStat->keywordLocation = std::nullopt;
-            reportRedundantExportKeyword(constKeywordLocation, "const", localStat);
-        }
+            reportRedundantExportKeyword(constKeywordLocation, "const", localStat, errorsBeforeDeclaration);
         return stat;
     }
     else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class")

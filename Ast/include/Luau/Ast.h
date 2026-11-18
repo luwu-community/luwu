@@ -1016,6 +1016,10 @@ public:
 
     // Attributes written above this declaration, e.g. `@deprecated`. Empty when there are none.
     AstArray<AstAttr*> attributes{nullptr, 0};
+
+    // Luwu Export Values (rfcs/export-values.md): set for `export local x = v`, a parse error that still declares a const
+    // export. `keywordLocation` is then the `local` keyword.
+    bool exportWrittenAsLocal = false;
 };
 
 class AstStatFor : public AstStat
