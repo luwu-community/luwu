@@ -644,6 +644,28 @@ struct TypeStringifier
     // name there instead of `*CYCLE*`, which doesn't say *which* type recursed -- ambiguous as soon
     // as more than one property can. Returns false (leaving the `*CYCLE*` fallback to the caller)
     // for unnamed types, and in exhaustive mode, where names are never used.
+    // Luwu: the name of the alias `ty` is the type of, recorded as a reference to it. When a scope is provided, the name
+    // is checked for visibility and gets its module's name in front.
+    void emitAliasName(TypeId ty, const std::string& name)
+    {
+        if (state.opts.scope)
+        {
+            auto [success, moduleName] = canUseTypeNameInScope(state.opts.scope, name);
+
+            if (!success)
+                state.result.invalid = true;
+
+            if (moduleName)
+            {
+                state.emit(*moduleName);
+                state.emit(".");
+            }
+        }
+
+        state.recordAliasReference(name, ty);
+        state.emitAndRecordSpan(name, ty);
+    }
+
     bool emitRecursiveAliasName(TypeId ty, const std::optional<std::string>& name, const std::optional<std::string>& syntheticName)
     {
         if (state.exhaustive)
@@ -1077,23 +1099,7 @@ struct TypeStringifier
         {
             if (ttv.name)
             {
-                // If scope if provided, add module name and check visibility
-                if (state.opts.scope)
-                {
-                    auto [success, moduleName] = canUseTypeNameInScope(state.opts.scope, *ttv.name);
-
-                    if (!success)
-                        state.result.invalid = true;
-
-                    if (moduleName)
-                    {
-                        state.emit(*moduleName);
-                        state.emit(".");
-                    }
-                }
-
-                state.recordAliasReference(*ttv.name, ty);
-                state.emitAndRecordSpan(*ttv.name, ty);
+                emitAliasName(ty, *ttv.name);
                 stringify(ttv.instantiatedTypeParams, ttv.instantiatedTypePackParams);
                 return;
             }
@@ -1488,6 +1494,24 @@ struct TypeStringifier
     void operator()(TypeId ty, const ExternType& etv)
     {
         const char* valueKind = state.opts.classAndTraitValuesInTypeForm ? nominalValueKind(etv) : nullptr;
+
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an instantiation that is an alias's type prints as the
+        // alias's name, like a named table
+        bool showName = (!state.exhaustive || state.opts.hideTableAliasExpansions) && state.suppressNameFor != ty;
+        if (!valueKind && showName && etv.aliasName)
+        {
+            emitAliasName(ty, *etv.aliasName);
+            return;
+        }
+
+        // Luwu bundles: a bundle prints the way `.(A, B)` writes it, rather than by its class's name
+        const ExternType* declared = etv.genericTemplate ? get<ExternType>(follow(*etv.genericTemplate)) : &etv;
+        if (!valueKind && declared && declared->printsAsBundle)
+        {
+            stringifyBundle(etv);
+            return;
+        }
+
         if (valueKind)
         {
             state.emit(valueKind);
@@ -1511,6 +1535,42 @@ struct TypeStringifier
 
         if (valueKind)
             state.emit(">");
+    }
+
+    void stringifyBundle(const ExternType& etv)
+    {
+        if (state.hasSeen(&etv))
+        {
+            state.result.cycle = true;
+            state.emit("*CYCLE*");
+            return;
+        }
+
+        // a fixed size's positions are its type arguments, a `BigBundle`'s are its type pack
+        std::vector<TypeId> positions = etv.instantiatedTypeParams;
+        std::optional<TypePackId> tail;
+        if (!etv.instantiatedTypePackParams.empty())
+        {
+            auto [heads, packTail] = flatten(etv.instantiatedTypePackParams[0]);
+            positions = std::move(heads);
+            tail = packTail;
+        }
+
+        state.emit(".(");
+        for (size_t i = 0; i < positions.size(); i++)
+        {
+            if (i > 0)
+                state.emit(", ");
+            stringify(positions[i]);
+        }
+        if (tail)
+        {
+            if (!positions.empty())
+                state.emit(", ");
+            stringify(*tail);
+        }
+        state.emit(")");
+        state.unsee(&etv);
     }
 
     void operator()(TypeId, const AnyType&)
