@@ -5193,17 +5193,68 @@ TEST_CASE_FIXTURE(Fixture, "class_extends_is_rejected")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
-    // no inheritance: `extends` gets its own error rather than parsing as two bare fields
+    // no inheritance: `extends` gets one error rather than parsing as bare fields, and the base stays in the AST
     ParseResult result = tryParse(R"(
-        class Base end
+        local m = {}
         class Derived extends Base end
-        class WithCtor(x: number) extends Base end
+        class WithCtor(x: number) extends m.Base
+            public y: number
+        end
+        class Indexed extends m["Base"] end
+        class Literal extends "Base" end
     )");
 
-    REQUIRE_EQ(result.errors.size(), 2);
-    CHECK_EQ(result.errors[0].getMessage(), "Luwu classes don't support classical inheritance ('extends'); consider composing your classes (holding an object of another class in your class) or waiting for Luwu traits");
-    CHECK_EQ(result.errors[0].getLocation().begin.line, 2);
-    CHECK_EQ(result.errors[1].getLocation().begin.line, 3);
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Luwu classes can't extend 'Base': give 'Derived' a field holding a 'Base', or put what they share in a trait and write 'implements' "
+        "instead of 'extends'"
+    );
+    CHECK_EQ(result.errors[0].getLocation(), Location{{2, 22}, {2, 34}});
+    CHECK_EQ(result.errors[1].getLocation(), Location{{3, 34}, {3, 48}});
+    CHECK_NE(result.errors[1].getMessage().find("'m.Base'"), std::string::npos);
+    CHECK_EQ(result.errors[2].getLocation(), Location{{6, 22}, {6, 39}});
+    CHECK_EQ(result.errors[3].getLocation(), Location{{7, 22}, {7, 36}});
+
+    REQUIRE_EQ(result.root->body.size, 5);
+    AstStatClass* derived = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(derived);
+    REQUIRE(derived->extendsLocation);
+    CHECK_EQ(*derived->extendsLocation, Location{{2, 22}, {2, 29}});
+    REQUIRE(derived->extendsBase);
+    CHECK(derived->extendsBase->is<AstExprGlobal>());
+
+    AstStatClass* withCtor = result.root->body.data[2]->as<AstStatClass>();
+    REQUIRE(withCtor);
+    CHECK(withCtor->primaryConstructor);
+    CHECK_EQ(withCtor->members.size, 1);
+    REQUIRE(withCtor->extendsBase);
+    AstExprIndexName* qualified = withCtor->extendsBase->as<AstExprIndexName>();
+    REQUIRE(qualified);
+    CHECK(qualified->expr->is<AstExprLocal>());
+
+    AstStatClass* indexed = result.root->body.data[3]->as<AstStatClass>();
+    REQUIRE(indexed);
+    REQUIRE(indexed->extendsBase);
+    CHECK(indexed->extendsBase->is<AstExprIndexExpr>());
+
+    AstStatClass* literal = result.root->body.data[4]->as<AstStatClass>();
+    REQUIRE(literal);
+    REQUIRE(literal->extendsBase);
+    CHECK(literal->extendsBase->is<AstExprConstantString>());
+
+    // A visitor sees the base, so `m` counts as used
+    struct FindsLocals : AstVisitor
+    {
+        size_t found = 0;
+        bool visit(AstExprLocal*) override
+        {
+            found++;
+            return true;
+        }
+    } findsLocals;
+    withCtor->visit(&findsLocals);
+    CHECK_EQ(findsLocals.found, 1);
 
     // and a field named `extends` is rejected as a keyword member name, not accepted as a field
     ParseResult field = tryParse(R"(
@@ -5212,6 +5263,44 @@ TEST_CASE_FIXTURE(Fixture, "class_extends_is_rejected")
         end
     )");
     CHECK_EQ(field.errors.size(), 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_open_is_rejected")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // upstream Luau's `open class` is one error, and the class still parses
+    ParseResult result = tryParse(R"(
+        open class Animal
+            public name: string
+        end
+        export open class Pet
+            public owner: string
+        end
+        local open = 1
+        print(open)
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].getMessage(), "Remove 'open' here: 'open class' is an upstream Luau feature for inheritance, not a Luwu feature");
+    CHECK_EQ(result.errors[0].getLocation(), Location{{1, 8}, {1, 12}});
+    CHECK_EQ(result.errors[1].getLocation(), Location{{4, 15}, {4, 19}});
+
+    REQUIRE_EQ(result.root->body.size, 4);
+    AstStatClass* animal = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(animal);
+    CHECK_EQ(animal->name->name, "Animal");
+    CHECK_EQ(animal->members.size, 1);
+    REQUIRE(animal->openLocation);
+    CHECK_EQ(*animal->openLocation, Location{{1, 8}, {1, 12}});
+    CHECK_EQ(animal->location.begin, Position{1, 8});
+
+    AstStatClass* pet = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(pet);
+    CHECK(pet->exported);
+    CHECK(pet->name->isExported);
+    REQUIRE(pet->openLocation);
+    CHECK_EQ(*pet->openLocation, Location{{4, 15}, {4, 19}});
 }
 
 TEST_CASE_FIXTURE(Fixture, "class_implements_is_rejected")
@@ -9067,11 +9156,13 @@ TEST_CASE_FIXTURE(Fixture, "declare_trait_mistakes")
         "declare trait type Handler\nend",
         "Write 'trait type Handler' for the type alone, or 'declare trait Handler' for the trait and its type: 'declare' declares a value"
     );
+    onlyError("export declare trait type Handler\nend", "Remove 'declare' to export the type alone: write 'export trait type Handler'");
     onlyError("trait type A\n    expect x = number\nend", "Expected fields can't have default values");
     onlyError("trait type A\n    c\nend", "Declared trait field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
     onlyError("trait type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
     onlyError("trait type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
     onlyError("trait type A implements B\nend", "Traits can't implement traits; did you mean 'needs'?");
+    onlyError("trait A extends B\nend", "Traits can't extend traits; did you mean 'needs'?");
 
     // `export` goes first
     Allocator allocator;

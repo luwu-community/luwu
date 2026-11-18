@@ -305,6 +305,9 @@ private:
     bool traitsEnabled() const;
     void declareClassValue(AstStatClass* shape, AstName valueType, const Location& declareLocation);
     bool startsClassType();
+    bool classFollowsOpen(const Location& openLocation);
+    AstStat* reportOpenClass(const Location& openLocation, AstStat* stat);
+    AstExpr* parseClassRefExpr();
     AstStat* parseClassType(const Location& start, const Location& classKeywordLocation, bool exported, bool isTrait = false);
     bool legacyDeclareClass();
     void skipClassOnlyExternTypeKeywords();

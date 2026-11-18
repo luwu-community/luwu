@@ -135,6 +135,7 @@ const char* const kDeclareTraitTypeError =
 const char* const kExportDeclareClassTypeError = "Remove 'declare' to export the type alone: write 'export class type %s'";
 const char* const kExportDeclareTraitTypeError = "Remove 'declare' to export the type alone: write 'export trait type %s'";
 const char* const kDeclareExportOrderError = "'export' goes before 'declare': write 'export declare'";
+const char* const kOpenClassError = "Remove 'open' here: 'open class' is an upstream Luau feature for inheritance, not a Luwu feature";
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
 // class header or in front of a member. This keeps those positions unambiguous, and leaves room to give
@@ -167,6 +168,26 @@ const std::unordered_set<std::string> CLASS_AND_TRAIT_KEYWORDS{
 bool isDisallowedClassMemberName(const AstName& name)
 {
     return name.value != nullptr && DISALLOWED_CLASS_MEMBER_NAMES.count(name.value) > 0;
+}
+
+// How a base class reference is written, `Animal` or `m.Animal`, or nullopt for anything else
+std::optional<std::string> classRefName(AstExpr* expr)
+{
+    if (AstExprGlobal* global = expr->as<AstExprGlobal>())
+        return global->name.value;
+
+    if (AstExprLocal* local = expr->as<AstExprLocal>())
+        return local->local->name.value;
+
+    AstExprIndexName* index = expr->as<AstExprIndexName>();
+    if (!index)
+        return std::nullopt;
+
+    std::optional<std::string> prefix = classRefName(index->expr);
+    if (!prefix)
+        return std::nullopt;
+
+    return *prefix + "." + index->index.value;
 }
 
 } // namespace
@@ -883,6 +904,15 @@ AstStat* Parser::parseStat()
             return reportLuwuFeatureStat(expr->location, copy({expr}), kClassesFeature);
     }
 
+    // Luwu Classes (rfcs/classes): upstream Luau's `open class Name`
+    if (ident == "open" && classFollowsOpen(expr->location))
+    {
+        validateAttributeContexts(commentAttributes, AstAttr::Context::Class);
+        Location classKeywordLocation = lexer.current().location;
+        nextLexeme();
+        return reportOpenClass(expr->location, parseClassStat(start, /* exported= */ false, classKeywordLocation, commentAttributes));
+    }
+
     // Luwu Traits (rfcs/classes/traits.md): `trait Name`. Like `class`, `trait` is only a keyword where a declaration starts,
     // so a variable named `trait` keeps working.
     // Luwu Declare Statements (rfcs/declare-statements.md): `trait type Name`, a trait's type with no value
@@ -893,6 +923,17 @@ AstStat* Parser::parseStat()
 
     if (ident == "export")
     {
+        // Luwu Classes (rfcs/classes): upstream Luau's `export open class Name`
+        Lexeme open = lexer.current();
+        bool exportsOpenClass = FFlag::LuwuClasses && open.type == Lexeme::Name && AstName(open.name) == "open" &&
+                                lexer.lookahead().type == Lexeme::Name && AstName(lexer.lookahead().name) == "class" &&
+                                lexer.lookahead().location.begin.line == open.location.end.line;
+        if (exportsOpenClass)
+        {
+            nextLexeme();
+            return reportOpenClass(open.location, parseExportValue(expr->location, expr->location, commentAttributes));
+        }
+
         // Luwu Declare Statements (rfcs/declare-statements.md): `export declare extern type`, `export declare class`
         bool exportsDeclaration = FFlag::LuwuDeclareStatements && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "declare";
         if (exportsDeclaration)
@@ -2741,25 +2782,51 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         nextLexeme();
     }
 
-    // Luwu Classes (rfcs/classes): no classical inheritance. Upstream Luau spells it `class A extends B`.
-    // Here that would parse as a class with two bare fields, `extends` and `B`, so report what's actually
-    // wrong for anyone porting upstream classes. Checked both before and after a primary constructor.
+    // Luwu Classes (rfcs/classes): no classical inheritance. Upstream Luau spells it `class A extends B`, where B is a name
+    // followed by any `.name` and `[key]` lookups. Here that would parse as bare fields, so it's reported as one error and
+    // the base is kept in the AST. Checked both before and after a primary constructor.
+    std::optional<Location> extendsLocation;
+    AstExpr* extendsBase = nullptr;
     auto rejectExtends = [&]()
     {
-        if (lexer.current().type != Lexeme::Name || AstName(lexer.current().name) != "extends" ||
-            lexer.lookahead().type != Lexeme::Name)
+        if (extendsLocation || lexer.current().type != Lexeme::Name || AstName(lexer.current().name) != "extends")
             return;
 
-        Location extendsLocation = lexer.current().location;
-        nextLexeme();
-        Location baseLocation = lexer.current().location;
+        // Upstream also takes a base that isn't a name, like `extends "Animal"`, and reports it
+        Lexeme base = lexer.lookahead();
+        bool literalBase = base.type == Lexeme::QuotedString || base.type == Lexeme::RawString || base.type == Lexeme::Number;
+        bool baseFollows = base.type == Lexeme::Name || (literalBase && base.location.begin.line == lexer.current().location.end.line);
+        if (!baseFollows)
+            return;
+
+        extendsLocation = lexer.current().location;
         nextLexeme();
 
-        report(
-            Location(extendsLocation, baseLocation),
-            "Luwu classes don't support classical inheritance ('extends'); consider composing your classes (holding an object of another "
-            "class in your class) or waiting for Luwu traits"
-        );
+        if (base.type == Lexeme::Name)
+            extendsBase = parseClassRefExpr();
+        else
+            extendsBase = parseSimpleExpr();
+
+        Location location(*extendsLocation, extendsBase->location);
+        std::optional<std::string> baseName = classRefName(extendsBase);
+        if (isTrait)
+            report(location, "Traits can't extend traits; did you mean 'needs'?");
+        else if (baseName)
+            report(
+                location,
+                "Luwu classes can't extend '%s': give '%s' a field holding a '%s', or put what they share in a trait and write 'implements' "
+                "instead of 'extends'",
+                baseName->c_str(),
+                name->name.value,
+                baseName->c_str()
+            );
+        else
+            report(
+                location,
+                "Luwu classes can't extend other classes: give '%s' a field holding the base, or put what they share in a trait and write "
+                "'implements' instead of 'extends'",
+                name->name.value
+            );
     };
 
     // Luwu Classes (rfcs/classes): `implements` is reserved in the class header for traits. Like
@@ -3651,6 +3718,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     cls->needs = needs;
     cls->implementsLocation = implementsKeywordLocation;
     cls->needsLocation = needsKeywordLocation;
+    cls->extendsLocation = extendsLocation;
+    cls->extendsBase = extendsBase;
 
     // A declared class has no value, so its name is not a class name for assignment and lookup; a clash with a
     // class's type name is reported by the type checker.
@@ -4370,6 +4439,49 @@ bool Parser::startsClassType()
 {
     return FFlag::LuwuDeclareStatements && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "type" &&
            lexer.lookahead().type == Lexeme::Name;
+}
+
+// Luwu Classes (rfcs/classes): whether `class` follows upstream Luau's `open` on the same line, as in `open class Name`.
+// Luwu has no inheritance, so reportOpenClass reports `open`, and the class is parsed without it.
+bool Parser::classFollowsOpen(const Location& openLocation)
+{
+    return FFlag::LuwuClasses && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "class" &&
+           lexer.current().location.begin.line == openLocation.end.line;
+}
+
+AstStat* Parser::reportOpenClass(const Location& openLocation, AstStat* stat)
+{
+    report(openLocation, "%s", kOpenClassError);
+    if (AstStatClass* classStat = stat->as<AstStatClass>())
+        classStat->openLocation = openLocation;
+
+    return stat;
+}
+
+// Luwu Classes (rfcs/classes): the base class in upstream Luau's `extends Base`, a name followed by any `.name` and `[key]`
+// lookups. Luwu reports it and keeps it in the AST.
+AstExpr* Parser::parseClassRefExpr()
+{
+    AstExpr* expr = parseNameExpr("base class name");
+    while (true)
+    {
+        Position opPosition = lexer.current().location.begin;
+        if (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+        {
+            nextLexeme();
+            Name index = parseName("base class name");
+            expr = allocator.alloc<AstExprIndexName>(Location(expr->location, index.location), expr, index.name, index.location, opPosition, '.');
+        }
+        else if (lexer.current().type == '[')
+        {
+            nextLexeme();
+            AstExpr* key = parseExpr();
+            expectAndConsume(']', "base class name");
+            expr = allocator.alloc<AstExprIndexExpr>(Location(expr->location, lexer.previousLocation()), expr, key);
+        }
+        else
+            return expr;
+    }
 }
 
 // Luwu Declare Statements (rfcs/declare-statements.md): `class type Name ... end` (or `trait type`), a class's type with no
