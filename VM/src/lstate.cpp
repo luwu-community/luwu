@@ -271,6 +271,9 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
         g->udatamt[i] = NULL;
     }
 
+    for (i = 0; i < LUA_OTAG_LIMIT; i++)
+        g->objectdtors[i] = NULL;
+
     for (i = 0; i < UTAG_INTERNAL_LIMIT; i++)
     {
         lua_UdataDirectAccessData& udatadirect = L->global->udatadirect[i];

@@ -597,6 +597,14 @@ LUA_API int lua_isresulterr(lua_State* L, int idx);
 // any other value.
 LUA_API int lua_getpayload(lua_State* L, int idx);
 
+// Luwu Native Classes (rfcs/native-classes.md): the destructor of every object whose native data has `tag`, called with
+// the data once, when the object is freed. Like a userdata destructor, it must not call back into Luwu.
+LUA_API void lua_setobjectdtor(lua_State* L, int tag, lua_Destructor dtor);
+LUA_API lua_Destructor lua_getobjectdtor(lua_State* L, int tag);
+// Luwu Native Classes (rfcs/native-classes.md): the native data of the object at `idx` when it has data with `tag`, and
+// NULL for any other value
+LUA_API void* lua_toobjectdata(lua_State* L, int idx, int tag);
+
 // Luwu bundles: lua_packbundle pops `n` values and pushes a bundle of them, as `bundle.pack` does; it raises past 1024
 // values or when the bundle library (luaopen_bundle) isn't open. lua_unpackbundle pushes the values of the bundle at
 // `idx` and returns how many, or pushes nothing and returns -1 for any other value.
