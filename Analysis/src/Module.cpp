@@ -52,6 +52,106 @@ static bool contains(Position pos, Comment comment)
         return false;
 }
 
+std::vector<SourceComment> readSourceComments(std::string_view source, const std::vector<Comment>& comments)
+{
+    std::vector<size_t> lineStarts{0};
+    for (size_t i = 0; i < source.size(); ++i)
+    {
+        if (source[i] == '\n')
+            lineStarts.push_back(i + 1);
+    }
+
+    auto offsetOf = [&](Position pos) -> size_t
+    {
+        if (pos.line >= lineStarts.size())
+            return source.size();
+        return std::min(lineStarts[pos.line] + pos.column, source.size());
+    };
+
+    auto trim = [](std::string_view text)
+    {
+        size_t first = text.find_first_not_of(" \t\r\n");
+        if (first == std::string_view::npos)
+            return std::string_view{};
+        size_t last = text.find_last_not_of(" \t\r\n");
+        return text.substr(first, last - first + 1);
+    };
+
+    std::vector<SourceComment> result;
+    for (const Comment& comment : comments)
+    {
+        if (comment.type != Lexeme::Comment && comment.type != Lexeme::BlockComment)
+            continue;
+
+        size_t begin = offsetOf(comment.location.begin);
+        std::string_view text = source.substr(begin, offsetOf(comment.location.end) - begin);
+        std::string_view lineBefore = source.substr(lineStarts[std::min<size_t>(comment.location.begin.line, lineStarts.size() - 1)]);
+        lineBefore = lineBefore.substr(0, std::min<size_t>(comment.location.begin.column, lineBefore.size()));
+
+        SourceComment sourceComment;
+        sourceComment.location = comment.location;
+        sourceComment.startsLine = trim(lineBefore).empty();
+
+        if (comment.type == Lexeme::BlockComment)
+        {
+            // `--[==[ message ]==]`: the opener up to its second `[`, and the closer has as many `=`
+            size_t open = text.find('[', 3);
+            size_t prefixLength = open == std::string_view::npos ? text.size() : open + 1;
+            size_t levels = prefixLength >= 4 ? prefixLength - 4 : 0;
+            size_t closeLength = std::min(levels + 2, text.size() - prefixLength);
+            sourceComment.prefix = std::string(text.substr(0, prefixLength));
+            std::string_view body = trim(text.substr(prefixLength, text.size() - prefixLength - closeLength));
+
+            // The lines after the first keep the indentation they had in the source, which the first (trimmed, or on the
+            // opener's line) doesn't: take the indentation they share off them, and blank the whitespace-only ones
+            std::vector<std::string_view> lines;
+            for (size_t at = 0;;)
+            {
+                size_t end = body.find('\n', at);
+                lines.push_back(body.substr(at, end == std::string_view::npos ? std::string_view::npos : end - at));
+                if (end == std::string_view::npos)
+                    break;
+                at = end + 1;
+            }
+            size_t indent = std::string_view::npos;
+            for (size_t i = 1; i < lines.size(); ++i)
+            {
+                size_t first = lines[i].find_first_not_of(" \t\r");
+                if (first != std::string_view::npos)
+                    indent = std::min(indent, first);
+            }
+            for (size_t i = 0; i < lines.size(); ++i)
+            {
+                std::string_view line = lines[i];
+                if (line.find_first_not_of(" \t\r") == std::string_view::npos)
+                    line = {};
+                else if (i > 0)
+                    line.remove_prefix(indent);
+                if (i > 0)
+                    sourceComment.message += '\n';
+                sourceComment.message += line;
+            }
+        }
+        else
+        {
+            size_t dashes = text.find_first_not_of('-');
+            if (dashes == std::string_view::npos)
+                dashes = text.size();
+
+            // a hot comment is a directive, not a comment
+            if (dashes == 2 && dashes < text.size() && text[dashes] == '!')
+                continue;
+
+            sourceComment.prefix = std::string(text.substr(0, dashes));
+            sourceComment.message = std::string(trim(text.substr(dashes)));
+        }
+
+        result.push_back(std::move(sourceComment));
+    }
+
+    return result;
+}
+
 bool isWithinComment(const std::vector<Comment>& commentLocations, Position pos)
 {
     auto iter = std::lower_bound(
