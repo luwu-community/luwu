@@ -63,7 +63,7 @@ if not line:startswith("#") and line:contains("=") then
 end
 ```
 
-An empty string matches anything, so `s:startswith("")` is `true`. This is what Python, JavaScript, Rust and Go do.
+An empty string matches anything: `s:startswith("")` is `true`, as in Python, JavaScript, Rust and Go.
 
 Comparing bytes is correct for UTF-8 text: a valid UTF-8 string can't match in the middle of a character.
 
@@ -99,7 +99,7 @@ print(("line\n"):trimend("\r\n"))       --> "line\n"
 print(("line\r\n\n"):trimend("\r", "\n")) --> "line"
 ```
 
-Giving strings replaces the default, so `s:trim("-")` doesn't remove whitespace. Empty strings are ignored.
+Giving strings replaces the default: `s:trim("-")` doesn't remove whitespace. Empty strings are ignored.
 
 Each string is a whole token, not a set of characters. To remove any of several characters, pass each one:
 `trimend(s, "\r", "\n")`.
@@ -121,8 +121,9 @@ print(("aaa"):replace("aa", "b"))           --> "ba"
 ```
 
 Because it returns only the new string, unlike `gsub`, `table.insert(t, s:replace(a, b))` works. An empty `old` is an
-error: inserting `new` between every byte would split UTF-8 characters and is never what's meant. A negative `max` is
-an error. A `max` of `0` returns `s` unchanged.
+error: inserting `new` between every byte would split UTF-8 characters and is never what's meant. A negative or NaN
+`max` is an error. A `max` of `0` returns `s` unchanged, and a `max` no string can reach, like `math.huge`, replaces
+every occurrence.
 
 ### `string.split`'s `maxpieces` argument
 
@@ -137,7 +138,9 @@ the common case:
 const left, right = table.unpack(vals:split(" = ", 2))
 ```
 
-It counts pieces, so it matches the number of names they're unpacked into. `maxpieces` must be at least `1`. Without it, `split` behaves as it does today.
+Counting pieces matches the number of names the result is unpacked into. `maxpieces` must be at least `1` and can't be
+NaN. A count no string can reach, like `math.huge`, is the same as no limit. Without `maxpieces`, `split` behaves as it
+does today.
 
 ### Type system
 
@@ -208,9 +211,9 @@ These functions could be proposed upstream as they are.
 
 | | trim | starts / ends / contains | literal replace |
 |---|---|---|---|
-| Python | `strip`, `lstrip`, `rstrip` (optional set of characters) | `startswith`, `endswith` (a string or a tuple), `in` | `replace(old, new, count)` |
+| Python | `strip`, `lstrip`, `rstrip` (optional character set) | `startswith`, `endswith` (a string or a tuple), `in` | `replace(old, new, count)` |
 | JavaScript | `trim`, `trimStart`, `trimEnd` | `startsWith`, `endsWith`, `includes` | `replaceAll` |
-| Rust | `trim`, `trim_start`, `trim_end`, `trim_matches` (patterns, including strings) | `starts_with`, `ends_with`, `contains` | `replace`, `replacen` |
+| Rust | `trim`, `trim_start`, `trim_end`, `trim_matches` (any pattern) | `starts_with`, `ends_with`, `contains` | `replace`, `replacen` |
 | Go | `TrimSpace`, `Trim` (set of characters), `TrimPrefix`, `TrimSuffix` | `HasPrefix`, `HasSuffix`, `Contains` | `Replace(s, old, new, n)` |
 | C# | `Trim`, `TrimStart`, `TrimEnd` (optional characters) | `StartsWith`, `EndsWith`, `Contains` | `Replace` |
 
