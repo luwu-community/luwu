@@ -78,6 +78,8 @@ LuauClass* luaR_newclass(
     classdef->fastmethods = NULL;
     classdef->qualified = NULL;
     classdef->typeofname = NULL;
+    classdef->nativesize = 0;
+    classdef->nativetag = 0;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -893,12 +895,23 @@ LuauObject* luaR_newobjectuninit(lua_State* L, LuauClass* classdef)
     // fills every one of them immediately, with nothing in between that could trigger a GC step --
     // traverseobject reads them all.
     uint32_t nummembers = classdef->numberofinstancemembers;
-    LuauObject* object = luaM_newgco(L, LuauObject, luaR_objectsize(nummembers), L->activememcat);
+    uint32_t nativesize = classdef->nativesize;
+    size_t size = nativesize == 0 ? luaR_objectsize(nummembers) : luaR_nativeallocsize(nummembers, nativesize);
+    LuauObject* object = luaM_newgco(L, LuauObject, size, L->activememcat);
     luaC_init(L, object, LUA_TOBJECT);
-    object->storagekind = LUAR_STORAGE_NONE;
+    object->storagekind = nativesize == 0 ? LUAR_STORAGE_NONE : LUAR_STORAGE_NATIVE;
     object->lclass = classdef;
     object->numberofmembers = nummembers;
 
+    // Luwu Native Classes (rfcs/native-classes.md): the data is zeroed, so a destructor can tell what construction
+    // never got to
+    if (LUAU_UNLIKELY(nativesize != 0))
+    {
+        LuauNativeData* native = luaR_nativedata(object);
+        native->size = nativesize;
+        native->tag = classdef->nativetag;
+        memset(native + 1, 0, nativesize);
+    }
     return object;
 }
 
@@ -908,12 +921,8 @@ LuauObject* luaR_newobject(lua_State* L, LuauClass* classdef)
     // object per instance instead of two, which halves both the allocator traffic and the sweep cost
     // of constructing objects. Both the interpreter (luaR_members) and native code
     // (LUAR_OBJECT_MEMBERS_OFFSET) address them from the object pointer.
-    uint32_t nummembers = classdef->numberofinstancemembers;
-    LuauObject* object = luaM_newgco(L, LuauObject, luaR_objectsize(nummembers), L->activememcat);
-    luaC_init(L, object, LUA_TOBJECT);
-    object->storagekind = LUAR_STORAGE_NONE;
-    object->lclass = classdef;
-    object->numberofmembers = nummembers;
+    LuauObject* object = luaR_newobjectuninit(L, classdef);
+    uint32_t nummembers = object->numberofmembers;
 
     // Initialize every member before anything can trigger a GC step, since traverseobject reads them
     // all. Constant defaults go straight in here, so the common case writes each member exactly once
@@ -1069,6 +1078,14 @@ void luaR_freeobject(lua_State* L, LuauObject* object, lua_Page* page)
 {
     if (LuauStorage* storage = luaR_storage(object))
         luaM_free_(L, storage, luaR_storagesize(storage->capacity), object->memcat);
+
+    // Luwu Native Classes (rfcs/native-classes.md): like a userdata's destructor, this runs during the sweep, so it must
+    // not run Luwu code or allocate GC objects
+    if (LuauNativeData* native = luaR_nativedata(object))
+    {
+        if (lua_Destructor dtor = L->global->objectdtors[native->tag])
+            dtor(L, native + 1);
+    }
     luaM_freegco(L, object, luaR_objectallocsize(object), object->memcat, page);
 }
 
@@ -2957,6 +2974,13 @@ LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_Native
         luaR_addnativemethod(L, classdef, "__init", init);
 
     return classdef;
+}
+
+void luaR_setclassnativedata(LuauClass* classdef, uint32_t size, int tag)
+{
+    LUAU_ASSERT(unsigned(tag) < LUA_OTAG_LIMIT);
+    classdef->nativesize = size;
+    classdef->nativetag = uint8_t(tag);
 }
 
 LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method)

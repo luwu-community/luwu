@@ -65,8 +65,8 @@ class with no way to set one. The check would accept the C function the class re
 
 ### Native data
 
-An object can carry bytes the embedder owns. `lua_newclass` takes their size, and every object of the class has that many bytes after its members.
-The embedder reads them with `lua_toobjectdata`:
+An object can carry bytes the embedder owns. `lua_newclass` takes their size, and every object of the class has that many bytes after its members,
+zeroed when the object is made. The embedder reads them with `lua_toobjectdata`, which returns `NULL` for a value without data of that tag:
 
 ```c
 typedef struct FileSize
@@ -74,12 +74,15 @@ typedef struct FileSize
     uint64_t bytes;
 } FileSize;
 
-FileSize* size = (FileSize*)lua_toobjectdata(L, 1, fileSizeClass);
+FileSize* size = (FileSize*)lua_toobjectdata(L, 1, FILESIZE_TAG);
 ```
 
 A class with native data has a tag, like a userdata tag. `lua_setobjectdtor(L, tag, dtor)` sets the function that runs when an object of that tag is
-collected, and `lua_setobjectmark` sets one that marks the references the data holds. The tag is kept on the object, since the collector can free a
+freed, and `lua_setobjectmark` sets one that marks the references the data holds. The tag is kept on the object, since the collector can free a
 class before its objects.
+
+The destructor runs once for every object of the class, when the collector frees it or the state is closed. It also runs for an object whose
+construction raised, which is why the data starts zeroed. Like a userdata destructor, it runs during a sweep and must not call into Luwu.
 
 ### Checking `self`
 
@@ -130,6 +133,7 @@ LUA_API void lua_newclass(lua_State* L, const char* name, const lua_ClassMember*
 LUA_API void lua_setclasstag(lua_State* L, int idx, int tag);
 LUA_API void* lua_toobjectdata(lua_State* L, int idx, int tag);
 LUA_API void lua_setobjectdtor(lua_State* L, int tag, lua_Destructor dtor);
+LUA_API lua_Destructor lua_getobjectdtor(lua_State* L, int tag);
 LUALIB_API void* luaL_checkobject(lua_State* L, int narg, int tag);
 ```
 
@@ -159,7 +163,6 @@ This only adds C API. Luau code can't tell a native class from a user class, and
 ## Unresolved questions
 
 - Whether the registered C `__init` may assign `const` fields, which the VM refuses for C code today.
-- Native data inline after the members, or a private userdata field for the first version.
 - Whether a native class's objects report the class name or `"object"` from `typeof`, since `typeofname` is internal today.
 - Static values, like `Duration.ZERO`: today a class's static members can only be functions.
 - How `implements` arguments are passed to `lua_newclass`.
