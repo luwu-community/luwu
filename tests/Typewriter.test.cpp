@@ -150,6 +150,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_exports")
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}};
 
     checkTypewriting(*this, "local a = 1\n", "export answer = a + 1", kAfter);
+
+    // Luwu Export Values (rfcs/export-values.md): upstream's forms are one parse error each
+    checkTypewriting(*this, "local a = 1\n", "export local answer = a + 1", kAfter);
+    checkTypewriting(*this, "local a = 1\n", "export const answer = a + 1", kAfter);
+    // A half-typed statement in the body reports its own error next to the one for 'local'
+    checkTypewriting(*this, "", "export local function f()\n    print(1)\nend", kAfter, {"try removing 'local'"});
 }
 
 // Luwu Classes (rfcs/classes): declaring classes, and using them from the code below
@@ -179,6 +185,16 @@ TEST_CASE_FIXTURE(ClassesFixture, "typing_class_declarations")
                                    "    private retries: number = 3\n"
                                    "end";
     checkTypewriting(*this, before, constAndDefaults, kAfter);
+
+    // Upstream Luau's `open` and `extends` report one error each, which stays up while the body is typed
+    const char* extends = "class Foo extends Bar\n"
+                          "    public x: string\n"
+                          "    function fooer(self)\n"
+                          "        print(\"x\")\n"
+                          "    end\n"
+                          "end";
+    checkTypewriting(*this, before, extends, kAfter, {"can't extend"});
+    checkTypewriting(*this, before, "open class Animal\n    public name: string\nend", kAfter, {"Remove 'open'"});
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "typing_class_uses")
