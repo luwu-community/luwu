@@ -177,6 +177,10 @@ const TString* luaT_objtypenamestr(lua_State* L, const TValue* o)
     if (ttisclass(o) && classvalue(o)->istrait)
         return L->global->traittypename;
 
+    // Luwu builtin classes: an object of one is named after what it is ("bundle", "vec"), not "object"
+    if (ttisobject(o) && objectvalue(o)->lclass->typeofname)
+        return objectvalue(o)->lclass->typeofname;
+
     // For all types except userdata and table, a global metatable can be set with a global name override
     if (LuaTable* mt = L->global->mt[ttype(o)])
     {
