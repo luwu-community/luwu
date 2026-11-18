@@ -531,7 +531,7 @@ end
 -- vec: a growable array
 do
     const list = collections.Vec()
-    assert(#list == 0 and list:pop() == nil and list:at(1) == nil)
+    assert(#list == 0 and list:pop() == nil and list:get(1) == nil)
     list:push(10)
     list:push(30)
     list:insert(2, 20)
@@ -560,6 +560,30 @@ do
     raises(function()
         list:push("x")
     end, "this Vec can only accept numbers, but you passed a string")
+end
+
+-- `at` raises for a position out of range, and `get` gives nil
+do
+    const list = collections.Vec(10, 20)
+    const queue = collections.VecDeque("a", "b")
+    queue:pushfront("z")
+    assert(list:at(1) == 10 and list:get(2) == 20 and queue:at(1) == "z" and queue:get(3) == "b")
+    for _, position in { 0, 3, 1.5 } do
+        assert(list:get(position) == nil)
+        raises(function()
+            list:at(position)
+        end, `position {position} is out of range 1 to 2; get({position}) returns nil instead of raising`)
+    end
+    assert(queue:get(4) == nil and queue:get(0) == nil)
+    raises(function()
+        queue:at(4)
+    end, "position 4 is out of range 1 to 3; get(4) returns nil instead of raising")
+    raises(function()
+        collections.VecDeque():at(1)
+    end, "position 1 is out of range 1 to 0")
+    raises(function()
+        list:get("x")
+    end, "invalid argument #2 to 'get'")
 end
 
 -- vecdeque: both ends, through growth and wrap-around
