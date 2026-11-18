@@ -5062,6 +5062,7 @@ TEST_CASE("TryExpressions")
 
     runConformance("try.luwu");
     runConformance("try_variants.luwu");
+    runConformance("try_inlined.luwu");
 }
 
 // Luwu try expressions: ranges around `do` expressions, which can write locals before they raise and leave the range
