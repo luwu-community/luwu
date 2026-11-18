@@ -63,7 +63,7 @@ if not line:startswith("#") and line:contains("=") then
 end
 ```
 
-An empty string matches anything, so `s:startswith("")` is `true`. This is what Python, JavaScript, Rust and Go do.
+An empty string matches anything: `s:startswith("")` is `true`, as in Python, JavaScript, Rust and Go.
 
 Comparing bytes is correct for UTF-8 text: a valid UTF-8 string can't match in the middle of a character.
 
@@ -99,7 +99,7 @@ print(("line\n"):trimend("\r\n"))       --> "line\n"
 print(("line\r\n\n"):trimend("\r", "\n")) --> "line"
 ```
 
-Giving strings replaces the default, so `s:trim("-")` doesn't remove whitespace. Empty strings are ignored.
+Giving strings replaces the default: `s:trim("-")` doesn't remove whitespace. Empty strings are ignored.
 
 Each string is a whole token, not a set of characters. To remove any of several characters, pass each one:
 `trimend(s, "\r", "\n")`.
