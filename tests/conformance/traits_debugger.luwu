@@ -1,0 +1,20 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print "testing traits under a debugger" -- note, this file can't run in isolation from C tests
+
+-- A breakpoint in a trait's method, set before any class implements the trait: each implementing class gets a copy of
+-- the method's code, breakpoint included, and the copy has to run it like the original does
+breakpoint(9)
+trait Greeter
+    function greet(self)
+        return "hi " .. self.name
+    end
+end
+
+class Cat(name: string) implements Greeter end
+class Dog(name: string) implements Greeter end
+
+assert(Cat("tom"):greet() == "hi tom")
+assert(Dog("rex"):greet() == "hi rex")
+assert(Greeter.greet(Cat("kit")) == "hi kit")
+
+return "OK"
