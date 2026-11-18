@@ -13818,13 +13818,14 @@ L0: RETURN R0 0
     );
 }
 
-TEST_CASE("ExportLocalBytecode")
+// Luwu: exports are always const (`export x = 5`); upstream's `export local` is an error, so its reassignment case is gone
+TEST_CASE("ExportBytecode")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
 
-    // basic exported local: value is stored into the export table, then table is frozen and returned
+    // basic export: value is stored into the export table, then table is frozen and returned
     CHECK_EQ(
-        "\n" + compileFunction0("export local x = 5"),
+        "\n" + compileFunction0("export x = 5"),
         R"(
 LOADN R0 5
 NEWTABLE R1 0 0
@@ -13836,9 +13837,9 @@ RETURN R2 1
 )"
     );
 
-    // multiple exported locals are all stored into the same export table
+    // multiple exports are all stored into the same export table
     CHECK_EQ(
-        "\n" + compileFunction0("export local x = 5\nexport local y = 10"),
+        "\n" + compileFunction0("export x = 5\nexport y = 10"),
         R"(
 LOADN R0 5
 NEWTABLE R1 0 0
@@ -13849,22 +13850,6 @@ GETIMPORT R3 4 [table.freeze]
 MOVE R4 R1
 CALL R3 1 1
 RETURN R3 1
-)"
-    );
-
-    // reassigning an exported local updates the export table
-    CHECK_EQ(
-        "\n" + compileFunction0("export local x = 5\nx = 10"),
-        R"(
-LOADN R0 5
-NEWTABLE R1 0 0
-SETTABLEKS R0 R1 K0 ['x']
-LOADN R2 10
-SETTABLEKS R2 R1 K0 ['x']
-GETIMPORT R2 3 [table.freeze]
-MOVE R3 R1
-CALL R2 1 1
-RETURN R2 1
 )"
     );
 }
@@ -13885,7 +13870,7 @@ TEST_CASE("ExportSyntaxRegression")
             end
         end
 
-        export local test3 = function()
+        export test3 = function()
            for _ in _, test3 do
            end
         end
