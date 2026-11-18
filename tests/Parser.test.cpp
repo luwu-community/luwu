@@ -8692,6 +8692,21 @@ TEST_CASE_FIXTURE(Fixture, "declared_types_are_written_out_and_never_shadowed")
         "declare class type Path\nend",
         "Write 'class type Path' for the type alone, or 'declare class Path' for the class and its type: 'declare' declares a value"
     );
+
+    // With `export`, removing `declare` gives `export class type Path`. The error is on `declare`, and the statement is
+    // still the exported type.
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult exported = parseSource(allocator, names, "export declare class type Path\n    raw: string\nend\nprint(1)");
+    REQUIRE_EQ(exported.errors.size(), 1);
+    CHECK_EQ(exported.errors[0].getMessage(), "Remove 'declare' to export the type alone: write 'export class type Path'");
+    CHECK_EQ(exported.errors[0].getLocation(), Location{{0, 7}, {0, 14}});
+    REQUIRE_EQ(exported.root->body.size, 2);
+    AstStatDeclareClass* exportedType = exported.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(exportedType);
+    CHECK(exportedType->shape->exported);
+    CHECK_EQ(exportedType->shape->name->name, "Path");
+    CHECK_EQ(exportedType->shape->members.size, 1);
     onlyError("class type A\n    c\nend", "Declared class field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
 
     const std::string declaredOnLine1 = "Type 'A' is declared on line 1, and a declared type can't be shadowed";
