@@ -124,6 +124,8 @@ const char* const kDeclareExportNestedError =
 const char* const kLegacyDeclareClassError = "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead";
 const char* const kDeclareClassTypeError =
     "Write 'class type %s' for the type alone, or 'declare class %s' for the class and its type: 'declare' declares a value";
+// `export class type Name` is how an exported type alone is written, so only `declare` is in the way
+const char* const kExportDeclareClassTypeError = "Remove 'declare' to export the type alone: write 'export class type %s'";
 const char* const kDeclareExportOrderError = "'export' goes before 'declare': write 'export declare'";
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
@@ -3299,11 +3301,13 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
     if (exportLocation)
     {
         bool exportsType = declaresClass() || (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "extern");
-        if (!exportsType)
-        {
+        // With nothing declarable after `declare` (`export declare` still being typed), the missing declaration is the
+        // one error
+        bool declaresSomething = lexer.current().type == Lexeme::Name || lexer.current().type == Lexeme::ReservedFunction;
+        if (!exportsType && declaresSomething)
             report(*exportLocation, "%s", kDeclareExportValueError);
+        if (!exportsType)
             exportLocation.reset();
-        }
     }
 
     if (declaresClass())
@@ -3314,7 +3318,12 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
         // `declare class Name` declares the class: its type, and the global holding it, the way `class Name` defines both.
         // `declare class type Name` mixes that with `class type Name` (the type alone); report it and parse the type.
         bool typeKeyword = lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "type" && lexer.lookahead().type == Lexeme::Name;
-        if (typeKeyword)
+        if (typeKeyword && exportKeywordLocation)
+        {
+            report(start, kExportDeclareClassTypeError, lexer.lookahead().name);
+            nextLexeme();
+        }
+        else if (typeKeyword)
         {
             report(Location(classKeywordLocation, lexer.current().location), kDeclareClassTypeError, lexer.lookahead().name, lexer.lookahead().name);
             nextLexeme();
