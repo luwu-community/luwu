@@ -1,0 +1,10 @@
+-- mutually recursive functions: a forward-declared local, filled by the export
+local b
+
+export function a()
+    return b() + 1
+end
+
+export function b()
+    return 42
+end
