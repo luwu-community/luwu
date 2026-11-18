@@ -1172,6 +1172,9 @@ void AstStatClass::visit(AstVisitor* visitor)
         for (AstGenericTypePack* genericPack : genericPacks)
             genericPack->visit(visitor);
 
+        if (extendsBase)
+            extendsBase->visit(visitor);
+
         if (primaryConstructor)
         {
             for (AstLocal* arg : primaryConstructor->args)
