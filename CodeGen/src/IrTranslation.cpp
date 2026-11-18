@@ -2248,7 +2248,8 @@ enum class StorageMethod
     PopFront,
     Front,
     Back,
-    At,
+    // `at` and `get`: out of range, the fallback's C call raises for `at` and gives nil for `get`
+    Entry,
     Set,
 };
 
@@ -2277,7 +2278,8 @@ static StorageMethodInfo storageMethodOf(const TString* name)
         {"popfront", {StorageMethod::PopFront, LUAR_STORAGE_RING, 0}},
         {"front", {StorageMethod::Front, LUAR_STORAGE_RING, 0}},
         {"back", {StorageMethod::Back, LUAR_STORAGE_RING, 0}},
-        {"at", {StorageMethod::At, LUAR_STORAGE_CONTAINER, 1}},
+        {"at", {StorageMethod::Entry, LUAR_STORAGE_CONTAINER, 1}},
+        {"get", {StorageMethod::Entry, LUAR_STORAGE_CONTAINER, 1}},
         {"set", {StorageMethod::Set, LUAR_STORAGE_CONTAINER, 2}},
     };
 
@@ -2469,7 +2471,7 @@ static void translateStorageMethod(
         }
         break;
     }
-    case StorageMethod::At:
+    case StorageMethod::Entry:
     {
         IrOp offset = checkStoragePosition(build, storage, argParts, fallback);
         storeStorageResults(build, callra, nresults, storage, offset);

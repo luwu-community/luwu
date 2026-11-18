@@ -288,9 +288,9 @@ static void checkelement(lua_State* L, LuauObject* container, const LuauStorage*
     luaL_error(L, "%s", lua_tostring(L, -1));
 }
 
-// `__tostring`: the call that builds an equal container, `Vec(1, 2)`, or `Vec()` when it's empty. `at` reads an
-// entry by position.
-static int containertostring(lua_State* L, LuauObject* container, uint32_t count, lua_CFunction at)
+// `__tostring`: the call that builds an equal container, `Vec(1, 2)`, or `Vec()` when it's empty. `get` reads an
+// entry by position. An entry's `__tostring` can remove the entries after it, which then print as nil.
+static int containertostring(lua_State* L, LuauObject* container, uint32_t count, lua_CFunction get)
 {
     const char* name = getstr(container->lclass->name);
     luaL_Strbuf b;
@@ -301,7 +301,7 @@ static int containertostring(lua_State* L, LuauObject* container, uint32_t count
     {
         if (i > 1)
             luaL_addstring(&b, ", ");
-        lua_pushcfunction(L, at, "at");
+        lua_pushcfunction(L, get, "get");
         lua_pushvalue(L, 1);
         lua_pushnumber(L, i);
         lua_call(L, 2, 1);
@@ -1430,6 +1430,19 @@ static int pushentryat(lua_State* L, LuauObject* container, double position)
     return 1;
 }
 
+// `at` of a Vec or VecDeque: pushes the entry at the position at stack 2, and raises when there's none
+static int pushentryorraise(lua_State* L, LuauObject* container)
+{
+    double position = luaL_checknumber(L, 2);
+    uint32_t count = countof(container);
+    if (!isposition(position, count))
+    {
+        const char* shown = pushshown(L, 2);
+        luaL_error(L, "position %s is out of range 1 to %d; get(%s) returns nil instead of raising", shown, int(count), shown);
+    }
+    return pushentryat(L, container, position);
+}
+
 // `popback` of a Vec or VecDeque: takes the last entry, or nil when there's none
 static int popback(lua_State* L, LuauObject* container)
 {
@@ -1556,7 +1569,12 @@ static int vecdequeback(lua_State* L)
 
 static int vecdequeat(lua_State* L)
 {
-    LuauObject* dq = checkdeque(L, "at");
+    return pushentryorraise(L, checkdeque(L, "at"));
+}
+
+static int vecdequeget(lua_State* L)
+{
+    LuauObject* dq = checkdeque(L, "get");
     return pushentryat(L, dq, luaL_checknumber(L, 2));
 }
 
@@ -1608,7 +1626,7 @@ static int vecdequeinit(lua_State* L)
 static int vecdequetostring(lua_State* L)
 {
     LuauObject* dq = checkdeque(L, "__tostring");
-    return containertostring(L, dq, countof(dq), vecdequeat);
+    return containertostring(L, dq, countof(dq), vecdequeget);
 }
 
 // VecDeque's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or
@@ -1677,7 +1695,16 @@ static int vecdequebackfast(lua_State* L, LuauObject* dq, StkId res, StkId args,
     return entryatfast(L, dq, countof(dq), res);
 }
 
+// `at` leaves a position out of range to the C method, which raises
 static int containeratfast(lua_State* L, LuauObject* container, StkId res, StkId args, int nargs)
+{
+    bool inrange = nargs >= 1 && ttisnumber(args) && isposition(nvalue(args), countof(container));
+    if (!inrange)
+        return -1;
+    return entryatfast(L, container, nvalue(args), res);
+}
+
+static int containergetfast(lua_State* L, LuauObject* container, StkId res, StkId args, int nargs)
 {
     if (nargs < 1 || !ttisnumber(args))
         return -1;
@@ -1704,6 +1731,7 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     {"front", vecdequefront, 0, vecdequefrontfast},
     {"back", vecdequeback, 0, vecdequebackfast},
     {"at", vecdequeat, 0, containeratfast},
+    {"get", vecdequeget, 0, containergetfast},
     {"set", vecdequeset, 0, containersetfast},
     {"clear", vecdequeclear, 0},
     {"__len", vecdequelen, 0},
@@ -1740,7 +1768,12 @@ static int vecpop(lua_State* L)
 
 static int vecat(lua_State* L)
 {
-    LuauObject* vec = checkvec(L, "at");
+    return pushentryorraise(L, checkvec(L, "at"));
+}
+
+static int vecget(lua_State* L)
+{
+    LuauObject* vec = checkvec(L, "get");
     return pushentryat(L, vec, luaL_checknumber(L, 2));
 }
 
@@ -1817,7 +1850,7 @@ static int vecinit(lua_State* L)
 static int vectostring(lua_State* L)
 {
     LuauObject* vec = checkvec(L, "__tostring");
-    return containertostring(L, vec, countof(vec), vecat);
+    return containertostring(L, vec, countof(vec), vecget);
 }
 
 // Vec's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or mistyped
@@ -1840,6 +1873,7 @@ static const luaR_NativeMember kVecMembers[] = {
     {"extend", vecextend, 0},
     {"pop", vecpop, 0, popbackfast},
     {"at", vecat, 0, containeratfast},
+    {"get", vecget, 0, containergetfast},
     {"set", vecset, 0, containersetfast},
     {"insert", vecinsert, 0},
     {"remove", vecremove, 0},
