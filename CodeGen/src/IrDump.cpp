@@ -483,6 +483,10 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_GETQUALIFIED";
     case IrCmd::FALLBACK_GETPOSITIONAL:
         return "FALLBACK_GETPOSITIONAL";
+    case IrCmd::FALLBACK_PUSH:
+        return "FALLBACK_PUSH";
+    case IrCmd::FALLBACK_POP:
+        return "FALLBACK_POP";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:
