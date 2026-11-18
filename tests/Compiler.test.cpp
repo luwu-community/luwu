@@ -16407,6 +16407,35 @@ TEST_CASE("InlineFewCallSitesRaiseTheThresholdOfLoopFreeFunctions")
     CHECK_EQ(countCalls(compileFunction(withLoop, 1, 2)), 2);
 }
 
+// Luwu: a call in a body inlined at several sites gets no few-call-sites boost, since each copy of the body adds a copy
+// of the callee. Counting the one call in the source let nested inlines multiply a module's bytecode several times.
+TEST_CASE("InlineFewCallSitesCountCopiesOfAnInlinedBody")
+{
+    const char* source = "local function big(t)\n"
+                         "    t.a = t.a + t.b\n"
+                         "    t.b = t.b + t.c\n"
+                         "    t.c = t.c + t.d\n"
+                         "    t.d = t.d + t.e\n"
+                         "    t.e = t.e + t.f\n"
+                         "    t.f = t.f + t.g\n"
+                         "    t.g = t.g + t.h\n"
+                         "    t.h = t.h + t.i\n"
+                         "    t.i = t.i + t.j\n"
+                         "    t.j = t.j + t.a\n"
+                         "    return t\n"
+                         "end\n"
+                         "local function paint(t)\n"
+                         "    return big(t)\n"
+                         "end\n"
+                         "local function main(t)\n"
+                         "    paint(t)\n"
+                         "    paint(t)\n"
+                         "end\n";
+
+    ScopedFastInt fewCallSites{FInt::LuwuCompileInlineFewCallSites, 6};
+    CHECK_EQ(countCalls(compileFunction(source, 2, 2)), 2);
+}
+
 // Luwu: a class field's default that calls a local function stays in `__init` and isn't copied into every construction.
 // Initializers move to the construction sites only when they name no local but the constructor's parameters.
 TEST_CASE("InlineOnlyCallSiteSkipsClassFieldDefaults")

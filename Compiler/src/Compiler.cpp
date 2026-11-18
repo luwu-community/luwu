@@ -49,9 +49,9 @@ LUAU_FASTINTVARIABLE(LuwuCompileInlineNativeCallCost, 16)
 LUAU_FASTINTVARIABLE(LuwuCompileInlineFewCallSites, 6)
 // Luwu: the most instructions inlining may add to one function, however the thresholds and the only-call-site rule are
 // set. It keeps bytecode size bounded: a module grows by at most this much per function. The cost model can't do that
-// on its own because it saturates at 127 and doesn't measure real size. 512 keeps the inlining wins the inliner-fast
-// benches measured (`collide` still inlines fully), and only 42 of 368 Luau files reach it.
-LUAU_FASTINTVARIABLE(LuwuCompileInlineBudget, 512)
+// on its own because it saturates at 127 and doesn't measure real size. A lower budget refuses inlines native code gains
+// from: at 512, bench/tests' sha3_bit32 runs 2.7x slower native.
+LUAU_FASTINTVARIABLE(LuwuCompileInlineBudget, 4096)
 
 LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuwuDoExpr)
@@ -1257,10 +1257,11 @@ struct Compiler
 
         // Luwu: fewer call sites raise the threshold of a loop-free function (LuwuCompileInlineFewCallSites). A loop in
         // the body does enough work per call that the call itself costs little next to it, and a call that runs once
-        // saves nothing worth a bigger body.
+        // saves nothing worth a bigger body. The count is of calls in the source, so it only holds where the call is
+        // compiled once: a call in a body inlined at two sites makes two copies of the callee.
         const unsigned* callSites = directCallSites.find(func);
         bool fewCallSites = callSites && *callSites > 0 && int(*callSites) < FInt::LuwuCompileInlineFewCallSites;
-        if (fewCallSites && !fi->hasLoops && !callRunsOnce())
+        if (fewCallSites && !fi->hasLoops && !callRunsOnce() && callCompiledOnce())
             threshold = threshold * FInt::LuwuCompileInlineFewCallSites / int(*callSites);
 
         // Luwu: a function with one call site inlines whatever it costs (isOnlyCallSite). Upstream inlines past the cost
@@ -1360,14 +1361,21 @@ struct Compiler
     bool isOnlyCallSite(AstExprFunction* func)
     {
         const unsigned* calls = directCallSites.find(func);
-        if (!calls || *calls != 1 || repeatedCompileDepth > 0)
+        if (!calls || *calls != 1 || !callCompiledOnce())
             return false;
 
         if (callRunsOnce())
             return false;
 
         bool leavesNativeCode = func->hasNativeAttribute() && currentFunction && !currentFunction->hasNativeAttribute();
-        if (leavesNativeCode)
+        return !leavesNativeCode;
+    }
+
+    // Luwu: the call being compiled appears once in the output: it isn't in an unrolled loop or in a body inlined at
+    // several call sites
+    bool callCompiledOnce() const
+    {
+        if (repeatedCompileDepth > 0)
             return false;
 
         for (const InlineFrame& frame : inlineFrames)
