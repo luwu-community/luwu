@@ -55,6 +55,9 @@ struct BuiltinTypeFunctions
     // because tests on one property contradict each other (one of `tests` is uninhabited). See applyRefinements.
     TypeFunction unlessneverFunc;
 
+    // Luwu: `oneof<A, B, ...>`, the union of its arguments where each table member has the others' fields as `nil`
+    TypeFunction oneofFunc;
+
     void addToScope(NotNull<TypeArena> arena, NotNull<Scope> scope) const;
 };
 
