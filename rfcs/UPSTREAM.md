@@ -142,3 +142,18 @@ Rows without notes are marked `**Status**: Implemented` in luau-lang/rfcs as of 
 | [Extended numeric literal syntax](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-number-literals.md) | 2021-05-03 | |
 | [Type ascriptions](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-type-ascription.md) | 2021-05-03 | |
 | [Typed variadics](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-typed-variadics.md) | 2021-05-03 | |
+
+## Backported from upstream (6)
+
+Upstream changes from after 0.730 that Luwu ported ahead of a sync, mostly performance fixes with no RFC. "Luwu FFlag" is
+the flag that gates the port here: upstream's name where it was kept, or none where the port is always on. Ports Luwu
+runs without a flag still name upstream's flag, so a later sync can find what it replaces.
+
+| Feature | Upstream version | Upstream FFlag | Luwu FFlag | Reason |
+| --- | --- | --- | --- | --- |
+| Relaxed constraint ordering for `function_check` | 0.732 | `LuauRelaxConstraintOrderingForFunctionCheck` | `LuauRelaxConstraintOrderingForFunctionCheck` | A call inside a table literal passed to a call blocked the outer call's check, which made checking quadratic: 8000 such statements took 20.6s to check, and 0.94s with it. |
+| Subtyping reasonings in `DenseHash2` | 0.734 | none | none | Every passing subtyping check allocated a set for reasonings nothing read. With the next row, 2000 checks of a table literal against a 150-field record went from 989ms to 556ms. |
+| Unread subtyping reasonings skipped | [#2992](https://github.com/luau-lang/luau/pull/2992) | `LuauSubtypingSkipUnreadReasoning` | `LuauSubtypingSkipUnreadReasoning` | The same case as the row above. |
+| Tag propagation through fallback blocks | 0.734, fixed in 0.742 | `LuauCodegenPropagateFallbackTags` | none | Native code forgot every register's tag where a fallback block rejoined the fast path and checked them again. Guards that exit to the VM in a loop-heavy benchmark went from 61 to 31. 0.742's fix is for constant propagation limits, which Luwu doesn't have yet. |
+| Move elision around inlined calls | 0.736, fixed in 0.742 | `LuauCompileMoveElision`, `LuauCompileMoveElisionFix` | none | An inlined call copied its result into the call's target, and copied a reassigned argument into a fresh register. Interpreted color math ran 35% slower than upstream. Under native code, each copy's 16-byte load can't be forwarded from the two smaller stores before it, which costs about 9 cycles per copy on Zen 3. |
+| GC check on loop back-edges made permanent | 0.731, flag removed in 0.743 | `LuauBackedgeHeapCheck` | none | Upstream checks for a GC step on every loop back-edge and dropped the flag in 0.743. Luwu still tested the flag in the interpreter on every back-edge, which made a loop-heavy benchmark run 1.2% more instructions than upstream for identical bytecode. |

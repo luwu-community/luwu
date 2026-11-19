@@ -552,8 +552,50 @@ void BytecodeBuilder::undoEmit(LuauOpcode op)
     LUAU_ASSERT(!insns.empty());
     LUAU_ASSERT((insns.back() & 0xff) == op);
 
+    // Luwu: ported from upstream 0.738 with LuauCompileMoveElision, which undoes MOVEs after locals may have been
+    // recorded around them. Adjust local ranges referencing this instruction
+    for (size_t i = 0; i < debugLocals.size();)
+    {
+        DebugLocal& l = debugLocals[i];
+
+        // If live range start has been removed, the local never existed
+        if (l.startpc == insns.size())
+        {
+            debugLocals.erase(debugLocals.begin() + i);
+            continue;
+        }
+
+        if (l.endpc == insns.size())
+            l.endpc--;
+        i++;
+    }
+
+    for (size_t i = 0; i < typedLocals.size();)
+    {
+        TypedLocal& l = typedLocals[i];
+
+        // If live range start has been removed, the local never existed
+        if (l.startpc == insns.size())
+        {
+            typedLocals.erase(typedLocals.begin() + i);
+            continue;
+        }
+
+        if (l.endpc == insns.size())
+            l.endpc--;
+        i++;
+    }
+
+    // Remove the instruction
     insns.pop_back();
     lines.pop_back();
+}
+
+unsigned BytecodeBuilder::lastInstruction()
+{
+    LUAU_ASSERT(!insns.empty());
+
+    return insns.back();
 }
 
 size_t BytecodeBuilder::emitLabel()
