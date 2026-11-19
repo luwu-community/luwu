@@ -22,6 +22,9 @@ LUAU_FASTINT(LuauCompileInlineThreshold)
 LUAU_FASTINT(LuauCompileInlineThresholdMaxBoost)
 LUAU_FASTINT(LuauCompileLoopUnrollThreshold)
 LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
+LUAU_FASTINT(LuwuCompileInlineBudget)
+LUAU_FASTINT(LuwuCompileInlineCallCost)
+LUAU_FASTINT(LuwuCompileInlineFewCallSites)
 LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
@@ -4502,6 +4505,7 @@ RETURN R4 1
 
 TEST_CASE("CostModelRemarks")
 {
+
     CHECK_EQ(
         compileWithRemarks(R"(
 local a, b = ...
@@ -8188,6 +8192,7 @@ RETURN R1 1
     );
 
     // this function has less register pressure but a large cost
+
     CHECK_EQ(
         "\n" + compileFunction(
                    R"(
@@ -15855,4 +15860,294 @@ TEST_CASE("LoopOverBundlePackUnfoldsUpToFourElements")
 
     std::string spread = compileFunction("local function f(t, ...) for _, v in bundle.pack(...) do t[v] = true end end", 0, 1);
     CHECK(spread.find("FORGLOOP") != std::string::npos);
+}
+
+// Luwu: how many CALL instructions (CALL or CALLFB) a function's dump has
+static int countCalls(const std::string& dump)
+{
+    int calls = 0;
+    for (size_t at = dump.find("CALL"); at != std::string::npos; at = dump.find("CALL", at + 1))
+    {
+        bool startsLine = at == 0 || dump[at - 1] == '\n';
+        if (startsLine)
+            calls++;
+    }
+    return calls;
+}
+
+// Luwu: a function's body as an inline target the cost model refuses (cost 31 against a threshold of 25)
+#define LUWU_EXPENSIVE_BODY \
+    "    for i = 1, #t do\n" \
+    "        t[i] = t[i] * 2 + 1\n" \
+    "    end\n" \
+    "    t.a = t.a + 1\n" \
+    "    t.b = t.b + 2\n" \
+    "    t.c = t.c + 3\n" \
+    "    t.d = t.d + 4\n" \
+    "    t.e = t.e + 5\n" \
+    "    return t\n"
+
+// Luwu: at O2 a function with one call site inlines whatever the cost model says, unless that call is compiled more
+// than once, runs once anyway, or the function opts out
+TEST_CASE("InlineOnlyCallSiteRegardlessOfCost")
+{
+    // the only call site: inlined
+    const char* once = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                       "local function main(t)\n"
+                       "    big(t)\n"
+                       "end\n";
+    CHECK_EQ(countCalls(compileFunction(once, 1, 2)), 0);
+
+    // two call sites: the cost model decides, and refuses
+    const char* twice = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                        "local function main(t)\n"
+                        "    big(t)\n"
+                        "    big(t)\n"
+                        "end\n";
+    CHECK_EQ(countCalls(compileFunction(twice, 1, 2)), 2);
+
+    // one call site, but the function is also returned: inlining would copy its body instead of moving it
+    const char* returned = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                           "local function main(t)\n"
+                           "    big(t)\n"
+                           "end\n"
+                           "return big, main\n";
+    CHECK_EQ(countCalls(compileFunction(returned, 1, 2)), 1);
+
+    // one call site an unrolled loop compiles twice
+    const char* unrolled = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                           "local function main(t)\n"
+                           "    for _ = 1, 2 do\n"
+                           "        big(t)\n"
+                           "    end\n"
+                           "end\n";
+    CHECK_EQ(countCalls(compileFunction(unrolled, 1, 2)), 2);
+
+    // one call site inside a cheap function that is itself inlined at two call sites
+    const char* nested = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                         "local function mid(t)\n"
+                         "    big(t)\n"
+                         "end\n"
+                         "local function main(t)\n"
+                         "    mid(t)\n"
+                         "    mid(t)\n"
+                         "end\n";
+    CHECK_EQ(countCalls(compileFunction(nested, 2, 2)), 2);
+
+    // top-level code runs once outside a loop, and every time inside one
+    const char* topLevel = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                           "local t = {}\n"
+                           "big(t)\n";
+    CHECK_EQ(countCalls(compileFunction(topLevel, 1, 2)), 1);
+    const char* topLevelLoop = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                               "local t = {}\n"
+                               "for _ = 1, #t do\n"
+                               "    big(t)\n"
+                               "end\n";
+    CHECK_EQ(countCalls(compileFunction(topLevelLoop, 1, 2)), 0);
+
+    // O1 never inlines
+    CHECK_EQ(countCalls(compileFunction(once, 1, 1)), 1);
+
+    // a `@native` function called from code that isn't would run its body interpreted
+    const char* native = "@native\n"
+                         "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                         "local function main(t)\n"
+                         "    big(t)\n"
+                         "end\n";
+    CHECK_EQ(countCalls(compileFunction(native, 1, 2)), 1);
+
+    ScopedFastFlag noInline{FFlag::DebugLuauNoInline, true};
+    const char* optedOut = "@debugnoinline\n"
+                           "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                           "local function main(t)\n"
+                           "    big(t)\n"
+                           "end\n";
+    CHECK_EQ(countCalls(compileFunction(optedOut, 1, 2)), 1);
+}
+
+// Luwu: inlining adds at most LuwuCompileInlineBudget instructions to a function, whatever the cost model allows
+TEST_CASE("InlineBudgetBoundsWhatInliningAdds")
+{
+    const char* source = "local function add(a, b)\n"
+                         "    return a + b\n"
+                         "end\n"
+                         "local function main(x)\n"
+                         "    return add(x, 1) + add(x, 2) + add(x, 3) + add(x, 4)\n"
+                         "end\n";
+
+    // unbounded, every call inlines
+    CHECK_EQ(countCalls(compileFunction(source, 1, 2)), 0);
+
+    // `add` is 2 instructions with its RETURN, checked against what's spent, and each inline emits 1: a budget of 3
+    // fits two
+    ScopedFastInt budget{FInt::LuwuCompileInlineBudget, 3};
+    CHECK_EQ(countCalls(compileFunction(source, 1, 2)), 2);
+}
+
+// Luwu: a function inlined wherever it's called keeps no body of its own, since nothing calls its closure
+TEST_CASE("InlinedFunctionWithoutCallsKeepsNoBody")
+{
+    const char* inlined = R"(
+local function add(a, b)
+    return a + b
+end
+local function main(x)
+    return add(x, 1)
+end
+)";
+    CHECK_EQ("\n" + compileFunction(inlined, 0, 2), R"(
+RETURN R0 0
+)");
+
+    // main is never called and never inlined, so it keeps its body; so does every function at O1
+    CHECK_EQ("\n" + compileFunction(inlined, 1, 2), R"(
+ADDK R1 R0 K0 [1]
+RETURN R1 1
+)");
+    CHECK_EQ("\n" + compileFunction(inlined, 0, 1), R"(
+ADD R2 R0 R1
+RETURN R2 1
+)");
+
+    // a closure that's read can be called
+    const char* escapes = R"(
+local function add(a, b)
+    return a + b
+end
+local function main(x)
+    return add(x, 1), add
+end
+)";
+    CHECK_EQ("\n" + compileFunction(escapes, 0, 2), R"(
+ADD R2 R0 R1
+RETURN R2 1
+)");
+
+    // a local function in an inlined body: its closure in `outer` is never made, and its closure in main is never read
+    const char* nested = R"(
+local function outer(x)
+    local function inner(y)
+        return y * 2
+    end
+    return inner(x) + 1
+end
+local function main(x)
+    return outer(x)
+end
+)";
+    CHECK_EQ("\n" + compileFunction(nested, 0, 2), R"(
+RETURN R0 0
+)");
+    CHECK_EQ("\n" + compileFunction(nested, 1, 2), R"(
+RETURN R0 0
+)");
+}
+
+// Luwu: LuwuCompileInlineCallCost is what a call counts as against the body's cost
+TEST_CASE("InlineCallCostWeighsAgainstTheBody")
+{
+    const char* source = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                         "local function main(t)\n"
+                         "    big(t)\n"
+                         "    big(t)\n"
+                         "end\n";
+
+    CHECK_EQ(countCalls(compileFunction(source, 1, 2)), 2);
+
+    ScopedFastInt callCost{FInt::LuwuCompileInlineCallCost, 32};
+    CHECK_EQ(countCalls(compileFunction(source, 1, 2)), 0);
+}
+
+// Luwu: a loop-free function with fewer call sites than LuwuCompileInlineFewCallSites gets a higher threshold; one
+// with a loop doesn't, since its own work dwarfs the call
+TEST_CASE("InlineFewCallSitesRaiseTheThresholdOfLoopFreeFunctions")
+{
+    const char* loopFree = "local function big(t)\n"
+                           "    t.a = t.a + t.b\n"
+                           "    t.b = t.b + t.c\n"
+                           "    t.c = t.c + t.d\n"
+                           "    t.d = t.d + t.e\n"
+                           "    t.e = t.e + t.f\n"
+                           "    t.f = t.f + t.g\n"
+                           "    t.g = t.g + t.h\n"
+                           "    t.h = t.h + t.i\n"
+                           "    t.i = t.i + t.j\n"
+                           "    t.j = t.j + t.a\n"
+                           "    return t\n"
+                           "end\n"
+                           "local function main(t)\n"
+                           "    big(t)\n"
+                           "    big(t)\n"
+                           "end\n";
+    const char* withLoop = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                           "local function main(t)\n"
+                           "    big(t)\n"
+                           "    big(t)\n"
+                           "end\n";
+
+    {
+        ScopedFastInt off{FInt::LuwuCompileInlineFewCallSites, 1};
+        CHECK_EQ(countCalls(compileFunction(loopFree, 1, 2)), 2);
+        CHECK_EQ(countCalls(compileFunction(withLoop, 1, 2)), 2);
+    }
+
+    ScopedFastInt fewCallSites{FInt::LuwuCompileInlineFewCallSites, 6};
+    CHECK_EQ(countCalls(compileFunction(loopFree, 1, 2)), 0);
+    CHECK_EQ(countCalls(compileFunction(withLoop, 1, 2)), 2);
+}
+
+// Luwu: a call in a body inlined at several sites gets no few-call-sites boost, since each copy of the body adds a copy
+// of the callee. Counting the one call in the source let nested inlines multiply a module's bytecode several times.
+TEST_CASE("InlineFewCallSitesCountCopiesOfAnInlinedBody")
+{
+    const char* source = "local function big(t)\n"
+                         "    t.a = t.a + t.b\n"
+                         "    t.b = t.b + t.c\n"
+                         "    t.c = t.c + t.d\n"
+                         "    t.d = t.d + t.e\n"
+                         "    t.e = t.e + t.f\n"
+                         "    t.f = t.f + t.g\n"
+                         "    t.g = t.g + t.h\n"
+                         "    t.h = t.h + t.i\n"
+                         "    t.i = t.i + t.j\n"
+                         "    t.j = t.j + t.a\n"
+                         "    return t\n"
+                         "end\n"
+                         "local function paint(t)\n"
+                         "    return big(t)\n"
+                         "end\n"
+                         "local function main(t)\n"
+                         "    paint(t)\n"
+                         "    paint(t)\n"
+                         "end\n";
+
+    ScopedFastInt fewCallSites{FInt::LuwuCompileInlineFewCallSites, 6};
+    CHECK_EQ(countCalls(compileFunction(source, 2, 2)), 2);
+}
+
+// Luwu: a class field's default that calls a local function stays in `__init` and isn't copied into every construction.
+// Initializers move to the construction sites only when they name no local but the constructor's parameters.
+TEST_CASE("InlineOnlyCallSiteSkipsClassFieldDefaults")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    const char* source = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                         "class Box(public n: number)\n"
+                         "    public items = big({})\n"
+                         "end\n"
+                         "local a = Box(1)\n"
+                         "local b = Box(2)\n";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+    Luau::ParseOptions parseOptions;
+    parseOptions.language = Luau::Language::Luwu;
+    Luau::compileOrThrow(bcb, source, options, parseOptions);
+
+    // both constructions call `__init`
+    std::string main = bcb.dumpFunction(bcb.getFunctionCount() - 1);
+    CHECK_EQ(countCalls(main), 2);
 }
