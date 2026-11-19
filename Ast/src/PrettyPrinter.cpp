@@ -561,7 +561,12 @@ struct Printer
         }
         else if (const auto& a = expr.as<AstExprGlobal>())
         {
-            writer.identifier(a->name.value);
+            // Luwu Traits (rfcs/classes/traits.md): `Self` names the class or trait it refers to
+            writer.identifier(a->writtenAsSelf ? "Self" : a->name.value);
+        }
+        else if (expr.is<AstExprSelfClass>())
+        {
+            writer.identifier("Self");
         }
         else if (expr.is<AstExprVarargs>())
         {
@@ -598,6 +603,14 @@ struct Printer
         else if (const auto& a = expr.as<AstExprIndexName>())
         {
             visualize(*a->expr);
+
+            // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name`, `Class:Trait.name`
+            if (a->qualifiedTrait)
+            {
+                writer.symbol(":");
+                visualize(*a->qualifiedTrait);
+            }
+
             advance(a->opPosition);
             writer.symbol(std::string(1, a->op));
             advance(a->indexLocation.begin);
@@ -1531,6 +1544,18 @@ struct Printer
                             }
                             writer.advance(method.keywordLocation.begin);
                             writer.keyword("function");
+                            // Luwu Traits (rfcs/classes/traits.md): `function Self.name`, `function Json.name`
+                            if (method.scopeLocation)
+                            {
+                                writer.advance(method.scopeLocation->begin);
+                                writer.identifier("Self");
+                                writer.symbol(".");
+                            }
+                            else if (method.qualifiedTrait)
+                            {
+                                visualize(*method.qualifiedTrait);
+                                writer.symbol(".");
+                            }
                             writer.advance(method.nameLocation.begin);
                             writer.identifier(method.functionName.value);
                             visualizeFunctionBody(*method.function);
