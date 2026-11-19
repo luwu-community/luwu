@@ -1,0 +1,194 @@
+--[=[
+    A usability target for the `ast` library, not a test that runs yet: a codemod that adds a trait and implements it
+    on the classes that match a filter. It's written against the API sketched in AST.CLAUDE.md. When the library
+    exists, this file should run unchanged (or the API gets fixed until it does), and its output on the cases at the
+    bottom is the test.
+
+    The codemod adds `Named`, which gives a class a `__tostring` built from its `label`. A class gets it when it has a
+    `name` field, doesn't write its own `__tostring` and doesn't implement `Named` already. A class without a `label`
+    method gets one that returns its name.
+]=]
+const env = require("@std/env")
+const fs = require("@std/fs")
+
+--- The `expect` message for code this script writes itself. A parse failure there is a bug in the script.
+const BUILT = "code written in this script parses"
+
+const NAMED = [==[
+trait Named
+    expect name: string
+    expect function label(self): string
+
+    function __tostring(self): string
+        return `{class.name(self)}({self:label()})`
+    end
+end
+]==]
+
+const LABEL = [==[
+function label(self): string
+    return self.name
+end
+]==]
+
+--- Whether `cls` implements `Named` already, directly or through another trait's `needs`.
+const function has_named(cls: ast.Class): boolean
+    for _, found in cls:traits() do
+        const name = if found is ast.Trait then found.binding.name else found:dotted()
+        return true if name == "Named"
+    end
+    return false
+end
+
+--- A class gets `Named` when it has a `name` field and doesn't write its own `__tostring`.
+const function wants_named(cls: ast.Class): boolean
+    const has_name = cls:member("name") is ast.Field
+    return has_name and cls:member("__tostring") == nil and not has_named(cls)
+end
+
+--- Whether `cls` writes `public` or `private` anywhere, which means every member it gains needs one too.
+const function uses_access_specifiers(cls: ast.Class): boolean
+    for _, param in cls.params or {} do
+        return true if param.access ~= nil
+    end
+    for _, member in cls.members do
+        return true if member.access ~= "default"
+    end
+    return false
+end
+
+--[=[
+    Adds `Named` to `doc` and implements it on every class that wants it. Returns how many classes changed, or nil when
+    `doc` already declares something named `Named`.
+]=]
+const function add_named(doc: ast.Document): number?
+    for _, binding in doc:find(ast.Binding) do
+        return nil if binding.name == "Named"
+    end
+
+    const targets = {
+        for _, cls in doc:find(ast.Class) when wants_named(cls)
+            give cls
+    }
+    return 0 if #targets == 0
+
+    -- `implements` reads the trait's value when the class statement runs, so the trait goes above the first class
+    const named = ast.stat(NAMED):expect(BUILT) :: ast.Trait
+    const top = doc.root:children()
+    const first = top:find(targets[1]) or error("classes are top-level statements")
+    top:insert(first, named)
+
+    for _, cls in targets do
+        const implemented = cls.implemented or ast.NodeList()
+        implemented:pushback(ast.TraitRef { of = named.binding:reference() })
+        cls.implemented = implemented
+
+        continue if cls:member("label") ~= nil
+
+        const label = ast.member(LABEL):expect(BUILT)
+        if uses_access_specifiers(cls) then
+            label.access = "public"
+        end
+        cls.members:pushback(label)
+    end
+    return #targets
+end
+
+for _, path in env.args do
+    match ast.parse(fs.readfile(path))
+    case is Err(broken) then
+        print(`skipped {path}: {#broken.errors} syntax errors`)
+    case is Ok(doc) then
+        const changed = add_named(doc)
+        if changed == nil then
+            print(`skipped {path}: it already declares something named Named`)
+        elseif changed > 0 then
+            fs.writefile(path, doc:source())
+            print(`{path}: {changed} classes implement Named`)
+        end
+    end
+end
+
+--[=[
+    Cases, input then expected output. Blank lines around an inserted trait or member follow the code around it.
+
+    ```luwu
+    trait Pet end
+
+    class Cat
+        name: string
+        lives = 9
+    end
+
+    class Point(public x: number, public y: number) end
+
+    class Dog(public name: string) implements Pet
+        public function label(self): string
+            return `good dog {self.name}`
+        end
+    end
+
+    class Owl(
+        public name: string,
+        private hoots: number = 0
+    ) end
+
+    class Quiet
+        name: string
+        function __tostring(self)
+            return "..."
+        end
+    end
+    ```
+
+    ```luwu
+    trait Pet end
+
+    trait Named
+        expect name: string
+        expect function label(self): string
+
+        function __tostring(self): string
+            return `{class.name(self)}({self:label()})`
+        end
+    end
+
+    class Cat implements Named
+        name: string
+        lives = 9
+
+        function label(self): string
+            return self.name
+        end
+    end
+
+    class Point(public x: number, public y: number) end
+
+    class Dog(public name: string) implements Pet, Named
+        public function label(self): string
+            return `good dog {self.name}`
+        end
+    end
+
+    class Owl(
+        public name: string,
+        private hoots: number = 0
+    ) implements Named
+        public function label(self): string
+            return self.name
+        end
+    end
+
+    class Quiet
+        name: string
+        function __tostring(self)
+            return "..."
+        end
+    end
+    ```
+
+    `Point` has no `name` and `Quiet` writes its own `__tostring`, so both stay as they are. `Owl` uses access
+    specifiers, so its new `label` is `public`.
+
+    Skipped: a file that already declares `Named` (a local, a class or a trait), even when no class would change.
+]=]

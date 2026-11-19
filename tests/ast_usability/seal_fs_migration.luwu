@@ -103,8 +103,8 @@ end
 const function fs_member(callee: ast.Expr): (string?, ast.Expr?)
     local names: { string } = {}
     local current = callee
-    while current is ast.Field do
-        table.insert(names, 1, current.field)
+    while current is ast.Property do
+        table.insert(names, 1, current.name)
         current = current.object
     end
 
