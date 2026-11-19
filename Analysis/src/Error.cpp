@@ -138,8 +138,8 @@ static const char* const kEnvironmentLibraryMembers[] = {
     "utf8.graphemes",
     "utf8.nfcnormalize",
     "utf8.nfdnormalize",
-    // Luwu's own, missing when their flags (`LuwuTableDrop`, `LuwuBufferIsFrozen`) are off.
-    "table.drop",
+    // Luwu's own, missing when their flags (`LuwuTableDiscard`, `LuwuBufferIsFrozen`) are off.
+    "table.discard",
     "buffer.isfrozen",
 };
 
