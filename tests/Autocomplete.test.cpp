@@ -28,7 +28,7 @@ LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauAutocompleteSkipErrorTypeInUnion)
 LUAU_FASTFLAG(LuauCheckTypeForDeprecated)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
-LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(LuwuTableDiscard)
 
 using namespace Luau;
 
@@ -367,7 +367,7 @@ TEST_CASE_FIXTURE(ACFixture, "function_parameters")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_member_completions")
 {
-    ScopedFastFlag tableDrop{FFlag::LuwuTableDrop, true};
+    ScopedFastFlag tableDiscard{FFlag::LuwuTableDiscard, true};
 
     check(R"(
         local a = table.@1
@@ -377,7 +377,7 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_member_completions")
 
     CHECK_EQ(18, ac.entryMap.size());
     CHECK(ac.entryMap.count("find"));
-    CHECK(ac.entryMap.count("drop"));
+    CHECK(ac.entryMap.count("discard"));
     CHECK(ac.entryMap.count("pack"));
     LUAU_CHECK_HAS_NO_KEY(ac.entryMap, "math");
     CHECK_EQ(ac.context, AutocompleteContext::Property);
@@ -476,7 +476,7 @@ TEST_CASE_FIXTURE(ACFixture, "table_intersection")
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_string_completions")
 {
-    ScopedFastFlag tableDrop{FFlag::LuwuTableDrop, true};
+    ScopedFastFlag tableDiscard{FFlag::LuwuTableDiscard, true};
 
     check(R"(
         local a = ("foo"):@1
@@ -485,7 +485,7 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "get_string_completions")
     auto ac = autocomplete('1');
 
     CHECK_EQ(17, ac.entryMap.size());
-    LUAU_CHECK_HAS_NO_KEY(ac.entryMap, "drop");
+    LUAU_CHECK_HAS_NO_KEY(ac.entryMap, "discard");
     CHECK_EQ(ac.context, AutocompleteContext::Property);
 }
 
