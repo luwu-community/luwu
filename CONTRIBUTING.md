@@ -17,6 +17,7 @@ Please feel free to [create a pull request](https://help.github.com/articles/abo
 ## Bugs
 
 If the language implementation doesn't compile on your system, compiles with warnings, doesn't seem to run correctly for your code or if anything else is amiss, please [open a GitHub issue](https://github.com/luwu-community/luwu/issues/new).
+[BUGS.md](BUGS.md) lists how serious each kind of bug is. Memory safety vulnerabilities go through [SECURITY.md](SECURITY.md) instead of a public issue.
 It helps if you note the Git revision issue happens in, the version of your compiler for compilation issues, and a reproduction case for runtime bugs.
 
 Of course, feel free to [create a pull request](https://help.github.com/articles/about-pull-requests/) to fix the bug yourself.
