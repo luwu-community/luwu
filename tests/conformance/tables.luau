@@ -455,22 +455,62 @@ do
   assert(table.find(t4, makeobjb(500)) == nil)
 end
 
--- test table.drop
+-- test table.discard
 do
   local t = {"apple", "banana", "orange", "banana", "pear"}
-  assert(table.drop(t, "banana") == 2)
+  assert(table.discard(t, "banana") == 2)
   assert(table.concat(t, ",") == "apple,orange,pear")
 
   local t2 = {"x", "y", "x", "z", "x"}
-  assert(table.drop(t2, "x", 2) == 2)
+  assert(table.discard(t2, "x", 2) == 2)
   assert(table.concat(t2, ",") == "y,z,x")
 
-  assert(pcall(table.drop, {1, 2, 1, 3}, 1, 0) == false)
-  assert(table.drop({1, 2, 3}, 4) == 0)
-  assert(table.drop({1, 2, 3}, 0) == 0)
+  assert(pcall(table.discard, {1, 2, 1, 3}, 1, 0) == false)
+  assert(table.discard({1, 2, 3}, 4) == 0)
+  assert(table.discard({1, 2, 3}, 0) == 0)
 
   local frozen = table.freeze({"a", "b", "a"})
-  assert(pcall(table.drop, frozen, "a") == false)
+  assert(pcall(table.discard, frozen, "a") == false)
+
+  -- tables are compared by identity unless the value has an __eq metamethod
+  local a, b = {}, {}
+  local t3 = {a, b, a, 1}
+  assert(table.discard(t3, a) == 2)
+  assert(#t3 == 2 and t3[1] == b and t3[2] == 1 and t3[3] == nil)
+
+  local eqmt = { __eq = function(l, r) return l.id == r.id end }
+  local function item(id) return setmetatable({ id = id }, eqmt) end
+  local t4 = {item(1), item(2), item(1), item(3), item(1)}
+  assert(table.discard(t4, item(1), 2) == 2)
+  assert(#t4 == 3 and t4[1].id == 2 and t4[2].id == 3 and t4[3].id == 1)
+
+  -- an __eq metamethod that grows the table can't break the pass
+  local grow = {}
+  local growmt = { __eq = function() for i = 1, 100 do grow[#grow + 1] = i end return false end }
+  grow[1] = setmetatable({}, growmt)
+  grow[2] = 5
+  assert(table.discard(grow, setmetatable({}, growmt)) == 0)
+  assert(grow[2] == 5)
+
+  -- a table filled from the end
+  local t5 = {}
+  for i = 10, 1, -1 do t5[i] = i % 3 end
+  assert(table.discard(t5, 0) == 3)
+  assert(table.concat(t5, ",") == "1,2,1,2,1,2,1")
+  assert(t5[8] == nil and t5[9] == nil and t5[10] == nil)
+
+  -- NaN never equals itself; nothing past #t is touched
+  local nan = 0 / 0
+  local t6 = {nan, 1, 1}
+  t6[5] = 1
+  assert(table.discard(t6, nan) == 0)
+  assert(table.discard(t6, 1) == 2)
+  assert(t6[1] ~= t6[1] and t6[2] == nil and t6[5] == 1)
+
+  -- a count above the number of matches removes every match
+  local t7 = {1, 2, 1}
+  assert(table.discard(t7, 1, 10) == 2)
+  assert(#t7 == 1 and t7[1] == 2)
 end
 
 -- test table.concat

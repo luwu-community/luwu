@@ -11,7 +11,7 @@
 #include "ldebug.h"
 #include "lvm.h"
 
-LUAU_FASTFLAGVARIABLE(LuwuTableDrop)
+LUAU_FASTFLAGVARIABLE(LuwuTableDiscard)
 
 static int foreachi(lua_State* L)
 {
@@ -551,43 +551,102 @@ static int tfind(lua_State* L)
     return 1;
 }
 
-static int tdrop(lua_State* L)
+// Luwu table.discard (rfcs/table-discard.md): whether comparing `value` with an element can call an `__eq` metamethod.
+// `equalobj` only calls one when `value` is a table, userdata or object whose metatable has `__eq`.
+static bool cancalleq(lua_State* L, const TValue* value)
 {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    luaL_checkany(L, 2);
+    bool comparedbymetamethod = ttistable(value) || ttisuserdata(value) || ttisobject(value);
+    return comparedbymetamethod && !ttisnil(luaT_gettmbyobj(L, value, TM_EQ));
+}
 
-    int n = lua_objlen(L, 1);
-    int maxRemoved = luaL_optinteger(L, 3, INT_MAX);
-    if (!lua_isnoneornil(L, 3))
-        luaL_argcheck(L, maxRemoved > 0, 3, "count must be greater than 0");
-
-    LuaTable* t = hvalue(L->base);
-    if (t->readonly)
-        luaG_readonlyerror(L);
-
-    int writeIndex = 1;
+// Luwu table.discard (rfcs/table-discard.md): removes up to `maxremoved` raw matches of `value` from `t`'s array part
+// in one compaction pass. Elements before the first match are never written.
+static int discardfromarray(lua_State* L, LuaTable* t, const TValue* value, int n, int maxremoved)
+{
+    TValue* array = t->array;
     int removed = 0;
+    int write = 0;
 
-    for (int i = 1; i <= n; ++i)
+    for (int read = 0; read < n; ++read)
     {
-        lua_rawgeti(L, 1, i);
+        if (removed < maxremoved && luaO_rawequalObj(value, &array[read]))
+        {
+            ++removed;
+            continue;
+        }
 
-        if (removed < maxRemoved && equalobj(L, L->base + 1, L->top - 1))
+        if (write != read)
+            setobj2t(L, &array[write], &array[read]);
+        ++write;
+    }
+
+    // Moving a value within `t` needs no GC barrier: `t` already referenced it.
+    for (int i = write; i < n; ++i)
+        setnilvalue(&array[i]);
+
+    return removed;
+}
+
+// Luwu table.discard (rfcs/table-discard.md): the same pass through the table API, for values compared by an `__eq`
+// metamethod. The metamethod could resize `t` under `discardfromarray`'s raw pointer.
+static int discardslow(lua_State* L, int n, int maxremoved)
+{
+    int removed = 0;
+    int write = 1;
+
+    for (int read = 1; read <= n; ++read)
+    {
+        lua_rawgeti(L, 1, read);
+
+        if (removed < maxremoved && equalobj(L, L->base + 1, L->top - 1))
         {
             lua_pop(L, 1);
             ++removed;
             continue;
         }
 
-        lua_rawseti(L, 1, writeIndex);
-        ++writeIndex;
+        if (write != read)
+            lua_rawseti(L, 1, write);
+        else
+            lua_pop(L, 1);
+        ++write;
     }
 
-    for (int i = writeIndex; i <= n; ++i)
+    for (int i = write; i <= n; ++i)
     {
         lua_pushnil(L);
         lua_rawseti(L, 1, i);
     }
+
+    return removed;
+}
+
+// Luwu table.discard (rfcs/table-discard.md): `table.discard(t, value, count?)` removes up to `count` elements equal to
+// `value` from `t[1..#t]` (all of them without `count`), keeps the rest in order and returns how many it removed.
+static int tdiscard(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checkany(L, 2);
+
+    int n = lua_objlen(L, 1);
+    int maxremoved = luaL_optinteger(L, 3, INT_MAX);
+    if (!lua_isnoneornil(L, 3))
+        luaL_argcheck(L, maxremoved > 0, 3, "count must be greater than 0");
+
+    LuaTable* t = hvalue(L->base);
+    if (t->readonly)
+        luaG_readonlyerror(L);
+
+    // luaH_getn's border never goes past the array part: newkey moves key sizearray + 1 into it.
+    LUAU_ASSERT(n <= t->sizearray);
+
+    const TValue* value = L->base + 1;
+
+    int removed = 0;
+    if (!cancalleq(L, value))
+        removed = discardfromarray(L, t, value, n, maxremoved);
+    else
+        removed = discardslow(L, n, maxremoved);
 
     lua_pushinteger(L, removed);
     return 1;
@@ -660,36 +719,14 @@ static const luaL_Reg tab_funcs[] = {
     {NULL, NULL},
 };
 
-static const luaL_Reg tab_funcs_with_drop[] = {
-    {"concat", tconcat},
-    {"foreach", foreach},
-    {"foreachi", foreachi},
-    {"getn", getn},
-    {"maxn", maxn},
-    {"insert", tinsert},
-    {"remove", tremove},
-    {"sort", tsort},
-    {"pack", tpack},
-    {"unpack", tunpack},
-    {"move", tmove},
-    {"create", tcreate},
-    {"find", tfind},
-    {"drop", tdrop},
-    {"clear", tclear},
-    {"freeze", tfreeze},
-    {"isfrozen", tisfrozen},
-    {"clone", tclone},
-    {NULL, NULL},
-};
-
 int luaopen_table(lua_State* L)
 {
-    luaL_register(L, LUA_TABLIBNAME, FFlag::LuwuTableDrop ? tab_funcs_with_drop : tab_funcs);
+    luaL_register(L, LUA_TABLIBNAME, tab_funcs);
 
-    if (FFlag::LuwuTableDrop)
+    if (FFlag::LuwuTableDiscard)
     {
-        lua_pushcfunction(L, tdrop, "drop");
-        lua_setfield(L, -2, "drop");
+        lua_pushcfunction(L, tdiscard, "discard");
+        lua_setfield(L, -2, "discard");
     }
 
     // Lua 5.1 compat
