@@ -68,8 +68,15 @@ While there are no compatibility concerns, this does add a new standard library 
 
 - Simply adding the linter rule would stop the footgun, but it would leave the verbose use of `if` statements as the
   only solution.
-- This function was originally proposed as `table.drop`. We renamed it because `drop(n)` means "the collection without
-  its first n elements" in most other languages (Haskell, Kotlin, Scala, Elixir, Clojure), and a dataframe's `drop`
-  removes columns by name. `table.discard` follows Python's `set.discard`: it removes the value if it's there and never
-  errors when it isn't. `table.erase` (after C++20's `std::erase`) and `table.remval` were also considered.
+- Naming it `table.drop`, as this RFC first proposed, or `table.erase` or `table.remval`.
 - Adding optional `start` and `finish` arguments to `table.discard` to specify search distance within the table.
+
+## Prior art
+
+- In most other languages, `drop(n)` gives a collection without its first n elements: Haskell, Kotlin, Scala, Elixir
+  and Clojure all use it that way. A dataframe's `drop` removes columns by name. Readers coming from either would
+  misread `table.drop`.
+- `table.discard` behaves like Python's `set.discard`: it removes the value if it's there and never errors when it
+  isn't.
+- C++20's `std::erase(container, value)` removes every match and returns how many it removed, like `table.discard`
+  without a `count`.
