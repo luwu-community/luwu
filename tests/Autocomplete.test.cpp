@@ -6992,7 +6992,6 @@ TEST_CASE_FIXTURE(ACFixture, "a_bare_dot_in_an_expression_completes_nothing")
     CHECK(ac.entryMap.count("alpha"));
 }
 
-||||||| /tmp/claude-1000/-home-deviaze-Repositories-luwu/8fe7482a-3764-4af6-a013-517769dd53f6/scratchpad/mf/old2
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a match arm's `then` completes as the keyword, like an
 // `if`'s, so accepting a completion there doesn't replace it with a name
 TEST_CASE_FIXTURE(ACFixture, "match_arm_then_completes_the_keyword")
