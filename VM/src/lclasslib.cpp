@@ -1,5 +1,6 @@
 #include "lapi.h"
 #include "lbytecode.h"
+#include "lclass.h"
 #include "lobject.h"
 #include "lstring.h"
 #include "lua.h"
@@ -19,6 +20,22 @@ static int class_isinstance(lua_State* L)
     const LuauClass* lclass = classvalue(obj);
     bool isInstance = ttisobject(inst) && objectvalue(inst)->lclass == lclass;
     lua_pushboolean(L, isInstance);
+    return 1;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): class.implements(value, trait) -> value is an object whose class implements the
+// trait, listed or implied through `needs`
+static int class_implements(lua_State* L)
+{
+    luaL_checkany(L, 1);
+    luaL_checktype(L, 2, LUA_TCLASS);
+    const TValue* value = luaA_toobject(L, 1);
+    const LuauClass* trait = classvalue(luaA_toobject(L, 2));
+
+    if (!trait->istrait)
+        luaL_error(L, "class.implements expects a trait, but '%s' is a class; use class.isinstance", getstr(trait->name));
+
+    lua_pushboolean(L, ttisobject(value) && luaR_implements(objectvalue(value)->lclass, trait));
     return 1;
 }
 
@@ -94,6 +111,7 @@ static int class_name(lua_State* L)
 
 static const luaL_Reg classlib[] = {
     {"isinstance", class_isinstance},
+    {"implements", class_implements},
     {"of", class_of},
     {"name", class_name},
     {"fields", class_fields},
