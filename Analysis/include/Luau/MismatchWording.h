@@ -272,9 +272,15 @@ Line andMore(size_t hidden, bool bullet, std::string_view things = "");
 // `CouldBeNil` differences on parameters.
 std::string narrowedParameterHelp(const std::vector<const Difference*>& narrowed, Rendering& rendering);
 
+// "1 value", "2 values"
+std::string countValues(size_t count);
+
 // Helps: what to do, printed right after the two types.
 std::string swappedParametersHelp(const std::string& first, const std::string& second, size_t i, size_t j, const Helpifier& helpifier);
 std::string swappedReturnsHelp(size_t i, size_t j, const Helpifier& helpifier);
+// Luwu bundles: the reason a bundle of `given` values doesn't fit where one of `expected` values goes, and how to fix it
+std::string bundleSizeSentence(size_t given, size_t expected);
+std::string bundleSizeHelp(size_t given, size_t expected, const Helpifier& helpifier);
 std::string misspelledStringHelp(const std::string& suggestion, const Helpifier& helpifier);
 // A missing field with a similar name present, at the path of the table holding it: what was written and what was
 // meant (`leaving.reson`, `leaving.reason`), and the help saying so.
