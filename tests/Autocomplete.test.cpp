@@ -6396,6 +6396,38 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
     CHECK(ac.entryMap.count("Animator"));
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a match arm's `then` completes as the keyword, like an
+// `if`'s, so accepting a completion there doesn't replace it with a name
+TEST_CASE_FIXTURE(ACFixture, "match_arm_then_completes_the_keyword")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    check(R"(
+        local thenable = 1
+        local function f(res: string)
+            match res
+            case is "a" then@1
+                print(thenable)
+            case is "b" @2
+            end
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.context, AutocompleteContext::Keyword);
+    CHECK(ac.entryMap.count("then"));
+    CHECK(!ac.entryMap.count("thenable"));
+
+    ac = autocomplete('2');
+    CHECK_EQ(ac.context, AutocompleteContext::Keyword);
+    CHECK(ac.entryMap.count("then"));
+    CHECK(ac.entryMap.count("when"));
+}
+
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): every query an editor's hover, docs and autocomplete
 // make answers at every position of `match` expressions and statements, finished or still being typed, without crashing
 TEST_CASE_FIXTURE(ACFixture, "every_query_at_every_position_of_a_match")
