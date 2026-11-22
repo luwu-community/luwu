@@ -10,6 +10,8 @@
 
 #include <memory>
 #include <optional>
+#include <string>
+#include <unordered_set>
 
 namespace Luau
 {
@@ -383,10 +385,16 @@ struct UnionBuilder
     void reserve(size_t size);
 
 private:
+    void addOption(TypeId option);
+
     NotNull<TypeArena> arena;
     NotNull<BuiltinTypes> builtinTypes;
     TypeIds options;
     bool isTop = false;
+    // Luwu: the singleton values among `options`, which compare by value rather than by TypeId
+    std::unordered_set<std::string> strings;
+    bool hasTrue = false;
+    bool hasFalse = false;
 };
 
 struct IntersectionBuilder
