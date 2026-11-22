@@ -47,6 +47,8 @@ inline int getOpLength(LuauOpcode op)
     case LOP_GETOBJECTMEMBER:
     case LOP_SETOBJECTMEMBER:
     case LOP_GETQUALIFIED:
+    case LOP_JUMPXTYPE:
+    case LOP_JUMPXMATCH:
         return 2;
 
     default:
@@ -97,6 +99,8 @@ inline bool isJumpD(LuauOpcode op)
     case LOP_CMPPROTO:
     case LOP_JUMPXISA:
     case LOP_INITTRAITS:
+    case LOP_JUMPXTYPE:
+    case LOP_JUMPXMATCH:
         return true;
 
     default:
@@ -159,4 +163,38 @@ inline bool isLoopJump(LuauOpcode op)
     }
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the name `type()` gives for an LBC_TYPE_* that JUMPXTYPE
+// tests, or null when JUMPXTYPE can't test it
+inline const char* getJumpxTypeName(uint8_t type)
+{
+    switch (type)
+    {
+    case LBC_TYPE_BOOLEAN:
+        return "boolean";
+    case LBC_TYPE_NUMBER:
+        return "number";
+    case LBC_TYPE_INTEGER:
+        return "integer";
+    case LBC_TYPE_STRING:
+        return "string";
+    case LBC_TYPE_TABLE:
+        return "table";
+    case LBC_TYPE_FUNCTION:
+        return "function";
+    case LBC_TYPE_THREAD:
+        return "thread";
+    case LBC_TYPE_USERDATA:
+        return "userdata";
+    case LBC_TYPE_VECTOR:
+        return "vector";
+    case LBC_TYPE_BUFFER:
+        return "buffer";
+    case LBC_TYPE_OBJECT:
+        return "object";
+    case LBC_TYPE_SYMNONE:
+        return "none";
+    default:
+        return nullptr;
+    }
+}
 } // namespace Luau
