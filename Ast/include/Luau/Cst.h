@@ -217,6 +217,8 @@ public:
         Position equalsPosition;       // only if Kind != List
         Separator separator;           // may be missing for last Item
         Position separatorPosition;
+        // Luwu: a Record item written `function name() end`; its value is the function and there is no `=`
+        bool namedFunction = false;
     };
 
     explicit CstExprTable(const AstArray<Item>& items);
