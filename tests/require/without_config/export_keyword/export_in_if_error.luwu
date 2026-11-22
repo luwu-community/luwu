@@ -4,5 +4,5 @@ if false then
 elseif false then
     print("skip")
 else
-    export local inside = "else block"
+    export inside = "else block"
 end
