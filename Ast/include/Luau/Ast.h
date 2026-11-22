@@ -73,10 +73,6 @@ class AstTypePack;
 class AstAttr;
 class AstExprTable;
 
-// Luwu Destructuring (rfcs/destructuring.md): the name of the hidden local an unnamed pattern (`local .{x} = v`)
-// binds its value to. Code can't spell it, so nothing can refer to it.
-constexpr const char* kDestructuredLocalName = "(destructured)";
-
 template<typename T>
 struct AstArray
 {
@@ -103,6 +99,10 @@ struct AstArray
         return std::make_reverse_iterator(begin());
     }
 };
+
+// Luwu Destructuring (rfcs/destructuring.md): the name of the hidden local an unnamed pattern (`local .{x} = v`)
+// binds its value to. Code can't spell it, so nothing can refer to it.
+constexpr const char* kDestructuredLocalName = "(destructured)";
 
 struct AstLocal
 {
@@ -572,6 +572,8 @@ public:
     void visit(AstVisitor* visitor) override;
 };
 
+struct AstDestructurePattern;
+
 class AstExprCall : public AstExpr
 {
 public:
@@ -596,6 +598,8 @@ public:
     AstArray<AstExpr*> args;
     bool self;
     Location argLocation;
+    // Luwu bundles: `.(a, b)`, which the parser writes as `bundle.pack(a, b)` (Parser::parseDotPositional)
+    bool fromDotPositional = false;
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a call the parser wrote for a pattern (`x is Point`
     // is `class.isinstance(x, Point)`), not one in the code. Editor features that show a call's parameters skip it.
     bool fromPattern = false;
@@ -784,6 +788,9 @@ public:
     Op op;
     AstExpr* left;
     AstExpr* right;
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the size test of a bundle pattern (`#value == 2`),
+    // which narrows `value` to the bundles of that size
+    bool fromBundlePattern = false;
 };
 
 std::string toString(AstExprBinary::Op op);
@@ -1185,6 +1192,9 @@ struct AstDestructurePattern
     // `.[a, b]`: the fields are elements read by index, `value[1]` on, and have no keys.
     bool array = false;
     AstArray<AstDestructureField> fields{nullptr, 0};
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the pattern the bound value matches in a pattern that
+    // tests its fields (`Cat(name is string)`), or null
+    class AstExprMatchPattern* test = nullptr;
 };
 
 struct AstDestructureField
@@ -1320,14 +1330,14 @@ public:
     // Location of the leading 'for' keyword token only.
     Location forLocation;
 
+    // Luwu If Local (rfcs/control-flow/if-local.md): see AstStatFor::whenGuard. With destructured bindings, `body` starts with
+    // their fields and the guard follows them.
+    AstStatIf* whenGuard = nullptr;
+
     // Luwu Destructuring (rfcs/destructuring.md): the pattern of each binding written as one (`for _, p.{x, y} in ps`),
     // null for a plain name; empty when no binding is a pattern. The loop variable is the pattern's local (hidden for
     // `.{x, y}`), and `body` starts with one `local` per bound name (AstStatLocal::destructuredFromLoop).
     AstArray<AstDestructurePattern*> destructure{nullptr, 0};
-
-    // Luwu If Local (rfcs/control-flow/if-local.md): see AstStatFor::whenGuard. With destructured bindings, `body` starts with
-    // their fields and the guard follows them.
-    AstStatIf* whenGuard = nullptr;
 };
 
 class AstStatAssign : public AstStat
@@ -1911,6 +1921,8 @@ public:
     AstName name;
     Location nameLocation;
     AstArray<AstTypeOrPack> parameters;
+    // Luwu bundles: `.(A, B)`, which the parser writes as `bundle.Bundle2<A, B>` (Parser::parseDotPositionalType)
+    bool fromDotPositional = false;
 };
 
 struct AstTableProp
@@ -2069,6 +2081,8 @@ struct AstPatternAlternative
         Class,
         // A trait after `implements`: the value's class implements it
         Trait,
+        // Luwu bundles: `.(a, b)`, a bundle of exactly that many values (or at least that many, ending in `..`)
+        Bundle,
     };
 
     Kind kind = Value;
@@ -2077,6 +2091,15 @@ struct AstPatternAlternative
     AstExpr* operand = nullptr;
     // A Tag's name
     AstName tag;
+    // Luwu builtin classes: the Tag is what `typeof` names an object of a builtin class (`bundle`, `vec`), not `type`
+    bool tagIsTypeof = false;
+    // Luwu Destructuring (rfcs/destructuring.md): what the alternative binds, as written (`Cat(name)`, `Pod {x}`,
+    // `vector {x, y, z}`, `.(a, b)`), or null. It's kept with no fields yet too, so autocomplete can offer them.
+    const AstDestructurePattern* fields = nullptr;
+    // Luwu bundles: a Bundle ending in `..` matches a bundle of at least as many values as it has elements, and
+    // `.. as rest` binds the values after them
+    bool openEnded = false;
+    AstLocal* rest = nullptr;
 };
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `value is <pattern>`, `value is not <pattern>` or
@@ -2111,6 +2134,9 @@ public:
     // `implements`: every alternative is a Trait
     bool implements;
     AstArray<AstPatternAlternative> alternatives;
+    // Luwu Destructuring (rfcs/destructuring.md): the patterns nested in its fields (`Cat(name is string)`) are clauses of
+    // their own after it, so matching it only tests each alternative itself. Otherwise matching it tests them too.
+    bool nestedPatternsAreClauses = false;
 
     // What the pattern means as plain code, which the type checker checks: `x is 1 | string` is
     // `x == 1 or type(x) == "string"`, and `x is Point` is `class.isinstance(x, Point)`. The value is read in it once for
