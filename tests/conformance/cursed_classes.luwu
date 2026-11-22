@@ -809,10 +809,10 @@ do
     expectfail("raising trait default", "trait default failed", Raising)
 end
 
--- LOP_INITTRAITS's runner and the class's copy of `__traitinit` are on the stack while a trait initializer of another
--- chunk runs, but the debug library doesn't hand them out
+-- The class's constructor and its copy of `__traitinit` are on the stack while a trait initializer of another chunk
+-- runs, but the debug library doesn't hand them out
 do
-    local runner
+    local constructor
     local Grabbed = compile([[
         local grab = ...
         trait Grabs
@@ -820,10 +820,10 @@ do
         end
         return Grabs
     ]])(function()
-        -- 1 is this function, 2 the class's copy of `__traitinit`, 3 the runner that called it
+        -- 1 is this function, 2 the class's copy of `__traitinit`, 3 the constructor that called it
         assert(debug.info(2, "n") == "__traitinit" and debug.info(2, "f") == nil)
-        assert(debug.info(3, "n") == "inittraits")
-        runner = debug.info(3, "f")
+        assert(debug.info(3, "n") == "GrabsAll")
+        constructor = debug.info(3, "f")
         return 0
     end)
     local GrabsAll = compile([[
@@ -835,7 +835,7 @@ do
     ]])(Grabbed)
 
     local o = GrabsAll()
-    assert(o.g == 0 and runner == nil)
+    assert(o.g == 0 and constructor == nil)
 end
 
 -- How construction fills trait fields: constants come from the shape with no call, computed fields from the class's copy
