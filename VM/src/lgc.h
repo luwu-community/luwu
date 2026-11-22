@@ -148,3 +148,31 @@ LUAI_FUNC void luaC_enumheap(
 );
 LUAI_FUNC int64_t luaC_allocationrate(lua_State* L);
 LUAI_FUNC const char* luaC_statename(int state);
+
+// Luwu builtin classes: upstream defines this in lvmload.cpp; Luwu moved it here so luaR_newnativeclass, which builds a
+// class the way the loader does, can pause the GC the same way.
+struct ScopedSetGCThreshold
+{
+public:
+    ScopedSetGCThreshold(global_State* global, size_t newThreshold) noexcept
+        : global{global}
+    {
+        originalThreshold = global->GCthreshold;
+        global->GCthreshold = newThreshold;
+    }
+
+    ScopedSetGCThreshold(const ScopedSetGCThreshold&) = delete;
+    ScopedSetGCThreshold(ScopedSetGCThreshold&&) = delete;
+
+    ScopedSetGCThreshold& operator=(const ScopedSetGCThreshold&) = delete;
+    ScopedSetGCThreshold& operator=(ScopedSetGCThreshold&&) = delete;
+
+    ~ScopedSetGCThreshold() noexcept
+    {
+        global->GCthreshold = originalThreshold;
+    }
+
+private:
+    global_State* global = nullptr;
+    size_t originalThreshold = 0;
+};
