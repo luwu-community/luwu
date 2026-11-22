@@ -1024,6 +1024,37 @@ static int createUnion(lua_State* L)
     return 1;
 }
 
+// Luwu try expressions: `types.raises(f: type) -> type`, what `raises<F>` gives: the function's error hints and
+// weakunknown, which prints as `unknown` and doesn't absorb the hints
+static int raisesOf(lua_State* L)
+{
+    TypeFunctionTypeId fn = getTypeUserData(L, 1);
+    const TypeFunctionFunctionType* function = get<TypeFunctionFunctionType>(fn);
+    if (!function)
+        luaL_error(L, "types.raises: expected a function type, got %s", getTag(L, fn).c_str());
+
+    TypeFunctionUnknownType weakUnknown{/* weak */ true};
+    if (!function->errorHint)
+    {
+        allocTypeUserData(L, weakUnknown);
+        return 1;
+    }
+
+    std::vector<TypeFunctionTypeId> components;
+    if (const TypeFunctionUnionType* hints = get<TypeFunctionUnionType>(*function->errorHint))
+        components = hints->components;
+    else
+        components.push_back(*function->errorHint);
+
+    // `allocTypeUserData` pushes the new type, so read it back for its id
+    allocTypeUserData(L, weakUnknown);
+    components.push_back(getTypeUserData(L, -1));
+    lua_pop(L, 1);
+
+    allocTypeUserData(L, TypeFunctionUnionType{std::move(components)});
+    return 1;
+}
+
 // Luau: `types.intersectionof(...: type) -> type`
 // Returns the type instance representing intersection
 static int createIntersection(lua_State* L)
@@ -3517,6 +3548,7 @@ void registerTypesLibrary(lua_State* L)
         {"negationof", createNegation},
         {"unionof", createUnion},
         {"intersectionof", createIntersection},
+        {"raises", raisesOf},
         {"optional", createOptional},
         {"newtable", createTable},
         {"newfunction", createFunction},
@@ -4342,8 +4374,8 @@ private:
                 break;
             }
         }
-        else if (get<TypeFunctionUnknownType>(ty))
-            target = typeFunctionRuntime->typeArena.allocate(TypeFunctionUnknownType{});
+        else if (const TypeFunctionUnknownType* unknown = get<TypeFunctionUnknownType>(ty))
+            target = typeFunctionRuntime->typeArena.allocate(TypeFunctionUnknownType{unknown->weak});
         else if (get<TypeFunctionNeverType>(ty))
             target = typeFunctionRuntime->typeArena.allocate(TypeFunctionNeverType{});
         else if (get<TypeFunctionAnyType>(ty))
@@ -4563,6 +4595,10 @@ private:
         f2->retTypes = shallowClone(f1->retTypes);
         if (FFlag::LuauTypeFunctionSerializeArgNames)
             f2->argNames = f1->argNames;
+
+        // Luwu try expressions
+        if (f1->errorHint)
+            f2->errorHint = shallowClone(*f1->errorHint);
     }
 
     void cloneChildren(TypeFunctionExternType* c1, TypeFunctionExternType* c2)
