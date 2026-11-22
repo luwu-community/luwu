@@ -20,7 +20,8 @@ struct TypeArena;
 
 // How many edits `written` is from `meant` when it looks like a misspelling of it, else nullopt. It doesn't when it's
 // too short to tell (`"t"` is a few edits from everything), when it's more edits away than a word its length allows,
-// and when the two differ only in digits: those are siblings (`Part8`, `Part0`), not misspellings.
+// and when the two differ only in digits: those are siblings (`Part8`, `Part0`), not misspellings. A difference in letter
+// case alone counts as one edit (`"nan"` for `"NaN"`).
 std::optional<size_t> typoDistance(const std::string& written, const std::string& meant);
 
 // Whether `written` is close enough to `meant` to be a misspelling of it (`typoDistance`)
