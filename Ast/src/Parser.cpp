@@ -151,6 +151,8 @@ const char* const kDeclareExportValueError =
 const char* const kDeclareExportNestedError =
     "Move this 'export declare %s' statement outside the 'do' block into the module's top level";
 const char* const kIncompleteStatement = "Incomplete statement: expected assignment or a function call";
+// Luwu try expressions: `try e` with arms that hold statements, see parseTryStat
+const char* const kTryStatementNeedsMatch = "Write 'match try' here: only a 'match' statement can have 'case' arms with blocks";
 // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): an expression statement can also end in a leave form, and in a `do`
 // expression a value where a statement goes was usually meant as the result.
 const char* const kOrLeaveIncompleteStatement =
@@ -993,6 +995,10 @@ AstStat* Parser::parseStat()
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` with arms where a statement goes
     if (matchExpressionFollows() || matchStatementFollows())
         return parseMatchStat();
+
+    // Luwu try expressions: a statement that starts with a `try` expression, such as `try e` with arms whose bodies are blocks
+    if (matchExpressionsAvailable() && tryExpressionFollows())
+        return parseTryStat();
 
     // Luwu Destructuring (rfcs/destructuring.md): `.{x} = t` with no `local`/`const`. Parsed as a `local` so the
     // rest of the file still sees its names.
@@ -9331,7 +9337,8 @@ bool Parser::tryExpressionFollows()
 // Luwu try expressions: `try` takes the whole expression after it, so `try a + b` protects both operands
 static bool caseStartsArm(const Lexeme& next, const Lexeme& second);
 
-AstExpr* Parser::parseTryExpr()
+// Luwu try expressions: with `startsStatement`, the `try` begins a statement (parseTryStat)
+AstExpr* Parser::parseTryExpr(bool startsStatement)
 {
     Location tryLocation = lexer.current().location;
     checkLuwuFeature(tryLocation, kTryExpressionsFeature, FFlag::DebugLuwuTryExpressions);
@@ -9339,14 +9346,19 @@ AstExpr* Parser::parseTryExpr()
 
     // Luwu try expressions: `try match e case ...` protects the whole match, so its arms test `e` and not the result.
     // That's usually a `try` put in front of a `match` that already had arms. Unless the subject is named, the arms are
-    // read as matching on the result, like `try e case ...`, so they don't cascade.
+    // read as matching on the result, like `try e case ...`, so they don't cascade. A statement's arms are blocks,
+    // which only a match statement has, so there the keywords are swapped.
     if (matchExpressionFollows())
     {
-        report(
-            Location(tryLocation, lexer.current().location),
-            "Replace both keywords with 'try' to match against the result of a protected expression or wrap the RHS in parens to "
-            "protect the entire match expression"
-        );
+        Location keywords(tryLocation, lexer.current().location);
+        if (startsStatement)
+            report(keywords, "%s", kTryStatementNeedsMatch);
+        else
+            report(
+                keywords,
+                "Replace both keywords with 'try' to match against the result of a protected expression or wrap the RHS in parens to "
+                "protect the entire match expression"
+            );
 
         Lexeme afterMatch = lexer.lookahead();
         bool namedSubject = afterMatch.type == Lexeme::ReservedLocal || (afterMatch.type == Lexeme::Name && AstName(afterMatch.name) == "const");
@@ -9364,6 +9376,47 @@ AstExpr* Parser::parseTryExpr()
     if (armFollows)
         return parseMatchExpr(node);
     return node;
+}
+
+// Luwu try expressions: the start of `case` or `when` (`c`, `whe`) on a line after the code before it
+bool Parser::armKeywordBeingTyped()
+{
+    const Lexeme& next = lexer.current();
+    if (next.type != Lexeme::Name || next.location.begin.line <= lexer.previousLocation().end.line)
+        return false;
+
+    std::string_view typed = next.name;
+    return std::string_view("case").substr(0, typed.size()) == typed || std::string_view("when").substr(0, typed.size()) == typed;
+}
+
+// Luwu try expressions: a statement that starts with a `try` expression. With `case` arms after it, it's a match statement
+// missing its `match`: `try e case ... then <block>` only exists as an expression, whose arms give values. Anything else
+// is a value where a statement goes, like `x or return v`.
+AstStat* Parser::parseTryStat()
+{
+    size_t errorsBefore = parseErrors.size();
+
+    // the arms are left for the statement, as they are for a `match` subject
+    bool outerSubject = inMatchSubject;
+    inMatchSubject = true;
+    AstExpr* expr = parseTryExpr(/* startsStatement= */ true);
+    inMatchSubject = outerSubject;
+
+    AstExprTry* tried = expr->as<AstExprTry>();
+    if (tried && matchArmFollows())
+    {
+        // `try match e` has said this already, and a disabled `try` has an error of its own
+        bool reportedAtTry = parseErrors.size() > errorsBefore && parseErrors[errorsBefore].getLocation().begin == tried->tryLocation.begin;
+        if (!reportedAtTry)
+            report(tried->tryLocation, "%s", kTryStatementNeedsMatch);
+        return parseMatchStat(tried);
+    }
+
+    // an arm being typed on the next line belongs to this incomplete statement
+    if (tried && armKeywordBeingTyped())
+        nextLexeme();
+
+    return parseOrLeaveStatement(expr, errorsBefore);
 }
 
 std::tuple<AstArray<AstExpr*>, Location, Location> Parser::parseCallList(TempVector<Position>* commaPositions, Position* closeParenPosition)
@@ -11943,8 +11996,7 @@ bool Parser::skipArmBeingTyped(bool report, const char* message)
         return false;
 
     std::string_view typed = next.name;
-    bool typingArm = std::string_view("case").substr(0, typed.size()) == typed || std::string_view("when").substr(0, typed.size()) == typed;
-    if (!typingArm && std::string_view("else").substr(0, typed.size()) != typed)
+    if (!armKeywordBeingTyped() && std::string_view("else").substr(0, typed.size()) != typed)
         return false;
 
     if (report)
@@ -12048,17 +12100,19 @@ AstExpr* Parser::parseMatchExpr(AstExprTry* tried)
 //   end
 //
 // The first arm that matches runs; with no `else`, a value no arm matches runs nothing.
-AstStat* Parser::parseMatchStat()
+// Luwu try expressions: `tried` is the subject of `try e case ...` written as a statement, already parsed
+AstStat* Parser::parseMatchStat(AstExprTry* tried)
 {
-    Location start = lexer.current().location;
+    Location start = tried ? tried->location : lexer.current().location;
     // the missing `end` names the last block's `then` or `else`, like an `if`'s (see blockOpener)
     Lexeme opener = lexer.current();
-    checkLuwuFeature(start, kMatchFeature, FFlag::DebugLuwuMatchExpressions);
-    nextLexeme(); // match
+    checkLuwuFeature(lexer.current().location, kMatchFeature, FFlag::DebugLuwuMatchExpressions);
+    if (!tried)
+        nextLexeme(); // match
 
     unsigned int localsBegin = saveLocals();
     size_t errorsBefore = parseErrors.size();
-    AstMatchSubject subject = parseMatchSubject(start);
+    AstMatchSubject subject = parseMatchSubject(start, tried);
 
     std::vector<AstMatchArm> arms;
     while (matchArmFollows())

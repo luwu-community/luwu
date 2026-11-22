@@ -694,7 +694,7 @@ private:
     AstExpr* parseMatchExpr(AstExprTry* tried = nullptr);
     // Luwu try expressions: set while a `match` subject is parsed, so a `try` there leaves the `case` arms to the `match`
     bool inMatchSubject = false;
-    AstStat* parseMatchStat();
+    AstStat* parseMatchStat(AstExprTry* tried = nullptr);
     bool matchStatementFollows();
     bool matchArmFollows();
     AstMatchSubject parseMatchSubject(const Location& start, AstExprTry* tried = nullptr);
@@ -737,7 +737,9 @@ private:
 
     // Luwu try expressions
     bool tryExpressionFollows();
-    AstExpr* parseTryExpr();
+    AstExpr* parseTryExpr(bool startsStatement = false);
+    AstStat* parseTryStat();
+    bool armKeywordBeingTyped();
 
     // stringinterp ::= <INTERP_BEGIN> exp {<INTERP_MID> exp} <INTERP_END>
     AstExpr* parseInterpString();

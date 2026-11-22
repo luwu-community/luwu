@@ -2545,6 +2545,32 @@ static AutocompleteResult autocompleteWhileLoopKeywords(std::vector<AstNode*> an
 // bounds, the values, the condition or the last clause of its `when` chain) and before its `do`: `do` and `when`, plus
 // `give` and `for` for a table comprehension's clause. Nothing when the cursor isn't there, or the part before it
 // is unfinished.
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the arm of the innermost match whose `then` is at
+// `position`, or whose `then` is missing after a finished test, where the keyword is being typed
+static const AstMatchArm* matchArmHeadAt(const std::vector<AstNode*>& ancestry, Position position)
+{
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        AstArray<AstMatchArm> arms{nullptr, 0};
+        if (const AstStatMatch* statMatch = (*it)->as<AstStatMatch>())
+            arms = statMatch->arms;
+        else if (const AstExprMatch* exprMatch = (*it)->as<AstExprMatch>())
+            arms = exprMatch->arms;
+        else
+            continue;
+
+        for (const AstMatchArm& arm : arms)
+        {
+            bool onThen = arm.thenLocation && arm.thenLocation->containsClosed(position);
+            bool thenMissing = !arm.thenLocation && arm.condition && !arm.condition->is<AstExprError>() && position > arm.condition->location.end;
+            if (onThen || thenMissing)
+                return &arm;
+        }
+        return nullptr;
+    }
+    return nullptr;
+}
+
 static std::optional<AutocompleteResult> autocompleteLoopHeaderKeywords(const std::vector<AstNode*>& ancestry, Position position)
 {
     for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
@@ -3253,6 +3279,17 @@ AutocompleteResult autocomplete_(
     {
         if (std::optional<AutocompleteResult> loopKeywords = autocompleteLoopHeaderKeywords(ancestry, position))
             return std::move(*loopKeywords);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a match arm's `then`, as for an `if`. Completing a
+    // name there would replace the keyword being typed.
+    if (const AstMatchArm* arm = matchArmHeadAt(ancestry, position))
+    {
+        AutocompleteEntryMap keywords;
+        keywords["then"] = {AutocompleteEntryKind::Keyword};
+        if (!arm->thenLocation)
+            keywords["when"] = {AutocompleteEntryKind::Keyword};
+        return {std::move(keywords), ancestry, AutocompleteContext::Keyword};
     }
 
     AstNode* node = ancestry.back();
