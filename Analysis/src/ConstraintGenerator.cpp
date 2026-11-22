@@ -3,6 +3,7 @@
 
 #include "Luau/ApplyTypeFunction.h"
 #include "Luau/Ast.h"
+#include "Luau/AstQuery.h"
 #include "Luau/AstUtils.h"
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/BuiltinTypeFunctions.h"
@@ -5757,6 +5758,11 @@ InferencePack ConstraintGenerator::checkExprCall(
                 expectedType = expectedTypesForCall[i];
             }
 
+            // Luwu try expressions: `error(v)` in a function with an annotated hint expects the hint, so `error("NaN")`
+            // is the singleton and `error("` completes the hint's strings
+            if (std::optional<TypeId> hint = annotatedHintFor(call, i))
+                expectedType = hint;
+
             // Example: `table.insert<V>(t: {V}, value: V)`. `expectedType` for `value` is just
             // the bare generic `V` here, since it was computed before any argument was checked.
             // `t` (arg 0) has already been checked by this point though, so if it's a `{Foo}`,
@@ -7566,24 +7572,16 @@ void ConstraintGenerator::weakenUnknownMembers(AstTypeUnion* annotation, std::ve
     }
 }
 
-// Luwu try expressions: the call in `error(...)`, if `stat` is one
-static AstExprCall* errorCallOf(AstStat* stat)
-{
-    AstStatExpr* expr = stat ? stat->as<AstStatExpr>() : nullptr;
-    AstExprCall* call = expr ? expr->expr->as<AstExprCall>() : nullptr;
-    AstExprGlobal* callee = call ? call->func->as<AstExprGlobal>() : nullptr;
-    if (!callee || callee->name != "error")
-        return nullptr;
-    return call;
-}
-
 void ConstraintGenerator::checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn)
 {
     if (FFlag::DebugLuwuTryExpressions)
     {
         RaisedErrors raised;
-        if (fn->body->body.size > 0)
-            raised.unreachableError = errorCallOf(fn->body->body.data[fn->body->body.size - 1]);
+        raised.unreachableError = finalErrorCall(fn);
+        TypeId* signature = module->astTypes.find(fn);
+        const FunctionType* function = signature ? get<FunctionType>(follow(*signature)) : nullptr;
+        if (function && fn->errorHint)
+            raised.declared = function->errorHint;
         raisedErrors.push_back(std::move(raised));
     }
 
@@ -7595,7 +7593,8 @@ void ConstraintGenerator::checkFunctionBody(const ScopePtr& scope, AstExprFuncti
     if (!FFlag::DebugLuwuTryExpressions)
         return;
 
-    // Luwu try expressions: inferred hints join the declared one, which never limits them
+    // Luwu try expressions: a function without a `! E` annotation gets a hint inferred from its body, joined with the one
+    // its return alias declares
     std::vector<TypeId> raised = std::move(raisedErrors.back().types);
     raisedErrors.pop_back();
 
@@ -7606,7 +7605,8 @@ void ConstraintGenerator::checkFunctionBody(const ScopePtr& scope, AstExprFuncti
 
     if (function->errorHint)
         raised.insert(raised.begin(), *function->errorHint);
-    // One member per type, so a declared hint the body also raises isn't listed twice
+    // One member per type, so a hint the body also raises isn't listed twice, and `error("a")` and `error("b")` give
+    // `string` once
     TypeIds unique;
     for (TypeId ty : raised)
     {
@@ -7627,11 +7627,34 @@ void ConstraintGenerator::checkFunctionBody(const ScopePtr& scope, AstExprFuncti
         function->errorHint = arena->addType(UnionType{std::move(raised)});
 }
 
-// Luwu try expressions: `error(v)` raises v's type, and `assert(...)` raises a string. Each joins the error hint of the
-// function the call is in.
+// Luwu try expressions: what `error(v)` raises in a function without an annotated hint. A string literal raises `string`,
+// widened like a local's initializer.
+TypeId ConstraintGenerator::raisedErrorType(AstExprCall* call, const std::vector<TypeId>& args)
+{
+    if (args.empty())
+        return builtinTypes->nilType;
+
+    bool stringLiteral = call->args.size > 0 && call->args.data[0]->is<AstExprConstantString>();
+    if (stringLiteral)
+        return builtinTypes->stringType;
+    return args[0];
+}
+
+// Luwu try expressions: the annotated hint of the function `call` is in, when `call` is `error(...)` and argument `index`
+// is what it raises
+std::optional<TypeId> ConstraintGenerator::annotatedHintFor(AstExprCall* call, size_t index)
+{
+    if (index != 0 || raisedErrors.empty() || call == raisedErrors.back().unreachableError || !isErrorCall(call))
+        return std::nullopt;
+    return raisedErrors.back().declared;
+}
+
+// Luwu try expressions: `error(v)` raises v's type, and `assert(...)` raises a string. Each joins the inferred hint of the
+// function the call is in, when that function's hint isn't annotated.
 void ConstraintGenerator::recordRaisedError(AstExprCall* call, const std::vector<TypeId>& args)
 {
-    if (raisedErrors.empty() || call == raisedErrors.back().unreachableError)
+    // an annotated hint is the function's whole hint
+    if (raisedErrors.empty() || raisedErrors.back().declared || call == raisedErrors.back().unreachableError)
         return;
 
     AstExprGlobal* callee = call->func->as<AstExprGlobal>();
@@ -7639,7 +7662,7 @@ void ConstraintGenerator::recordRaisedError(AstExprCall* call, const std::vector
         return;
 
     if (callee->name == "error")
-        raisedErrors.back().types.push_back(args.empty() ? builtinTypes->nilType : args[0]);
+        raisedErrors.back().types.push_back(raisedErrorType(call, args));
     else if (callee->name == "assert")
         raisedErrors.back().types.push_back(builtinTypes->stringType);
 }

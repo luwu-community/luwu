@@ -238,6 +238,26 @@ TEST_CASE_FIXTURE(ACFixture, "weakunknown_completes_the_rest_of_its_union")
     CHECK(ac.entryMap.count("path"));
 }
 
+// Luwu try expressions: `error("` in a function with a `! E` hint completes the strings the hint names
+TEST_CASE_FIXTURE(ACFixture, "error_completes_the_annotated_hint")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    check(R"(
+        local function count(n: number): true ! "NaN" | "negative"
+            if n < 0 then
+                error("@1")
+            end
+            return true
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("NaN"));
+    CHECK(ac.entryMap.count("negative"));
+    CHECK_EQ(ac.context, AutocompleteContext::String);
+}
+
 TEST_CASE_FIXTURE(ACFixture, "local_initializer")
 {
     check("local a = @1");

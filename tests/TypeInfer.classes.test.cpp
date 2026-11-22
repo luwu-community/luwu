@@ -7083,6 +7083,55 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_try_expressions")
 }
 
 // Luwu try expressions: the error of `try f()` is f's hints and weakunknown, printed `unknown`
+// Luwu try expressions: a `! E` hint is the function's whole hint, and `error(v)` in its body is checked against it, a
+// near miss as a typo. Without one, the body's errors are inferred, `error("a")` and `error("b")` as one `string`.
+TEST_CASE_FIXTURE(BuiltinsFixture, "error_calls_are_checked_against_the_annotated_hint")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuHelpfulSubtypingErrors, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function count(n: number): true ! "NaN" | "negative"
+            if n ~= n then
+                error("NaN")
+            end
+            if n < 0 then
+                error("negativ")
+            end
+            if n > 100 then
+                error(5)
+            end
+            return true
+        end
+        local function plain(n: number)
+            if n < 0 then
+                error("a")
+            end
+            if n > 1 then
+                error("b")
+            end
+            return n
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    const Typo* typo = get<Typo>(result.errors[0]);
+    REQUIRE(typo);
+    CHECK_EQ(typo->written, "\"negativ\"");
+    CHECK_EQ(typo->meant, "\"negative\"");
+    CHECK_EQ(result.errors[0].location.begin, Position(7, 22));
+    CHECK_EQ(result.errors[1].location.begin, Position(10, 22));
+    CHECK_EQ(toString(requireType("count")), "(number) -> true ! \"NaN\" | \"negative\"");
+    CHECK_EQ(toString(requireType("plain")), "(number) -> number ! string");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "try_types_its_error_from_the_callees_hint")
 {
     ScopedFastFlag sffs[] = {
@@ -7375,6 +7424,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_error_hints")
     checkTypewriting(*this, "type NotFound = { kind: \"NotFound\" }\ntype Lookup = string", " ! NotFound", after);
     const char* withLookup = "type NotFound = { kind: \"NotFound\" }\ntype Lookup = string ! NotFound\n";
     checkTypewriting(*this, withLookup, "local function read(path: string): Lookup\n    return path\nend", after);
+
+    // an `error` in a function with a hint is checked against it while its value is typed
+    const char* hinted = "local function count(n: number): true ! \"NaN\" | \"negative\"\n    if n < 0 then\n";
+    checkTypewriting(*this, hinted, "        error(\"negative\")", "\n    end\n    return true\nend\nlocal unrelated = count(1)\nprint(unrelated)\n");
 }
 
 // Luwu try expressions: an `Err` can say where its error was raised, with optional fields after the error
