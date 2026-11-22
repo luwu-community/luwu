@@ -270,6 +270,11 @@ struct CostVisitor : AstVisitor
                 cost += (alternative.operand ? model(alternative.operand) : Cost()) + 1;
             return cost;
         }
+        else if (AstExprPop* expr = node->as<AstExprPop>())
+        {
+            // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): one instruction, which can call __pop
+            return model(expr->expr) + 1;
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");
@@ -445,6 +450,20 @@ struct CostVisitor : AstVisitor
         result += node->var->is<AstExprLocal>() ? 1 : 2;
 
         return true;
+    }
+
+    bool visit(AstStatPush* node) override
+    {
+        // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): one instruction after the operands, which can call
+        // __push
+        result += model(node->target);
+
+        for (AstExpr* value : node->values)
+            result += model(value);
+
+        result += 1;
+
+        return false;
     }
 
     bool visit(AstStatBreak* node) override
