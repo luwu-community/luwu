@@ -1619,6 +1619,9 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_INTEGER_CLAMP:
     case LBF_INTEGER_EXTRACT:
     case LBF_INTEGER_TONUMBER:
+    case LBF_STRING_STARTSWITH:
+    case LBF_STRING_ENDSWITH:
+    case LBF_STRING_CONTAINS:
         break;
     case LBF_BUFFER_WRITEU8:
     case LBF_BUFFER_WRITEU16:
