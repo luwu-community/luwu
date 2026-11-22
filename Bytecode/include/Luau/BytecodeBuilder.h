@@ -64,6 +64,9 @@ public:
         // `implements` list (LBC_CLASSSHAPE_IMPLEMENTS)
         bool isTrait = false;
         bool implementsTraits = false;
+        // Luwu Destructuring (rfcs/destructuring.md): parallel to propertyNames: for a member flagged
+        // LBC_CLASSMEMBER_POSITIONAL, its position among the primary constructor's parameters; -1 for every other member.
+        std::vector<int32_t> propertyPositions;
     };
 
     BytecodeBuilder(BytecodeEncoder* encoder = 0);
