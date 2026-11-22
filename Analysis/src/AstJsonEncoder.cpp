@@ -1149,6 +1149,135 @@ struct AstJsonEncoder : public AstVisitor
         );
     }
 
+    // Luwu Classes (rfcs/classes)
+    void write(AstClassMemberVisibility visibility)
+    {
+        writeString(toString(visibility));
+    }
+
+    // Luwu Classes (rfcs/classes)
+    void write(const AstClassPrimaryConstructorParamQualifiers& qualifiers)
+    {
+        writeRaw("{");
+        bool c = pushComma();
+        writeType("AstClassPrimaryConstructorParamQualifiers");
+        write("visibility", qualifiers.visibility);
+        write("isConst", qualifiers.isConst);
+        popComma(c);
+        writeRaw("}");
+    }
+
+    // Luwu Classes (rfcs/classes)
+    void write(struct AstClassPrimaryConstructor* node)
+    {
+        writeRaw("{");
+        bool c = pushComma();
+        writeType("AstClassPrimaryConstructor");
+        write("visibility", node->visibility);
+        write("args", node->args);
+        write("argsDefaults", node->argsDefaults);
+        write("argsQualifiers", node->argsQualifiers);
+        write("argLocation", node->argLocation);
+        popComma(c);
+        writeRaw("}");
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md)
+    void write(const AstClassTraitRef& ref)
+    {
+        writeRaw("{");
+        bool c = pushComma();
+        writeType("AstClassTraitRef");
+        write("trait", ref.trait);
+        write("typeArguments", ref.typeArguments);
+        write("hasArgs", ref.hasArgs);
+        write("args", ref.args);
+        write("location", ref.location);
+        popComma(c);
+        writeRaw("}");
+    }
+
+    // Luwu Classes (rfcs/classes)
+    void write(const AstClassProperty& prop)
+    {
+        writeRaw("{");
+        bool c = pushComma();
+        writeType("AstClassProperty");
+        write("visibility", prop.visibility);
+        write("name", prop.name);
+        write("nameLocation", prop.nameLocation);
+        if (prop.ty)
+            write("luauType", prop.ty);
+        write("isConst", prop.isConst);
+        if (prop.defaultValue)
+            write("defaultValue", prop.defaultValue);
+        write("attributes", prop.attributes);
+        if (prop.expectLocation)
+            write("expect", true);
+        if (prop.finalLocation)
+            write("final", true);
+        popComma(c);
+        writeRaw("}");
+    }
+
+    // Luwu Classes (rfcs/classes)
+    void write(const AstClassMethod& method)
+    {
+        writeRaw("{");
+        bool c = pushComma();
+        writeType("AstClassMethod");
+        write("visibility", method.visibility);
+        write("name", method.functionName);
+        write("nameLocation", method.nameLocation);
+        write("function", method.function);
+        if (method.expectLocation)
+            write("expect", true);
+        if (method.isOptional)
+            write("optional", true);
+        if (method.finalLocation)
+            write("final", true);
+        if (method.qualifiedTrait)
+            write("qualifiedTrait", method.qualifiedTrait);
+        popComma(c);
+        writeRaw("}");
+    }
+
+    // Luwu Classes (rfcs/classes)
+    void write(const AstClassMember& member)
+    {
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+            write(*prop);
+        else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
+            write(*method);
+        else
+            LUAU_ASSERT(!"Unknown AstClassMember");
+    }
+
+    // Luwu Classes (rfcs/classes); Luwu Traits (rfcs/classes/traits.md)
+    void write(class AstStatClass* node)
+    {
+        writeNode(
+            node,
+            "AstStatClass",
+            [&]()
+            {
+                write("name", node->name);
+                PROP(exported);
+                PROP(generics);
+                PROP(genericPacks);
+                if (node->primaryConstructor)
+                    write("primaryConstructor", node->primaryConstructor);
+                PROP(members);
+                PROP(hasEnd);
+                write("attributes", node->attributes);
+                if (node->isTrait)
+                    write("isTrait", true);
+                PROP(implements);
+                PROP(needs);
+            }
+        );
+    }
+
     void write(class AstStatDeclareFunction* node)
     {
         writeNode(
@@ -1753,6 +1882,13 @@ struct AstJsonEncoder : public AstVisitor
     }
 
     bool visit(class AstStatDeclareGlobal* node) override
+    {
+        write(node);
+        return false;
+    }
+
+    // Luwu Classes (rfcs/classes)
+    bool visit(class AstStatClass* node) override
     {
         write(node);
         return false;
