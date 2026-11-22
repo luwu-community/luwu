@@ -94,7 +94,7 @@ struct LintWarning
         Code_Any = 59,
         Code_AnyCast = 60,                 // `x :: any` without a comment saying why
         Code_AnyAnnotation = 61,           // `x: any` on a parameter, local or property, which `unknown` would type safely
-        Code_LuwuOnlyApi = 62,             // Luwu: a Luwu-only library function (`table.drop`) used in a `.luau` or `.lua` file
+        Code_LuwuOnlyApi = 62,             // Luwu: a Luwu-only library function (`table.discard`) used in a `.luau` or `.lua` file
         Code_DuplicateKey = 63,            // Luwu: a key or index repeated in a table literal (part of TableLiteral)
         Code_DuplicateProperty = 64,       // Luwu: a property declared twice in a table type (part of TableLiteral)
         Code_DuplicateReadWrite = 65,      // Luwu: a table type property given its read or write type twice (part of TableLiteral)
