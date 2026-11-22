@@ -37,6 +37,9 @@ Each of these has a trap:
 
 Every mainstream language has these functions, and people coming to Luwu expect them.
 
+String method calls need fixing too. People have avoided writing `s:sub(1, 3)` for years because it was twice as
+slow as `string.sub(s, 1, 3)`.
+
 ## Design
 
 All of these are byte-based and literal: arguments are never patterns. They are also methods, so `s:trim()` and
@@ -235,8 +238,12 @@ instead.
     local holding one, or a local checked by `type(x) == "string"` in an `if` or `assert`. Under `--!trust`, a
     `string` annotation counts too.
   - Otherwise, a method call named after a builtin whose fast path takes only a string receiver (`byte`, `len`, `sub`,
-    `startswith`, `endswith`, `contains`) tries that builtin first. Its fallback is the method call, so a table or
-    userdata with its own method of that name still runs it.
+    `startswith`, `endswith`, `contains`) compiles to that builtin's `FASTCALL1`, `FASTCALL2`, `FASTCALL2K` or
+    `FASTCALL3` naming the receiver's register. The method call (`NAMECALL` and `CALL`) follows as the fallback, and a
+    successful fastcall jumps over it. The generic `FASTCALL` doesn't work here: it reads its arguments from the
+    `CALL`'s registers, and the receiver only lands there once `NAMECALL` has run.
+  - A call with more than two arguments or a multret last argument stays a plain method call. `char` isn't on the list
+    because its fast path takes a number.
   - A name the `string` library doesn't have stays a method call, so a typo still raises "missing method".
   - One visible difference for proven receivers: a bad-argument error counts the receiver as argument 1, as the
     function form does, where a method call counted from the argument after it.

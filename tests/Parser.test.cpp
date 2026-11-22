@@ -2470,6 +2470,69 @@ case = 2
     CHECK(result.root->body.data[3]->is<AstStatAssign>());
 }
 
+// Luwu try expressions: `try match e case ...` asks for `try e case ...` and is parsed as that, so the arms match on the
+// result and nothing cascades. A named subject can't be tried that way, so the whole match stays protected.
+TEST_CASE_FIXTURE(Fixture, "try_before_match_asks_for_try_alone")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    ParseResult result = tryParse(R"(
+local r = try match f()
+    case is 1 then "one"
+    else "other"
+local s = try match const n = f()
+    case is 1 then n
+    else 0
+)");
+    REQUIRE(result.root);
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].getLocation(), Location(Position(1, 10), Position(1, 19)));
+    CHECK(result.errors[0].getMessage().find("Replace both keywords with 'try'") != std::string::npos);
+    CHECK_EQ(result.errors[1].getLocation().begin, Position(4, 10));
+    REQUIRE_EQ(result.root->body.size, 2);
+
+    AstStatLocal* recovered = result.root->body.data[0]->as<AstStatLocal>();
+    REQUIRE(recovered);
+    AstExprMatch* match = recovered->values.data[0]->as<AstExprMatch>();
+    REQUIRE(match);
+    CHECK(match->subject.value->is<AstExprTry>());
+
+    AstStatLocal* named = result.root->body.data[1]->as<AstStatLocal>();
+    REQUIRE(named);
+    CHECK(named->values.data[0]->is<AstExprTry>());
+}
+
+// Luwu try expressions: putting `try` in front of a `match` reports that one error while the arms are typed. The finished
+// code keeps the error, so this calls typewrite instead of checkTypewriting, which wants it clean.
+TEST_CASE_FIXTURE(Fixture, "typing_try_before_match")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    for (bool autocompleteEnd : {true, false})
+    {
+        INFO("autocompleteEnd " << autocompleteEnd);
+        CHECK_EQ(
+            "",
+            typewrite(
+                *this,
+                "local function f(): number\n    return 1\nend\n",
+                "local r = try match f()\n    case v then v",
+                "\nlocal unrelated = 1\nreturn unrelated + 1\n",
+                autocompleteEnd,
+                {"Replace both keywords with 'try'"}
+            )
+        );
+    }
+}
+
 TEST_CASE_FIXTURE(Fixture, "try_expressions_are_gated_and_luwu_only")
 {
     {

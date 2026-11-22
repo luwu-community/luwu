@@ -9337,6 +9337,23 @@ AstExpr* Parser::parseTryExpr()
     checkLuwuFeature(tryLocation, kTryExpressionsFeature, FFlag::DebugLuwuTryExpressions);
     nextLexeme();
 
+    // Luwu try expressions: `try match e case ...` protects the whole match, so its arms test `e` and not the result.
+    // That's usually a `try` put in front of a `match` that already had arms. Unless the subject is named, the arms are
+    // read as matching on the result, like `try e case ...`, so they don't cascade.
+    if (matchExpressionFollows())
+    {
+        report(
+            Location(tryLocation, lexer.current().location),
+            "Replace both keywords with 'try' to match against the result of a protected expression or wrap the RHS in parens to "
+            "protect the entire match expression"
+        );
+
+        Lexeme afterMatch = lexer.lookahead();
+        bool namedSubject = afterMatch.type == Lexeme::ReservedLocal || (afterMatch.type == Lexeme::Name && AstName(afterMatch.name) == "const");
+        if (!namedSubject)
+            nextLexeme(); // match
+    }
+
     AstExpr* expr = parseExpr();
     AstExprTry* node = allocator.alloc<AstExprTry>(Location(tryLocation, expr->location), tryLocation, expr);
 
