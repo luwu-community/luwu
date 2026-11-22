@@ -324,6 +324,7 @@ private:
     void checkContainerConstructor(AstExprCall* call);
     void checkUnionMethodSelves(AstExprIndexName* indexExpr);
     void visit(AstExprCall* call);
+    void checkRaisedError(AstExprCall* call);
     std::optional<TypeId> tryStripUnionFromNil(TypeId ty) const;
     TypeId stripFromNilAndReport(TypeId ty, const Location& location);
     TypeId stripWeakUnknown(TypeId ty) const;

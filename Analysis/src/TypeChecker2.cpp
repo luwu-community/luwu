@@ -3998,6 +3998,28 @@ void TypeChecker2::visit(AstExprCall* call)
 
     visitCall(call);
     checkContainerConstructor(call);
+    checkRaisedError(call);
+}
+
+// Luwu try expressions: `error(v)` in a function with a `! E` hint raises an `E`. A string that looks like a misspelling
+// of one the hint names is reported as a typo of it.
+void TypeChecker2::checkRaisedError(AstExprCall* call)
+{
+    bool raises = isErrorCall(call) && call->args.size > 0;
+    if (!raises || enclosingFunctions.empty())
+        return;
+
+    const AstExprFunction* fn = enclosingFunctions.back();
+    if (!fn->errorHint || call == finalErrorCall(fn))
+        return;
+
+    const TypeId* signature = module->astTypes.find(fn);
+    const FunctionType* function = signature ? get<FunctionType>(follow(*signature)) : nullptr;
+    if (!function || !function->errorHint)
+        return;
+
+    AstExpr* raised = call->args.data[0];
+    testIsSubtype(lookupType(raised), *function->errorHint, raised->location);
 }
 
 std::optional<TypeId> TypeChecker2::tryStripUnionFromNil(TypeId ty) const
