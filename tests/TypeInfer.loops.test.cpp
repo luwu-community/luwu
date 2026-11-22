@@ -1645,6 +1645,27 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "for_in_loop_annotations_apply_inside_lambdas
     CHECK_EQ("string", toString(err->givenType));
 }
 
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "for_in_over_a_generic_array_gives_values_that_fit_its_element_type")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    // The value is `T & ~nil`. Reducing that with `intersect`, which can't reduce over a generic, left it unreduced, and
+    // `table.insert` reported a generic bounds mismatch with an empty lower bound.
+    CheckResult result = check(R"(
+        local function filter<T>(inner: { T })
+            local kept = {}
+            for _, value in inner do
+                table.insert(kept, value)
+            end
+            return kept
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("<T>({T}) -> {T & ~nil}", toString(requireType("filter")));
+}
+
 // Luwu: a local given a table in both branches of an `if` is a union of the two table types after it. Iterating it
 // gives the union of their keys and values instead of the error type.
 TEST_CASE_FIXTURE(BuiltinsFixture, "iterating_a_union_of_indexed_tables")
