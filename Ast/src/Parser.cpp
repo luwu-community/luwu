@@ -213,6 +213,9 @@ struct AttributeEntry
     // attribute that takes no arguments. argsValidator is what enforces them.
     const char* const* argumentFields;
     std::optional<AttributeArgumentsValidator> argsValidator;
+    // The arguments the attribute can't be written without, for editors to insert with its name; nullptr
+    // when it needs none.
+    const char* requiredArguments = nullptr;
 };
 
 // A table entry, in a value or a type, may itself *be* a table or a string, so `@deprecated {1, 2}`
@@ -351,8 +354,8 @@ AttributeEntry kAttributeEntries[] = {
     {"checked", AstAttr::Type::Checked, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
     {"native", AstAttr::Type::Native, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
     {"deprecated", AstAttr::Type::Deprecated, AstAttr::Context::Any, nullptr, kDeprecatedArgumentFields, deprecatedArgsValidator},
-    {"nolint", AstAttr::Type::Nolint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintNamesArgsValidator},
-    {"lint", AstAttr::Type::Lint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintOnArgsValidator},
+    {"nolint", AstAttr::Type::Nolint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintNamesArgsValidator, "()"},
+    {"lint", AstAttr::Type::Lint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintOnArgsValidator, "()"},
     {"nodiscard", AstAttr::Type::Nodiscard, AstAttr::Context::AnyFunction, "functions", nullptr, nodiscardArgsValidator},
     {nullptr, AstAttr::Type::Checked, AstAttr::Context::None, nullptr, nullptr, {}}
 };
@@ -378,13 +381,15 @@ std::vector<AttributeInfo> getKnownAttributes()
     for (int i = 0; kAttributeEntries[i].name; ++i)
     {
         const AttributeEntry& entry = kAttributeEntries[i];
-        result.push_back(AttributeInfo{entry.name, entry.type, entry.allowedContexts, entry.argumentFields});
+        result.push_back(AttributeInfo{entry.name, entry.type, entry.allowedContexts, entry.argumentFields, entry.requiredArguments});
     }
 
     for (const auto& entry : kFlaggedAttributeEntries)
     {
         if (entry.second)
-            result.push_back(AttributeInfo{entry.first.name, entry.first.type, entry.first.allowedContexts, entry.first.argumentFields});
+            result.push_back(
+                AttributeInfo{entry.first.name, entry.first.type, entry.first.allowedContexts, entry.first.argumentFields, entry.first.requiredArguments}
+            );
     }
 
     return result;
@@ -1756,9 +1761,11 @@ void Parser::parseAttribute_DEPRECATED(TempVector<AstAttr*>& attributes, AstAttr
 
         std::optional<AstAttr::Type> type = validateAttribute(loc, name, attributes, args, context);
 
-        attributes.push_back(allocator.alloc<AstAttr>(
+        AstAttr* node = allocator.alloc<AstAttr>(
             misplaced ? Location(loc, argsLocation) : loc, type.value_or(AstAttr::Type::Unknown), args, AstName(name)
-        ));
+        );
+        node->bare = true;
+        attributes.push_back(node);
     }
     else
     {
@@ -1855,6 +1862,7 @@ void Parser::parseAttribute(TempVector<AstAttr*>& attributes, AstAttr::Context c
     AstAttr* node = allocator.alloc<AstAttr>(
         argumentsFollowBare ? Location(loc, argsLocation) : loc, type.value_or(AstAttr::Type::Unknown), args, AstName(name)
     );
+    node->bare = true;
     attributes.push_back(node);
     if (options.storeCstData)
         cstNodeMap[node] = allocator.alloc<CstAttr>(/* hasAt */ true);
