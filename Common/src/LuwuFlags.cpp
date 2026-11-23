@@ -67,3 +67,7 @@ LUAU_FASTFLAGVARIABLE(DebugLuwuTryExpressions)
 // Luwu bundles: the `bundle` library, its classes, and the compiler's fastcalls and unfolding for it. A prototype whose
 // API can still change. Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(DebugLuwuBundles)
+
+// Luwu: string.format and interpolated strings compile to a fastcall (LBF_STRING_FORMAT). While it is on, the compiler
+// emits WIP bytecode (version 200), which a VM without the builtin can't run.
+LUAU_FASTFLAGVARIABLE(LuwuStringFormatFastcall)
