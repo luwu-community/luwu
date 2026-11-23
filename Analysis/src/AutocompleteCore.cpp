@@ -651,10 +651,16 @@ enum class PropIndexType
  * ... would never provide autocomplete options, even though `prop` is a
  * reasonable option, even in strict mode.
  */
-static bool isSkippableTypeInUnion(TypeId ty)
+// Luwu try expressions: `NotFound | unknown` completes NotFound's members
+static bool isWeakUnknown(TypeId ty, NotNull<BuiltinTypes> builtinTypes)
+{
+    return follow(ty) == builtinTypes->weakUnknownType;
+}
+
+static bool isSkippableTypeInUnion(TypeId ty, NotNull<BuiltinTypes> builtinTypes)
 {
     ty = follow(ty);
-    return isNil(ty) || is<ErrorType>(ty) || is<NeverType>(ty);
+    return isNil(ty) || is<ErrorType>(ty) || is<NeverType>(ty) || isWeakUnknown(ty, builtinTypes);
 }
 
 static void autocompleteProps(
@@ -891,14 +897,14 @@ static void autocompleteProps(
 
         if (FFlag::LuauAutocompleteSkipErrorTypeInUnion)
         {
-            while (iter != endIter && isSkippableTypeInUnion(*iter))
+            while (iter != endIter && isSkippableTypeInUnion(*iter, builtinTypes))
                 ++iter;
         }
         else
         {
             while (iter != endIter)
             {
-                if (isNil(*iter))
+                if (isNil(*iter) || isWeakUnknown(*iter, builtinTypes))
                     ++iter;
                 else
                     break;
@@ -931,7 +937,7 @@ static void autocompleteProps(
 
             if (FFlag::LuauAutocompleteSkipErrorTypeInUnion)
             {
-                if (isSkippableTypeInUnion(*iter))
+                if (isSkippableTypeInUnion(*iter, builtinTypes))
                 {
                     ++iter;
                     continue;
@@ -939,7 +945,7 @@ static void autocompleteProps(
             }
             else
             {
-                if (isNil(*iter))
+                if (isNil(*iter) || isWeakUnknown(*iter, builtinTypes))
                 {
                     ++iter;
                     continue;
