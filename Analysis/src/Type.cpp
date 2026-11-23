@@ -10,6 +10,7 @@
 #include "Luau/RecursionCounter.h"
 #include "Luau/StringUtils.h"
 #include "Luau/ToString.h"
+#include "Luau/TypeArena.h"
 #include "Luau/TypeFunction.h"
 #include "Luau/TypeInfer.h"
 #include "Luau/TypePack.h"
@@ -473,6 +474,28 @@ bool hasLength(TypeId ty, DenseHashSet<TypeId>& seen, int* recursionCount)
 
     if (isString(ty) || isPrim(ty, PrimitiveType::Table) || get<AnyType>(ty) || get<TableType>(ty) || get<MetatableType>(ty))
         return true;
+
+    // Luwu: an extern type with a `__len` metamethod has a length, so `#` works on a union of bundles or on a generic
+    // narrowed to one (`T & .(...unknown)`). Upstream only counts tables and strings here: a lone extern type's `__len`
+    // is found before this is asked.
+    if (const ExternType* etv = get<ExternType>(ty); etv && etv->metatable)
+    {
+        const TableType* metatable = get<TableType>(follow(*etv->metatable));
+        if (metatable && metatable->props.count("__len"))
+            return true;
+    }
+
+    // Luwu: a refined generic stays `intersect<T, X>` until `T` is known, and has a length when a part has one
+    if (const TypeFunctionInstanceType* instance = get<TypeFunctionInstanceType>(ty); instance && instance->function->name == "intersect")
+    {
+        seen.insert(ty);
+        for (TypeId part : instance->typeArguments)
+        {
+            if (hasLength(part, seen, recursionCount))
+                return true;
+        }
+        return false;
+    }
 
     if (auto uty = get<UnionType>(ty))
     {
@@ -1271,9 +1294,72 @@ static bool isBareGenericNominalRoot(const ExternType* cls, const ExternType* pa
     return true;
 }
 
+bool isBundle(const ExternType* etv)
+{
+    const ExternType* declared = etv->genericTemplate ? get<ExternType>(follow(*etv->genericTemplate)) : etv;
+    return declared && declared->printsAsBundle;
+}
+
+bool isAnyBundle(const ExternType* etv)
+{
+    std::optional<BundleShape> shape = bundleShape(etv);
+    if (!shape || !shape->head.empty() || !shape->rest)
+        return false;
+
+    const VariadicTypePack* rest = get<VariadicTypePack>(follow(*shape->rest));
+    return rest && get<UnknownType>(follow(rest->ty));
+}
+
+std::optional<TypeId> BundleShape::at(NotNull<BuiltinTypes> builtinTypes, size_t index) const
+{
+    if (index < head.size())
+        return head[index];
+    if (!rest)
+        return std::nullopt;
+    if (const VariadicTypePack* variadic = get<VariadicTypePack>(follow(*rest)))
+        return variadic->ty;
+    return builtinTypes->unknownType;
+}
+
+std::optional<BundleShape> bundleShape(const ExternType* etv)
+{
+    if (!isBundle(etv))
+        return std::nullopt;
+
+    // a fixed size's positions are its type arguments, a `BigBundle`'s are its type pack
+    if (etv->instantiatedTypePackParams.empty())
+        return BundleShape{etv->instantiatedTypeParams, std::nullopt};
+
+    auto [head, rest] = flatten(etv->instantiatedTypePackParams[0]);
+    return BundleShape{std::move(head), rest};
+}
+
+TypePackId bundlePositionPack(NotNull<TypeArena> arena, const ExternType* etv)
+{
+    if (!etv->instantiatedTypePackParams.empty())
+        return etv->instantiatedTypePackParams[0];
+    return arena->addTypePack(etv->instantiatedTypeParams);
+}
+
+// Luwu bundles: the most digits a position has, since a bundle holds at most 1024 values
+static constexpr size_t kBundlePositionDigits = 4;
+
+std::optional<size_t> bundlePositionOfName(const std::string& name)
+{
+    bool digits = !name.empty() && name[0] != '0' && name.size() <= kBundlePositionDigits &&
+                  std::all_of(name.begin(), name.end(), [](char c) { return c >= '0' && c <= '9'; });
+    if (!digits)
+        return std::nullopt;
+    return size_t(std::stoul(name)) - 1;
+}
+
 // The extern type hierarchy walk: `cls` or one of its parents is `parent`, or the same generic nominal type
 static bool isNominalSubclass(const ExternType* cls, const ExternType* parent)
 {
+    // Luwu bundles: whatever its class, every bundle is an `.(...unknown)`, which `typeof(x) == "bundle"` narrows to
+    if (isAnyBundle(parent) && isBundle(cls))
+        return true;
+
     while (cls)
     {
         // Luwu: classes and traits a type function made are the same when their keys are (ExternType::generatedKey)
