@@ -278,6 +278,9 @@ public:
     // to the same type, so the arguments of a type whose arguments are being written are left out.
     AstType* externTypeReference(const ExternType& etv, char* name)
     {
+        if (std::optional<BundleShape> bundle = bundleShape(&etv); bundle && writingArgumentsOf.count(&etv) == 0)
+            return bundleReference(etv, *bundle);
+
         const size_t typeCount = etv.instantiatedTypeParams.size();
         const size_t packCount = etv.instantiatedTypePackParams.size();
         const bool writeArguments = typeCount + packCount != 0 && writingArgumentsOf.count(&etv) == 0;
@@ -299,6 +302,28 @@ public:
         writingArgumentsOf.erase(&etv);
 
         return allocator->alloc<AstTypeReference>(Location(), std::nullopt, AstName{name}, std::nullopt, Location(), true, parameters);
+    }
+
+    // Luwu bundles: a bundle is written the way its type is, `.(A, B)` or `.(A, T...)`
+    AstType* bundleReference(const ExternType& etv, const BundleShape& bundle)
+    {
+        writingArgumentsOf.insert(&etv);
+
+        AstArray<AstTypeOrPack> parameters;
+        parameters.size = bundle.head.size() + (bundle.rest ? 1 : 0);
+        parameters.data = static_cast<AstTypeOrPack*>(allocator->allocate(sizeof(AstTypeOrPack) * parameters.size));
+        for (size_t i = 0; i < bundle.head.size(); ++i)
+            parameters.data[i] = {Luau::visit(*this, bundle.head[i]->ty), {}};
+        if (bundle.rest)
+            parameters.data[bundle.head.size()] = {{}, rehydrate(*bundle.rest)};
+
+        writingArgumentsOf.erase(&etv);
+
+        char* name = allocateString(*allocator, etv.name);
+        AstTypeReference* reference =
+            allocator->alloc<AstTypeReference>(Location(), AstName{"bundle"}, AstName{name}, std::nullopt, Location(), true, parameters);
+        reference->fromDotPositional = true;
+        return reference;
     }
 
     AstType* operator()(const ExternType& etv)
