@@ -3719,11 +3719,18 @@ return guard, quietGuard
     );
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintParenthesizesAReturnedCallOfOneValue")
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintParenthesizesACallTheCompilerCantKeepToOneValue")
 {
     ScopedFastFlag classes{FFlag::LuwuClasses, true};
 
     const std::string source = R"(
+local helpers = { half = function(n: number): number return n / 2 end }
+
+-- the compiler can't resolve `helpers.half`, so it can't tell `half` gives one value
+local function half(n: number): number
+    return helpers.half(n)
+end
+
 local function double(n: number): number
     return n * 2
 end
@@ -3733,46 +3740,48 @@ local function pair(n: number): (number, number)
 end
 
 class Size
-    function of(n: number): Size
-        return Size()
+    function of(n: number): number
+        return half(n)
     end
 
-    function grow(self, n: number): Size
+    function grow(self, n: number): number
         return Size.of(n)
     end
 
     function twice(self, n: number): number
-        return self:double(n)
-    end
-
-    function double(self, n: number): number
-        return n * 2
+        return self:grow(n)
     end
 end
 
 local function f(n: number)
+    print(half(n))
+    local t = { half(n) }
     if n > 1 then
-        return double(n)
+        return double(n), (half(n)), tostring(n)
     end
     if n > 2 then
-        return (double(n))
-    end
-    if n > 3 then
         return pair(n)
     end
-    return tostring(n)
+    return half(n)
 end
 
 return f
 )";
 
     std::vector<LintWarning> hints = optimizationHints(lint("--!optimize 2\n" + source));
-    REQUIRE(3 == hints.size());
-    CHECK_EQ(hints[0].code, LintWarning::Code_OptimizationHint);
-    CHECK_EQ(hints[0].location.begin.line, 16);
-    CHECK(hints[0].text.find("'return (Size.of(...))'") != std::string::npos);
-    CHECK_EQ(hints[1].location.begin.line, 20);
-    CHECK_EQ(hints[2].location.begin.line, 30);
+    // `half`, and everything that returns its value, can't be kept to one value by the compiler. `double`, `pair` and
+    // `tostring` get no hint.
+    REQUIRE(6 == hints.size());
+    CHECK_EQ(hints[0].location.begin.line, 19);
+    CHECK_EQ(hints[1].location.begin.line, 23);
+    CHECK(hints[1].text.find("'return (Size.of(...))'") != std::string::npos);
+    CHECK_EQ(hints[2].location.begin.line, 27);
+    CHECK(hints[2].text.find("'return (self:grow(...))'") != std::string::npos);
+    CHECK_EQ(hints[3].location.begin.line, 32);
+    CHECK(hints[3].text.find("or pass another argument after it") != std::string::npos);
+    CHECK_EQ(hints[4].location.begin.line, 33);
+    CHECK(hints[4].text.find("a table's last item") != std::string::npos);
+    CHECK_EQ(hints[5].location.begin.line, 40);
 
     // without `--!optimize 2` or `--!native` nothing is inlined, so there's nothing to hint
     CHECK(optimizationHints(lint(source)).empty());
