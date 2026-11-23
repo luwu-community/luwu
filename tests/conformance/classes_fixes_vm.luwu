@@ -88,16 +88,15 @@ do
     end
 end
 
--- The constructor closure can outlive its class; its debug name must not point into the class.
+-- The C constructor closure can outlive its class; its debug name must not point into the class. A class constructs
+-- through its compiled constructor, which debug.info never hands out, so a trait's `__create` reaches the C one.
 do
     local weak = setmetatable({}, { __mode = "k" })
     local leaked
     do
         local chunk = loadstring([[
-class AVeryLongClassNameSoTheDebugNameIsLongerThanAnyStringReuse
-    x: number
-    function __init(self)
-        self.x = 1
+trait AVeryLongClassNameSoTheDebugNameIsLongerThanAnyStringReuse
+    function __create()
         LEAKED_CTOR = debug.info(2, "f")
     end
 end
@@ -399,6 +398,96 @@ do
     local ok1, paused = coroutine.resume(co)
     local ok2, x = coroutine.resume(co, 42)
     assert(ok1 and paused == "paused" and ok2 and x == 42)
+end
+
+-- A call on a class value the compiler can't resolve (another chunk's class, or one in a local) runs the class's
+-- constructor, which builds the object the way a call site in the class's own chunk would
+do
+    local Point, Init, Pod, Tagged, Secret, Yields, Sealed = loadstring([[
+        local made = 0
+        trait Counted(start: number)
+            count = start
+            items = {}
+        end
+        class Point(x: number, y: number = 2)
+            sum = x + y
+        end
+        class Init
+            v: number
+            function __init(self, v: number)
+                self.v = v
+                return "dropped", "too"
+            end
+        end
+        class Pod
+            a = 1
+            b = {}
+            c = made
+        end
+        class Tagged(name: string) implements Counted(10)
+            label = `{name}!`
+        end
+        class Secret
+            private hidden: number = 7
+            public shown: number = 0
+            private function __init(self) end
+            public function make(): Secret
+                return Secret()
+            end
+        end
+        class Yields(v: number)
+            got = coroutine.yield(v)
+        end
+        class Sealed
+            private key = {}
+            public open = 0
+        end
+        return Point, Init, Pod, Tagged, Secret, Yields, Sealed
+    ]])()
+
+    -- primary constructors, with a parameter default and an initializer that reads a parameter
+    local p = Point(1)
+    assert(p.x == 1 and p.y == 2 and p.sum == 3)
+    assert(Point(1, nil).y == 2 and Point(1, 5).sum == 6)
+
+    -- `__init`'s results are dropped, also when the caller takes every result
+    local function all(...)
+        return select("#", ...), ...
+    end
+    local n, object = all(Init(4))
+    assert(n == 1 and object.v == 4)
+    local function forwarded()
+        return Init(5)
+    end
+    assert(select("#", forwarded()) == 1)
+
+    -- the POD constructor: computed defaults are fresh per object, the argument overrides them, and nil is no argument
+    local a, b = Pod(), Pod({ a = 5 })
+    assert(a.a == 1 and b.a == 5 and a.b ~= b.b and Pod(nil).a == 1)
+    expectfail("POD constructor with two arguments", "expected zero or one arguments", Pod, {}, {})
+
+    -- trait fields with `implements` arguments come before the class's own
+    local t = Tagged("x")
+    assert(t.count == 10 and t.label == "x!" and t.items ~= Tagged("y").items)
+
+    -- a private constructor is checked against the code that called the class, also through pcall
+    expectfail("private constructor through a local", "the constructor of 'Secret' is private", function()
+        local Alias = Secret
+        return Alias()
+    end)
+    expectfail("private constructor through pcall", "the constructor of 'Secret' is private", Secret)
+    assert(Secret.make().shown == 0)
+
+    -- the POD constructor reads an argument's private fields with the caller's rights, not the constructor's
+    expectfail("private field through a POD argument", "private", Sealed, Sealed())
+
+    -- construction yields like any call
+    local co = coroutine.create(function()
+        return Yields(3)
+    end)
+    local _, first = coroutine.resume(co)
+    local _, made = coroutine.resume(co, "back")
+    assert(first == 3 and made.got == "back" and made.v == 3)
 end
 
 return 'OK'
