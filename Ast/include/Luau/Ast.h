@@ -343,6 +343,8 @@ public:
     // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): written as a `--@[...]` comment. It means
     // the same as an attribute in the code, but the pretty printer doesn't print it.
     bool comment = false;
+    // Written as `@name` instead of in a `@[...]` list. Only the list form takes arguments.
+    bool bare = false;
 };
 
 // The `@deprecated` attribute's payload, or nullopt when the array has no `@deprecated`.
@@ -359,6 +361,9 @@ struct AttributeInfo
     // The record fields the attribute takes as `@[name { field = ... }]`, ending in nullptr; nullptr for an
     // attribute that takes no arguments.
     const char* const* argumentFields;
+    // The arguments the attribute can't be written without, as an editor inserts them after its name
+    // (`("reason")`); nullptr when it needs none.
+    const char* requiredArguments;
 };
 
 // Every attribute this build accepts, including flag-gated ones whose flag is currently on.

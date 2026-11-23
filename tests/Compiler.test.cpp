@@ -13872,6 +13872,32 @@ RETURN R1 1
     );
 }
 
+TEST_CASE("NoinlineAttributeExplainsItselfInRemarks")
+{
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    std::string remarks = compileWithRemarks(R"(
+@noinline
+local function foo()
+    return 42
+end
+
+class Cat
+    @noinline
+    function meow(self)
+        return 1
+    end
+end
+
+local cat = Cat()
+return foo(), cat:meow()
+)");
+
+    CHECK(remarks.find("inlining failed: foo is marked @noinline") != std::string::npos);
+    CHECK(remarks.find("inlining failed: Cat:meow is marked @noinline") != std::string::npos);
+}
+
 TEST_CASE("NoinlineAttributeIsNotMarkedInlinable")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuwuNoinlineAttribute, true}, {FFlag::LuauEmitCallFeedback, true}};
