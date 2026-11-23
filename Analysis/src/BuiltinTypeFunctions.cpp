@@ -3071,8 +3071,8 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , classFunc{"class", classTypeFunction}
     , weakoptionalFunc{"weakoptional", weakoptionalTypeFunc}
     , unlessneverFunc{"unlessnever", unlessneverTypeFunction}
-    , oneofFunc{"oneof", oneofTypeFunction}
     , raisesFunc{"raises", raisesTypeFunction}
+    , oneofFunc{"oneof", oneofTypeFunction}
 {
 }
 
