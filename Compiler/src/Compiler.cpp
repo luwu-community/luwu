@@ -1023,8 +1023,29 @@ struct Compiler
 
         const char* owner = nullptr;
         const char* name = describeInlineTarget(func, owner);
-        std::string written = owner ? format("%s:%s", owner, name) : std::string(name);
+        // a method is written `Class:method`, a static function `Class.f`
+        std::string written = name;
+        if (owner)
+            written = format("%s:%s", owner, name);
+        else if (AstStatClass* staticOwner = staticFunctionClass(func))
+            written = format("%s.%s", staticOwner->name->name.value, name);
         CompileError::raise(call->location, "'%s' is marked @[inline] but can't be inlined here because %s", written.c_str(), because.c_str());
+    }
+
+    // Luwu Classes (rfcs/classes): the class `func` is a static function of, or null
+    AstStatClass* staticFunctionClass(AstExprFunction* func)
+    {
+        AstStatClass* cls = FFlag::LuwuClasses ? lexicalClassOf(func) : nullptr;
+        if (!cls)
+            return nullptr;
+
+        for (const AstClassMember& member : cls->members)
+        {
+            const AstClassMethod* m = member.get_if<AstClassMethod>();
+            if (m && m->function == func)
+                return cls;
+        }
+        return nullptr;
     }
 
     // Luwu: how many calls of `func` the module has. A class method's are its name's method calls (`x:name()`), which
@@ -1393,6 +1414,13 @@ struct Compiler
                 self->methodCallSites[method->index]++;
 
             AstExprFunction* func = node->self ? nullptr : self->getFunctionExpr(node->func);
+
+            // a class's static function, `Cls.f(...)`
+            AstExprIndexName* member = node->self ? nullptr : node->func->as<AstExprIndexName>();
+            AstStatClass* cls = member && FFlag::LuwuClasses ? self->classBindingOf(member->expr) : nullptr;
+            if (!func && cls)
+                func = self->findStaticFunction(cls, member->index);
+
             if (!func)
                 return true;
 
@@ -2830,44 +2858,85 @@ struct Compiler
         if (!method)
             return nullptr;
 
-        // Code lexically inside recvClass (its methods and closures nested in them) runs with recvClass's private
-        // access, so the method's body behaves the same inlined there. Anywhere else, only a body whose private
-        // access doesn't depend on the running closure can move (see InlinedPrivateAccessVisitor).
-        AstStatClass* callerClass = lexicalClassOf(currentFunction);
-        bool sameClass = callerClass == recvClass;
+        return classFunctionInlinesHere(expr, recvClass, method, idx->index.value) ? method : nullptr;
+    }
 
-        // Calling a private method is itself a private access, checked by NAMECALL against the running closure.
-        // Inlining it from outside the class would skip that check entirely and let the call succeed.
-        if (!sameClass && isPrivateClassMethod(recvClass, method))
+    // Luwu Classes (rfcs/classes): may `func`, a method or static function of `cls` that `call` calls by `name`, be
+    // inlined here as far as private access goes? Code lexically inside `cls` (its methods and closures nested in
+    // them) runs with its private access, so the body behaves the same inlined there. Anywhere else, only a body whose
+    // private access doesn't depend on the running closure can move (see InlinedPrivateAccessVisitor).
+    bool classFunctionInlinesHere(AstExprCall* call, AstStatClass* cls, AstExprFunction* func, const char* name)
+    {
+        AstStatClass* callerClass = lexicalClassOf(currentFunction);
+        bool sameClass = callerClass == cls;
+
+        // Calling a private method or static is itself a private access, checked at runtime against the running
+        // closure. Inlining it from outside the class would skip that check entirely and let the call succeed.
+        if (!sameClass && isPrivateClassMethod(cls, func))
         {
-            bytecode.addDebugRemark("inlining failed: %s is private to %s", idx->index.value, recvClass->name->name.value);
-            refuseEncouragedInline(expr, method, format("it's private to %s, so inlining it would leak private access", recvClass->name->name.value));
-            return nullptr;
+            bytecode.addDebugRemark("inlining failed: %s is private to %s", name, cls->name->name.value);
+            refuseEncouragedInline(call, func, format("it's private to %s, so inlining it would leak private access", cls->name->name.value));
+            return false;
         }
 
-        bool bodyLosesAccess =
-            !sameClass && classesWithPrivateMembers.contains(recvClass) && !classInlinedBodyKeepsPrivateAccess(recvClass, recvClass, method);
+        bool bodyLosesAccess = !sameClass && classesWithPrivateMembers.contains(cls) && !classInlinedBodyKeepsPrivateAccess(cls, cls, func);
 
         if (bodyLosesAccess)
         {
-            bytecode.addDebugRemark("inlining failed: body needs %s's private access at runtime", recvClass->name->name.value);
-            refuseEncouragedInline(expr, method, "it would leak private access");
-            return nullptr;
+            bytecode.addDebugRemark("inlining failed: body needs %s's private access at runtime", cls->name->name.value);
+            refuseEncouragedInline(call, func, "it would leak private access");
+            return false;
         }
 
         // A free function inlined into a method does gain its class's private access; that is accepted (a class
         // answers for the functions its own methods call). Another class's method is not the class's own logic.
         bool callerHasPrivateMembers = callerClass && classesWithPrivateMembers.contains(callerClass);
-        bool bodyGainsAccess = !sameClass && callerHasPrivateMembers && !classInlinedBodyKeepsPrivateAccess(recvClass, callerClass, method);
+        bool bodyGainsAccess = !sameClass && callerHasPrivateMembers && !classInlinedBodyKeepsPrivateAccess(cls, callerClass, func);
 
         if (bodyGainsAccess)
         {
             bytecode.addDebugRemark("inlining failed: body would gain %s's private access", callerClass->name->name.value);
-            refuseEncouragedInline(expr, method, "it would leak private access");
+            refuseEncouragedInline(call, func, "it would leak private access");
+            return false;
+        }
+
+        return true;
+    }
+
+    // Luwu Classes (rfcs/classes): the static function `name` of `cls`: a member function the class doesn't call with
+    // `self` (classMethodOwner holds those)
+    AstExprFunction* findStaticFunction(AstStatClass* cls, AstName name)
+    {
+        for (const AstClassMember& member : cls->members)
+        {
+            const AstClassMethod* m = member.get_if<AstClassMethod>();
+            if (m && m->functionName == name && !classMethodOwner.contains(m->function))
+                return m->function;
+        }
+        return nullptr;
+    }
+
+    // Luwu Classes (rfcs/classes): resolve a `Cls.f(...)` call to the static function it reads, so it can be inlined at
+    // O2. A class binding is const and its members can't be replaced, so `Cls.f` always reads that function, once the
+    // class's declaration has run: before then the call raises, and an inlined body wouldn't.
+    AstExprFunction* tryResolveStaticCall(AstExprCall* expr)
+    {
+        AstExprIndexName* idx = expr->self ? nullptr : expr->func->as<AstExprIndexName>();
+        AstStatClass* cls = idx ? classBindingOf(idx->expr) : nullptr;
+        if (!cls)
+            return nullptr;
+
+        AstExprFunction* func = findStaticFunction(cls, idx->index);
+        if (!func)
+            return nullptr;
+
+        if (!isClassBoundAt(cls, expr->location))
+        {
+            bytecode.addDebugRemark("inlining failed: %s may not be declared yet", cls->name->name.value);
             return nullptr;
         }
 
-        return method;
+        return classFunctionInlinesHere(expr, cls, func, idx->index.value) ? func : nullptr;
     }
 
     // Luwu Classes (rfcs/classes): this class's own `__init`, or null when it uses the default
@@ -3616,6 +3685,31 @@ struct Compiler
         {
             if (tryCompileNewObject(expr, target))
                 return;
+        }
+
+        // Luwu Classes (rfcs/classes): inline `Cls.f(...)` calls of a class's static functions (see tryResolveStaticCall)
+        if (options.optimizationLevel >= 2 && !expr->self && FFlag::LuwuClasses)
+        {
+            if (AstExprFunction* sfunc = tryResolveStaticCall(expr))
+            {
+                Function* fi = functions.find(sfunc);
+
+                if (!(fi && fi->canInline))
+                    refuseEncouragedInline(expr, sfunc, whyNeverInlined(sfunc, fi != nullptr));
+
+                if (fi && fi->canInline &&
+                    tryCompileInlinedCall(
+                        expr,
+                        sfunc,
+                        target,
+                        targetCount,
+                        multRet,
+                        FInt::LuauCompileInlineThreshold,
+                        FInt::LuauCompileInlineThresholdMaxBoost,
+                        FInt::LuauCompileInlineDepth
+                    ))
+                    return;
+            }
         }
 
         // Luwu Classes (rfcs/classes): inline `obj:method()` calls whose receiver class is

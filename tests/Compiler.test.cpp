@@ -14352,6 +14352,60 @@ TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
     );
 }
 
+// Luwu Classes (rfcs/classes): a class's static functions inline at `Cls.f(...)` calls, with the same private-access
+// rules as methods: a private static, or a body that needs the class's private access at runtime (a private
+// constructor), inlines only inside the class
+TEST_CASE("ClassStaticFunctionsInline")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuEncourageInline, true},
+    };
+
+    const char* source = R"(
+class Size private (
+    private const bytes: number
+)
+    public function twice(n: number): number
+        return n * 2
+    end
+    private function half(n: number): number
+        return n / 2
+    end
+    public function of(n: number): Size
+        return Size(Size.half(n))
+    end
+end
+local function main(n)
+    return Size.twice(n), Size.of(n)
+end
+return main
+)";
+    std::string main = compileFunction(source, 3, 2);
+    // twice inlines, `of` stays a call because it constructs through the private constructor
+    CHECK_EQ(countCalls(main), 1);
+    // inside the class, `of` inlines the private `half`
+    CHECK_EQ(countCalls(compileFunction(source, 2, 2)), 0);
+
+    const char* encouragedPrivate = R"(
+class Size private (
+    private const bytes: number
+)
+    @[inline("cheap")]
+    public function of(n: number): Size
+        return Size(n)
+    end
+end
+local function main(n)
+    return Size.of(n)
+end
+return main
+)";
+    CHECK_EQ(
+        encouragedInlineError(encouragedPrivate), "11: 'Size.of' is marked @[inline] but can't be inlined here because it would leak private access"
+    );
+}
+
 TEST_CASE("InlineOnlyCallSiteRegardlessOfCost")
 {
     // the only call site: inlined
