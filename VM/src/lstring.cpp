@@ -286,3 +286,36 @@ void luaS_free(lua_State* L, TString* ts, lua_Page* page)
         luaM_freegco(L, ts, sizestring(ts->len), ts->memcat, page);
     }
 }
+
+bool luaS_startswith(const char* s, size_t len, const char* needle, size_t needlelen)
+{
+    return needlelen <= len && memcmp(s, needle, needlelen) == 0;
+}
+
+bool luaS_endswith(const char* s, size_t len, const char* needle, size_t needlelen)
+{
+    return needlelen <= len && memcmp(s + len - needlelen, needle, needlelen) == 0;
+}
+
+bool luaS_contains(const char* s, size_t len, const char* needle, size_t needlelen)
+{
+    if (needlelen == 0)
+        return true;
+
+    if (needlelen > len)
+        return false;
+
+    // memchr finds each candidate for the first byte; memcmp checks the rest
+    const char* last = s + (len - needlelen);
+    for (const char* candidate = s; candidate <= last; candidate++)
+    {
+        candidate = (const char*)memchr(candidate, needle[0], last - candidate + 1);
+        if (!candidate)
+            return false;
+
+        if (memcmp(candidate, needle, needlelen) == 0)
+            return true;
+    }
+
+    return false;
+}
