@@ -1128,6 +1128,13 @@ bool ConstraintSolver::tryDispatch(const GeneralizationConstraint& c, NotNull<co
                 fty->isDeprecatedFunction = true;
                 fty->deprecatedInfo = std::make_shared<AstAttr::DeprecatedInfo>(c.deprecatedInfo);
             }
+
+            // Luwu: `@nodiscard`
+            if (c.hasNodiscardAttribute)
+            {
+                fty->isNodiscard = true;
+                fty->nodiscardReason = c.nodiscardReason;
+            }
         }
 
         if (c.classValueMethodType)
