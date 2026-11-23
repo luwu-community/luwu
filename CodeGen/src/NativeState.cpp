@@ -89,6 +89,7 @@ void initFunctions(NativeContext& context)
     context.forgLoopNodeIter = forgLoopNodeIter;
     context.forgLoopNonTableFallback = forgLoopNonTableFallback;
     context.forgLoopNonTableFallback_DEPRECATED = forgLoopNonTableFallback_DEPRECATED;
+    context.invokeFastMethod = invokeFastMethod;
     context.forgPrepXnextFallback = forgPrepXnextFallback;
     context.callProlog = callProlog;
     context.callEpilogC = callEpilogC;
@@ -113,6 +114,7 @@ void initFunctions(NativeContext& context)
     context.executeGETPOSITIONAL = executeGETPOSITIONAL;
     context.executePUSH = executePUSH;
     context.executePOP = executePOP;
+    context.executeTABLEBUNDLE = executeTABLEBUNDLE;
     context.executeGETVARARGSMultRet = executeGETVARARGSMultRet;
     context.executeGETVARARGSConst = executeGETVARARGSConst;
     context.executeDUPCLOSURE = executeDUPCLOSURE;

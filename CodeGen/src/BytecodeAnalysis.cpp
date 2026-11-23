@@ -400,6 +400,12 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
         types.result = LBC_TYPE_BOOLEAN;
         types.b = LBC_TYPE_CLASS;
         break;
+    case LBF_BUNDLE_PACK:
+    case LBF_BUNDLE_UNPACK:
+        // Luwu collections and bundles: FASTCALL's fallback calls whatever the library holds, so the result could be
+        // anything
+        types.result = LBC_TYPE_ANY;
+        break;
     case LBF_TABLE_UNPACK:
         types.result = LBC_TYPE_ANY;
         types.a = LBC_TYPE_TABLE;
@@ -1603,6 +1609,7 @@ static void analyzeBytecodeTypesPass(
             case LOP_SETOBJECTMEMBER:
             case LOP_PRESIZETABLE:
             case LOP_PUSH:
+            case LOP_SETTABLEBUNDLE:
                 break;
             case LOP_APPENDTABLE:
             {
@@ -1613,9 +1620,9 @@ static void analyzeBytecodeTypesPass(
             }
             case LOP_GETQUALIFIED:
             case LOP_INITTRAITS:
+            case LOP_GETTABLEBUNDLE:
             {
-                // Luwu Traits (rfcs/classes/traits.md): A gets the runner (or nil when the jump is taken) or GETQUALIFIED's
-                // function
+                // Luwu: A gets INITTRAITS's count, GETQUALIFIED's function or GETTABLEBUNDLE's value
                 int ra = LUAU_INSN_A(*pc);
                 regTags[ra] = LBC_TYPE_ANY;
                 bcType.result = regTags[ra];
@@ -1743,6 +1750,7 @@ static void visitBytecodeRegWrites(const IrFunction& function, const std::vector
         break;
     case LOP_INITTRAITS:
     case LOP_GETQUALIFIED:
+    case LOP_GETTABLEBUNDLE:
         visit(ra, uint8_t(LBC_TYPE_ANY));
         break;
     case LOP_APPENDTABLE:
