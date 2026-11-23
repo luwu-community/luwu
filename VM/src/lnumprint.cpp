@@ -5,6 +5,7 @@
 
 #include "lcommon.h"
 
+#include <math.h>
 #include <string.h>
 
 #ifdef _MSC_VER
@@ -390,4 +391,61 @@ char* luai_int2str(char* buf, int64_t l)
     LUAU_ASSERT(pos == -1);
 
     return &buf[(l < 0) ? (numDigits + 1) : numDigits];
+}
+
+// Luwu: string.format's `%.Nf` without snprintf, for N up to kMaxFastFixedPrecision. Below kMaxFastFixed the product
+// `|n| * 10^N` is off by at most 2^-23, so a value whose fraction is further than kFixedTieMargin from halfway rounds the
+// way snprintf rounds the exact value. Anything else returns null: a larger value, NaN or infinity, or one within the
+// margin of halfway (exact ties among them, which snprintf rounds to even).
+static const double kMaxFastFixed = 1073741824.0; // 2^30
+static const double kFixedTieMargin = 1e-6;
+static const int kMaxFastFixedPrecision = 9;
+
+char* luai_fixed2str(char* buf, double n, int precision)
+{
+    static const double powers[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9};
+    static const uint64_t scales[] = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000};
+
+    if (precision < 0 || precision > kMaxFastFixedPrecision)
+        return nullptr;
+
+    double scaled = fabs(n) * powers[precision];
+    // also false for NaN
+    bool small = scaled < kMaxFastFixed;
+    if (!small)
+        return nullptr;
+
+    double fraction = scaled - floor(scaled);
+    bool nearHalf = fabs(fraction - 0.5) < kFixedTieMargin;
+    if (nearHalf)
+        return nullptr;
+
+    uint64_t rounded = uint64_t(floor(scaled + 0.5));
+    uint64_t scale = scales[precision];
+
+    // snprintf prints the sign of a negative value that rounds to zero, and of -0
+    if (signbit(n))
+        *buf++ = '-';
+
+    char digits[24];
+    char* end = digits + sizeof(digits);
+    // printunsignedrev writes no digits for zero, which the fraction's zero padding covers below
+    char* start = printunsignedrev(end, rounded / scale);
+    if (start == end)
+        *--start = '0';
+    memcpy(buf, start, end - start);
+    buf += end - start;
+
+    if (precision > 0)
+    {
+        *buf++ = '.';
+        start = printunsignedrev(end, rounded % scale);
+        int padding = precision - int(end - start);
+        memset(buf, '0', padding);
+        buf += padding;
+        memcpy(buf, start, end - start);
+        buf += end - start;
+    }
+
+    return buf;
 }
