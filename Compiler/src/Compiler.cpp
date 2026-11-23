@@ -47,12 +47,16 @@ LUAU_FASTINTVARIABLE(LuwuCompileInlineFewCallSites, 6)
 // on its own because it saturates at 127 and doesn't measure real size. A lower budget refuses inlines native code gains
 // from: at 512, bench/tests' sha3_bit32 runs 2.7x slower native.
 LUAU_FASTINTVARIABLE(LuwuCompileInlineBudget, 4096)
+// Luwu: the most a function marked @[inline(reason)] may weigh at its call sites, in instructions (see
+// encouragedInlineSize). It replaces the cost model's threshold for such a function.
+LUAU_FASTINTVARIABLE(LuwuCompileEncouragedInlineLimit, 256)
 
 LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
@@ -1001,6 +1005,80 @@ struct Compiler
         }
     }
 
+    // Luwu: `@[inline(reason)]` weighs a function's size at a third (DebugLuwuEncourageInline, encouragedInlineSize)
+    static constexpr int kEncouragedInlineFactor = 3;
+
+    // Luwu: whether `func` is marked `@[inline(reason)]`, which asks for every call the compiler can inline to be inlined
+    bool encouragesInline(AstExprFunction* func) const
+    {
+        return FFlag::DebugLuwuEncourageInline && func->hasAttribute(AstAttr::Type::Inline);
+    }
+
+    // Luwu: a call to a function marked `@[inline]` that isn't inlined is a compile error at the call, since the attribute
+    // asked for it. `because` says why, after "can't be inlined here because".
+    void refuseEncouragedInline(AstExprCall* call, AstExprFunction* func, const std::string& because)
+    {
+        if (!encouragesInline(func))
+            return;
+
+        const char* owner = nullptr;
+        const char* name = describeInlineTarget(func, owner);
+        std::string written = owner ? format("%s:%s", owner, name) : std::string(name);
+        CompileError::raise(call->location, "'%s' is marked @[inline] but can't be inlined here because %s", written.c_str(), because.c_str());
+    }
+
+    // Luwu: how many calls of `func` the module has. A class method's are its name's method calls (`x:name()`), which
+    // also counts calls of other classes' methods of that name: never fewer than the real number.
+    unsigned encouragedCallSites(AstExprFunction* func)
+    {
+        const char* owner = nullptr;
+        const char* name = describeInlineTarget(func, owner);
+        const unsigned* sites = owner ? methodCallSites.find(names.getOrAdd(name)) : directCallSites.find(func);
+        return sites ? std::max(*sites, 1u) : 1u;
+    }
+
+    // Luwu: what inlining a function marked @[inline] at all its call sites weighs, in instructions: a third of its size
+    // (kEncouragedInlineFactor), times its copies, with each copy past the first counting two thirds. The cost model
+    // can't be used for this, since it caps every cost at 127.
+    int encouragedInlineSize(uint32_t instructionCount, unsigned callSites)
+    {
+        return int(instructionCount * (3 + 2 * (callSites - 1)) / (3 * kEncouragedInlineFactor));
+    }
+
+    void refuseEncouragedInlineTooBig(AstExprCall* call, AstExprFunction* func, uint32_t instructionCount, unsigned callSites)
+    {
+        if (callSites == 1)
+            refuseEncouragedInline(
+                call, func, format("it's too big even with %dx encouragement (%u instructions)", kEncouragedInlineFactor, instructionCount)
+            );
+        else
+            refuseEncouragedInline(
+                call,
+                func,
+                format(
+                    "it's too big to copy to its %u call sites even with %dx encouragement (%u instructions)",
+                    callSites,
+                    kEncouragedInlineFactor,
+                    instructionCount
+                )
+            );
+    }
+
+    // Luwu: why `func` never inlines, which its declaration decided (see compileFunction), so an inline of it isn't even
+    // attempted. `compiled` is false for a call inside the function's own body, before the function is finished.
+    std::string whyNeverInlined(AstExprFunction* func, bool compiled)
+    {
+        if (!compiled)
+            return "it's called inside its own body";
+        if (func->vararg)
+            return "it's variadic";
+        if (func->self)
+            return "it's declared with ':' outside a class";
+        if (getfenvUsed || setfenvUsed)
+            return "the module uses getfenv or setfenv";
+        return "it's also marked @debugnoinline";
+    }
+
     void reportInlineTooExpensive(AstExprFunction* func, int inlinedCost, int inlineProfit)
     {
         const char* owner = nullptr;
@@ -1046,6 +1124,7 @@ struct Compiler
         if (regTop > 128 || fi->stackSize > 32)
         {
             bytecode.addDebugRemark("inlining failed: high register pressure");
+            refuseEncouragedInline(expr, func, "the call needs too many registers");
             return false;
         }
 
@@ -1053,6 +1132,7 @@ struct Compiler
         if (int(inlineFrames.size()) >= depthLimit)
         {
             bytecode.addDebugRemark("inlining failed: too many inlined frames");
+            refuseEncouragedInline(expr, func, "the call is nested in too many inlined calls");
             return false;
         }
 
@@ -1061,6 +1141,7 @@ struct Compiler
             if (frame.func == func)
             {
                 bytecode.addDebugRemark("inlining failed: can't inline recursive calls");
+                refuseEncouragedInline(expr, func, "it's called inside its own body");
                 return false;
             }
 
@@ -1074,6 +1155,7 @@ struct Compiler
             functionContainsNestedFunctions(func))
         {
             bytecode.addDebugRemark("inlining failed: nested function would change class ownership");
+            refuseEncouragedInline(expr, func, "a function inside it would get another class's private access");
             return false;
         }
 
@@ -1084,6 +1166,7 @@ struct Compiler
             if (AstStatClass* initClass = classOfInit(currentFunction); initClass && bodyMayWriteConstMember(func, initClass))
             {
                 bytecode.addDebugRemark("inlining failed: body may write a const field of %s", initClass->name->name.value);
+                refuseEncouragedInline(expr, func, format("it may write a const field of %s inside %s's __init", initClass->name->name.value, initClass->name->name.value));
                 return false;
             }
         }
@@ -1095,6 +1178,7 @@ struct Compiler
         if (multRet)
         {
             bytecode.addDebugRemark("inlining failed: can't convert fixed returns to multret");
+            refuseEncouragedInline(expr, func, "its results are used as a list of values");
             return false;
         }
 
@@ -1148,21 +1232,29 @@ struct Compiler
         // only an immediately called function expression.
         bool onlyCallSite = isOnlyCallSite(func);
 
+        // Luwu: a function marked @[inline] is weighed by its size at all its call sites instead of by the cost model
+        bool encouraged = encouragesInline(func);
+        unsigned encouragedSites = encouraged ? encouragedCallSites(func) : 0;
+        bool overLimit = encouraged ? encouragedInlineSize(fi->instructionCount, encouragedSites) > FInt::LuwuCompileEncouragedInlineLimit
+                                    : inlinedCost > threshold;
+
         if (FFlag::LuauCompileIifeInline)
         {
             bool isIife = unwrapExprOfType<AstExprFunction>(expr->func) != nullptr;
 
-            if (inlinedCost > threshold && !isIife && !onlyCallSite)
+            if (overLimit && !isIife && !onlyCallSite)
             {
                 reportInlineTooExpensive(func, inlinedCost, inlineProfit);
+                refuseEncouragedInlineTooBig(expr, func, fi->instructionCount, encouragedSites);
                 return false;
             }
         }
         else
         {
-            if (inlinedCost > threshold && !onlyCallSite)
+            if (overLimit && !onlyCallSite)
             {
                 reportInlineTooExpensive(func, inlinedCost, inlineProfit);
+                refuseEncouragedInlineTooBig(expr, func, fi->instructionCount, encouragedSites);
                 return false;
             }
         }
@@ -1183,10 +1275,11 @@ struct Compiler
                 spent,
                 FInt::LuwuCompileInlineBudget.value
             );
+            refuseEncouragedInline(expr, func, "it would pass the inlining budget of the function it's called in");
             return false;
         }
 
-        if (onlyCallSite && inlinedCost > threshold)
+        if (onlyCallSite && overLimit)
             bytecode.addDebugRemark("inlining past the cost model: the only call site of a function (cost %d)", inlinedCost);
 
         // Luwu Classes: a method call's remark says how its receiver's class was known, `proven` or `trusted` (from an
@@ -1295,6 +1388,10 @@ struct Compiler
 
         bool visit(AstExprCall* node) override
         {
+            // a method call counts for every method of its name (encouragedCallSites)
+            if (AstExprIndexName* method = node->self ? node->func->as<AstExprIndexName>() : nullptr)
+                self->methodCallSites[method->index]++;
+
             AstExprFunction* func = node->self ? nullptr : self->getFunctionExpr(node->func);
             if (!func)
                 return true;
@@ -2744,6 +2841,7 @@ struct Compiler
         if (!sameClass && isPrivateClassMethod(recvClass, method))
         {
             bytecode.addDebugRemark("inlining failed: %s is private to %s", idx->index.value, recvClass->name->name.value);
+            refuseEncouragedInline(expr, method, format("it's private to %s, so inlining it would leak private access", recvClass->name->name.value));
             return nullptr;
         }
 
@@ -2753,6 +2851,7 @@ struct Compiler
         if (bodyLosesAccess)
         {
             bytecode.addDebugRemark("inlining failed: body needs %s's private access at runtime", recvClass->name->name.value);
+            refuseEncouragedInline(expr, method, "it would leak private access");
             return nullptr;
         }
 
@@ -2764,6 +2863,7 @@ struct Compiler
         if (bodyGainsAccess)
         {
             bytecode.addDebugRemark("inlining failed: body would gain %s's private access", callerClass->name->name.value);
+            refuseEncouragedInline(expr, method, "it would leak private access");
             return nullptr;
         }
 
@@ -3500,6 +3600,8 @@ struct Compiler
             // add a debug remark for cases when we didn't even call tryCompileInlinedCall
             if (func && !(fi && fi->canInline))
             {
+                refuseEncouragedInline(expr, func, whyNeverInlined(func, fi != nullptr));
+
                 if (func->vararg)
                     bytecode.addDebugRemark("inlining failed: function is variadic");
                 else if (!fi)
@@ -3525,6 +3627,9 @@ struct Compiler
             {
                 Function* fi = functions.find(mfunc);
                 AstExprIndexName* idx = expr->func->as<AstExprIndexName>();
+
+                if (!(fi && fi->canInline))
+                    refuseEncouragedInline(expr, mfunc, whyNeverInlined(mfunc, fi != nullptr));
 
                 if (fi && fi->canInline && idx &&
                     tryCompileInlinedCall(
@@ -8673,6 +8778,8 @@ struct Compiler
     // Luwu: how many direct calls each function has in the module (CallSiteVisitor), and how deep the compiler is in
     // code it compiles more than once (RepeatedCompile)
     DenseHashMap<AstExprFunction*, unsigned> directCallSites{nullptr};
+    // Luwu: how many method calls (`x:name()`) each name has in the module, for encouragedCallSites
+    DenseHashMap<AstName, unsigned> methodCallSites{AstName()};
     unsigned repeatedCompileDepth = 0;
 
     // Luwu: the local each function's direct call names (null when the callee isn't a plain local), and how many times

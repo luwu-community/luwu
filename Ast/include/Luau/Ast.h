@@ -228,6 +228,8 @@ public:
         Native,
         Deprecated,
         DebugNoinline,
+        // Luwu: `@[inline(reason)]`, which asks the compiler to inline every call it can (DebugLuwuEncourageInline)
+        Inline,
         Unknown
     };
 

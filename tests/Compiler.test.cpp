@@ -34,6 +34,7 @@ LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
@@ -14237,6 +14238,120 @@ static int countCalls(const std::string& dump)
 
 // Luwu: at O2 a function with one call site inlines whatever the cost model says, unless that call is compiled more
 // than once, runs once anyway, or the function opts out
+// Luwu: the compile error for a call to an `@[inline]` function that isn't inlined, or "" when it compiles
+static std::string encouragedInlineError(const char* source, int optimizationLevel = 2)
+{
+    try
+    {
+        Luau::BytecodeBuilder bcb;
+        Luau::CompileOptions options;
+        options.optimizationLevel = optimizationLevel;
+        Luau::compileOrThrow(bcb, source, options);
+        return "";
+    }
+    catch (Luau::CompileError& e)
+    {
+        return format("%d: %s", e.getLocation().begin.line + 1, e.what());
+    }
+}
+
+// six calls, past the few-call-sites boost
+#define LUWU_SIX_CALLS(name) \
+    "local function main(t)\n" \
+    "    " name "(t)\n    " name "(t)\n    " name "(t)\n    " name "(t)\n    " name "(t)\n    " name "(t)\n" \
+    "end\n"
+
+// Luwu: `@[inline(reason)]` weighs a function by a third of its size at its call sites instead of the cost model, which
+// inlines calls the model alone refuses
+TEST_CASE("EncouragedInlineWeighsAThirdOfTheSize")
+{
+    ScopedFastFlag encourageInline{FFlag::DebugLuwuEncourageInline, true};
+
+    const char* plain = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n" LUWU_SIX_CALLS("big");
+    CHECK_EQ(countCalls(compileFunction(plain, 1, 2)), 6);
+
+    const char* encouraged = "@[inline(\"main's hot path\")]\n"
+                             "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n" LUWU_SIX_CALLS("big");
+    CHECK_EQ(countCalls(compileFunction(encouraged, 1, 2)), 0);
+}
+
+// Luwu: a call to an `@[inline]` function that still isn't inlined is a compile error at the call, saying why. Where the
+// compiler doesn't inline at all (below O2), nothing is reported.
+TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuEncourageInline, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    // a big function at many call sites: each copy past the first weighs two thirds, but twelve copies are too many
+    {
+        std::string body;
+        for (int i = 0; i < 40; i++)
+            body += format("    t.f%d = t.f%d + %d\n", i, i, i);
+
+        auto withCalls = [&](int calls)
+        {
+            std::string source = "@[inline(\"a hot helper\")]\nlocal function big(t)\n" + body + "end\nlocal function main(t)\n";
+            for (int i = 0; i < calls; i++)
+                source += "    big(t)\n";
+            return source + "end\nreturn main\n";
+        };
+
+        std::string error = encouragedInlineError(withCalls(12).c_str());
+        CHECK_MESSAGE(error.find("45: 'big' is marked @[inline] but can't be inlined here because it's too big to copy to its 12 call sites even with 3x encouragement") == 0, error);
+        CHECK_EQ(encouragedInlineError(withCalls(3).c_str()), "");
+    }
+
+    // past the instructions inlining may add to one function
+    {
+        ScopedFastInt budget{FInt::LuwuCompileInlineBudget, 3};
+        const char* tooBig = "@[inline(\"main's hot path\")]\n"
+                             "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                             "local function main(t)\n"
+                             "    big(t)\n"
+                             "    big(t)\n"
+                             "end\n"
+                             "return main\n";
+        std::string error = encouragedInlineError(tooBig);
+        CHECK_MESSAGE(
+            error == "14: 'big' is marked @[inline] but can't be inlined here because it would pass the inlining budget of the function it's called in",
+            error
+        );
+        CHECK_EQ(encouragedInlineError(tooBig, 1), "");
+    }
+
+    const char* variadic = "@[inline(\"a tiny helper\")]\n"
+                           "local function first(...)\n"
+                           "    return (...)\n"
+                           "end\n"
+                           "local function main(a)\n"
+                           "    return first(a)\n"
+                           "end\n"
+                           "return main\n";
+    CHECK_EQ(encouragedInlineError(variadic), "6: 'first' is marked @[inline] but can't be inlined here because it's variadic");
+
+    // a public method whose body calls a private one would leak the class's private access into the caller
+    const char* leaksPrivate = "class Counter\n"
+                               "    public count: number\n"
+                               "    private function secret(self)\n"
+                               "        return self.count\n"
+                               "    end\n"
+                               "    @[inline(\"reads are hot\")]\n"
+                               "    public function value(self)\n"
+                               "        return self:secret()\n"
+                               "    end\n"
+                               "end\n"
+                               "local function main()\n"
+                               "    local c = Counter { count = 1 }\n"
+                               "    return c:value()\n"
+                               "end\n"
+                               "return main\n";
+    CHECK_EQ(
+        encouragedInlineError(leaksPrivate), "13: 'Counter:value' is marked @[inline] but can't be inlined here because it would leak private access"
+    );
+}
+
 TEST_CASE("InlineOnlyCallSiteRegardlessOfCost")
 {
     // the only call site: inlined
