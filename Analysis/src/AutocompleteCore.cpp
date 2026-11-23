@@ -63,7 +63,11 @@ static void forEachAttributeList(const std::vector<AstNode*>& ancestry, Visit vi
 
         if (AstExprFunction* fn = node->as<AstExprFunction>())
         {
-            if (visit(fn->attributes, AstAttr::Context::Function))
+            // A global `function f()` is the one function with a body the compiler can't inline
+            AstStatFunction* global = it + 1 != ancestry.rend() ? (*(it + 1))->as<AstStatFunction>() : nullptr;
+            bool inlinable = !global || global->func != fn;
+
+            if (visit(fn->attributes, inlinable ? AstAttr::Context::InlinableFunction : AstAttr::Context::Function))
                 return;
 
             for (AstLocal* arg : fn->args)
@@ -120,7 +124,7 @@ static void forEachAttributeList(const std::vector<AstNode*>& ancestry, Visit vi
                 }
                 else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
                 {
-                    if (method->function && visit(method->function->attributes, AstAttr::Context::Function))
+                    if (method->function && visit(method->function->attributes, AstAttr::Context::InlinableFunction))
                         return;
                 }
             }
@@ -147,11 +151,17 @@ static void forEachAttributeList(const std::vector<AstNode*>& ancestry, Visit vi
     }
 }
 
-// The position the cursor is writing an attribute for, when it sits inside one that is not a known
-// attribute yet.
-static std::optional<AstAttr::Context> findIncompleteAttributeContext(const std::vector<AstNode*>& ancestry, Position position)
+// An attribute the cursor is writing, and the position it's written on
+struct IncompleteAttribute
 {
-    std::optional<AstAttr::Context> result;
+    const AstAttr* attr;
+    AstAttr::Context context;
+};
+
+// The attribute the cursor sits inside, when it isn't a known attribute yet
+static std::optional<IncompleteAttribute> findIncompleteAttribute(const std::vector<AstNode*>& ancestry, Position position)
+{
+    std::optional<IncompleteAttribute> result;
     forEachAttributeList(
         ancestry,
         [&](const AstArray<AstAttr*>& attributes, AstAttr::Context context)
@@ -160,7 +170,7 @@ static std::optional<AstAttr::Context> findIncompleteAttributeContext(const std:
             {
                 if (attr->location.begin <= position && position <= attr->location.end && attr->type == AstAttr::Type::Unknown)
                 {
-                    result = context;
+                    result = IncompleteAttribute{attr, context};
                     return true;
                 }
             }
@@ -170,6 +180,19 @@ static std::optional<AstAttr::Context> findIncompleteAttributeContext(const std:
     );
 
     return result;
+}
+
+// Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): an attribute that needs arguments inserts
+// them too. After a bare `@` that means the list form, `@[inline("reason")]`, since only a list takes arguments.
+static AutocompleteEntry autocompleteAttributeEntry(const AttributeInfo& info, bool bare)
+{
+    AutocompleteEntry entry{AutocompleteEntryKind::Keyword};
+    if (info.requiredArguments)
+    {
+        std::string written = std::string(info.name) + info.requiredArguments;
+        entry.insertText = bare ? "[" + written + "]" : written;
+    }
+    return entry;
 }
 
 // The attribute whose arguments the cursor is inside, as in `@[deprecated { | }]`.
@@ -2260,13 +2283,13 @@ AutocompleteResult autocomplete_(
     // `local` would be read as completing a local declaration). Only the attributes legal in that
     // position are offered, taken from the parser's registry, so each attribute is suggested exactly
     // where it declares itself valid.
-    if (std::optional<AstAttr::Context> attributeContext = findIncompleteAttributeContext(ancestry, position))
+    if (std::optional<IncompleteAttribute> incomplete = findIncompleteAttribute(ancestry, position))
     {
         AutocompleteEntryMap ret;
         for (const AttributeInfo& info : getKnownAttributes())
         {
-            if (AstAttr::contextAllows(info.allowedContexts, *attributeContext))
-                ret[info.name] = {AutocompleteEntryKind::Keyword};
+            if (AstAttr::contextAllows(info.allowedContexts, incomplete->context))
+                ret[info.name] = autocompleteAttributeEntry(info, incomplete->attr->bare);
         }
 
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
