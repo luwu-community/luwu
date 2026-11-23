@@ -106,6 +106,20 @@ private:
     Parser(const char* buffer, std::size_t bufferSize, AstNameTable& names, Allocator& allocator, const ParseOptions& options);
 
     bool blockFollow(const Lexeme& l);
+    // Luwu: extra `end` recovery (see Parser::parse)
+    static ParseResult parseOnce(
+        const char* buffer,
+        std::size_t bufferSize,
+        AstNameTable& names,
+        Allocator& allocator,
+        const ParseOptions& options,
+        std::optional<Location> extraEnd,
+        std::vector<Location>* extraEndSuspects
+    );
+    void noteEndClosing(const Position& openerBegin);
+    void skipExtraEnd();
+    bool blockEnds();
+    bool classBodyEnds();
 
     AstStatBlock* parseChunk();
 
@@ -609,6 +623,11 @@ private:
     AstName nameNil;
 
     MatchLexeme endMismatchSuspect;
+
+    // Luwu: `end`s that may be extra, each indented past the opener it closes with the block's code continuing after it
+    std::vector<Location> extraEndSuspects;
+    // Luwu: in a recovery parse, the `end` to report as extra and skip
+    std::optional<Location> extraEnd;
 
     std::vector<Function> functionStack;
     size_t typeFunctionDepth = 0;
