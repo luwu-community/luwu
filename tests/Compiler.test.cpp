@@ -14884,6 +14884,34 @@ L1: RETURN R1 1
 )");
 }
 
+// A `match` on a parameter of a function inlined with a constant argument: the parameter has no register, so the
+// constant is loaded to test it, not read as an upvalue
+TEST_CASE("MatchOnAnInlinedConstantParameter")
+{
+    ScopedFastFlag match{FFlag::DebugLuwuMatchExpressions, true};
+
+    const char* source = R"(
+local function name_of(unit: string): string
+    return match unit
+        case is "PiB" then "pebibytes"
+        else "other"
+end
+local function f()
+    return name_of("KB")
+end
+return f
+)";
+
+    CHECK_EQ("\n" + compileFunction(source, 1, 2), R"(
+LOADK R1 K0 ['KB']
+JUMPXEQKS R1 K1 L0 NOT ['PiB']
+LOADK R0 K2 ['pebibytes']
+RETURN R0 1
+L0: LOADK R0 K3 ['other']
+RETURN R0 1
+)");
+}
+
 TEST_CASE("PatternsCompileToOneJumpPerAlternative")
 {
     ScopedFastFlag sffs[] = {
