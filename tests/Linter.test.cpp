@@ -5280,6 +5280,115 @@ return f
     CHECK(optimizationHints(lint(source)).empty());
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match` whose arms all return leaves the function the
+// way an `if` with an `else` does. One whose last arm calls `error` runs off its end as far as the compiler can tell.
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintFollowsMatchArmsThatLeave")
+{
+    ScopedFastFlag matchExpressions{FFlag::DebugLuwuMatchExpressions, true};
+
+    const std::string source = R"(
+local function sign(n: number): number
+    match n
+        case is 0 then
+            return 0
+        else
+            return 1
+    end
+end
+
+local function checked(n: number): number
+    match n
+        case is 0 then
+            return 0
+        case other then
+            error("bad")
+    end
+end
+
+local function f(n: number)
+    if n > 1 then
+        return sign(n)
+    end
+    return checked(n)
+end
+
+return f
+)";
+
+    std::vector<LintWarning> hints = optimizationHints(lint("--!optimize 2\n" + source));
+    REQUIRE(1 == hints.size());
+    CHECK(hints[0].text.find("checked") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintOnlyWhereParenthesesLetTheCallInline")
+{
+    const std::string source = R"(
+-- runs off its end after `error`, so the compiler can't tell it returns one value
+local function checked(n: number): number
+    if n >= 0 then
+        return n
+    end
+    error("negative")
+end
+
+local function count_down(n: number): number
+    if n <= 0 then
+        return 0
+    end
+    return count_down(n - 1)
+end
+
+local function big(n: number): number
+    local total = 0
+    total += n * 1
+    total += n * 2
+    total += n * 3
+    total += n * 4
+    total += n * 5
+    total += n * 6
+    total += n * 7
+    total += n * 8
+    total += n * 9
+    total += n * 10
+    total += n * 11
+    total += n * 12
+    total += n * 13
+    total += n * 14
+    total += n * 15
+    total += n * 16
+    total += n * 17
+    total += n * 18
+    total += n * 19
+    total += n * 20
+    total += n * 21
+    total += n * 22
+    total += n * 23
+    total += n * 24
+    total += n * 25
+    total += n * 26
+    total += n * 27
+    total += n * 28
+    total += n * 29
+    total += n * 30
+    return total
+end
+
+local function f(n: number)
+    if n > 1 then
+        return big(n)
+    end
+    return checked(n)
+end
+
+return f
+)";
+
+    // `count_down` calls itself and `big` is too big to inline, so parentheses help neither
+    std::vector<LintWarning> hints = optimizationHints(lint("--!optimize 2\n" + source));
+    REQUIRE(1 == hints.size());
+    CHECK(hints[0].text.find("checked") != std::string::npos);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintFenvAndFloorDivision")
 {
     const std::string source = R"(
