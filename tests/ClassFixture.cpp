@@ -28,19 +28,19 @@ Frontend& ExternTypeFixture::getFrontend()
     TypeId connectionType = arena.addType(ExternType{"Connection", {}, nullopt, nullopt, {}, {}, "Connection", {}});
 
     TypeId baseClassInstanceType = arena.addType(ExternType{"BaseClass", {}, nullopt, nullopt, {}, {}, "Test", {}});
-    getMutable<ExternType>(baseClassInstanceType)->props = {
+    getMutable<ExternType>(baseClassInstanceType)->props() = {
         {"BaseMethod", Property::readonly(makeFunction(arena, baseClassInstanceType, {numberType}, {}))},
         {"BaseField", {numberType}},
 
         {"Touched", Property::readonly(connectionType)},
     };
 
-    getMutable<ExternType>(connectionType)->props = {
+    getMutable<ExternType>(connectionType)->props() = {
         {"Connect", {makeFunction(arena, connectionType, {makeFunction(arena, nullopt, {baseClassInstanceType}, {})}, {})}}
     };
 
     TypeId baseClassType = arena.addType(ExternType{"BaseClass", {}, nullopt, nullopt, {}, {}, "Test", {}});
-    getMutable<ExternType>(baseClassType)->props = {
+    getMutable<ExternType>(baseClassType)->props() = {
         {"StaticMethod", {makeFunction(arena, nullopt, {}, {numberType})}},
         {"Clone", {makeFunction(arena, nullopt, {baseClassInstanceType}, {baseClassInstanceType})}},
         {"New", {makeFunction(arena, nullopt, {}, {baseClassInstanceType})}},
@@ -50,12 +50,12 @@ Frontend& ExternTypeFixture::getFrontend()
 
     TypeId childClassInstanceType = arena.addType(ExternType{"ChildClass", {}, baseClassInstanceType, nullopt, {}, {}, "Test", {}});
 
-    getMutable<ExternType>(childClassInstanceType)->props = {
+    getMutable<ExternType>(childClassInstanceType)->props() = {
         {"Method", {makeFunction(arena, childClassInstanceType, {}, {stringType})}},
     };
 
     TypeId childClassType = arena.addType(ExternType{"ChildClass", {}, baseClassType, nullopt, {}, {}, "Test", {}});
-    getMutable<ExternType>(childClassType)->props = {
+    getMutable<ExternType>(childClassType)->props() = {
         {"New", {makeFunction(arena, nullopt, {}, {childClassInstanceType})}},
     };
     globals.globalScope->exportedTypeBindings["ChildClass"] = TypeFun{{}, childClassInstanceType};
@@ -63,12 +63,12 @@ Frontend& ExternTypeFixture::getFrontend()
 
     TypeId grandChildInstanceType = arena.addType(ExternType{"GrandChild", {}, childClassInstanceType, nullopt, {}, {}, "Test", {}});
 
-    getMutable<ExternType>(grandChildInstanceType)->props = {
+    getMutable<ExternType>(grandChildInstanceType)->props() = {
         {"Method", {makeFunction(arena, grandChildInstanceType, {}, {stringType})}},
     };
 
     TypeId grandChildType = arena.addType(ExternType{"GrandChild", {}, baseClassType, nullopt, {}, {}, "Test", {}});
-    getMutable<ExternType>(grandChildType)->props = {
+    getMutable<ExternType>(grandChildType)->props() = {
         {"New", {makeFunction(arena, nullopt, {}, {grandChildInstanceType})}},
     };
     globals.globalScope->exportedTypeBindings["GrandChild"] = TypeFun{{}, grandChildInstanceType};
@@ -76,12 +76,12 @@ Frontend& ExternTypeFixture::getFrontend()
 
     TypeId anotherChildInstanceType = arena.addType(ExternType{"AnotherChild", {}, baseClassInstanceType, nullopt, {}, {}, "Test", {}});
 
-    getMutable<ExternType>(anotherChildInstanceType)->props = {
+    getMutable<ExternType>(anotherChildInstanceType)->props() = {
         {"Method", {makeFunction(arena, anotherChildInstanceType, {}, {stringType})}},
     };
 
     TypeId anotherChildType = arena.addType(ExternType{"AnotherChild", {}, baseClassType, nullopt, {}, {}, "Test", {}});
-    getMutable<ExternType>(anotherChildType)->props = {
+    getMutable<ExternType>(anotherChildType)->props() = {
         {"New", {makeFunction(arena, nullopt, {}, {anotherChildInstanceType})}},
     };
     globals.globalScope->exportedTypeBindings["AnotherChild"] = TypeFun{{}, anotherChildInstanceType};
@@ -90,7 +90,7 @@ Frontend& ExternTypeFixture::getFrontend()
     TypeId unrelatedClassInstanceType = arena.addType(ExternType{"UnrelatedClass", {}, nullopt, nullopt, {}, {}, "Test", {}});
 
     TypeId unrelatedClassType = arena.addType(ExternType{"UnrelatedClass", {}, nullopt, nullopt, {}, {}, "Test", {}});
-    getMutable<ExternType>(unrelatedClassType)->props = {
+    getMutable<ExternType>(unrelatedClassType)->props() = {
         {"New", {makeFunction(arena, nullopt, {}, {unrelatedClassInstanceType})}},
     };
     globals.globalScope->exportedTypeBindings["UnrelatedClass"] = TypeFun{{}, unrelatedClassInstanceType};
@@ -99,13 +99,13 @@ Frontend& ExternTypeFixture::getFrontend()
     TypeId vector2MetaType = arena.addType(TableType{});
 
     vector2InstanceType = arena.addType(ExternType{"Vector2", {}, nullopt, vector2MetaType, {}, {}, "Test", {}});
-    getMutable<ExternType>(vector2InstanceType)->props = {
+    getMutable<ExternType>(vector2InstanceType)->props() = {
         {"X", {numberType}},
         {"Y", {numberType}},
     };
 
     vector2Type = arena.addType(ExternType{"Vector2", {}, nullopt, nullopt, {}, {}, "Test", {}});
-    getMutable<ExternType>(vector2Type)->props = {
+    getMutable<ExternType>(vector2Type)->props() = {
         {"New", {makeFunction(arena, nullopt, {numberType, numberType}, {vector2InstanceType})}},
     };
     getMutable<TableType>(vector2MetaType)->props = {
@@ -144,7 +144,7 @@ Frontend& ExternTypeFixture::getFrontend()
     // Add a confusing derived class which shares the same name internally, but has a unique alias
     TypeId duplicateBaseClassInstanceType = arena.addType(ExternType{"BaseClass", {}, baseClassInstanceType, nullopt, {}, {}, "Test", {}});
 
-    getMutable<ExternType>(duplicateBaseClassInstanceType)->props = {
+    getMutable<ExternType>(duplicateBaseClassInstanceType)->props() = {
         {"Method", {makeFunction(arena, duplicateBaseClassInstanceType, {}, {stringType})}},
     };
 

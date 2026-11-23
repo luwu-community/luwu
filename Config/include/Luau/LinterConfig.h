@@ -99,6 +99,7 @@ struct LintWarning
         Code_DuplicateProperty = 64,       // Luwu: a property declared twice in a table type (part of TableLiteral)
         Code_DuplicateReadWrite = 65,      // Luwu: a table type property given its read or write type twice (part of TableLiteral)
         Code_ExtraArguments = 66,          // Luwu: a call to a written function passing more arguments than it takes
+        Code_ReturnSelf = 67,              // Luwu Traits: a trait method returning `self` typed as the trait, not `Self`
 
         Code__Count
     };
@@ -215,6 +216,7 @@ inline constexpr const char* kWarningNames[] = {
     "DuplicateProperty",
     "DuplicateReadWrite",
     "ExtraArguments",
+    "ReturnSelf",
 };
 // clang-format on
 
