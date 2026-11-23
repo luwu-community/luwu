@@ -1204,4 +1204,18 @@ TEST_CASE_FIXTURE(Fixture, "variadic_argument_tail_mismatch_names_the_callee")
     );
 }
 
+// Luwu: a pack after the extra types is the rest of theirs, so `F<number, ...string>` passes `(number, ...string)`
+TEST_CASE_FIXTURE(Fixture, "type_pack_after_extra_type_arguments_is_their_rest")
+{
+    CheckResult result = check(R"(
+        type F<T...> = (T...) -> ()
+        local f: F<number, ...string> = function(a: number, ...: string) end
+        local wrong: F<number, ...string> = function(a: number, b: number) end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 3);
+    CHECK_EQ(toString(requireType("f")), "(number, ...string) -> ()");
+}
+
 TEST_SUITE_END();
