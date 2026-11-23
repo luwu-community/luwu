@@ -122,6 +122,8 @@ static_assert(sizeof(LuaNode) == ABISWITCH(32, 32, 32), "size mismatch for table
 static_assert(offsetof(TString, data) == ABISWITCH(24, 20, 20), "size mismatch for string header");
 static_assert(sizeof(LuaTable) == ABISWITCH(48, 32, 32), "size mismatch for table header");
 static_assert(offsetof(Buffer, data) == ABISWITCH(8, 8, 8), "size mismatch for buffer header");
+// Luwu Classes (rfcs/classes): members follow the object header (luaR_members), so its size is their offset
+static_assert(sizeof(LuauObject) == ABISWITCH(24, 16, 16), "size mismatch for object header");
 
 // The userdata is designed to provide 16 byte alignment for 16 byte and larger userdata sizes
 static_assert(offsetof(Udata, data) == 16, "data must be at precise offset provide proper alignment");
