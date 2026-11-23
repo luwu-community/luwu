@@ -4,7 +4,6 @@
 #include "AstQueryDsl.h"
 #include "Typewriter.h"
 #include "Fixture.h"
-#include "Typewriter.h"
 #include "Luau/Ast.h"
 #include "Luau/Common.h"
 #include "ScopedFlags.h"
