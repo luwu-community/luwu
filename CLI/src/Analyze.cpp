@@ -14,6 +14,7 @@
 #include "Luau/AnalyzeResolvers.h"
 #include "Luau/FileUtils.h"
 #include "Luau/Flags.h"
+#include "Luau/LuwonJsonCommand.h"
 #include "Luau/RequireNavigator.h"
 
 #include "lua.h"
@@ -118,6 +119,9 @@ static void displayHelp(const char* argv0)
     printf("Available modes:\n");
     printf("  omitted: typecheck and lint input files\n");
     printf("  --annotate: typecheck input files and output source with type annotations\n");
+    printf("  --json <file>: write a .luwon data file as JSON, approximating what JSON has no type for (or --luwon-to-json)\n");
+    printf("  --json=lossless <file>: write it as JSON that --luwon reads back to the same data\n");
+    printf("  --luwon <file>: write a JSON file as a .luwon data file (or --json-to-luwon; '-' reads stdin for all three)\n");
     printf("\n");
     printf("Available options:\n");
     printf("  --formatter=plain: report analysis errors in Luacheck-compatible format\n");
@@ -256,6 +260,9 @@ int main(int argc, char** argv)
         else if (strncmp(argv[i], "--defs=", 7) == 0)
             definitionFiles.emplace_back(argv[i] + 7);
     }
+
+    if (std::optional<int> converted = runLuwonJsonCommand(argc, argv))
+        return *converted;
 
 #if !defined(LUAU_ENABLE_TIME_TRACE)
     if (FFlag::DebugLuauTimeTracing)
