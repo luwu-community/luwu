@@ -3869,6 +3869,9 @@ return f
     // `half`, and everything that returns its value, can't be kept to one value by the compiler. `double`, `pair` and
     // `tostring` get no hint.
     REQUIRE(6 == hints.size());
+    // they're hints about calls that don't inline, which MethodsNotInlined turns off on its own
+    for (const LintWarning& hint : hints)
+        CHECK_EQ(hint.code, LintWarning::Code_MethodsNotInlined);
     CHECK_EQ(hints[0].location.begin.line, 19);
     CHECK_EQ(hints[1].location.begin.line, 23);
     CHECK(hints[1].text.find("'return (Size.of(...))'") != std::string::npos);
