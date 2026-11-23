@@ -891,16 +891,55 @@ struct Compiler
         if (fi && fi->returnsOne)
             return false;
 
+        // Luwu Classes (rfcs/classes): a class's static function and a method on a proven receiver are known the same way
+        if (FFlag::LuwuClasses)
+        {
+            AstExprFunction* member = knownClassCallee(expr);
+            Function* mfi = member ? functions.find(member) : nullptr;
+            if (mfi && mfi->returnsOne)
+                return false;
+        }
+
         // unrecognized call, so we conservatively assume multret
         return true;
     }
 
+    // Luwu Classes (rfcs/classes): the function a `Cls.f(...)` or `obj:m(...)` call always runs, or null. A class binding
+    // is const and its members can't be replaced. Before the declaration runs `Cls.f` raises, so its results don't
+    // matter. A method counts only on a proven receiver: an annotation can lie about the object's class.
+    AstExprFunction* knownClassCallee(AstExprCall* expr)
+    {
+        AstExprIndexName* idx = expr->func->as<AstExprIndexName>();
+        if (!idx)
+            return nullptr;
+
+        if (!expr->self)
+        {
+            AstStatClass* cls = classBindingOf(idx->expr);
+            return cls ? findStaticFunction(cls, idx->index) : nullptr;
+        }
+
+        ReceiverClass receiver = resolveReceiverClass(idx->expr);
+        return receiver && receiver.proven ? findInstanceMethod(receiver.cls, idx->index) : nullptr;
+    }
+
     // note: this doesn't just clobber target (assuming it's temp), but also clobbers *all* allocated registers >= target!
     // this is important to be able to support "multret" semantics due to Lua call frame structure
-    bool compileExprTempMultRet(AstExpr* node, uint8_t target)
+    // Luwu: where a multret value is compiled, for the advice in an `@[inline]` call's error
+    enum class MultRetUse
+    {
+        Return,
+        Argument,
+        ListItem,
+    };
+    MultRetUse multRetUse = MultRetUse::Return;
+
+    bool compileExprTempMultRet(AstExpr* node, uint8_t target, MultRetUse use = MultRetUse::Return)
     {
         if (AstExprCall* expr = node->as<AstExprCall>())
         {
+            multRetUse = use;
+
             // Luwu try expressions: compiled to one value (compileTryResultMethod, compileTryResultVariantTest)
             if (isTryResultCall(expr))
             {
@@ -1149,6 +1188,22 @@ struct Compiler
         CompileError::raise(call->location, "'%s' is marked @[inline] but can't be inlined here because %s", written.c_str(), because.c_str());
     }
 
+    // Luwu: why an `@[inline]` call that passes on all its values can't be inlined, and how to keep one
+    const char* multRetRefusal() const
+    {
+        switch (multRetUse)
+        {
+        case MultRetUse::Argument:
+            return "it's the last argument, so all its values are passed on; wrap the call in parentheses to pass only the "
+                   "first, or pass another argument after it";
+        case MultRetUse::ListItem:
+            return "it's the last item of a table, so all its values are added; wrap the call in parentheses to add only the first";
+        case MultRetUse::Return:
+            break;
+        }
+        return "all its values are returned; wrap the call in parentheses to return only the first";
+    }
+
     // Luwu Classes (rfcs/classes): the class `func` is a static function of, or null
     AstStatClass* staticFunctionClass(AstExprFunction* func)
     {
@@ -1319,7 +1374,7 @@ struct Compiler
         if (multRet)
         {
             bytecode.addDebugRemark("inlining failed: can't convert fixed returns to multret");
-            refuseEncouragedInline(expr, func, "its results are used as a list of values");
+            refuseEncouragedInline(expr, func, multRetRefusal());
             return false;
         }
 
@@ -4765,7 +4820,7 @@ struct Compiler
 
         for (size_t i = 0; i < expr->args.size; ++i)
             if (i + 1 == expr->args.size)
-                multCall = compileExprTempMultRet(expr->args.data[i], uint8_t(regs + 1 + expr->self + i));
+                multCall = compileExprTempMultRet(expr->args.data[i], uint8_t(regs + 1 + expr->self + i), MultRetUse::Argument);
             else
                 compileExprTempTop(expr->args.data[i], uint8_t(regs + 1 + expr->self + i));
 
@@ -9028,7 +9083,7 @@ struct Compiler
                 uint8_t temp = uint8_t(arrayChunkReg + arrayChunkCurrent);
 
                 if (i + 1 == expr->items.size)
-                    multRet = compileExprTempMultRet(value, temp);
+                    multRet = compileExprTempMultRet(value, temp, MultRetUse::ListItem);
                 else
                     compileExprTempTop(value, temp);
 
