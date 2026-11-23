@@ -312,8 +312,8 @@ AttributeEntry kAttributeEntries[] = {
     {"checked", AstAttr::Type::Checked, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
     {"native", AstAttr::Type::Native, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
     {"deprecated", AstAttr::Type::Deprecated, AstAttr::Context::Any, nullptr, kDeprecatedArgumentFields, deprecatedArgsValidator},
-    {"nolint", AstAttr::Type::Nolint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintNamesArgsValidator},
-    {"lint", AstAttr::Type::Lint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintOnArgsValidator},
+    {"nolint", AstAttr::Type::Nolint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintNamesArgsValidator, "()"},
+    {"lint", AstAttr::Type::Lint, kLintScopeContexts, "functions, classes, class fields and locals", nullptr, lintOnArgsValidator, "()"},
     {"nodiscard", AstAttr::Type::Nodiscard, AstAttr::Context::AnyFunction, "functions", nullptr, nodiscardArgsValidator},
     {nullptr, AstAttr::Type::Checked, AstAttr::Context::None, nullptr, nullptr, {}}
 };
