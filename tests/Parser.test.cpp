@@ -9042,6 +9042,55 @@ TEST_CASE_FIXTURE(Fixture, "if_local_without_the_flag_says_how_to_enable_it")
     matchParseError("local x = if const a = f() then a else nil", message);
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `case` after the match's `end` was meant to come
+// before it. It's one error, and the arm belongs to the match, so the blocks around the match aren't closed early.
+TEST_CASE_FIXTURE(Fixture, "a_case_after_the_match_end_is_one_error")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    ParseResult result = tryParse(R"(
+local function f(v)
+    match v
+        case is 1 then
+            print(1)
+        end
+        case is 2 then
+            print(2)
+        end
+    end
+end
+local function g(v)
+    match v
+    case is 1 then
+        print(1)
+    end
+    case is 2 then
+        print(2)
+    end
+end
+)");
+    REQUIRE(result.root);
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(6, 8));
+    CHECK(result.errors[0].getMessage().find("Put this 'case' before the preceding 'end'") != std::string::npos);
+    CHECK_EQ(result.errors[1].getLocation().begin, Position(16, 4));
+    REQUIRE_EQ(result.root->body.size, 2);
+
+    for (size_t i = 0; i < 2; i++)
+    {
+        AstStatLocalFunction* fn = result.root->body.data[i]->as<AstStatLocalFunction>();
+        REQUIRE(fn);
+        REQUIRE_EQ(fn->func->body->body.size, 1);
+        AstStatMatch* match = fn->func->body->body.data[0]->as<AstStatMatch>();
+        REQUIRE(match);
+        CHECK_EQ(match->arms.size, 2);
+    }
+}
+
 TEST_CASE_FIXTURE(Fixture, "match_without_the_flag_says_how_to_enable_it")
 {
     ScopedFastFlag sffs[] = {
