@@ -308,6 +308,8 @@ struct NonStrictTypeChecker
             return visit(s);
         else if (auto s = stat->as<AstStatDeclareExternType>())
             return visit(s);
+        else if (stat->is<AstStatDeclareClass>())
+            return {};
         else if (auto s = stat->as<AstStatClass>())
             return visit(s);
         else if (auto s = stat->as<AstStatError>())
@@ -491,7 +493,8 @@ struct NonStrictTypeChecker
 
     NonStrictContext visit(AstStatDeclareGlobal* declGlobal)
     {
-        visit(declGlobal->type);
+        if (declGlobal->type)
+            visit(declGlobal->type);
 
         return {};
     }
