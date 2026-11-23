@@ -39,10 +39,9 @@ struct PackSubtypeConstraint
     TypePackId subPack;
     TypePackId superPack;
 
-    // HACK!! TODO clip.
-    // We need to know which of `PackSubtypeConstraint` are emitted from `AstStatReturn` vs any others.
-    // Then we force these specific `PackSubtypeConstraint` to only dispatch in the order of the `return`s.
-    bool returns = false;
+    // Luwu: set on a `return` of a function that has no return annotation and more than one `return`. Every such
+    // `return` widens the function's return type (ConstraintSolver::dispatchInferredReturn).
+    bool inferredReturn = false;
 };
 
 // generalizedType ~ gen sourceType
