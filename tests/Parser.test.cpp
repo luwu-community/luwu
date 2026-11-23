@@ -37,6 +37,7 @@ LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuExternTypeGenericMethods)
 LUAU_FASTFLAG(LuwuGenericNominals)
 
@@ -2337,6 +2338,215 @@ end
     ParseResult withoutCompat = tryParse(source, luau);
     REQUIRE(!withoutCompat.errors.empty());
     CHECK_EQ(withoutCompat.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: classes");
+}
+
+// Luwu try expressions: the whole value of a local, if it's a `try` expression
+static AstExprTry* tryExprOf(AstStatBlock* block, size_t index)
+{
+    if (!block || index >= block->body.size)
+        return nullptr;
+    AstStatLocal* local = block->body.data[index]->as<AstStatLocal>();
+    if (!local || local->values.size != 1)
+        return nullptr;
+    return local->values.data[0]->as<AstExprTry>();
+}
+
+TEST_CASE_FIXTURE(Fixture, "try_takes_the_whole_expression_after_it")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    AstStatBlock* block = parse(R"(
+        local function f(...)
+            local a = try g(x)
+            local b = try x + y * z
+            local c = try not x
+            local d = try #t
+            local e = try ...
+            local f = try 1
+            local g = try nil
+            local h = try `x{y}`
+            local i = try none
+        end
+    )");
+    REQUIRE(block);
+    AstStatLocalFunction* f = block->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(f);
+    AstStatBlock* body = f->func->body;
+    REQUIRE_EQ(body->body.size, 9);
+
+    for (size_t i = 0; i < body->body.size; i++)
+        CHECK_MESSAGE(tryExprOf(body, i), "local " << i << " isn't a try expression");
+
+    AstExprTry* sum = tryExprOf(body, 1);
+    REQUIRE(sum);
+    CHECK(sum->expr->is<AstExprBinary>());
+    CHECK_EQ(sum->tryLocation, Location{{3, 22}, {3, 25}});
+}
+
+// Luwu try expressions: wherever Luau reads `try` as a name, so does Luwu
+TEST_CASE_FIXTURE(Fixture, "try_stays_a_name_where_luau_reads_one")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = try(x)
+        local b = try.x
+        local c = try:m()
+        local d = try - 1
+        local e = try "s"
+        local f = try { 1 }
+        local g = try[1]
+        local h = try
+        local i = 1
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 9);
+
+    for (size_t i = 0; i < block->body.size; i++)
+        CHECK_MESSAGE(!tryExprOf(block, i), "statement " << i << " parsed as a try expression");
+
+    // In a Luwu file the tokens decide, not the lines: this is `local j = try f()`
+    block = parse(R"(
+        local j = try
+            f()
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 1);
+    CHECK(tryExprOf(block, 0));
+}
+
+// Luwu try expressions: in a Luau module, `try` before something that can start a statement is a variable followed by
+// that statement, as in Luau, on the same line or the next
+TEST_CASE_FIXTURE(Fixture, "try_before_a_statement_stays_a_name_in_a_luau_module")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    ParseResult result = tryParse("local a = try x()\nlocal b = try\nf()\nlocal c = try do end", luau);
+    CHECK(result.errors.empty());
+    REQUIRE(result.root);
+    REQUIRE_EQ(result.root->body.size, 6);
+    CHECK(!tryExprOf(result.root, 0));
+}
+
+TEST_CASE_FIXTURE(Fixture, "try_expressions_are_gated_and_luwu_only")
+{
+    {
+        ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, false};
+        matchParseError("local r = try f()", "attempt to use disabled Luwu feature 'try' expressions; enable via FFlag 'DebugLuwuTryExpressions'");
+    }
+
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    // `try not` can't be Luau, so it's a `try` expression a Luau module can't have
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    ParseResult result = tryParse("local r = try not f()", luau);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'try' expressions");
+
+    // a Luau module's `try` function still works
+    result = tryParse("local r = try(f) - try.x", luau);
+    CHECK(result.errors.empty());
+}
+
+// Luwu try expressions: `! E` after a return type, alone, in a function type and in a declaration
+TEST_CASE_FIXTURE(Fixture, "error_hints_follow_the_return_type")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseResult result = tryParse(R"(
+        local function read(path: string): string ! NotFound | Denied
+            return path
+        end
+        local function meow(): ! string
+            error("meow")
+        end
+        type Reader = (string) -> string ! NotFound
+        type Returner = (string) -> ((string) -> number) ! NotFound
+        declare function open(path: string): number ! NotFound
+    )");
+    CHECK(result.errors.empty());
+    AstStatBlock* block = result.root;
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 5);
+
+    AstStatLocalFunction* read = block->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(read);
+    REQUIRE(read->func->returnAnnotation);
+    REQUIRE(read->func->errorHint);
+    CHECK(read->func->errorHint->is<AstTypeUnion>());
+
+    AstStatLocalFunction* meow = block->body.data[1]->as<AstStatLocalFunction>();
+    REQUIRE(meow);
+    CHECK(!meow->func->returnAnnotation);
+    CHECK(meow->func->errorHint);
+
+    AstStatTypeAlias* reader = block->body.data[2]->as<AstStatTypeAlias>();
+    REQUIRE(reader);
+    AstTypeFunction* readerType = reader->type->as<AstTypeFunction>();
+    REQUIRE(readerType);
+    CHECK(readerType->errorHint);
+
+    // the hint belongs to the outer function: the inner one is parenthesized
+    AstStatTypeAlias* returner = block->body.data[3]->as<AstStatTypeAlias>();
+    REQUIRE(returner);
+    AstTypeFunction* returnerType = returner->type->as<AstTypeFunction>();
+    REQUIRE(returnerType);
+    CHECK(returnerType->errorHint);
+
+    AstStatDeclareFunction* open = block->body.data[4]->as<AstStatDeclareFunction>();
+    REQUIRE(open);
+    CHECK(open->errorHint);
+}
+
+TEST_CASE_FIXTURE(Fixture, "error_hints_on_type_aliases")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseResult result = tryParse(R"(
+        type Result<T, E = string> = T ! E
+        type Lookup = string? ! NotFound | Denied
+        type Reader = (string) -> string ! NotFound
+    )");
+    CHECK(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatTypeAlias* resultAlias = result.root->body.data[0]->as<AstStatTypeAlias>();
+    REQUIRE(resultAlias);
+    REQUIRE(resultAlias->errorHint);
+    CHECK(resultAlias->errorHint->is<AstTypeReference>());
+    CHECK_EQ(resultAlias->location.end, resultAlias->errorHint->location.end);
+
+    AstStatTypeAlias* lookup = result.root->body.data[1]->as<AstStatTypeAlias>();
+    REQUIRE(lookup);
+    REQUIRE(lookup->errorHint);
+    CHECK(lookup->errorHint->is<AstTypeUnion>());
+
+    // a hint after a function type is the function's
+    AstStatTypeAlias* reader = result.root->body.data[2]->as<AstStatTypeAlias>();
+    REQUIRE(reader);
+    CHECK(!reader->errorHint);
+}
+
+TEST_CASE_FIXTURE(Fixture, "error_hints_are_gated_and_luwu_only")
+{
+    {
+        ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, false};
+        matchParseError(
+            "local function f(): string ! number return '' end",
+            "attempt to use disabled Luwu feature error hints; enable via FFlag 'DebugLuwuTryExpressions'"
+        );
+    }
+
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    ParseResult result = tryParse("local function f(): string ! number return '' end", luau);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: error hints");
 }
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_luwu_only")

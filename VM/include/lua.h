@@ -579,6 +579,19 @@ LUA_API int lua_classof(lua_State* L, int idx);
 // at `classidx`, 0 otherwise. Raises if the value at `classidx` isn't a class.
 LUA_API int lua_classis(lua_State* L, int idx, int classidx);
 
+// Luwu try expressions: options and results for embedders. Building one raises if the result library (luaopen_result)
+// isn't open. lua_pushsome pushes `Some(v)` for the value at `idx`, which can be nil or none. An empty option is
+// lua_pushsymnone.
+LUA_API void lua_pushsome(lua_State* L, int idx);
+LUA_API void lua_pushresultok(lua_State* L, int idx);
+LUA_API void lua_pushresulterr(lua_State* L, int idx);
+LUA_API int lua_issome(lua_State* L, int idx);
+LUA_API int lua_isresultok(lua_State* L, int idx);
+LUA_API int lua_isresulterr(lua_State* L, int idx);
+// Pushes the value a `Some`, `Ok` or `Err` at `idx` holds and returns its type. Pushes nothing and returns LUA_TNONE for
+// any other value.
+LUA_API int lua_getpayload(lua_State* L, int idx);
+
 // Luwu Native Classes (rfcs/native-classes.md): the destructor of every object whose native data has `tag`, called with
 // the data once, when the object is freed. Like a userdata destructor, it must not call back into Luwu.
 LUA_API void lua_setobjectdtor(lua_State* L, int tag, lua_Destructor dtor);
