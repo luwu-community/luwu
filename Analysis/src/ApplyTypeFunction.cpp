@@ -141,6 +141,68 @@ static TypeId applyTemplate(ApplyTypeFunction& substitution, TypeId instantiatio
     return result;
 }
 
+// The deepest nesting of instantiations sameInstantiation compares; past it two types count as different
+static constexpr int kSameInstantiationDepth = 16;
+
+// Whether `a` and `b` are the same type: the same TypeId, or instantiations of one generic class with the same arguments
+// (two `Bundle2<number, number>`s)
+static bool sameInstantiation(TypeId a, TypeId b, int depth = 0)
+{
+    a = follow(a);
+    b = follow(b);
+    if (a == b)
+        return true;
+    if (depth >= kSameInstantiationDepth)
+        return false;
+
+    const ExternType* left = get<ExternType>(a);
+    const ExternType* right = get<ExternType>(b);
+    bool sameClass = left && right && left->genericTemplate && right->genericTemplate &&
+                     follow(*left->genericTemplate) == follow(*right->genericTemplate);
+    if (!sameClass || left->instantiatedTypeParams.size() != right->instantiatedTypeParams.size() ||
+        left->instantiatedTypePackParams.size() != right->instantiatedTypePackParams.size())
+        return false;
+
+    for (size_t i = 0; i < left->instantiatedTypeParams.size(); ++i)
+    {
+        if (!sameInstantiation(left->instantiatedTypeParams[i], right->instantiatedTypeParams[i], depth + 1))
+            return false;
+    }
+    for (size_t i = 0; i < left->instantiatedTypePackParams.size(); ++i)
+    {
+        if (follow(left->instantiatedTypePackParams[i]) != follow(right->instantiatedTypePackParams[i]))
+            return false;
+    }
+    return true;
+}
+
+// `ty` without repeated members when it's a union: substituting a template's `A | B` with `number` for both gives
+// `number | number`, which reads as two types. One member left is the type itself.
+static TypeId withoutRepeatedMembers(TypeArena* arena, TypeId ty)
+{
+    const UnionType* u = get<UnionType>(follow(ty));
+    if (!u)
+        return ty;
+
+    std::vector<TypeId> members;
+    for (TypeId option : u->options)
+    {
+        bool repeated = std::any_of(members.begin(), members.end(),
+            [&](TypeId member)
+            {
+                return sameInstantiation(member, option);
+            });
+        if (!repeated)
+            members.push_back(option);
+    }
+
+    if (members.size() == u->options.size())
+        return ty;
+    if (members.size() == 1)
+        return members[0];
+    return arena->addType(UnionType{std::move(members)});
+}
+
 TypeId instantiateGenericNominal(
     TypeArena* arena,
     TypeId genericTemplate,
@@ -196,7 +258,8 @@ TypeId instantiateGenericNominal(
     if (etv->indexer)
     {
         etv->indexer->indexType = applyTemplate(substitution, result, etv->indexer->indexType, copiedReferences);
-        etv->indexer->indexResultType = applyTemplate(substitution, result, etv->indexer->indexResultType, copiedReferences);
+        etv->indexer->indexResultType =
+            withoutRepeatedMembers(arena, applyTemplate(substitution, result, etv->indexer->indexResultType, copiedReferences));
     }
 
     for (TypeId& trait : etv->implementedTraits)
