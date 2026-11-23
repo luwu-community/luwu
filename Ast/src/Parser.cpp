@@ -12196,42 +12196,58 @@ AstStat* Parser::parseMatchStat(AstExprTry* tried)
     AstMatchSubject subject = parseMatchSubject(start, tried);
 
     std::vector<AstMatchArm> arms;
-    while (matchArmFollows())
+    bool hasEnd = false;
+    while (true)
     {
-        // the arm's `case` and `when` bindings end with its block
-        unsigned int armLocalsBegin = saveLocals();
-        AstMatchArm arm = parseMatchArmHead(subject.local);
-        if (arm.thenLocation)
-            opener = Lexeme(*arm.thenLocation, Lexeme::ReservedThen);
-        arm.body = parseMatchArmBlock();
-        restoreLocals(armLocalsBegin);
-        arms.push_back(arm);
-    }
+        while (matchArmFollows())
+        {
+            // the arm's `case` and `when` bindings end with its block
+            unsigned int armLocalsBegin = saveLocals();
+            AstMatchArm arm = parseMatchArmHead(subject.local);
+            if (arm.thenLocation)
+                opener = Lexeme(*arm.thenLocation, Lexeme::ReservedThen);
+            arm.body = parseMatchArmBlock();
+            restoreLocals(armLocalsBegin);
+            arms.push_back(arm);
+        }
 
-    const char* missingArm = "Expected 'case' after the value 'match' tests";
-    bool reportMissingArm = parseErrors.size() == errorsBefore && arms.empty();
-    if (skipArmBeingTyped(reportMissingArm, missingArm))
-        reportMissingArm = false;
-    if (reportMissingArm)
-        report(lexer.previousLocation(), "%s", missingArm);
+        const char* missingArm = "Expected 'case' after the value 'match' tests";
+        bool reportMissingArm = parseErrors.size() == errorsBefore && arms.empty();
+        if (skipArmBeingTyped(reportMissingArm, missingArm))
+            reportMissingArm = false;
+        if (reportMissingArm)
+            report(lexer.previousLocation(), "%s", missingArm);
 
-    // A `match` with no arm written yet has said so, and gets no missing `end` too
-    bool expectsEnd = !arms.empty() || lexer.current().type == Lexeme::ReservedElse || lexer.current().type == Lexeme::ReservedEnd;
+        // A `match` with no arm written yet has said so, and gets no missing `end` too
+        bool expectsEnd = !arms.empty() || lexer.current().type == Lexeme::ReservedElse || lexer.current().type == Lexeme::ReservedEnd;
 
-    if (lexer.current().type == Lexeme::ReservedElse)
-    {
-        AstMatchArm arm;
-        arm.kind = AstMatchArm::Else;
-        arm.keywordLocation = lexer.current().location;
-        opener = lexer.current();
-        nextLexeme(); // else
-        arm.body = parseMatchArmBlock();
-        arms.push_back(arm);
+        if (lexer.current().type == Lexeme::ReservedElse)
+        {
+            AstMatchArm arm;
+            arm.kind = AstMatchArm::Else;
+            arm.keywordLocation = lexer.current().location;
+            opener = lexer.current();
+            nextLexeme(); // else
+            arm.body = parseMatchArmBlock();
+            arms.push_back(arm);
+        }
+
+        hasEnd = expectsEnd && expectMatchEndAndConsume(Lexeme::ReservedEnd, opener);
+
+        // An arm on the line after the `end` was meant to be before it. It's reported and parsed as an arm of this
+        // match, so it doesn't fail as a statement and close the blocks around the match early.
+        bool armAfterEnd = hasEnd && lexer.current().location.begin.line > lexer.previousLocation().end.line && matchArmFollows();
+        if (!armAfterEnd)
+            break;
+
+        report(
+            lexer.current().location,
+            "Put this '%s' before the preceding 'end'; only one 'end' ends all the cases",
+            AstName(lexer.current().name).value
+        );
     }
 
     restoreLocals(localsBegin);
-
-    bool hasEnd = expectsEnd && expectMatchEndAndConsume(Lexeme::ReservedEnd, opener);
 
     // Arms indented under `match` can close with an `end` at their indent before the match's `end` at the column `match`
     // starts at, the way a Rust `match` closes its braces. An enclosing block's `end` is further left and never counts.
