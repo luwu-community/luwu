@@ -1,0 +1,3 @@
+const parts = { "a" }
+
+return { "result " .. parts }
