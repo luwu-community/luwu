@@ -250,6 +250,8 @@ static bool similar(AstExpr* lhs, AstExpr* rhs)
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): patterns can bind names and arms run code
     CASE(AstExprMatchPattern) return false;
     CASE(AstExprMatch) return false;
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): each pop takes a different element
+    CASE(AstExprPop) return false;
     else
     {
         LUAU_ASSERT(!"Unknown expression type");
