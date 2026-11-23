@@ -3575,7 +3575,7 @@ static std::vector<LintWarning> optimizationHints(const LintResult& result)
     {
         // Luwu: the hints OptimizationHint's own pass reports, each under its own part
         bool ownHint = warning.code == LintWarning::Code_MethodsNotInlined || warning.code == LintWarning::Code_FloorDivision ||
-                       warning.code == LintWarning::Code_FenvDeoptimization;
+                       warning.code == LintWarning::Code_FenvDeoptimization || warning.code == LintWarning::Code_OptimizationHint;
         if (ownHint)
             hints.push_back(warning);
     }
@@ -3702,6 +3702,65 @@ return guard, quietGuard
         "Asserting 'v' isn't nil doesn't prove to the compiler that it's a 'Vec2', since type annotations are only trusted under '--!trust'; "
         "use 'assert(class.isinstance(v, Vec2))' so 'Vec2' methods can be inlined after it"
     );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintParenthesizesAReturnedCallOfOneValue")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    const std::string source = R"(
+local function double(n: number): number
+    return n * 2
+end
+
+local function pair(n: number): (number, number)
+    return n, n
+end
+
+class Size
+    function of(n: number): Size
+        return Size()
+    end
+
+    function grow(self, n: number): Size
+        return Size.of(n)
+    end
+
+    function twice(self, n: number): number
+        return self:double(n)
+    end
+
+    function double(self, n: number): number
+        return n * 2
+    end
+end
+
+local function f(n: number)
+    if n > 1 then
+        return double(n)
+    end
+    if n > 2 then
+        return (double(n))
+    end
+    if n > 3 then
+        return pair(n)
+    end
+    return tostring(n)
+end
+
+return f
+)";
+
+    std::vector<LintWarning> hints = optimizationHints(lint("--!optimize 2\n" + source));
+    REQUIRE(3 == hints.size());
+    CHECK_EQ(hints[0].code, LintWarning::Code_OptimizationHint);
+    CHECK_EQ(hints[0].location.begin.line, 16);
+    CHECK(hints[0].text.find("'return (Size.of(...))'") != std::string::npos);
+    CHECK_EQ(hints[1].location.begin.line, 20);
+    CHECK_EQ(hints[2].location.begin.line, 30);
+
+    // without `--!optimize 2` or `--!native` nothing is inlined, so there's nothing to hint
+    CHECK(optimizationHints(lint(source)).empty());
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintFenvAndFloorDivision")
