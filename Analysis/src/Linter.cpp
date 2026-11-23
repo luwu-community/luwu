@@ -5974,6 +5974,52 @@ private:
             );
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a match statement whose arms are indented under
+    // `match` closes with an `end` at the arms' indent and another at the `match`'s column. With only one of the two, the
+    // lone `end` reads as closing the wrong thing.
+    bool visit(AstStatMatch* node) override
+    {
+        if (enabled.misleadingIndentation)
+            checkMatchEnd(node);
+        return true;
+    }
+
+    void checkMatchEnd(AstStatMatch* node)
+    {
+        if (!node->hasEnd || node->armsEndLocation || node->arms.size == 0)
+            return;
+
+        Position matchBegin = node->location.begin;
+        Position armBegin = node->arms.data[0].keywordLocation.begin;
+        bool armsIndented = armBegin.line > matchBegin.line && armBegin.column > matchBegin.column;
+        if (!armsIndented)
+            return;
+
+        Position endEnd = node->location.end;
+        Location endKeyword(Position(endEnd.line, endEnd.column - 3), endEnd);
+        unsigned int endColumn = endKeyword.begin.column;
+
+        if (endColumn == matchBegin.column)
+        {
+            emitWarning(
+                *context,
+                LintWarning::Code_MisleadingIndentation,
+                endKeyword,
+                "Consider putting an 'end' here to balance the last case or unindent these case arms"
+            );
+        }
+        else if (endColumn == armBegin.column)
+        {
+            emitWarning(
+                *context,
+                LintWarning::Code_MisleadingIndentation,
+                endKeyword,
+                "This 'end' closes the 'match' on line %d; add another 'end' below it at the 'match''s indent, or unindent this one",
+                matchBegin.line + 1
+            );
+        }
+    }
+
     // `return`'s values may start on the next line, as everywhere in Lua. In a `do` expression the `return` is often meant
     // to have no value, and then whatever starts the next line becomes the value to return.
     bool visit(AstStatReturn* node) override
