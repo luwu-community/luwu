@@ -7,6 +7,7 @@ target_sources(Luwu.Common PRIVATE
     Common/include/Luau/DenseHash.h
     Common/include/Luau/ExperimentalFlags.h
     Common/include/Luau/HashUtil.h
+    Common/include/Luau/LuwuFlags.h
     Common/include/Luau/InsertionOrderedMap.h
     Common/include/Luau/SmallVector.h
     Common/include/Luau/StringUtils.h
