@@ -40,8 +40,8 @@ AutocompleteResult autocomplete(Frontend& frontend, const ModuleName& moduleName
         globalScope = frontend.globalsForAutocomplete.globalScope.get();
 
     TypeArena typeArena;
-    bool isInHotComment = isWithinHotComment(*sourceModule, position);
-    if (isWithinComment(*sourceModule, position) && !isInHotComment)
+    const HotComment* hotComment = findHotComment(sourceModule->hotcomments, position);
+    if (isWithinComment(*sourceModule, position) && !hotComment)
         return {};
 
     std::vector<AstNode*> ancestry = findAncestryAtPositionForAutocomplete(*sourceModule, position);
@@ -49,7 +49,7 @@ AutocompleteResult autocomplete(Frontend& frontend, const ModuleName& moduleName
     ScopePtr startScope = findScopeAtPosition(*module, position);
 
     return autocomplete_(
-        module, builtinTypes, &typeArena, ancestry, globalScope, startScope, position, frontend.fileResolver, std::move(callback), isInHotComment
+        module, builtinTypes, &typeArena, ancestry, globalScope, startScope, position, frontend.fileResolver, std::move(callback), hotComment
     );
 }
 

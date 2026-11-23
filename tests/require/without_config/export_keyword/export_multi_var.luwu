@@ -1,0 +1,2 @@
+-- multi-variable export with a trailing nil
+export a, b, c, d = 10, 20, 30, nil
