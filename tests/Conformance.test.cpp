@@ -85,6 +85,7 @@ LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuStringFormatFastcall)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
@@ -1410,6 +1411,14 @@ TEST_CASE("StringFormatNumbersMatchSnprintf")
             REQUIRE_MESSAGE(luaFormat("%d", value) == expected, "%d of " << value);
         }
     }
+}
+
+// Luwu: string.format and interpolated strings through the LBF_STRING_FORMAT fastcall give what the call gives, and
+// anything the fastcall can't write exactly (a __tostring, an error, a long result) still runs the call
+TEST_CASE("StringFormatFastcall")
+{
+    ScopedFastFlag stringFormatFastcall{FFlag::LuwuStringFormatFastcall, true};
+    runConformance("string_format_fastcall.luau");
 }
 
 TEST_CASE("StringInterp")
@@ -6500,6 +6509,7 @@ TEST_CASE("LuwuBytecodeHeader")
     {
         // a WIP feature's flag switches the version to LWBC_VERSION_WIP
         ScopedFastFlag luwuClassesOff{FFlag::LuwuClasses, false};
+        ScopedFastFlag formatFastcallOff{FFlag::LuwuStringFormatFastcall, false};
         std::string bytecode = Luau::compile("return 1");
         REQUIRE(bytecode.size() > LWBC_HEADER_SIZE);
         CHECK(uint8_t(bytecode[0]) == LWBC_MAGIC);

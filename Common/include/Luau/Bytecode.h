@@ -71,6 +71,7 @@
 //   Luwu Classes: CHECKSELFCLASS, JUMPXISA, NEWOBJECT, GETOBJECTMEMBER and SETOBJECTMEMBER, per-member flags
 //   and constant field defaults in LBC_CONSTANT_CLASS_SHAPE, LBC_TYPE_CLASS/LBC_TYPE_OBJECT and
 //   LBF_CLASS_ISINSTANCE.
+//   Luwu string.format fastcall: LBF_STRING_FORMAT, including after the format string of an interpolated string.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -915,6 +916,9 @@ enum LuauBuiltinFunction
 
     // Luwu Classes (rfcs/classes): class.isinstance(value, class) -> boolean
     LBF_CLASS_ISINSTANCE,
+
+    // Luwu: string.format(format, ...) -> string, which interpolated strings compile to
+    LBF_STRING_FORMAT,
 };
 
 // Capture type, used in LOP_CAPTURE

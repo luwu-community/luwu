@@ -7,3 +7,7 @@
 // Luwu Classes (rfcs/classes): enables classes. While it is on, the compiler emits WIP bytecode (version 200),
 // whose format can still change.
 LUAU_FASTFLAGVARIABLE(LuwuClasses)
+
+// Luwu: string.format and interpolated strings compile to a fastcall (LBF_STRING_FORMAT). While it is on, the compiler
+// emits WIP bytecode (version 200), which a VM without the builtin can't run.
+LUAU_FASTFLAGVARIABLE(LuwuStringFormatFastcall)

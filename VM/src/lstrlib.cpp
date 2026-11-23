@@ -3,6 +3,7 @@
 #include "lualib.h"
 
 #include "lstring.h"
+#include "lnumutils.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -964,90 +965,14 @@ static void addInt64Format(char form[MAX_FORMAT], char formatIndicator, size_t f
     form[formatItemSize + 3] = 0;
 }
 
-// Luwu: string.format writes a plain `%.Nf` or `%d` itself. Upstream calls snprintf for every number, which is most of the
-// cost: about 145 ns of a 200 ns `string.format("%.2f", x)`. Anything the fast paths can't print exactly the way snprintf
-// does still goes to snprintf.
-
-// The largest `|x| * 10^N` printed without snprintf. Below it the product is off by at most 2^-23, so a value whose
-// fraction is further than kFixedTieMargin from halfway rounds the way snprintf rounds the exact value.
-static const double kMaxFastFixed = 1073741824.0; // 2^30
-static const double kFixedTieMargin = 1e-6;
-static const int kMaxFastFixedPrecision = 9;
+// Luwu: string.format writes a plain `%.Nf` (luai_fixed2str) or `%d` (luai_int2str) itself. Upstream calls snprintf for
+// every number, which is most of the cost: about 145 ns of a 200 ns `string.format("%.2f", x)`.
 
 // The precision N of a format item that is exactly `%.Nf`, or -1
 static int plainFixedPrecision(const char* form, size_t formatItemSize)
 {
     bool plain = formatItemSize == 3 && form[1] == '.' && isdigit(uchar(form[2]));
     return plain ? form[2] - '0' : -1;
-}
-
-// Writes `value`'s decimal digits at `out`, returning the count
-static int writeDigits(char* out, unsigned long long value)
-{
-    char reversed[24];
-    int count = 0;
-    do
-    {
-        reversed[count++] = char('0' + value % 10);
-        value /= 10;
-    } while (value != 0);
-
-    for (int i = 0; i < count; i++)
-        out[i] = reversed[count - 1 - i];
-    return count;
-}
-
-// Writes `x` the way snprintf's `%.<precision>f` does and returns the length, or returns 0 when it has to be snprintf:
-// a value too large for the exact check, NaN or infinity, or one within kFixedTieMargin of halfway.
-static int formatFixed(char* buff, double x, int precision)
-{
-    static const double powers[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9};
-    static const unsigned long long scales[] = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000};
-
-    double scaled = fabs(x) * powers[precision];
-    // also false for NaN
-    bool small = scaled < kMaxFastFixed;
-    if (!small)
-        return 0;
-
-    double fraction = scaled - floor(scaled);
-    bool nearHalf = fabs(fraction - 0.5) < kFixedTieMargin;
-    if (nearHalf)
-        return 0;
-
-    unsigned long long rounded = (unsigned long long)floor(scaled + 0.5);
-    unsigned long long scale = scales[precision];
-
-    char* out = buff;
-    // snprintf prints the sign of a negative value that rounds to zero, and of -0
-    if (signbit(x))
-        *out++ = '-';
-    out += writeDigits(out, rounded / scale);
-
-    if (precision > 0)
-    {
-        *out++ = '.';
-        unsigned long long fractionDigits = rounded % scale;
-        for (unsigned long long place = scale / 10; place > fractionDigits && place > 1; place /= 10)
-            *out++ = '0';
-        out += writeDigits(out, fractionDigits);
-    }
-
-    return int(out - buff);
-}
-
-// Writes `value` the way snprintf's `%lld` does and returns the length
-static int formatInteger(char* buff, long long value)
-{
-    char* out = buff;
-    unsigned long long magnitude = (unsigned long long)value;
-    if (value < 0)
-    {
-        *out++ = '-';
-        magnitude = 0ull - magnitude;
-    }
-    out += writeDigits(out, magnitude);
-    return int(out - buff);
 }
 
 static int str_format(lua_State* L)
@@ -1096,7 +1021,8 @@ static int str_format(lua_State* L)
                 long long value = lua_isinteger64(L, arg) ? luaL_checkinteger64(L, arg) : (int64_t)luaL_checknumber(L, arg);
                 if (formatItemSize == 1)
                 {
-                    luaL_addlstring(&b, buff, formatInteger(buff, value));
+                    char* end = luai_int2str(buff, value);
+                    luaL_addlstring(&b, buff, end - buff);
                     continue; // skip the 'luaL_addlstring' at the end
                 }
                 addInt64Format(form, formatIndicator, formatItemSize);
@@ -1126,12 +1052,12 @@ static int str_format(lua_State* L)
             {
                 double value = luaL_checknumber(L, arg);
                 int precision = plainFixedPrecision(form, formatItemSize);
-                int length = 0;
-                if (precision >= 0 && precision <= kMaxFastFixedPrecision)
-                    length = formatFixed(buff, value, precision);
-                if (length > 0)
+                char* end = nullptr;
+                if (precision >= 0)
+                    end = luai_fixed2str(buff, value, precision);
+                if (end)
                 {
-                    luaL_addlstring(&b, buff, length);
+                    luaL_addlstring(&b, buff, end - buff);
                     continue; // skip the 'luaL_addlstring' at the end
                 }
                 snprintf(buff, sizeof(buff), form, value);
