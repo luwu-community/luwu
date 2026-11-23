@@ -21,6 +21,7 @@ LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuStringExtensions)
+LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
@@ -5475,6 +5476,87 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_argument_fields_bey
     ac = autocomplete('1');
     CHECK_EQ(ac.entryMap.count("use"), 1);
     CHECK_EQ(ac.entryMap.count("reason"), 1);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_offers_noinline_on_functions_the_compiler_can_inline")
+{
+    ScopedFastFlag noinline{FFlag::LuwuNoinlineAttribute, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    check(R"(
+        \@[no@1]
+        local function f() end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("noinline"), 1);
+    CHECK_EQ(ac.entryMap.count("native"), 1);
+
+    check(R"(
+        local f = \@[no@1] function() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("noinline"), 1);
+
+    check(R"(
+        class Size
+            \@[no@1]
+            function grow(self) end
+        end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("noinline"), 1);
+
+    // A global function is never resolved at its calls, so it can't be inlined
+    check(R"(
+        \@[no@1]
+        function f() end
+    )");
+
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("noinline"), 0);
+    CHECK_EQ(ac.entryMap.count("native"), 1);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_without_required_arguments_inserts_its_name")
+{
+    check(R"(
+        \@dep@1
+        function foo() end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("deprecated"));
+    CHECK(!ac.entryMap["deprecated"].insertText);
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_inserts_its_required_arguments")
+{
+    // `@[lint]` has to name the lints it turns on, and a `@[nolint]` that names none is linted against
+    check(R"(
+        \@[li@1]
+        function foo() end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("lint"));
+    CHECK_EQ(ac.entryMap["lint"].insertText, "lint()");
+    REQUIRE(ac.entryMap.count("nolint"));
+    CHECK_EQ(ac.entryMap["nolint"].insertText, "nolint()");
+    REQUIRE(ac.entryMap.count("native"));
+    CHECK(!ac.entryMap["native"].insertText);
+
+    // Only a `@[...]` list takes arguments
+    check(R"(
+        \@li@1
+        function foo() end
+    )");
+
+    ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("lint"));
+    CHECK_EQ(ac.entryMap["lint"].insertText, "[lint()]");
 }
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_braced_attribute")
