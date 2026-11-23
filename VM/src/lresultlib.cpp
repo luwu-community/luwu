@@ -25,8 +25,9 @@ static LuauClass* builtinclass(lua_State* L, LuwuBuiltinClass kind)
     return L->global->builtinclasses[kind];
 }
 
-// The value of a `Some`, `Ok` or `Err`, readable as `value` (`error` for `Err`)
-static const uint8_t kPayloadField = LBC_CLASSMEMBER_CONST;
+// The value of a `Some`, `Ok` or `Err`, readable as `value` (`error` for `Err`). Luwu Destructuring
+// (rfcs/destructuring.md): `.(a, b)` reads it, and the rest of an `Err`'s fields, by position.
+static const uint8_t kPayloadField = LBC_CLASSMEMBER_CONST | LBC_CLASSMEMBER_POSITIONAL;
 
 // The first field of a `Some`, `Ok` or `Err`
 static const int kPayload = 0;
