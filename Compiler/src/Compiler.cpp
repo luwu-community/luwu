@@ -1064,7 +1064,7 @@ struct Compiler
         char separator = 0;
         const char* name = describeInlineTarget(func, owner, separator);
         std::string written = owner ? format("%s%c%s", owner, separator, name) : name;
-        CompileError::raise(call->location, "'%s' is marked @[inline] but can't be inlined here because %s", written.c_str(), because.c_str());
+        CompileError::raise(call->location, "'%s' is marked as @[inline] but cannot be inlined here because %s", written.c_str(), because.c_str());
     }
 
     // Luwu: why an `@[inline]` call that passes on all its values can't be inlined, and how to keep one
@@ -1073,14 +1073,17 @@ struct Compiler
         switch (multRetUse)
         {
         case MultRetUse::Argument:
-            return "it's the last argument, so all its values are passed on; wrap the call in parentheses to pass only the "
-                   "first, or pass another argument after it";
+            return "a last argument accepts multiple values; wrap this call in parentheses, pass another argument after it, or "
+                   "otherwise truncate it to its first return value to prove this expression evaluates to exactly 1 value at "
+                   "runtime";
         case MultRetUse::ListItem:
-            return "it's the last item of a table, so all its values are added; wrap the call in parentheses to add only the first";
+            return "a table's last item accepts multiple values; wrap this call in parentheses or otherwise truncate it to its "
+                   "first return value to prove this expression evaluates to exactly 1 value at runtime";
         case MultRetUse::Return:
             break;
         }
-        return "all its values are returned; wrap the call in parentheses to return only the first";
+        return "a return accepts multiple values; wrap this call in parentheses or otherwise truncate it to its first return "
+               "value to prove this expression evaluates to exactly 1 value at runtime";
     }
 
     // Luwu Classes (rfcs/classes): the class `func` is a static function of, or null
