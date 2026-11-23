@@ -63,32 +63,6 @@ struct TempBuffer
     }
 };
 
-struct ScopedSetGCThreshold
-{
-public:
-    ScopedSetGCThreshold(global_State* global, size_t newThreshold) noexcept
-        : global{global}
-    {
-        originalThreshold = global->GCthreshold;
-        global->GCthreshold = newThreshold;
-    }
-
-    ScopedSetGCThreshold(const ScopedSetGCThreshold&) = delete;
-    ScopedSetGCThreshold(ScopedSetGCThreshold&&) = delete;
-
-    ScopedSetGCThreshold& operator=(const ScopedSetGCThreshold&) = delete;
-    ScopedSetGCThreshold& operator=(ScopedSetGCThreshold&&) = delete;
-
-    ~ScopedSetGCThreshold() noexcept
-    {
-        global->GCthreshold = originalThreshold;
-    }
-
-private:
-    global_State* global = nullptr;
-    size_t originalThreshold = 0;
-};
-
 void luaV_getimport(lua_State* L, LuaTable* env, TValue* k, StkId res, uint32_t id, bool propagatenil)
 {
     int count = id >> 30;
