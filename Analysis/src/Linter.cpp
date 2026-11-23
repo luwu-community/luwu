@@ -5215,7 +5215,7 @@ private:
     void checkAllValuesPassedOn(AstExpr* value, AllValuesUse use)
     {
         AstExprCall* call = value->as<AstExprCall>();
-        bool hintApplies = context->asksForSpeed && call && context->warningEnabled(LintWarning::Code_OptimizationHint);
+        bool hintApplies = context->asksForSpeed && call && context->warningEnabled(LintWarning::Code_MethodsNotInlined);
         if (!hintApplies)
             return;
 
@@ -5230,7 +5230,7 @@ private:
         case AllValuesUse::Return:
             emitWarning(
                 *context,
-                LintWarning::Code_OptimizationHint,
+                LintWarning::Code_MethodsNotInlined,
                 call->location,
                 "Wrap this call in parentheses so it gets inlined by the compiler: 'return (%s(...))' proves the call "
                 "evaluates to exactly one value at runtime",
@@ -5240,7 +5240,7 @@ private:
         case AllValuesUse::Argument:
             emitWarning(
                 *context,
-                LintWarning::Code_OptimizationHint,
+                LintWarning::Code_MethodsNotInlined,
                 call->location,
                 "Wrap this call in parentheses or pass another argument after it so it gets inlined by the compiler: "
                 "'(%s(...))' proves the call evaluates to exactly one value at runtime",
@@ -5250,7 +5250,7 @@ private:
         case AllValuesUse::TableItem:
             emitWarning(
                 *context,
-                LintWarning::Code_OptimizationHint,
+                LintWarning::Code_MethodsNotInlined,
                 call->location,
                 "Wrap this call in parentheses so it gets inlined by the compiler: '(%s(...))' proves the call evaluates to "
                 "exactly one value at runtime",
