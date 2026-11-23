@@ -14373,6 +14373,25 @@ RETURN R1 1
     );
 }
 
+TEST_CASE("NoinlineStaticFunctionExplainsItselfInRemarks")
+{
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    std::string remarks = compileWithRemarks(R"(
+class Size
+    @noinline
+    function double(n: number): number
+        return n * 2
+    end
+end
+
+return Size.double(2)
+)");
+
+    CHECK_MESSAGE(remarks.find("inlining failed: Size.double is marked @noinline") != std::string::npos, remarks);
+}
+
 TEST_CASE("NoinlineAttributeExplainsItselfInRemarks")
 {
     ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};

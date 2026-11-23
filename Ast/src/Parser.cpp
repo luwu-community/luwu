@@ -430,7 +430,8 @@ std::pair<AttributeEntry, Luau::FValue<bool>&> kFlaggedAttributeEntries[] = {
       AstAttr::Context::InlinableFunction,
       "a local function, a const function, a class method or a function expression",
       nullptr,
-      inlineArgsValidator},
+      inlineArgsValidator,
+      "(\"why this function should be inlined\")"},
      FFlag::DebugLuwuEncourageInline},
 };
 

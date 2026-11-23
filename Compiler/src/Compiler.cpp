@@ -1911,10 +1911,11 @@ struct Compiler
             return false;
 
         const char* owner = nullptr;
-        const char* name = describeInlineTarget(func, owner);
+        char separator = 0;
+        const char* name = describeInlineTarget(func, owner, separator);
 
         if (owner)
-            bytecode.addDebugRemark("inlining failed: %s:%s is marked @noinline", owner, name);
+            bytecode.addDebugRemark("inlining failed: %s%c%s is marked @noinline", owner, separator, name);
         else
             bytecode.addDebugRemark("inlining failed: %s is marked @noinline", name);
         return true;
@@ -4571,7 +4572,10 @@ struct Compiler
                 Function* fi = functions.find(sfunc);
 
                 if (!(fi && fi->canInline))
+                {
+                    remarkNoinline(sfunc);
                     refuseEncouragedInline(expr, sfunc, whyNeverInlined(sfunc, fi != nullptr));
+                }
 
                 if (fi && fi->canInline &&
                     tryCompileInlinedCall(
