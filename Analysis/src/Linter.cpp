@@ -4123,7 +4123,7 @@ private:
                         *context,
                         LintWarning::Code_TableOperations,
                         args[1]->location,
-                        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.drop` instead. If order is not important, use a key/value table for better performance."
+                        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.discard` instead. If order is not important, use a key/value table for better performance."
                     );
                 }
             }
