@@ -14275,6 +14275,65 @@ TEST_CASE("EncouragedInlineWeighsAThirdOfTheSize")
     CHECK_EQ(countCalls(compileFunction(encouraged, 1, 2)), 0);
 }
 
+// Luwu Classes (rfcs/classes): a call of a static function or a method on a proven receiver that always returns one
+// value keeps one value where all its values would be passed on, like a local function's, so it can be inlined there
+TEST_CASE("ClassFunctionsReturningOneValueInlineInMultretPositions")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    std::string remarks = compileWithRemarks(R"(
+class Size
+    function of(n: number): number
+        return n * 2
+    end
+
+    function grow(self, n: number)
+        print(Size.of(n))
+        return Size.of(n)
+    end
+
+    function twice(self, n: number)
+        return self:grow(n)
+    end
+end
+
+return Size.of(1)
+)");
+
+    CHECK_MESSAGE(remarks.find("can't convert fixed returns to multret") == std::string::npos, remarks);
+    CHECK_MESSAGE(remarks.find("inlining succeeded: Size.of") != std::string::npos, remarks);
+}
+
+// Luwu: an `@[inline]` call that passes on all its values says where it is and how to keep one
+TEST_CASE("EncouragedInlineMultretErrorSaysHowToKeepOneValue")
+{
+    ScopedFastFlag encourageInline{FFlag::DebugLuwuEncourageInline, true};
+
+    std::string source = "local function many() return 1, 2 end\n"
+                         "@[inline(\"a tiny helper\")]\n"
+                         "local function first(a)\n"
+                         "    return a, many()\n"
+                         "end\n"
+                         "local function main(a)\n"
+                         "    print(first(a))\n"
+                         "    local t = { first(a) }\n"
+                         "    return first(a)\n"
+                         "end\n"
+                         "return main\n";
+
+    std::string error = encouragedInlineError(source.c_str());
+    CHECK_MESSAGE(error.find("7: 'first' is marked @[inline] but can't be inlined here because it's the last argument") == 0, error);
+    CHECK_MESSAGE(error.find("or pass another argument after it") != std::string::npos, error);
+
+    source.replace(source.find("    print(first(a))\n"), strlen("    print(first(a))\n"), "    print((first(a)))\n");
+    error = encouragedInlineError(source.c_str());
+    CHECK_MESSAGE(error.find("8: 'first' is marked @[inline] but can't be inlined here because it's the last item of a table") == 0, error);
+
+    source.replace(source.find("    local t = { first(a) }\n"), strlen("    local t = { first(a) }\n"), "    local t = { (first(a)) }\n");
+    error = encouragedInlineError(source.c_str());
+    CHECK_MESSAGE(error.find("9: 'first' is marked @[inline] but can't be inlined here because all its values are returned") == 0, error);
+}
+
 // Luwu: a call `@[inline]` decided says so in its remark, and whether the cost model would have inlined it anyway
 TEST_CASE("EncouragedInlineSaysSoInRemarks")
 {
