@@ -42,6 +42,8 @@ LUAI_FUNC void luaG_breakpoint(lua_State* L, Proto* p, int line, bool enable);
 LUAI_FUNC bool luaG_onbreak(lua_State* L);
 
 LUAI_FUNC int luaG_getline(Proto* p, int pc);
+// Luwu try expressions: the trace lua_debugtrace writes, for the top `levels` frames only
+LUAI_FUNC TString* luaG_traceback(lua_State* L, int levels);
 
 LUAI_FUNC int luaG_isnative(lua_State* L, int level);
 LUAI_FUNC int luaG_hasnative(lua_State* L, int level);
