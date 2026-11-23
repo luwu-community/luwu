@@ -10,6 +10,7 @@
 LUAU_FASTFLAGVARIABLE(LuauIntegerFastcalls)
 LUAU_FASTFLAGVARIABLE(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuStringFormatFastcall)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
@@ -267,6 +268,8 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
             return LBF_STRING_ENDSWITH;
         if (FFlag::LuwuStringExtensions && builtin.method == "contains")
             return LBF_STRING_CONTAINS;
+        if (FFlag::LuwuStringFormatFastcall && builtin.method == "format")
+            return LBF_STRING_FORMAT;
     }
 
     if (builtin.object == "table")
@@ -687,6 +690,9 @@ BuiltinInfo getBuiltinInfo(int bfid)
         return {-1, 1}; // 0 to 12 parameters
     case LBF_BUNDLE_UNPACK:
         return {-1, -1}; // 1 to 3 parameters
+
+    case LBF_STRING_FORMAT:
+        return {-1, 1};
 
     case LBF_TABLE_INSERT:
         return {-1, 0}; // 2 or 3 parameters
