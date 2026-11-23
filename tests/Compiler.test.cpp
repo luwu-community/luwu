@@ -34,6 +34,7 @@ LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
@@ -14237,6 +14238,264 @@ static int countCalls(const std::string& dump)
 
 // Luwu: at O2 a function with one call site inlines whatever the cost model says, unless that call is compiled more
 // than once, runs once anyway, or the function opts out
+// Luwu: the compile error for a call to an `@[inline]` function that isn't inlined, or "" when it compiles
+static std::string encouragedInlineError(const char* source, int optimizationLevel = 2)
+{
+    try
+    {
+        Luau::BytecodeBuilder bcb;
+        Luau::CompileOptions options;
+        options.optimizationLevel = optimizationLevel;
+        Luau::compileOrThrow(bcb, source, options);
+        return "";
+    }
+    catch (Luau::CompileError& e)
+    {
+        return format("%d: %s", e.getLocation().begin.line + 1, e.what());
+    }
+}
+
+// Luwu: does `error` refuse to inline `name` at the call on `line` (1-based), saying something about `fact`?
+static bool refusedInlineAt(const std::string& error, int line, const char* name, const char* fact)
+{
+    std::string start = format("%d: '%s'", line, name);
+    return error.rfind(start, 0) == 0 && error.find(fact) != std::string::npos;
+}
+
+// six calls, past the few-call-sites boost
+#define LUWU_SIX_CALLS(name) \
+    "local function main(t)\n" \
+    "    " name "(t)\n    " name "(t)\n    " name "(t)\n    " name "(t)\n    " name "(t)\n    " name "(t)\n" \
+    "end\n"
+
+// Luwu: `@[inline(reason)]` weighs a function by a third of its size at its call sites instead of the cost model, which
+// inlines calls the model alone refuses
+TEST_CASE("EncouragedInlineWeighsAThirdOfTheSize")
+{
+    ScopedFastFlag encourageInline{FFlag::DebugLuwuEncourageInline, true};
+
+    const char* plain = "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n" LUWU_SIX_CALLS("big");
+    CHECK_EQ(countCalls(compileFunction(plain, 1, 2)), 6);
+
+    const char* encouraged = "@[inline(\"main's hot path\")]\n"
+                             "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n" LUWU_SIX_CALLS("big");
+    CHECK_EQ(countCalls(compileFunction(encouraged, 1, 2)), 0);
+}
+
+// Luwu Classes (rfcs/classes): a call of a static function or a method on a proven receiver that always returns one
+// value keeps one value where all its values would be passed on, like a local function's, so it can be inlined there
+TEST_CASE("ClassFunctionsReturningOneValueInlineInMultretPositions")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    std::string remarks = compileWithRemarks(R"(
+class Size
+    function of(n: number): number
+        return n * 2
+    end
+
+    function grow(self, n: number)
+        print(Size.of(n))
+        return Size.of(n)
+    end
+
+    function twice(self, n: number)
+        return self:grow(n)
+    end
+end
+
+return Size.of(1)
+)");
+
+    CHECK_MESSAGE(remarks.find("can't convert fixed returns to multret") == std::string::npos, remarks);
+    CHECK_MESSAGE(remarks.find("inlining succeeded: Size.of") != std::string::npos, remarks);
+}
+
+// Luwu: an `@[inline]` call that passes on all its values says where it is and how to keep one
+TEST_CASE("EncouragedInlineMultretErrorSaysHowToKeepOneValue")
+{
+    ScopedFastFlag encourageInline{FFlag::DebugLuwuEncourageInline, true};
+
+    std::string source = "local function many() return 1, 2 end\n"
+                         "@[inline(\"a tiny helper\")]\n"
+                         "local function first(a)\n"
+                         "    return a, many()\n"
+                         "end\n"
+                         "local function main(a)\n"
+                         "    print(first(a))\n"
+                         "    local t = { first(a) }\n"
+                         "    return first(a)\n"
+                         "end\n"
+                         "return main\n";
+
+    std::string error = encouragedInlineError(source.c_str());
+    CHECK_MESSAGE(refusedInlineAt(error, 7, "first", "another argument"), error);
+
+    source.replace(source.find("    print(first(a))\n"), strlen("    print(first(a))\n"), "    print((first(a)))\n");
+    error = encouragedInlineError(source.c_str());
+    CHECK_MESSAGE(refusedInlineAt(error, 8, "first", "table"), error);
+
+    source.replace(source.find("    local t = { first(a) }\n"), strlen("    local t = { first(a) }\n"), "    local t = { (first(a)) }\n");
+    error = encouragedInlineError(source.c_str());
+    CHECK_MESSAGE(refusedInlineAt(error, 9, "first", "parentheses"), error);
+}
+
+// Luwu: a call `@[inline]` decided says so in its remark, and whether the cost model would have inlined it anyway
+TEST_CASE("EncouragedInlineSaysSoInRemarks")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuEncourageInline, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    std::string remarks = compileWithRemarks("@[inline(\"main's hot path\")]\n"
+                                             "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n" LUWU_SIX_CALLS("big"));
+    CHECK_MESSAGE(remarks.find("inlining forced by @inline: big (without it, cost") != std::string::npos, remarks);
+
+    remarks = compileWithRemarks(R"(
+class Size
+    @[inline("a tiny helper")]
+    function double(n: number): number
+        return n * 2
+    end
+end
+
+local function main(n)
+    return Size.double(n) + Size.double(n + 1)
+end
+return main
+)");
+    CHECK_MESSAGE(remarks.find("inlining forced by @inline: Size.double (it would have inlined without it)") != std::string::npos, remarks);
+    CHECK_MESSAGE(remarks.find("inlining succeeded: Size.double (cost") != std::string::npos, remarks);
+}
+
+// Luwu: a call to an `@[inline]` function that still isn't inlined is a compile error at the call, saying why. Where the
+// compiler doesn't inline at all (below O2), nothing is reported.
+TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuEncourageInline, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    // a big function at many call sites: each copy past the first weighs two thirds, but twelve copies are too many
+    {
+        std::string body;
+        for (int i = 0; i < 40; i++)
+            body += format("    t.f%d = t.f%d + %d\n", i, i, i);
+
+        auto withCalls = [&](int calls)
+        {
+            std::string source = "@[inline(\"a hot helper\")]\nlocal function big(t)\n" + body + "end\nlocal function main(t)\n";
+            for (int i = 0; i < calls; i++)
+                source += "    big(t)\n";
+            return source + "end\nreturn main\n";
+        };
+
+        std::string error = encouragedInlineError(withCalls(12).c_str());
+        CHECK_MESSAGE(refusedInlineAt(error, 45, "big", "12 call sites"), error);
+        CHECK_EQ(encouragedInlineError(withCalls(3).c_str()), "");
+    }
+
+    // past the instructions inlining may add to one function
+    {
+        ScopedFastInt budget{FInt::LuwuCompileInlineBudget, 3};
+        const char* tooBig = "@[inline(\"main's hot path\")]\n"
+                             "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
+                             "local function main(t)\n"
+                             "    big(t)\n"
+                             "    big(t)\n"
+                             "end\n"
+                             "return main\n";
+        std::string error = encouragedInlineError(tooBig);
+        CHECK_MESSAGE(refusedInlineAt(error, 14, "big", "budget"), error);
+        CHECK_EQ(encouragedInlineError(tooBig, 1), "");
+    }
+
+    const char* variadic = "@[inline(\"a tiny helper\")]\n"
+                           "local function first(...)\n"
+                           "    return (...)\n"
+                           "end\n"
+                           "local function main(a)\n"
+                           "    return first(a)\n"
+                           "end\n"
+                           "return main\n";
+    std::string error = encouragedInlineError(variadic);
+    CHECK_MESSAGE(refusedInlineAt(error, 6, "first", "variadic"), error);
+
+    // a public method whose body calls a private one would leak the class's private access into the caller
+    const char* leaksPrivate = "class Counter\n"
+                               "    public count: number\n"
+                               "    private function secret(self)\n"
+                               "        return self.count\n"
+                               "    end\n"
+                               "    @[inline(\"reads are hot\")]\n"
+                               "    public function value(self)\n"
+                               "        return self:secret()\n"
+                               "    end\n"
+                               "end\n"
+                               "local function main()\n"
+                               "    local c = Counter { count = 1 }\n"
+                               "    return c:value()\n"
+                               "end\n"
+                               "return main\n";
+    error = encouragedInlineError(leaksPrivate);
+    CHECK_MESSAGE(refusedInlineAt(error, 13, "Counter:value", "private"), error);
+}
+
+// Luwu Classes (rfcs/classes): a class's static functions inline at `Cls.f(...)` calls, with the same private-access
+// rules as methods: a private static, or a body that needs the class's private access at runtime (a private
+// constructor), inlines only inside the class
+TEST_CASE("ClassStaticFunctionsInline")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuEncourageInline, true},
+    };
+
+    const char* source = R"(
+class Size private (
+    private const bytes: number
+)
+    public function twice(n: number): number
+        return n * 2
+    end
+    private function half(n: number): number
+        return n / 2
+    end
+    public function of(n: number): Size
+        return Size(Size.half(n))
+    end
+end
+local function main(n)
+    return Size.twice(n), Size.of(n)
+end
+return main
+)";
+    std::string main = compileFunction(source, 3, 2);
+    // twice inlines, `of` stays a call because it constructs through the private constructor
+    CHECK_EQ(countCalls(main), 1);
+    // inside the class, `of` inlines the private `half`
+    CHECK_EQ(countCalls(compileFunction(source, 2, 2)), 0);
+
+    const char* encouragedPrivate = R"(
+class Size private (
+    private const bytes: number
+)
+    @[inline("cheap")]
+    public function of(n: number): Size
+        return Size(n)
+    end
+end
+local function main(n)
+    return Size.of(n)
+end
+return main
+)";
+    std::string error = encouragedInlineError(encouragedPrivate);
+    CHECK_MESSAGE(refusedInlineAt(error, 11, "Size.of", "private"), error);
+}
+
 TEST_CASE("InlineOnlyCallSiteRegardlessOfCost")
 {
     // the only call site: inlined

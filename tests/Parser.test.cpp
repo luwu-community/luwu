@@ -19,6 +19,7 @@ LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_DYNAMIC_FASTFLAG(DebugLuauReportReturnTypeVariadicWithTypeSuffix)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
@@ -6825,6 +6826,35 @@ local function hello(x, y)
 end)");
 
     checkFirstErrorForAttributes(result.errors, 1, Location(Position(1, 0), Position(1, 14)), "Invalid attribute '@debugnoinline'");
+}
+
+// Luwu: `@[inline(reason)]` takes one string constant, and needs DebugLuwuEncourageInline
+TEST_CASE_FIXTURE(Fixture, "inline_attribute_takes_a_reason")
+{
+    {
+        ScopedFastFlag encourageInline{FFlag::DebugLuwuEncourageInline, true};
+
+        ParseResult result = tryParse(R"(
+@[inline("a hot helper")]
+local function a() end
+@[inline]
+local function b() end
+@[inline(1)]
+local function c() end
+)");
+        REQUIRE_EQ(result.errors.size(), 2);
+        CHECK_EQ(result.errors[0].getLocation().begin, Position(3, 2));
+        CHECK(result.errors[0].getMessage().find("@inline needs one reason") != std::string::npos);
+        CHECK_EQ(result.errors[1].getLocation().begin, Position(5, 9));
+        CHECK(result.errors[1].getMessage().find("must be a string constant") != std::string::npos);
+    }
+
+    ParseResult withoutFlag = tryParse(R"(
+@[inline("a hot helper")]
+local function a() end
+)");
+    REQUIRE(!withoutFlag.errors.empty());
+    CHECK(withoutFlag.errors[0].getMessage().find("inline") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(Fixture, "empty_attribute_name_is_not_allowed")
