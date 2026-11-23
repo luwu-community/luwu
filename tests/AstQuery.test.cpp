@@ -8,6 +8,8 @@
 
 using namespace Luau;
 
+LUAU_FASTFLAG(LuwuAttributesEverywhere)
+
 struct DocumentationSymbolFixture : BuiltinsFixture
 {
     std::optional<DocumentationSymbol> getDocSymbol(const std::string& source, Position position)
@@ -425,6 +427,66 @@ TEST_CASE_FIXTURE(Fixture, "interior_binding_location_is_consistent_with_exterio
     REQUIRE(outerCallBinding);
 
     CHECK(outerCallBinding->location == Location{{1, 23}, {1, 27}});
+}
+
+TEST_CASE_FIXTURE(Fixture, "ancestry_reaches_into_attributes")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    check(R"(
+type M = {
+    @[deprecated {reason = "hi"}]
+    bark: () -> (),
+}
+    )");
+
+    auto hasAttr = [](const std::vector<AstNode*>& ancestry)
+    {
+        return std::any_of(
+            ancestry.begin(),
+            ancestry.end(),
+            [](AstNode* node)
+            {
+                return node->is<AstAttr>();
+            }
+        );
+    };
+
+    // The attribute's name.
+    std::vector<AstNode*> ancestry = findAstAncestryOfPosition(*getMainSourceModule(), Position(2, 8), /* includeTypes */ true);
+    REQUIRE(!ancestry.empty());
+    CHECK(ancestry.back()->is<AstAttr>());
+
+    // A key in its arguments.
+    ancestry = findAstAncestryOfPosition(*getMainSourceModule(), Position(2, 19), /* includeTypes */ true);
+    REQUIRE(!ancestry.empty());
+    CHECK(ancestry.back()->is<AstExprConstantString>());
+    CHECK(hasAttr(ancestry));
+}
+
+TEST_CASE_FIXTURE(Fixture, "ancestry_reaches_into_function_attributes")
+{
+    // A function's attributes come before it, outside the function's own location.
+    check(R"(
+@[deprecated {use = "bar"}]
+local function foo() end
+    )");
+
+    std::vector<AstNode*> ancestry = findAstAncestryOfPosition(*getMainSourceModule(), Position(1, 22));
+    REQUIRE(!ancestry.empty());
+    CHECK(ancestry.back()->is<AstExprConstantString>());
+    CHECK(std::any_of(
+        ancestry.begin(),
+        ancestry.end(),
+        [](AstNode* node)
+        {
+            return node->is<AstExprFunction>();
+        }
+    ));
+
+    AstNode* node = findNodeAtPosition(*getMainSourceModule(), Position(1, 22));
+    REQUIRE(node);
+    CHECK(node->is<AstExprConstantString>());
 }
 
 TEST_SUITE_END();
