@@ -5224,7 +5224,8 @@ struct Compiler
 
     // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the register holding the value `pattern` matches:
     // its subject's when it has one (a `case` arm's `match` subject, or the hidden local a pattern that binds read the
-    // value into), which is in this frame's registers unless it's an upvalue, and otherwise its value's
+    // value into), which is in this frame's registers unless it's an upvalue or an inlined constant, and otherwise its
+    // value's
     uint8_t compilePatternValue(AstExprMatchPattern* pattern, RegScope& rs)
     {
         if (!pattern->subject)
@@ -5232,6 +5233,14 @@ struct Compiler
 
         if (int reg = getLocalReg(pattern->subject); reg >= 0)
             return uint8_t(reg);
+
+        // a parameter of an inlined function given a constant argument has no register
+        if (const Constant* cv = locstants.find(pattern->subject); cv && cv->type != Constant::Type_Unknown)
+        {
+            uint8_t reg = allocReg(pattern, 1u);
+            compileExprConstant(pattern, cv, reg);
+            return reg;
+        }
 
         AstExprLocal subject(pattern->location, pattern->subject, /* upvalue= */ true);
         return compileExprAuto(&subject, rs);
