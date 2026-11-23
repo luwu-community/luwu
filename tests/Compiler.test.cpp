@@ -16400,16 +16400,16 @@ TEST_CASE("EncouragedInlineMultretErrorSaysHowToKeepOneValue")
                          "return main\n";
 
     std::string error = encouragedInlineError(source.c_str());
-    CHECK_MESSAGE(error.find("7: 'first' is marked @[inline] but can't be inlined here because it's the last argument") == 0, error);
-    CHECK_MESSAGE(error.find("or pass another argument after it") != std::string::npos, error);
+    CHECK_MESSAGE(error.find("7: 'first' is marked as @[inline] but cannot be inlined here because a last argument accepts multiple values") == 0, error);
+    CHECK_MESSAGE(error.find("pass another argument after it") != std::string::npos, error);
 
     source.replace(source.find("    print(first(a))\n"), strlen("    print(first(a))\n"), "    print((first(a)))\n");
     error = encouragedInlineError(source.c_str());
-    CHECK_MESSAGE(error.find("8: 'first' is marked @[inline] but can't be inlined here because it's the last item of a table") == 0, error);
+    CHECK_MESSAGE(error.find("8: 'first' is marked as @[inline] but cannot be inlined here because a table's last item accepts multiple values") == 0, error);
 
     source.replace(source.find("    local t = { first(a) }\n"), strlen("    local t = { first(a) }\n"), "    local t = { (first(a)) }\n");
     error = encouragedInlineError(source.c_str());
-    CHECK_MESSAGE(error.find("9: 'first' is marked @[inline] but can't be inlined here because all its values are returned") == 0, error);
+    CHECK_MESSAGE(error.find("9: 'first' is marked as @[inline] but cannot be inlined here because a return accepts multiple values") == 0, error);
 }
 
 // Luwu: a call `@[inline]` decided says so in its remark, and whether the cost model would have inlined it anyway
@@ -16465,7 +16465,7 @@ TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
         };
 
         std::string error = encouragedInlineError(withCalls(12).c_str());
-        CHECK_MESSAGE(error.find("45: 'big' is marked @[inline] but can't be inlined here because it's too big to copy to its 12 call sites even with 3x encouragement") == 0, error);
+        CHECK_MESSAGE(error.find("45: 'big' is marked as @[inline] but cannot be inlined here because it's too big to copy to its 12 call sites even with 3x encouragement") == 0, error);
         CHECK_EQ(encouragedInlineError(withCalls(3).c_str()), "");
     }
 
@@ -16481,7 +16481,7 @@ TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
                              "return main\n";
         std::string error = encouragedInlineError(tooBig);
         CHECK_MESSAGE(
-            error == "14: 'big' is marked @[inline] but can't be inlined here because it would pass the inlining budget of the function it's called in",
+            error == "14: 'big' is marked as @[inline] but cannot be inlined here because it would pass the inlining budget of the function it's called in",
             error
         );
         CHECK_EQ(encouragedInlineError(tooBig, 1), "");
@@ -16495,7 +16495,7 @@ TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
                            "    return first(a)\n"
                            "end\n"
                            "return main\n";
-    CHECK_EQ(encouragedInlineError(variadic), "6: 'first' is marked @[inline] but can't be inlined here because it's variadic");
+    CHECK_EQ(encouragedInlineError(variadic), "6: 'first' is marked as @[inline] but cannot be inlined here because it's variadic");
 
     // a public method whose body calls a private one would leak the class's private access into the caller
     const char* leaksPrivate = "class Counter\n"
@@ -16514,7 +16514,7 @@ TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
                                "end\n"
                                "return main\n";
     CHECK_EQ(
-        encouragedInlineError(leaksPrivate), "13: 'Counter:value' is marked @[inline] but can't be inlined here because it would leak private access"
+        encouragedInlineError(leaksPrivate), "13: 'Counter:value' is marked as @[inline] but cannot be inlined here because it would leak private access"
     );
 }
 
@@ -16568,7 +16568,7 @@ end
 return main
 )";
     CHECK_EQ(
-        encouragedInlineError(encouragedPrivate), "11: 'Size.of' is marked @[inline] but can't be inlined here because it would leak private access"
+        encouragedInlineError(encouragedPrivate), "11: 'Size.of' is marked as @[inline] but cannot be inlined here because it would leak private access"
     );
 }
 
