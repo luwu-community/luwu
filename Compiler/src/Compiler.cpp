@@ -1524,6 +1524,23 @@ struct Compiler
         return func->debugname.value ? func->debugname.value : "<anonymous>";
     }
 
+    // Luwu @noinline (rfcs/noinline-attribute.md): the remark for a call that `@noinline` kept from inlining. False
+    // when the callee isn't marked.
+    bool remarkNoinline(AstExprFunction* func)
+    {
+        if (!FFlag::LuwuNoinlineAttribute || !func->hasAttribute(AstAttr::Type::Noinline))
+            return false;
+
+        const char* owner = nullptr;
+        const char* name = describeInlineTarget(func, owner);
+
+        if (owner)
+            bytecode.addDebugRemark("inlining failed: %s:%s is marked @noinline", owner, name);
+        else
+            bytecode.addDebugRemark("inlining failed: %s is marked @noinline", name);
+        return true;
+    }
+
     // May this compilation act on a type annotation nothing verified? Only when the file says so with
     // `--!trust` and the embedder allows that directive (DebugLuwuCompilerTrustsTypeAnnotations).
     //
@@ -3725,7 +3742,7 @@ struct Compiler
                 return;
 
             // add a debug remark for cases when we didn't even call tryCompileInlinedCall
-            if (func && !(fi && fi->canInline))
+            if (func && !(fi && fi->canInline) && !remarkNoinline(func))
             {
                 if (func->vararg)
                     bytecode.addDebugRemark("inlining failed: function is variadic");
@@ -3770,6 +3787,9 @@ struct Compiler
                         /* receiverKnownBy= */ trusted ? "trusted" : "proven"
                     ))
                     return;
+
+                if (fi && !fi->canInline)
+                    remarkNoinline(mfunc);
             }
         }
 
