@@ -48,6 +48,8 @@ struct ParseOptions
     // Luwu: the errors are shown by static analysis (an editor, `luwu-analyze`), which has room for a 'Help' section,
     // rather than raised by a runtime compiling the module.
     bool analysisErrors = false;
+    // Luwu object notation: everything outside the notation is a parse error in this `.luwon` data file.
+    bool luwon = false;
 };
 
 } // namespace Luau
