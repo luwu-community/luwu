@@ -55,6 +55,13 @@ struct AutocompleteNodeFinder : public AstVisitor
         return false;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): `Self` is one name, though it holds the `class.of(self)` call it compiles to
+    bool visit(AstExprSelfClass* expr) override
+    {
+        visit(static_cast<AstExpr*>(expr));
+        return false;
+    }
+
     bool visit(AstStat* stat) override
     {
         // Consider 'local myLocal = 4;|' and 'local myLocal = 4', where '|' is the cursor position. In both cases, the cursor position is equal
@@ -178,6 +185,13 @@ struct FindNode : public AstVisitor
         return false;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): `Self` is one name, though it holds the `class.of(self)` call it compiles to
+    bool visit(AstExprSelfClass* node) override
+    {
+        visit(static_cast<AstNode*>(node));
+        return false;
+    }
+
     bool visit(AstAttr* attr) override
     {
         return visit(static_cast<AstNode*>(attr));
@@ -255,6 +269,12 @@ bool FindFullAncestry::visit(AstExprFunction* node)
     }
 
     return visit(static_cast<AstNode*>(node));
+}
+
+bool FindFullAncestry::visit(AstExprSelfClass* node)
+{
+    visit(static_cast<AstNode*>(node));
+    return false;
 }
 
 bool FindFullAncestry::visit(AstNode* node)
@@ -476,6 +496,13 @@ struct FindExprOrLocal : public AstVisitor
         return false;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): `Self` is one name, though it holds the `class.of(self)` call it compiles to
+    bool visit(AstExprSelfClass* expr) override
+    {
+        visit(static_cast<AstExpr*>(expr));
+        return false;
+    }
+
     bool visitLocal(AstLocal* local)
     {
         if (isCloserMatch(local->location))
@@ -494,10 +521,12 @@ struct FindExprOrLocal : public AstVisitor
 
     bool visit(AstStatLocal* al) override
     {
+        bool matchedVar = false;
         for (size_t i = 0; i < al->vars.size; ++i)
         {
-            visitLocal(al->vars.data[i]);
+            matchedVar |= visitLocal(al->vars.data[i]);
         }
+
         return true;
     }
 
@@ -635,7 +664,7 @@ std::optional<DocumentationSymbol> getDocumentationSymbolAtPosition(const Source
                 {
                     while (etv)
                     {
-                        if (auto propIt = etv->props.find(indexName->index.value); propIt != etv->props.end())
+                        if (auto propIt = etv->props().find(indexName->index.value); propIt != etv->props().end())
                         {
 
                             if (auto ty = propIt->second.readTy)
