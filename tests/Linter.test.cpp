@@ -4942,7 +4942,7 @@ static std::vector<LintWarning> optimizationHints(const LintResult& result)
     {
         // Luwu: the hints OptimizationHint's own pass reports, each under its own part
         bool ownHint = warning.code == LintWarning::Code_MethodsNotInlined || warning.code == LintWarning::Code_FloorDivision ||
-                       warning.code == LintWarning::Code_FenvDeoptimization;
+                       warning.code == LintWarning::Code_FenvDeoptimization || warning.code == LintWarning::Code_OptimizationHint;
         if (ownHint)
             hints.push_back(warning);
     }
@@ -5069,6 +5069,143 @@ return guard, quietGuard
         "Asserting 'v' isn't nil doesn't prove to the compiler that it's a 'Vec2', since type annotations are only trusted under '--!trust'; "
         "use 'assert(class.isinstance(v, Vec2))' so 'Vec2' methods can be inlined after it"
     );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintParenthesizesACallTheCompilerCantKeepToOneValue")
+{
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    const std::string source = R"(
+local helpers = { half = function(n: number): number return n / 2 end }
+
+-- the compiler can't resolve `helpers.half`, so it can't tell `half` gives one value
+local function half(n: number): number
+    return helpers.half(n)
+end
+
+local function double(n: number): number
+    return n * 2
+end
+
+local function pair(n: number): (number, number)
+    return n, n
+end
+
+class Size
+    function of(n: number): number
+        return half(n)
+    end
+
+    function grow(self, n: number): number
+        return Size.of(n)
+    end
+
+    function twice(self, n: number): number
+        return self:grow(n)
+    end
+end
+
+local function f(n: number)
+    print(half(n))
+    local t = { half(n) }
+    if n > 1 then
+        return double(n), (half(n)), tostring(n)
+    end
+    if n > 2 then
+        return pair(n)
+    end
+    return half(n)
+end
+
+return f
+)";
+
+    std::vector<LintWarning> hints = optimizationHints(lint("--!optimize 2\n" + source));
+    // `half`, and everything that returns its value, can't be kept to one value by the compiler. `double`, `pair` and
+    // `tostring` get no hint.
+    REQUIRE(6 == hints.size());
+    CHECK_EQ(hints[0].location.begin.line, 19);
+    CHECK_EQ(hints[1].location.begin.line, 23);
+    CHECK(hints[1].text.find("'return (Size.of(...))'") != std::string::npos);
+    CHECK_EQ(hints[2].location.begin.line, 27);
+    CHECK(hints[2].text.find("'return (self:grow(...))'") != std::string::npos);
+    CHECK_EQ(hints[3].location.begin.line, 32);
+    CHECK(hints[3].text.find("or pass another argument after it") != std::string::npos);
+    CHECK_EQ(hints[4].location.begin.line, 33);
+    CHECK(hints[4].text.find("'(half(...))' proves") != std::string::npos);
+    CHECK_EQ(hints[5].location.begin.line, 40);
+
+    // without `--!optimize 2` or `--!native` nothing is inlined, so there's nothing to hint
+    CHECK(optimizationHints(lint(source)).empty());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintOnlyWhereParenthesesLetTheCallInline")
+{
+    const std::string source = R"(
+-- runs off its end after `error`, so the compiler can't tell it returns one value
+local function checked(n: number): number
+    if n >= 0 then
+        return n
+    end
+    error("negative")
+end
+
+local function count_down(n: number): number
+    if n <= 0 then
+        return 0
+    end
+    return count_down(n - 1)
+end
+
+local function big(n: number): number
+    local total = 0
+    total += n * 1
+    total += n * 2
+    total += n * 3
+    total += n * 4
+    total += n * 5
+    total += n * 6
+    total += n * 7
+    total += n * 8
+    total += n * 9
+    total += n * 10
+    total += n * 11
+    total += n * 12
+    total += n * 13
+    total += n * 14
+    total += n * 15
+    total += n * 16
+    total += n * 17
+    total += n * 18
+    total += n * 19
+    total += n * 20
+    total += n * 21
+    total += n * 22
+    total += n * 23
+    total += n * 24
+    total += n * 25
+    total += n * 26
+    total += n * 27
+    total += n * 28
+    total += n * 29
+    total += n * 30
+    return total
+end
+
+local function f(n: number)
+    if n > 1 then
+        return big(n)
+    end
+    return checked(n)
+end
+
+return f
+)";
+
+    // `count_down` calls itself and `big` is too big to inline, so parentheses help neither
+    std::vector<LintWarning> hints = optimizationHints(lint("--!optimize 2\n" + source));
+    REQUIRE(1 == hints.size());
+    CHECK(hints[0].text.find("checked") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintFenvAndFloorDivision")
