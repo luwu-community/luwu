@@ -84,7 +84,7 @@ struct LintWarning
         Code_SelfAssignment = 53,          // Luwu: `x = x`, which does nothing
         Code_DeadStore = 54,               // Luwu: a computed value overwritten before anything reads it
         // Luwu: more parts of OptimizationHint
-        Code_MethodsNotInlined = 55,       // code that keeps the compiler from proving a class, so its methods aren't inlined
+        Code_MethodsNotInlined = 55,       // code that keeps the compiler from inlining a call: an unproven class, all of a call's values passed on
         Code_FloorDivision = 56,           // `math.floor(a / b)`, which is `a // b`
         Code_FenvDeoptimization = 57,      // `getfenv`/`setfenv`, which deoptimize the whole module
         Code_DiscardedValues = 58,         // Luwu: a call giving several values where only its first is kept (an if-else branch)
