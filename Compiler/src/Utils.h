@@ -43,11 +43,16 @@ inline bool alwaysTerminates(const DenseHashMap<AstExpr*, Constant>& constants, 
     if (node->is<AstStatReturn>())
         return true;
 
-    if (node->is<AstStatBreak>() || node->is<AstStatContinue>())
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `give` leaves its block like `return`
+    if (node->is<AstStatBreak>() || node->is<AstStatContinue>() || node->is<AstStatGive>())
         return true;
 
     if (AstStatIf* stat = node->as<AstStatIf>())
     {
+        // Luwu If Local (rfcs/control-flow/if-local.md): a constant first clause doesn't decide a `when` chain
+        if (stat->clauses.size != 0)
+            return stat->elsebody && alwaysTerminates(constants, stat->thenbody) && alwaysTerminates(constants, stat->elsebody);
+
         if (isConstantTrue(constants, stat->condition))
             return alwaysTerminates(constants, stat->thenbody);
 
@@ -55,6 +60,21 @@ inline bool alwaysTerminates(const DenseHashMap<AstExpr*, Constant>& constants, 
             return alwaysTerminates(constants, stat->elsebody);
 
         return stat->elsebody && alwaysTerminates(constants, stat->thenbody) && alwaysTerminates(constants, stat->elsebody);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): every arm leaves, and some arm always matches
+    if (AstStatMatch* stat = node->as<AstStatMatch>())
+    {
+        if (!matchesEveryValue(stat->arms))
+            return false;
+
+        for (const AstMatchArm& arm : stat->arms)
+        {
+            if (!alwaysTerminates(constants, arm.body))
+                return false;
+        }
+
+        return true;
     }
 
     return false;
