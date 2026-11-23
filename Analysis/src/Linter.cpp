@@ -4659,11 +4659,8 @@ public:
             context.root->visit(&collector);
         }
 
-        if (FFlag::LuwuClasses)
-        {
-            ClassCollector collector{&pass.declaredClasses};
-            context.root->visit(&collector);
-        }
+        DefinitionCollector definitions{&pass};
+        context.root->visit(&definitions);
 
         context.root->visit(&pass);
         pass.reportFieldMethodCalls(context.root);
@@ -4676,8 +4673,52 @@ private:
     LintContext* context;
     // The names of the classes declared in this file. Empty when class hints are off.
     std::unordered_set<std::string> classes;
-    // The names of the classes declared in this file, whatever the class hints
-    std::unordered_set<std::string> declaredClasses;
+    // The functions a call can be resolved to in this file, for the hint about calls whose values are all passed on:
+    // local functions, the classes declared here, and the class each method's `self` belongs to
+    DenseHashMap<AstLocal*, AstExprFunction*> localFunctions{nullptr};
+    std::unordered_map<std::string, AstStatClass*> declaredClasses;
+    DenseHashMap<AstLocal*, AstStatClass*> selfClasses{nullptr};
+
+    struct DefinitionCollector : AstVisitor
+    {
+        LintOptimizationHint* pass;
+
+        explicit DefinitionCollector(LintOptimizationHint* pass)
+            : pass(pass)
+        {
+        }
+
+        bool visit(AstStatLocalFunction* node) override
+        {
+            pass->localFunctions[node->name] = node->func;
+            return true;
+        }
+
+        bool visit(AstStatLocal* node) override
+        {
+            for (size_t i = 0; i < node->vars.size && i < node->values.size; ++i)
+            {
+                if (AstExprFunction* func = node->values.data[i]->as<AstExprFunction>())
+                    pass->localFunctions[node->vars.data[i]] = func;
+            }
+            return true;
+        }
+
+        bool visit(AstStatClass* node) override
+        {
+            if (!FFlag::LuwuClasses)
+                return true;
+
+            pass->declaredClasses[node->name->name.value] = node;
+            for (const AstClassMember& member : node->members)
+            {
+                const AstClassMethod* method = member.get_if<AstClassMethod>();
+                if (AstLocal* self = method && method->function ? selfOf(method->function) : nullptr)
+                    pass->selfClasses[self] = node;
+            }
+            return true;
+        }
+    };
 
     struct ClassCollector : AstVisitor
     {
@@ -5006,68 +5047,201 @@ private:
     {
         checkFloorDivision(node);
         checkFenv(node);
+        if (node->args.size > 0)
+            checkAllValuesPassedOn(node->args.data[node->args.size - 1], AllValuesUse::Argument);
         return true;
     }
 
     bool visit(AstStatReturn* node) override
     {
         if (node->list.size > 0)
-            checkReturnedCall(node->list.data[node->list.size - 1]);
+            checkAllValuesPassedOn(node->list.data[node->list.size - 1], AllValuesUse::Return);
         return true;
     }
 
-    // Could the compiler inline a call to `callee`? A local function, a static function of a class in this file
-    // (`Self.f` too) and a method called on `self`.
-    bool calleeMayInline(AstExprCall* call)
+    bool visit(AstExprTable* node) override
+    {
+        if (node->items.size > 0 && node->items.data[node->items.size - 1].kind == AstExprTable::Item::Kind::List)
+            checkAllValuesPassedOn(node->items.data[node->items.size - 1].value, AllValuesUse::TableItem);
+        return true;
+    }
+
+    // Where every value of a call is passed on: the compiler only inlines such a call when it knows the call gives one
+    enum class AllValuesUse
+    {
+        Return,
+        Argument,
+        TableItem,
+    };
+
+    // Below this many calls deep, a function returning another call's value is checked through that call too
+    static constexpr int kReturnedCallDepth = 4;
+
+    // A class method named `name`: a static function, or one taking `self` when `takesSelf`
+    static AstExprFunction* findClassFunction(AstStatClass* cls, AstName name, bool takesSelf)
+    {
+        for (const AstClassMember& member : cls->members)
+        {
+            const AstClassMethod* method = member.get_if<AstClassMethod>();
+            if (method && method->function && method->functionName == name && (selfOf(method->function) != nullptr) == takesSelf)
+                return method->function;
+        }
+        return nullptr;
+    }
+
+    // A method's `self`, written `function m(self)` or `function T:m()`, or null for a static function
+    static AstLocal* selfOf(AstExprFunction* func)
+    {
+        if (func->self)
+            return func->self;
+
+        bool selfFirst = func->args.size > 0 && func->args.data[0]->name == "self";
+        return selfFirst ? func->args.data[0] : nullptr;
+    }
+
+    // The function a call always runs, when the compiler can know it: a local function, a static function of a class in
+    // this file (`Self.f` too) and a method called on a method's `self`
+    AstExprFunction* calleeFunction(AstExprCall* call)
     {
         AstExpr* callee = unwrapGroup(call->func);
-        if (callee->is<AstExprLocal>())
-            return !call->self;
+        if (AstExprLocal* local = callee->as<AstExprLocal>())
+        {
+            AstExprFunction** func = localFunctions.find(local->local);
+            return func && !call->self ? *func : nullptr;
+        }
 
         AstExprIndexName* index = callee->as<AstExprIndexName>();
         if (!index)
-            return false;
+            return nullptr;
 
         AstExpr* object = unwrapGroup(index->expr);
         if (call->self)
         {
             AstExprLocal* receiver = object->as<AstExprLocal>();
-            return receiver && receiver->local->name == "self";
+            AstStatClass** cls = receiver ? selfClasses.find(receiver->local) : nullptr;
+            return cls ? findClassFunction(*cls, index->index, /* takesSelf= */ true) : nullptr;
         }
 
-        AstExprGlobal* cls = object->as<AstExprGlobal>();
-        return cls && declaredClasses.count(cls->name.value) > 0;
+        AstExprGlobal* global = object->as<AstExprGlobal>();
+        auto cls = global ? declaredClasses.find(global->name.value) : declaredClasses.end();
+        return cls != declaredClasses.end() ? findClassFunction(cls->second, index->index, /* takesSelf= */ false) : nullptr;
     }
 
-    // `return f(x)` passes on every value `f` gives, so the compiler can't inline `f` there. When `f` is typed to give
-    // one value, `return (f(x))` means the same and lets it.
-    void checkReturnedCall(AstExpr* last)
+    // Does the compiler know this value is one value? It does for anything but a call or `...`, and for a call it can
+    // resolve to a function that only returns one value. A global or library call typed to give one value counts as
+    // known, since the compiler knows the builtins.
+    bool compilerKnowsOneValue(AstExpr* value, int depth)
     {
-        AstExprCall* call = last->as<AstExprCall>();
-        bool hintApplies = context->asksForSpeed && call && context->warningEnabled(LintWarning::Code_OptimizationHint);
-        if (!hintApplies || !calleeMayInline(call))
-            return;
+        AstExprCall* call = value->as<AstExprCall>();
+        if (!call)
+            return !value->is<AstExprVarargs>();
 
+        AstExpr* callee = unwrapGroup(call->func);
+        if (AstExprGlobal* global = callee->as<AstExprGlobal>())
+            return declaredClasses.count(global->name.value) > 0 || typedToGiveOneValue(call);
+
+        AstExprIndexName* index = callee->as<AstExprIndexName>();
+        AstExprGlobal* library = index ? unwrapGroup(index->expr)->as<AstExprGlobal>() : nullptr;
+        bool libraryCall = !call->self && library && !declaredClasses.count(library->name.value);
+        if (libraryCall)
+            return typedToGiveOneValue(call);
+
+        AstExprFunction* func = depth < kReturnedCallDepth ? calleeFunction(call) : nullptr;
+        return func && compilerKnowsReturnsOne(func, depth + 1);
+    }
+
+    // The compiler's rule: every `return` in the function has one value it knows is one value
+    bool compilerKnowsReturnsOne(AstExprFunction* func, int depth)
+    {
+        struct ReturnFinder : AstVisitor
+        {
+            LintOptimizationHint* pass = nullptr;
+            int depth = 0;
+            bool returnsOne = true;
+
+            bool visit(AstExpr*) override
+            {
+                return false;
+            }
+
+            bool visit(AstStatReturn* node) override
+            {
+                returnsOne = returnsOne && node->list.size == 1 && pass->compilerKnowsOneValue(node->list.data[0], depth);
+                return false;
+            }
+        };
+
+        ReturnFinder finder;
+        finder.pass = this;
+        finder.depth = depth;
+        func->body->visit(&finder);
+        return finder.returnsOne;
+    }
+
+    bool typedToGiveOneValue(AstExprCall* call)
+    {
         std::optional<TypeId> calleeType = context->getType(call->func);
         const FunctionType* function = calleeType ? get<FunctionType>(follow(*calleeType)) : nullptr;
         if (!function)
-            return;
+            return false;
 
         auto [values, tail] = flatten(function->retTypes);
-        bool returnsOneValue = values.size() == 1 && !tail;
-        if (!returnsOneValue)
+        return values.size() == 1 && !tail;
+    }
+
+    // `return f(x)`, `g(f(x))` and `{ f(x) }` pass on every value `f` gives, so the compiler can't inline `f` there
+    // unless it knows `f` gives one. When `f` is typed to give one value and the compiler can't tell, parentheses keep
+    // one value and let it inline.
+    void checkAllValuesPassedOn(AstExpr* value, AllValuesUse use)
+    {
+        AstExprCall* call = value->as<AstExprCall>();
+        bool hintApplies = context->asksForSpeed && call && context->warningEnabled(LintWarning::Code_OptimizationHint);
+        if (!hintApplies)
+            return;
+
+        AstExprFunction* func = calleeFunction(call);
+        bool needsParentheses = func && typedToGiveOneValue(call) && !compilerKnowsReturnsOne(func, 0);
+        if (!needsParentheses)
             return;
 
         std::string callee = toString(call->func);
-        emitWarning(
-            *context,
-            LintWarning::Code_OptimizationHint,
-            call->location,
-            "Wrap this call in parentheses, 'return (%s(...))', so '%s' can be inlined; a returned call passes on every value "
-            "it gives, and the compiler only inlines a call it knows gives one",
-            callee.c_str(),
-            callee.c_str()
-        );
+        switch (use)
+        {
+        case AllValuesUse::Return:
+            emitWarning(
+                *context,
+                LintWarning::Code_OptimizationHint,
+                call->location,
+                "Wrap this call in parentheses, 'return (%s(...))', so '%s' can be inlined; a returned call passes on every "
+                "value it gives, and the compiler can't tell that '%s' gives one",
+                callee.c_str(),
+                callee.c_str(),
+                callee.c_str()
+            );
+            break;
+        case AllValuesUse::Argument:
+            emitWarning(
+                *context,
+                LintWarning::Code_OptimizationHint,
+                call->location,
+                "Wrap this call in parentheses or pass another argument after it so '%s' can be inlined; a last argument passes "
+                "on every value the call gives, and the compiler can't tell that '%s' gives one",
+                callee.c_str(),
+                callee.c_str()
+            );
+            break;
+        case AllValuesUse::TableItem:
+            emitWarning(
+                *context,
+                LintWarning::Code_OptimizationHint,
+                call->location,
+                "Wrap this call in parentheses so '%s' can be inlined; a table's last item takes every value the call gives, and "
+                "the compiler can't tell that '%s' gives one",
+                callee.c_str(),
+                callee.c_str()
+            );
+            break;
+        }
     }
 
     // `self.pos:add(...)` several times in one function: a field can't be proven in place, so none of the calls are
