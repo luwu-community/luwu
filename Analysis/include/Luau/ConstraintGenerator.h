@@ -661,8 +661,18 @@ private:
      * @param fn the function expression to check.
      */
     void checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn);
-    void recordRaisedError(AstExprCall* call, const std::vector<TypeId>& args);
-    TypeId raisedErrorType(AstExprCall* call, const std::vector<TypeId>& args);
+    void recordRaisedError(
+        const ScopePtr& scope,
+        AstExprCall* call,
+        const std::vector<TypeId>& args,
+        std::optional<TypePackId> argTail
+    );
+    TypeId raisedErrorType(
+        const ScopePtr& scope,
+        AstExprCall* call,
+        const std::vector<TypeId>& args,
+        std::optional<TypePackId> argTail
+    );
     std::optional<TypeId> annotatedHintFor(AstExprCall* call, size_t index);
     void weakenUnknownMembers(AstTypeUnion* annotation, std::vector<TypeId>& members);
     std::optional<FunctionType::TruthyRefinement> resolveTruthyRefinement(const ScopePtr& signatureScope, AstExprFunction* fn);

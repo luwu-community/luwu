@@ -7593,6 +7593,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "error_calls_are_checked_against_the_annotate
             end
             return n
         end
+        local function message(n: number): string
+            return `bad count {n}`
+        end
+        local function wrapped(n: number)
+            if n < 0 then
+                error(message(n))
+            end
+            return n
+        end
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
@@ -7604,6 +7613,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "error_calls_are_checked_against_the_annotate
     CHECK_EQ(result.errors[1].location.begin, Position(10, 22));
     CHECK_EQ(toString(requireType("count")), "(number) -> true ! \"NaN\" | \"negative\"");
     CHECK_EQ(toString(requireType("plain")), "(number) -> number ! string");
+    // a call's first value, not `nil`
+    CHECK_EQ(toString(requireType("wrapped")), "(number) -> number ! string");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "try_types_its_error_from_the_callees_hint")
