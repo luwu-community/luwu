@@ -1072,6 +1072,16 @@ enum class IrCmd : uint8_t
     // F: int (1 for a write)
     FALLBACK_TABLEBUNDLE,
 
+    // Luwu bundles: LOP_GETTABLEBUNDLE or LOP_SETTABLEBUNDLE, a table read or write at a bundle key given by its values.
+    // May run `__index` or `__newindex`.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (target, written, or source)
+    // C: Rn (table)
+    // D: Rn (first of E registers holding the bundle's values)
+    // E: int (how many values)
+    // F: int (1 for a write)
+    FALLBACK_TABLEBUNDLE,
+
     // Luwu Traits (rfcs/classes/traits.md): LOP_GETQUALIFIED, the class's version of a trait's member. Runs no Luau code,
     // but raises when the class doesn't implement the trait.
     // A: unsigned int (bytecode instruction index)
