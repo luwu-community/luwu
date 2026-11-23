@@ -8,6 +8,8 @@
 #include "Luau/OptimizeFinalX64.h"
 #include "ScopedFlags.h"
 
+#include "Luau/BytecodeUtils.h"
+
 #include "doctest.h"
 
 #include <limits.h>
@@ -8019,6 +8021,21 @@ bb_exit_1:
    JUMP exit(1)
 
 )");
+}
+
+TEST_SUITE_END();
+
+TEST_SUITE_BEGIN("OpLength");
+
+// Luwu: CodeGen keeps its own table of instruction lengths. One that disagrees with the bytecode's reads an AUX word as an
+// instruction: GETQUALIFIED's constant index once read as a LOADB and gave its call a boolean `self`.
+TEST_CASE("CodeGenInstructionLengthsMatchTheBytecode")
+{
+    for (int op = 0; op < LOP__COUNT; op++)
+    {
+        INFO(op);
+        CHECK_EQ(Luau::CodeGen::getOpLength(LuauOpcode(op)), Luau::getOpLength(LuauOpcode(op)));
+    }
 }
 
 TEST_SUITE_END();
