@@ -5974,6 +5974,174 @@ private:
             );
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a match statement laid out so its lines read as
+    // belonging to something else. Its arms line up at the `match`'s indent or past it, each arm's block is indented past
+    // its arm, and its `end`s line up with what they close. Indented arms close with an `end` at their indent and another
+    // at the `match`'s.
+    bool visit(AstStatMatch* node) override
+    {
+        if (enabled.misleadingIndentation)
+            checkMatchIndentation(node);
+        return true;
+    }
+
+    static const char* armKeyword(const AstMatchArm& arm)
+    {
+        switch (arm.kind)
+        {
+        case AstMatchArm::Case:
+            return "case";
+        case AstMatchArm::When:
+            return "when";
+        case AstMatchArm::Else:
+            return "else";
+        }
+        return "case";
+    }
+
+    // Where an `end` balancing the last arm would go, one line up: the arms' indent on the last arm's last line, as wide as
+    // `end`
+    static Location balancingEndAbove(const AstMatchArm& arm, unsigned int armsColumn)
+    {
+        unsigned int line = arm.keywordLocation.end.line;
+        if (arm.body && arm.body->body.size > 0)
+            line = arm.body->body.data[arm.body->body.size - 1]->location.end.line;
+        return Location(Position(line, armsColumn), Position(line, armsColumn + 3));
+    }
+
+    void checkMatchIndentation(AstStatMatch* node)
+    {
+        if (node->arms.size == 0)
+            return;
+
+        Position matchBegin = node->location.begin;
+        unsigned int matchColumn = startLineColumn(matchBegin);
+        const AstMatchArm& first = node->arms.data[0];
+        // arms written on the `match`'s line have no indent to compare
+        if (first.keywordLocation.begin.line == matchBegin.line)
+            return;
+
+        unsigned int armsColumn = first.keywordLocation.begin.column;
+        bool armsAligned = checkMatchArms(node, matchColumn, armsColumn);
+        if (!armsAligned || !node->hasEnd)
+            return;
+
+        Position endEnd = node->location.end;
+        Location endKeyword(Position(endEnd.line, endEnd.column - 3), endEnd);
+        unsigned int endColumn = endKeyword.begin.column;
+        bool armsIndented = armsColumn > matchColumn;
+
+        if (node->armsEndLocation)
+        {
+            if (node->armsEndLocation->begin.column != armsColumn)
+                emitWarning(
+                    *context,
+                    LintWarning::Code_MisleadingIndentation,
+                    *node->armsEndLocation,
+                    "This 'end' closes the arms of the 'match' on line %d; line it up with the arms",
+                    matchBegin.line + 1
+                );
+        }
+        else if (armsIndented && endColumn == matchColumn)
+        {
+            emitWarning(
+                *context,
+                LintWarning::Code_MisleadingIndentation,
+                balancingEndAbove(node->arms.data[node->arms.size - 1], armsColumn),
+                "Consider putting an extra 'end' under here to visually balance the last case when indented or unindent all cases to "
+                "align with the 'match' keyword on line %d",
+                matchBegin.line + 1
+            );
+        }
+        else if (armsIndented && endColumn == armsColumn)
+        {
+            emitWarning(
+                *context,
+                LintWarning::Code_MisleadingIndentation,
+                endKeyword,
+                "This 'end' closes the 'match' on line %d; add another 'end' below it at the 'match''s indent, or unindent this one",
+                matchBegin.line + 1
+            );
+        }
+        else if (endColumn != matchColumn)
+        {
+            emitWarning(
+                *context,
+                LintWarning::Code_MisleadingIndentation,
+                endKeyword,
+                "This 'end' closes the 'match' on line %d; line it up with the 'match'",
+                matchBegin.line + 1
+            );
+        }
+    }
+
+    // Reports arms left of the `match` or out of line with the first arm, and the first line of each arm's block that isn't
+    // indented past its arm. Returns whether every arm lines up.
+    bool checkMatchArms(AstStatMatch* node, unsigned int matchColumn, unsigned int armsColumn)
+    {
+        unsigned int matchLine = node->location.begin.line;
+        bool aligned = true;
+        for (const AstMatchArm& arm : node->arms)
+        {
+            Position armBegin = arm.keywordLocation.begin;
+            if (armBegin.column < matchColumn)
+            {
+                aligned = false;
+                emitWarning(
+                    *context,
+                    LintWarning::Code_MisleadingIndentation,
+                    arm.keywordLocation,
+                    "This '%s' is left of the 'match' on line %d; indent it to the 'match''s column or one level past it",
+                    armKeyword(arm),
+                    matchLine + 1
+                );
+            }
+            else if (armBegin.column != armsColumn)
+            {
+                aligned = false;
+                emitWarning(
+                    *context,
+                    LintWarning::Code_MisleadingIndentation,
+                    arm.keywordLocation,
+                    "This '%s' isn't lined up with the first arm of the 'match' on line %d; indent it like that arm",
+                    armKeyword(arm),
+                    matchLine + 1
+                );
+            }
+
+            checkMatchArmBody(arm);
+        }
+        return aligned;
+    }
+
+    void checkMatchArmBody(const AstMatchArm& arm)
+    {
+        if (!arm.body)
+            return;
+
+        Position armBegin = arm.keywordLocation.begin;
+        for (AstStat* stat : arm.body->body)
+        {
+            Position begin = stat->location.begin;
+            if (begin.line == armBegin.line || begin.column > armBegin.column)
+                continue;
+
+            Location line = stat->location;
+            if (line.end.line != line.begin.line)
+                line.end = line.begin;
+            emitWarning(
+                *context,
+                LintWarning::Code_MisleadingIndentation,
+                line,
+                "This line is in the '%s' on line %d, but is indented like the arms; indent it past that '%s'",
+                armKeyword(arm),
+                armBegin.line + 1,
+                armKeyword(arm)
+            );
+            return;
+        }
+    }
+
     // `return`'s values may start on the next line, as everywhere in Lua. In a `do` expression the `return` is often meant
     // to have no value, and then whatever starts the next line becomes the value to return.
     bool visit(AstStatReturn* node) override

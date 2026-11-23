@@ -3775,6 +3775,72 @@ return f, g
     CHECK_EQ(found[2].location, Location(Position(6, 4), Position(6, 10)));
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a match statement's arms line up at or past the
+// `match`, each block is indented past its arm, and its `end`s line up with what they close. Indented arms close with an
+// `end` at their indent and another at the `match`'s; arms at the `match`'s column need only the one.
+TEST_CASE_FIXTURE(Fixture, "MisleadingIndentationInMatchStatements")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+    };
+
+    LintResult result = lint(R"(
+local function f(v: number)
+    match v
+        case is 1 then
+            print("one")
+    end
+    match v
+        case is 1 then
+            print("one")
+        end
+    match v
+        case is 1 then
+            print("one")
+        end
+    end
+    match v
+    case is 1 then
+        print("one")
+    end
+        match v
+    case is 1 then
+        print("one")
+    else
+        print("other")
+        end
+    match v
+    case is 1 then
+    print("one")
+      case is 2 then
+        print("two")
+    end
+    match v
+    case is 1 then
+        print("one")
+      end
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MisleadingIndentation);
+    std::map<std::pair<unsigned int, unsigned int>, std::string> byStart;
+    for (const LintWarning& warning : found)
+        byStart[{warning.location.begin.line, warning.location.begin.column}] = warning.text;
+
+    // the two layouts that balance (lines 11-15 and 16-19) have no warnings
+    REQUIRE_EQ(found.size(), 7);
+    CHECK(byStart[{4, 8}].find("Consider putting an extra 'end' under here") != std::string::npos);
+    CHECK(byStart[{9, 8}].find("closes the 'match' on line 7; add another 'end'") != std::string::npos);
+    CHECK(byStart[{20, 4}].find("This 'case' is left of the 'match' on line 20") != std::string::npos);
+    CHECK(byStart[{22, 4}].find("This 'else' is left of the 'match' on line 20") != std::string::npos);
+    CHECK(byStart[{27, 4}].find("This line is in the 'case' on line 27") != std::string::npos);
+    CHECK(byStart[{28, 6}].find("isn't lined up with the first arm") != std::string::npos);
+    CHECK(byStart[{34, 6}].find("line it up with the 'match'") != std::string::npos);
+}
+
 // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a `do` body is indented one level past the line the `do` is on. A table
 // comprehension's `when` clauses, at the `for`'s indent or one level in, don't change that for `give do`.
 // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): a comprehension's clauses are parts of the statement around it, so
