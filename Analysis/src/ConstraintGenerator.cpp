@@ -5559,7 +5559,7 @@ InferencePack ConstraintGenerator::checkExprCall(
 
     Checkpoint argEndCheckpoint = checkpoint(this);
 
-    recordRaisedError(call, args);
+    recordRaisedError(scope, call, args, argTail);
 
     // Luwu: upstream refines `x` in `class.isinstance(x, C)` here, matching the call by its spelling (a global's
     // `.isinstance`). Luwu does it in MagicClassInstanceCheck::refine, by the callee's type, so an alias (`const is =
@@ -7319,16 +7319,27 @@ void ConstraintGenerator::checkFunctionBody(const ScopePtr& scope, AstExprFuncti
 }
 
 // Luwu try expressions: what `error(v)` raises in a function without an annotated hint. A string literal raises `string`,
-// widened like a local's initializer.
-TypeId ConstraintGenerator::raisedErrorType(AstExprCall* call, const std::vector<TypeId>& args)
+// widened like a local's initializer. A call as the only argument (`error(message())`) is in `argTail`, and raises its
+// first value.
+TypeId ConstraintGenerator::raisedErrorType(
+    const ScopePtr& scope,
+    AstExprCall* call,
+    const std::vector<TypeId>& args,
+    std::optional<TypePackId> argTail
+)
 {
-    if (args.empty())
+    if (call->args.size == 0)
         return builtinTypes->nilType;
 
-    bool stringLiteral = call->args.size > 0 && call->args.data[0]->is<AstExprConstantString>();
+    bool stringLiteral = call->args.data[0]->is<AstExprConstantString>();
     if (stringLiteral)
         return builtinTypes->stringType;
-    return args[0];
+
+    if (!args.empty())
+        return args[0];
+    if (argTail)
+        return flattenPack(scope, call->args.data[0]->location, InferencePack{*argTail}).ty;
+    return builtinTypes->nilType;
 }
 
 // Luwu try expressions: the annotated hint of the function `call` is in, when `call` is `error(...)` and argument `index`
@@ -7342,7 +7353,12 @@ std::optional<TypeId> ConstraintGenerator::annotatedHintFor(AstExprCall* call, s
 
 // Luwu try expressions: `error(v)` raises v's type, and `assert(...)` raises a string. Each joins the inferred hint of the
 // function the call is in, when that function's hint isn't annotated.
-void ConstraintGenerator::recordRaisedError(AstExprCall* call, const std::vector<TypeId>& args)
+void ConstraintGenerator::recordRaisedError(
+    const ScopePtr& scope,
+    AstExprCall* call,
+    const std::vector<TypeId>& args,
+    std::optional<TypePackId> argTail
+)
 {
     // an annotated hint is the function's whole hint
     if (raisedErrors.empty() || raisedErrors.back().declared || call == raisedErrors.back().unreachableError)
@@ -7353,7 +7369,7 @@ void ConstraintGenerator::recordRaisedError(AstExprCall* call, const std::vector
         return;
 
     if (callee->name == "error")
-        raisedErrors.back().types.push_back(raisedErrorType(call, args));
+        raisedErrors.back().types.push_back(raisedErrorType(scope, call, args, argTail));
     else if (callee->name == "assert")
         raisedErrors.back().types.push_back(builtinTypes->stringType);
 }
