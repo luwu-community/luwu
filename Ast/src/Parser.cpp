@@ -9226,7 +9226,8 @@ AstExpr* Parser::parseMatchExpr()
 //       [else block]
 //   end
 //
-// The first arm that matches runs; with no `else`, a value no arm matches runs nothing.
+// The first arm that matches runs; with no `else`, a value no arm matches runs nothing. Arms indented under `match` may
+// end with an `end` at their indent before the `match`'s `end`.
 AstStat* Parser::parseMatchStat()
 {
     Location start = lexer.current().location;
@@ -9276,7 +9277,22 @@ AstStat* Parser::parseMatchStat()
     restoreLocals(localsBegin);
 
     bool hasEnd = expectsEnd && expectMatchEndAndConsume(Lexeme::ReservedEnd, opener);
+
+    // Arms indented under `match` can close with an `end` at their indent before the match's `end` at the column `match`
+    // starts at, the way a Rust `match` closes its braces. An enclosing block's `end` is further left and never counts.
+    std::optional<Location> armsEndLocation;
+    const Lexeme& next = lexer.current();
+    Location firstEnd = lexer.previousLocation();
+    bool endsIndentedArms = hasEnd && firstEnd.begin.column > start.begin.column && next.type == Lexeme::ReservedEnd &&
+                            next.location.begin.line > firstEnd.end.line && next.location.begin.column == start.begin.column;
+    if (endsIndentedArms)
+    {
+        armsEndLocation = firstEnd;
+        nextLexeme(); // end
+    }
+
     AstStatMatch* node = allocator.alloc<AstStatMatch>(Location(start, lexer.previousLocation()), subject, copy(arms.data(), arms.size()), hasEnd);
+    node->armsEndLocation = armsEndLocation;
     node->luwuOnly = true;
     return node;
 }

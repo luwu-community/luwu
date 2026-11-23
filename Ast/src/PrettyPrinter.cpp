@@ -1157,6 +1157,11 @@ struct Printer
                 visualizeMatchArmHead(arm);
                 visualizeBlock(*arm.body);
             }
+            if (a->armsEndLocation)
+            {
+                advance(a->armsEndLocation->begin);
+                writer.keyword("end");
+            }
             if (a->hasEnd)
             {
                 advanceBefore(a->location.end, 3);

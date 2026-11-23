@@ -2063,6 +2063,8 @@ public:
     AstMatchSubject subject;
     AstArray<AstMatchArm> arms;
     bool hasEnd;
+    // The `end` that closes arms indented under `match`, when a second `end` at the `match`'s column closes the statement
+    std::optional<Location> armsEndLocation;
 };
 
 // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `expr` without the parentheses around it.
