@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "ldo.h"
 
@@ -19,15 +19,14 @@
 
 LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCustomYieldablePcalls)
-LUAU_FASTFLAG(LuauPcallMulti)
+LUAU_FASTFLAG(LuwuPcallMulti)
+LUAU_FASTFLAGVARIABLE(LuauXpcallFixMessageYieldPath)
 
 // keep max stack allocation request under 1GB
 #define MAX_STACK_SIZE (int(1024 / sizeof(TValue)) * 1024 * 1024)
 
 /*
-** {======================================================
 ** Error-recovery functions
-** =======================================================
 */
 
 #if LUA_USE_LONGJMP
@@ -165,7 +164,6 @@ l_noret luaD_throw(lua_State* L, int errcode)
 }
 #endif
 
-// }======================================================
 
 static void correctstack(lua_State* L, TValue* oldstack)
 {
@@ -404,7 +402,7 @@ void luaD_seterrorobj(lua_State* L, int errcode, StkId oldtop)
 
 void luaD_seterrorobj_multi(lua_State* L, int errcode, StkId oldtop, int num_err_results)
 {
-    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    LUAU_ASSERT(FFlag::LuwuPcallMulti);
     switch (errcode)
     {
     case LUA_ERRMEM:
@@ -584,7 +582,7 @@ static void callerrfunc(lua_State* L, void* ud)
 
 static void callerrfunc_multi(lua_State* L, void* ud)
 {
-    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    LUAU_ASSERT(FFlag::LuwuPcallMulti);
     StkId errfunc = cast_to(StkId, ud);
 
     setobj2s(L, L->top, L->top - 1);
@@ -624,8 +622,11 @@ static void resume_handle(lua_State* L, void* ud)
         // if errfunc fails, we fail with "error in error handling" or "not enough memory"
         int err = luaD_rawrunprotected(L, callerrfunc, ci->base + (ci->errfunc - 1));
 
-        // restore nCcalls to base if errfunc itself errored
-        L->nCcalls = L->baseCcalls;
+        if (!FFlag::LuauXpcallFixMessageYieldPath)
+        {
+            // restore nCcalls to base if errfunc itself errored
+            L->nCcalls = L->baseCcalls;
+        }
 
         // in general we preserve the status, except for cases when the error handler fails
         // out of memory is treated specially because it's common for it to be cascading, in which case we preserve the code
@@ -644,6 +645,12 @@ static void resume_handle(lua_State* L, void* ud)
 
     if (FFlag::LuauCustomYieldablePcalls)
     {
+        if (FFlag::LuauXpcallFixMessageYieldPath)
+        {
+            // restore nCcalls to base for the continuation
+            L->nCcalls = L->baseCcalls;
+        }
+
         // restore the stack frame to the frame with continuation
         L->ci = ci;
 
@@ -737,9 +744,17 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
             }
         }
 
-        // restore the baseline we established in resume_start
-        L->nCcalls = oldnCcalls;
-        L->baseCcalls = L->nCcalls;
+        if (FFlag::LuauCustomYieldablePcalls && FFlag::LuauXpcallFixMessageYieldPath)
+        {
+            // restore the baseline we established in resume_start
+            L->baseCcalls = oldnCcalls;
+        }
+        else
+        {
+            // restore the baseline we established in resume_start
+            L->nCcalls = oldnCcalls;
+            L->baseCcalls = L->nCcalls;
+        }
 
         L->status = cast_byte(status);
         status = luaD_rawrunprotected(L, resume_handle, ch);
@@ -888,7 +903,7 @@ int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t e
 
 int luaD_pcall_multi(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t ef)
 {
-    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    LUAU_ASSERT(FFlag::LuwuPcallMulti);
     unsigned short oldnCcalls = L->nCcalls;
     unsigned short oldbaseCcalls = L->baseCcalls;
     ptrdiff_t old_ci = saveci(L, L->ci);

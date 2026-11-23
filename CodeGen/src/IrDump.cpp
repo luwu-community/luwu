@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/IrDump.h"
 
 #include "Luau/IrUtils.h"
@@ -51,7 +51,7 @@ static bool isPrintableStringConstant(const char* str, size_t len)
     return true;
 }
 
-static const char* getTagName(uint8_t tag)
+const char* getTagName(uint8_t tag)
 {
     switch (tag)
     {
@@ -111,6 +111,8 @@ const char* getCmdName(IrCmd cmd)
         return "LOAD_EXTRA";
     case IrCmd::LOAD_POINTER:
         return "LOAD_POINTER";
+    case IrCmd::LOAD_BUFFER_DATA:
+        return "LOAD_BUFFER_DATA";
     case IrCmd::LOAD_DOUBLE:
         return "LOAD_DOUBLE";
     case IrCmd::LOAD_INT:
@@ -131,6 +133,8 @@ const char* getCmdName(IrCmd cmd)
         return "GET_HASH_NODE_ADDR";
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
         return "GET_CLOSURE_UPVAL_ADDR";
+    case IrCmd::LOAD_OWNER_CLASS:
+        return "LOAD_OWNER_CLASS";
     case IrCmd::STORE_TAG:
         return "STORE_TAG";
     case IrCmd::STORE_EXTRA:
@@ -301,6 +305,8 @@ const char* getCmdName(IrCmd cmd)
         return "STRING_LEN";
     case IrCmd::BUFFER_ISFROZEN:
         return "BUFFER_ISFROZEN";
+    case IrCmd::CLASS_ISINSTANCE:
+        return "CLASS_ISINSTANCE";
     case IrCmd::NEW_TABLE:
         return "NEW_TABLE";
     case IrCmd::DUP_TABLE:
@@ -311,6 +317,8 @@ const char* getCmdName(IrCmd cmd)
         return "TRY_CALL_FASTGETTM";
     case IrCmd::NEW_USERDATA:
         return "NEW_USERDATA";
+    case IrCmd::NEW_VECTOR:
+        return "NEW_VECTOR";
     case IrCmd::INT64_TO_NUM:
         return "INT64_TO_NUM";
     case IrCmd::INT_TO_NUM:
@@ -379,6 +387,20 @@ const char* getCmdName(IrCmd cmd)
         return "CHECK_NODE_NO_NEXT";
     case IrCmd::CHECK_NODE_VALUE:
         return "CHECK_NODE_VALUE";
+    case IrCmd::CHECK_OBJECT_CLASS:
+        return "CHECK_OBJECT_CLASS";
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+        return "TRY_OBJECT_MEMBER_ADDR";
+    case IrCmd::OBJECT_MEMBER_ADDR:
+        return "OBJECT_MEMBER_ADDR";
+    case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+        return "CHECK_CLASS_FIELDS_CONSTRUCTIBLE";
+    case IrCmd::NEW_OBJECT:
+        return "NEW_OBJECT";
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
+        return "TRY_OBJECT_NAMECALL_ADDR";
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+        return "TRY_CLASS_MEMBER_ADDR";
     case IrCmd::CHECK_BUFFER_LEN:
         return "CHECK_BUFFER_LEN";
     case IrCmd::CHECK_BUFFER_MUTABLE:
@@ -441,6 +463,10 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_DUPCLOSURE";
     case IrCmd::FALLBACK_FORGPREP:
         return "FALLBACK_FORGPREP";
+    case IrCmd::FALLBACK_NEWOBJECT:
+        return "FALLBACK_NEWOBJECT";
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
+        return "FALLBACK_NEWCLASSMEMBER";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:
@@ -566,6 +592,63 @@ const char* getConversionCmdSuffix(IrCmd conversionCmd)
     return conversionCmd == IrCmd::INT_TO_NUM ? " as int" : conversionCmd == IrCmd::UINT_TO_NUM ? " as uint" : "";
 }
 
+uint8_t parseTagName(std::string_view name)
+{
+    if (name == "tnil")
+        return LUA_TNIL;
+
+    if (name == "tboolean")
+        return LUA_TBOOLEAN;
+
+    if (name == "tlightuserdata")
+        return LUA_TLIGHTUSERDATA;
+
+    if (name == "tnumber")
+        return LUA_TNUMBER;
+
+    if (name == "tinteger")
+        return LUA_TINTEGER;
+
+    if (name == "tvector")
+        return LUA_TVECTOR;
+
+    if (name == "tstring")
+        return LUA_TSTRING;
+
+    if (name == "ttable")
+        return LUA_TTABLE;
+
+    if (name == "tfunction")
+        return LUA_TFUNCTION;
+
+    if (name == "tuserdata")
+        return LUA_TUSERDATA;
+
+    if (name == "tthread")
+        return LUA_TTHREAD;
+
+    if (name == "tbuffer")
+        return LUA_TBUFFER;
+
+    if (name == "tproto")
+        return LUA_TPROTO;
+
+    if (name == "tupval")
+        return LUA_TUPVAL;
+
+    if (name == "tdeadkey")
+        return LUA_TDEADKEY;
+
+    if (name == "tclass")
+        return LUA_TCLASS;
+
+    if (name == "tobject")
+        return LUA_TOBJECT;
+
+    CODEGEN_ASSERT(!"Unknown type tag");
+    return 0xff;
+}
+
 void toString(IrToStringContext& ctx, const IrInst& inst, uint32_t index)
 {
     append(ctx.result, "  ");
@@ -628,7 +711,7 @@ static void appendVmConstant(std::string& result, Proto* proto, int index)
     }
     else if (constant.tt == LUA_TVECTOR)
     {
-        const float* v = constant.value.v;
+        const LUA_VECTOR_TYPE* v = vvalue(&constant);
 
 #if LUA_VECTOR_SIZE == 4
         if (v[3] != 0)
@@ -783,6 +866,10 @@ const char* getBytecodeTypeName(uint8_t type, const char* const* userdataTypes)
         return "buffer";
     case LBC_TYPE_SYMNONE:
         return "none";
+    case LBC_TYPE_CLASS:
+        return "class";
+    case LBC_TYPE_OBJECT:
+        return "object";
     case LBC_TYPE_ANY:
         return "any";
     }

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Common.h"
 #include "Luau/Parser.h"
 #include "Luau/PrettyPrinter.h"
@@ -10,10 +10,12 @@
 
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuauNoInline)
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 using namespace Luau;
 
@@ -903,7 +905,7 @@ TEST_CASE("roundtrip_generic_types")
 
 TEST_CASE("roundtrip_function_arg_defaults")
 {
-    ScopedFastFlag sff{FFlag::LuauDefaultArguments, true};
+    ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     const std::string code = R"(
         local function foo(a:string=1)
@@ -2124,7 +2126,7 @@ TEST_CASE("fuzzer_nil_optional")
 
 TEST_CASE("fuzzer_class")
 {
-    ScopedFastFlag fflag{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
     const std::string code = R"( class l0 end )";
     // should not crash
     prettyPrint(code, {}, true);
@@ -2132,12 +2134,12 @@ TEST_CASE("fuzzer_class")
 
 TEST_CASE("simple_class_example")
 {
-    ScopedFastFlag fflag{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     std::string code = R"(
 class Point
-    public x: number
-    public y: number
+    x: number
+    y: number
     function length(self)
         return 100
     end
@@ -2151,18 +2153,18 @@ end
 
 TEST_CASE("remixed_simple_class")
 {
-    ScopedFastFlag fflag{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     std::string code = R"(
 class Point
     function length(self)
         return 100
     end
-    public x
+    x
     function new(): Point
         return Point { x = 0, y = 0 }
     end
-    public y
+    y
 end
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
@@ -2170,7 +2172,7 @@ end
 
 TEST_CASE("simple_class_with_public_functions")
 {
-    ScopedFastFlag fflag{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     std::string code = R"(
 class Point
@@ -2185,6 +2187,81 @@ class Point
 end
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("class_with_method_attributes")
+{
+    ScopedFastFlag fflags[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuauCstAttr, true},
+    };
+
+    // Attributes on either side of the access specifier come back out where they were written.
+    std::string code = R"(
+class Point
+    private x: number
+    @native
+    public function length(self)
+        return 100
+    end
+    private @native function scaled(self)
+        return 100
+    end
+end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("class_round_trip_keeps_generics_defaults_and_parameter_qualifiers")
+{
+    ScopedFastFlag fflags[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuDefaultArguments, true},
+        {FFlag::LuauExportValueSyntax, true},
+    };
+
+    std::string code = R"(
+export class Box<T, U = string>(public const a: number, private b = 2, public c)
+    private const y = "s"
+    public z: number = a + 1
+    public w = {}
+    public function get(self): T
+        return self.a
+    end
+end
+class Plain<T...>
+    x: number = 1
+end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    code = R"(
+class Account private (private const holder: string)
+    public balance = 0
+end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+}
+
+TEST_CASE("class_without_types_drops_generics")
+{
+    ScopedFastFlag fflags[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+    };
+
+    std::string code = R"(
+class Box<T>(a)
+    x: T
+end
+    )";
+    std::string expected = R"(
+class Box   (a)
+    x
+end
+    )";
+    CHECK_EQ(expected, prettyPrint(code, {}, false).code);
 }
 
 TEST_CASE("prettyPrint_function_attributes")
@@ -2644,6 +2721,57 @@ TEST_CASE("pretty_print_incomplete_attr_args")
     )=";
 
     CHECK_EQ(code, prettyPrint(code, {}, true, true).code);
+}
+
+TEST_CASE_FIXTURE(Fixture, "attach_types_to_a_property_with_different_read_and_write_types")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    // `x` attaches as two entries, one for its read type and one for its write type.
+    std::string code = R"(
+        local function f(t: { read x: number, write x: string })
+            local u = t
+            return u
+        end
+    )";
+
+    // The printer only writes `read`/`write` where the source had them, so the attached entries print
+    // bare; what matters is that both are there.
+    std::string decorated = decorateWithTypes(code);
+    CHECK(decorated.find("local u:{x:number,x:string}=t") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "attach_types_to_a_function_whose_generics_are_bound")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    // Luwu: taken from upstream 0.736 (after our last sync at 0.731). Generalization can leave a
+    // function's generic list holding a bound type. Reading that list without `follow` failed an assert,
+    // and in release builds it read the bound type as a generic and crashed.
+    std::string code = R"(--!strict
+        local Account = {}
+        Account.__index = Account
+        function Account.new(balance)
+            local self = setmetatable({}, Account)
+            self.balance = balance
+            self.owner = "x"
+            return self
+        end
+        function Account:deposit(n)
+            self.balance = self.balance + n
+        end
+        function Account:withdraw(n)
+            if n > self.balance then error("no") end
+            self.balance -= n
+        end
+        local a = Account.new(10)
+        a:deposit(5)
+        a:withdraw(3)
+        print(a.balance, a.owner)
+    )";
+
+    std::string decorated = decorateWithTypes(code);
+    CHECK(decorated.find("local a:") != std::string::npos);
 }
 
 TEST_SUITE_END();

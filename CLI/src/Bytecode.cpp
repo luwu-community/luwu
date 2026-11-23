@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "lua.h"
 #include "lualib.h"
 
@@ -11,6 +11,8 @@
 #include "Luau/Flags.h"
 
 #include <memory>
+
+#include <stdlib.h>
 
 using Luau::CodeGen::FunctionBytecodeSummary;
 

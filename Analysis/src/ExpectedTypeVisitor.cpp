@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/ExpectedTypeVisitor.h"
 
 #include "Luau/Scope.h"
@@ -7,6 +7,8 @@
 #include "Luau/TypePack.h"
 #include "Luau/TypeUtils.h"
 #include "Luau/VisitType.h"
+
+#include <algorithm>
 
 LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceSimplifyTables)
 
@@ -172,8 +174,28 @@ bool ExpectedTypeVisitor::visit(AstExprIndexExpr* expr)
 bool ExpectedTypeVisitor::visit(AstExprCall* expr)
 {
     TypeId* ty = astOverloadResolvedTypes->find(expr);
-    if (!ty)
+
+    // If the resolved call type came from `astOverloadResolvedTypes` rather than the callee
+    // expression's own type, and the callee's own type isn't itself a function, then this call
+    // was resolved through a `__call` metamethod (e.g. a class value invoked as its own
+    // constructor: `Cat { ... }`). Such calls forward the callee as an implicit leading argument
+    // (see OverloadResolver::testFunctionOrCallMetamethod) that doesn't correspond to any AST
+    // argument, so we need to skip it below the same way we skip an explicit `self` argument.
+    // An overloaded callee (an intersection of functions) also resolves through
+    // `astOverloadResolvedTypes`, with no extra argument, so ask for the metamethod itself.
+    bool viaCallMetamethod = false;
+    if (ty)
+    {
+        if (TypeId* calleeTy = astTypes->find(expr->func))
+        {
+            ErrorVec metatableErrors;
+            viaCallMetamethod = get<FunctionType>(follow(*calleeTy)) == nullptr &&
+                                findMetatableEntry(builtinTypes, metatableErrors, *calleeTy, "__call", expr->func->location).has_value();
+        }
+    }
+    else
         ty = astTypes->find(expr->func);
+
     if (!ty)
         return true;
 
@@ -194,6 +216,9 @@ bool ExpectedTypeVisitor::visit(AstExprCall* expr)
         // pack will be the type of `self`, so we just skip that.
         it++;
     }
+
+    if (viaCallMetamethod && it != end(ftv->argTypes))
+        it++;
 
     while (idx < expr->args.size && it != end(ftv->argTypes))
     {
@@ -246,6 +271,44 @@ void ExpectedTypeVisitor::applyExpectedType(TypeId expectedType, const AstExpr* 
                             return;
                         }
                     }
+                }
+
+                // Luwu (helpful subtyping errors): no member matches yet, which is the usual state of a
+                // literal being written (`{ kind = "" }` against a tagged union). Each field can still be
+                // anything some member allows for it, so that's what it's expected to be, and completion
+                // can offer `"join"`, `"leave"`, ... inside the quotes. Upstream stops here with no
+                // expected type for the fields, so under the new solver it offers nothing (CLI-116814).
+                // Iterating the union also yields the members of any union nested in it.
+                std::vector<const TableType*> members;
+                for (TypeId option : utv)
+                {
+                    if (const TableType* member = get<TableType>(option))
+                        members.push_back(member);
+                }
+
+                for (const AstExprTable::Item& item : exprTable->items)
+                {
+                    if (!isRecord(item))
+                        continue;
+
+                    const AstArray<char>& s = item.key->as<AstExprConstantString>()->value;
+                    std::string keyStr{s.data, s.data + s.size};
+
+                    std::vector<TypeId> options;
+                    for (const TableType* member : members)
+                    {
+                        if (auto it = member->props.find(keyStr); it != member->props.end() && it->second.readTy)
+                        {
+                            TypeId ty = follow(*it->second.readTy);
+                            if (std::find(options.begin(), options.end(), ty) == options.end())
+                                options.push_back(ty);
+                        }
+                    }
+
+                    if (options.size() == 1)
+                        applyExpectedType(options[0], item.value);
+                    else if (options.size() > 1)
+                        applyExpectedType(arena->addType(UnionType{std::move(options)}), item.value);
                 }
             }
             return;

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/BytecodeBuilder.h"
 #include "Luau/BytecodeGraph.h"
 #include "Luau/BytecodeValidation.h"
@@ -17,6 +17,7 @@ using namespace Luau;
 using namespace Luau::Bytecode;
 
 LUAU_FASTFLAG(LuauEmitCallFeedback)
+LUAU_FASTFLAG(LuwuClasses)
 
 namespace
 {
@@ -36,9 +37,9 @@ struct BytecodeCompilerFixture
 {
     BytecodeCompilerFixture() {}
 
-    std::optional<Bytecode::CompTimeBcFunction> buildBytecode(std::string_view src, int optimizationLevel = 0)
+    std::optional<Bytecode::CompTimeBcFunction> buildBytecode(std::string_view src, int optimizationLevel = 0, uint32_t functionId = 0)
     {
-        auto bytecode = getFunctionBytecode(src, optimizationLevel);
+        auto bytecode = getFunctionBytecode(src, optimizationLevel, functionId);
         if (bytecode)
         {
             strings = bytecode->second;
@@ -50,7 +51,11 @@ struct BytecodeCompilerFixture
         return {};
     }
 
-    std::optional<std::pair<std::string, std::vector<std::string>>> getFunctionBytecode(std::string_view src, int optimizationLevel = 0)
+    std::optional<std::pair<std::string, std::vector<std::string>>> getFunctionBytecode(
+        std::string_view src,
+        int optimizationLevel = 0,
+        uint32_t functionId = 0
+    )
     {
         Allocator allocator;
         AstNameTable names(allocator);
@@ -76,7 +81,7 @@ struct BytecodeCompilerFixture
             CompileOptions opts;
             opts.optimizationLevel = optimizationLevel;
             compileOrThrow(bcb, result, names, opts);
-            return {{bcb.getFunctionData(0), extractStringTable(bcb)}};
+            return {{bcb.getFunctionData(functionId), extractStringTable(bcb)}};
         }
         catch (CompileError& e)
         {
@@ -91,7 +96,7 @@ struct BytecodeCompilerFixture
     {
         std::string bytecode = bcb.getBytecode();
         const char* data = bytecode.data();
-        size_t offset = 2; // skip versions
+        size_t offset = LWBC_HEADER_SIZE; // skip the Luwu header
         std::vector<std::string> result;
         uint32_t stringsCount = readVarInt(data, offset);
         for (uint32_t i = 0; i < stringsCount; i++)
@@ -105,11 +110,11 @@ struct BytecodeCompilerFixture
         return result;
     }
 
-    void checkRoundtrip(std::string_view snippet)
+    void checkRoundtrip(std::string_view snippet, uint32_t functionId = 0)
     {
         for (int optLevel = 0; optLevel <= 2; optLevel++)
         {
-            auto bytecode = getFunctionBytecode(snippet, optLevel);
+            auto bytecode = getFunctionBytecode(snippet, optLevel, functionId);
             REQUIRE(bytecode);
             std::vector<std::string_view> table;
             for (std::string& s : bytecode->second)
@@ -996,12 +1001,12 @@ TEST_CASE_FIXTURE(BytecodeCompilerFixture, "bytecode_roundtrip")
 TEST_CASE_FIXTURE(BytecodeCompilerFixture, "classes_bytecode_roundtrips")
 {
 
-    ScopedFastFlag _{FFlag::DebugLuauUserDefinedClasses, true};
+    ScopedFastFlag _{FFlag::LuwuClasses, true};
 
     checkRoundtrip(R"(
         class Point
-            public x
-            public y
+            x
+            y
 
             function magnitude(self)
                 return math.sqrt(self.x * self.x + self.y * self.y)
@@ -1038,6 +1043,143 @@ TEST_CASE_FIXTURE(BytecodeCompilerFixture, "classes_bytecode_roundtrips")
 
         return { Point = Point }
     )");
+}
+
+// Luwu Classes (rfcs/classes): one construction of every NEWOBJECT form, in `fn` (function 1), after the
+// classes' declarations (functions 0 and 2 are the two `__init`s, 3 is the module).
+static const char* kClassConstructionSource = R"(
+    class Pod
+        public x = 0
+    end
+    class WithInit
+        public x = 0
+        public function __init(self, x) self.x = x end
+    end
+    class Prim(public x, public y) end
+    local function fn(a, b, t)
+        local p = Pod()
+        local q = Pod { x = a }
+        local u = Pod(t)
+        local r = WithInit(a)
+        local s = Prim(a, b)
+        return p, q, u, r, s
+    end
+    return fn
+)";
+
+static bool isProjection(CompTimeBcFunction& fn, BcOp op, BcOp of, uint32_t index)
+{
+    return op.kind == BcOpKind::Proj && fn.projOp(op).op == of && fn.projOp(op).index == index;
+}
+
+TEST_CASE_FIXTURE(BytecodeCompilerFixture, "classes_newobject_registers")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    auto fn = buildBytecode(kClassConstructionSource, 0, 1);
+    REQUIRE(fn);
+    REQUIRE_EQ(verifyUseConsistency(*fn), true);
+
+    BcBlock& entry = fn->blockOp(fn->entryBlock);
+    std::vector<BcOp> ops(entry.ops.begin(), entry.ops.end());
+
+    int forms[3] = {};
+
+    for (size_t i = 0; i < ops.size(); ++i)
+    {
+        BcInst& newObject = fn->instOp(ops[i]);
+        if (newObject.op != LOP_NEWOBJECT)
+            continue;
+
+        // the class, then the form and AUX
+        REQUIRE_GE(newObject.ops.size(), 3);
+        REQUIRE_EQ(fn->instOp(newObject.ops[0]).op, LOP_GETUPVAL);
+        int form = fn->immOp(newObject.ops[1]).valueInt;
+        int aux = fn->immOp(newObject.ops[2]).valueInt;
+        REQUIRE(form <= LBC_NEWOBJECT_FIELDS);
+        forms[form]++;
+
+        if (form == LBC_NEWOBJECT_INIT)
+        {
+            // the CALL that follows runs `__init` (A + 1) with the instance (A + 2), and A holds the instance after it
+            REQUIRE_EQ(newObject.ops.size(), 3);
+            REQUIRE_LT(i + 2, ops.size());
+
+            BcInst& call = fn->instOp(ops[i + 1]);
+            REQUIRE_EQ(call.op, LOP_CALL);
+            REQUIRE_EQ(call.ops.size(), 4 + aux);
+            CHECK(isProjection(*fn, call.ops[2], ops[i], 1));
+            CHECK(isProjection(*fn, call.ops[3], ops[i], 2));
+
+            BcInst& move = fn->instOp(ops[i + 2]);
+            REQUIRE_EQ(move.op, LOP_MOVE);
+            REQUIRE_EQ(move.ops.size(), 1);
+            CHECK(isProjection(*fn, move.ops[0], ops[i], 0));
+        }
+        else
+        {
+            // one input per value it reads from A + 1 up (at O0 each argument is moved there), and A is its result
+            REQUIRE_EQ(newObject.ops.size(), 3 + aux);
+            for (int k = 0; k < aux; ++k)
+                CHECK_EQ(fn->instOp(newObject.ops[3 + k]).op, LOP_MOVE);
+
+            CHECK_FALSE(newObject.uses.empty());
+        }
+    }
+
+    CHECK_EQ(forms[LBC_NEWOBJECT_DEFAULT], 2);
+    CHECK_EQ(forms[LBC_NEWOBJECT_INIT], 1);
+    CHECK_EQ(forms[LBC_NEWOBJECT_FIELDS], 2);
+
+    checkRoundtrip(kClassConstructionSource, 1);
+}
+
+TEST_CASE_FIXTURE(BytecodeCompilerFixture, "classes_declaration_roundtrips")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // the module: class shapes (with a constant default) and NEWCLASSMEMBER
+    auto fn = buildBytecode(kClassConstructionSource, 0, 3);
+    REQUIRE(fn);
+    REQUIRE_EQ(verifyUseConsistency(*fn), true);
+
+    int members = 0;
+    for (BcOp op : fn->blockOp(fn->entryBlock).ops)
+    {
+        BcInst& insn = fn->instOp(op);
+        if (insn.op != LOP_NEWCLASSMEMBER)
+            continue;
+
+        // the class, the method's closure and its name
+        REQUIRE_EQ(insn.ops.size(), 3);
+        CHECK_EQ(fn->instOp(insn.ops[0]).op, LOP_LOADKX);
+        CHECK_EQ(fn->instOp(insn.ops[1]).op, LOP_NEWCLOSURE);
+        CHECK_EQ(insn.ops[2].kind, BcOpKind::VmConst);
+        members++;
+    }
+    CHECK_EQ(members, 2);
+
+    // checkRoundtrip serializes into an empty builder, where the module's child closures don't exist
+    for (int optLevel = 0; optLevel <= 2; optLevel++)
+    {
+        auto bytecode = getFunctionBytecode(kClassConstructionSource, optLevel, 3);
+        REQUIRE(bytecode);
+        std::vector<std::string_view> table;
+        for (std::string& str : bytecode->second)
+            table.push_back(str);
+        std::optional<CompTimeBcFunction> module = Bytecode::fromFunctionBytecode(bytecode->first, table);
+        REQUIRE(module);
+
+        BytecodeBuilder bcb;
+        for (int child = 0; child < 3; child++)
+        {
+            bcb.beginFunction(0);
+            bcb.emitABC(LOP_RETURN, 0, 1, 0);
+            bcb.endFunction(1, 0);
+        }
+
+        REQUIRE_EQ(extractCode(bytecode->first), extractCode(Bytecode::toFunctionBytecode(bcb, *module)));
+    }
 }
 
 TEST_SUITE_END();

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/AstQuery.h"
 #include "Luau/BuiltinDefinitions.h"
@@ -26,7 +26,7 @@ LUAU_FASTFLAG(LuauBidirectionalInferenceVariadics)
 LUAU_FASTFLAG(LuauBidirectionalInferenceBetterLambdaHandling)
 LUAU_FASTFLAG(LuauHigherOrderGenericInference)
 LUAU_FASTFLAG(LuauCollapseDirectBoundCycles)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
 
 TEST_SUITE_BEGIN("TypeInferFunctions");
@@ -62,7 +62,9 @@ TEST_CASE_FIXTURE(Fixture, "overload_resolution")
     const FunctionType* fooType = get<FunctionType>(requireType("foo"));
     REQUIRE(fooType != nullptr);
 
-    CHECK(toString(t) == "(((number) -> string) & ((string) -> number)) -> (string, number)");
+    // A and B are named type aliases referenced (not aliased themselves) in `foo`'s parameter
+    // position, so they print by name rather than being expanded inline every time.
+    CHECK(toString(t) == "(A & B) -> (string, number)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "tc_function")
@@ -242,6 +244,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "vararg_function_is_quantified")
 
 TEST_CASE_FIXTURE(Fixture, "list_only_alternative_overloads_that_match_argument_count")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         local multiply: ((number)->number) & ((number)->string) & ((number, number)->number)
         multiply("")
@@ -277,6 +280,7 @@ TEST_CASE_FIXTURE(Fixture, "list_only_alternative_overloads_that_match_argument_
 
 TEST_CASE_FIXTURE(Fixture, "list_all_overloads_if_no_overload_takes_given_argument_count")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         local multiply: ((number)->number) & ((number)->string) & ((number, number)->number)
         multiply()
@@ -965,12 +969,22 @@ TEST_CASE_FIXTURE(Fixture, "report_exiting_without_return_strict")
         end
     )");
 
-    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    // Each exiting function reports twice: the summary on its `end`, and the code path that escapes.
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
     FunctionExitsWithoutReturning* annotatedErr = get<FunctionExitsWithoutReturning>(result.errors[0]);
     CHECK(annotatedErr);
 
-    FunctionExitsWithoutReturning* inferredErr = get<FunctionExitsWithoutReturning>(result.errors[1]);
+    FunctionExitsWithoutReturning* inferredErr = get<FunctionExitsWithoutReturning>(result.errors[2]);
     CHECK(inferredErr);
+
+    // The second error of each pair is on the `if` that skips the return.
+    for (size_t pathIndex : {1, 3})
+    {
+        CAPTURE(pathIndex);
+        const FunctionExitsWithoutReturning* pathErr = get<FunctionExitsWithoutReturning>(result.errors[pathIndex]);
+        REQUIRE(pathErr);
+        CHECK(pathErr->overrideMessage);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "calling_function_with_incorrect_argument_type_yields_errors_spanning_argument")
@@ -1308,18 +1322,18 @@ f(function(a, b, c, ...) return a + b end)
     std::string expected;
     if (FFlag::LuauInstantiateInSubtyping)
     {
-        expected = "Expected this to be\n\t"
+        expected = "Expected this to be\n    "
                    "'(number, number) -> number'"
-                   "\nbut got\n\t"
+                   "\nbut got\n    "
                    "'<a>(number, number, a) -> number'"
                    "\ncaused by:\n"
                    "  Argument count mismatch. Function expects 3 arguments, but only 2 are specified";
     }
     else
     {
-        expected = "Expected this to be\n\t"
+        expected = "Expected this to be\n    "
                    "'(number, number) -> number'"
-                   "\nbut got\n\t"
+                   "\nbut got\n    "
                    "'(number, number, *error-type*) -> number'"
                    "\ncaused by:\n"
                    "  Argument count mismatch. Function expects 3 arguments, but only 2 are specified";
@@ -1525,9 +1539,9 @@ local b: B = a
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(number) -> string'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, number) -> string'"
                                  "\ncaused by:\n"
                                  "  Argument count mismatch. Function expects 2 arguments, but only 1 is specified";
@@ -1548,9 +1562,9 @@ local b: B = a
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(number, string) -> string'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, number) -> string'"
                                  "\ncaused by:\n"
                                  "  Argument #2 type is not compatible.\n"
@@ -1572,9 +1586,9 @@ local b: B = a
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(number, number) -> (number, boolean)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, number) -> number'"
                                  "\ncaused by:\n"
                                  "  Function only returns 1 value, but 2 are required here";
@@ -1595,9 +1609,9 @@ local b: B = a
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(number, number) -> number'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, number) -> string'"
                                  "\ncaused by:\n"
                                  "  Return type is not compatible.\n"
@@ -1619,9 +1633,9 @@ local b: B = a
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'(number, number) -> (number, boolean)'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, number) -> (number, string)'"
                                  "\ncaused by:\n"
                                  "  Return #2 type is not compatible.\n"
@@ -1812,9 +1826,9 @@ function t:b() return 2 end -- not OK
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
     CHECK_EQ(
-        "Expected this to be\n\t"
+        "Expected this to be\n    "
         "'() -> number'"
-        "\nbut got\n\t"
+        "\nbut got\n    "
         "'(*error-type*) -> number'"
         "\ncaused by:\n"
         "  Argument count mismatch. Function expects 1 argument, but none are specified",
@@ -2085,9 +2099,9 @@ z = y -- Not OK, so the line is colorable
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     const std::string expected =
-        "Expected this to be\n\t"
+        "Expected this to be\n    "
         R"('("blue" | "red") -> ("blue" | "red") -> ("blue" | "red") -> false')"
-        "\nbut got\n\t"
+        "\nbut got\n    "
         R"('(("blue" | "red") -> ("blue" | "red") -> ("blue" | "red") -> boolean) & (("blue" | "red") -> ("blue") -> ("blue") -> false) & (("blue" | "red") -> ("red") -> ("red") -> false) & (("blue") -> ("blue") -> ("blue" | "red") -> false) & (("red") -> ("red") -> ("blue" | "red") -> false)')"
         "; none of the intersection parts are compatible";
     CHECK_EQ(expected, toString(result.errors[0]));
@@ -2317,7 +2331,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "param_1_and_2_both_takes_the_same_generic_bu
         const std::string expected = R"(Expected this to be 'vec2?', but got '{| x: number |}'
 caused by:
   None of the union options are compatible. For example:
-required field 'y' not found in type '{| x: number |}' from expected type 'vec2')";
+required property 'y' not found in type
+  '{| x: number |}'
+expected type:
+  'vec2')";
         CHECK_EQ(expected, toString(result.errors[0]));
         CHECK_EQ("Expected this to be 'number', but got 'vec2'", toString(result.errors[1]));
     }
@@ -2382,6 +2399,36 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "attempt_to_call_an_intersection_of_tables_wi
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "call_metamethod_checks_a_multret_final_argument")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    // The resolver forwards the callee as the metamethod's first argument. So the reasoning it hands back
+    // is indexed against a pack one longer than the one built from the call's own arguments.
+    // A final argument that is itself a call contributes a pack rather than a single type. That skips the
+    // per-argument check in TypeChecker2::visit(AstExprCall*), so overload resolution is the only thing
+    // that checks it. Regression test: its report landed one slot short, so the mismatch was silently
+    // dropped.
+    CheckResult result = check(R"(
+        type Callable = typeof(setmetatable({}, {} :: { __call: (Callable, number) -> string }))
+
+        local c = (nil :: any) :: Callable
+        local function mk(): boolean return true end
+
+        local viaPack = c(mk())
+        local viaValue = c(true)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    for (size_t i = 0; i < 2; ++i)
+    {
+        const TypeMismatch* err = get<TypeMismatch>(result.errors[i]);
+        REQUIRE(err);
+        CHECK_EQ("number", toString(err->wantedType));
+        CHECK_EQ("boolean", toString(err->givenType));
+    }
+}
+
 TEST_CASE_FIXTURE(Fixture, "generic_packs_are_not_variadic")
 {
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
@@ -2413,6 +2460,7 @@ TEST_CASE_FIXTURE(Fixture, "generic_packs_are_not_variadic")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "num_is_solved_before_num_or_str")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function num()
             return 5
@@ -2435,6 +2483,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "num_is_solved_before_num_or_str")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "num_is_solved_after_num_or_str")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local function num_or_str()
             if math.random() > 0.5 then
@@ -3471,6 +3520,7 @@ TEST_CASE_FIXTURE(Fixture, "overload_selection_pick_better_arity")
 
 TEST_CASE_FIXTURE(Fixture, "overload_selection_no_compatible_option")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
 
     auto result = check(R"(
@@ -3943,8 +3993,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cli_187542_recursive_call_in_loop")
     // This will have some other errors, but all we care about is that
     // this finished solving all constraints without forcing any.
     // FIXME CLI-188000: We infer `a: (never) -> never`, which is incorrect.
-    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    // `a` can fall off its end past the last `if`: one error on its `end`, and one on that `if`.
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
     LUAU_REQUIRE_NO_ERROR(result, ConstraintSolvingIncompleteError);
+    CHECK(get<FunctionExitsWithoutReturning>(result.errors[0]));
+    CHECK(get<FunctionExitsWithoutReturning>(result.errors[1]));
+    CHECK_EQ(Location{{7, 12}, {7, 14}}, result.errors[1].location);
 }
 
 TEST_CASE_FIXTURE(Fixture, "global_function_redefinition")
@@ -4378,7 +4432,7 @@ TEST_CASE_FIXTURE(Fixture, "default_argument_infers_parameter_type")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     CheckResult result = check(R"(
@@ -4395,7 +4449,7 @@ TEST_CASE_FIXTURE(Fixture, "default_argument_is_checked_against_parameter_annota
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauDefaultArguments, true},
+        {FFlag::LuwuDefaultArguments, true},
     };
 
     CheckResult result = check(R"(
@@ -4404,6 +4458,225 @@ TEST_CASE_FIXTURE(Fixture, "default_argument_is_checked_against_parameter_annota
     )");
 
     CHECK(!result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "default_argument_expression_is_typechecked")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function foo(bar: number = next_id(), baz = nope())
+            return bar, baz
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    const char* expectedNames[] = {"next_id", "nope"};
+    for (size_t i = 0; i < 2; ++i)
+    {
+        const UnknownSymbol* err = get<UnknownSymbol>(result.errors[i]);
+        REQUIRE(err);
+        CHECK_EQ(expectedNames[i], err->name);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "default_argument_infers_parameter_type_string")
+{
+    // Regression test; lsp used to crash in some cases when type annotations w/ default arg weren't provided
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    CheckResult result = check(R"(
+        local function meow(message = "meow")
+            return message
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("(string?) -> string", toString(requireType("meow")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_contravariant_argument_says_what_the_callback_will_be_handed")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // "`Vcn` is not a supertype of `Scoped`" is the definition of contravariance, and no help at all
+    // to a reader looking at a `Vcn` that plainly is a `Scoped`.
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+
+        local function takesCb(cb: (Scoped) -> ()) end
+        local function onVcn(v: Vcn) end
+        takesCb(onVcn)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    CHECK_EQ("Expected this to be callable with any 'Scoped', not just 'Vcn'.", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_contravariant_argument_names_the_parameter_when_there_are_several")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+
+        local function takesCb(cb: (string, Scoped) -> ()) end
+        local function onVcn(tag: string, v: Vcn) end
+        takesCb(onVcn)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    CHECK_EQ("Expected this to be callable with any 'Scoped' as parameter 'v', not just 'Vcn'.", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_contravariant_argument_falls_back_to_the_parameter_position")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+
+        local given: (string, Vcn) -> () = nil :: any
+        local function takesCb(cb: (string, Scoped) -> ()) end
+        takesCb(given)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    CHECK_EQ("Expected this to be callable with any 'Scoped' as parameter 2, not just 'Vcn'.", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "variance_contravariant_argument_of_an_unrelated_type_does_not_say_not_just")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // A `string` parameter handed a `number` doesn't handle part of it, so "not just `string`" is wrong.
+    CheckResult result = check(R"(
+        local function takesCb(cb: (string, number) -> ()) end
+        local function onItem(s: string, i: string) end
+        takesCb(onItem)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    CHECK(toString(result.errors[0]).find("not just") == std::string::npos);
+}
+
+TEST_CASE_FIXTURE(Fixture, "return_context_preamble_prints_the_return_type_not_the_function_type")
+{
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // The preamble promises a return type, so it prints the return types, not the function types
+    // ("Expected this function to return '() -> Vcn', but got '(...any) -> Scoped'").
+    CheckResult result = check(R"(
+        type Scoped = { name: string }
+        type Vcn = { name: string, vcn: number }
+
+        local function takesRet(cb: () -> Vcn) end
+        local function retScoped(): Scoped return { name = "a" } end
+        takesRet(retScoped)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    CHECK_EQ(
+        "Expected this function to return 'Vcn', but got 'Scoped'\n"
+        "`Scoped` is not a subtype of `Vcn`",
+        toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "returning_nothing_where_nil_is_declared_explains_the_difference")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // Falling off the end and writing a bare `return` are the same mistake, so they get the same error.
+    // Upstream reports them as two different ones: "Not all codepaths in this function return 'nil'."
+    // and "Expected this to be 'nil', but got '()'".
+    const std::string expected = "Expected this function to return the value 'nil', but it returns nothing at all.\n"
+                                 "Consider adding 'return nil', or annotating the return type as '()' if it is meant to return nothing.";
+
+    CheckResult noReturn = check(R"(
+        local function a(): nil end
+    )");
+    LUAU_REQUIRE_ERROR_COUNT(1, noReturn);
+    CHECK_EQ(expected, toString(noReturn.errors[0]));
+
+    CheckResult bareReturn = check(R"(
+        local function b(): nil return end
+    )");
+    LUAU_REQUIRE_ERROR_COUNT(1, bareReturn);
+    CHECK_EQ(expected, toString(bareReturn.errors[0]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "returning_nil_where_nothing_is_declared_suggests_an_optional_return")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // A function whose only return is `return nil` is usually reaching for `T?`, not for a return
+    // type of `nil`, so the advice names the shape rather than the literal annotation.
+    CheckResult result = check(R"(
+        local function c(): () return nil end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(
+        "Expected this function to return no values, but it returns the value 'nil'.\n"
+        "Consider changing this to a bare 'return', or if you want to return a value annotate the function's "
+        "return type as optional (a type followed by '?').",
+        toString(result.errors[0])
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "return_count_mismatch_without_nil_gets_no_advice")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult returnsTooMuch = check(R"(
+        local function d(): () return 5 end
+    )");
+    LUAU_REQUIRE_ERROR_COUNT(1, returnsTooMuch);
+    CHECK_EQ("Expected this function to return no values, but it returns 'number'.", toString(returnsTooMuch.errors[0]));
+
+    CheckResult returnsTooLittle = check(R"(
+        local function h(): (number, string) return end
+    )");
+    LUAU_REQUIRE_ERROR_COUNT(1, returnsTooLittle);
+    CHECK_EQ("Expected this function to return 'number, string', but it returns nothing at all.", toString(returnsTooLittle.errors[0]));
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_genuine_partial_return_still_reports_codepaths")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // "Not all codepaths" is exactly right here: one path returns, the other falls off the end.
+    CheckResult result = check(R"(
+        local function e(flag: boolean): nil
+            if flag then return nil end
+        end
+    )");
+
+    // The summary stays on the function's `end`, and the escaping code path is pointed at directly.
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ("Not all code paths return 'nil'.", toString(result.errors[0]));
+    CHECK_EQ("This 'if' has no 'else', so the code path that skips it doesn't return 'nil'.", toString(result.errors[1]));
+
+    // The squiggle covers the `if` keyword alone: highlighting the whole statement paints the
+    // branch that does return, which is the opposite of what the message says.
+    CHECK_EQ(Location{{2, 12}, {2, 14}}, result.errors[1].location);
 }
 
 TEST_SUITE_END();

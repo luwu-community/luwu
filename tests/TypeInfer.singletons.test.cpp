@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Fixture.h"
 
@@ -63,6 +63,7 @@ TEST_CASE_FIXTURE(Fixture, "string_singleton_function_call")
 
 TEST_CASE_FIXTURE(Fixture, "bool_singletons_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local a: true = false
     )");
@@ -73,6 +74,7 @@ TEST_CASE_FIXTURE(Fixture, "bool_singletons_mismatch")
 
 TEST_CASE_FIXTURE(Fixture, "string_singletons_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local a: "foo" = "bar"
     )");
@@ -83,6 +85,7 @@ TEST_CASE_FIXTURE(Fixture, "string_singletons_mismatch")
 
 TEST_CASE_FIXTURE(Fixture, "string_singletons_escape_chars")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local a: "\n" = "\000\r"
     )");
@@ -133,6 +136,7 @@ TEST_CASE_FIXTURE(Fixture, "function_call_with_singletons")
 
 TEST_CASE_FIXTURE(Fixture, "function_call_with_singletons_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         function f(a: true, b: "foo") end
         f(true, "bar")
@@ -169,11 +173,13 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_function_resolution_singleton_parameters"
     const FunctionType* fooType = get<FunctionType>(requireType("foo"));
     REQUIRE(fooType != nullptr);
 
-    CHECK(toString(t) == "(((\"A\") -> string) & ((\"B\") -> number)) -> (string, number)");
+    // A and B are named type aliases referenced (not expanded) in the parameter position.
+    CHECK(toString(t) == "(A & B) -> (string, number)");
 }
 
 TEST_CASE_FIXTURE(Fixture, "overloaded_function_call_with_singletons_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         function f(g: ((true, string) -> ()) & ((false, number) -> ()))
             g(true, 37)
@@ -207,6 +213,7 @@ TEST_CASE_FIXTURE(Fixture, "enums_using_singletons")
 
 TEST_CASE_FIXTURE(Fixture, "enums_using_singletons_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::LuauDropUnionSubtypeReasoning, true};
 
     CheckResult result = check(R"(
@@ -328,6 +335,7 @@ TEST_CASE_FIXTURE(Fixture, "table_properties_singleton_strings")
 }
 TEST_CASE_FIXTURE(Fixture, "table_properties_singleton_strings_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         --!strict
         type T = {
@@ -381,6 +389,7 @@ TEST_CASE_FIXTURE(Fixture, "indexer_can_be_union_of_singletons")
 
 TEST_CASE_FIXTURE(Fixture, "table_properties_type_error_escapes")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sffs[]{
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::LuauBetterMissingPropertiesTypeError, true},
@@ -394,12 +403,16 @@ TEST_CASE_FIXTURE(Fixture, "table_properties_type_error_escapes")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    const std::string expected = R"(required field '<>' not found in type '{ ["\n"]: number }' from expected type '{ ["<>"]: number }')";
+    const std::string expected = R"(required property '<>' not found in type
+  '{ ["\n"]: number }'
+expected type:
+  '{ ["<>"]: number }')";
     CHECK(expected == toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_tagged_union_mismatch_string")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     CheckResult result = check(R"(
@@ -413,20 +426,27 @@ local a: Animal = { tag = 'cat', cafood = 'something' }
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     if (!FFlag::DebugLuauForceOldSolver)
         CHECK(
-            R"(required field 'catfood' not found in type '{ cafood: string, tag: "cat" }' from expected type 'Cat')" == toString(result.errors[0])
+            R"(required property 'catfood' not found in type
+  '{ cafood: string, tag: "cat" }'
+expected type:
+  'Cat')" == toString(result.errors[0])
         );
     else
     {
         const std::string expected = R"(Expected this to be 'Cat | Dog', but got 'a'
 caused by:
   None of the union options are compatible. For example:
-required field 'catfood' not found in type 'a' from expected type 'Cat')";
+required property 'catfood' not found in type
+  'a'
+expected type:
+  'Cat')";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
 }
 
 TEST_CASE_FIXTURE(Fixture, "error_detailed_tagged_union_mismatch_bool")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     CheckResult result = check(R"(
@@ -441,7 +461,7 @@ local a: Result = { success = false, result = 'something' }
     if (!FFlag::DebugLuauForceOldSolver)
     {
         CHECK_EQ(
-            "required field 'error' not found in type '{ result: string, success: false }' from expected type 'Bad'", toString(result.errors[0])
+            "required property 'error' not found in type\n  '{ result: string, success: false }'\nexpected type:\n  'Bad'", toString(result.errors[0])
         );
     }
     else
@@ -449,13 +469,17 @@ local a: Result = { success = false, result = 'something' }
         const std::string expected = R"(Expected this to be 'Bad | Good', but got 'a'
 caused by:
   None of the union options are compatible. For example:
-required field 'error' not found in type 'a' from expected type 'Bad')";
+required property 'error' not found in type
+  'a'
+expected type:
+  'Bad')";
         CHECK_EQ(expected, toString(result.errors[0]));
     }
 }
 
 TEST_CASE_FIXTURE(Fixture, "parametric_tagged_union_alias")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
@@ -471,7 +495,8 @@ TEST_CASE_FIXTURE(Fixture, "parametric_tagged_union_alias")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
     CHECK_EQ(
-        "required field 'error' not found in type '{ result: string, success: false }' from expected type 'Err<number>'", toString(result.errors[0])
+        "required property 'error' not found in type\n  '{ result: string, success: false }'\nexpected type:\n  'Err<number>'",
+        toString(result.errors[0])
     );
 }
 

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/HashUtil.h"
@@ -747,7 +747,7 @@ public:
     using const_iterator = typename Impl::const_iterator;
     using iterator = typename Impl::iterator;
 
-    explicit DenseHashSet2(size_t buckets = 0)
+    DenseHashSet2(size_t buckets = 0)
         : impl(buckets)
     {
     }
@@ -839,7 +839,7 @@ public:
     using const_iterator = typename Impl::const_iterator;
     using iterator = typename Impl::iterator;
 
-    explicit DenseHashMap2(size_t buckets = 0)
+    DenseHashMap2(size_t buckets = 0)
         : impl(buckets)
     {
     }

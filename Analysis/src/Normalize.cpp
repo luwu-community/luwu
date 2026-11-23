@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/Normalize.h"
 #include "Luau/ToString.h"
@@ -19,9 +19,10 @@ LUAU_FASTFLAGVARIABLE(DebugLuauCheckNormalizeInvariant)
 
 LUAU_FASTINTVARIABLE(LuauNormalizeCacheLimit, 100000)
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauReadOnlyIndexers)
 LUAU_FASTINTVARIABLE(LuauNormalizerInitialFuel, 3000)
 LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAGVARIABLE(LuauAllowIntersectionOfOneTableWithExtern)
+LUAU_FASTFLAGVARIABLE(LuauAlwaysIntersectTablesWithTables)
 
 namespace Luau
 {
@@ -200,15 +201,18 @@ bool NormalizedType::isUnknown() const
                            strings.isString() && isThread(threads) && isBuffer(buffers) && Luau::isNone(nones);
     }
 
-    // Check is extern type
-    bool isTopExternType = false;
-    for (const auto& [t, disj] : externTypes.externTypes)
+    // Check is extern type: the nominal component is `unknown` only when every
+    // nominal root (see BuiltinTypes::nominalRoots) is present with no negations.
+    std::array<TypeId, 4> nominalRoots = builtinTypes->nominalRoots();
+    bool isTopExternType = externTypes.externTypes.size() == nominalRoots.size();
+    if (isTopExternType)
     {
-        if (get<ExternType>(t))
+        for (TypeId root : nominalRoots)
         {
-            if (t == builtinTypes->externType && disj.empty())
+            auto it = externTypes.externTypes.find(root);
+            if (it == externTypes.externTypes.end() || !it->second.empty())
             {
-                isTopExternType = true;
+                isTopExternType = false;
                 break;
             }
         }
@@ -618,15 +622,18 @@ static int tyvarIndex(TypeId ty)
 
 static bool isTop(NotNull<BuiltinTypes> builtinTypes, const NormalizedExternType& externTypes)
 {
-    if (externTypes.externTypes.size() != 1)
+    // The top of the nominal lattice is every nominal root (userdata/class/
+    // object/vector) present with no negations.
+    std::array<TypeId, 4> roots = builtinTypes->nominalRoots();
+    if (externTypes.externTypes.size() != roots.size())
         return false;
 
-    auto first = externTypes.externTypes.begin();
-    if (first->first != builtinTypes->externType)
-        return false;
-
-    if (!first->second.empty())
-        return false;
+    for (TypeId root : roots)
+    {
+        auto it = externTypes.externTypes.find(root);
+        if (it == externTypes.externTypes.end() || !it->second.empty())
+            return false;
+    }
 
     return true;
 }
@@ -635,7 +642,8 @@ static void resetToTop(NotNull<BuiltinTypes> builtinTypes, NormalizedExternType&
 {
     externTypes.ordering.clear();
     externTypes.externTypes.clear();
-    externTypes.pushPair(builtinTypes->externType, TypeIds{});
+    for (TypeId root : builtinTypes->nominalRoots())
+        externTypes.pushPair(root, TypeIds{});
 }
 
 #ifdef LUAU_ASSERTENABLED
@@ -2000,6 +2008,7 @@ NormalizationResult Normalizer::unionNormalWithTy(
 
 // ------- Negations
 
+
 std::optional<NormalizedType> Normalizer::negateNormal(const NormalizedType& here)
 {
     consumeFuel();
@@ -2044,19 +2053,24 @@ std::optional<NormalizedType> Normalizer::negateNormal(const NormalizedType& her
     }
     else
     {
-        TypeIds rootNegations{};
+        // need to ensure extern types that actually refer to 'objects' remain
+        // rooted to 'object' instead of 'userdata' now that externtype can refer
+        // to either an object of a class or an actual extern type userdata
+        std::map<TypeId, TypeIds> negationsByRoot;
 
         for (const auto& [hereParent, hereNegations] : here.externTypes.externTypes)
         {
-            if (hereParent != builtinTypes->externType)
-                rootNegations.insert(hereParent);
+            // A type's hierarchy root is its `root` pointer, or itself if it is a root.
+            TypeId root = get<ExternType>(hereParent)->root.value_or(hereParent);
+            if (hereParent != root)
+                negationsByRoot[root].insert(hereParent);
 
             for (TypeId hereNegation : hereNegations)
                 unionExternTypesWithExternType(result.externTypes, hereNegation);
         }
 
-        if (!rootNegations.empty())
-            result.externTypes.pushPair(builtinTypes->externType, std::move(rootNegations));
+        for (auto& [root, negations] : negationsByRoot)
+            result.externTypes.pushPair(root, std::move(negations));
     }
 
     result.nils = get<NeverType>(here.nils) ? builtinTypes->nilType : builtinTypes->neverType;
@@ -2904,40 +2918,26 @@ std::optional<TypeId> Normalizer::intersectionOfTables(TypeId here, TypeId there
 
     if (httv->indexer && tttv->indexer)
     {
-        if (FFlag::LuauReadOnlyIndexers)
+        TypeId index = unionType(httv->indexer->indexType, tttv->indexer->indexType);
+        TableIndexer idx{index, {}};
+
+        if (httv->indexer->isReadOnly && tttv->indexer->isReadOnly)
         {
-            TypeId index = unionType(httv->indexer->indexType, tttv->indexer->indexType);
-            TableIndexer idx{index, {}};
-
-            if (httv->indexer->isReadOnly && tttv->indexer->isReadOnly)
-            {
-                // Both read-only: covariant -> intersect values, keep read-only.
-                idx.indexResultType = intersectionType(httv->indexer->indexResultType, tttv->indexer->indexResultType);
-                idx.isReadOnly = true;
-            }
-            else
-                idx.indexResultType = intersectionType(httv->indexer->indexResultType, tttv->indexer->indexResultType);
-
-            bool hereModeMatch = httv->indexer->isReadOnly == idx.isReadOnly;
-            bool thereModeMatch = tttv->indexer->isReadOnly == idx.isReadOnly;
-            hereSubThere &= hereModeMatch && (httv->indexer->indexType == index) && (httv->indexer->indexResultType == idx.indexResultType);
-            thereSubHere &= thereModeMatch && (tttv->indexer->indexType == index) && (tttv->indexer->indexResultType == idx.indexResultType);
-
-            if (!result.get())
-                result = std::make_unique<TableType>(TableType{state, level, scope});
-            result->indexer = idx;
+            // Both read-only: covariant -> intersect values, keep read-only.
+            idx.indexResultType = intersectionType(httv->indexer->indexResultType, tttv->indexer->indexResultType);
+            idx.isReadOnly = true;
         }
         else
-        {
-            // TODO: What should intersection of indexes be?
-            TypeId index = unionType(httv->indexer->indexType, tttv->indexer->indexType);
-            TypeId indexResult = intersectionType(httv->indexer->indexResultType, tttv->indexer->indexResultType);
-            if (!result.get())
-                result = std::make_unique<TableType>(TableType{state, level, scope});
-            result->indexer = {index, indexResult};
-            hereSubThere &= (httv->indexer->indexType == index) && (httv->indexer->indexResultType == indexResult);
-            thereSubHere &= (tttv->indexer->indexType == index) && (tttv->indexer->indexResultType == indexResult);
-        }
+            idx.indexResultType = intersectionType(httv->indexer->indexResultType, tttv->indexer->indexResultType);
+
+        bool hereModeMatch = httv->indexer->isReadOnly == idx.isReadOnly;
+        bool thereModeMatch = tttv->indexer->isReadOnly == idx.isReadOnly;
+        hereSubThere &= hereModeMatch && (httv->indexer->indexType == index) && (httv->indexer->indexResultType == idx.indexResultType);
+        thereSubHere &= thereModeMatch && (tttv->indexer->indexType == index) && (tttv->indexer->indexResultType == idx.indexResultType);
+
+        if (!result.get())
+            result = std::make_unique<TableType>(TableType{state, level, scope});
+        result->indexer = idx;
     }
     else if (httv->indexer)
     {
@@ -3425,10 +3425,26 @@ NormalizationResult Normalizer::intersectNormalWithTy(
             TypeIds tables = std::move(here.tables);
             clearNormal(here);
 
-            if (externTypes.isNever())
+            if (FFlag::LuauAlwaysIntersectTablesWithTables)
+            {
+                // We intersect this table against the table part of the
+                // normalized type, which may include the top table type.
                 intersectTablesWithTable(tables, there, seenTablePropPairs, seenSetTypes);
+                if (!externTypes.isNever())
+                {
+                    // If we have extern types present, intersect this table
+                    // as a shape against the extern types of this normalized
+                    // type.
+                    intersectExternTypesWithShape(externTypes, there);
+                }
+            }
             else
-                intersectExternTypesWithShape(externTypes, there);
+            {
+                if (externTypes.isNever())
+                    intersectTablesWithTable(tables, there, seenTablePropPairs, seenSetTypes);
+                else
+                    intersectExternTypesWithShape(externTypes, there);
+            }
 
             here.tables = std::move(tables);
             here.externTypes = std::move(externTypes);
@@ -3443,10 +3459,46 @@ NormalizationResult Normalizer::intersectNormalWithTy(
     }
     else if (get<ExternType>(there))
     {
-        NormalizedExternType nct = std::move(here.externTypes);
-        clearNormal(here);
-        intersectExternTypesWithExternType(nct, there);
-        here.externTypes = std::move(nct);
+        if (FFlag::LuauAllowIntersectionOfOneTableWithExtern && useNewLuauSolver())
+        {
+            NormalizedExternType nct = std::move(here.externTypes);
+            TypeIds tables = std::move(here.tables);
+            clearNormal(here);
+            // FIXME CLI-214308: The representation of NormalizedExternType 
+            // does not support an intersection like ...
+            //
+            //  ExternType & (Tbl1 | Tbl2 | Tbl3)
+            //
+            // ... however, we can represent ...
+            //
+            //  ExternType & Tbl1
+            //
+            // ... so if the table part of this normalized type has a single
+            // table present, then intersect against *that*.
+            //
+            // In the future, we should allow intersections against more than
+            // one table in a union.
+
+            // Luwu: the extern types and the table are a union, so the table can't take away what the extern types give.
+            // Upstream intersects the extern types with the table too, so `(Box | Input) & Box` came out `never` whenever
+            // `Input` and `Box` were disjoint, and with more than one table it dropped the extern types. The table part
+            // (`there` with the table's shape) is used when the extern types give nothing; only a table type is a shape an
+            // extern type can have, and `table` (in `~Parent`) holds none.
+            intersectExternTypesWithExternType(nct, there);
+            if (nct.isNever() && tables.size() == 1 && get<TableType>(follow(tables.front())))
+            {
+                nct.pushPair(there, {});
+                intersectExternTypesWithShape(nct, tables.front());
+            }
+            here.externTypes = std::move(nct);
+        }
+        else
+        {
+            NormalizedExternType nct = std::move(here.externTypes);
+            clearNormal(here);
+            intersectExternTypesWithExternType(nct, there);
+            here.externTypes = std::move(nct);
+        }
     }
     else if (get<ErrorType>(there))
     {
@@ -3632,7 +3684,8 @@ TypeId Normalizer::typeFromNormal(const NormalizedType& norm)
 
     if (isTop(builtinTypes, norm.externTypes))
     {
-        result.push_back(builtinTypes->externType);
+        for (TypeId root : builtinTypes->nominalRoots())
+            result.push_back(root);
     }
     else if (!norm.externTypes.isNever())
     {

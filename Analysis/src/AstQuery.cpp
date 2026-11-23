@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/AstQuery.h"
 
 #include "Luau/Frontend.h"
@@ -12,7 +12,7 @@
 
 #include <algorithm>
 
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
 {
@@ -459,7 +459,7 @@ struct FindExprOrLocal : public AstVisitor
         {
             visitLocal(fn->args.data[i]);
         }
-        if (FFlag::LuauDefaultArguments)
+        if (FFlag::LuwuDefaultArguments)
         {
             for (auto arg : fn->argsDefaults)
             {

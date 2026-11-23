@@ -39,8 +39,8 @@
             "description": "Builds the protobuf-based fuzzer and transpiler tools.",
             "configurePreset": "fuzz",
             "targets": [
-                "Luau.Fuzz.Proto",
-                "Luau.Fuzz.ProtoTest"
+                "Luwu.Fuzz.Proto",
+                "Luwu.Fuzz.ProtoTest"
             ]
         }
     ]

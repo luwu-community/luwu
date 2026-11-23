@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #pragma once
 
@@ -217,13 +217,14 @@ public:
     bool tryDispatch(const GeneralizationConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const IterableConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const NameConstraint& c, NotNull<const Constraint> constraint);
-    bool tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint);
+    bool tryDispatch(const TypeAliasExpansionConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const FunctionCallConstraint& c, NotNull<const Constraint> constraint, bool force);
     bool tryDispatch(const FunctionCheckConstraint& c, NotNull<const Constraint> constraint, bool force);
     // Clip with LuauRemovePrimitiveTypeConstraint
     bool DEPRECATED_tryDispatch(const DEPRECATED_PrimitiveTypeConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const HasPropConstraint& c, NotNull<const Constraint> constraint);
     bool tryDispatch(const TypeInstantiationConstraint& c, NotNull<const Constraint> constraint);
+    bool tryDispatch(const InstantiateNominalPropConstraint& c, NotNull<const Constraint> constraint, bool force);
 
     bool tryDispatchHasIndexer(
         int& recursionDepth,
@@ -345,6 +346,23 @@ public:
 
     void reportError(TypeErrorData&& data, const Location& location);
     void reportError(TypeError e);
+    // Luwu Classes (rfcs/classes): queues expansion of the pending aliases inside a generic class's
+    // member that instantiating the class copied and that nothing else will expand.
+    //
+    // Instantiating a generic class substitutes the type arguments into each member. A member can
+    // still contain a pending (unexpanded) alias at that point. The substitution copies that alias with
+    // the new arguments, and nothing else queues an expansion for the copy. Two shapes hit this:
+    //  - an optional reference to the class itself (`sw: S<U, T>?`);
+    //  - the type arguments a table records for display (`instantiatedTypeParams`), e.g. `r: R<A<T>>`
+    //    inside `class A<T>`, where `type R<T> = { R<T> }` never uses `T`.
+    // A member that is itself a pending expansion is not handled here; the caller defers it.
+    void queuePendingMemberExpansions(TypeId memberTy, NotNull<const Constraint> constraint);
+    // Luwu Classes (rfcs/classes): a generic class's method as read through the class value. Nothing
+    // instantiates the class's generics there, so the method is made generic over them itself.
+    TypeId quantifyOverClassGenerics(TypeId methodTy, const GeneralizationConstraint& c);
+    // Luwu Classes (rfcs/classes): reports a generic class's infinite reference to itself once, at
+    // the reference inside the class.
+    void reportInfiniteSelfReference(TypeId reference, TypeId classTemplate, const Location& expansionLocation);
 
     /**
      * Bind a type variable to another type.

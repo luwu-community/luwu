@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/Subtyping.h"
 
@@ -25,13 +25,13 @@ LUAU_FASTINTVARIABLE(LuauSubtypingReasoningLimit, 100)
 LUAU_FASTFLAGVARIABLE(LuauSubtypingMissingPropertiesAsNil)
 LUAU_FASTINTVARIABLE(LuauSubtypingIterationLimit, 20000)
 LUAU_FASTFLAG(LuauPropertyModifierMismatchErrors)
-LUAU_FASTFLAG(LuauReadOnlyIndexers)
 LUAU_FASTFLAGVARIABLE(LuauSubtypeUnionsTogether)
 LUAU_FASTFLAGVARIABLE(LuauDropUnionSubtypeReasoning)
 LUAU_FASTFLAGVARIABLE(LuauDontBindOptionalGenericToNil)
 LUAU_FASTFLAGVARIABLE(LuauImproveUniqueTableWidthSubtyping)
 LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAG(LuauIndexerModifierMismatchErrors)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau
 {
@@ -179,13 +179,6 @@ static void assertReasoningValid(TID subTy, TID superTy, const SubtypingResult& 
         LUAU_ASSERT(traverse(subTy, reasoning.subPath, builtinTypes, arena));
         LUAU_ASSERT(traverse(superTy, reasoning.superPath, builtinTypes, arena));
     }
-}
-
-template<>
-void assertReasoningValid<TableIndexer>(TableIndexer, TableIndexer, const SubtypingResult&, NotNull<BuiltinTypes>, NotNull<TypeArena>)
-{
-    // This specialization exists so that we can invoke methods like
-    // isInvariantWith() on a pair of TableIndexers.
 }
 
 static SubtypingReasonings mergeReasonings(const SubtypingReasonings& a, const SubtypingReasonings& b)
@@ -2031,10 +2024,25 @@ SubtypingResult Subtyping::isCovariantWith(
     bool hasErrorSuppression = false;
     bool shouldSuppressErrors = true;
 
+    // Luwu: the reasonings of failing properties go into one set, which becomes `result`'s at the end. Upstream merges
+    // each into `result` with `andAlso`, which rebuilds the set every time, so a table where many properties fail
+    // rebuilds it once per property. Reasonings of different properties never combine (their paths start at their own
+    // property), so the set is the same union.
+    SubtypingResult failedProperties{false};
     auto record = [&](SubtypingResult subResult)
     {
         hasErrorSuppression |= subResult.isErrorSuppressing;
         shouldSuppressErrors &= subResult.isSubtype || subResult.isErrorSuppressing;
+        if (!subResult.isSubtype)
+        {
+            for (const SubtypingReasoning& reasoning : subResult.reasoning)
+            {
+                if (failedProperties.reasoning.size() >= size_t(FInt::LuauSubtypingReasoningLimit))
+                    break;
+                failedProperties.reasoning.insert(reasoning);
+            }
+            subResult.reasoning.clear();
+        }
         result.andAlso(std::move(subResult));
     };
 
@@ -2057,7 +2065,7 @@ SubtypingResult Subtyping::isCovariantWith(
         {
             if (superProp.isShared())
             {
-                if (FFlag::LuauReadOnlyIndexers && subTable->indexer->isReadOnly)
+                if (subTable->indexer->isReadOnly)
                     // A read-only indexer cannot satisfy a read-write property requirement.
                     record(
                         SubtypingResult{false}.withSubComponent(TypePath::TypeField::IndexResult).withSuperComponent(TypePath::Property::read(name))
@@ -2077,7 +2085,7 @@ SubtypingResult Subtyping::isCovariantWith(
                 }
                 if (superProp.writeTy)
                 {
-                    if (FFlag::LuauReadOnlyIndexers && subTable->indexer->isReadOnly)
+                    if (subTable->indexer->isReadOnly)
                         record(
                             SubtypingResult{false}
                                 .withSubComponent(TypePath::TypeField::IndexResult)
@@ -2123,15 +2131,10 @@ SubtypingResult Subtyping::isCovariantWith(
     {
         if (subTable->indexer)
         {
-            if (FFlag::LuauReadOnlyIndexers)
-            {
-                // We say covariant here, but the implementation of
-                // isCovariantWith() properly handles variance of the index
-                // result type.
-                record(isCovariantWith(env, *subTable->indexer, *superTable->indexer, scope));
-            }
-            else
-                record(isInvariantWith(env, *subTable->indexer, *superTable->indexer, scope));
+            // We say covariant here, but the implementation of
+            // isCovariantWith() properly handles variance of the index
+            // result type.
+            record(isCovariantWith(env, *subTable->indexer, *superTable->indexer, scope));
         }
         else if (subTable->state != TableState::Sealed)
         {
@@ -2144,6 +2147,8 @@ SubtypingResult Subtyping::isCovariantWith(
     }
 
     result.isErrorSuppressing = hasErrorSuppression && shouldSuppressErrors;
+    if (!result.isSubtype)
+        result.reasoning = std::move(failedProperties.reasoning);
     return result;
 }
 
@@ -2274,7 +2279,49 @@ SubtypingResult Subtyping::isCovariantWith(
     NotNull<Scope> scope
 )
 {
-    return {isSubclass(subExternType, superExternType)};
+    if (isSubclass(subExternType, superExternType))
+        return {true};
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): `isSubclass` compares a generic nominal's type arguments with `sameNominalTypeArg`
+    // (Type.cpp), which can only answer pointer identity or another nominal -- it lives in Type.cpp
+    // and has no subtyping machinery to call. So two separately-constructed but identical arguments
+    // never match, and `Exception<{ n: number }>` is not a subtype of `Exception<{ n: number }>`.
+    // Here the machinery *is* available, so compare the arguments properly. A nominal's type
+    // parameters are invariant, so this is equivalence, not subtyping -- `Exception<string>` still
+    // has nothing to do with `Exception<number>`.
+    if (FFlag::LuwuGenericNominals && subExternType->name == superExternType->name &&
+        subExternType->definitionModuleName == superExternType->definitionModuleName &&
+        subExternType->definitionLocation == superExternType->definitionLocation &&
+        subExternType->instantiatedTypeParams.size() == superExternType->instantiatedTypeParams.size() &&
+        subExternType->instantiatedTypePackParams.size() == superExternType->instantiatedTypePackParams.size() &&
+        !subExternType->instantiatedTypeParams.empty())
+    {
+        SubtypingResult result{true};
+        bool anyUnsuppressedMismatch = false;
+
+        for (size_t i = 0; i < subExternType->instantiatedTypeParams.size(); ++i)
+        {
+            SubtypingResult argResult =
+                isInvariantWith(env, follow(subExternType->instantiatedTypeParams[i]), follow(superExternType->instantiatedTypeParams[i]), scope);
+            anyUnsuppressedMismatch |= !argResult.isSubtype && !argResult.isErrorSuppressing;
+            result.andAlso(std::move(argResult));
+        }
+
+        for (size_t i = 0; i < subExternType->instantiatedTypePackParams.size(); ++i)
+        {
+            if (follow(subExternType->instantiatedTypePackParams[i]) != follow(superExternType->instantiatedTypePackParams[i]))
+                return {false};
+        }
+
+        // An argument that only mismatches `any` (`A<any>` against `A<string>`) fails with the error
+        // suppressed, like the structural `{ v: any }` against `{ v: string }`. Any other mismatch
+        // fails without reasonings: their paths lead into type arguments, which the error
+        // explanation can't follow.
+        if (result.isSubtype || !anyUnsuppressedMismatch)
+            return result;
+    }
+
+    return {false};
 }
 
 SubtypingResult Subtyping::isCovariantWith(
@@ -2530,32 +2577,25 @@ SubtypingResult Subtyping::isCovariantWith(
     NotNull<Scope> scope
 )
 {
-    if (FFlag::LuauReadOnlyIndexers)
-    {
-        SubtypingResult result{false};
-        if (!FFlag::LuauIndexerModifierMismatchErrors && (subIndexer.isReadOnly && !superIndexer.isReadOnly))
-            return result.withBothComponent(TypePath::TypeField::IndexResult);
+    SubtypingResult result{false};
+    
+    if (!FFlag::LuauIndexerModifierMismatchErrors && (subIndexer.isReadOnly && !superIndexer.isReadOnly))
+        return result.withBothComponent(TypePath::TypeField::IndexResult);
 
-        result = isInvariantWith(env, subIndexer.indexType, superIndexer.indexType, scope).withBothComponent(TypePath::TypeField::IndexLookup);
+    result = isInvariantWith(env, subIndexer.indexType, superIndexer.indexType, scope).withBothComponent(TypePath::TypeField::IndexLookup);
 
-        // Value-type variance: read-only super → covariant; read-write super → invariant.
-        if (superIndexer.isReadOnly)
-            result.andAlso(isCovariantWith(env, subIndexer.indexResultType, superIndexer.indexResultType, scope)
-                            .withBothComponent(TypePath::TypeField::IndexResult));
-        else
-            result.andAlso(isInvariantWith(env, subIndexer.indexResultType, superIndexer.indexResultType, scope)
-                            .withBothComponent(TypePath::TypeField::IndexResult));
+    // Value-type variance: read-only super → covariant; read-write super → invariant.
+    if (superIndexer.isReadOnly)
+        result.andAlso(isCovariantWith(env, subIndexer.indexResultType, superIndexer.indexResultType, scope)
+                        .withBothComponent(TypePath::TypeField::IndexResult));
+    else
+        result.andAlso(isInvariantWith(env, subIndexer.indexResultType, superIndexer.indexResultType, scope)
+                        .withBothComponent(TypePath::TypeField::IndexResult));
 
-        if (FFlag::LuauIndexerModifierMismatchErrors && (subIndexer.isReadOnly && !superIndexer.isReadOnly))
-            result.andAlso(SubtypingResult{false}.withBothComponent(TypePath::TypeField::IndexResult).withAccessModifierViolation());
+    if (FFlag::LuauIndexerModifierMismatchErrors && (subIndexer.isReadOnly && !superIndexer.isReadOnly))
+        result.andAlso(SubtypingResult{false}.withBothComponent(TypePath::TypeField::IndexResult).withAccessModifierViolation());
 
-        return result;
-    } else {
-        return isInvariantWith(env, subIndexer.indexType, superIndexer.indexType, scope)
-            .withBothComponent(TypePath::TypeField::IndexLookup)
-            .andAlso(isInvariantWith(env, subIndexer.indexResultType, superIndexer.indexResultType, scope)
-                         .withBothComponent(TypePath::TypeField::IndexResult));
-    }
+    return result;
 }
 
 SubtypingResult Subtyping::isCovariantWith(

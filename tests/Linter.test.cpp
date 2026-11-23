@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Linter.h"
 #include "Luau/BuiltinDefinitions.h"
 
@@ -8,8 +8,13 @@
 #include "doctest.h"
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
+LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
+LUAU_FASTFLAG(LuwuTableDrop)
 
 using namespace Luau;
 
@@ -44,7 +49,16 @@ TEST_CASE_FIXTURE(Fixture, "UnknownGlobal")
     LintResult result = lint("--!nocheck\nreturn foo");
 
     REQUIRE(1 == result.warnings.size());
-    CHECK_EQ(result.warnings[0].text, "Unknown global 'foo'; consider assigning to it first");
+    CHECK_EQ(result.warnings[0].text, "Unknown variable 'foo', define it with 'local foo = value'");
+}
+
+// Luwu: the lint explains an unknown name the way the type checkers do
+TEST_CASE_FIXTURE(Fixture, "UnknownGlobalTypo")
+{
+    LintResult result = lint("--!nocheck\nlocal othername = 1\nreturn othername, othrname");
+
+    REQUIRE(1 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "Did you mean 'othername' instead of 'othrname'?");
 }
 
 TEST_CASE_FIXTURE(Fixture, "DeprecatedGlobal")
@@ -126,6 +140,26 @@ if true then print(1) print(2) print(3) end
 
     REQUIRE(1 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "A new statement is on the same line; add semi-colon on previous statement to silence");
+}
+
+// Luwu: a half-typed statement doesn't make the untouched line after it lint. Found by the typewriter tests.
+TEST_CASE_FIXTURE(Fixture, "HalfTypedStatementsDontLintTheNextLine")
+{
+    // the parser's placeholder for the missing name isn't a variable
+    LintResult missingName = lint(R"(
+local
+local unrelated = 1
+print(unrelated)
+)");
+    CHECK_EQ(0, missingName.warnings.size());
+
+    // the missing value's error expression sits on the next line, where the parser gave up
+    LintResult missingValue = lint(R"(
+local t =
+local unrelated = 1
+print(t, unrelated)
+)");
+    CHECK_EQ(0, missingValue.warnings.size());
 }
 
 TEST_CASE_FIXTURE(Fixture, "MultilineBlockSemicolonsWhitelisted")
@@ -332,6 +366,40 @@ print(arg)
     CHECK_EQ(result.warnings[0].text, "Variable 'arg' shadows previous declaration at line 2");
 }
 
+// Luwu: a global that is only read is an unknown global, already a type error, so a local with its name isn't reported
+TEST_CASE_FIXTURE(BuiltinsFixture, "LocalShadowUnknownGlobal")
+{
+    LintResult result = lint(R"(
+local function parts(s)
+    print(prefix)
+end
+
+local function other()
+    local prefix = 1
+    return prefix
+end
+
+function defined() end
+
+local function third()
+    local defined = 2
+    return defined
+end
+
+return parts, other, third
+)");
+
+    std::vector<std::string> shadows;
+    for (const LintWarning& w : result.warnings)
+    {
+        if (w.code == LintWarning::Code_LocalShadow)
+            shadows.push_back(w.text);
+    }
+
+    REQUIRE_EQ(shadows.size(), 1);
+    CHECK_EQ(shadows[0], "Variable 'defined' shadows a global variable used at line 11");
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LocalShadowGlobal")
 {
     LintResult result = lint(R"(
@@ -363,6 +431,55 @@ return bar()
 
     REQUIRE(1 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Variable 'a' shadows previous declaration at line 2");
+}
+
+TEST_CASE_FIXTURE(Fixture, "LocalShadowClass")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // Two locals shadow the class and are reported. The one before the class hides it from the rest of
+    // the module, and the one in a function hides it from the rest of that function. Neither `local cat`
+    // (a different name) nor the unrelated class `Dog` is reported.
+    LintResult result = lint(R"(
+local Cat = 1
+local before = Cat
+class Cat
+    public x: number = 2
+end
+local function f()
+    local function Cat() return 3 end
+    return Cat()
+end
+class Dog
+    public y: number = 1
+end
+local cat = Dog()
+return before, f, cat
+)");
+
+    REQUIRE(2 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].code, LintWarning::Code_LocalShadow);
+    CHECK_EQ(result.warnings[0].location.begin.line, 1);
+    CHECK_EQ(result.warnings[0].text, "Variable 'Cat' shadows class 'Cat' declared at line 4");
+    CHECK_EQ(result.warnings[1].code, LintWarning::Code_LocalShadow);
+    CHECK_EQ(result.warnings[1].location.begin.line, 7);
+    CHECK_EQ(result.warnings[1].text, "Variable 'Cat' shadows class 'Cat' declared at line 4");
+}
+
+TEST_CASE_FIXTURE(Fixture, "LocalShadowClassAfterTheClass")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    LintResult result = lint(R"(
+class Cat
+    public x: number = 2
+end
+local Cat = 1
+return Cat
+)");
+
+    REQUIRE(1 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "Variable 'Cat' shadows class 'Cat' declared at line 2");
 }
 
 TEST_CASE_FIXTURE(Fixture, "LocalUnused")
@@ -1314,13 +1431,13 @@ end
 )");
 
     REQUIRE(7 == result.warnings.size());
-    CHECK_EQ(result.warnings[0].text, "Table field 'first' is a duplicate; previously defined at line 3");
-    CHECK_EQ(result.warnings[1].text, "Table field 'first' is a duplicate; previously defined at line 9");
+    CHECK_EQ(result.warnings[0].text, "Table property 'first' is a duplicate; previously defined at line 3");
+    CHECK_EQ(result.warnings[1].text, "Table property 'first' is a duplicate; previously defined at line 9");
     CHECK_EQ(result.warnings[2].text, "Table index 1 is a duplicate; previously defined as a list entry");
     CHECK_EQ(result.warnings[3].text, "Table index 3 is a duplicate; previously defined as a list entry");
-    CHECK_EQ(result.warnings[4].text, "Table type field 'first' is a duplicate; previously defined at line 24");
+    CHECK_EQ(result.warnings[4].text, "Table type property 'first' is a duplicate; previously defined at line 24");
     CHECK_EQ(result.warnings[5].text, "Table index 1 is a duplicate; previously defined at line 36");
-    CHECK_EQ(result.warnings[6].text, "Table type field 'first' is a duplicate; previously defined at line 41");
+    CHECK_EQ(result.warnings[6].text, "Table type property 'first' is a duplicate; previously defined at line 41");
 }
 
 TEST_CASE_FIXTURE(Fixture, "read_write_table_props")
@@ -1339,12 +1456,12 @@ TEST_CASE_FIXTURE(Fixture, "read_write_table_props")
     )");
 
     REQUIRE(6 == result.warnings.size());
-    CHECK(result.warnings[0].text == "Table type field 'x' is already read-write; previously defined at line 4");
-    CHECK(result.warnings[1].text == "Table type field 'x' is already read-write; previously defined at line 5");
-    CHECK(result.warnings[2].text == "Table type field 'x' already has a read type defined at line 6");
-    CHECK(result.warnings[3].text == "Table type field 'x' is a duplicate; previously defined at line 7");
-    CHECK(result.warnings[4].text == "Table type field 'x' already has a write type defined at line 8");
-    CHECK(result.warnings[5].text == "Table type field 'x' is a duplicate; previously defined at line 9");
+    CHECK(result.warnings[0].text == "Table type property 'x' is already read-write; previously defined at line 4");
+    CHECK(result.warnings[1].text == "Table type property 'x' is already read-write; previously defined at line 5");
+    CHECK(result.warnings[2].text == "Table type property 'x' already has a read type defined at line 6");
+    CHECK(result.warnings[3].text == "Table type property 'x' is a duplicate; previously defined at line 7");
+    CHECK(result.warnings[4].text == "Table type property 'x' already has a write type defined at line 8");
+    CHECK(result.warnings[5].text == "Table type property 'x' is a duplicate; previously defined at line 9");
 }
 
 TEST_CASE_FIXTURE(Fixture, "ImportOnlyUsedInTypeAnnotation")
@@ -2309,6 +2426,55 @@ end
     CHECK_EQ(result.warnings[2].text, "Using 'ipairs' on a table with string keys is likely a bug");
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "TableRemoveFootgunLint")
+{
+    ScopedFastFlag featureFlag{FFlag::LuwuTableRemoveFootgunLint, true};
+
+    LintResult result = lint(R"(
+        local t = {"apple", "banana"}
+
+        table.remove(t, table.find(t, "banana"))
+        table.remove(t, nil)
+
+        local i: number? = table.find(t, "apple")
+        table.remove(t, i)
+
+        local j: number = 1
+        table.remove(t, j)
+
+        local k = table.find(t, "pear")
+        table.remove(t, k)
+    )");
+
+    REQUIRE(3 == result.warnings.size());
+    CHECK_EQ(
+        result.warnings[0].text,
+        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.drop` instead. If order is not important, use a key/value table for better performance."
+    );
+    CHECK_EQ(
+        result.warnings[1].text,
+        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.drop` instead. If order is not important, use a key/value table for better performance."
+    );
+    CHECK_EQ(
+        result.warnings[2].text,
+        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.drop` instead. If order is not important, use a key/value table for better performance."
+    );
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "TableRemoveFootgunLintFlagDisabled")
+{
+    ScopedFastFlag featureFlag{FFlag::LuwuTableRemoveFootgunLint, false};
+
+    LintResult result = lint(R"(
+local t = {"apple", "banana"}
+
+local i: number? = table.find(t, "apple")
+table.remove(t, i)
+)");
+
+    REQUIRE(0 == result.warnings.size());
+}
+
 TEST_CASE_FIXTURE(Fixture, "DuplicateConditions")
 {
     LintResult result = lint(R"(
@@ -2413,6 +2579,8 @@ _ = (math.random() < 0.5 and false) or 42 -- currently ignored
 
 TEST_CASE_FIXTURE(Fixture, "WrongComment")
 {
+    ScopedFastFlag allowTrust{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, true};
+
     LintResult result = lint(R"(
 --!strict
 --!struct
@@ -2423,18 +2591,36 @@ TEST_CASE_FIXTURE(Fixture, "WrongComment")
 --! no more lint
 --!strict here
 --!native on
+--!trust
+--!trust me
 do end
 --!nolint
 )");
 
-    REQUIRE(7 == result.warnings.size());
+    REQUIRE(8 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Unknown comment directive 'struct'; did you mean 'strict'?");
     CHECK_EQ(result.warnings[1].text, "Unknown comment directive 'nolintGlobal'");
     CHECK_EQ(result.warnings[2].text, "nolint directive refers to unknown lint rule 'Global'");
     CHECK_EQ(result.warnings[3].text, "nolint directive refers to unknown lint rule 'KnownGlobal'; did you mean 'UnknownGlobal'?");
     CHECK_EQ(result.warnings[4].text, "Comment directive with the type checking mode has extra symbols at the end of the line");
     CHECK_EQ(result.warnings[5].text, "native directive has extra symbols at the end of the line");
-    CHECK_EQ(result.warnings[6].text, "Comment directive is ignored because it is placed after the first non-comment token");
+    // `--!trust` on its own is a known directive and warns about nothing
+    CHECK_EQ(result.warnings[6].text, "trust directive has extra symbols at the end of the line");
+    CHECK_EQ(result.warnings[7].text, "Comment directive is ignored because it is placed after the first non-comment token");
+}
+
+TEST_CASE_FIXTURE(Fixture, "TrustDirectiveWithoutTheFlag")
+{
+    // The flag only permits `--!trust`, so without it the directive does nothing, and says so.
+    ScopedFastFlag disallowTrust{FFlag::DebugLuwuCompilerTrustsTypeAnnotations, false};
+
+    LintResult result = lint(R"(
+--!trust
+do end
+)");
+
+    REQUIRE(1 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "trust directive has no effect because DebugLuwuCompilerTrustsTypeAnnotations is disabled");
 }
 
 TEST_CASE_FIXTURE(Fixture, "WrongCommentMuteSelf")
@@ -2629,6 +2815,166 @@ a<<"hi">>("hi")
 )");
 
     REQUIRE(0 == result.warnings.size());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "NilNoneComparison")
+{
+    ScopedFastFlag nonePrimitive{FFlag::LuwuNonePrimitive, true};
+
+    LintResult result = lint(R"(
+local function getNumber(x: string | number): number | none
+    if type(x) == "number" then
+        return x
+    end
+    return none
+end
+
+local function find(t: { string }, s: string): number?
+    return table.find(t, s)
+end
+
+local x = getNumber("4")
+if x ~= nil then end
+if nil == x then end
+if x ~= none then end -- ok
+if x then end -- ok
+
+local i = find({}, "a")
+while i ~= none do end
+
+local t = { value = getNumber(1) }
+local _hasValue = t.value ~= nil
+
+local flag: boolean | none = none
+if flag ~= nil then end
+
+local both: number | nil | none = nil
+if both ~= nil then end -- ok: can be either
+if both ~= none then end -- ok
+
+local neither = 5
+if neither ~= nil then end -- ok: a different mistake, not this one
+
+local function _untyped(u) return u ~= nil end -- ok: unknown
+local a: any = nil
+if a ~= none then end -- ok
+)");
+
+    REQUIRE_EQ(5, result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "'x' can be 'none' but never 'nil', so this is always true; did you mean 'x ~= none' or 'if x then'?");
+    CHECK_EQ(result.warnings[0].location, Location(Position(13, 3), Position(13, 11)));
+    CHECK_EQ(result.warnings[1].text, "'x' can be 'none' but never 'nil', so this is always false; did you mean 'x == none' or 'if not x then'?");
+    CHECK_EQ(result.warnings[2].text, "'i' can be 'nil' but never 'none', so this is always true; did you mean 'i ~= nil' or 'while i do'?");
+    // Not a condition: `t.value` on its own isn't a boolean.
+    CHECK_EQ(result.warnings[3].text, "'t.value' can be 'none' but never 'nil', so this is always true; did you mean 't.value ~= none'?");
+    // `if flag then` would also skip `false`.
+    CHECK_EQ(result.warnings[4].text, "'flag' can be 'none' but never 'nil', so this is always true; did you mean 'flag ~= none'?");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "NilNoneComparisonNeedsTheNonePrimitive")
+{
+    ScopedFastFlag nonePrimitive{FFlag::LuwuNonePrimitive, false};
+
+    // Without the `none` runtime there is nothing to mix up with `nil`, so the lint doesn't run.
+    LintResult result = lint(R"(
+local x: number | none = none
+if x ~= nil then end
+)");
+
+    for (const LintWarning& w : result.warnings)
+        CHECK(w.code != LintWarning::Code_NilNoneComparison);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "VarargCastIgnoresCallsThatReturnOneValue")
+{
+    // A cast on a call only truncates when the call can return more than one value; these are
+    // ordinary idioms that lose nothing.
+    LintResult result = lint(R"(
+local function one(): number return 1 end
+local function pair(): (number, number) return 1, 2 end
+local function many(...: number): ...number return ... end
+
+local function ok(x: any)
+    print(tostring(x) :: string)
+    local t = { tostring(x) :: string, one() :: any }
+    print(t)
+    return require(x) :: any
+end
+
+local function bad()
+    print(pair() :: number)
+    print(many(1, 2) :: number)
+end
+
+return ok, bad
+)");
+
+    std::vector<LintWarning> warnings;
+    for (const LintWarning& w : result.warnings)
+    {
+        if (w.code == LintWarning::Code_VarargCast)
+            warnings.push_back(w);
+    }
+
+    REQUIRE_EQ(2, warnings.size());
+    CHECK(warnings[0].text.find("'pair()'") != std::string::npos);
+    CHECK_EQ(warnings[0].location.begin.line, 13);
+    CHECK(warnings[1].text.find("'many()'") != std::string::npos);
+    CHECK_EQ(warnings[1].location.begin.line, 14);
+}
+
+TEST_CASE_FIXTURE(Fixture, "VarargCast")
+{
+    LintResult result = lint(R"(
+local function count(...: number) return select("#", ...) end
+local function pair(): (number, number) return 1, 2 end
+local lib = { pair = pair }
+
+local function f(...: string | number)
+    count(... :: number)
+    count(1, pair() :: number)
+    local t = { ... :: number }
+    local a, b = lib.pair() :: number
+    count(... :: any :: number)
+    return ... :: number
+end
+
+local function ok(...: string | number)
+    count((... :: number)) -- ok: parenthesized
+    count(... :: number, 1) -- ok: not last, one value either way
+    local x = ... :: number -- ok: one name
+    local t = { (... :: number), n = ... :: number } -- ok
+    count(((...)) :: number) -- ok: the parentheses truncated it already
+    return count(...)
+end
+
+return f, ok
+)");
+
+    // `local a, b = ...` also reports UnbalancedAssignment; only VarargCast is under test here.
+    std::vector<LintWarning> warnings;
+    for (const LintWarning& w : result.warnings)
+    {
+        if (w.code == LintWarning::Code_VarargCast)
+            warnings.push_back(w);
+    }
+
+    REQUIRE_EQ(6, warnings.size());
+    CHECK_EQ(
+        warnings[0].text,
+        "This type cast silently truncates '...' to its first value at runtime; use a helper function to convert these values to '...number', "
+        "or wrap this in parentheses to silence"
+    );
+    CHECK_EQ(warnings[0].location, Location(Position(6, 10), Position(6, 23)));
+    CHECK_EQ(
+        warnings[1].text,
+        "This type cast silently truncates 'pair()' to its first result at runtime; use a helper function to convert these results to "
+        "'...number', or wrap this in parentheses to silence"
+    );
+    CHECK_EQ(warnings[2].location.begin.line, 8);
+    CHECK(warnings[3].text.find("'lib.pair()'") != std::string::npos);
+    CHECK(warnings[4].text.find("'...'") != std::string::npos);
+    CHECK_EQ(warnings[5].location.begin.line, 11);
 }
 
 TEST_SUITE_END();

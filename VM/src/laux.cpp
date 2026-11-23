@@ -1,10 +1,11 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lualib.h"
 
 #include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"
+#include "ltable.h"
 #include "lapi.h"
 #include "lgc.h"
 #include "lnumutils.h"
@@ -285,21 +286,36 @@ unsigned luaL_optunsigned(lua_State* L, int narg, unsigned def)
     return luaL_opt(L, luaL_checkunsigned, narg, def);
 }
 
-const float* luaL_checkvector(lua_State* L, int narg)
+const LUA_VECTOR_TYPE* luaL_checkvector(lua_State* L, int narg)
 {
-    const float* v = lua_tovector(L, narg);
+    const LUA_VECTOR_TYPE* v = lua_tovector(L, narg);
     if (!v)
         tag_error(L, narg, LUA_TVECTOR);
     return v;
 }
 
-const float* luaL_optvector(lua_State* L, int narg, const float* def)
+const LUA_VECTOR_TYPE* luaL_optvector(lua_State* L, int narg, const LUA_VECTOR_TYPE* def)
 {
     return luaL_opt(L, luaL_checkvector, narg, def);
 }
 
 int luaL_getmetafield(lua_State* L, int obj, const char* event)
 {
+    // Luwu Classes (rfcs/classes): lua_getmetatable never exposes an object's metatable, but its
+    // metamethods still apply (`__tostring` through luaL_tolstring, for one), so read the field
+    // straight out of it. The metamethods are static members of the class anyway, so this reveals
+    // nothing new.
+    if (lua_isobject(L, obj))
+    {
+        LuaTable* mt = objectvalue(luaA_toobject(L, obj))->lclass->instancemetatable;
+        const TValue* field = mt ? luaH_getstr(mt, luaS_new(L, event)) : luaO_nilobject;
+        if (ttisnil(field))
+            return 0;
+        luaC_threadbarrier(L);
+        luaA_pushvalue(L, field);
+        return 1;
+    }
+
     if (!lua_getmetatable(L, obj)) // no metatable?
         return 0;
     lua_pushstring(L, event);
@@ -723,7 +739,7 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
     }
     case LUA_TVECTOR:
     {
-        const float* v = lua_tovector(L, idx);
+        const LUA_VECTOR_TYPE* v = lua_tovector(L, idx);
 
         char s[LUAI_MAXNUM2STR * LUA_VECTOR_SIZE];
         char* e = s;

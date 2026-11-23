@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/Scope.h"
 #include "Luau/ToString.h"
@@ -15,6 +15,30 @@ using namespace Luau;
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 TEST_SUITE_BEGIN("ToString");
+
+TEST_CASE_FIXTURE(Fixture, "definition_file_union_and_function_alias_names_survive_clonePublicInterface")
+{
+    // Regression test. Module::clonePublicInterface (Module.cpp) moves declaredGlobals and
+    // exportedTypeBindings from a module's internalTypes arena into its interfaceTypes arena. It copies
+    // them with Substitution.cpp's hand-rolled shallowClone, which lists the fields to copy for each type
+    // kind instead of doing a generic copy.
+    //
+    // That clone carried TableType::name/syntheticName, but not the newer name fields on UnionType,
+    // IntersectionType and FunctionType. So an alias exposed through a `declare` or `export type` in a
+    // definition file silently lost its name at this clone. Ordinary modules didn't show the bug, because
+    // regular, non-exported local bindings never go through this path.
+    loadDefinition(R"(
+        export type Pathlike = number | string
+        declare function useIt(p: Pathlike): ()
+    )");
+
+    CheckResult result = check(R"(
+        local f = useIt
+    )");
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("(Pathlike) -> ()", toString(requireType("f")));
+}
 
 TEST_CASE_FIXTURE(Fixture, "primitive")
 {
@@ -290,8 +314,10 @@ TEST_CASE_FIXTURE(Fixture, "overloaded_functions_always_printed_on_multiple_line
     opts.useLineBreaks = true;
 
     CHECK_EQ(
-        "((number) -> number)\n"
-        "& ((string) -> string)",
+        "( -- 2 overloads\n"
+        "    & ((number) -> number)\n"
+        "    & ((string) -> string)\n"
+        ")",
         toString(requireType("a"), opts)
     );
 }
@@ -319,7 +345,8 @@ TEST_CASE_FIXTURE(Fixture, "complex_unions_printed_on_multiple_lines")
     opts.useLineBreaks = true;
 
     CHECK_EQ(
-        "boolean\n"
+        "\n"
+        "| boolean\n"
         "| number\n"
         "| string",
         toString(requireType("a"), opts)
@@ -434,6 +461,24 @@ TEST_CASE_FIXTURE(Fixture, "stringifying_table_type_correctly_use_matching_table
     ToStringOptions o;
     o.maxTableLength = 40;
     CHECK_EQ(toString(&tv, o), "{ a: number, b: number, c: number, d: number, e: number, ... 5 more ... }");
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_length_elision_is_a_comment_when_using_line_breaks")
+{
+    TableType ttv{TableState::Sealed, TypeLevel{}};
+    for (char c : std::string("abcdefghij"))
+        ttv.props[std::string(1, c)] = {getBuiltins()->numberType};
+
+    Type tv{ttv};
+
+    ToStringOptions o;
+    o.maxTableLength = 40;
+    o.useLineBreaks = true;
+    CHECK_EQ(toString(&tv, o), "{\n    a: number,\n    b: number,\n    c: number,\n    -- ⋯ 7 more properties\n}");
+
+    // The elision comment must not swallow the closing brace even when it's the only entry.
+    o.maxTableLength = 1;
+    CHECK_EQ(toString(&tv, o), "{\n    -- ⋯ 10 more properties\n}");
 }
 
 TEST_CASE_FIXTURE(Fixture, "stringifying_cyclic_union_type_bails_early")
@@ -683,6 +728,23 @@ TEST_CASE_FIXTURE(Fixture, "toStringNamedFunction_id")
     CHECK_EQ("id<a>(x: a): a", toStringNamedFunction("id", *ftv));
 }
 
+TEST_CASE_FIXTURE(Fixture, "toStringNamedFunction_defines_only_the_cycle_names_it_used")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    // `Node` is a cycle, but it prints as its name, so no `t1` is used and none is defined.
+    CheckResult result = check(R"(
+        type Node = { next: Node? }
+        local function f(n: Node) end
+    )");
+
+    TypeId ty = requireType("f");
+    const FunctionType* ftv = get<FunctionType>(follow(ty));
+    REQUIRE(ftv);
+
+    CHECK_EQ("f(n: Node): ()", toStringNamedFunction("f", *ftv));
+}
+
 TEST_CASE_FIXTURE(Fixture, "toStringNamedFunction_map")
 {
     CheckResult result = check(R"(
@@ -840,6 +902,7 @@ TEST_CASE_FIXTURE(Fixture, "tostring_unsee_ttv_if_array")
 
 TEST_CASE_FIXTURE(Fixture, "tostring_error_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         --!strict
         function f1(t: {a : number, b: string, c: {d: string}}) : {a : number, b : string, c : { d : number}}
@@ -849,22 +912,22 @@ TEST_CASE_FIXTURE(Fixture, "tostring_error_mismatch")
 
     std::string expected;
     if (!FFlag::DebugLuauForceOldSolver)
-        expected = "Expected this to be\n\t"
+        expected = "Expected this to be\n    "
                    "'{ a: number, b: string, c: { d: number } }'\n"
-                   "but got\n\t"
-                   "'{ a: number, b: string, c: { d: string } }'; \n"
+                   "but got\n    "
+                   "'{ a: number, b: string, c: { d: string } }'\n"
                    "accessing `c.d` results in `string` in the latter type and `number` in the former "
                    "type, and `string` is not exactly `number`";
     else
-        expected = "Expected this to be exactly\n\t"
+        expected = "Expected this to be exactly\n    "
                    "'{ a: number, b: string, c: { d: number } }'\n"
-                   "but got\n\t"
+                   "but got\n    "
                    "'{ a: number, b: string, c: { d: string } }'\n"
                    "caused by:\n  "
                    "Property 'c' is not compatible.\n"
-                   "Expected this to be exactly\n\t"
+                   "Expected this to be exactly\n    "
                    "'{ d: number }'\n"
-                   "but got\n\t"
+                   "but got\n    "
                    "'{ d: string }'\n"
                    "caused by:\n  "
                    "Property 'd' is not compatible.\n"
@@ -1060,6 +1123,68 @@ TEST_CASE_FIXTURE(Fixture, "record_type_compositions_generic")
     CHECK_EQ(startPosObject, 4);
     CHECK_EQ(endPosObject, 10);
     CHECK_EQ(recordedTyObject, requireTypeAlias("Object"));
+}
+
+TEST_CASE_FIXTURE(Fixture, "expanded_root_alias_prints_recursive_references_by_name")
+{
+    // Expanding the root alias bypasses its name short-circuit, so a recursive reference back to it
+    // used to fall through to the cycle guard and print `*CYCLE*` -- which doesn't say which type
+    // recursed once more than one property can.
+    CheckResult result = check(R"(
+        type ThingRecurses = {
+            inside_here: ThingRecurses,
+        }
+        type List<T> = {
+            value: T,
+            next: List<T>?,
+        }
+    )");
+
+    ToStringOptions opts;
+    opts.alwaysExpandRootAlias = true;
+    opts.includeWhereClauses = true;
+
+    ToStringResult thing = toStringDetailed(requireTypeAlias("ThingRecurses"), opts);
+    CHECK_EQ("{ inside_here: ThingRecurses }", thing.name);
+    CHECK_EQ("", thing.whereClauses);
+    CHECK_EQ(std::string::npos, thing.name.find("CYCLE"));
+
+    std::string list = toString(requireTypeAlias("List"), opts);
+    CHECK_EQ(std::string::npos, list.find("CYCLE"));
+    CHECK_NE(std::string::npos, list.find("next: List<T>?"));
+}
+
+TEST_CASE_FIXTURE(Fixture, "recursive_union_alias_prints_by_name")
+{
+    CheckResult result = check(R"(
+        type Content = string | { read Content | nil }
+        local optional: Content | nil = "a"
+    )");
+
+    TypeId content = requireTypeAlias("Content");
+
+    // the table's element type reaches `Content` itself, not a copy of it
+    const UnionType* contentUnion = get<UnionType>(follow(content));
+    REQUIRE(contentUnion);
+    REQUIRE(contentUnion->options.size() == 2);
+    const TableType* array = get<TableType>(follow(contentUnion->options[1]));
+    REQUIRE(array);
+    REQUIRE(array->indexer);
+    const UnionType* element = get<UnionType>(follow(array->indexer->indexResultType));
+    REQUIRE(element);
+    REQUIRE(element->options.size() == 2);
+    CHECK_EQ(follow(element->options[0]), follow(content));
+
+    CHECK_EQ("Content?", toString(requireType("optional")));
+    CHECK_EQ("Content?", toString(array->indexer->indexResultType));
+
+    // expanded as the root, the way a hover shows an alias
+    ToStringOptions opts;
+    opts.alwaysExpandRootAlias = true;
+    opts.includeWhereClauses = true;
+    ToStringResult expanded = toStringDetailed(content, opts);
+    CHECK_EQ("string | {read Content?}", expanded.name);
+    CHECK_EQ("", expanded.whereClauses);
 }
 
 TEST_SUITE_END();

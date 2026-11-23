@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/TypeInfer.h"
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Common.h"
@@ -149,15 +149,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "sort_with_bad_predicate")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    const std::string expected = "Expected this to be\n\t"
+    const std::string expected = "Expected this to be\n    "
                                  "'((string, string) -> boolean)?'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, number) -> boolean'"
                                  "\ncaused by:\n"
                                  "  None of the union options are compatible. For example:\n"
-                                 "Expected this to be\n\t"
+                                 "Expected this to be\n    "
                                  "'(string, string) -> boolean'"
-                                 "\nbut got\n\t"
+                                 "\nbut got\n    "
                                  "'(number, number) -> boolean'"
                                  "\ncaused by:\n"
                                  "  Argument #1 type is not compatible.\n"
@@ -187,6 +187,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "math_max_variatic")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "math_max_checks_for_numbers")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local n = math.max(1,2,"3")
     )");
@@ -504,6 +505,24 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "os_time_takes_optional_date_table")
     CHECK("number" == toString(requireType("n1")));
     CHECK("number" == toString(requireType("n2")));
     CHECK("number" == toString(requireType("n3")));
+}
+
+// os.difftime reads its arguments with luaL_checknumber and luaL_optnumber: a date table raises at runtime and t1
+// defaults to 0.
+TEST_CASE_FIXTURE(BuiltinsFixture, "os_difftime_takes_numbers_and_an_optional_start")
+{
+    CheckResult result = check(R"(
+        --!strict
+        local elapsed = os.difftime(os.time(), 0)
+        local since_epoch = os.difftime(os.time())
+        local date = { year = 2020, month = 1, day = 1, hour = 0, min = 0, sec = 0, wday = 4, yday = 1, isdst = false }
+        local from_date = os.difftime(date, 0)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK(5 == result.errors[0].location.begin.line);
+    CHECK("number" == toString(requireType("elapsed")));
+    CHECK("number" == toString(requireType("since_epoch")));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "thread_is_a_type")
@@ -1019,6 +1038,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "string_format_report_all_type_errors_at_corr
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "tonumber_returns_optional_number_type")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         --!strict
         local b: number = tonumber('asdf')
@@ -1029,8 +1049,8 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "tonumber_returns_optional_number_type")
     if (!FFlag::DebugLuauForceOldSolver)
     {
         CHECK_EQ(
-            "Expected this to be 'number', but got 'number?'; \n"
-            "the 2nd component of the union is `nil`, which is not a subtype of `number`",
+            "Expected this to be 'number', but got 'number?'\n"
+            "`number?` could be `nil`",
             toString(result.errors[0])
         );
     }
@@ -1380,7 +1400,7 @@ TEST_CASE_FIXTURE(Fixture, "typeof_unresolved_function")
         local function f(a: typeof(f)) end
         )");
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Unknown global 'f'; consider assigning to it first", toString(result.errors[0]));
+    CHECK_EQ("Unknown variable 'f', define it with 'local f = value'", toString(result.errors[0]));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "no_persistent_typelevel_change")
@@ -1899,6 +1919,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "vector_lerp_should_not_crash")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "instantiation_works_on_builtins")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local foo = table.create<<string>>(4)
         local bar = table.unpack<<string>>({})
@@ -1981,6 +2002,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_freeze_with_variadic_any_should_not_er
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_freeze_with_variadic_non_error_suppressing_should_error")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag _{FFlag::DebugLuauForceOldSolver, false};
 
     CheckResult result = check(R"(

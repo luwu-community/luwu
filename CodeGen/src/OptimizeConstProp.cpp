@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/OptimizeConstProp.h"
 
 #include "Luau/DenseHash.h"
@@ -23,8 +23,8 @@ LUAU_FASTINTVARIABLE(LuauCodeGenReuseSlotLimit, 64)
 LUAU_FASTINTVARIABLE(LuauCodeGenReuseUdataTagLimit, 64)
 LUAU_FASTINTVARIABLE(LuauCodeGenLiveSlotReuseLimit, 8)
 LUAU_FASTFLAGVARIABLE(DebugLuauAbortingChecks)
-LUAU_FASTFLAGVARIABLE(LuauCodegenLoadPropagateOrigin)
 LUAU_FASTFLAGVARIABLE(LuauCodegenSubstituteReplacements)
+LUAU_FASTFLAGVARIABLE(LuauCodegenConstVectorBufferRead)
 
 namespace Luau
 {
@@ -121,6 +121,12 @@ static uint8_t tryGetTagForTypename(std::string_view name, bool forTypeof)
         return LUA_TBUFFER;
 
     return 0xff;
+}
+
+// Write bit (OP_E) of a TRY_OBJECT_MEMBER_ADDR: 1 = SETTABLEKS (enforces const), else read
+static bool objectMemberIsWrite(IrFunction& function, IrInst& inst)
+{
+    return HAS_OP_E(inst) && function.uintOp(OP_E(inst)) != 0;
 }
 
 // Check if we can treat double as an integer in addition and subtraction
@@ -280,6 +286,7 @@ struct ConstPropState
 
         hashValueCache.clear();
         arrayValueCache.clear();
+        objectValueCache.clear();
 
         // While other map clears already prevent instValue keys from matching again, this saves memory and map size
         instValue.clear();
@@ -300,6 +307,11 @@ struct ConstPropState
 
         hashValueCache.clear();
         arrayValueCache.clear();
+
+        // Object members are heap and can be mutated/aliased by any call, same lifetime as tables
+        tryObjectMemberCache.clear();
+        objectMemberCache.clear();
+        objectValueCache.clear();
     }
 
     void invalidateHeapBufferData()
@@ -450,7 +462,7 @@ struct ConstPropState
                 if (uint32_t* prevIdx = getPreviousVersionedLoadIndex(IrCmd::LOAD_INT64, vmReg))
                     return std::make_pair(IrCmd::LOAD_INT64, *prevIdx);
             }
-            else if (tag == LUA_TVECTOR)
+            else if (LUA_VECTOR_DOUBLE == 0 && tag == LUA_TVECTOR)
             {
                 if (uint32_t* prevIdx = getPreviousVersionedLoadIndex(IrCmd::LOAD_FLOAT, vmReg))
                     return std::make_pair(IrCmd::LOAD_FLOAT, *prevIdx);
@@ -889,6 +901,50 @@ struct ConstPropState
         int offset = function.intOp(OP_B(loadInst));
         uint8_t tag = function.tagOp(OP_C(loadInst));
 
+        if (loadInst.cmd == IrCmd::BUFFER_READF64 && OP_A(loadInst).kind == IrOpKind::Inst)
+        {
+            IrInst& addrInst = function.instructions[OP_A(loadInst).index];
+
+            // Forward component reads from NEW_VECTOR directly
+            if (addrInst.cmd == IrCmd::NEW_VECTOR)
+            {
+                IrOp component;
+
+                if (offset == 0)
+                    component = OP_A(addrInst);
+                else if (offset == 8)
+                    component = OP_B(addrInst);
+                else if (offset == 16)
+                    component = OP_C(addrInst);
+
+                if (component.kind != IrOpKind::None)
+                {
+                    substitute(function, loadInst, component);
+                    return;
+                }
+            }
+
+            // Forward component reads from a constant vector pointer
+            if (FFlag::LuauCodegenConstVectorBufferRead && addrInst.cmd == IrCmd::LOAD_POINTER && OP_A(addrInst).kind == IrOpKind::VmReg &&
+                function.proto)
+            {
+                if (uint32_t* prevIdx = getPreviousVersionedLoadIndex(IrCmd::LOAD_TVALUE, OP_A(addrInst)))
+                {
+                    IrInst& tvalueLoad = function.instructions[*prevIdx];
+
+                    if (tvalueLoad.cmd == IrCmd::LOAD_TVALUE && OP_A(tvalueLoad).kind == IrOpKind::VmConst)
+                    {
+                        TValue* tv = &function.proto->k[vmConstOp(OP_A(tvalueLoad))];
+
+                        if (ttisvector(tv) && offset % 8 == 0 && unsigned(offset) / 8 < LUA_VECTOR_SIZE)
+                        {
+                            substitute(function, loadInst, build.constDouble(vvalue(tv)[offset / 8]));
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         // Find if we have data for this kind of load
         for (BufferLoadStoreInfo& info : bufferLoadStoreInfo)
         {
@@ -1060,7 +1116,8 @@ struct ConstPropState
                 const IrInst& infoPtr = function.instOp(info.address);
 
                 // Pointers from separate allocations cannot be the same
-                if (currPtr.cmd == IrCmd::NEW_USERDATA && infoPtr.cmd == IrCmd::NEW_USERDATA && OP_A(storeInst) != info.address)
+                if ((currPtr.cmd == IrCmd::NEW_USERDATA || currPtr.cmd == IrCmd::NEW_VECTOR) &&
+                    (infoPtr.cmd == IrCmd::NEW_USERDATA || infoPtr.cmd == IrCmd::NEW_VECTOR) && OP_A(storeInst) != info.address)
                 {
                     i++;
                     continue;
@@ -1202,8 +1259,39 @@ struct ConstPropState
             // Double-check that TABLE_SETNUM invalidated the table array data
             CODEGEN_ASSERT(arrayValueCache.empty());
         }
+        else if (targetAddr.cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR || targetAddr.cmd == IrCmd::OBJECT_MEMBER_ADDR)
+        {
+            // A write to one member can't change a cached load of a different member. It does
+            // invalidate cached loads of the same member on any object that might alias this one.
+            //
+            // The two address forms identify a member differently: TRY_OBJECT_MEMBER_ADDR by its name
+            // constant (OP_C), and OBJECT_MEMBER_ADDR by its constant offset (OP_B). So a cached load is
+            // compared only against a write through the same form. A write through the other form
+            // invalidates it unconditionally, because one function can reach the same object through
+            // both forms. Examples: a local proven by `class.isinstance` next to an untyped receiver, or
+            // a freshly constructed object.
+            for (auto& [pointerIdx, loadedValueIdx] : objectValueCache)
+            {
+                IrInst& address = function.instructions[pointerIdx];
+
+                if (address.cmd != targetAddr.cmd)
+                {
+                    loadedValueIdx = kInvalidInstIdx;
+                }
+                else if (address.cmd == IrCmd::OBJECT_MEMBER_ADDR)
+                {
+                    if (OP_B(address) == OP_B(targetAddr))
+                        loadedValueIdx = kInvalidInstIdx;
+                }
+                else if (OP_C(address) == OP_C(targetAddr))
+                {
+                    loadedValueIdx = kInvalidInstIdx;
+                }
+            }
+        }
         else
         {
+            // GET_CLOSURE_UPVAL_ADDR writes aren't cached anywhere else in this pass, nothing to invalidate
             CODEGEN_ASSERT(targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR);
         }
     }
@@ -1222,6 +1310,10 @@ struct ConstPropState
             IrOp offsetOp = getCombinedArrayLoadOffsetOp(targetAddr, writeOffsetOp);
 
             arrayValueCache.push_back({function.getInstIndex(targetAddr), offsetOp, instIdx});
+        }
+        else if (targetAddr.cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR || targetAddr.cmd == IrCmd::OBJECT_MEMBER_ADDR)
+        {
+            objectValueCache[function.getInstIndex(targetAddr)] = instIdx;
         }
         else
         {
@@ -1306,6 +1398,7 @@ struct ConstPropState
         instNotReadonly.clear();
         instNoMetatable.clear();
         instArraySize.clear();
+        instBufferMutable.clear();
 
         invalidateValuePropagation();
         invalidateHeapTableData();
@@ -1350,6 +1443,21 @@ struct ConstPropState
     std::vector<NumberedInstruction> getSlotNodeCache; // Additionally, pcpos argument might be different
     std::vector<NodeSlotState> checkSlotMatchCache;    // Additionally, fallback block argument might be different
 
+    // Luwu Classes (rfcs/classes): earlier TRY_OBJECT_MEMBER_ADDR instructions, for reuse. The
+    // instruction both checks the member and computes its address, so a repeat on the same object
+    // (OP_A) and member name (OP_C) is replaced by the earlier result. The two may have a different
+    // pcpos (OP_B) and fallback (OP_D).
+    //
+    // A write's check (OP_E set) is stronger than a read's, because a write also checks `const`. So a
+    // read may reuse an earlier write's result, but a write may not reuse an earlier read's.
+    std::vector<NumberedInstruction> tryObjectMemberCache;
+    // The same, for the proven-class direct form: keyed by object pointer (OP_A) and constant member
+    // offset (OP_B), with no guard strength to reconcile.
+    std::vector<NumberedInstruction> objectMemberCache;
+    // Maps an object member address (TRY_OBJECT_MEMBER_ADDR or OBJECT_MEMBER_ADDR) SSA index to the last
+    // instruction producing the value there
+    DenseHashMap<uint32_t, uint32_t> objectValueCache{kInvalidInstIdx};
+
     std::vector<uint32_t> getArrAddrCache;
     std::vector<uint32_t> checkArraySizeCache; // Additionally, fallback block argument might be different
 
@@ -1366,6 +1474,9 @@ struct ConstPropState
     DenseHashSet<uint32_t> instNotReadonly{kInvalidInstIdx};
     DenseHashSet<uint32_t> instNoMetatable{kInvalidInstIdx};
     DenseHashMap<uint32_t, int> instArraySize{kInvalidInstIdx};
+
+    // Mutable buffer tracking
+    DenseHashSet<uint32_t> instBufferMutable{kInvalidInstIdx};
 
     std::vector<uint32_t> rangeEndTemp;
 };
@@ -1427,6 +1538,7 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_MATH_ROUND:
     case LBF_RAWGET:
     case LBF_RAWEQUAL:
+    case LBF_CLASS_ISINSTANCE:
     case LBF_TABLE_UNPACK:
     case LBF_VECTOR:
     case LBF_BIT32_COUNTLZ:
@@ -1504,8 +1616,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (state.substituteTagLoadWithTValueData(build, inst))
                 break;
 
-            if (FFlag::LuauCodegenLoadPropagateOrigin)
-                state.tryRedirectVmRegLoadToTValueOrigin(inst);
+            state.tryRedirectVmRegLoadToTValueOrigin(inst);
 
             state.substituteOrRecordVmRegLoad(inst);
         }
@@ -1516,12 +1627,16 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (state.substituteOrRecordValueLoadWithTValueData(build, inst))
                 break;
 
-            if (FFlag::LuauCodegenLoadPropagateOrigin)
-                state.tryRedirectVmRegLoadToTValueOrigin(inst);
+            state.tryRedirectVmRegLoadToTValueOrigin(inst);
 
             state.substituteOrRecordVmRegLoad(inst);
         }
         break;
+    case IrCmd::LOAD_BUFFER_DATA: 
+    {
+        state.substituteOrRecord(inst, index);
+        break;
+    }
     case IrCmd::LOAD_DOUBLE:
     {
         IrOp value = state.tryGetValue(OP_A(inst));
@@ -1535,8 +1650,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (state.substituteOrRecordValueLoadWithTValueData(build, inst))
                 break;
 
-            if (FFlag::LuauCodegenLoadPropagateOrigin)
-                state.tryRedirectVmRegLoadToTValueOrigin(inst);
+            state.tryRedirectVmRegLoadToTValueOrigin(inst);
 
             state.substituteOrRecordVmRegLoad(inst);
         }
@@ -1555,8 +1669,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (state.substituteOrRecordValueLoadWithTValueData(build, inst))
                 break;
 
-            if (FFlag::LuauCodegenLoadPropagateOrigin)
-                state.tryRedirectVmRegLoadToTValueOrigin(inst);
+            state.tryRedirectVmRegLoadToTValueOrigin(inst);
 
             state.substituteOrRecordVmRegLoad(inst);
         }
@@ -1575,8 +1688,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (state.substituteOrRecordValueLoadWithTValueData(build, inst))
                 break;
 
-            if (FFlag::LuauCodegenLoadPropagateOrigin)
-                state.tryRedirectVmRegLoadToTValueOrigin(inst);
+            state.tryRedirectVmRegLoadToTValueOrigin(inst);
 
             state.substituteOrRecordVmRegLoad(inst);
         }
@@ -1619,7 +1731,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
                     if (ttisvector(tv))
                     {
-                        const float* v = vvalue(tv);
+                        const LUA_VECTOR_TYPE* v = vvalue(tv);
                         substitute(function, inst, build.constDouble(v[component]));
                         break;
                     }
@@ -1730,6 +1842,37 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 }
 
                 state.arrayValueCache.push_back({OP_A(inst).index, offsetOp, index});
+            }
+            else if (source->cmd == IrCmd::TRY_OBJECT_MEMBER_ADDR || source->cmd == IrCmd::OBJECT_MEMBER_ADDR)
+            {
+                uint32_t* prevIdx = state.objectValueCache.find(OP_A(inst).index);
+
+                if (prevIdx && *prevIdx != kInvalidInstIdx)
+                {
+                    IrInst& prev = function.instructions[*prevIdx];
+
+                    if (prev.cmd == IrCmd::LOAD_TVALUE)
+                    {
+                        // Previous load might have been removed as unused
+                        if (prev.useCount != 0)
+                            substitute(function, inst, IrOp{IrOpKind::Inst, *prevIdx});
+                    }
+                    else if (prev.cmd == IrCmd::STORE_SPLIT_TVALUE)
+                    {
+                        state.instTag[index] = function.tagOp(OP_B(prev));
+                        state.instValue[index] = OP_C(prev);
+                    }
+                    else if (prev.cmd == IrCmd::STORE_TVALUE)
+                    {
+                        // For safety, check that the operand of the previous store is still alive (store was not removed or replaced)
+                        if (auto arg = function.asInstOp(OP_B(prev)); arg && arg->useCount != 0)
+                            substitute(function, inst, OP_B(prev));
+                    }
+
+                    break;
+                }
+
+                state.objectValueCache[OP_A(inst).index] = index;
             }
         }
         break;
@@ -2246,6 +2389,20 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         }
         break;
     case IrCmd::CHECK_BUFFER_MUTABLE:
+        if (OP_A(inst).kind == IrOpKind::Inst)
+        {
+            if (state.instBufferMutable.contains(OP_A(inst).index))
+            {
+                if (FFlag::DebugLuauAbortingChecks)
+                    replace(function, OP_B(inst), build.undef());
+                else
+                    kill(function, inst);
+            }
+            else
+            {
+                state.instBufferMutable.insert(OP_A(inst).index);
+            }
+        }
         break;
     case IrCmd::CHECK_BUFFER_LEN:
     {
@@ -2512,8 +2669,76 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         if (int(state.getSlotNodeCache.size()) < FInt::LuauCodeGenReuseSlotLimit)
             state.getSlotNodeCache.push_back({index, state.instPos, state.instPos});
         break;
+    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
+    {
+        bool curWrite = objectMemberIsWrite(function, inst);
+        int cacheSize = int(state.tryObjectMemberCache.size());
+
+        for (size_t i = 0; i < state.tryObjectMemberCache.size(); i++)
+        {
+            auto&& [prevIdx, num, lastNum] = state.tryObjectMemberCache[i];
+
+            IrInst& prev = function.instructions[prevIdx];
+
+            // Same object pointer (OP_A) and member name (OP_C); a read may reuse a dominating write's
+            // guard (write guard subsumes read guard), but a write must not reuse a read's weaker guard
+            if (OP_A(prev) == OP_A(inst) && OP_C(prev) == OP_C(inst) && (objectMemberIsWrite(function, prev) || !curWrite))
+            {
+                int limit = FInt::LuauCodeGenLiveSlotReuseLimit;
+
+                if (cacheSize > limit && state.getMaxInternalOverlap(state.tryObjectMemberCache, i) > limit)
+                    return;
+
+                lastNum = state.instPos;
+
+                substitute(function, inst, IrOp{IrOpKind::Inst, prevIdx});
+                return; // Break out from both the loop and the switch
+            }
+        }
+
+        if (cacheSize < FInt::LuauCodeGenReuseSlotLimit)
+            state.tryObjectMemberCache.push_back({index, state.instPos, state.instPos});
+        break;
+    }
+    case IrCmd::OBJECT_MEMBER_ADDR:
+    {
+        // Luwu Classes (rfcs/classes): an OBJECT_MEMBER_ADDR depends only on the object and a
+        // constant offset, and carries no guard at all, so a repeat of the same pair is the same
+        // address. Reusing it is what lets the value cache above forward a load or a store
+        // to a later read of the same member.
+        for (size_t i = 0; i < state.objectMemberCache.size(); i++)
+        {
+            auto&& [prevIdx, num, lastNum] = state.objectMemberCache[i];
+
+            IrInst& prev = function.instructions[prevIdx];
+
+            if (OP_A(prev) == OP_A(inst) && OP_B(prev) == OP_B(inst))
+            {
+                int limit = FInt::LuauCodeGenLiveSlotReuseLimit;
+
+                if (int(state.objectMemberCache.size()) > limit && state.getMaxInternalOverlap(state.objectMemberCache, i) > limit)
+                    return;
+
+                lastNum = state.instPos;
+
+                substitute(function, inst, IrOp{IrOpKind::Inst, prevIdx});
+                return; // Break out from both the loop and the switch
+            }
+        }
+
+        if (int(state.objectMemberCache.size()) < FInt::LuauCodeGenReuseSlotLimit)
+            state.objectMemberCache.push_back({index, state.instPos, state.instPos});
+        break;
+    }
     case IrCmd::GET_HASH_NODE_ADDR:
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
+        break;
+    case IrCmd::LOAD_OWNER_CLASS:
+        // Proto::ownerclass is fixed for the executing closure; there is nothing to propagate
+        break;
+    case IrCmd::TRY_CLASS_MEMBER_ADDR:
+    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
+        // TODO(rfcs/classes): no reuse cache yet, unlike TRY_OBJECT_MEMBER_ADDR above
         break;
     case IrCmd::ADD_INT64:
     case IrCmd::SUB_INT64:
@@ -2824,12 +3049,28 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::STRING_LEN:
     case IrCmd::BUFFER_ISFROZEN:
         break;
+    case IrCmd::CLASS_ISINSTANCE:
+        // a value whose tag is known not to be an object is never an instance, so the branch on it folds
+        if (OP_A(inst).kind == IrOpKind::Constant && function.tagOp(OP_A(inst)) != LUA_TOBJECT)
+        {
+            substitute(function, inst, build.constInt(0));
+            break;
+        }
+
+        // Pure function of (tag, value ptr, class ptr); two identical checks in a block can be CSE'd
+        state.substituteOrRecord(inst, index);
+        break;
     case IrCmd::NEW_TABLE:
         state.instNotReadonly.insert(index);
         state.instNoMetatable.insert(index);
         state.instArraySize[index] = int(function.uintOp(OP_A(inst)));
         break;
     case IrCmd::DUP_TABLE:
+        break;
+    case IrCmd::NEW_OBJECT:
+        // an allocation: reads and writes nothing the pass tracks, and runs no user code
+        break;
+    case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
         break;
     case IrCmd::TRY_NUM_TO_INDEX:
         for (uint32_t prevIdx : state.tryNumToIndexCache)
@@ -2851,6 +3092,8 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::NEW_USERDATA:
         if (int(state.useradataTagCache.size()) < FInt::LuauCodeGenReuseUdataTagLimit)
             state.useradataTagCache.push_back(index);
+        break;
+    case IrCmd::NEW_VECTOR:
         break;
     case IrCmd::INT64_TO_NUM:
     case IrCmd::INT_TO_NUM:
@@ -3181,6 +3424,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             state.checkSlotMatchCache.push_back({index, true});
         break;
 
+    case IrCmd::CHECK_OBJECT_CLASS:
+        // TODO(rfcs/classes): no redundant-check elimination yet, unlike CHECK_SLOT_MATCH above
+        break;
+
     case IrCmd::ADD_VEC:
     case IrCmd::SUB_VEC:
     case IrCmd::MUL_VEC:
@@ -3352,6 +3599,16 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.invalidate(IrOp{OP_B(inst).kind, vmRegOp(OP_B(inst)) + 0u});
         state.invalidate(IrOp{OP_B(inst).kind, vmRegOp(OP_B(inst)) + 1u});
         state.invalidate(IrOp{OP_B(inst).kind, vmRegOp(OP_B(inst)) + 2u});
+        state.invalidateUserCall();
+        break;
+    case IrCmd::FALLBACK_NEWCLASSMEMBER:
+        // Adding a member can run the collector, but writes no registers.
+        state.invalidateUserCall();
+        break;
+    case IrCmd::FALLBACK_NEWOBJECT:
+        // Construction writes the instance (and, for a user __init, the frame it lays out above it),
+        // and applying fields can run an __index metamethod, i.e. arbitrary Lua.
+        state.invalidateRegisterRange(vmRegOp(OP_B(inst)), function.intOp(OP_D(inst)) == LBC_NEWOBJECT_INIT ? 3 : 1);
         state.invalidateUserCall();
         break;
     }

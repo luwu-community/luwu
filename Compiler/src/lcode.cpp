@@ -1,8 +1,9 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "luacode.h"
 
 #include "Luau/Compiler.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 char* luau_compile(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize)
@@ -51,6 +52,11 @@ void luau_set_compile_constant_integer64(lua_CompileConstant* constant, int64_t 
 void luau_set_compile_constant_vector(lua_CompileConstant* constant, float x, float y, float z, float w)
 {
     Luau::setCompileConstantVector(constant, x, y, z, w);
+}
+
+void luau_set_compile_constant_vectord(lua_CompileConstant* constant, double x, double y, double z, double w)
+{
+    Luau::setCompileConstantVectord(constant, x, y, z, w);
 }
 
 void luau_set_compile_constant_string(lua_CompileConstant* constant, const char* s, size_t l)

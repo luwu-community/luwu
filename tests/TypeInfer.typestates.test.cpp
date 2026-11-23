@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Fixture.h"
 
 #include "doctest.h"
@@ -125,6 +125,7 @@ TEST_CASE_FIXTURE(TypeStateFixture, "refine_a_local_and_then_assign_it")
 
 TEST_CASE_FIXTURE(TypeStateFixture, "assign_a_local_and_then_refine_it")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     CheckResult result = check(R"(
         local function f(x: string?)
             x = nil

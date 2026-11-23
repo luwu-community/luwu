@@ -9,8 +9,8 @@
 #include <memory>
 #include <string.h>
 
-LUAU_FASTFLAG(LuauExternallyManagedBuffers)
-LUAU_FASTFLAG(LuauBufferIsFrozen)
+LUAU_FASTFLAG(LuwuExternallyManagedBuffers)
+LUAU_FASTFLAG(LuwuBufferIsFrozen)
 
 static int s_externalBufferFreeCount = 0;
 static void test_buffer_free_cb(lua_State* L, void* data, size_t sz, void* userdata)
@@ -59,7 +59,7 @@ static int too_big_external_buffer_cb(lua_State* L)
 
 TEST_CASE("ExternalBufferTooBig")
 {
-    ScopedFastFlag sff{FFlag::LuauExternallyManagedBuffers, true};
+    ScopedFastFlag sff{FFlag::LuwuExternallyManagedBuffers, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     
@@ -73,7 +73,7 @@ TEST_CASE("ExternalBufferTooBig")
 
 TEST_CASE("ExternalBufferMutable")
 {
-    ScopedFastFlag sff{FFlag::LuauExternallyManagedBuffers, true};
+    ScopedFastFlag sff{FFlag::LuwuExternallyManagedBuffers, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     luaL_openlibs(L);
@@ -107,8 +107,8 @@ TEST_CASE("ExternalBufferMutable")
 
 TEST_CASE("ExternalBufferImmutable")
 {
-    ScopedFastFlag sff{FFlag::LuauExternallyManagedBuffers, true};
-    ScopedFastFlag sff2{FFlag::LuauBufferIsFrozen, true};
+    ScopedFastFlag sff{FFlag::LuwuExternallyManagedBuffers, true};
+    ScopedFastFlag sff2{FFlag::LuwuBufferIsFrozen, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     luaL_openlibs(L);
@@ -155,8 +155,8 @@ TEST_CASE("ExternalBufferImmutable")
 
 TEST_CASE("ExternalBufferImmutable_NCG")
 {
-    ScopedFastFlag sff{FFlag::LuauExternallyManagedBuffers, true};
-    ScopedFastFlag sff2{FFlag::LuauBufferIsFrozen, true};
+    ScopedFastFlag sff{FFlag::LuwuExternallyManagedBuffers, true};
+    ScopedFastFlag sff2{FFlag::LuwuBufferIsFrozen, true};
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
     luaL_openlibs(L);

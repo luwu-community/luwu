@@ -1,11 +1,11 @@
 #!/usr/bin/python3
-# This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+# This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 # Given two heap snapshots (A & B), this tool performs reachability analysis on new objects allocated in B
 # This is useful to find memory leaks - reachability analysis answers the question "why is this set of objects not freed"
 # This tool can also be ran with just one snapshot, in which case it displays all allocated objects
 # The result of analysis is a .svg file which can be viewed in a browser
-# To generate these dumps, use luaC_dump, ideally preceded by luaC_fullgc
+# To generate these dumps, use lua_memorydump, ideally preceded by lua_gc(L, LUA_GCCOLLECT, 0)
 
 import argparse
 import json

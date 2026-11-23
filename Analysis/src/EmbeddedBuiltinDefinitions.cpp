@@ -1,12 +1,13 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/BuiltinDefinitions.h"
 
 LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
-LUAU_FASTFLAG(LuauBufferIsFrozen)
+LUAU_FASTFLAG(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(LuwuTableDrop)
 
 namespace Luau
 {
@@ -174,7 +175,7 @@ type DateTypeResult = {
 declare os: {
     time: (time: DateTypeArg?) -> number,
     date: ((formatString: "*t" | "!*t", time: number?) -> DateTypeResult) & ((formatString: string?, time: number?) -> string),
-    difftime: (t2: DateTypeResult | number, t1: DateTypeResult | number) -> number,
+    difftime: (t2: number, t1: number?) -> number,
     clock: () -> number,
 }
 
@@ -205,6 +206,7 @@ declare table: {
     sort: <V>(t: {V}, comp: ((V, V) -> boolean)?) -> (),
     create: <V>(count: number, value: V?) -> {V},
     find: <V>(haystack: {V}, needle: V, init: number?) -> number?,
+    drop: <V>(t: {V}, value: V, count: number?) -> number,
 
     unpack: <V>(list: {V}, i: number?, j: number?) -> ...V,
     pack: <V>(...V) -> { n: number, [number]: V },
@@ -214,7 +216,6 @@ declare table: {
     foreachi: <V>({V}, (number, V) -> ()) -> (),
 
     move: <V>(src: {V}, a: number, b: number, t: number, dst: {V}?) -> {V},
-
     clear: (table: {}) -> (),
     isfrozen: (t: {}) -> boolean,
 }
@@ -287,12 +288,10 @@ static constexpr const char* kBuiltinDefinitionBufferSrcClose = R"BUILTIN_SRC(
 
 static const char* const kBuiltinDefinitionVectorSrc = R"BUILTIN_SRC(
 
--- While vector would have been better represented as a built-in primitive type, type solver extern type handling covers most of the properties
-declare extern type vector with
-    read x: number
-    read y: number
-    read z: number
-end
+-- `vector` is a language primitive that reuses the ExternType representation; its type (a nominal
+-- root with read x/y/z fields + operator metatable) is created in C++ as `builtinTypes->vectorType`
+-- and bound to the name `vector` in GlobalTypes (see makeVectorMetatable). Only the library value
+-- is declared here.
 
 declare vector: {
     create: @checked (x: number, y: number, z: number?) -> vector,
@@ -367,7 +366,9 @@ declare integer: {
 static const char* kBuiltinDefinitionClassSrc = R"CLASS_SRC(
 declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
-    classof: @checked (o: unknown) -> class?
+    of: @checked (o: unknown) -> class?,
+    name: @checked (o: class | object) -> string,
+    fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)
 }
 )CLASS_SRC";
 
@@ -379,11 +380,21 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionMathSrc;
     result += kBuiltinDefinitionOsSrc;
     result += kBuiltinDefinitionCoroutineSrc;
-    result += kBuiltinDefinitionTableSrc;
+
+    std::string tableSrc = kBuiltinDefinitionTableSrc;
+    if (!FFlag::LuwuTableDrop)
+    {
+        std::string dropEntry = "    drop: <V>(t: {V}, value: V, count: number?) -> number,\n";
+        size_t dropPos = tableSrc.find(dropEntry);
+        if (dropPos != std::string::npos)
+            tableSrc.erase(dropPos, dropEntry.size());
+    }
+    result += tableSrc;
+
     result += kBuiltinDefinitionDebugSrc;
     result += kBuiltinDefinitionUtf8Src;
     result += kBuiltinDefinitionBufferSrcCore;
-    if (FFlag::LuauBufferIsFrozen)
+    if (FFlag::LuwuBufferIsFrozen)
         result += kBuiltinDefinitionBufferSrcIsFrozen;
     result += kBuiltinDefinitionBufferSrcClose;
 
@@ -394,7 +405,7 @@ std::string getBuiltinDefinitionSource()
         result += kBuiltinDefinitionIntegerSrc;
     }
 
-    if (FFlag::DebugLuauUserDefinedClasses && FFlag::LuauAllowGlobalDeclarationToBeCalledClass)
+    if (FFlag::LuwuClasses && FFlag::LuauAllowGlobalDeclarationToBeCalledClass)
     {
         result += kBuiltinDefinitionClassSrc;
     }

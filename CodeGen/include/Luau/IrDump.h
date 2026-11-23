@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/IrData.h"
@@ -16,10 +16,13 @@ namespace CodeGen
 
 struct CfgInfo;
 
+const char* getTagName(uint8_t tag);
 const char* getCmdName(IrCmd cmd);
 const char* getBlockKindName(IrBlockKind kind);
 const char* getValueKindName(IrValueKind kind);
 const char* getConversionCmdSuffix(IrCmd conversionCmd);
+
+uint8_t parseTagName(std::string_view name);
 
 struct IrToStringContext
 {

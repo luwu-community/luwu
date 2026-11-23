@@ -5,13 +5,13 @@
 #include "ScopedFlags.h"
 #include <vector>
 
-LUAU_FASTFLAG(LuauManagedReferences2)
+LUAU_FASTFLAG(LuwuManagedReferences2)
 
 TEST_SUITE_BEGIN("RefPool");
 
 TEST_CASE("RefPoolCreationAndGet")
 {
-    ScopedFastFlag sff{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff{FFlag::LuwuManagedReferences2, true};
     lua_State* L = luaL_newstate();
     
     lua_pushnumber(L, 42.0);
@@ -37,7 +37,7 @@ TEST_CASE("RefPoolCreationAndGet")
 
 TEST_CASE("RefPoolGC")
 {
-    ScopedFastFlag sff{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff{FFlag::LuwuManagedReferences2, true};
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
 
@@ -70,7 +70,7 @@ static int multiple_refs_dtor_hits = 0;
 
 TEST_CASE("RefPoolMultipleRefs")
 {
-    ScopedFastFlag sff{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff{FFlag::LuwuManagedReferences2, true};
     lua_State* L = luaL_newstate();
     
     std::vector<int> refs;
@@ -148,7 +148,7 @@ static int close_state_dtor_hits = 0;
 
 TEST_CASE("RefPoolCloseState")
 {
-    ScopedFastFlag sff{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff{FFlag::LuwuManagedReferences2, true};
     lua_State* L = luaL_newstate();
     close_state_dtor_hits = 0;
 
@@ -174,7 +174,7 @@ static int table_ref_gc_dtor_hits = 0;
 
 TEST_CASE("RefPoolTableRefGC")
 {
-    ScopedFastFlag sff{FFlag::LuauManagedReferences2, true};
+    ScopedFastFlag sff{FFlag::LuwuManagedReferences2, true};
     lua_State* L = luaL_newstate();
     table_ref_gc_dtor_hits = 0;
     

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Config.h"
 
 #include "Luau/Lexer.h"
@@ -19,6 +19,7 @@ Config::Config()
 
 Config::Config(const Config& other)
     : mode(other.mode)
+    , language(other.language)
     , parseOptions(other.parseOptions)
     , enabledLint(other.enabledLint)
     , fatalLint(other.fatalLint)

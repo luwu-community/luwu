@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "ltm.h"
 
@@ -22,7 +22,10 @@ const char* const luaT_typenames[] = {
     "userdata",
     "number",
     "integer",
+
+#if LUA_VECTOR_DOUBLE == 0
     "vector",
+#endif
     "symbol",
 
     "string",
@@ -35,6 +38,10 @@ const char* const luaT_typenames[] = {
     "class",
     "object",
     "integer",
+
+#if LUA_VECTOR_DOUBLE == 1
+    "vector",
+#endif
 };
 
 const char* const luaT_eventname[] = {

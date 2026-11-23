@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include <unordered_set>
@@ -11,7 +11,7 @@
 
 LUAU_FASTINT(LuauVisitRecursionLimit)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
-LUAU_FASTFLAG(LuauGenericNominals)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau
 {
@@ -354,7 +354,7 @@ struct GenericTypeVisitor
                     traverse(etv->indexer->indexResultType);
                 }
 
-                if (FFlag::LuauGenericNominals)
+                if (FFlag::LuwuGenericNominals)
                 {
                     for (TypeId itp : etv->instantiatedTypeParams)
                         traverse(itp);

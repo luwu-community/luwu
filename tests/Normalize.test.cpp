@@ -1,10 +1,11 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Fixture.h"
 
 #include "Luau/AstQuery.h"
 #include "Luau/Common.h"
 #include "Luau/Type.h"
+#include "Luau/TypeUtils.h"
 #include "ScopedFlags.h"
 #include "doctest.h"
 
@@ -15,6 +16,7 @@ LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauTruthyFalsy)
+LUAU_FASTFLAG(LuauAlwaysIntersectTablesWithTables)
 
 using namespace Luau;
 
@@ -722,13 +724,13 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negated_function_is_anything_except_a_funct
 {
     if (FFlag::LuauIntegerType2)
     {
-        CHECK("(boolean | buffer | integer | none | number | string | table | thread | userdata)?" == toString(normal(R"(
+        CHECK("(boolean | buffer | class | integer | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
         Not<fun>
     )")));
     }
     else
     {
-        CHECK("(boolean | buffer | none | number | string | table | thread | userdata)?" == toString(normal(R"(
+        CHECK("(boolean | buffer | class | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
         Not<fun>
     )")));
     }
@@ -756,13 +758,13 @@ TEST_CASE_FIXTURE(NormalizeFixture, "bare_negated_boolean")
 {
     if (FFlag::LuauIntegerType2)
     {
-        CHECK("(buffer | function | integer | none | number | string | table | thread | userdata)?" == toString(normal(R"(
+        CHECK("(buffer | class | function | integer | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
             Not<boolean>
         )")));
     }
     else
     {
-        CHECK("(buffer | function | none | number | string | table | thread | userdata)?" == toString(normal(R"(
+        CHECK("(buffer | class | function | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
             Not<boolean>
         )")));
     }
@@ -984,9 +986,9 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negations_of_tables")
 {
     CHECK(nullptr == toNormalizedType("Not<{}>", !FFlag::DebugLuauForceOldSolver ? 1 : 0));
     if (FFlag::LuauIntegerType2)
-        CHECK("(boolean | buffer | function | integer | none | number | string | thread | userdata)?" == toString(normal("Not<tbl>")));
+        CHECK("(boolean | buffer | class | function | integer | none | number | object | string | thread | userdata | vector)?" == toString(normal("Not<tbl>")));
     else
-        CHECK("(boolean | buffer | function | none | number | string | thread | userdata)?" == toString(normal("Not<tbl>")));
+        CHECK("(boolean | buffer | class | function | none | number | object | string | thread | userdata | vector)?" == toString(normal("Not<tbl>")));
     CHECK("table" == toString(normal("Not<Not<tbl>>")));
 }
 
@@ -1179,6 +1181,37 @@ TEST_CASE_FIXTURE(NormalizeFixture, "tyvar_limit_one_sided_intersection" * docte
     // early and claim we've hit the limit.
     auto norm = normalize(target);
     REQUIRE(!norm);
+}
+
+TEST_CASE_FIXTURE(NormalizeFixture, "normalize_class_against_union_of_tables")
+{
+    createSomeExternTypes(getFrontend());
+    auto normalized = normal("Parent & ( { foo: number } | { bar: string } )");
+    // FIXME CLI-214308: This is clearly inhabitable.
+    CHECK("never" == toString(normalized));
+}
+
+TEST_CASE_FIXTURE(NormalizeFixture, "intersection_of_table_and_truthy")
+{
+    DOES_NOT_PASS_OLD_SOLVER_GUARD();
+
+    ScopedFastFlag _{FFlag::LuauAlwaysIntersectTablesWithTables, true};
+
+    TableType tt{{{"x", Property::rw(getBuiltins()->numberType)}}, std::nullopt, {}, TableState::Sealed};
+    TypeId tbl = arena.addType(std::move(tt));
+
+    IntersectionBuilder ib{NotNull{&arena}, NotNull{builtinTypes}};
+    ib.add(builtinTypes->truthyType);
+    ib.add(tbl);
+
+    auto norm = normalize(ib.build());
+    REQUIRE(norm);
+    TypeId ty = typeFromNormal(*norm);
+
+    // CLI-214308: This does not seem correct, we should be saying ...
+    //
+    //  (userdata & { x: number }) | { x: number }
+    CHECK("class | object | userdata | vector | { x: number }" == toString(ty));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "normalizer_should_be_able_to_detect_cyclic_tables_and_not_stack_overflow")

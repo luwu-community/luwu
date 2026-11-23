@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/VfsNavigator.h"
 
 #include "Luau/Common.h"
@@ -10,8 +10,10 @@
 #include <string>
 #include <string_view>
 
-const std::array<std::string_view, 2> kSuffixes = {".luau", ".lua"};
-const std::array<std::string_view, 2> kInitSuffixes = {"/init.luau", "/init.lua"};
+// Luwu: `.luwu` files are Luwu code, which isn't guaranteed to run in upstream Luau. Two candidates for
+// one module are ambiguous whatever their extensions, so `a.luwu` next to `a.luau` is an error.
+const std::array<std::string_view, 3> kSuffixes = {".luwu", ".luau", ".lua"};
+const std::array<std::string_view, 3> kInitSuffixes = {"/init.luwu", "/init.luau", "/init.lua"};
 
 struct ResolvedRealPath
 {

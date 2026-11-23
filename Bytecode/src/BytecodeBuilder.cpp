@@ -1,24 +1,23 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/BytecodeBuilder.h"
 
 #include "Luau/BytecodeUtils.h"
 #include "Luau/StringUtils.h"
 
 #include <algorithm>
+#include <stdlib.h>
 #include <string.h>
-#include <climits>
 
 LUAU_FASTFLAG(LuauIntegerType2)
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
-LUAU_FASTFLAGVARIABLE(LuauBytecodeCostModel)
 
 namespace Luau
 {
 
-static_assert(LBC_VERSION_TARGET >= LBC_VERSION_MIN && LBC_VERSION_TARGET <= LBC_VERSION_MAX, "Invalid bytecode version setup");
-static_assert(LBC_VERSION_MAX <= 127, "Bytecode version should be 7-bit so that we can extend the serialization to use varint transparently");
+static_assert(LWBC_VERSION_TARGET >= LWBC_VERSION_MIN && LWBC_VERSION_TARGET <= LWBC_VERSION_MAX, "Invalid bytecode version setup");
+static_assert(LWBC_VERSION_WIP > LWBC_VERSION_MAX && LWBC_VERSION_WIP < LWBC_MAGIC, "Invalid bytecode version setup");
 
 static const uint32_t kMaxConstantCount = 1 << 23;
 static const uint32_t kMaxClosureCount = 1 << 15;
@@ -97,10 +96,10 @@ size_t BytecodeBuilder::StringRefHash::operator()(const StringRef& v) const
 
 size_t BytecodeBuilder::ConstantKeyHash::operator()(const ConstantKey& key) const
 {
-    if (key.type == Constant::Type_Vector)
+    if (key.type == Constant::Type_Vectorf)
     {
         uint32_t i[4];
-        static_assert(sizeof(key.value) + sizeof(key.extra) == sizeof(i), "Expecting vector to have four 32-bit components");
+        static_assert(sizeof(key.value) + sizeof(key.extra1) == sizeof(i), "Expecting vector to have four 32-bit components");
         memcpy(i, &key.value, sizeof(i));
 
         // scramble bits to make sure that integer coordinates have entropy in lower bits
@@ -111,6 +110,26 @@ size_t BytecodeBuilder::ConstantKeyHash::operator()(const ConstantKey& key) cons
 
         // Optimized Spatial Hashing for Collision Detection of Deformable Objects
         uint32_t h = (i[0] * 73856093) ^ (i[1] * 19349663) ^ (i[2] * 83492791) ^ (i[3] * 39916801);
+
+        return size_t(h);
+    }
+    else if (key.type == Constant::Type_Vectord)
+    {
+        uint64_t i[4];
+        static_assert(
+            sizeof(key.value) + sizeof(key.extra1) + sizeof(key.extra2) + sizeof(key.extra3) == sizeof(i),
+            "Expecting vector to have four 64-bit components"
+        );
+        memcpy(i, &key.value, sizeof(i));
+
+        // scramble bits to make sure that integer coordinates have entropy in lower bits
+        i[0] ^= i[0] >> 32;
+        i[1] ^= i[1] >> 32;
+        i[2] ^= i[2] >> 32;
+        i[3] ^= i[3] >> 32;
+
+        // Optimized Spatial Hashing for Collision Detection of Deformable Objects
+        uint32_t h = uint32_t(i[0] * 73856093) ^ uint32_t(i[1] * 19349663) ^ uint32_t(i[2] * 83492791) ^ uint32_t(i[3] * 39916801);
 
         return size_t(h);
     }
@@ -358,7 +377,7 @@ int32_t BytecodeBuilder::addConstantInteger(int64_t value, uint8_t mode)
     c.valueInteger64 = value;
 
     ConstantKey k = {Constant::Type_Integer};
-    k.extra = mode;
+    k.extra1 = mode;
     static_assert(sizeof(k.value) == sizeof(value), "Expecting integer to be 64-bit");
     memcpy(&k.value, &value, sizeof(value));
 
@@ -373,28 +392,49 @@ int32_t BytecodeBuilder::addConstantIntegerHeap(StringRef value, uint8_t mode)
     c.valueString = index;
 
     ConstantKey k = {Constant::Type_IntegerHeap};
-    k.extra = mode;
+    k.extra1 = mode;
     k.value = index;
 
     return addConstant(k, c);
 }
 
-int32_t BytecodeBuilder::addConstantVector(float x, float y, float z, float w)
+int32_t BytecodeBuilder::addConstantVectorf(float x, float y, float z, float w)
 {
-    Constant c = {Constant::Type_Vector};
-    c.valueVector[0] = x;
-    c.valueVector[1] = y;
-    c.valueVector[2] = z;
-    c.valueVector[3] = w;
+    Constant c = {Constant::Type_Vectorf};
+    c.valueVectorf[0] = x;
+    c.valueVectorf[1] = y;
+    c.valueVectorf[2] = z;
+    c.valueVectorf[3] = w;
 
-    ConstantKey k = {Constant::Type_Vector};
+    ConstantKey k = {Constant::Type_Vectorf};
     static_assert(
-        sizeof(k.value) == sizeof(x) + sizeof(y) && sizeof(k.extra) == sizeof(z) + sizeof(w), "Expecting vector to have four 32-bit components"
+        sizeof(k.value) == sizeof(x) + sizeof(y) && sizeof(k.extra1) == sizeof(z) + sizeof(w), "Expecting vector to have four 32-bit components"
     );
     memcpy(&k.value, &x, sizeof(x));
     memcpy((char*)&k.value + sizeof(x), &y, sizeof(y));
-    memcpy(&k.extra, &z, sizeof(z));
-    memcpy((char*)&k.extra + sizeof(z), &w, sizeof(w));
+    memcpy(&k.extra1, &z, sizeof(z));
+    memcpy((char*)&k.extra1 + sizeof(z), &w, sizeof(w));
+
+    return addConstant(k, c);
+}
+
+int32_t BytecodeBuilder::addConstantVectord(double x, double y, double z, double w)
+{
+    Constant c = {Constant::Type_Vectord};
+    c.valueVectord[0] = x;
+    c.valueVectord[1] = y;
+    c.valueVectord[2] = z;
+    c.valueVectord[3] = w;
+
+    ConstantKey k = {Constant::Type_Vectord};
+    static_assert(
+        sizeof(k.value) == sizeof(x) && sizeof(k.extra1) == sizeof(y) && sizeof(k.extra2) == sizeof(z) && sizeof(k.extra3) == sizeof(w),
+        "Expecting vector to have four 64-bit components"
+    );
+    memcpy(&k.value, &x, sizeof(x));
+    memcpy(&k.extra1, &y, sizeof(y));
+    memcpy(&k.extra2, &z, sizeof(z));
+    memcpy(&k.extra3, &w, sizeof(w));
 
     return addConstant(k, c);
 }
@@ -734,9 +774,11 @@ void BytecodeBuilder::finalize()
 
     // assemble final bytecode blob
     uint8_t version = getVersion();
-    LUAU_ASSERT(version >= LBC_VERSION_MIN && version <= LBC_VERSION_MAX);
+    LUAU_ASSERT((version >= LWBC_VERSION_MIN && version <= LWBC_VERSION_MAX) || version == LWBC_VERSION_WIP);
 
-    bytecode = char(version);
+    // Luwu bytecode versioning: upstream writes its own version number here; see "Luwu bytecode version history" in Bytecode.h
+    bytecode = char(LWBC_MAGIC);
+    writeByte(bytecode, version);
 
     uint8_t typesversion = getTypeEncodingVersion();
     LUAU_ASSERT(typesversion >= LBC_TYPE_VERSION_MIN && typesversion <= LBC_TYPE_VERSION_MAX);
@@ -763,8 +805,8 @@ void BytecodeBuilder::finalize()
 
     for (const Function& func : functions)
     {
-        if (FFlag::LuauBytecodeCostModel)
-            writeVarInt(bytecode, func.data.size());
+        // Luwu bytecode versioning: every Luwu version has the version 12 layout, so this is unconditional (upstream: only at version 12)
+        writeVarInt(bytecode, func.data.size());
         bytecode += func.data;
     }
 
@@ -862,12 +904,20 @@ void BytecodeBuilder::writeFunction(std::string& ss, uint32_t id, uint8_t flags,
             writeVarInt(ss, c.valueString);
             break;
 
-        case Constant::Type_Vector:
+        case Constant::Type_Vectorf:
             writeByte(ss, LBC_CONSTANT_VECTOR);
-            writeFloat(ss, c.valueVector[0]);
-            writeFloat(ss, c.valueVector[1]);
-            writeFloat(ss, c.valueVector[2]);
-            writeFloat(ss, c.valueVector[3]);
+            writeFloat(ss, c.valueVectorf[0]);
+            writeFloat(ss, c.valueVectorf[1]);
+            writeFloat(ss, c.valueVectorf[2]);
+            writeFloat(ss, c.valueVectorf[3]);
+            break;
+
+        case Constant::Type_Vectord:
+            writeByte(ss, LBC_CONSTANT_VECTORD);
+            writeDouble(ss, c.valueVectord[0]);
+            writeDouble(ss, c.valueVectord[1]);
+            writeDouble(ss, c.valueVectord[2]);
+            writeDouble(ss, c.valueVectord[3]);
             break;
 
         case Constant::Type_String:
@@ -977,34 +1027,45 @@ void BytecodeBuilder::writeFunction(std::string& ss, uint32_t id, uint8_t flags,
         writeByte(ss, 0);
     }
 
-    if (FFlag::LuauEmitCallFeedback)
+    // Luwu bytecode versioning: the feedback vector and the inlining cost are always written, since every Luwu version has the
+    // version 12 layout (upstream writes each only when the flag that picks versions 11 and 12 is on)
+    writeVarInt(ss, fbSlots.size());
+    for (uint32_t pc : fbSlots)
     {
-        // Feedback Slots
-        writeVarInt(ss, fbSlots.size());
-        for (uint32_t pc : fbSlots)
-        {
-            writeByte(ss, LFT_CALLTARGET);
-            writeVarInt(ss, pc);
-        }
+        writeByte(ss, LFT_CALLTARGET);
+        writeVarInt(ss, pc);
     }
 
-    if (FFlag::LuauBytecodeCostModel && (flags & LPF_INLINABLE) != 0)
-    {
-        if (!FFlag::LuauEmitCallFeedback)
-            writeVarInt(ss, 0);
+    if ((flags & LPF_INLINABLE) != 0)
         writeVarInt(ss, cost);
-    }
 }
 
 void BytecodeBuilder::writeClassShape(std::string& ss, const ClassShape& cs) const
 {
+    LUAU_ASSERT(cs.propertyFlags.size() == cs.propertyNames.size());
+    LUAU_ASSERT(cs.methodFlags.size() == cs.methodNames.size());
+    LUAU_ASSERT(cs.propertyDefaults.empty() || cs.propertyDefaults.size() == cs.propertyNames.size());
+
     writeVarInt(ss, cs.className);
     writeVarInt(ss, cs.propertyNames.size());
     writeVarInt(ss, cs.methodNames.size());
-    for (const auto propName : cs.propertyNames)
-        writeVarInt(ss, propName);
-    for (const auto methodName : cs.methodNames)
-        writeVarInt(ss, methodName);
+    // Each member's name and flags byte are written together (properties first, then methods,
+    // matching offset order) so the reader can fill in offsetToMember/memberFlags in one pass.
+    for (size_t i = 0; i < cs.propertyNames.size(); i++)
+    {
+        writeVarInt(ss, cs.propertyNames[i]);
+        writeVarInt(ss, cs.propertyFlags[i]);
+
+        // a constant default is stored with the member itself, so the reader can copy it into the
+        // class and skip the `__defaults` closure entirely
+        if (cs.propertyFlags[i] & LBC_CLASSMEMBER_CONSTDEFAULT)
+            writeVarInt(ss, cs.propertyDefaults[i]);
+    }
+    for (size_t i = 0; i < cs.methodNames.size(); i++)
+    {
+        writeVarInt(ss, cs.methodNames[i]);
+        writeVarInt(ss, cs.methodFlags[i]);
+    }
 }
 
 int BytecodeBuilder::calcLinesSpan() const
@@ -1423,7 +1484,7 @@ std::vector<uint32_t> BytecodeBuilder::expandJumps()
 
 std::string BytecodeBuilder::getError(const std::string& message)
 {
-    // 0 acts as a special marker for error bytecode (it's equal to LBC_VERSION_TARGET for valid bytecode blobs)
+    // 0 acts as a special marker for error bytecode (valid blobs start with LWBC_MAGIC)
     std::string result;
     result += char(0);
     result += message;
@@ -1433,15 +1494,11 @@ std::string BytecodeBuilder::getError(const std::string& message)
 
 uint8_t BytecodeBuilder::getVersion()
 {
-    if (FFlag::LuauBytecodeCostModel)
-        return 12;
-    if (FFlag::LuauEmitCallFeedback)
-        return 11;
+    // Luwu Classes (rfcs/classes): class bytecode is still a work-in-progress format
+    if (FFlag::LuwuClasses)
+        return LWBC_VERSION_WIP;
 
-    if (FFlag::DebugLuauUserDefinedClasses)
-        return 10;
-
-    return LBC_VERSION_TARGET;
+    return LWBC_VERSION_TARGET;
 }
 
 uint8_t BytecodeBuilder::getTypeEncodingVersion()
@@ -1921,6 +1978,35 @@ void BytecodeBuilder::validateInstructions() const
             VJUMP(LUAU_INSN_D(insn));
             break;
 
+        case LOP_CHECKSELFCLASS:
+            VREG(LUAU_INSN_A(insn));
+            // operand B is LBC_SELFCLASS_OWNER (the class comes from Proto::ownerclass) or a register
+            if (LUAU_INSN_B(insn) != LBC_SELFCLASS_OWNER)
+                VREG(LUAU_INSN_B(insn));
+            VCONST(insns[i + 1], String);
+            break;
+
+        case LOP_JUMPXISA:
+            VREG(LUAU_INSN_A(insn));
+            VJUMP(LUAU_INSN_D(insn));
+            VREG(insns[i + 1] & 0xff); // class register lives in the low byte of aux
+            LUAU_ASSERT((insns[i + 1] & ~(0xffu | LBC_JUMPXISA_JUMPIFINSTANCE | LBC_JUMPXISA_CHECKCLASS)) == 0);
+            break;
+
+        case LOP_GETOBJECTMEMBER:
+        case LOP_SETOBJECTMEMBER:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            break;
+
+        case LOP_NEWOBJECT:
+            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_FIELDS);
+            // with a user __init the instruction lays out `__init`, `self` and the arguments above A;
+            // the other forms use one register per argument or per field
+            VREG(LUAU_INSN_A(insn) + (LUAU_INSN_C(insn) == LBC_NEWOBJECT_INIT ? 2 : 0) + insns[i + 1]);
+            VREG(LUAU_INSN_B(insn));
+            break;
+
         default:
             LUAU_ASSERT(!"Unsupported opcode");
         }
@@ -2101,12 +2187,21 @@ void BytecodeBuilder::dumpConstant(std::string& result, int k, bool detailed) co
         formatAppend(result, "%.*si", int(str.length), str.data);
         break;
     }
-    case Constant::Type_Vector:
+    case Constant::Type_Vectorf:
         // 3-vectors is the most common configuration, so truncate to three components if possible
-        if (data.valueVector[3] == 0.0)
-            formatAppend(result, "%.9g, %.9g, %.9g", data.valueVector[0], data.valueVector[1], data.valueVector[2]);
+        if (data.valueVectorf[3] == 0.0f)
+            formatAppend(result, "%.9g, %.9g, %.9g", data.valueVectorf[0], data.valueVectorf[1], data.valueVectorf[2]);
         else
-            formatAppend(result, "%.9g, %.9g, %.9g, %.9g", data.valueVector[0], data.valueVector[1], data.valueVector[2], data.valueVector[3]);
+            formatAppend(result, "%.9g, %.9g, %.9g, %.9g", data.valueVectorf[0], data.valueVectorf[1], data.valueVectorf[2], data.valueVectorf[3]);
+        break;
+    case Constant::Type_Vectord:
+        // 3-vectors is the most common configuration, so truncate to three components if possible
+        if (data.valueVectord[3] == 0.0)
+            formatAppend(result, "%.17g, %.17g, %.17g", data.valueVectord[0], data.valueVectord[1], data.valueVectord[2]);
+        else
+            formatAppend(
+                result, "%.17g, %.17g, %.17g, %.17g", data.valueVectord[0], data.valueVectord[1], data.valueVectord[2], data.valueVectord[3]
+            );
         break;
     case Constant::Type_String:
     {
@@ -2688,6 +2783,42 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         formatAppend(result, "CMPPROTO R%d #%d L%d\n", LUAU_INSN_A(insn), *code++, targetLabel);
         break;
 
+    case LOP_CHECKSELFCLASS:
+        if (LUAU_INSN_B(insn) == LBC_SELFCLASS_OWNER)
+            formatAppend(result, "CHECKSELFCLASS R%d OWNER K%d [", LUAU_INSN_A(insn), *code);
+        else
+            formatAppend(result, "CHECKSELFCLASS R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code);
+        dumpConstant(result, int(*code++), false);
+        formatAppend(result, "]%s\n", LUAU_INSN_C(insn) ? " SELF" : "");
+        break;
+
+    case LOP_JUMPXISA:
+        formatAppend(
+            result,
+            "JUMPXISA R%d R%d L%d%s%s\n",
+            LUAU_INSN_A(insn),
+            *code & 0xff,
+            targetLabel,
+            (*code & LBC_JUMPXISA_JUMPIFINSTANCE) ? "" : " NOT",
+            (*code & LBC_JUMPXISA_CHECKCLASS) ? " CHECKCLASS" : ""
+        );
+        break;
+
+    case LOP_GETOBJECTMEMBER:
+        formatAppend(result, "GETOBJECTMEMBER R%d R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++);
+        break;
+
+    case LOP_SETOBJECTMEMBER:
+        formatAppend(result, "SETOBJECTMEMBER R%d R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++);
+        break;
+
+    case LOP_NEWOBJECT:
+    {
+        const char* form = LUAU_INSN_C(insn) == LBC_NEWOBJECT_INIT ? " INIT" : (LUAU_INSN_C(insn) == LBC_NEWOBJECT_FIELDS ? " FIELDS" : "");
+        formatAppend(result, "NEWOBJECT R%d R%d %d%s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++, form);
+        break;
+    }
+
     default:
         LUAU_ASSERT(!"Unsupported opcode");
     }
@@ -2722,6 +2853,10 @@ static const char* getBaseTypeString(uint8_t type)
         return "buffer";
     case LBC_TYPE_SYMNONE:
         return "none";
+    case LBC_TYPE_CLASS:
+        return "class";
+    case LBC_TYPE_OBJECT:
+        return "object";
     case LBC_TYPE_ANY:
         return "any";
     }

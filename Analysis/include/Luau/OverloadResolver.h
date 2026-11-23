@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Ast.h"
@@ -170,6 +170,16 @@ private:
         Location fnLocation,
         NotNull<DenseHashSet<TypeId>> uniqueTypes
     );
+
+    void emplaceArgumentMismatch(
+        ErrorVec& errors,
+        Location location,
+        const ModuleName& moduleName,
+        const SubtypingReasoning& reason,
+        const std::optional<TypeOrPack>& wanted,
+        const std::optional<TypeOrPack>& given,
+        bool onNone
+    ) const;
 
     void maybeEmplaceError(
         ErrorVec* errors,

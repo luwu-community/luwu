@@ -1,0 +1,5 @@
+# Commits `git blame` skips. GitHub reads this file automatically; locally, run once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# chore: file headers say Luwu instead of Luau
+0d54aa4c0ecd731c827f4dc497b2bc78359a3e22

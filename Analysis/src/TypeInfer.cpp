@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/TypeInfer.h"
 
 #include "Luau/ApplyTypeFunction.h"
@@ -32,8 +32,8 @@ LUAU_FASTFLAGVARIABLE(DebugLuauFreezeDuringUnification)
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
 {
@@ -403,7 +403,7 @@ ControlFlow TypeChecker::check(const ScopePtr& scope, const AstStat& program)
 
         return ControlFlow::None;
     }
-    else if (FFlag::DebugLuauUserDefinedClasses && program.is<AstStatClass>())
+    else if (FFlag::LuwuClasses && program.is<AstStatClass>())
     {
         reportError(program.as<AstStatClass>()->name->location, GenericError{"class keyword is illegal here"});
         return ControlFlow::None;
@@ -4010,7 +4010,7 @@ std::pair<TypeId, ScopePtr> TypeChecker::checkFunctionSignature(
                 argType = anyIfNonstrict(freshType(funScope));
         }
 
-        if (FFlag::LuauDefaultArguments)
+        if (FFlag::LuwuDefaultArguments)
         {
             if (expr.argsDefaults.data[i])
             {
@@ -4047,7 +4047,7 @@ std::pair<TypeId, ScopePtr> TypeChecker::checkFunctionSignature(
 
         funScope->bindings[local] = {argType, local->location};
 
-        if (FFlag::LuauDefaultArguments && expr.argsDefaults.data[i])
+        if (FFlag::LuwuDefaultArguments && expr.argsDefaults.data[i])
         {
             argTypes.push_back(unionOfTypes(nilType, argType, scope, expr.argsDefaults.data[i]->location));
         }
@@ -6624,8 +6624,11 @@ void TypeChecker::resolve(const TypeGuardPredicate& typeguardP, RefinementMap& r
         return addRefinement(refis, typeguardP.lvalue, errorRecoveryType(scope));
     }
 
-    // We're only interested in the root type of any extern type.
-    if (auto etv = get<ExternType>(type); !etv || (etv->parent != builtinTypes->externType && !hasTag(type, kTypeofRootTag)))
+    // We're only interested in a type `typeof` can name: a userdata datatype
+    // root (a direct child of the `userdata` root), or the `object`/`class`
+    // roots themselves (an individual class's typeof is "object", not its name).
+    if (auto etv = get<ExternType>(type); !etv || (etv->parent != builtinTypes->externType && type != builtinTypes->objectType &&
+                                                   type != builtinTypes->classType && !hasTag(type, kTypeofRootTag)))
         return addRefinement(refis, typeguardP.lvalue, errorRecoveryType(scope));
 
     // This probably hints at breaking out type filtering functions from the predicate solver so that typeof is not tightly coupled with IsA.

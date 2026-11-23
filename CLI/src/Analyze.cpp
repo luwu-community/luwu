@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Config.h"
 #include "Luau/Frontend.h"
@@ -21,6 +21,7 @@
 
 #include <condition_variable>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -67,12 +68,23 @@ static void report(ReportFormat format, const char* name, const Luau::Location& 
     }
 }
 
+// Luwu (helpful subtyping errors): the path notation used by every mismatch reported, so its legend is
+// printed once after all of them rather than once per error.
+static uint8_t mismatchNotationUsed = 0;
+
 static void reportError(const Luau::Frontend& frontend, ReportFormat format, const Luau::TypeError& error)
 {
+    const Luau::TypeMismatch* mismatch = Luau::get_if<Luau::TypeMismatch>(&error.data);
+    if (mismatch && mismatch->explained)
+        mismatchNotationUsed |= mismatch->explained->notation;
+
     std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(error.moduleName);
 
     if (const Luau::SyntaxError* syntaxError = Luau::get_if<Luau::SyntaxError>(&error.data))
         report(format, humanReadableName.c_str(), error.location, "SyntaxError", syntaxError->message.c_str());
+    // Luwu (helpful subtyping errors): a misspelled name is labeled as one, so it isn't read as a broken type.
+    else if (Luau::isTypo(error))
+        report(format, humanReadableName.c_str(), error.location, "Typo", Luau::toString(error, Luau::TypeErrorToStringOptions{frontend.fileResolver}).c_str());
     else
         report(
             format,
@@ -104,10 +116,31 @@ static bool reportModuleResult(Luau::Frontend& frontend, const Luau::ModuleName&
         return false;
     }
 
-    for (auto& error : cr->errors)
-        reportError(frontend, format, error);
-
     std::string humanReadableName = frontend.fileResolver->getHumanReadableModuleName(name);
+
+    // Luwu: notes (Module::notes) follow the error they're about, and any about no error reported here come after
+    Luau::ModulePtr module = frontend.moduleResolver.getModule(name);
+    std::vector<bool> notePrinted(module ? module->notes.size() : 0);
+    auto reportNotes = [&](std::optional<Luau::Location> origin)
+    {
+        for (size_t i = 0; i < notePrinted.size(); ++i)
+        {
+            const Luau::DiagnosticNote& note = module->notes[i];
+            if (notePrinted[i] || (origin && note.origin != origin))
+                continue;
+            report(format, humanReadableName.c_str(), note.location, "Note", note.message.c_str());
+            notePrinted[i] = true;
+        }
+    };
+
+    for (auto& error : cr->errors)
+    {
+        reportError(frontend, format, error);
+        if (error.moduleName == name)
+            reportNotes(error.location);
+    }
+    reportNotes(std::nullopt);
+
     for (auto& error : cr->lintResult.errors)
         reportWarning(format, humanReadableName.c_str(), error);
     for (auto& warning : cr->lintResult.warnings)
@@ -139,9 +172,11 @@ static void displayHelp(const char* argv0)
     printf("Available options:\n");
     printf("  --formatter=plain: report analysis errors in Luacheck-compatible format\n");
     printf("  --formatter=gnu: report analysis errors in GNU-compatible format\n");
-    printf("  --mode=strict: default to strict mode when typechecking\n");
-    printf("  --solver={new|old}: selects which typechecker to use (defaults to the new solver)");
+    printf("  --mode=nonstrict: default to nonstrict mode when typechecking (Luwu defaults to strict)\n");
+    printf("  --mode=strict: default to strict mode when typechecking (the default)\n");
+    printf("  --solver={new|old}: selects which typechecker to use (defaults to the new solver)\n");
     printf("  --timetrace: record compiler time tracing information into trace.json\n");
+    printf("  --defs=<path>: load a definition file (`declare` globals) before checking; can be repeated\n");
 }
 
 static int assertionHandler(const char* expr, const char* file, int line, const char* function)
@@ -224,8 +259,25 @@ struct CliFileResolver : Luau::FileResolver
     {
         if (name == "-")
             return "stdin";
+        // modules are named by absolute path (see `moduleNameForPath`); show them the way they'd be typed
+        if (cwd && name.size() > cwd->size() + 1 && name.compare(0, cwd->size(), *cwd) == 0 && name[cwd->size()] == '/')
+            return name.substr(cwd->size() + 1);
         return name;
     }
+
+    // Luwu: a module is named by its absolute path, which is what `resolveModule` gets from the require
+    // navigator. A file passed on the command line has to be named the same way, or a file that is both
+    // passed and required is checked (and reported) twice, once under each spelling.
+    std::string moduleNameForPath(const std::string& path) const
+    {
+        if (path == "-")
+            return path;
+        if (!cwd || isAbsolutePath(path))
+            return normalizePath(path);
+        return normalizePath(*cwd + "/" + path);
+    }
+
+    std::optional<std::string> cwd = getCurrentWorkingDirectory();
 };
 
 struct CliConfigResolver : Luau::ConfigResolver
@@ -240,13 +292,22 @@ struct CliConfigResolver : Luau::ConfigResolver
         defaultConfig.mode = mode;
     }
 
+    // Luwu: one copy of a directory's config per language, since a `.luau` and a `.luwu` file there share everything else.
+    mutable std::map<std::pair<std::string, Luau::Language>, Luau::Config> languageConfigCache;
+
     const Luau::Config& getConfig(const Luau::ModuleName& name, const Luau::TypeCheckLimits& limits) const override
     {
         std::optional<std::string> path = getParentPath(name);
-        if (!path)
-            return defaultConfig;
+        const Luau::Config& directoryConfig = path ? readConfigRec(*path, limits) : defaultConfig;
 
-        return readConfigRec(*path, limits);
+        Luau::Language language = languageOfPath(name);
+        if (directoryConfig.language == language)
+            return directoryConfig;
+
+        auto [it, inserted] = languageConfigCache.try_emplace({path.value_or(""), language}, directoryConfig);
+        if (inserted)
+            it->second.language = language;
+        return it->second;
     }
 
     const Luau::Config& readConfigRec(const std::string& path, const Luau::TypeCheckLimits& limits) const
@@ -404,11 +465,13 @@ int main(int argc, char** argv)
     }
 
     ReportFormat format = ReportFormat::Default;
-    Luau::Mode mode = Luau::Mode::Nonstrict;
+    // matches Config::mode: Luwu checks strictly unless a file, a .luaurc or `--mode=` says otherwise
+    Luau::Mode mode = Luau::Mode::Strict;
     bool annotate = false;
     int threadCount = 0;
     std::string basePath = "";
     Luau::SolverMode solverMode = Luau::SolverMode::New;
+    std::vector<std::string> definitionFiles;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -421,6 +484,8 @@ int main(int argc, char** argv)
             format = ReportFormat::Gnu;
         else if (strcmp(argv[i], "--mode=strict") == 0)
             mode = Luau::Mode::Strict;
+        else if (strcmp(argv[i], "--mode=nonstrict") == 0)
+            mode = Luau::Mode::Nonstrict;
         else if (strcmp(argv[i], "--annotate") == 0)
             annotate = true;
         else if (strcmp(argv[i], "--timetrace") == 0)
@@ -433,6 +498,8 @@ int main(int argc, char** argv)
             basePath = std::string{argv[i] + 10};
         else if (strcmp(argv[i], "--solver=old") == 0)
             solverMode = Luau::SolverMode::Old;
+        else if (strncmp(argv[i], "--defs=", 7) == 0)
+            definitionFiles.emplace_back(argv[i] + 7);
     }
 
 #if !defined(LUAU_ENABLE_TIME_TRACE)
@@ -472,6 +539,43 @@ int main(int argc, char** argv)
     }
 
     Luau::registerBuiltinGlobals(frontend, frontend.globals);
+
+    // Luwu: an embedder's globals (seal, lune, Roblox) come from a definition file, which only the
+    // language server could load before.
+    for (const std::string& path : definitionFiles)
+    {
+        std::optional<std::string> source = readFile(path);
+        if (!source)
+        {
+            fprintf(stderr, "Error opening definition file %s\n", path.c_str());
+            return 1;
+        }
+
+        Luau::LoadDefinitionFileResult result = frontend.loadDefinitionFile(
+            frontend.globals, frontend.globals.globalScope, *source, "@" + path, /* captureComments */ false
+        );
+        if (!result.success)
+        {
+            for (const Luau::ParseError& error : result.parseResult.errors)
+                report(format, path.c_str(), error.getLocation(), "SyntaxError", error.getMessage().c_str());
+
+            if (result.module)
+            {
+                for (const Luau::TypeError& error : result.module->errors)
+                    report(
+                        format,
+                        path.c_str(),
+                        error.location,
+                        "TypeError",
+                        Luau::toString(error, Luau::TypeErrorToStringOptions{frontend.fileResolver}).c_str()
+                    );
+            }
+
+            fprintf(stderr, "Failed to load definition file %s\n", path.c_str());
+            return 1;
+        }
+    }
+
     Luau::freeze(frontend.globals.globalTypes);
 
 #ifdef CALLGRIND
@@ -481,7 +585,7 @@ int main(int argc, char** argv)
     std::vector<std::string> files = getSourceFiles(argc, argv);
 
     for (const std::string& path : files)
-        frontend.queueModuleCheck(path);
+        frontend.queueModuleCheck(fileResolver.moduleNameForPath(path));
 
     std::vector<Luau::ModuleName> checkedModules;
 
@@ -526,6 +630,13 @@ int main(int argc, char** argv)
 
     for (const Luau::ModuleName& name : checkedModules)
         failed += !reportModuleResult(frontend, name, format, annotate);
+
+    if (format != ReportFormat::Luacheck)
+    {
+        std::string legend = Luau::mismatchNotationLegend(mismatchNotationUsed, Luau::Helpifier{});
+        if (!legend.empty())
+            fprintf(stderr, "\n%s\n", legend.c_str());
+    }
 
     if (!configResolver.configErrors.empty())
     {

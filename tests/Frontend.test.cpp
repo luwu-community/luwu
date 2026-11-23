@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/AstQuery.h"
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Common.h"
@@ -20,11 +20,13 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver);
 LUAU_FASTFLAG(DebugLuauFreezeArena)
 LUAU_FASTFLAG(DebugLuauMagicTypes)
 LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauDontBindOptionalGenericToNil)
 LUAU_FASTFLAG(LuauSubtypingMissingPropertiesAsNil)
 LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
+LUAU_FASTFLAG(LuauFrontendSourceNodeErase)
 
 namespace
 {
@@ -924,6 +926,7 @@ TEST_CASE_FIXTURE(FrontendFixture, "discard_type_graphs")
 
 TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_errors_when_full_type_graph_is_discarded")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
 
     Frontend fe{!FFlag::DebugLuauForceOldSolver ? SolverMode::New : SolverMode::Old, &fileResolver, &configResolver, {false}};
@@ -941,10 +944,41 @@ TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_errors_when_f
     // It could segfault, or you could see weird type names like the empty string or <VALUELESS BY EXCEPTION>
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        CHECK_EQ("required field 'Count' not found in type '{ count: string }' from expected type '{ Count: number }'", toString(result.errors[0]));
+        CHECK_EQ(
+            "required property 'Count' not found in type\n  '{ count: string }'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0])
+        );
     }
     else
-        REQUIRE_EQ("required field 'Count' not found in type 'a' from expected type '{ Count: number }'", toString(result.errors[0]));
+        REQUIRE_EQ("required property 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+}
+
+TEST_CASE_FIXTURE(FrontendFixture, "it_should_be_safe_to_stringify_explained_errors_when_full_type_graph_is_discarded")
+{
+    ScopedFastFlag helpfulErrors{FFlag::LuwuHelpfulSubtypingErrors, true};
+    ScopedFastFlag sff{FFlag::LuauBetterMissingPropertiesTypeError, true};
+
+    Frontend fe{!FFlag::DebugLuauForceOldSolver ? SolverMode::New : SolverMode::Old, &fileResolver, &configResolver, {false}};
+    fileResolver.source["Module/A"] = R"(
+        --!strict
+        local a: {Count: number} = {count='five'}
+    )";
+
+    CheckResult result = fe.check("Module/A");
+
+    // As above: stringifying reads the error's TypeIds, which must outlive the discarded type graph.
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        // The second error is the misspelling: `count` written where `Count` was meant.
+        REQUIRE_EQ(2, result.errors.size());
+        CHECK_EQ("'a' is missing a property:\n  • 'Count: number'", toString(result.errors[1]));
+        REQUIRE(get<Typo>(result.errors[0]));
+        CHECK_EQ("Did you mean 'Count' instead of 'count'?", toString(result.errors[0]));
+    }
+    else
+    {
+        REQUIRE_EQ(1, result.errors.size());
+        CHECK_EQ("required property 'Count' not found in type\n  'a'\nexpected type:\n  '{ Count: number }'", toString(result.errors[0]));
+    }
 }
 
 TEST_CASE_FIXTURE(FrontendFixture, "trace_requires_in_nonstrict_mode")
@@ -1274,6 +1308,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "module_scope_check")
 
 TEST_CASE_FIXTURE(FrontendFixture, "parse_only")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/Gui/Modules/A"] = R"(
         local a: number = 'oh no a type error'
         return {a=a}
@@ -2044,6 +2079,95 @@ TEST_CASE_FIXTURE(FrontendFixture, "generic_P_widening_with_cross_module_recursi
 
     CheckResult result = getFrontend().check("game/Gui/Modules/B");
     LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(FrontendFixture, "deleted_source_is_evicted_on_recheck")
+{
+    ScopedFastFlag luauFrontendSourceNodeErase{FFlag::LuauFrontendSourceNodeErase, true};
+
+    fileResolver.source["game/A"] = R"(
+        export type Props = { name: string, value: number, label: string? }
+        local function make(p: Props): Props
+            return p
+        end
+        return {make = make}
+    )";
+    fileResolver.source["game/B"] = R"(
+        local A = require(game.A)
+        local function wrap(p: A.Props): A.Props
+            return A.make(p)
+        end
+        return {wrap = wrap}
+    )";
+    fileResolver.source["game/C"] = R"(
+        local A = require(game.A)
+        local B = require(game.B)
+        local x = B.wrap({name = "hi", value = 1})
+        local y = A.make({name = "lo", value = 2})
+        return {x, y}
+    )";
+
+    LUAU_REQUIRE_NO_ERRORS(getFrontend().check("game/C"));
+
+    // Delete module B, mark it as dirty
+    fileResolver.source.erase("game/B");
+    getFrontend().markDirty("game/B");
+
+    // Invalidate old contents of A
+    getFrontend().markDirty("game/A");
+
+    // Should be able to check C and fail on missing B. Luwu: and on the first use of `B`, which has no type because
+    // of it (NoTypeUse).
+    CheckResult result = getFrontend().check("game/C");
+    if (!FFlag::DebugLuauForceOldSolver)
+    {
+        LUAU_REQUIRE_ERROR_COUNT(2, result);
+        CHECK(get<NoTypeUse>(result.errors[1]));
+    }
+    else
+    {
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+    }
+
+    CHECK(getFrontend().sourceNodes.count("game/B") == 0);
+    CHECK(getFrontend().moduleResolver.getModule("game/B") == nullptr);
+
+    CHECK(getFrontend().sourceNodes.count("game/A") == 1);
+    CHECK(getFrontend().moduleResolver.getModule("game/A") != nullptr);
+}
+
+TEST_CASE_FIXTURE(Fixture, "luwu_syntax_in_a_luau_module_is_a_syntax_error")
+{
+    ScopedFastFlag luwuDefaultArguments{FFlag::LuwuDefaultArguments, true};
+
+    fileResolver.source["game/a"] = "local function f(x = 1) return x end";
+    fileResolver.source["game/b"] = "local function f(x = 1) return x end";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    CheckResult luau = getFrontend().check("game/a");
+    LUAU_REQUIRE_ERROR_COUNT(1, luau);
+    REQUIRE(get<SyntaxError>(luau.errors[0]));
+    CHECK(toString(luau.errors[0]).find("Default arguments are a Luwu-only feature.\n\nHelp (Luwu-only feature):") == 0);
+
+    CheckResult luwu = getFrontend().check("game/b");
+    LUAU_REQUIRE_NO_ERRORS(luwu);
+}
+
+TEST_CASE_FIXTURE(Fixture, "checked_modules_know_their_language")
+{
+    fileResolver.source["game/a"] = "local x = 1";
+    fileResolver.source["game/b"] = "local x = 1";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    getFrontend().check("game/a");
+    getFrontend().check("game/b");
+
+    ModulePtr luau = getFrontend().moduleResolver.getModule("game/a");
+    ModulePtr luwu = getFrontend().moduleResolver.getModule("game/b");
+    REQUIRE(luau);
+    REQUIRE(luwu);
+    CHECK(luau->language == Language::Luau);
+    CHECK(luwu->language == Language::Luwu);
 }
 
 TEST_SUITE_END();

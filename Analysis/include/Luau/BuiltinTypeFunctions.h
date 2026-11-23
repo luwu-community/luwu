@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/TypeFunction.h"
@@ -48,8 +48,12 @@ struct BuiltinTypeFunctions
     TypeFunction getmetatableFunc;
 
     TypeFunction objectofFunc;
+    TypeFunction classFunc;
 
     TypeFunction weakoptionalFunc;
+    // Luwu: `unlessnever<refined, fallback, tests...>` is `refined`, or `fallback` when `refined` is uninhabited
+    // because tests on one property contradict each other (one of `tests` is uninhabited). See applyRefinements.
+    TypeFunction unlessneverFunc;
 
     void addToScope(NotNull<TypeArena> arena, NotNull<Scope> scope) const;
 };

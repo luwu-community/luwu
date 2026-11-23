@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Repl.h"
 
 #include "Luau/CodeGenOptions.h"
@@ -43,6 +43,7 @@
 
 #include <locale.h>
 #include <signal.h>
+#include <stdlib.h>
 
 LUAU_FASTFLAG(DebugLuauTimeTracing)
 LUAU_FASTFLAG(LuauAutoStack)
@@ -584,6 +585,11 @@ static std::string getFilePath(const char* name)
 
     std::string base = name;
 
+    // Luwu: `.luwu` files are tried first.
+    std::string luwuPath = base + ".luwu";
+    if (isFile(luwuPath))
+        return luwuPath;
+
     std::string luauPath = base + ".luau";
     if (isFile(luauPath))
         return luauPath;
@@ -613,7 +619,9 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
 
     std::string chunkname = "@" + normalizePath(name);
 
-    std::string bytecode = Luau::compile(*source, copts());
+    Luau::CompileOptions options = copts();
+    options.language = int(languageOfPath(name));
+    std::string bytecode = Luau::compile(*source, options);
     int status = 0;
 
     if (luau_load(L, chunkname.c_str(), bytecode.data(), bytecode.size(), 0) == 0)

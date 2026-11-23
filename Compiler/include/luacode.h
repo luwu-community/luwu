@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include <stddef.h>
@@ -50,6 +50,10 @@ struct lua_CompileOptions
     // alternative vector type name for type tables, in addition to default type 'vector'
     const char* vectorType;
 
+    // 0 - 32-bit float vector components
+    // 1 - 64-bit double vector components
+    int vectorPrecision;
+
     // null-terminated array of globals that are mutable; disables the import optimization for fields accessed through these
     const char* const* mutableGlobals;
 
@@ -64,6 +68,18 @@ struct lua_CompileOptions
 
     // null-terminated array of library functions that should not be compiled into a built-in fastcall ("name" "lib.name")
     const char* const* disabledBuiltins;
+
+    // Luwu: the language the source is written in, a lua_Language. Luwu syntax in Luau or Lua source is a compile error,
+    // even when its FFlag is on. Zero is Luwu. Upstream has no such option.
+    int language;
+};
+
+// Luwu: the language a module is written in (lua_CompileOptions::language)
+enum lua_Language
+{
+    LUA_LANGUAGE_LUWU = 0,
+    LUA_LANGUAGE_LUAU = 1, // a `.luau` file
+    LUA_LANGUAGE_LUA = 2,  // a `.lua` file
 };
 
 // compile source to bytecode; when source compilation fails, the resulting bytecode contains the encoded error. use free() to destroy
@@ -77,4 +93,5 @@ LUACODE_API void luau_set_compile_constant_boolean(lua_CompileConstant* constant
 LUACODE_API void luau_set_compile_constant_number(lua_CompileConstant* constant, double n);
 LUACODE_API void luau_set_compile_constant_integer64(lua_CompileConstant* constant, int64_t l);
 LUACODE_API void luau_set_compile_constant_vector(lua_CompileConstant* constant, float x, float y, float z, float w);
+LUACODE_API void luau_set_compile_constant_vectord(lua_CompileConstant* constant, double x, double y, double z, double w);
 LUACODE_API void luau_set_compile_constant_string(lua_CompileConstant* constant, const char* s, size_t l);

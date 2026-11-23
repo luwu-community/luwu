@@ -1,4 +1,4 @@
--- --bench-args: --fflags=DebugLuauUserDefinedClasses,DebugLuauUserDefinedClassesRuntime
+-- --bench-args: --fflags=LuwuClasses
 local function prequire(name)
     local success, result = pcall(require, name)
     return success and result
@@ -8,7 +8,7 @@ local bench = script and require(script.Parent.bench_support)
     or require("../bench_support")
 
 class Number
-    public value
+    value
 
     function Swap(self, other)
         local tmp = other.value

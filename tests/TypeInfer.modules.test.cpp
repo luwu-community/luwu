@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/AstQuery.h"
 #include "Luau/BuiltinDefinitions.h"
@@ -14,7 +14,7 @@
 LUAU_FASTFLAG(LuauInstantiateInSubtyping)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuauMagicTypes)
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTINT(LuauSolverConstraintLimit)
@@ -127,6 +127,142 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "require_types")
     REQUIRE_MESSAGE(bool(get<TableType>(hType)), "Expected table but got " << toString(hType));
 }
 
+// Luwu forwarded module types: a module returning another module's value unchanged exports its types too
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_module_forwarding_a_require_forwards_its_types")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    fileResolver.source["game/Real"] = R"(
+        export type Thing = { name: string }
+        return { make = function(): Thing return { name = "x" } end }
+    )";
+    fileResolver.source["game/Returned"] = R"(
+        return require(game.Real)
+    )";
+    fileResolver.source["game/Local"] = R"(
+        local module = require(game.Real)
+        return module
+    )";
+    fileResolver.source["game/Chained"] = R"(
+        return require(game.Returned)
+    )";
+    fileResolver.source["game/Main"] = R"(
+        local returned = require(game.Returned)
+        local viaLocal = require(game.Local)
+        local chained = require(game.Chained)
+        local a: returned.Thing = returned.make()
+        local b: viaLocal.Thing = viaLocal.make()
+        local c: chained.Thing = chained.make()
+    )";
+
+    CheckResult result = getFrontend().check("game/Main");
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    // the forwarded type is the declaring module's own, so hovers and doc comments come from its declaration
+    ModulePtr real = getFrontend().moduleResolver.getModule("game/Real");
+    REQUIRE(real);
+    auto declared = real->exportedTypeBindings.find("Thing");
+    REQUIRE(declared != real->exportedTypeBindings.end());
+    for (const char* forwarding : {"game/Returned", "game/Local", "game/Chained"})
+    {
+        INFO(forwarding);
+        ModulePtr module = getFrontend().moduleResolver.getModule(forwarding);
+        REQUIRE(module);
+        auto it = module->exportedTypeBindings.find("Thing");
+        REQUIRE(it != module->exportedTypeBindings.end());
+        CHECK_EQ(it->second.type, declared->second.type);
+        CHECK_EQ(it->second.definitionLocation, declared->second.definitionLocation);
+        CHECK_EQ(it->second.definitionModuleName, std::optional<ModuleName>{"game/Real"});
+    }
+}
+
+// A forwarded type is an export only: the forwarding module itself can't name it unqualified
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_forwarded_type_isnt_in_the_forwarding_modules_scope")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    fileResolver.source["game/Real"] = R"(
+        export type Thing = { name: string }
+        return {}
+    )";
+    fileResolver.source["game/Link"] = R"(
+        local module = require(game.Real)
+        local thing: Thing = { name = "x" }
+        return module
+    )";
+
+    CheckResult result = getFrontend().check("game/Link");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const UnknownSymbol* unknown = get<UnknownSymbol>(result.errors[0]);
+    REQUIRE(unknown);
+    CHECK_EQ(unknown->name, "Thing");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_forwarding_modules_own_exported_type_wins")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    fileResolver.source["game/Real"] = R"(
+        export type Thing = { name: string }
+        export type Other = boolean
+        return {}
+    )";
+    fileResolver.source["game/Link"] = R"(
+        export type Thing = number
+        return require(game.Real)
+    )";
+    fileResolver.source["game/Main"] = R"(
+        local link = require(game.Link)
+        local thing: link.Thing = 1
+        local other: link.Other = true
+    )";
+
+    CheckResult result = getFrontend().check("game/Main");
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// A returned local that's assigned again, or a value wrapping the module, isn't the required module any more
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_module_returning_a_changed_require_doesnt_forward_its_types")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    fileResolver.source["game/Real"] = R"(
+        export type Thing = { name: string }
+        return {}
+    )";
+    fileResolver.source["game/Reassigned"] = R"(
+        local module = require(game.Real)
+        module = {}
+        return module
+    )";
+    fileResolver.source["game/Wrapped"] = R"(
+        local module = require(game.Real)
+        return { inner = module }
+    )";
+    fileResolver.source["game/Shadowed"] = R"(
+        local module = require(game.Real)
+        local module = {}
+        return module
+    )";
+
+    for (const char* forwarding : {"Reassigned", "Wrapped", "Shadowed"})
+    {
+        INFO(forwarding);
+        fileResolver.source["game/Main"] = std::string("local link = require(game.") + forwarding + ")\nlocal thing: link.Thing = { name = \"x\" }\n";
+        getFrontend().markDirty("game/Main");
+
+        CheckResult result = getFrontend().check("game/Main");
+        LUAU_REQUIRE_ERROR_COUNT(1, result);
+        const UnknownSymbol* unknown = get<UnknownSymbol>(result.errors[0]);
+        REQUIRE(unknown);
+        CHECK_EQ(unknown->name, "link.Thing");
+    }
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "require_a_variadic_function")
 {
     fileResolver.source["game/A"] = R"(
@@ -201,7 +337,10 @@ TEST_CASE_FIXTURE(Fixture, "type_error_of_unknown_qualified_type")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
-    REQUIRE_EQ(result.errors[0], (TypeError{Location{{1, 17}, {1, 40}}, UnknownSymbol{"SomeModule.DoesNotExist"}}));
+    // Luwu: the error says `SomeModule` isn't a module; upstream's carries only the name
+    UnknownSymbol expected{"SomeModule.DoesNotExist", UnknownSymbol::Context::Type};
+    expected.qualifier = UnknownSymbol::Qualifier::NotAModule;
+    REQUIRE_EQ(result.errors[0], (TypeError{Location{{1, 17}, {1, 40}}, expected}));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "require_module_that_does_not_export")
@@ -249,6 +388,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "warn_if_you_try_to_require_a_non_modulescrip
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "general_require_call_expression")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/A"] = R"(
 --!strict
 return { def = 4 }
@@ -268,6 +408,7 @@ a = tbl.abc.def
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "general_require_type_mismatch")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/A"] = R"(
 return { def = 4 }
     )";
@@ -442,6 +583,7 @@ type Table = typeof(tbl)
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "module_type_conflict")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/A"] = R"(
 export type T = { x: number }
 return {}
@@ -464,7 +606,7 @@ local b: B.T = a
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        const std::string expected = "Expected this to be 'T' from 'game/B', but got 'T' from 'game/A'; \n"
+        const std::string expected = "Expected this to be 'T' from 'game/B', but got 'T' from 'game/A'\n"
                                      "accessing `x` results in `number` in the latter type and `string` in the former type, and "
                                      "`number` is not exactly `string`";
         CHECK(expected == toString(result.errors[0]));
@@ -481,6 +623,7 @@ Expected this to be exactly 'string', but got 'number')";
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "module_type_conflict_instantiated")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     fileResolver.source["game/A"] = R"(
 export type Wrap<T> = { x: T }
 return {}
@@ -510,7 +653,7 @@ local b: B.T = a
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        const std::string expected = "Expected this to be 'T' from 'game/C', but got 'T' from 'game/B'; \n"
+        const std::string expected = "Expected this to be 'T' from 'game/C', but got 'T' from 'game/B'\n"
                                      "accessing `x` results in `number` in the latter type and `string` in the former type, and "
                                      "`number` is not exactly `string`";
         CHECK(expected == toString(result.errors[0]));
@@ -1206,13 +1349,13 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "export_class")
         {FFlag::LuauExportValueSyntax, true},
         {FFlag::LuauExportValueTypecheck, true},
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::DebugLuauUserDefinedClasses, true}
+        {FFlag::LuwuClasses, true}
     };
 
     fileResolver.source["game/A"] = R"(
         export class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
 
             function __tostring(self)
                 return `Point x={self.x} y={self.y}`
@@ -1238,12 +1381,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "export_class")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "non_exported_class")
 {
-    ScopedFastFlag sff[] = {{FFlag::DebugLuauForceOldSolver, false}, {FFlag::DebugLuauUserDefinedClasses, true}};
+    ScopedFastFlag sff[] = {{FFlag::DebugLuauForceOldSolver, false}, {FFlag::LuwuClasses, true}};
 
     fileResolver.source["game/A"] = R"(
         class Point
-            public x: number
-            public y: number
+            x: number
+            y: number
 
             function __tostring(self)
                 return `Point x={self.x} y={self.y}`
@@ -1267,6 +1410,36 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "non_exported_class")
     REQUIRE(err);
     CHECK("A.Point" == err->name);
     CHECK(UnknownSymbol::Context::Type == err->context);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "unknown_module_types_say_whether_the_module_or_the_type_is_missing")
+{
+    fileResolver.source["game/A"] = R"(
+        export type Point = { x: number }
+        return {}
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        --!strict
+        local A = require(game.A)
+        local notAModule = 5
+        local missing = require(game.DoesNotExist)
+        local a: A.Size = 1
+        local b: notAModule.Size = 1
+        local c: missing.Size = 1
+        local d: Nowhere = 1
+    )";
+
+    getFrontend().check("game/A");
+    CheckResult result = getFrontend().check("game/B");
+
+    // the unresolved require reports itself; its type keeps the plain message so the two don't contradict
+    LUAU_REQUIRE_ERROR_COUNT(5, result);
+    CHECK(get<UnknownRequire>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[1]), "Unknown type 'A.Size': module 'A' exports no type named 'Size'");
+    CHECK_EQ(toString(result.errors[2]), "Unknown type 'notAModule.Size': 'notAModule' isn't a required module");
+    CHECK_EQ(toString(result.errors[3]), "Unknown type 'missing.Size'");
+    CHECK_EQ(toString(result.errors[4]), "Unknown type 'Nowhere'");
 }
 
 TEST_SUITE_END();

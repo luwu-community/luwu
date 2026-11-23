@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Normalize.h"
 #include "Luau/Scope.h"
 #include "Luau/Type.h"
@@ -16,6 +16,7 @@ LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(LuauIndexingIntoErrorGivesError);
 LUAU_FASTFLAG(LuauAvoidTrivialPhis)
 LUAU_FASTFLAG(LuauTruthyFalsy)
+LUAU_FASTFLAG(LuauAllowIntersectionOfOneTableWithExtern)
 
 using namespace Luau;
 
@@ -497,6 +498,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "call_to_undefined_method_is_not_a_refinement
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "call_an_incompatible_function_after_using_typeguard")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local function f(x: number)
             return x
@@ -726,6 +728,50 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "truthy_refined_none_union_hover_type_does_no
     LUAU_REQUIRE_NO_ERRORS(result);
     CHECK_EQ("string", toString(requireTypeAtPosition({4, 24})));
     CHECK_EQ("string", toString(requireTypeAtPosition({5, 12})));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "lvalue_typeof_none_refinement")
+{
+    CheckResult result = check(R"(
+        local function f(a: string | none)
+            if typeof(a) == "none" then
+                local foo = a
+            else
+                local foo = a
+            end
+
+            if typeof(a) ~= "none" then
+                local bar = a
+            else
+                local bar = a
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("none", toString(requireTypeAtPosition({3, 28})));
+    CHECK_EQ("string", toString(requireTypeAtPosition({5, 28})));
+    CHECK_EQ("string", toString(requireTypeAtPosition({9, 28})));
+    CHECK_EQ("none", toString(requireTypeAtPosition({11, 28})));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "boolean_optional_truthy_refinement_unaffected_by_none")
+{
+    CheckResult result = check(R"(
+        local function f(a: boolean?)
+            if a then
+                local foo = a
+            else
+                local foo = a
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("true", toString(requireTypeAtPosition({3, 28})));
+    CHECK_EQ("false?", toString(requireTypeAtPosition({5, 28})));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "lvalue_is_equal_to_none_refinement")
@@ -1714,15 +1760,28 @@ TEST_CASE_FIXTURE(RefinementExternTypeFixture, "isa_type_refinement_must_be_know
         end
     )");
 
-    LUAU_REQUIRE_NO_ERRORS(result);
-
     if (!FFlag::DebugLuauForceOldSolver)
     {
+        // Luwu: without LuauAllowIntersectionOfOneTableWithExtern, inference makes `x` `never` where `x:IsA` reads it,
+        // which looks like a type checker bug (UnreachableCodeUse, PossibleTypeBug). Upstream reports nothing.
+        if (FFlag::LuauAllowIntersectionOfOneTableWithExtern)
+        {
+            LUAU_REQUIRE_NO_ERRORS(result);
+        }
+        else
+        {
+            LUAU_REQUIRE_ERROR_COUNT(1, result);
+            const UnreachableCodeUse* unreachable = get<UnreachableCodeUse>(result.errors[0]);
+            REQUIRE(unreachable);
+            CHECK_EQ(UnreachableCodeUse::Reason::PossibleTypeBug, unreachable->reason);
+        }
+
         CHECK_EQ("t1 where t1 = Instance & { read IsA: (t1, string) -> (unknown, ...unknown) }", toString(requireTypeAtPosition({3, 28})));
         CHECK_EQ("t1 where t1 = Instance & { read IsA: (t1, string) -> (unknown, ...unknown) }", toString(requireTypeAtPosition({5, 28})));
     }
     else
     {
+        LUAU_REQUIRE_NO_ERRORS(result);
         CHECK_EQ("Instance", toString(requireTypeAtPosition({3, 28})));
         CHECK_EQ("Instance", toString(requireTypeAtPosition({5, 28})));
     }
@@ -2806,9 +2865,10 @@ TEST_CASE_FIXTURE(RefinementExternTypeFixture, "cannot_call_a_function_union")
     // FIXME CLI-157125: It's a bit clowny that we return a union of
     // functions containing `function` here, but it looks like a side
     // effect of how we execute `hasProp`.
+    // Luwu: `Disconnectable` prints as its name. Upstream names the cycle through it instead:
+    // `t2 where t1 = ExternScriptConnection | { Disconnect: t2 } | { disconnect: (t1) -> (...any) } ; t2 = (t1) -> (...any)`.
     std::string expectedError = "Cannot call a value of type function in union:\n"
-                                "  ((ExternScriptConnection) -> ()) | function | t2 where t1 = ExternScriptConnection | { Disconnect: t2 } | { "
-                                "disconnect: (t1) -> (...any) } ; t2 = (t1) -> (...any)";
+                                "  ((Disconnectable) -> (...any)) | ((ExternScriptConnection) -> ()) | function";
 
     CHECK_EQ(toString(result.errors[1]), expectedError);
 }

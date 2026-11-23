@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include <stdint.h>
@@ -62,6 +62,7 @@ void translateInstForNPrep(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstForNLoop(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstForGPrepNext(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstForGPrepInext(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstForGPrep(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstForGLoopIpairs(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstGetTableN(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstSetTableN(IrBuilder& build, const Instruction* pc, int pcpos);
@@ -70,6 +71,10 @@ void translateInstSetTable(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstGetImport(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstGetTableKS(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstSetTableKS(IrBuilder& build, const Instruction* pc, int pcpos);
+// Luwu Classes (rfcs/classes): member read at a constant offset on a proven receiver.
+void translateInstGetObjectMember(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstNewObject(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstSetObjectMember(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstGetGlobal(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstSetGlobal(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstConcat(IrBuilder& build, const Instruction* pc, int pcpos);
@@ -79,6 +84,8 @@ void translateInstAndX(IrBuilder& build, const Instruction* pc, int pcpos, IrOp 
 void translateInstOrX(IrBuilder& build, const Instruction* pc, int pcpos, IrOp c);
 void translateInstNewClosure(IrBuilder& build, const Instruction* pc, int pcpos);
 void translateInstCmpProto(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstCheckSelfClass(IrBuilder& build, const Instruction* pc, int pcpos);
+void translateInstJumpXIsa(IrBuilder& build, const Instruction* pc, int pcpos);
 
 void beforeInstForNPrep(IrBuilder& build, const Instruction* pc, int pcpos);
 void afterInstForNLoop(IrBuilder& build, const Instruction* pc);

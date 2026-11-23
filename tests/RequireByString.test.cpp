@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Common.h"
 #include "Luau/Config.h"
 
@@ -24,9 +24,9 @@
 #include <vector>
 
 LUAU_FASTFLAG(LuauExportValueSyntax)
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
-LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
+LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauCyclicRequireShortCircuit)
+LUAU_DYNAMIC_FASTFLAG(LuauSelfIsSelfAndAlwaysSelf)
 
 #if __APPLE__
 #include <TargetConditionals.h>
@@ -367,6 +367,32 @@ TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireLua")
     assertOutputContainsAll({"true", "result from lua_dependency"});
 }
 
+// Luwu: `.luwu` modules resolve like `.luau` ones.
+TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireLuwu")
+{
+    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/luwu_dependency";
+    runProtectedRequire(path);
+    assertOutputContainsAll({"true", "result from luwu_dependency"});
+}
+
+TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireInitLuwu")
+{
+    std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/luwu";
+    runProtectedRequire(path);
+    assertOutputContainsAll({"true", "result from init.luwu"});
+}
+
+// Luwu: a `.luwu` and a `.luau` file for the same module are ambiguous, like `.luau` and `.lua`.
+TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireLuwuNextToLuauIsAmbiguous")
+{
+    std::string ambiguousPath = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/ambiguous_luwu_file_requirer";
+
+    runProtectedRequire(ambiguousPath);
+    assertOutputContainsAll(
+        {"false", "error requiring module \"./ambiguous/luwu_file/dependency\": could not resolve child component \"dependency\" (ambiguous)"}
+    );
+}
+
 TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireInitLuau")
 {
     std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/without_config/luau";
@@ -645,6 +671,21 @@ TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireUnprefixedPath")
     std::string path = "an/unprefixed/path";
     runProtectedRequire(path);
     assertOutputContainsAll({"false", "require path must start with a valid prefix: ./, ../, or @"});
+}
+
+TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireSubmoduleUsingSelfWithOverrideAttempt")
+{
+    ScopedFastFlag sffs[] = {{DFFlag::LuauSelfIsSelfAndAlwaysSelf, true}};
+    {
+        std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/config_tests/with_config/nested_override";
+        runProtectedRequire(path);
+        assertOutputContainsAll({"true", "result from submodule"});
+    }
+    {
+        std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/config_tests/with_config_luau/nested_override";
+        runProtectedRequire(path);
+        assertOutputContainsAll({"true", "result from submodule"});
+    }
 }
 
 TEST_CASE_FIXTURE(ReplWithPathFixture, "RequirePathWithAlias")
@@ -1289,9 +1330,7 @@ TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireExportTrap")
 
 TEST_CASE("RequireExportClass")
 {
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuauExportValueSyntax, true}, {FFlag::DebugLuauUserDefinedClasses, true}, {FFlag::DebugLuauUserDefinedClassesRuntime, true}
-    };
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuwuClasses, true}};
 
     // we create a new fixture so the new lua_State has the class library
     ReplWithPathFixture fixture;

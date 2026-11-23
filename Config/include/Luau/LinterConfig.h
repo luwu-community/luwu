@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Location.h"
@@ -50,6 +50,8 @@ struct LintWarning
         Code_IntegerParsing = 27,
         Code_ComparisonPrecedence = 28,
         Code_RedundantNativeAttribute = 29,
+        Code_NilNoneComparison = 30, // Luwu: comparing with nil where only none is possible, or the reverse
+        Code_VarargCast = 31,        // Luwu: `f(... :: T)` passes only the first value
 
         Code__Count
     };
@@ -117,6 +119,8 @@ inline constexpr const char* kWarningNames[] = {
     "IntegerParsing",
     "ComparisonPrecedence",
     "RedundantNativeAttribute",
+    "NilNoneComparison",
+    "VarargCast",
 };
 // clang-format on
 

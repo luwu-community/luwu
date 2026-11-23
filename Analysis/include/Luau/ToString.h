@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Common.h"
@@ -32,6 +32,9 @@ struct ToStringNameMap
     std::unordered_map<TypePackId, std::string> typePacks;
 };
 
+// Luwu (helpful subtyping errors): for a table, the properties an error message is about, which it prints first.
+using PropertyFocus = DenseHashMap<TypeId, std::vector<std::string>>;
+
 struct ToStringOptions
 {
     ToStringOptions(bool exhaustive = false)
@@ -45,9 +48,45 @@ struct ToStringOptions
     bool hideTableKind = false;                   // If true, all tables will be surrounded with plain '{}'
     bool hideNamedFunctionTypeParameters = false; // If true, type parameters of functions will be hidden at top-level.
     bool hideFunctionSelfArgument = false;        // If true, `self: X` will be omitted from the function signature if the function has self
+    bool hideFunctionSelfArgumentType = false;    // If true, `self: X` will be printed as bare `self` (no type) if the function has self
     bool hideTableAliasExpansions = false;        // If true, all table aliases will not be expanded
     bool useQuestionMarks = true;                 // If true, use a postfix ? for options, else write them out as unions that include nil.
     bool ignoreSyntheticName = false;             // If true, ignore synthetic names on table types.
+    // If true, a `whereClauses` trailing section is populated in ToStringResult with a one-level
+    // expansion of each named type (table/union/intersection/function alias) referenced (but not
+    // itself the root) while printing this type, e.g. "where Metadata = { ... }".
+    bool includeWhereClauses = false;
+    // If true, a named TableType/MetatableType at the *root* of a toStringDetailed call is expanded to
+    // its structure instead of printing just its name. Union, intersection and function types at the
+    // root are always expanded (see TypeStringifier's per-Type operator() overloads).
+    // Off by default, for callers that want the compact `Alias<T>` form at the root, such as a hover
+    // over a type alias declaration. Turn it on for callers that display the type of a *value*, such
+    // as a hover over a variable. There, printing the alias's own name back (`const fs: fs.fs`) tells
+    // the reader nothing.
+    bool alwaysExpandRootAlias = false;
+    // Luwu (helpful subtyping errors): if false, union and intersection members print in the order the type
+    // holds them (the order they were written in, for an annotation) instead of sorted. Mismatch
+    // explanations number union members (`Drop#2`), and the number has to match what the reader sees.
+    bool sortUnionMembers = true;
+    // Luwu (helpful subtyping errors): types an error message names because it would otherwise print them
+    // several times (`where type Animal = ...`), printed by that name. The root of a call with
+    // `alwaysExpandRootAlias` is still expanded, which is how the name's own declaration is printed.
+    const DenseHashMap<TypeId, std::string>* repeatedTypeNames = nullptr;
+    // Luwu (helpful subtyping errors): with `useLineBreaks`, put a table's fields on lines of their own only
+    // when it has more than a few, or one of them is long. A small table reads better on one line, even
+    // inside a large one.
+    bool breakOnlyLargeTables = false;
+    // Luwu (helpful subtyping errors): past this many properties (0 for no limit), a table prints only this many:
+    // the ones in `propertyFocus` first, then up to two whose type is a literal (a discriminant, `kind: "leave"`),
+    // then with `identifyByConventionalNames` the ones conventionally naming what it is (`type`, `kind`, `name`,
+    // ...), then the rest in order, and counts the others. A record of twenty properties where three are wrong is
+    // mostly properties the reader doesn't need.
+    size_t maxPropertiesShown = 0;
+    const PropertyFocus* propertyFocus = nullptr;
+    bool identifyByConventionalNames = false;
+    // Luwu (helpful subtyping errors): print only the properties `maxPropertiesShown` puts ahead of the rest, and `…`
+    // for the others, however few there are: for a table the message only needs to point into.
+    bool onlyFocusedProperties = false;
     size_t maxTableLength = size_t(FInt::LuauTableTypeMaximumStringifierLength); // Only applied to TableTypes
     size_t maxTypeLength = size_t(FInt::LuauTypeMaximumStringifierLength);
     size_t compositeTypesSingleLineLimit = 5; // The number of type elements permitted on a single line when printing type unions/intersections
@@ -69,6 +108,11 @@ struct ToStringResult
 
     // Records which TypeId produced each substring of the output. Only recorded for named types
     std::vector<ToStringSpan> typeSpans;
+
+    // Populated only when ToStringOptions::includeWhereClauses is set: a one-level expansion of
+    // each named type referenced while printing `name`, formatted as one "where X = ..." line per
+    // referenced alias. Empty if nothing was referenced or the option was off.
+    std::string whereClauses;
 
     bool invalid = false;
     bool error = false;

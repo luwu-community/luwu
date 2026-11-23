@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lclass.h"
 #include "lfunc.h"
@@ -7,6 +7,7 @@
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
+#include "lvector.h"
 #include "lgc.h"
 #include "ldo.h"
 #include "lnumutils.h"
@@ -17,7 +18,7 @@ LUAU_FASTFLAG(LuauInteger)
 // limit for table tag-method chains (to avoid loops)
 #define MAXTAGLOOP 100
 
-LUAU_FASTFLAG(DebugLuauUserDefinedClassesRuntime)
+LUAU_FASTFLAG(LuwuClasses)
 
 const TValue* luaV_tonumber(const TValue* obj, TValue* n)
 {
@@ -48,7 +49,7 @@ int luaV_tostring(lua_State* L, StkId obj)
     }
 }
 
-const float* luaV_tovector(const TValue* obj)
+const LUA_VECTOR_TYPE* luaV_tovector(const TValue* obj)
 {
     if (ttisvector(obj))
         return vvalue(obj);
@@ -100,6 +101,11 @@ static void callTM(lua_State* L, const TValue* f, const TValue* p1, const TValue
 
 void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
 {
+    luaV_gettablefor(L, t, key, val, isLua(L->ci) ? clvalue(L->ci->func) : nullptr);
+}
+
+void luaV_gettablefor(lua_State* L, const TValue* t, TValue* key, StkId val, const Closure* accessor)
+{
     int loop;
     for (loop = 0; loop < MAXTAGLOOP; loop++)
     {
@@ -121,21 +127,22 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
             }
             // t isn't a table, so see if it has an INDEX meta-method to look up the key with
         }
-        else if (LUAU_UNLIKELY(FFlag::DebugLuauUserDefinedClassesRuntime && ttisobject(t)))
+        else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisobject(t)))
         {
             LuauObject* inst = objectvalue(t);
             const TValue* offsettval = luaH_get(inst->lclass->memberstooffset, key);
 
-            // Class instances throw if you try to access a member that is not
+            // Objects throw if you try to access a member that is not
             // present.
             if (ttisnil(offsettval))
                 luaG_missingmembererror(L, t, key);
 
             const uint32_t offset = uint32_t(nvalue(offsettval));
+            luaR_checkprivateaccessfast(L, key, inst->lclass, accessor, offset);
             setobj2s(L, val, luaR_lookupmemberatoffset(inst, offset));
             return;
         }
-        else if (LUAU_UNLIKELY(FFlag::DebugLuauUserDefinedClassesRuntime && ttisclass(t)))
+        else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisclass(t)))
         {
             LuauClass* lco = classvalue(t);
             const TValue* res = luaH_get(lco->memberstooffset, key);
@@ -159,7 +166,9 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
             //  local _ = Box.item
             //
             if (offset < lco->numberofinstancemembers)
-                luaG_missingmembererror(L, t, key);
+                luaG_instancefieldonclasserror(L, t, key);
+
+            luaR_checkprivateaccessfast(L, key, lco, accessor, offset);
 
             setobj2s(L, val, &lco->staticmembers[offset - lco->numberofinstancemembers]);
             return;
@@ -207,7 +216,7 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
 
             // fallthrough to metamethod
         }
-        else if (LUAU_UNLIKELY(FFlag::DebugLuauUserDefinedClassesRuntime && ttisobject(t)))
+        else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisobject(t)))
         {
             LuauObject* inst = objectvalue(t);
             const TValue* offset = luaH_get(inst->lclass->memberstooffset, key);
@@ -217,6 +226,16 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
             LUAU_ASSERT(offsetnum < inst->lclass->numberofallmembers);
             if (offsetnum >= inst->lclass->numberofinstancemembers)
                 luaG_indexerror(L, t, key);
+            if (LUAU_UNLIKELY((inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers)))
+            {
+                Closure* cl = nullptr;
+                if (isLua(L->ci))
+                    cl = clvalue(L->ci->func);
+                if (inst->lclass->hasprivatemembers)
+                    luaR_checkprivateaccessfast(L, key, inst->lclass, cl, offsetnum);
+                if (inst->lclass->hasconstmembers)
+                    luaR_checkconstassignfast(L, key, inst, cl, offsetnum);
+            }
             setobj2class(L, &inst->members[offsetnum], val);
             luaC_barrier(L, inst, val);
             return;
@@ -375,7 +394,7 @@ int luaV_equalval(lua_State* L, const TValue* t1, const TValue* t2)
         // is not a strict requirement for comparison metamethods.
         LuauObject* t1inst = objectvalue(t1);
         LuauObject* t2inst = objectvalue(t2);
-        // Class instances with differing class objects are always inequal.
+        // Objects of differing classes are always inequal.
         if (t1inst->lclass != t2inst->lclass)
             return false;
         // Otherwise, check if `__eq` exists and use that
@@ -473,36 +492,37 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
     // v*v  s*v  v*s   (mul)
     // v/v  s/v  v/s   (div)
     // v//v s//v v//s  (floor div)
-    const float* vb = ttisvector(rb) ? vvalue(rb) : nullptr;
-    const float* vc = ttisvector(rc) ? vvalue(rc) : nullptr;
+    const LUA_VECTOR_TYPE* vb = ttisvector(rb) ? vvalue(rb) : nullptr;
+    const LUA_VECTOR_TYPE* vc = ttisvector(rc) ? vvalue(rc) : nullptr;
 
     if (vb && vc)
     {
         switch (op)
         {
         case TM_ADD:
-            setvvalue(ra, vb[0] + vc[0], vb[1] + vc[1], vb[2] + vc[2], vb[3] + vc[3]);
+            setvvalue(L, ra, vb[0] + vc[0], vb[1] + vc[1], vb[2] + vc[2], vb[3] + vc[3]);
             return;
         case TM_SUB:
-            setvvalue(ra, vb[0] - vc[0], vb[1] - vc[1], vb[2] - vc[2], vb[3] - vc[3]);
+            setvvalue(L, ra, vb[0] - vc[0], vb[1] - vc[1], vb[2] - vc[2], vb[3] - vc[3]);
             return;
         case TM_MUL:
-            setvvalue(ra, vb[0] * vc[0], vb[1] * vc[1], vb[2] * vc[2], vb[3] * vc[3]);
+            setvvalue(L, ra, vb[0] * vc[0], vb[1] * vc[1], vb[2] * vc[2], vb[3] * vc[3]);
             return;
         case TM_DIV:
-            setvvalue(ra, vb[0] / vc[0], vb[1] / vc[1], vb[2] / vc[2], vb[3] / vc[3]);
+            setvvalue(L, ra, vb[0] / vc[0], vb[1] / vc[1], vb[2] / vc[2], vb[3] / vc[3]);
             return;
         case TM_IDIV:
             setvvalue(
+                L,
                 ra,
-                float(luai_numidiv(vb[0], vc[0])),
-                float(luai_numidiv(vb[1], vc[1])),
-                float(luai_numidiv(vb[2], vc[2])),
-                float(luai_numidiv(vb[3], vc[3]))
+                LUA_VECTOR_TYPE(luai_numidiv(vb[0], vc[0])),
+                LUA_VECTOR_TYPE(luai_numidiv(vb[1], vc[1])),
+                LUA_VECTOR_TYPE(luai_numidiv(vb[2], vc[2])),
+                LUA_VECTOR_TYPE(luai_numidiv(vb[3], vc[3]))
             );
             return;
         case TM_UNM:
-            setvvalue(ra, -vb[0], -vb[1], -vb[2], -vb[3]);
+            setvvalue(L, ra, -vb[0], -vb[1], -vb[2], -vb[3]);
             return;
         default:
             break;
@@ -514,19 +534,24 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
 
         if (c)
         {
-            float nc = cast_to(float, nvalue(c));
+            LUA_VECTOR_TYPE nc = cast_to(LUA_VECTOR_TYPE, nvalue(c));
 
             switch (op)
             {
             case TM_MUL:
-                setvvalue(ra, vb[0] * nc, vb[1] * nc, vb[2] * nc, vb[3] * nc);
+                setvvalue(L, ra, vb[0] * nc, vb[1] * nc, vb[2] * nc, vb[3] * nc);
                 return;
             case TM_DIV:
-                setvvalue(ra, vb[0] / nc, vb[1] / nc, vb[2] / nc, vb[3] / nc);
+                setvvalue(L, ra, vb[0] / nc, vb[1] / nc, vb[2] / nc, vb[3] / nc);
                 return;
             case TM_IDIV:
                 setvvalue(
-                    ra, float(luai_numidiv(vb[0], nc)), float(luai_numidiv(vb[1], nc)), float(luai_numidiv(vb[2], nc)), float(luai_numidiv(vb[3], nc))
+                    L,
+                    ra,
+                    LUA_VECTOR_TYPE(luai_numidiv(vb[0], nc)),
+                    LUA_VECTOR_TYPE(luai_numidiv(vb[1], nc)),
+                    LUA_VECTOR_TYPE(luai_numidiv(vb[2], nc)),
+                    LUA_VECTOR_TYPE(luai_numidiv(vb[3], nc))
                 );
                 return;
             default:
@@ -540,19 +565,24 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
 
         if (b)
         {
-            float nb = cast_to(float, nvalue(b));
+            LUA_VECTOR_TYPE nb = cast_to(LUA_VECTOR_TYPE, nvalue(b));
 
             switch (op)
             {
             case TM_MUL:
-                setvvalue(ra, nb * vc[0], nb * vc[1], nb * vc[2], nb * vc[3]);
+                setvvalue(L, ra, nb * vc[0], nb * vc[1], nb * vc[2], nb * vc[3]);
                 return;
             case TM_DIV:
-                setvvalue(ra, nb / vc[0], nb / vc[1], nb / vc[2], nb / vc[3]);
+                setvvalue(L, ra, nb / vc[0], nb / vc[1], nb / vc[2], nb / vc[3]);
                 return;
             case TM_IDIV:
                 setvvalue(
-                    ra, float(luai_numidiv(nb, vc[0])), float(luai_numidiv(nb, vc[1])), float(luai_numidiv(nb, vc[2])), float(luai_numidiv(nb, vc[3]))
+                    L,
+                    ra,
+                    LUA_VECTOR_TYPE(luai_numidiv(nb, vc[0])),
+                    LUA_VECTOR_TYPE(luai_numidiv(nb, vc[1])),
+                    LUA_VECTOR_TYPE(luai_numidiv(nb, vc[2])),
+                    LUA_VECTOR_TYPE(luai_numidiv(nb, vc[3]))
                 );
                 return;
             default:

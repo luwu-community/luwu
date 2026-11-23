@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/FragmentAutocomplete.h"
 
 #include "Luau/Ast.h"
@@ -30,7 +30,8 @@ LUAU_FASTINT(LuauTypeInferIterationLimit);
 LUAU_FASTINT(LuauTarjanChildLimit)
 
 LUAU_FASTFLAGVARIABLE(DebugLogFragmentsFromAutocomplete)
-LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuauCyclicRequireTypeInference)
 
 namespace Luau
 {
@@ -459,7 +460,7 @@ FragmentAutocompleteAncestryResult findAncestryForFragmentParse(AstStatBlock* st
                     }
                     else if (auto classDecl = stat->as<AstStatClass>())
                     {
-                        LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
+                        LUAU_ASSERT(FFlag::LuwuClasses);
                         // We need to include the class name as part of the
                         // locals so that within the fragment the class name
                         // is defined.
@@ -1239,8 +1240,8 @@ FragmentTypeCheckResult typecheckFragment_(
         NotNull{&normalizer},
         NotNull{&typeFunctionRuntime},
         NotNull(cg.rootScope),
-        borrowConstraints(cg.constraints),
-        NotNull{&cg.scopeToFunction},
+        borrowConstraints(FFlag::DebugLuauCyclicRequireTypeInference ? cg.cgraph->constraints : cg.constraints),
+        NotNull{FFlag::DebugLuauCyclicRequireTypeInference ? &cg.cgraph->scopeToFunction : &cg.scopeToFunction},
         incrementalModule,
         NotNull{&resolver},
         {},

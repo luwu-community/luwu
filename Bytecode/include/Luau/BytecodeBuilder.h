@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Bytecode.h"
@@ -53,6 +53,13 @@ public:
         int32_t className;
         std::vector<int32_t> propertyNames;
         std::vector<int32_t> methodNames;
+        // Parallel to propertyNames/methodNames; LBC_CLASSMEMBER_* bits (see Luau/Bytecode.h) for
+        // each member, in the same order (properties first, then methods).
+        std::vector<uint8_t> propertyFlags;
+        std::vector<uint8_t> methodFlags;
+        // Parallel to propertyNames: for a member flagged LBC_CLASSMEMBER_CONSTDEFAULT, the proto
+        // constant index of its default value; -1 for every other member.
+        std::vector<int32_t> propertyDefaults;
     };
 
     BytecodeBuilder(BytecodeEncoder* encoder = 0);
@@ -68,7 +75,8 @@ public:
     int32_t addConstantNumber(double value);
     int32_t addConstantInteger(int64_t value, uint8_t mode = 0);
     int32_t addConstantIntegerHeap(StringRef value, uint8_t mode = 0);
-    int32_t addConstantVector(float x, float y, float z, float w);
+    int32_t addConstantVectorf(float x, float y, float z, float w);
+    int32_t addConstantVectord(double x, double y, double z, double w);
     int32_t addConstantString(StringRef value);
     int32_t addImport(uint32_t iid);
     int32_t addConstantTable(const TableShape& shape);
@@ -188,7 +196,8 @@ protected:
             Type_Boolean,
             Type_Number,
             Type_Integer,
-            Type_Vector,
+            Type_Vectorf,
+            Type_Vectord,
             Type_String,
             Type_Import,
             Type_Table,
@@ -204,7 +213,8 @@ protected:
             bool valueBoolean;
             double valueNumber;
             int64_t valueInteger64;
-            float valueVector[4];
+            float valueVectorf[4];
+            double valueVectord[4];
             unsigned int valueString; // index into string table
             uint32_t valueImport;     // 10-10-10-2 encoded import id
             uint32_t valueTable;      // index into tableShapes[]
@@ -217,13 +227,16 @@ protected:
     {
         Constant::Type type;
         // Note: this stores value* from Constant; when type is Type_Number, this stores the same bits as double does but in uint64_t.
-        // For Type_Vector, x and y are stored in 'value' and z and w are stored in 'extra'.
+        // For Type_Vectorf, x and y are stored in 'value' and z and w are stored in 'extra1'.
+        // For Type_Vectord, x is stored in 'value', y, z and w are stored in 'extra1/2/3' accordingly.
         uint64_t value;
-        uint64_t extra = 0;
+        uint64_t extra1 = 0;
+        uint64_t extra2 = 0;
+        uint64_t extra3 = 0;
 
         bool operator==(const ConstantKey& key) const
         {
-            return type == key.type && value == key.value && extra == key.extra;
+            return type == key.type && value == key.value && extra1 == key.extra1 && extra2 == key.extra2 && extra3 == key.extra3;
         }
     };
 

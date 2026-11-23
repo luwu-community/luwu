@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Ast.h"
 #include "Luau/AstJsonEncoder.h"
 #include "Luau/Parser.h"
@@ -13,14 +13,14 @@ using namespace Luau;
 
 
 LUAU_FASTFLAG(LuauDisallowExternClassInTypeDefinitions)
-LUAU_FASTFLAG(LuauDefaultArguments)
+LUAU_FASTFLAG(LuwuDefaultArguments)
 
 struct JsonEncoderFixture
 {
     Allocator allocator;
     AstNameTable names{allocator};
     ScopedFastFlag sff{FFlag::LuauDisallowExternClassInTypeDefinitions, true};
-    ScopedFastFlag sffDefaultArguments{FFlag::LuauDefaultArguments, true};
+    ScopedFastFlag sffDefaultArguments{FFlag::LuwuDefaultArguments, true};
 
     ParseResult parse(std::string_view src)
     {
@@ -68,6 +68,9 @@ TEST_CASE("encode_constants")
     AstExprConstantNumber positiveInfinity{Location(), INFINITY};
     AstExprConstantNumber negativeInfinity{Location(), -INFINITY};
     AstExprConstantNumber nan{Location(), NAN};
+    AstExprConstantInteger intSmall{Location(), 42};
+    AstExprConstantInteger intNeg{Location(), -1};
+    AstExprConstantInteger intLarge{Location(), 0x7FFFFFFFFFFFFFFFLL};
 
     AstArray<char> charString;
     charString.data = const_cast<char*>("a\x1d\0\\\"b");
@@ -82,6 +85,9 @@ TEST_CASE("encode_constants")
     CHECK_EQ(R"({"type":"AstExprConstantNumber","location":"0,0 - 0,0","value":Infinity})", toJson(&positiveInfinity));
     CHECK_EQ(R"({"type":"AstExprConstantNumber","location":"0,0 - 0,0","value":-Infinity})", toJson(&negativeInfinity));
     CHECK_EQ(R"({"type":"AstExprConstantNumber","location":"0,0 - 0,0","value":NaN})", toJson(&nan));
+    CHECK_EQ(R"({"type":"AstExprConstantInteger","location":"0,0 - 0,0","value":42})", toJson(&intSmall));
+    CHECK_EQ(R"({"type":"AstExprConstantInteger","location":"0,0 - 0,0","value":-1})", toJson(&intNeg));
+    CHECK_EQ(R"({"type":"AstExprConstantInteger","location":"0,0 - 0,0","value":9223372036854775807})", toJson(&intLarge));
     CHECK_EQ("{\"type\":\"AstExprConstantString\",\"location\":\"0,0 - 0,0\",\"value\":\"a\\u001d\\u0000\\\\\\\"b\"}", toJson(&needsEscaping));
 }
 
@@ -405,7 +411,7 @@ TEST_CASE_FIXTURE(JsonEncoderFixture, "encode_AstStatLocalFunction")
     AstStat* statement = expectParseStatement("local function a(b) return end");
 
     std::string_view expected =
-        R"({"type":"AstStatLocalFunction","location":"0,0 - 0,30","name":{"luauType":null,"name":"a","isConst":false,"type":"AstLocal","location":"0,15 - 0,16"},"func":{"type":"AstExprFunction","location":"0,0 - 0,30","attributes":[],"generics":[],"genericPacks":[],"args":[{"luauType":null,"name":"b","isConst":false,"type":"AstLocal","location":"0,17 - 0,18"}],"argsDefaults":[null],"vararg":false,"varargLocation":"0,0 - 0,0","body":{"type":"AstStatBlock","location":"0,19 - 0,27","hasEnd":true,"body":[{"type":"AstStatReturn","location":"0,20 - 0,26","list":[]}]},"functionDepth":1,"debugname":"a"}})";
+        R"({"type":"AstStatLocalFunction","location":"0,0 - 0,30","name":{"luauType":null,"name":"a","isConst":false,"type":"AstLocal","location":"0,15 - 0,16"},"func":{"type":"AstExprFunction","location":"0,6 - 0,30","attributes":[],"generics":[],"genericPacks":[],"args":[{"luauType":null,"name":"b","isConst":false,"type":"AstLocal","location":"0,17 - 0,18"}],"argsDefaults":[null],"vararg":false,"varargLocation":"0,0 - 0,0","body":{"type":"AstStatBlock","location":"0,19 - 0,27","hasEnd":true,"body":[{"type":"AstStatReturn","location":"0,20 - 0,26","list":[]}]},"functionDepth":1,"debugname":"a"}})";
 
     CHECK(toJson(statement) == expected);
 }

@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Scope.h"
@@ -18,6 +18,36 @@ struct TypeArena;
 struct Subtyping;
 
 struct MagicRequire final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+};
+
+// Overrides `class.fields`'s declared `({ [string]: unknown }, boolean)` return with the precise
+// per-field type map (and a literal `complete` boolean) when the argument is a known class or
+// object type. Exposed here (rather than kept file-local in BuiltinDefinitions.cpp) so fixtures
+// that load their own class library declarations, like ClassesFixture in
+// tests/TypeInfer.classes.test.cpp, can attach it too.
+struct MagicClassFields final : MagicFunction
+{
+    std::optional<WithPredicate<TypePackId>> handleOldSolver(
+        struct TypeChecker&,
+        const std::shared_ptr<struct Scope>&,
+        const class AstExprCall&,
+        WithPredicate<TypePackId>
+    ) override;
+    bool infer(const MagicFunctionCallContext& context) override;
+};
+
+// Narrows `class.name`'s declared `string` return to the class's name as a string singleton when the
+// argument is a class or object type, and to a union of singletons for a union of them. Exposed for
+// the same reason as MagicClassFields.
+struct MagicClassName final : MagicFunction
 {
     std::optional<WithPredicate<TypePackId>> handleOldSolver(
         struct TypeChecker&,

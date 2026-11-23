@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lapi.h"
 
@@ -15,19 +15,22 @@
 #include "lvm.h"
 #include "lnumutils.h"
 #include "lbuffer.h"
+#include "lvector.h"
+#include "lclass.h"
 
 #include <string.h>
 
 LUAU_FASTFLAG(LuauDirectFieldGet)
-LUAU_FASTFLAG(LuauNonePrimitive)
+LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAGVARIABLE(LuauAutoStack)
 LUAU_FASTFLAGVARIABLE(LuauCloneTableFix)
-LUAU_FASTFLAGVARIABLE(LuauExternallyManagedBuffers)
-LUAU_FASTFLAGVARIABLE(LuauExternalString)
-LUAU_FASTFLAGVARIABLE(DebugLuauAllowNonNullTerminatedStrings)
-LUAU_FASTFLAGVARIABLE(LuauFatCClosure)
-LUAU_FASTFLAGVARIABLE(LuauManagedReferences2)
-LUAU_FASTFLAGVARIABLE(LuauPcallMulti)
+LUAU_FASTFLAGVARIABLE(LuwuExternallyManagedBuffers)
+LUAU_FASTFLAGVARIABLE(LuwuExternalString)
+LUAU_FASTFLAGVARIABLE(DebugLuwuAllowNonNullTerminatedStrings)
+LUAU_FASTFLAGVARIABLE(LuwuFatCClosure)
+LUAU_FASTFLAGVARIABLE(LuwuManagedReferences2)
+LUAU_FASTFLAGVARIABLE(LuwuPcallMulti)
+LUAU_FASTFLAG(LuauGcTraceUdata)
 
 /*
  * This file contains most implementations of core Lua APIs from lua.h.
@@ -55,6 +58,9 @@ const char* lua_ident = "$Lua: Lua 5.1.4 Copyright (C) 1994-2008 Lua.org, PUC-Ri
 
 const char* luau_ident = "$Luau: Copyright (C) 2019-2024 Roblox Corporation $\n"
                          "$URL: luau.org $\n";
+
+const char* luwu_ident = "$Luwu: Copyright (C) 2026 Luwu contributors $\n"
+                         "$URL: luwu.org $\n";
 
 #define api_checknelems(L, n) api_check(L, (n) <= (L->top - L->base))
 
@@ -584,7 +590,7 @@ const char* lua_namecallatom(lua_State* L, int* atom)
     return getstr(s);
 }
 
-const float* lua_tovector(lua_State* L, int idx)
+const LUA_VECTOR_TYPE* lua_tovector(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
     if (!ttisvector(o))
@@ -709,7 +715,7 @@ void lua_pushnil(lua_State* L)
 
 void lua_pushsymnone(lua_State* L)
 {
-    LUAU_ASSERT(FFlag::LuauNonePrimitive);
+    LUAU_ASSERT(FFlag::LuwuNonePrimitive);
     ensure_stack(L, 1);
     setsymnonevalue(L->top);
     api_incr_top(L);
@@ -744,17 +750,27 @@ void lua_pushunsigned(lua_State* L, unsigned u)
 }
 
 #if LUA_VECTOR_SIZE == 4
-void lua_pushvector(lua_State* L, float x, float y, float z, float w)
+void lua_pushvector(lua_State* L, LUA_VECTOR_TYPE x, LUA_VECTOR_TYPE y, LUA_VECTOR_TYPE z, LUA_VECTOR_TYPE w)
 {
+    if (LUA_VECTOR_DOUBLE == 1)
+    {
+        luaC_checkGC(L);
+        luaC_threadbarrier(L);
+    }
     ensure_stack(L, 1);
-    setvvalue(L->top, x, y, z, w);
+    setvvalue(L, L->top, x, y, z, w);
     api_incr_top(L);
 }
 #else
-void lua_pushvector(lua_State* L, float x, float y, float z)
+void lua_pushvector(lua_State* L, LUA_VECTOR_TYPE x, LUA_VECTOR_TYPE y, LUA_VECTOR_TYPE z)
 {
+    if (LUA_VECTOR_DOUBLE == 1)
+    {
+        luaC_checkGC(L);
+        luaC_threadbarrier(L);
+    }
     ensure_stack(L, 1);
-    setvvalue(L->top, x, y, z, 0.0f);
+    setvvalue(L, L->top, x, y, z, LUA_VECTOR_TYPE(0.0));
     api_incr_top(L);
 }
 #endif
@@ -818,7 +834,7 @@ void lua_pushcclosurek(lua_State* L, lua_CFunction fn, const char* debugname, in
 
 void* lua_pushcclosurewithdatak(lua_State* L, lua_CFunction fn, const char* debugname, lua_Continuation cont, size_t size, lua_ClosureWithDataFree dtor)
 {
-    LUAU_ASSERT(FFlag::LuauFatCClosure);
+    LUAU_ASSERT(FFlag::LuwuFatCClosure);
     
     api_check(L, fn != nullptr);
     luaC_checkGC(L);
@@ -836,9 +852,24 @@ void* lua_pushcclosurewithdatak(lua_State* L, lua_CFunction fn, const char* debu
     return (void*)cl->fatc.data;
 }
 
+void* lua_pushdatacfunctionk(
+    lua_State* L,
+    lua_DataCFunction fn,
+    const char* debugname,
+    lua_Continuation cont,
+    size_t size,
+    lua_ClosureWithDataFree dtor
+)
+{
+    api_check(L, fn != nullptr);
+    void* data = lua_pushcclosurewithdatak(L, luaF_calldatacfunction, debugname, cont, size, dtor);
+    clvalue(L->top - 1)->fatc.df = fn;
+    return data;
+}
+
 void* lua_getcclosuredata(lua_State* L)
 {
-    LUAU_ASSERT(FFlag::LuauFatCClosure);
+    LUAU_ASSERT(FFlag::LuwuFatCClosure);
         
     Closure* cl = curr_func(L);
     if (cl && cl->isC == 2)
@@ -992,7 +1023,11 @@ int lua_getmetatable(lua_State* L, int objindex)
         mt = uvalue(obj)->metatable;
         break;
     case LUA_TOBJECT:
-        mt = objectvalue(obj)->lclass->instancemetatable;
+    case LUA_TCLASS:
+        // Luwu Classes (rfcs/classes): class and object metatables are locked down and never
+        // exposed, so these behave like a primitive without a metatable (such as `number`). Upstream
+        // returns an object's class's instance metatable, and the global metatable of the type for a class.
+        mt = NULL;
         break;
     default:
         mt = L->global->mt[ttype(obj)];
@@ -1128,6 +1163,14 @@ int lua_setmetatable(lua_State* L, int objindex)
             luaC_objbarrier(L, uvalue(obj), mt);
         break;
     }
+    case LUA_TOBJECT:
+    case LUA_TCLASS:
+    {
+        // Luwu Classes (rfcs/classes): the default case would install a metatable for every value
+        // of the type, which the language doesn't allow for classes and objects. Upstream takes the
+        // default case for both.
+        luaG_runerror(L, "cannot set the metatable of a %s", luaT_typenames[ttype(obj)]);
+    }
     default:
     {
         L->global->mt[ttype(obj)] = mt;
@@ -1237,7 +1280,7 @@ int lua_pcall(lua_State* L, int nargs, int nresults, int errfunc)
 
 int lua_pcallmulti(lua_State* L, int nargs, int nresults, int errfunc)
 {
-    LUAU_ASSERT(FFlag::LuauPcallMulti);
+    LUAU_ASSERT(FFlag::LuwuPcallMulti);
     api_check(L, nargs >= 0);
     api_check(L, nresults >= LUA_MULTRET);
     api_checknelems(L, nargs + 1);
@@ -1295,6 +1338,13 @@ int lua_cpcall(lua_State* L, lua_CFunction func, void* ud)
     c.ud = ud;
 
     return luaD_pcall(L, f_Ccall, &c, savestack(L, L->top), 0);
+}
+
+int lua_rawpcall(lua_State* L, int nargs, void (*func)(lua_State* L, void* ud), void* ud)
+{
+    api_check(L, func != nullptr);
+    api_checknelems(L, nargs);
+    return luaD_pcall(L, func, ud, savestack(L, L->top - nargs), 0);
 }
 
 int lua_status(lua_State* L)
@@ -1468,10 +1518,22 @@ int lua_gc(lua_State* L, int what, int data)
         g->gcstepsize = data << 10;
         break;
     }
+    case LUA_GCISPAUSED:
+    {
+        res = g->gcstate == GCSpause;
+        break;
+    }
     default:
         res = -1; // invalid option
     }
     return res;
+}
+
+void lua_memorydump(lua_State* L, void* file, lua_CategoryName categoryName)
+{
+    api_check(L, file != nullptr);
+
+    luaC_dump(L, file, categoryName);
 }
 
 /*
@@ -1631,7 +1693,7 @@ void* lua_newbuffer(lua_State* L, size_t sz)
 
 void* lua_newexternalbuffer(lua_State* L, size_t sz, void* data, void* userdata, lua_BufferFree free_cb, int mode)
 {
-    LUAU_ASSERT(FFlag::LuauExternallyManagedBuffers);
+    LUAU_ASSERT(FFlag::LuwuExternallyManagedBuffers);
     api_check(L, mode == 1 || mode == 2);
     luaC_checkGC(L);
     luaC_threadbarrier(L);
@@ -1656,8 +1718,8 @@ void* lua_getbufferuserdata(lua_State* L, int idx)
 
 const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, void* userdata, lua_StringFree free_cb)
 {
-    LUAU_ASSERT(FFlag::LuauExternalString);
-    if (!FFlag::DebugLuauAllowNonNullTerminatedStrings)
+    LUAU_ASSERT(FFlag::LuwuExternalString);
+    if (!FFlag::DebugLuwuAllowNonNullTerminatedStrings)
         api_check(L, data[len] == '\0');
     luaC_checkGC(L);
     luaC_threadbarrier(L);
@@ -1670,20 +1732,138 @@ const char* lua_pushexternalstring(lua_State* L, const char* data, size_t len, v
 
 int lua_isstringexternal(lua_State* L, int idx)
 {
-    LUAU_ASSERT(FFlag::LuauExternalString);
+    LUAU_ASSERT(FFlag::LuwuExternalString);
     StkId p = index2addr(L, idx);
     return ttisstring(p) ? (!tsisinline(tsvalue(p))) : 0;
 }
 
 void* lua_getstringexternaluserdata(lua_State* L, int idx)
 {
-    LUAU_ASSERT(FFlag::LuauExternalString);
+    LUAU_ASSERT(FFlag::LuwuExternalString);
     StkId p = index2addr(L, idx);
     if (ttisstring(p) && !tsisinline(tsvalue(p)))
     {
         return tsvalue(p)->ext.userdata;
     }
     return nullptr;
+}
+
+// Luwu Classes (rfcs/classes): the class a class-or-object value belongs to, or NULL for any other
+// value.
+static LuauClass* classofvalue(const TValue* o)
+{
+    if (ttisclass(o))
+        return classvalue(o);
+    if (ttisobject(o))
+        return objectvalue(o)->lclass;
+    return NULL;
+}
+
+static const TValue* findclassmember(lua_State* L, int idx, const char* membername, LuauClass** classdef)
+{
+    const TValue* o = index2addr(L, idx);
+    *classdef = classofvalue(o);
+    if (!*classdef)
+        luaG_runerror(L, "expected a class or object, got %s", luaT_objtypename(L, o));
+
+    return luaH_getstr((*classdef)->memberstooffset, luaS_new(L, membername));
+}
+
+void lua_newobject(lua_State* L, int idx)
+{
+    StkId cls = index2addr(L, idx);
+    if (!ttisclass(cls))
+        luaG_runerror(L, "attempt to construct a %s value", luaT_objtypename(L, cls));
+
+    int nargs = cast_int(L->top - (cls + 1));
+    api_check(L, nargs >= 0);
+
+    luaC_checkGC(L);
+    luaC_threadbarrier(L);
+
+    LuauClass* classdef = classvalue(cls);
+
+    // Construction runs here instead of through the class's `__call`. Doing it here skips the private
+    // constructor check, because the embedder is trusted. It also reads `__init` by offset rather than
+    // as a member, since `__init` is never readable by name. The object replaces the class in its stack
+    // slot. That anchors it during construction, and once the arguments are dropped it ends up exactly
+    // where the class was.
+    ptrdiff_t objectslot = savestack(L, cls);
+    LuauObject* object = luaR_newobject(L, classdef);
+    setobjectvalue(L, cls, object);
+
+    if (!classdef->hascustominit)
+    {
+        // an object argument's private fields are read with the embedder's rights, like any access it makes
+        luaR_initpodobject(L, classdef, object, cls + 1, nargs, NULL);
+        L->top = restorestack(L, objectslot) + 1;
+        return;
+    }
+
+    const TValue* init = &classdef->staticmembers[classdef->initoffset - classdef->numberofinstancemembers];
+
+    if (!lua_checkstack(L, 2 + nargs))
+        luaG_runerror(L, "stack overflow (class constructor arguments)");
+    cls = restorestack(L, objectslot);
+    setobj2s(L, L->top, init);
+    setobj2s(L, L->top + 1, cls);
+    for (int i = 0; i < nargs; i++)
+        setobj2s(L, L->top + 2 + i, cls + 1 + i);
+    L->top += 2 + nargs;
+
+    lua_call(L, 1 + nargs, 0);
+
+    L->top = restorestack(L, objectslot) + 1;
+}
+
+int lua_getmemberaccess(lua_State* L, int idx, const char* membername)
+{
+    LuauClass* classdef;
+    const TValue* offset = findclassmember(L, idx, membername, &classdef);
+    if (ttisnil(offset))
+        return LUA_MEMBERMISSING;
+
+    return (classdef->memberflags[uint32_t(nvalue(offset))] & LBC_CLASSMEMBER_PRIVATE) ? LUA_MEMBERPRIVATE : LUA_MEMBERPUBLIC;
+}
+
+int lua_ismemberconst(lua_State* L, int idx, const char* membername)
+{
+    LuauClass* classdef;
+    const TValue* offset = findclassmember(L, idx, membername, &classdef);
+    if (ttisnil(offset))
+        return 0;
+
+    uint32_t offsetnum = uint32_t(nvalue(offset));
+    // functions (static members) are always immutable
+    return offsetnum >= classdef->numberofinstancemembers || (classdef->memberflags[offsetnum] & LBC_CLASSMEMBER_CONST) != 0;
+}
+
+const char* lua_getclassname(lua_State* L, int idx)
+{
+    LuauClass* classdef = classofvalue(index2addr(L, idx));
+    return classdef ? getstr(classdef->name) : NULL;
+}
+
+int lua_classof(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    if (!ttisobject(o))
+        return 0;
+
+    luaC_threadbarrier(L);
+    setclassvalue(L, L->top, objectvalue(o)->lclass);
+    api_incr_top(L);
+    return 1;
+}
+
+int lua_classis(lua_State* L, int idx, int classidx)
+{
+    const TValue* cls = index2addr(L, classidx);
+    if (!ttisclass(cls))
+        luaG_runerror(L, "expected a class, got %s", luaT_objtypename(L, cls));
+
+    const TValue* o = index2addr(L, idx);
+    return ttisobject(o) && objectvalue(o)->lclass == classvalue(cls);
 }
 
 static const char* aux_upvalue(StkId fi, int n, TValue** val)
@@ -1741,6 +1921,27 @@ const char* lua_setupvalue(lua_State* L, int funcindex, int n)
     return name;
 }
 
+
+int lua_hascustomexecution(lua_State* L, int level)
+{
+    return luaG_hasnative(L, level);
+}
+
+int lua_incustomexecution(lua_State* L, int level)
+{
+    return luaG_isnative(L, level);
+}
+
+void lua_setpointerencodekey(lua_State* L, uint64_t a, uint64_t b, uint64_t c, uint64_t d)
+{
+    global_State* g = L->global;
+
+    g->ptrenckey[0] = a & ~1ull;
+    g->ptrenckey[1] = b | 1ull;
+    g->ptrenckey[2] = c;
+    g->ptrenckey[3] = d;
+}
+
 uintptr_t lua_encodepointer(lua_State* L, uintptr_t p)
 {
     global_State* g = L->global;
@@ -1749,7 +1950,7 @@ uintptr_t lua_encodepointer(lua_State* L, uintptr_t p)
 
 int lua_refpool(lua_State* L, int idx)
 {
-    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    LUAU_ASSERT(FFlag::LuwuManagedReferences2);
     api_check(L, idx != LUA_REGISTRYINDEX); // idx is a stack index for value
     int ref = LUA_REFNIL;
     global_State* g = L->global;
@@ -1786,7 +1987,7 @@ int lua_refpool(lua_State* L, int idx)
 
 int lua_getrefpool(lua_State* L, int ref)
 {
-    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    LUAU_ASSERT(FFlag::LuwuManagedReferences2);
     luaC_threadbarrier(L);
     ensure_stack(L, 1);
     global_State* g = L->global;
@@ -1804,7 +2005,7 @@ int lua_getrefpool(lua_State* L, int ref)
 
 void lua_unrefpool(lua_State* L, int ref)
 {
-    LUAU_ASSERT(FFlag::LuauManagedReferences2);
+    LUAU_ASSERT(FFlag::LuwuManagedReferences2);
     if (ref <= LUA_REFNIL)
         return;
 
@@ -1818,19 +2019,18 @@ void lua_unrefpool(lua_State* L, int ref)
     g->ref_free = ref;
 }
 
-int lua_ref(lua_State* L, int idx)
+static int registryref(lua_State* L, int idx, TValue* registry, int& registryfree)
 {
-    api_check(L, idx != LUA_REGISTRYINDEX); // idx is a stack index for value
+    LUAU_ASSERT(FFlag::LuauGcTraceUdata);
     int ref = LUA_REFNIL;
-    global_State* g = L->global;
     StkId p = index2addr(L, idx);
     if (!ttisnil(p))
     {
-        LuaTable* reg = hvalue(registry(L));
+        LuaTable* reg = hvalue(registry);
 
-        if (g->registryfree != 0)
+        if (registryfree != 0)
         { // reuse existing slot
-            ref = g->registryfree;
+            ref = registryfree;
         }
         else
         { // no free elements
@@ -1839,21 +2039,21 @@ int lua_ref(lua_State* L, int idx)
         }
 
         TValue* slot = luaH_setnum(L, reg, ref);
-        if (g->registryfree != 0)
-            g->registryfree = int(nvalue(slot));
+        if (registryfree != 0)
+            registryfree = int(nvalue(slot));
         setobj2t(L, slot, p);
         luaC_barriert(L, reg, p);
     }
     return ref;
 }
 
-void lua_unref(lua_State* L, int ref)
+static void registryunref(lua_State* L, int ref, TValue* registry, int& registryfree)
 {
+    LUAU_ASSERT(FFlag::LuauGcTraceUdata);
     if (ref <= LUA_REFNIL)
         return;
 
-    global_State* g = L->global;
-    LuaTable* reg = hvalue(registry(L));
+    LuaTable* reg = hvalue(registry);
 
     const TValue* slot = luaH_getnum(reg, ref);
     api_check(L, slot != luaO_nilobject);
@@ -1862,9 +2062,81 @@ void lua_unref(lua_State* L, int ref)
     TValue* mutableSlot = (TValue*)slot;
 
     // NB: no barrier needed because value isn't collectable
-    setnvalue(mutableSlot, g->registryfree);
+    setnvalue(mutableSlot, registryfree);
 
-    g->registryfree = ref;
+    registryfree = ref;
+}
+
+int lua_ref(lua_State* L, int idx)
+{
+    api_check(L, idx != LUA_REGISTRYINDEX); // idx is a stack index for value
+    if (FFlag::LuauGcTraceUdata)
+    {
+        global_State* g = L->global;
+        int registryfree = g->registryfree;
+        int ref = registryref(L, idx, registry(L), registryfree);
+        g->registryfree = registryfree;
+        return ref;
+    }
+    else
+    {
+        int ref = LUA_REFNIL;
+        global_State* g = L->global;
+        StkId p = index2addr(L, idx);
+        if (!ttisnil(p))
+        {
+            LuaTable* reg = hvalue(registry(L));
+
+            if (g->registryfree != 0)
+            { // reuse existing slot
+                ref = g->registryfree;
+            }
+            else
+            { // no free elements
+                ref = luaH_getn(reg);
+                ref++; // create new reference
+            }
+
+            TValue* slot = luaH_setnum(L, reg, ref);
+            if (g->registryfree != 0)
+                g->registryfree = int(nvalue(slot));
+            setobj2t(L, slot, p);
+            luaC_barriert(L, reg, p);
+        }
+        return ref;
+    }
+}
+
+int lua_unref(lua_State* L, int ref)
+{
+    if (FFlag::LuauGcTraceUdata)
+    {
+        global_State* g = L->global;
+        int registryfree = g->registryfree;
+        registryunref(L, ref, registry(L), registryfree);
+        g->registryfree = registryfree;
+        return LUA_NOREF;
+    }
+    else
+    {
+        if (ref <= LUA_REFNIL)
+            return LUA_NOREF;
+
+        global_State* g = L->global;
+        LuaTable* reg = hvalue(registry(L));
+
+        const TValue* slot = luaH_getnum(reg, ref);
+        api_check(L, slot != luaO_nilobject);
+
+        // similar to how 'luaH_setnum' makes non-nil slot value mutable
+        TValue* mutableSlot = (TValue*)slot;
+
+        // NB: no barrier needed because value isn't collectable
+        setnvalue(mutableSlot, g->registryfree);
+
+        g->registryfree = ref;
+        return LUA_NOREF;
+    }
 }
 
 void lua_setuserdatatag(lua_State* L, int idx, int tag)
@@ -1885,6 +2157,45 @@ lua_Destructor lua_getuserdatadtor(lua_State* L, int tag)
 {
     api_check(L, unsigned(tag) < LUA_UTAG_LIMIT);
     return L->global->udatagc[tag];
+}
+
+void lua_setuserdatamark(lua_State* L, int tag, lua_UserdataMark markfn)
+{
+    LUAU_ASSERT(FFlag::LuauGcTraceUdata);
+    api_check(L, unsigned(tag) < LUA_UTAG_LIMIT);
+    L->global->udatamark[tag] = markfn;
+}
+
+void lua_setembeddergc(lua_State* L, lua_EmbedderGc fn)
+{
+    LUAU_ASSERT(FFlag::LuauGcTraceUdata);
+    L->global->embeddergc = fn;
+}
+
+int lua_weakref(lua_State* L, int idx)
+{
+    LUAU_ASSERT(FFlag::LuauGcTraceUdata);
+    global_State* g = L->global;
+    return registryref(L, idx, &g->weakregistry, g->weakregistryfree);
+}
+
+int lua_weakunref(lua_State* L, int ref)
+{
+    LUAU_ASSERT(FFlag::LuauGcTraceUdata);
+    global_State* g = L->global;
+    registryunref(L, ref, &g->weakregistry, g->weakregistryfree);
+    return LUA_NOREF;
+}
+
+int lua_getweakref(lua_State* L, int ref)
+{
+    LUAU_ASSERT(FFlag::LuauGcTraceUdata);
+    luaC_threadbarrier(L);
+    ensure_stack(L, 1);
+    LuaTable* wr = hvalue(&L->global->weakregistry);
+    setobj2s(L, L->top, luaH_getnum(wr, ref));
+    api_incr_top(L);
+    return ttype(L->top - 1);
 }
 
 void lua_setuserdatametatable(lua_State* L, int tag)
@@ -2048,6 +2359,11 @@ size_t lua_totalbytes(lua_State* L, int category)
     return category < 0 ? L->global->totalbytes : L->global->memcatbytes[category];
 }
 
+int64_t lua_allocationrate(lua_State* L)
+{
+    return luaC_allocationrate(L);
+}
+
 lua_Alloc lua_getallocf(lua_State* L, void** ud)
 {
     lua_Alloc f = L->global->frealloc;
@@ -2080,37 +2396,59 @@ void lua_registeruserdatadirectfieldget(lua_State* L, int tag, const char* field
 void lua_userdatadirectfield_setnumber(void* result, double n)
 {
     LUAU_ASSERT(FFlag::LuauDirectFieldGet);
-    setnvalue(static_cast<TValue*>(result), n);
+    TValue* slot = LUA_VECTOR_DOUBLE ? static_cast<DirectFieldResult*>(result)->slot : static_cast<TValue*>(result);
+    setnvalue(slot, n);
 }
 
 #if LUA_VECTOR_SIZE == 4
-void lua_userdatadirectfield_setvector(void* result, float x, float y, float z, float w)
+void lua_userdatadirectfield_setvector(void* result, LUA_VECTOR_TYPE x, LUA_VECTOR_TYPE y, LUA_VECTOR_TYPE z, LUA_VECTOR_TYPE w)
 {
     LUAU_ASSERT(FFlag::LuauDirectFieldGet);
-    setvvalue(static_cast<TValue*>(result), x, y, z, w);
+
+    if (LUA_VECTOR_DOUBLE == 1)
+    {
+        DirectFieldResult* dfr = static_cast<DirectFieldResult*>(result);
+        setvvalue(dfr->L, dfr->slot, x, y, z, w);
+    }
+    else
+    {
+        setvvalue((lua_State*)nullptr, static_cast<TValue*>(result), x, y, z, w);
+    }
 }
 #else
-void lua_userdatadirectfield_setvector(void* result, float x, float y, float z)
+void lua_userdatadirectfield_setvector(void* result, LUA_VECTOR_TYPE x, LUA_VECTOR_TYPE y, LUA_VECTOR_TYPE z)
 {
     LUAU_ASSERT(FFlag::LuauDirectFieldGet);
-    setvvalue(static_cast<TValue*>(result), x, y, z, 0);
+
+    if (LUA_VECTOR_DOUBLE == 1)
+    {
+        DirectFieldResult* dfr = static_cast<DirectFieldResult*>(result);
+        setvvalue(dfr->L, dfr->slot, x, y, z, 0);
+    }
+    else
+    {
+        setvvalue((lua_State*)nullptr, static_cast<TValue*>(result), x, y, z, 0);
+    }
 }
 #endif
 
 void lua_userdatadirectfield_setboolean(void* result, int b)
 {
     LUAU_ASSERT(FFlag::LuauDirectFieldGet);
-    setbvalue(static_cast<TValue*>(result), b);
+    TValue* slot = LUA_VECTOR_DOUBLE ? static_cast<DirectFieldResult*>(result)->slot : static_cast<TValue*>(result);
+    setbvalue(slot, b);
 }
 
 void lua_userdatadirectfield_setinteger64(void* result, int64_t n)
 {
     LUAU_ASSERT(FFlag::LuauDirectFieldGet);
-    setlvalue(static_cast<TValue*>(result), n);
+    TValue* slot = LUA_VECTOR_DOUBLE ? static_cast<DirectFieldResult*>(result)->slot : static_cast<TValue*>(result);
+    setlvalue(slot, n);
 }
 
 void lua_userdatadirectfield_setnil(void* result)
 {
     LUAU_ASSERT(FFlag::LuauDirectFieldGet);
-    setnilvalue(static_cast<TValue*>(result));
+    TValue* slot = LUA_VECTOR_DOUBLE ? static_cast<DirectFieldResult*>(result)->slot : static_cast<TValue*>(result);
+    setnilvalue(slot);
 }

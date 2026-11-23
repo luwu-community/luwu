@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Compiler.h"
@@ -21,7 +21,8 @@ struct Constant
         Type_Boolean,
         Type_Number,
         Type_Integer,
-        Type_Vector,
+        Type_Vectorf,
+        Type_Vectord,
         Type_String,
         Type_Table,
     };
@@ -35,7 +36,8 @@ struct Constant
         bool valueBoolean;
         double valueNumber;
         int64_t valueInteger64;
-        float valueVector[4];
+        float valueVectorf[4];
+        double valueVectord[4];
         size_t valueTable;                 // index pointing to constant table entry with table's constant properties
         const char* valueString = nullptr; // length stored in stringLength
     };
@@ -87,6 +89,7 @@ void foldConstants(
     DenseHashMap<AstLocal*, Constant>& locals,
     const DenseHashMap<AstExprCall*, int>* builtins,
     bool foldLibraryK,
+    bool vectorDoublePrecision,
     LibraryMemberConstantCallback libraryMemberConstantCb,
     AstNode* root,
     AstNameTable& stringTable,

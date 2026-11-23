@@ -1,4 +1,4 @@
--- This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 print("testing asserts") -- someone has to
 
 if pcall(assert, false) or pcall(function() assert(false) end) then

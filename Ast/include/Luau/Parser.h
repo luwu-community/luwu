@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Ast.h"
@@ -49,6 +49,17 @@ private:
     std::vector<T>& storage;
     size_t offset;
     size_t size_;
+};
+
+// Luwu: a piece of Luwu-only syntax, named the way error messages name it.
+struct LuwuFeature
+{
+    // As it reads in the middle of a sentence: "classes", "'do' expressions"
+    const char* name;
+    // Whether `name` takes "are" rather than "is"
+    bool plural;
+    // The FFlag that turns it on
+    const char* flag;
 };
 
 class Parser
@@ -170,6 +181,9 @@ private:
     // attributes ::= {attribute}
     AstArray<AstAttr*> parseAttributes(TempVector<CstAttrList*>* cstAttrLists = nullptr);
 
+    // `first` followed by `second`, for attributes written on both sides of an access specifier.
+    AstArray<AstAttr*> concatAttributes(const AstArray<AstAttr*>& first, const AstArray<AstAttr*>& second);
+
     // attributes local function Name funcbody
     // attributes function funcname funcbody
     // attributes `declare function' Name`(' [parlist] `)' [`:` Type]
@@ -190,9 +204,21 @@ private:
     AstStat* parseReturn();
 
     // type Name `=' Type
-    AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition);
+    AstStat* parseTypeAlias(const Location& start, bool exported, Position typeKeywordPosition, const Location& typeKeywordLocation);
 
-    AstStat* parseClassStat(const Location& start, bool exported);
+    AstStat* parseClassStat(const Location& start, bool exported, const Location& classKeywordLocation);
+
+    // True when the class body is looking at something that reads as a statement rather than a class
+    // member, which means the class was never closed. See its definition.
+    bool classBodyLooksLikeStatement();
+
+    // Luwu Classes (rfcs/classes): parse a class's primary constructor parameter list, e.g. the
+    // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`.
+    AstClassPrimaryConstructor* parseClassPrimaryConstructor(const std::optional<Location>& qualifierLocation, AstClassMemberVisibility visibility);
+
+    // Brings a primary constructor's parameters into scope; the caller takes a saveLocals() offset
+    // first and passes it to restoreLocals once the expression that needed them has been parsed.
+    void pushClassPrimaryConstructorParams(AstClassPrimaryConstructor* primaryConstructor);
 
     // type function Name ... end
     AstStat* parseTypeFunction(const Location& start, bool exported, Position typeKeywordPosition);
@@ -229,7 +255,17 @@ private:
         const Name* localName,
         const AstArray<AstAttr*>& attributes,
         const bool isConst = false,
-        TempVector<CstAttrList*>* cstAttrLists = nullptr
+        TempVector<CstAttrList*>* cstAttrLists = nullptr,
+        // Used only for the closing 'end' indentation-mismatch diagnostic; defaults to
+        // `matchFunction` itself. Callers that need that diagnostic to report a different column
+        // than the true 'function' keyword (e.g. 'local function'/'const function' aligning it to
+        // 'local'/'const' instead) pass a separate lexeme here rather than mutating `matchFunction`,
+        // since `matchFunction.location` is also used as the real, unadjusted 'function' keyword
+        // location for the resulting AstExprFunction and its CST node.
+        const Lexeme* endMatchLexeme = nullptr,
+        // Luwu Classes (rfcs/classes): set for a class function, whose first parameter, when named
+        // `self`, is bound const.
+        bool isClassFunction = false
     );
 
     // explist ::= {exp `,'} exp
@@ -367,6 +403,7 @@ private:
 
     // Name
     std::optional<Name> parseNameOpt(const char* context = nullptr);
+    std::optional<Name> parseNameBeforeDeclaration(const char* context);
     Name parseName(const char* context = nullptr);
     Name parseIndexName(const char* context, const Position& previous);
 
@@ -401,6 +438,22 @@ private:
     // check that parser is at lexeme/symbol, move to next lexeme/symbol on success, report failure and continue on failure
     bool expectAndConsume(char value, const char* context = nullptr);
     bool expectAndConsume(Lexeme::Type type, const char* context = nullptr);
+    bool consumeExpected(Lexeme::Type type, const char* context);
+    AstTypeError* missingTypeHere();
+    bool continuesOnSameLine();
+    bool startsConstDeclaration();
+    bool startsTypeAliasDeclaration();
+    bool nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName));
+    bool statementReportedError();
+    AstExpr* unfinishedIfElseExpr(
+        const Location& start,
+        AstExpr* condition,
+        size_t errorsBefore,
+        const char* keyword,
+        bool hasThen,
+        AstExpr* trueExpr = nullptr,
+        std::optional<Location> thenLocation = std::nullopt
+    );
     bool expectAndConsumeFailWithLookahead(Lexeme::Type type, const char* context);
     void expectAndConsumeFail(Lexeme::Type type, const char* context);
 
@@ -449,6 +502,14 @@ private:
         ...
     ) LUAU_PRINTF_ATTR(5, 6);
     AstExprError* reportExprError(const Location& location, const AstArray<AstExpr*>& expressions, const char* format, ...) LUAU_PRINTF_ATTR(4, 5);
+
+    // Luwu: reports `feature` where it can't be used, in a Luau module or with its FFlag off (`enabled`). Returns
+    // whether it can be used. The syntax is parsed either way, so the rest of the module still checks.
+    bool checkLuwuFeature(const Location& location, const LuwuFeature& feature, bool enabled);
+    // Luwu: the statement for a Luwu-only one that can't be used, after reporting why (see checkLuwuFeature).
+    AstStatError* reportLuwuFeatureStat(const Location& location, const AstArray<AstExpr*>& expressions, const LuwuFeature& feature);
+    AstStatClass* getMatchingClass(AstExpr* expr);
+    bool isExprLValue(AstExpr* expr);
     AstExprError* reportLValueError(AstExpr* expr);
     AstTypeError* reportTypeError(const Location& location, const AstArray<AstType*>& types, const char* format, ...) LUAU_PRINTF_ATTR(4, 5);
     // `parseErrorLocation` is associated with the parser error
@@ -537,6 +598,9 @@ private:
 
     bool hotcommentHeader = true;
 
+    // Luwu: where the statement being parsed starts (see nextLineStartsStatement)
+    Position statementStart{0, 0};
+
     unsigned int recursionCounter;
 
     AstName nameSelf;
@@ -551,11 +615,15 @@ private:
 
     DenseHashMap<AstName, AstLocal*> localMap;
     std::vector<AstLocal*> localStack;
-    DenseHashSet<AstName> classesWithinModule{{}};
+    DenseHashMap<AstName, AstStatClass*> classesWithinModule{{}};
 
     std::vector<ParseError> parseErrors;
 
     std::vector<unsigned int> matchRecoveryStopOnToken;
+
+    // Luwu: the line of the last "Incomplete statement" error. A word still being typed (`n o` on the way to `n or`)
+    // splits into several statements on one line, and only the first is reported.
+    std::optional<unsigned> incompleteStatementLine;
 
     DenseHashMap<AstName, Location> declaredExportBindings;
     bool hasModuleReturn = false;
@@ -576,6 +644,7 @@ private:
     std::vector<AstTypeOrPack> scratchTypeOrPack;
     std::vector<AstDeclaredExternTypeProperty> scratchDeclaredClassProps;
     std::vector<AstClassMember> scratchClassDeclarations;
+    std::vector<AstClassPrimaryConstructorParamQualifiers> scratchClassParamQualifiers;
     std::vector<AstExprTable::Item> scratchItem;
     std::vector<CstExprTable::Item> scratchCstItem;
     std::vector<AstArgumentName> scratchArgName;

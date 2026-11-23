@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/Module.h"
 
 #include "Luau/Clone.h"
@@ -295,7 +295,9 @@ struct ClonePublicInterface : Substitution
 
         TypeId type = cloneType(tf.type);
 
-        return TypeFun{std::move(typeParams), std::move(typePackParams), type, tf.definitionLocation};
+        TypeFun result{std::move(typeParams), std::move(typePackParams), type, tf.definitionLocation};
+        result.definitionModuleName = tf.definitionModuleName;
+        return result;
     }
 };
 
@@ -330,6 +332,11 @@ void Module::clonePublicInterface(NotNull<BuiltinTypes> builtinTypes, InternalEr
     for (auto& [name, tf] : moduleScope->exportedTypeBindings)
     {
         tf = clonePublicInterface.cloneTypeFun(tf);
+
+        // Luwu: an exported type names the module it's declared in, so a copy in another module (an import, a forwarded
+        // or destructured type) still says which file definitionLocation is in. Upstream doesn't record it.
+        if (!tf.definitionModuleName)
+            tf.definitionModuleName = this->name;
     }
 
     for (auto& [name, ty] : declaredGlobals)
@@ -355,6 +362,10 @@ void Module::clonePublicInterface(NotNull<BuiltinTypes> builtinTypes, InternalEr
     // Copy external stuff over to Module itself
     this->returnType = moduleScope->returnType;
     this->exportedTypeBindings = moduleScope->exportedTypeBindings;
+
+    // Luwu forwarded module types: these are already the required module's public interface, so they aren't cloned
+    for (const auto& [name, tf] : forwardedTypeBindings)
+        this->exportedTypeBindings.try_emplace(name, tf);
 }
 
 bool Module::hasModuleScope() const
@@ -456,14 +467,18 @@ void synthesizeExportReturn(NotNull<BuiltinTypes> builtinTypes, NotNull<Module> 
                 props[exprLocal->local->name.value].location = exprLocal->local->location;
             }
         }
-        else if (FFlag::DebugLuauUserDefinedClasses)
+        else if (FFlag::LuwuClasses)
         {
             if (AstStatClass* classStat = statement->as<AstStatClass>())
             {
                 if (!classStat->exported)
                     continue;
 
-                props[classStat->name->name.value] = Property::readonly(lookupExportedBindingType(classStat->name));
+                TypeId ty = builtinTypes->errorType;
+                if (auto found = moduleScope->lookup(Symbol{classStat->name->name}))
+                    ty = follow(*found);
+
+                props[classStat->name->name.value] = Property::readonly(ty);
                 props[classStat->name->name.value].location = classStat->name->location;
             }
         }
@@ -472,7 +487,9 @@ void synthesizeExportReturn(NotNull<BuiltinTypes> builtinTypes, NotNull<Module> 
     if (props.empty())
         return;
 
-    TypeId exports = module->internalTypes->addType(TableType{props, std::nullopt, moduleScope->level, TableState::Sealed});
+    TableType tbl{props, std::nullopt, moduleScope->level, TableState::Sealed};
+    tbl.definitionModuleName = module->name;
+    TypeId exports = module->internalTypes->addType(std::move(tbl));
     moduleScope->returnType = module->internalTypes->addTypePack({exports});
 }
 

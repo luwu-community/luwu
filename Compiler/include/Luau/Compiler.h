@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/ParseOptions.h"
@@ -54,6 +54,10 @@ struct CompileOptions
     // alternative vector type name for type tables, in addition to default type 'vector'
     const char* vectorType = nullptr;
 
+    // 0 - 32-bit float vector components
+    // 1 - 64-bit double vector components
+    int vectorPrecision;
+
     // null-terminated array of globals that are mutable; disables the import optimization for fields accessed through these
     const char* const* mutableGlobals = nullptr;
 
@@ -68,6 +72,9 @@ struct CompileOptions
 
     // null-terminated array of library functions that should not be compiled into a built-in fastcall ("name" "lib.name")
     const char* const* disabledBuiltins = nullptr;
+
+    // Luwu: the language the source is written in, a Luau::Language (see lua_CompileOptions::language)
+    int language = 0;
 };
 
 class CompileError : public std::exception
@@ -105,6 +112,7 @@ void setCompileConstantBoolean(CompileConstant* constant, bool b);
 void setCompileConstantNumber(CompileConstant* constant, double n);
 void setCompileConstantInteger64(CompileConstant* constant, int64_t l);
 void setCompileConstantVector(CompileConstant* constant, float x, float y, float z, float w);
+void setCompileConstantVectord(CompileConstant* constant, double x, double y, double z, double w);
 void setCompileConstantString(CompileConstant* constant, const char* s, size_t l);
 
 } // namespace Luau

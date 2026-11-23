@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lgc.h"
 
@@ -12,6 +12,7 @@
 #include "ludata.h"
 #include "lbuffer.h"
 #include "lclass.h"
+#include "lvector.h"
 
 #include <string.h>
 
@@ -19,7 +20,10 @@ LUAU_FASTFLAG(LuauUdataDirectAccess6)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAGVARIABLE(LuauUdataMetatablePinned)
 LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcTableStepFix, false)
+LUAU_FASTFLAGVARIABLE(LuauGcTraceUdata)
+LUAU_FLAGVERSION(LuauGcTraceUdata, 2)
 LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcMarkUdataAccess, false)
+LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 
 /*
  * Luau uses an incremental non-generational non-moving mark&sweep garbage collector.
@@ -102,12 +106,7 @@ LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcMarkUdataAccess, false)
  * all objects are marked, we traverse all weak tables (that are linked into special weak table lists using `gclist` during marking),
  * and remove all entries that have white keys or values. If keys or values are strong, they are marked normally.
  *
- * The simplified scheme described above isn't fully accurate because of threads, upvalues and strings.
- *
- * Strings are semantically black (they are initially white, and when the mark stage reaches a string, it changes its color and never
- * touches the object again), but they are technically marked as gray - the black bit is never set on a string object. This behavior
- * is inherited from Lua 5.1 GC, but doesn't have a clear rationale - effectively, strings are marked as gray but are never part of
- * a gray list.
+ * The simplified scheme described above isn't fully accurate because of threads and upvalues.
  *
  * Threads are hard to deal with because for them to fit into the white-gray-black scheme, writes to thread stacks need to have barriers
  * that turn the thread from black (already scanned) to gray - but this is very expensive because stack writes are very common. To
@@ -140,7 +139,7 @@ LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcMarkUdataAccess, false)
 #define white2gray(x) reset2bits((x)->gch.marked, WHITE0BIT, WHITE1BIT)
 #define black2gray(x) resetbit((x)->gch.marked, BLACKBIT)
 
-#define stringmark(s) reset2bits((s)->marked, WHITE0BIT, WHITE1BIT)
+#define stringmark(s) (reset2bits((s)->marked, WHITE0BIT, WHITE1BIT), l_setbit((s)->marked, BLACKBIT))
 
 #define markvalue(g, o) \
     { \
@@ -247,6 +246,7 @@ static void reallymarkobject(global_State* g, GCObject* o)
     {
     case LUA_TSTRING:
     {
+        gray2black(o); // strings are never gray
         return;
     }
     case LUA_THEAPINTEGER:
@@ -256,11 +256,25 @@ static void reallymarkobject(global_State* g, GCObject* o)
     }
     case LUA_TUSERDATA:
     {
-        LuaTable* mt = gco2u(o)->metatable;
-        gray2black(o); // udata are never gray
-        if (mt)
-            markobject(g, mt);
-        return;
+        if (FFlag::LuauGcTraceUdata)
+        {
+            gray2black(o); // udata are never gray
+            Udata* u = gco2u(o);
+            if (u->tag < LUA_UTAG_LIMIT)
+                if (lua_UserdataMark markfn = g->udatamark[u->tag])
+                    markfn(g->mainthread, u->data);
+            if (LuaTable* mt = u->metatable)
+                markobject(g, mt);
+            return;
+        }
+        else
+        {
+            LuaTable* mt = gco2u(o)->metatable;
+            gray2black(o); // udata are never gray
+            if (mt)
+                markobject(g, mt);
+            return;
+        }
     }
     case LUA_TUPVAL:
     {
@@ -287,6 +301,11 @@ static void reallymarkobject(global_State* g, GCObject* o)
         gco2th(o)->gclist = g->gray;
         g->gray = o;
         break;
+    }
+    case LUA_TVECTOR:
+    {
+        gray2black(o); // vectors are never gray
+        return;
     }
     case LUA_TBUFFER:
     {
@@ -406,6 +425,12 @@ static void traverseproto(global_State* g, Proto* f)
 
     if (f->deoptimized)
         markobject(g, f->deoptimized);
+
+    // Luwu Classes (rfcs/classes): keep the owning class alive while its method proto is alive.
+    // Private-access authorization compares this pointer, and CHECKSELFCLASS's LBC_SELFCLASS_OWNER form
+    // uses it as the class (its error path reads the class name).
+    if (f->ownerclass)
+        markobject(g, f->ownerclass);
 }
 
 static void traverseclosure(global_State* g, Closure* cl)
@@ -442,24 +467,28 @@ static void traversestack(global_State* g, lua_State* l)
     }
 }
 
-static void traverseclass(global_State* g, LuauClass* classobject)
+static void traverseclass(global_State* g, LuauClass* classdef)
 {
-    markobject(g, classobject->name);
-    markobject(g, classobject->memberstooffset);
-    for (uint32_t i = 0; i < classobject->numberofallmembers; i++)
-        markobject(g, classobject->offsettomember[i]);
-    for (uint32_t i = 0; i < classobject->numberofallmembers - classobject->numberofinstancemembers; i++)
-        markvalue(g, &classobject->staticmembers[i]);
-    markobject(g, classobject->metatable);
-    if (classobject->instancemetatable)
-        markobject(g, classobject->instancemetatable);
+    markobject(g, classdef->name);
+    markobject(g, classdef->memberstooffset);
+    for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+        if (classdef->offsettomember[i])
+            markobject(g, classdef->offsettomember[i]);
+    for (uint32_t i = 0; i < classdef->numberofallmembers - classdef->numberofinstancemembers; i++)
+        markvalue(g, &classdef->staticmembers[i]);
+    if (classdef->memberdefaults)
+        for (uint32_t i = 0; i < classdef->numberofinstancemembers; i++)
+            markvalue(g, &classdef->memberdefaults[i]);
+    markobject(g, classdef->metatable);
+    if (classdef->instancemetatable)
+        markobject(g, classdef->instancemetatable);
 }
 
-static void traverseobject(global_State* g, LuauObject* classinst)
+static void traverseobject(global_State* g, LuauObject* object)
 {
-    markobject(g, classinst->lclass);
-    for (uint32_t i = 0; i < classinst->numberofmembers; i++)
-        markvalue(g, &classinst->members[i]);
+    markobject(g, object->lclass);
+    for (uint32_t i = 0; i < object->numberofmembers; i++)
+        markvalue(g, &object->members[i]);
 }
 
 static void clearstack(lua_State* l)
@@ -580,30 +609,35 @@ static size_t propagatemark(global_State* g)
     }
     case LUA_TCLASS:
     {
-        LuauClass* classobject = gco2class(o);
-        g->gray = classobject->gclist;
-        traverseclass(g, classobject);
-        // We've traversed the "object" itself ...
-        return sizeof(LuauClass) +
-               // ... plus the method closures, each a `TValue` wide ...
-               ((classobject->numberofallmembers - classobject->numberofinstancemembers) * sizeof(TValue)) +
-               // ... plus a string pointer for each method or property, each a pointer wide.
-               (classobject->numberofallmembers * sizeof(TString*));
+        LuauClass* classdef = gco2class(o);
+        g->gray = classdef->gclist;
+        traverseclass(g, classdef);
+        return luaR_classsize(classdef);
     }
     case LUA_TOBJECT:
     {
-        LuauObject* classinst = gco2object(o);
-        g->gray = classinst->gclist;
-        traverseobject(g, classinst);
-        // We've traversed the instance ...
-        return sizeof(LuauObject) +
-               // ... plus all of the instance fields.
-               classinst->numberofmembers * sizeof(TValue);
+        LuauObject* object = gco2object(o);
+        g->gray = object->gclist;
+        traverseobject(g, object);
+        // We've traversed the instance, header plus its inline fields (one allocation, see
+        // luaR_objectsize).
+        return luaR_objectsize(object->numberofmembers);
     }
     default:
         LUAU_ASSERT(0);
         return 0;
     }
+}
+
+static void embeddermarkref(lua_State* L, int ref)
+{
+    LUAU_ASSERT(FFlag::LuauGcTraceUdata);
+    if (ref <= LUA_REFNIL)
+        return;
+    LuaTable* wt = hvalue(&L->global->weakregistry);
+    const TValue* slot = luaH_getnum(wt, ref);
+    if (iscollectable(slot) && iswhite(gcvalue(slot)))
+        reallymarkobject(L->global, gcvalue(slot));
 }
 
 static size_t propagateall(global_State* g)
@@ -741,6 +775,9 @@ static void freeobj(lua_State* L, GCObject* o, lua_Page* page)
     case LUA_TUSERDATA:
         luaU_freeudata(L, gco2u(o), page);
         break;
+    case LUA_TVECTOR:
+        luaVec_freevector(L, gco2vec(o), page);
+        break;
     case LUA_TBUFFER:
         luaB_freebuffer(L, gco2buf(o), page);
         break;
@@ -870,6 +907,13 @@ static void markroot(lua_State* L)
     for (int i = 0; i < g->ref_size; i++) {
         if (g->ref_array[i].tt != LUA_TNONE)
             markvalue(g, &g->ref_array[i]);
+    }
+
+    if (FFlag::LuauGcTraceUdata)
+    {
+        markvalue(g, &g->weakregistry);
+        if (g->embeddergc)
+            g->embeddergc(g->mainthread, nullptr);
     }
 
     if (FFlag::LuauUdataDirectAccess6)
@@ -1015,6 +1059,22 @@ static size_t atomic(lua_State* L)
 
 #ifdef LUAI_GCMETRICS
     g->gcmetrics.currcycle.atomictimegray += recordGcDeltaTime(currts);
+#endif
+
+    // fixed-point algorithm for embedder references
+    if (FFlag::LuauGcTraceUdata && g->embeddergc)
+    {
+        g->embeddergc(g->mainthread, embeddermarkref);
+        while (g->gray)
+        {
+            work += propagateall(g);
+            g->embeddergc(g->mainthread, embeddermarkref);
+        }
+    }
+
+#ifdef LUAI_GCMETRICS
+    if (FFlag::LuauGcTraceUdata)
+        g->gcmetrics.currcycle.atomictimeembedder += recordGcDeltaTime(currts);
 #endif
 
     // remove collected objects from weak tables
@@ -1242,7 +1302,7 @@ size_t luaC_step(lua_State* L, bool assist)
 {
     global_State* g = L->global;
 
-    int lim = g->gcstepsize * g->gcstepmul / 100; // how much to work
+    size_t lim = g->gcstepsize * g->gcstepmul / 100; // how much to work
     LUAU_ASSERT(g->totalbytes >= g->GCthreshold);
     size_t debt = g->totalbytes - g->GCthreshold;
 
@@ -1258,6 +1318,15 @@ size_t luaC_step(lua_State* L, bool assist)
 
     double lasttimestamp = lua_clock();
 #endif
+
+    // if allocations outpace the GC to require an assist, adjust step size to cover the difference
+    if ((FFlag::LuauBackedgeHeapCheck || LUA_VECTOR_DOUBLE == 1) && assist)
+    {
+        size_t need = debt * g->gcstepmul / 100;
+
+        if (need > lim)
+            lim = need;
+    }
 
     int lastgcstate = g->gcstate;
 

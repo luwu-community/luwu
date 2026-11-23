@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/CodeGenOptions.h"
 #include "lua.h"
 #include "lualib.h"
@@ -13,6 +13,8 @@
 #include "Luau/Flags.h"
 
 #include <memory>
+
+#include <stdlib.h>
 
 #ifdef _WIN32
 #include <io.h>
@@ -371,6 +373,7 @@ static bool compileFile(
         Luau::AstNameTable names(allocator);
         Luau::ParseOptions parseOptions;
         parseOptions.storeCstData = globalOptions.parseCst;
+        parseOptions.language = languageOfPath(name);
         Luau::ParseResult result = Luau::Parser::parse(source->c_str(), source->size(), names, allocator, parseOptions);
 
         if (!result.errors.empty())

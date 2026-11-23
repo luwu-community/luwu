@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lclass.h"
 #include "lvm.h"
@@ -7,6 +7,7 @@
 #include "ltable.h"
 #include "lfunc.h"
 #include "lstring.h"
+#include "lvector.h"
 #include "lgc.h"
 #include "lmem.h"
 #include "ldebug.h"
@@ -18,14 +19,17 @@
 #include <string.h>
 LUAU_FASTFLAG(LuauInteger)
 
+LUAU_FASTFLAG(LuwuClasses)
+
 LUAU_FASTFLAGVARIABLE(LuauDirectFieldGet)
 LUAU_FLAGVERSION(LuauDirectFieldGet, 3)
 
 LUAU_FASTFLAGVARIABLE(LuauCIProto)
-LUAU_FASTFLAGVARIABLE(DebugLuauUserDefinedClassesRuntime)
 LUAU_FASTFLAGVARIABLE(LuauCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauYieldIter2)
 LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
+LUAU_FASTFLAGVARIABLE(LuauBackedgeHeapCheck)
+LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
 
 // Disable c99-designator to avoid the warning in computed goto dispatch table
 #ifdef __clang__
@@ -66,6 +70,17 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
         base = L->base; \
     }
 
+// To avoid VM_PROTECT(luaC_checkGC(L)) overhead for cases where GC step is not needed
+#define VM_CHECK_GC(x) \
+    { \
+        if (luaC_needsGC(L)) \
+        { \
+            L->ci->savedpc = pc; \
+            luaC_step(L, true); \
+            base = L->base; \
+        } \
+    }
+
 // Some external functions can cause an error, but never reallocate the stack; for these, VM_PROTECT_PC() is
 // a cheaper version of VM_PROTECT that can be called before the external call.
 #define VM_PROTECT_PC() L->ci->savedpc = pc
@@ -78,6 +93,13 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
 
 #define VM_PATCH_OP(pc, op) *const_cast<Instruction*>(pc) = (uint8_t(op) | (0xffffff00u & *(pc)))
 #define VM_PATCH_C(pc, slot) *const_cast<Instruction*>(pc) = ((uint8_t(slot) << 24) | (0x00ffffffu & *(pc)))
+// Luwu Classes (rfcs/classes): caches a member offset in C, see LUAR_MAX_CACHED_MEMBER_SLOT
+#define VM_PATCH_MEMBER_SLOT(pc, offset) \
+    do \
+    { \
+        if ((offset) <= LUAR_MAX_CACHED_MEMBER_SLOT) \
+            VM_PATCH_C(pc, offset); \
+    } while (0)
 #define VM_PATCH_E(pc, slot) *const_cast<Instruction*>(pc) = ((uint32_t(slot) << 8) | (0x000000ffu & *(pc)))
 #define VM_PATCH_AUX(pc, slot) *const_cast<Instruction*>(pc) = uint32_t(slot)
 #define VM_PATCH_AUX_SLOT(pc, k, slot) *const_cast<Instruction*>(pc) = ((k) | (uint32_t(slot) << 16))
@@ -147,7 +169,9 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
         VM_DISPATCH_OP(LOP_FASTCALL2), VM_DISPATCH_OP(LOP_FASTCALL2K), VM_DISPATCH_OP(LOP_FORGPREP), VM_DISPATCH_OP(LOP_JUMPXEQKNIL), \
         VM_DISPATCH_OP(LOP_JUMPXEQKB), VM_DISPATCH_OP(LOP_JUMPXEQKN), VM_DISPATCH_OP(LOP_JUMPXEQKS), VM_DISPATCH_OP(LOP_IDIV), \
         VM_DISPATCH_OP(LOP_IDIVK), VM_DISPATCH_OP(LOP_GETUDATAKS), VM_DISPATCH_OP(LOP_SETUDATAKS), VM_DISPATCH_OP(LOP_NAMECALLUDATA), \
-        VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), 
+        VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
+        VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
+        VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -585,10 +609,17 @@ reentry:
                             int slot = LUAU_INSN_C(insn) & dispatch->nodemask8;
                             LuaNode* n = &dispatch->node[slot];
 
+#if LUA_VECTOR_DOUBLE == 1
+                            DirectFieldResult dfr{L, ra};
+                            void* resultarg = &dfr;
+#else
+                            void* resultarg = ra;
+#endif
+
                             if (LUAU_LIKELY(ttisstring(gkey(n)) && tsvalue(gkey(n)) == tsvalue(kv) && !ttisnil(gval(n))))
                             {
                                 lua_UserdataDirectFieldGet fn = reinterpret_cast<lua_UserdataDirectFieldGet>(pvalue(gval(n)));
-                                fn(uvalue(rb)->data, ra);
+                                fn(L, uvalue(rb)->data, resultarg);
                                 VM_NEXT();
                             }
 
@@ -598,7 +629,7 @@ reentry:
                                 // cache slot for future lookups
                                 VM_PATCH_C(pc - 2, gval2slot(dispatch, fptr));
                                 lua_UserdataDirectFieldGet fn = reinterpret_cast<lua_UserdataDirectFieldGet>(pvalue(fptr));
-                                fn(uvalue(rb)->data, ra);
+                                fn(L, uvalue(rb)->data, resultarg);
                                 VM_NEXT();
                             }
                         }
@@ -638,7 +669,7 @@ reentry:
 
                         if (unsigned(ic) < LUA_VECTOR_SIZE && name[1] == '\0')
                         {
-                            const float* v = vvalue(rb); // silences ubsan when indexing v[]
+                            const LUA_VECTOR_TYPE* v = vvalue(rb); // silences ubsan when indexing v[]
                             setnvalue(ra, v[ic]);
                             VM_NEXT();
                         }
@@ -664,7 +695,7 @@ reentry:
 
                         // fall through to slow path
                     }
-                    else if (LUAU_UNLIKELY(FFlag::DebugLuauUserDefinedClassesRuntime && ttisobject(rb)))
+                    else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisobject(rb)))
                     {
                         // fast-path: the "hash line" is an offset that points
                         // to the class member with the same name.
@@ -672,6 +703,8 @@ reentry:
                         LuauObject* inst = objectvalue(rb);
                         if (LUAU_LIKELY(slot < inst->lclass->numberofallmembers && tsvalue(kv) == inst->lclass->offsettomember[slot]))
                         {
+                            if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers))
+                                luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
                             setobj2s(L, ra, luaR_lookupmemberatoffset(inst, slot));
                             VM_NEXT();
                         }
@@ -682,8 +715,40 @@ reentry:
                             if (ttisnil(offset))
                                 luaG_missingmembererror(L, rb, kv);
                             const uint32_t offsetnum = uint32_t(nvalue(offset));
+                            luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
                             setobj2s(L, ra, luaR_lookupmemberatoffset(inst, offsetnum));
-                            VM_PATCH_C(pc - 2, offsetnum);
+                            VM_PATCH_MEMBER_SLOT(pc - 2, offsetnum);
+                            VM_NEXT();
+                        }
+                    }
+                    else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisclass(rb)))
+                    {
+                        // fast-path: the "hash line" is an offset that points to the static class
+                        // member with the same name (classes are const, so this never goes stale)
+                        uint8_t slot = LUAU_INSN_C(insn);
+                        LuauClass* lco = classvalue(rb);
+                        if (LUAU_LIKELY(
+                                slot < lco->numberofallmembers && slot >= lco->numberofinstancemembers && tsvalue(kv) == lco->offsettomember[slot]
+                            ))
+                        {
+                            if (LUAU_UNLIKELY(lco->hasprivatemembers))
+                                luaR_checkprivateaccessfast(L, kv, lco, cl, slot);
+                            setobj2s(L, ra, &lco->staticmembers[slot - lco->numberofinstancemembers]);
+                            VM_NEXT();
+                        }
+                        // slow-er path: the slot mismatched so we fall back to looking up the offset from the string.
+                        else
+                        {
+                            const TValue* offset = luaH_getstr(lco->memberstooffset, tsvalue(kv));
+                            if (ttisnil(offset))
+                                luaG_missingmembererror(L, rb, kv);
+                            const uint32_t offsetnum = uint32_t(nvalue(offset));
+                            // accessing an instance member (field) through the class object itself is an error
+                            if (offsetnum < lco->numberofinstancemembers)
+                                luaG_instancefieldonclasserror(L, rb, kv);
+                            luaR_checkprivateaccessfast(L, kv, lco, cl, offsetnum);
+                            setobj2s(L, ra, &lco->staticmembers[offsetnum - lco->numberofinstancemembers]);
+                            VM_PATCH_MEMBER_SLOT(pc - 2, offsetnum);
                             VM_NEXT();
                         }
                     }
@@ -762,6 +827,48 @@ reentry:
                         // save cachedslot to accelerate future lookups; patches currently executing instruction since pc-2 rolls back two pc++
                         VM_PATCH_C(pc - 2, L->cachedslot);
                         VM_NEXT();
+                    }
+                    else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisobject(rb)))
+                    {
+                        // fast-path: the "hash line" is an offset that points to the instance field
+                        // with the same name. Only instance members (offset < numberofinstancemembers)
+                        // are valid SETTABLEKS targets; static members and methods are read-only here.
+                        uint8_t slot = LUAU_INSN_C(insn);
+                        LuauObject* inst = objectvalue(rb);
+                        if (LUAU_LIKELY(slot < inst->lclass->numberofinstancemembers && tsvalue(kv) == inst->lclass->offsettomember[slot]))
+                        {
+                            if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers))
+                            {
+                                if (inst->lclass->hasprivatemembers)
+                                    luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
+                                if (inst->lclass->hasconstmembers)
+                                    luaR_checkconstassignfast(L, kv, inst, cl, slot);
+                            }
+                            setobj2class(L, &inst->members[slot], ra);
+                            luaC_barrier(L, inst, ra);
+                            VM_NEXT();
+                        }
+                        // slow-er path: the slot mismatched so we fall back to looking up the offset from the string.
+                        else
+                        {
+                            const TValue* offset = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
+                            if (ttisnil(offset))
+                                luaG_missingmembererror(L, rb, kv);
+                            const uint32_t offsetnum = uint32_t(nvalue(offset));
+                            if (offsetnum >= inst->lclass->numberofinstancemembers)
+                                luaG_indexerror(L, rb, kv);
+                            if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers))
+                            {
+                                if (inst->lclass->hasprivatemembers)
+                                    luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
+                                if (inst->lclass->hasconstmembers)
+                                    luaR_checkconstassignfast(L, kv, inst, cl, offsetnum);
+                            }
+                            setobj2class(L, &inst->members[offsetnum], ra);
+                            luaC_barrier(L, inst, ra);
+                            VM_PATCH_MEMBER_SLOT(pc - 2, offsetnum);
+                            VM_NEXT();
+                        }
                     }
                     else
                     {
@@ -982,6 +1089,35 @@ reentry:
                             luaG_methoderror(L, ra + 1, tsvalue(kv));
                     }
                 }
+                else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisobject(rb)))
+                {
+                    // Objects are dispatched on their own: they don't use L->global->mt[ttype]
+                    // like userdata/vectors do (each class has its own instancemetatable), and
+                    // they don't support __index/__newindex at all, so none of the generic
+                    // metatable machinery below applies to them.
+                    uint8_t slot = LUAU_INSN_C(insn);
+                    LuauObject* inst = objectvalue(rb);
+                    if (slot < inst->lclass->numberofallmembers && tsvalue(kv) == inst->lclass->offsettomember[slot])
+                    {
+                        if (LUAU_UNLIKELY(inst->lclass->hasprivatemembers))
+                            luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
+                        // note: order of copies allows rb to alias ra+1 or ra
+                        setobj2s(L, ra + 1, rb);
+                        setobj2s(L, ra, luaR_lookupmemberatoffset(inst, slot));
+                    }
+                    // slow-er path: try to fetch the field manually.
+                    else
+                    {
+                        const TValue* offset = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
+                        if (ttisnil(offset))
+                            luaG_missingmembererror(L, rb, kv);
+                        const uint32_t offsetnum = uint32_t(nvalue(offset));
+                        luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
+                        setobj2s(L, ra + 1, rb);
+                        setobj2s(L, ra, luaR_lookupmemberatoffset(inst, offsetnum));
+                        VM_PATCH_MEMBER_SLOT(pc - 2, offsetnum);
+                    }
+                }
                 else
                 {
                     LuaTable* mt = ttisuserdata(rb) ? uvalue(rb)->metatable : L->global->mt[ttype(rb)];
@@ -1021,28 +1157,6 @@ reentry:
                             ra = VM_REG(LUAU_INSN_A(insn));
                             if (ttisnil(ra))
                                 luaG_methoderror(L, ra + 1, tsvalue(kv));
-                        }
-                    }
-                    else if (LUAU_UNLIKELY(FFlag::DebugLuauUserDefinedClassesRuntime && ttisobject(rb)))
-                    {
-                        uint8_t slot = LUAU_INSN_C(insn);
-                        LuauObject* inst = objectvalue(rb);
-                        if (slot < inst->lclass->numberofallmembers && tsvalue(kv) == inst->lclass->offsettomember[slot])
-                        {
-                            // note: order of copies allows rb to alias ra+1 or ra
-                            setobj2s(L, ra + 1, rb);
-                            setobj2s(L, ra, luaR_lookupmemberatoffset(inst, slot));
-                        }
-                        // slow-er path: try to fetch the field manually.
-                        else
-                        {
-                            const TValue* offset = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
-                            if (ttisnil(offset))
-                                luaG_missingmembererror(L, rb, kv);
-                            const uint32_t offsetnum = uint32_t(nvalue(offset));
-                            setobj2s(L, ra + 1, rb);
-                            setobj2s(L, ra, luaR_lookupmemberatoffset(inst, offsetnum));
-                            VM_PATCH_C(pc - 2, offsetnum);
                         }
                     }
                     else
@@ -1135,8 +1249,7 @@ reentry:
                 }
                 else
                 {
-                    lua_CFunction func = ccl->c.f;
-                    int n = func(L);
+                    int n = luaD_callcfunction(L, ccl);
 
                     // yield
                     if (n < 0)
@@ -1248,8 +1361,7 @@ reentry:
                     if (feedback_slot != LUAU_INSN_FBSLOT_SEALED)
                         VM_PATCH_AUX(pc - 1, LUAU_INSN_FBSLOT_SEALED);
 
-                    lua_CFunction func = ccl->c.f;
-                    int n = func(L);
+                    int n = luaD_callcfunction(L, ccl);
 
                     // yield
                     if (n < 0)
@@ -1810,9 +1922,9 @@ reentry:
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
                 {
-                    const float* vb = vvalue(rb);
-                    const float* vc = vvalue(rc);
-                    setvvalue(ra, vb[0] + vc[0], vb[1] + vc[1], vb[2] + vc[2], vb[3] + vc[3]);
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    const LUA_VECTOR_TYPE* vc = vvalue(rc);
+                    setvvalue(L, ra, vb[0] + vc[0], vb[1] + vc[1], vb[2] + vc[2], vb[3] + vc[3]);
                     VM_NEXT();
                 }
                 else
@@ -1865,9 +1977,9 @@ reentry:
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
                 {
-                    const float* vb = vvalue(rb);
-                    const float* vc = vvalue(rc);
-                    setvvalue(ra, vb[0] - vc[0], vb[1] - vc[1], vb[2] - vc[2], vb[3] - vc[3]);
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    const LUA_VECTOR_TYPE* vc = vvalue(rc);
+                    setvvalue(L, ra, vb[0] - vc[0], vb[1] - vc[1], vb[2] - vc[2], vb[3] - vc[3]);
                     VM_NEXT();
                 }
                 else
@@ -1920,23 +2032,23 @@ reentry:
                 }
                 else if (ttisvector(rb) && ttisnumber(rc))
                 {
-                    const float* vb = vvalue(rb);
-                    float vc = cast_to(float, nvalue(rc));
-                    setvvalue(ra, vb[0] * vc, vb[1] * vc, vb[2] * vc, vb[3] * vc);
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    LUA_VECTOR_TYPE vc = cast_to(LUA_VECTOR_TYPE, nvalue(rc));
+                    setvvalue(L, ra, vb[0] * vc, vb[1] * vc, vb[2] * vc, vb[3] * vc);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
                 {
-                    const float* vb = vvalue(rb);
-                    const float* vc = vvalue(rc);
-                    setvvalue(ra, vb[0] * vc[0], vb[1] * vc[1], vb[2] * vc[2], vb[3] * vc[3]);
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    const LUA_VECTOR_TYPE* vc = vvalue(rc);
+                    setvvalue(L, ra, vb[0] * vc[0], vb[1] * vc[1], vb[2] * vc[2], vb[3] * vc[3]);
                     VM_NEXT();
                 }
                 else if (ttisnumber(rb) && ttisvector(rc))
                 {
-                    float vb = cast_to(float, nvalue(rb));
-                    const float* vc = vvalue(rc);
-                    setvvalue(ra, vb * vc[0], vb * vc[1], vb * vc[2], vb * vc[3]);
+                    LUA_VECTOR_TYPE vb = cast_to(LUA_VECTOR_TYPE, nvalue(rb));
+                    const LUA_VECTOR_TYPE* vc = vvalue(rc);
+                    setvvalue(L, ra, vb * vc[0], vb * vc[1], vb * vc[2], vb * vc[3]);
                     VM_NEXT();
                 }
                 else
@@ -1986,23 +2098,23 @@ reentry:
                 }
                 else if (ttisvector(rb) && ttisnumber(rc))
                 {
-                    const float* vb = vvalue(rb);
-                    float vc = cast_to(float, nvalue(rc));
-                    setvvalue(ra, vb[0] / vc, vb[1] / vc, vb[2] / vc, vb[3] / vc);
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    LUA_VECTOR_TYPE vc = cast_to(LUA_VECTOR_TYPE, nvalue(rc));
+                    setvvalue(L, ra, vb[0] / vc, vb[1] / vc, vb[2] / vc, vb[3] / vc);
                     VM_NEXT();
                 }
                 else if (ttisvector(rb) && ttisvector(rc))
                 {
-                    const float* vb = vvalue(rb);
-                    const float* vc = vvalue(rc);
-                    setvvalue(ra, vb[0] / vc[0], vb[1] / vc[1], vb[2] / vc[2], vb[3] / vc[3]);
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    const LUA_VECTOR_TYPE* vc = vvalue(rc);
+                    setvvalue(L, ra, vb[0] / vc[0], vb[1] / vc[1], vb[2] / vc[2], vb[3] / vc[3]);
                     VM_NEXT();
                 }
                 else if (ttisnumber(rb) && ttisvector(rc))
                 {
-                    float vb = cast_to(float, nvalue(rb));
-                    const float* vc = vvalue(rc);
-                    setvvalue(ra, vb / vc[0], vb / vc[1], vb / vc[2], vb / vc[3]);
+                    LUA_VECTOR_TYPE vb = cast_to(LUA_VECTOR_TYPE, nvalue(rb));
+                    const LUA_VECTOR_TYPE* vc = vvalue(rc);
+                    setvvalue(L, ra, vb / vc[0], vb / vc[1], vb / vc[2], vb / vc[3]);
                     VM_NEXT();
                 }
                 else
@@ -2047,14 +2159,15 @@ reentry:
                 }
                 else if (ttisvector(rb) && ttisnumber(rc))
                 {
-                    const float* vb = vvalue(rb);
-                    float vc = cast_to(float, nvalue(rc));
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    LUA_VECTOR_TYPE vc = cast_to(LUA_VECTOR_TYPE, nvalue(rc));
                     setvvalue(
+                        L,
                         ra,
-                        float(luai_numidiv(vb[0], vc)),
-                        float(luai_numidiv(vb[1], vc)),
-                        float(luai_numidiv(vb[2], vc)),
-                        float(luai_numidiv(vb[3], vc))
+                        LUA_VECTOR_TYPE(luai_numidiv(vb[0], vc)),
+                        LUA_VECTOR_TYPE(luai_numidiv(vb[1], vc)),
+                        LUA_VECTOR_TYPE(luai_numidiv(vb[2], vc)),
+                        LUA_VECTOR_TYPE(luai_numidiv(vb[3], vc))
                     );
                     VM_NEXT();
                 }
@@ -2191,9 +2304,9 @@ reentry:
                 }
                 else if (ttisvector(rb))
                 {
-                    const float* vb = vvalue(rb);
-                    float vc = cast_to(float, nvalue(kv));
-                    setvvalue(ra, vb[0] * vc, vb[1] * vc, vb[2] * vc, vb[3] * vc);
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    LUA_VECTOR_TYPE vc = cast_to(LUA_VECTOR_TYPE, nvalue(kv));
+                    setvvalue(L, ra, vb[0] * vc, vb[1] * vc, vb[2] * vc, vb[3] * vc);
                     VM_NEXT();
                 }
                 else
@@ -2237,9 +2350,9 @@ reentry:
                 }
                 else if (ttisvector(rb))
                 {
-                    const float* vb = vvalue(rb);
-                    float nc = cast_to(float, nvalue(kv));
-                    setvvalue(ra, vb[0] / nc, vb[1] / nc, vb[2] / nc, vb[3] / nc);
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    LUA_VECTOR_TYPE nc = cast_to(LUA_VECTOR_TYPE, nvalue(kv));
+                    setvvalue(L, ra, vb[0] / nc, vb[1] / nc, vb[2] / nc, vb[3] / nc);
                     VM_NEXT();
                 }
                 else
@@ -2283,14 +2396,15 @@ reentry:
                 }
                 else if (ttisvector(rb))
                 {
-                    const float* vb = vvalue(rb);
-                    float vc = cast_to(float, nvalue(kv));
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    LUA_VECTOR_TYPE vc = cast_to(LUA_VECTOR_TYPE, nvalue(kv));
                     setvvalue(
+                        L,
                         ra,
-                        float(luai_numidiv(vb[0], vc)),
-                        float(luai_numidiv(vb[1], vc)),
-                        float(luai_numidiv(vb[2], vc)),
-                        float(luai_numidiv(vb[3], vc))
+                        LUA_VECTOR_TYPE(luai_numidiv(vb[0], vc)),
+                        LUA_VECTOR_TYPE(luai_numidiv(vb[1], vc)),
+                        LUA_VECTOR_TYPE(luai_numidiv(vb[2], vc)),
+                        LUA_VECTOR_TYPE(luai_numidiv(vb[3], vc))
                     );
                     VM_NEXT();
                 }
@@ -2455,8 +2569,8 @@ reentry:
                 }
                 else if (ttisvector(rb))
                 {
-                    const float* vb = vvalue(rb);
-                    setvvalue(ra, -vb[0], -vb[1], -vb[2], -vb[3]);
+                    const LUA_VECTOR_TYPE* vb = vvalue(rb);
+                    setvvalue(L, ra, -vb[0], -vb[1], -vb[2], -vb[3]);
                     VM_NEXT();
                 }
                 else
@@ -2613,6 +2727,8 @@ reentry:
             VM_CASE(LOP_FORNLOOP)
             {
                 VM_INTERRUPT();
+                if (FFlag::LuauBackedgeHeapCheck)
+                    VM_CHECK_GC(L);
                 VM_CASE_INSTRUCTION insn = *pc++;
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(insn));
                 LUAU_ASSERT(ttisnumber(ra + 0) && ttisnumber(ra + 1) && ttisnumber(ra + 2));
@@ -2642,7 +2758,7 @@ reentry:
                 VM_CASE_INSTRUCTION insn = *pc++;
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(insn));
 
-                if (FFlag::DebugLuauUserDefinedClassesRuntime)
+                if (FFlag::LuwuClasses)
                 {
                     // If this is a function it will be called
                     // during FORGLOOP
@@ -2762,6 +2878,8 @@ reentry:
             VM_CASE(LOP_FORGLOOP)
             {
                 VM_INTERRUPT();
+                if (FFlag::LuauBackedgeHeapCheck)
+                    VM_CHECK_GC(L);
                 VM_CASE_INSTRUCTION insn = *pc++;
                 VM_CASE_STKID ra = VM_REG(LUAU_INSN_A(insn));
                 uint32_t aux = *pc;
@@ -3056,6 +3174,8 @@ reentry:
             VM_CASE(LOP_JUMPBACK)
             {
                 VM_INTERRUPT();
+                if (FFlag::LuauBackedgeHeapCheck)
+                    VM_CHECK_GC(L);
                 VM_CASE_INSTRUCTION insn = *pc++;
 
                 pc += LUAU_INSN_D(insn);
@@ -3077,6 +3197,8 @@ reentry:
             VM_CASE(LOP_JUMPX)
             {
                 VM_INTERRUPT();
+                if (FFlag::LuauBackedgeHeapCheck)
+                    VM_CHECK_GC(L);
                 VM_CASE_INSTRUCTION insn = *pc++;
 
                 pc += LUAU_INSN_E(insn);
@@ -3187,9 +3309,9 @@ reentry:
                 }
                 else if (ttisvector(rc))
                 {
-                    float nb = cast_to(float, nvalue(kv));
-                    const float* vc = vvalue(rc);
-                    setvvalue(ra, nb / vc[0], nb / vc[1], nb / vc[2], nb / vc[3]);
+                    LUA_VECTOR_TYPE nb = cast_to(LUA_VECTOR_TYPE, nvalue(kv));
+                    const LUA_VECTOR_TYPE* vc = vvalue(rc);
+                    setvvalue(L, ra, nb / vc[0], nb / vc[1], nb / vc[2], nb / vc[3]);
                     VM_NEXT();
                 }
                 else
@@ -3751,6 +3873,243 @@ reentry:
                 VM_NEXT();
             }
 
+            VM_CASE(LOP_CHECKSELFCLASS)
+            {
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId self = VM_REG(LUAU_INSN_A(insn));
+
+                // A method's own prologue check takes the class from the executing closure's proto
+                // rather than a register: it is a constant of that proto, so a register would mean a
+                // GETUPVAL per call plus a forced upvalue capture (see LBC_SELFCLASS_OWNER). An
+                // inlined copy of the body still passes a register, because it runs under the
+                // *caller's* proto, whose ownerclass is a different class or none.
+                LuauClass* classdef;
+
+                if (LUAU_INSN_B(insn) == LBC_SELFCLASS_OWNER)
+                {
+                    // the compiler emits this form only in a class method's prologue, whose proto the
+                    // class stamps (luaR_stampownerclass)
+                    classdef = cl->l.p->ownerclass;
+                    LUAU_ASSERT(classdef);
+                }
+                else
+                {
+                    StkId classReg = VM_REG(LUAU_INSN_B(insn));
+                    LUAU_ASSERT(ttisclass(classReg));
+                    classdef = classvalue(classReg);
+                }
+
+                if (LUAU_LIKELY(ttisobject(self) && objectvalue(self)->lclass == classdef))
+                {
+                    VM_NEXT();
+                }
+                else
+                {
+                    // cold: always raises
+                    VM_PROTECT_PC();
+                    luaG_selfclasserror(L, self, classdef, tsvalue(VM_KV(aux)), LUAU_INSN_C(insn) != 0);
+                }
+            }
+
+            VM_CASE(LOP_NEWOBJECT)
+            {
+                // Luwu Classes (rfcs/classes): construct an instance of a statically resolved class directly.
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId classReg = VM_REG(LUAU_INSN_B(insn));
+                int form = LUAU_INSN_C(insn);
+                bool custominit = form == LBC_NEWOBJECT_INIT;
+
+                // The compiler emits this only for a class it resolved statically (isKnownClassExpr,
+                // which resolves same-module class declarations only) and picks the shape from that
+                // class's own declaration. Such a binding cannot be rebound -- the parser rejects
+                // assigning to a class name -- so the register holds that same class here and the
+                // shape agrees by construction. Asserted rather than checked, the way VM_REG asserts
+                // its register index: valid bytecode cannot fail this, and invalid bytecode is the
+                // embedder's contract to keep.
+                //
+                // The FIELDS form initializes every member itself, so it is also the shape used for a
+                // class whose `__init` came from a primary constructor. That `__init` does nothing but
+                // assign fields from its parameters, which the construction site has already done. Any
+                // other custom `__init` has to actually run, which is why the asserts below require the
+                // form to agree with `hascustominit`.
+                bool fieldsform = form == LBC_NEWOBJECT_FIELDS;
+                LUAU_ASSERT(ttisclass(classReg));
+                LUAU_ASSERT(
+                    fieldsform ? !(classvalue(classReg)->hascustominit && !classvalue(classReg)->hasprimaryinit)
+                               : classvalue(classReg)->hascustominit == custominit
+                );
+                LUAU_ASSERT(custominit || !classvalue(classReg)->haspoddefaultsfn);
+                LUAU_ASSERT(!fieldsform || classvalue(classReg)->numberofinstancemembers == aux);
+                // the POD form takes at most one argument; more compile to a call, which raises
+                LUAU_ASSERT(form != LBC_NEWOBJECT_DEFAULT || aux <= 1);
+
+                LuauClass* classdef = classvalue(classReg);
+
+                // Luwu Classes (rfcs/classes): a private `__init` is only callable from inside its
+                // own class. The `__call` path gets that from luaR_createobject, and NEWOBJECT exists
+                // to skip that C frame, so without this the fast path would be a hole in `private`.
+                //
+                // `cl` is the closure to ask: this instruction *is* the constructing code, running in
+                // the frame that wrote it. luaR_createobject has to walk for the nearest Lua frame
+                // instead (luaR_callinglua), because its immediate caller is `pcall` for
+                // `pcall(SomeClass, ...)`. NEWOBJECT is only emitted for a direct, statically resolved
+                // `ClassName(...)`, so pcall'd and aliased construction still goes through
+                // luaR_createobject.
+                //
+                // The INIT form needs this too: it reads `__init` straight out of staticmembers, with
+                // no per-member check of its own.
+                if (LUAU_UNLIKELY(luaR_hasprivateconstructor(classdef)))
+                {
+                    VM_PROTECT_PC();
+                    luaR_checkprivateconstructor(L, classdef, cl);
+                }
+
+                VM_PROTECT_PC(); // the allocation below may fail due to OOM
+
+                // When the construction site supplies every member (the FIELDS form) and the class has
+                // no constant defaults to preserve, the members are written here from registers -- so
+                // the nil-fill luaR_newobject would do first is dead, and so is the per-member nil test
+                // below. Nothing between the allocation and the fill can collect, and the object isn't
+                // reachable until after it.
+                if (fieldsform && !classdef->memberdefaults)
+                {
+                    LuauObject* object = luaR_newobjectuninit(L, classdef);
+
+                    for (uint32_t idx = 0; idx < aux; idx++)
+                        setobj(L, &object->members[idx], ra + 1 + idx);
+
+                    setobjectvalue(L, ra, object);
+
+                    luaC_barrierfast(L, object);
+
+                    VM_PROTECT(luaC_checkGC(L));
+                    VM_NEXT();
+                }
+
+                LuauObject* object = luaR_newobject(L, classdef);
+
+                // Anchor the object on the stack before anything else: applying fields can run an
+                // __index metamethod, which can run the collector, and until the object is stored
+                // somewhere reachable nothing keeps it alive.
+                setobjectvalue(L, ra, object);
+
+                if (custominit)
+                {
+                    // Lay out `__init`'s frame for the CALL that follows; __init's offset is fixed when
+                    // the class is created, and the arguments are already in place above `self`.
+                    LUAU_ASSERT(classdef->initoffset >= classdef->numberofinstancemembers);
+                    setobj2s(L, ra + 1, &classdef->staticmembers[classdef->initoffset - classdef->numberofinstancemembers]);
+                    setobjectvalue(L, ra + 2, object);
+                }
+                else if (fieldsform)
+                {
+                    // one value per member in declaration order; nil keeps the member's default
+                    for (uint32_t idx = 0; idx < aux; idx++)
+                    {
+                        StkId value = ra + 1 + idx;
+
+                        if (!ttisnil(value))
+                            setobj(L, &object->members[idx], value);
+                    }
+                }
+                else if (aux == 1)
+                {
+                    StkId arg = ra + 1;
+
+                    // a table carrying a metatable needs the generic, __index-aware path
+                    if (LUAU_LIKELY(ttistable(arg) && hvalue(arg)->metatable == NULL))
+                        luaR_applyobjectfields(L, classdef, object, hvalue(arg));
+                    else
+                        VM_PROTECT(luaR_applyobjectfieldsslow(L, classdef, object, arg));
+                }
+
+                luaC_barrierfast(L, object);
+
+                VM_PROTECT(luaC_checkGC(L));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_GETOBJECTMEMBER)
+            {
+                // Luwu Classes (rfcs/classes): read `self.field` at a known offset, skipping all of
+                // GETTABLEKS's per-access work -- no slot cache, no name compare, no private-access
+                // check. That is only sound under what the compiler guarantees at every emit site (see
+                // provenSelfMemberOffset in Compiler.cpp). The receiver is one of:
+                //
+                //   - the executing method's own `self`, after its CHECKSELFCLASS prologue
+                //   - an inlined method's `self`, after the CHECKSELFCLASS emitted at the inline site
+                //   - a local inside the then-branch of `if class.isinstance(local, C)`, compiled to JUMPXISA
+                //     against a class `C` declared in this module
+                //
+                // In every case the value is never reassigned and its class comes from a runtime check, never
+                // from a type annotation. A private member is only read this way through a proven `self` or
+                // from inside one of the class's methods.
+                //
+                // A member's offset is therefore a compile-time constant, and the receiver is an object
+                // of that class. Both are asserted rather than checked, the way VM_REG asserts its
+                // register index: valid bytecode cannot violate them, and invalid bytecode is the
+                // embedder's contract to keep, not something to pay for on every field read.
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                LUAU_ASSERT(ttisobject(rb) && aux < objectvalue(rb)->numberofmembers);
+
+                setobj2s(L, ra, &objectvalue(rb)->members[aux]);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_SETOBJECTMEMBER)
+            {
+                // See LOP_GETOBJECTMEMBER, including why this asserts rather than checks. Never emitted
+                // for a `const` member, so there is no const-assignment check to make here either.
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                LUAU_ASSERT(ttisobject(rb) && aux < objectvalue(rb)->numberofmembers);
+
+                LuauObject* inst = objectvalue(rb);
+                setobj2class(L, &inst->members[aux], ra);
+                luaC_barrier(L, inst, ra);
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_JUMPXISA)
+            {
+                // Luwu Classes (rfcs/classes): fused class.isinstance(value, class) test-and-branch.
+                Instruction insn = *pc++;
+                uint32_t aux = *pc;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId classReg = VM_REG(aux & 0xff);
+
+                if (aux & LBC_JUMPXISA_CHECKCLASS)
+                {
+                    // a class the compiler couldn't resolve: raise exactly what the builtin would
+                    if (LUAU_UNLIKELY(!ttisclass(classReg)))
+                    {
+                        VM_PROTECT_PC();
+                        luaG_runerror(L, "invalid argument #2 to 'isinstance' (class expected, got %s)", luaT_objtypename(L, classReg));
+                    }
+                }
+                else
+                {
+                    LUAU_ASSERT(ttisclass(classReg));
+                }
+
+                bool isInstance = ttisobject(ra) && objectvalue(ra)->lclass == classvalue(classReg);
+                bool jumpIfInstance = (aux & LBC_JUMPXISA_JUMPIFINSTANCE) != 0;
+
+                pc += isInstance == jumpIfInstance ? LUAU_INSN_D(insn) : 1;
+                VM_ASSERT_PC(pc);
+                VM_NEXT();
+            }
+
 #if !VM_USE_CGOTO
         default:
             LUAU_ASSERT(!"Unknown opcode");
@@ -3851,8 +4210,7 @@ int luau_precall(lua_State* L, StkId func, int nresults)
     }
     else
     {
-        lua_CFunction func = ccl->c.f;
-        int n = func(L);
+        int n = luaD_callcfunction(L, ccl);
 
         // yield
         if (n < 0)

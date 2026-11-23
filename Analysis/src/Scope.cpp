@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/Scope.h"
 
@@ -92,6 +92,26 @@ std::optional<TypeId> Scope::lookupRValueRefinementType(DefId def) const
             return *ty;
     }
 
+    return std::nullopt;
+}
+
+const Scope::PropertyTests* Scope::lookupPropertyTests(DefId def) const
+{
+    for (const Scope* current = this; current; current = current->parent.get())
+    {
+        if (const PropertyTests* tests = current->propertyTests.find(def))
+            return tests;
+    }
+    return nullptr;
+}
+
+std::optional<TypeId> Scope::lookupPropertyRefinementBase(DefId def) const
+{
+    for (const Scope* current = this; current; current = current->parent.get())
+    {
+        if (const TypeId* base = current->propertyRefinementBases.find(def))
+            return *base;
+    }
     return std::nullopt;
 }
 
@@ -237,6 +257,12 @@ void Scope::inheritRefinements(const ScopePtr& childScope)
         if (lookup(symbol))
             refinements[k] = a;
     }
+
+    // Luwu: refinements a guard leaves behind (`if not h.enc then return end`) keep what their property tests were
+    for (const auto& [k, tests] : childScope->propertyTests)
+        propertyTests[k] = tests;
+    for (const auto& [k, base] : childScope->propertyRefinementBases)
+        propertyRefinementBases[k] = base;
 }
 
 

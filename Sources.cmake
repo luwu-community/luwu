@@ -1,5 +1,5 @@
-# Luau.Common Sources
-target_sources(Luau.Common PRIVATE
+# Luwu.Common Sources
+target_sources(Luwu.Common PRIVATE
     Common/include/Luau/Common.h
     Common/include/Luau/Bytecode.h
     Common/include/Luau/BytecodeUtils.h
@@ -15,16 +15,18 @@ target_sources(Luau.Common PRIVATE
     Common/include/Luau/VecDeque.h
 
     Common/src/BytecodeWire.cpp
+    Common/src/LuwuFlags.cpp
     Common/src/StringUtils.cpp
     Common/src/TimeTrace.cpp
 )
 
-# Luau.Ast Sources
-target_sources(Luau.Ast PRIVATE
+# Luwu.Ast Sources
+target_sources(Luwu.Ast PRIVATE
     Ast/include/Luau/Allocator.h
     Ast/include/Luau/Ast.h
     Ast/include/Luau/Confusables.h
     Ast/include/Luau/Cst.h
+    Ast/include/Luau/Helpifier.h
     Ast/include/Luau/Lexer.h
     Ast/include/Luau/Location.h
     Ast/include/Luau/ParseOptions.h
@@ -36,14 +38,15 @@ target_sources(Luau.Ast PRIVATE
     Ast/src/Ast.cpp
     Ast/src/Confusables.cpp
     Ast/src/Cst.cpp
+    Ast/src/Helpifier.cpp
     Ast/src/Lexer.cpp
     Ast/src/Location.cpp
     Ast/src/Parser.cpp
     Ast/src/PrettyPrinter.cpp
 )
 
-# Luau.Bytecode Sources
-target_sources(Luau.Bytecode PRIVATE
+# Luwu.Bytecode Sources
+target_sources(Luwu.Bytecode PRIVATE
     Bytecode/include/Luau/BytecodeBuilder.h
     Bytecode/include/Luau/BytecodeCallInliner.h
     Bytecode/include/Luau/BytecodeGraph.h
@@ -58,18 +61,20 @@ target_sources(Luau.Bytecode PRIVATE
     Bytecode/src/Sccp.cpp
 )
 
-# Luau.Inliner Sources
-target_sources(Luau.Inliner PRIVATE
+# Luwu.Inliner Sources
+target_sources(Luwu.Inliner PRIVATE
     Inliner/include/Luau/JitInliner.h
     Inliner/include/luajitinliner.h
 
     Inliner/src/JitInliner.cpp
+    Inliner/src/TValueVmConstImpl.cpp
+    Inliner/src/TValueVmConstImpl.h
     Inliner/src/luajitinliner.cpp
     Inliner/src/RuntimeBytecodeBuilder.h
 )
 
-# Luau.Compiler Sources
-target_sources(Luau.Compiler PRIVATE
+# Luwu.Compiler Sources
+target_sources(Luwu.Compiler PRIVATE
     Compiler/include/Luau/Compiler.h
     Compiler/include/luacode.h
 
@@ -92,8 +97,8 @@ target_sources(Luau.Compiler PRIVATE
     Compiler/src/ValueTracking.h
 )
 
-# Luau.Config Sources
-target_sources(Luau.Config PRIVATE
+# Luwu.Config Sources
+target_sources(Luwu.Config PRIVATE
     Config/include/Luau/Config.h
     Config/include/Luau/LinterConfig.h
     Config/include/Luau/LuauConfig.h
@@ -103,8 +108,8 @@ target_sources(Luau.Config PRIVATE
     Config/src/LuauConfig.cpp
 )
 
-# Luau.CodeGen Sources
-target_sources(Luau.CodeGen PRIVATE
+# Luwu.CodeGen Sources
+target_sources(Luwu.CodeGen PRIVATE
     CodeGen/include/Luau/AddressA64.h
     CodeGen/include/Luau/AssemblyBuilderA64.h
     CodeGen/include/Luau/AssemblyBuilderX64.h
@@ -200,8 +205,8 @@ target_sources(Luau.CodeGen PRIVATE
     CodeGen/src/NativeState.h
 )
 
-# Luau.Analysis Sources
-target_sources(Luau.Analysis PRIVATE
+# Luwu.Analysis Sources
+target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/Anyification.h
     Analysis/include/Luau/ApplyTypeFunction.h
     Analysis/include/Luau/AstJsonEncoder.h
@@ -241,6 +246,8 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/Linter.h
     Analysis/include/Luau/LValue.h
     Analysis/include/Luau/Metamethods.h
+    Analysis/include/Luau/MismatchExplanation.h
+    Analysis/include/Luau/MismatchWording.h
     Analysis/include/Luau/Module.h
     Analysis/include/Luau/ModuleResolver.h
     Analysis/include/Luau/NonStrictTypeChecker.h
@@ -251,6 +258,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/Quantify.h
     Analysis/include/Luau/RecursionCounter.h
     Analysis/include/Luau/Refinement.h
+    Analysis/include/Luau/RepeatedTypeNames.h
     Analysis/include/Luau/RequireTracer.h
     Analysis/include/Luau/Scope.h
     Analysis/include/Luau/Set.h
@@ -280,15 +288,19 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/TypeFwd.h
     Analysis/include/Luau/TypeIds.h
     Analysis/include/Luau/TypeInfer.h
+    Analysis/include/Luau/TypeNaming.h
     Analysis/include/Luau/TypeOrPack.h
     Analysis/include/Luau/TypePack.h
     Analysis/include/Luau/TypePairHash.h
     Analysis/include/Luau/TypePath.h
     Analysis/include/Luau/TypeUtils.h
+    Analysis/include/Luau/Typos.h
     Analysis/include/Luau/Unifiable.h
     Analysis/include/Luau/Unifier.h
     Analysis/include/Luau/Unifier2.h
     Analysis/include/Luau/UnifierSharedState.h
+    Analysis/include/Luau/UnknownVariable.h
+    Analysis/include/Luau/UnreachableProof.h
     Analysis/include/Luau/UserDefinedTypeFunction.h
     Analysis/include/Luau/VisitType.h
     Analysis/include/Luau/IterativeTypeVisitor.h
@@ -332,6 +344,8 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/JsonEmitter.cpp
     Analysis/src/Linter.cpp
     Analysis/src/LValue.cpp
+    Analysis/src/MismatchExplanation.cpp
+    Analysis/src/MismatchWording.cpp
     Analysis/src/Module.cpp
     Analysis/src/NonStrictTypeChecker.cpp
     Analysis/src/Normalize.cpp
@@ -339,6 +353,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/Quantify.cpp
     Analysis/src/RecursionCounter.cpp
     Analysis/src/Refinement.cpp
+    Analysis/src/RepeatedTypeNames.cpp
     Analysis/src/RequireTracer.cpp
     Analysis/src/Scope.cpp
     Analysis/src/Simplify.cpp
@@ -364,18 +379,22 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/TypeFunctionRuntimeBuilder.cpp
     Analysis/src/TypeIds.cpp
     Analysis/src/TypeInfer.cpp
+    Analysis/src/TypeNaming.cpp
     Analysis/src/TypeOrPack.cpp
     Analysis/src/TypePack.cpp
     Analysis/src/TypePath.cpp
     Analysis/src/TypeUtils.cpp
+    Analysis/src/Typos.cpp
     Analysis/src/Unifiable.cpp
     Analysis/src/Unifier.cpp
     Analysis/src/Unifier2.cpp
+    Analysis/src/UnknownVariable.cpp
+    Analysis/src/UnreachableProof.cpp
     Analysis/src/UserDefinedTypeFunction.cpp
 )
 
-# Luau.VM Sources
-target_sources(Luau.VM PRIVATE
+# Luwu.VM Sources
+target_sources(Luwu.VM PRIVATE
     VM/include/lua.h
     VM/include/luaconf.h
     VM/include/lualib.h
@@ -427,6 +446,7 @@ target_sources(Luau.VM PRIVATE
     VM/src/lvmexecute.cpp
     VM/src/lclass.cpp
     VM/src/lclasslib.cpp
+    VM/src/lvector.cpp
     VM/src/lvmload.cpp
     VM/src/lvmutils.cpp
 
@@ -457,6 +477,7 @@ target_sources(Luau.VM PRIVATE
     VM/src/ltable.h
     VM/src/ltm.h
     VM/src/ludata.h
+    VM/src/lvector.h
     VM/src/lvm.h
 )
 
@@ -466,7 +487,7 @@ target_sources(isocline PRIVATE
 )
 
 # Common sources shared between all CLI apps
-target_sources(Luau.CLI.lib PRIVATE
+target_sources(Luwu.CLI.lib PRIVATE
     CLI/include/Luau/FileUtils.h
     CLI/include/Luau/Flags.h
     CLI/include/Luau/VfsNavigator.h
@@ -476,9 +497,9 @@ target_sources(Luau.CLI.lib PRIVATE
     CLI/src/VfsNavigator.cpp
 )
 
-if(TARGET Luau.Repl.CLI)
-    # Luau.Repl.CLI Sources
-    target_sources(Luau.Repl.CLI PRIVATE
+if(TARGET Luwu.Repl.CLI)
+    # Luwu.Repl.CLI Sources
+    target_sources(Luwu.Repl.CLI PRIVATE
         CLI/include/Luau/Counters.h
         CLI/include/Luau/Coverage.h
         CLI/include/Luau/Profiler.h
@@ -493,9 +514,9 @@ if(TARGET Luau.Repl.CLI)
     )
 endif()
 
-if(TARGET Luau.Analyze.CLI)
-    # Luau.Analyze.CLI Sources
-    target_sources(Luau.Analyze.CLI PRIVATE
+if(TARGET Luwu.Analyze.CLI)
+    # Luwu.Analyze.CLI Sources
+    target_sources(Luwu.Analyze.CLI PRIVATE
         CLI/include/Luau/AnalyzeRequirer.h
 
         CLI/src/Analyze.cpp
@@ -503,16 +524,16 @@ if(TARGET Luau.Analyze.CLI)
     )
 endif()
 
-if(TARGET Luau.Ast.CLI)
-    # Luau.Ast.CLI Sources
-    target_sources(Luau.Ast.CLI PRIVATE
+if(TARGET Luwu.Ast.CLI)
+    # Luwu.Ast.CLI Sources
+    target_sources(Luwu.Ast.CLI PRIVATE
         CLI/src/Ast.cpp
     )
 endif()
 
-if(TARGET Luau.UnitTest)
-    # Luau.UnitTest Sources
-    target_sources(Luau.UnitTest PRIVATE
+if(TARGET Luwu.UnitTest)
+    # Luwu.UnitTest Sources
+    target_sources(Luwu.UnitTest PRIVATE
         tests/AssemblyBuilderA64.test.cpp
         tests/AssemblyBuilderX64.test.cpp
         tests/AstJsonEncoder.test.cpp
@@ -526,6 +547,7 @@ if(TARGET Luau.UnitTest)
         tests/BytecodeCompiler.test.cpp
         tests/ClassFixture.cpp
         tests/ClassFixture.h
+        tests/ClassesFixture.h
         tests/CodeAllocator.test.cpp
         tests/Compiler.test.cpp
         tests/Config.test.cpp
@@ -550,6 +572,7 @@ if(TARGET Luau.UnitTest)
         tests/Lexer.test.cpp
         tests/Linter.test.cpp
         tests/LValue.test.cpp
+        tests/MismatchExplanation.test.cpp
         tests/Module.test.cpp
         tests/NonstrictMode.test.cpp
         tests/NonStrictTypeChecker.test.cpp
@@ -559,6 +582,7 @@ if(TARGET Luau.UnitTest)
         tests/Parser.test.cpp
         tests/PrettyPrinter.test.cpp
         tests/RegisterCallbacks.cpp
+        tests/RepeatedTypeNames.test.cpp
         tests/RegisterCallbacks.h
         tests/RequireTracer.test.cpp
         tests/RuntimeLimits.test.cpp
@@ -573,6 +597,9 @@ if(TARGET Luau.UnitTest)
         tests/TopoSort.test.cpp
         tests/ToString.test.cpp
         tests/TxnLog.test.cpp
+        tests/Typewriter.cpp
+        tests/Typewriter.h
+        tests/Typewriter.test.cpp
         tests/TypeFunction.test.cpp
         tests/TypeFunction.user.test.cpp
         tests/TypeInfer.aliases.test.cpp
@@ -614,9 +641,9 @@ if(TARGET Luau.UnitTest)
         tests/main.cpp)
 endif()
 
-if(TARGET Luau.Conformance)
-    # Luau.Conformance Sources
-    target_sources(Luau.Conformance PRIVATE
+if(TARGET Luwu.Conformance)
+    # Luwu.Conformance Sources
+    target_sources(Luwu.Conformance PRIVATE
         tests/ExternalBuffer.test.cpp
         tests/ExternalString.test.cpp
         tests/FatCClosure.test.cpp
@@ -631,9 +658,9 @@ if(TARGET Luau.Conformance)
         tests/main.cpp)
 endif()
 
-if(TARGET Luau.CLI.Test)
-    # Luau.CLI.Test Sources
-    target_sources(Luau.CLI.Test PRIVATE
+if(TARGET Luwu.CLI.Test)
+    # Luwu.CLI.Test Sources
+    target_sources(Luwu.CLI.Test PRIVATE
         CLI/include/Luau/Counters.h
         CLI/include/Luau/Coverage.h
         CLI/include/Luau/Profiler.h
@@ -652,9 +679,9 @@ if(TARGET Luau.CLI.Test)
         tests/main.cpp)
 endif()
 
-if(TARGET Luau.Require)
-    # Luau.Require Sources
-    target_sources(Luau.Require PRIVATE
+if(TARGET Luwu.Require)
+    # Luwu.Require Sources
+    target_sources(Luwu.Require PRIVATE
     # Public headers
     Require/include/Luau/Require.h
     Require/include/Luau/RequireNavigator.h
@@ -674,27 +701,27 @@ if(TARGET Luau.Require)
     Require/src/RequireNavigator.cpp)
 endif()
 
-if(TARGET Luau.Web)
-    # Luau.Web Sources
-    target_sources(Luau.Web PRIVATE
+if(TARGET Luwu.Web)
+    # Luwu.Web Sources
+    target_sources(Luwu.Web PRIVATE
         CLI/src/Web.cpp)
 endif()
 
-if(TARGET Luau.Reduce.CLI)
-    # Luau.Reduce.CLI Sources
-    target_sources(Luau.Reduce.CLI PRIVATE
+if(TARGET Luwu.Reduce.CLI)
+    # Luwu.Reduce.CLI Sources
+    target_sources(Luwu.Reduce.CLI PRIVATE
         CLI/src/Reduce.cpp
     )
 endif()
 
-if(TARGET Luau.Compile.CLI)
-    # Luau.Compile.CLI Sources
-    target_sources(Luau.Compile.CLI PRIVATE
+if(TARGET Luwu.Compile.CLI)
+    # Luwu.Compile.CLI Sources
+    target_sources(Luwu.Compile.CLI PRIVATE
         CLI/src/Compile.cpp)
 endif()
 
-if(TARGET Luau.Bytecode.CLI)
-    # Luau.Bytecode.CLI Sources
-    target_sources(Luau.Bytecode.CLI PRIVATE
+if(TARGET Luwu.Bytecode.CLI)
+    # Luwu.Bytecode.CLI Sources
+    target_sources(Luwu.Bytecode.CLI PRIVATE
         CLI/src/Bytecode.cpp)
 endif()

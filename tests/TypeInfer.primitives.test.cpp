@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 
 #include "Luau/Type.h"
 #include "Luau/VisitType.h"
@@ -105,6 +105,7 @@ TEST_CASE_FIXTURE(Fixture, "string_function_indirect")
 
 TEST_CASE_FIXTURE(Fixture, "check_methods_of_number")
 {
+    CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     CheckResult result = check(R"(
         local x: number = 9999
         function x:y(z: number)

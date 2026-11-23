@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Ast.h"
@@ -26,6 +26,9 @@ struct BuiltinAstTypes
     AstTypeReference integerType{{}, std::nullopt, AstName{"integer"}, std::nullopt, {}};
     AstTypeReference stringType{{}, std::nullopt, AstName{"string"}, std::nullopt, {}};
     AstTypeReference vectorType{{}, std::nullopt, AstName{"vector"}, std::nullopt, {}};
+    // Luwu Classes (rfcs/classes): used to type constructor-call results (`Account(...)`) as
+    // objects without needing a real AstType node for the specific class.
+    AstTypeReference objectType{{}, std::nullopt, AstName{"object"}, std::nullopt, {}};
 
     AstTypeReference hostVectorType;
 };
@@ -41,7 +44,13 @@ void buildTypeMap(
     const DenseHashMap<AstExprCall*, int>& builtinCalls,
     const DenseHashMap<AstName, Compile::Global>& globals,
     LibraryMemberTypeCallback libraryMemberTypeCb,
-    BytecodeBuilder& bytecode
+    BytecodeBuilder& bytecode,
+    // Luwu: the result of trackValues. An unannotated local takes its initializer's type only when this says
+    // the local is never written. When this is null, no unannotated local takes its initializer's type.
+    const DenseHashMap<AstLocal*, Compile::Variable>* variables = nullptr,
+    // whether a declared return type of a class's static method may type the call's result (see
+    // DebugLuwuCompilerTrustsTypeAnnotations)
+    bool trustsTypeAnnotations = false
 );
 
 } // namespace Luau

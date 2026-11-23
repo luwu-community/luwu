@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/BytecodeGraph.h"
@@ -526,6 +526,14 @@ struct BytecodeGraphSerializer
             bcb.emitAux(static_cast<uint32_t>(getImmBool(insn, 1)) << 31 | getVmConstInputAux(insn, 3));
             break;
 
+        case LOP_JUMPXISA:
+            recordJump(insn, 2);
+            bcb.emitAD(insn.op, getRegInput(insn, 0), 0);
+            bcb.emitAux(
+                (getImmBool(insn, 1) ? LBC_JUMPXISA_JUMPIFINSTANCE : 0u) | getRegInput(insn, 3) | (getImmBool(insn, 4) ? LBC_JUMPXISA_CHECKCLASS : 0u)
+            );
+            break;
+
         case LOP_IDIV:
             bcb.emitABC(LOP_IDIV, getRegister(insnOp), getRegInput(insn, 0), getRegInput(insn, 1));
             break;
@@ -535,7 +543,7 @@ struct BytecodeGraphSerializer
             break;
 
         case LOP_NEWCLASSMEMBER:
-            LUAU_ASSERT(FFlag::DebugLuauUserDefinedClasses);
+            LUAU_ASSERT(FFlag::LuwuClasses);
             bcb.emitABC(LOP_NEWCLASSMEMBER, getRegInput(insn, 0), 0, getRegInput(insn, 1));
             bcb.emitAux(getVmConstInputAux(insn, 2));
             break;
@@ -544,6 +552,33 @@ struct BytecodeGraphSerializer
             recordJump(insn, 2);
             bcb.emitAD(LOP_CMPPROTO, getRegInput(insn, 0), 0);
             bcb.emitAux(getImmInt(insn, 1));
+            break;
+
+        case LOP_CHECKSELFCLASS:
+            bcb.emitABC(
+                LOP_CHECKSELFCLASS,
+                getRegInput(insn, 0),
+                // see the parser: index 2 records whether operand B was the LBC_SELFCLASS_OWNER
+                // sentinel rather than a real register
+                getImmInt(insn, 2) ? uint8_t(LBC_SELFCLASS_OWNER) : getRegInput(insn, 1),
+                uint8_t(getImmInt(insn, 3))
+            );
+            bcb.emitAux(getVmConstInputAux(insn, 4));
+            break;
+
+        case LOP_GETOBJECTMEMBER:
+            bcb.emitABC(LOP_GETOBJECTMEMBER, getRegister(insnOp), getRegInput(insn, 0), 0);
+            bcb.emitAux(getImmInt(insn, 1));
+            break;
+
+        case LOP_SETOBJECTMEMBER:
+            bcb.emitABC(LOP_SETOBJECTMEMBER, getRegInput(insn, 0), getRegInput(insn, 1), 0);
+            bcb.emitAux(getImmInt(insn, 2));
+            break;
+
+        case LOP_NEWOBJECT:
+            bcb.emitABC(LOP_NEWOBJECT, getRegister(insnOp), getRegInput(insn, 0), uint8_t(getImmInt(insn, 1)));
+            bcb.emitAux(getImmInt(insn, 2));
             break;
 
         case LOP__COUNT:

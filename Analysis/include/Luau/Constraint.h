@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Ast.h" // Used for some of the enumerations
@@ -58,6 +58,13 @@ struct GeneralizationConstraint
     /// If true, never introduce generics.  Always replace free types by their
     /// bounds or unknown. Presently used only to generalize the whole module.
     bool noGenerics = false;
+
+    // Luwu Classes (rfcs/classes): a generic class's instance method read through the class value
+    // (`Box.get`). Bound, once the method is generalized, to its type quantified over the class's
+    // own generics too, which the class value doesn't instantiate.
+    std::optional<TypeId> classValueMethodType;
+    std::vector<TypeId> classGenerics;
+    std::vector<TypePackId> classGenericPacks;
 };
 
 // variables ~ iterate iterator
@@ -127,6 +134,12 @@ struct FunctionCheckConstraint
     class AstExprCall* callSite = nullptr;
     NotNull<DenseHashMap<const AstExpr*, TypeId>> astTypes;
     NotNull<DenseHashMap<const AstExpr*, TypeId>> astExpectedTypes;
+
+    // The type this call is expected to produce, if any. Used to solve the generics of a nominal
+    // the call constructs before its arguments are checked, so that a literal argument is checked
+    // against the expected type argument rather than widened. See FunctionCallConstraint's own
+    // `expectedType`, which resolves the same generics after the fact for a different purpose.
+    std::optional<TypeId> expectedType;
 };
 
 // prim FreeType ExpectedType PrimitiveType
@@ -313,6 +326,38 @@ struct TypeInstantiationConstraint
     std::vector<TypePackId> typePackArguments;
 };
 
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): fills in one member of a generic class instantiation (`Box<number>`) whose type
+// was not known yet when the instantiation was made.
+//
+// A generic class can be instantiated before its own members are solved. This always happens for a
+// reference to the class from inside its own body, and for a forward reference to a class declared
+// later in the file. At that point each member's type is still a BlockedType. Copying that BlockedType
+// into the instantiation would share it with the template. When it was bound later, the instantiation
+// would see the uninstantiated member, and `Box<number>:get()` would return `T`.
+//
+// Normally the expansion waits for these members. If it is force-dispatched first, the instantiation
+// gets a fresh BlockedType for each blocked member instead. This constraint binds that BlockedType to
+// the substituted member once the template's member is known (or to the error type, if it never is).
+struct InstantiateNominalPropConstraint
+{
+    // The member's type on the template class, blocked until the class body is solved.
+    TypeId templateProp;
+    // The BlockedType standing in for it on the instantiation, which this constraint binds.
+    TypeId target;
+
+    // The class being instantiated and the instantiation itself, so that a member mentioning the
+    // class (`self`, or a method returning `Box<T>`) lands on the instantiation rather than on a
+    // second copy of it.
+    TypeId templateType;
+    TypeId instantiatedType;
+
+    // The template's parameters paired positionally with the arguments the instantiation supplied.
+    std::vector<TypeId> typeParams;
+    std::vector<TypeId> typeArguments;
+    std::vector<TypePackId> typePackParams;
+    std::vector<TypePackId> typePackArguments;
+};
+
 struct PushTypeConstraint
 {
     TypeId expectedType;
@@ -343,7 +388,8 @@ using ConstraintV = Variant<
     SimplifyConstraint,
     PushFunctionTypeConstraint,
     PushTypeConstraint,
-    TypeInstantiationConstraint>;
+    TypeInstantiationConstraint,
+    InstantiateNominalPropConstraint>;
 
 struct Constraint
 {

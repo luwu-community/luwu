@@ -1,4 +1,4 @@
--- This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 -- pairs/ipairs may be substituted through getfenv
 -- however, they *must* be substituted with functions - we don't support them falling back to generalized iteration
 -- next may be substituted, but only with a function or a table. we do not optimize next under the presence of get/setfenv

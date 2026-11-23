@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lstring.h"
 
@@ -8,7 +8,7 @@
 
 #include <string.h>
 
-LUAU_FASTFLAG(LuauExternalString)
+LUAU_FASTFLAG(LuwuExternalString)
 
 unsigned int luaS_hash(const char* str, size_t len)
 {
@@ -167,7 +167,7 @@ TString* luaS_newlstr(lua_State* L, const char* str, size_t l)
 
 TString* luaS_newexternallstr(lua_State* L, const char* str, size_t l, void* userdata, lua_StringFree free_cb)
 {
-    LUAU_ASSERT(FFlag::LuauExternalString);
+    LUAU_ASSERT(FFlag::LuwuExternalString);
     if (l > MAXSSIZE)
     {
         if (free_cb)

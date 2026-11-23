@@ -1,4 +1,4 @@
--- This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 local function checkerror(msg, f, ...)
 	local s, err = pcall(f, ...)
 	assert(not s and string.find(err, msg))

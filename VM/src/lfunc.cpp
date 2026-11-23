@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lfunc.h"
 
@@ -41,6 +41,7 @@ Proto* luaF_newproto(lua_State* L)
     f->typeinfo = NULL;
 
     f->userdata = NULL;
+    f->ownerclass = NULL;
 
     f->gclist = NULL;
 
@@ -109,7 +110,15 @@ Closure* luaF_newFatCclosure(lua_State* L, size_t sz, LuaTable* e)
     c->fatc.debugname = NULL;
     c->fatc.dtor = NULL;
     c->fatc.size = sz;
+    c->fatc.df = NULL;
     return c;
+}
+
+int luaF_calldatacfunction(lua_State* L)
+{
+    Closure* cl = clvalue(L->ci->func);
+    LUAU_ASSERT(cl->isC == 2 && cl->fatc.df);
+    return cl->fatc.df(L, cl->fatc.data, int(L->top - L->base));
 }
 
 UpVal* luaF_findupval(lua_State* L, StkId level)

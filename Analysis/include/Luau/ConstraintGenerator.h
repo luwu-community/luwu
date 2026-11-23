@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Ast.h"
@@ -71,6 +71,27 @@ struct ClassDeclRecord
 {
     TypeId ty = nullptr;
     DenseHashMap<AstName, TypeId> memberTypes{AstName{""}};
+    // The type of the class's constructor (the `__call` metamethod on the
+    // class value). Blocked until `__init`'s signature is known, if the class
+    // defines `__init` or a primary constructor; otherwise resolved eagerly to
+    // the default POD constructor's type.
+    TypeId ctorTy = nullptr;
+
+    // Luwu Classes (rfcs/classes): the `__init` a primary constructor implies. Blocked until the
+    // parameters' annotations have been resolved, alongside ctorTy. Null when the class has no
+    // primary constructor -- a POD class's `__init` is resolved eagerly, and an explicit one is a
+    // member like any other.
+    TypeId primaryInitTy = nullptr;
+
+    // The class's own generics (e.g. the `T` in `class Box<T> ... end`), under
+    // LuwuGenericNominals. Empty for non-generic classes.
+    std::vector<GenericTypeDefinition> typeParams;
+    std::vector<GenericTypePackDefinition> typePackParams;
+
+    // Luwu Classes (rfcs/classes): for a generic class, the type of each instance method as read
+    // through the class value, blocked until the method is generalized (see GeneralizationConstraint).
+    // A non-generic class shares the instance member's type instead.
+    DenseHashMap<AstName, TypeId> classValueMethodTypes{AstName{""}};
 };
 
 struct ConstraintGenerator
@@ -104,6 +125,7 @@ struct ConstraintGenerator
     // See the functions recordInferredBinding and fillInInferredBindings.
     DenseHashMap<Symbol, InferredBinding> inferredBindings{{}};
 
+    // Remove constraints, freeTypes, and scopeToFunction with DebugLuauCyclicRequireTypeInference: these move to ConstraintGraph (cgraph).
     // Constraints that go straight to the solver.
     std::vector<ConstraintPtr> constraints;
 
@@ -117,8 +139,14 @@ struct ConstraintGenerator
     DenseHashMap<const AstStatTypeAlias*, ScopePtr> astTypeAliasDefiningScopes{nullptr};
 
     // The private scope of an extern type declaration, used to resolve type references
-    // (e.g. a generic method's own type parameters) within its body. See LuauExternTypeUseDefinitionScope.
+    // (e.g. a generic method's own type parameters) within its body. See LuwuExternTypeUseDefinitionScope.
     DenseHashMap<const AstStatDeclareExternType*, ScopePtr> astExternTypeDefiningScopes{nullptr};
+    DenseHashMap<const AstStatClass*, ScopePtr> astClassDefiningScopes{nullptr};
+
+    // Luwu Classes (rfcs/classes): names bound by a class declaration. `checkGlobal` resolves a
+    // class referenced past a control-flow join by its binding, and must not do that for any other
+    // global: see the comment there.
+    DenseHashSet<AstName> classGlobalNames{AstName{}};
 
     NotNull<const DataFlowGraph> dfg;
     RefinementArena refinementArena;
@@ -268,6 +296,10 @@ private:
 
         // Sometimes the type we're discriminating against is implicitly nil.
         bool shouldAppendNilType = false;
+
+        // Luwu: the tests on properties that refine this def: the path from it to the property (`enc` for `h` in
+        // `not h.enc`, empty for `h.enc` itself) and the property's discriminant (`falsy`)
+        std::vector<std::pair<std::string, TypeId>> propertyTests;
     };
 
     using RefinementContext = InsertionOrderedMap<DefId, RefinementPartition>;
@@ -289,6 +321,15 @@ private:
         std::vector<ConstraintV>* constraints
     );
     void applyRefinements(const ScopePtr& scope, Location location, RefinementId refinement);
+    void forgetPropertyTests(const ScopePtr& scope, AstExpr* assigned, AstExpr* table, const std::string& name);
+    TypeId refineUnlessContradicted(
+        const ScopePtr& scope,
+        Location location,
+        DefId def,
+        TypeId unrefined,
+        TypeId refined,
+        const RefinementPartition& partition
+    );
 
     LUAU_NOINLINE void prototypeTypeDefinitions(const ScopePtr& scope, AstStatBlock* block);
 
@@ -536,6 +577,9 @@ private:
      */
     void prepopulateGlobalScope(const ScopePtr& globalScope, AstStatBlock* program);
 
+    // Luwu forwarded module types: a module root returning another module's value exports that module's types too
+    void forwardRequiredTypes(AstStatBlock* block);
+
     bool recordPropertyAssignment(TypeId ty);
 
     // Record the fact that a particular local has a particular type in at least
@@ -565,6 +609,20 @@ private:
     void updateRValueRefinements(const ScopePtr& scope, DefId def, TypeId ty) const;
     void updateRValueRefinements(Scope* scope, DefId def, TypeId ty) const;
     void resolveGenericDefaultParameters(const ScopePtr& defnScope, AstStatTypeAlias* alias, const TypeFun& fun);
+
+    // Binds a generic parameter list's names into `defnScope` and, for each parameter that was
+    // written with a default (`<T = string>`), resolves that default and unblocks the placeholder
+    // `createGenerics`/`createGenericPacks` left in the corresponding GenericTypeDefinition.
+    //
+    // Binding and resolution are interleaved in declaration order so that a later default can refer
+    // to an earlier parameter, as in `<A, B = A>`.
+    void resolveGenericDefaultParameters(
+        const ScopePtr& defnScope,
+        AstArray<AstGenericType*> generics,
+        AstArray<AstGenericTypePack*> genericPacks,
+        const std::vector<GenericTypeDefinition>& typeParams,
+        const std::vector<GenericTypePackDefinition>& typePackParams
+    );
 };
 
 } // namespace Luau

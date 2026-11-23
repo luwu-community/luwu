@@ -1,4 +1,4 @@
--- --bench-args: --fflags=DebugLuauUserDefinedClasses,DebugLuauUserDefinedClassesRuntime
+-- --bench-args: --fflags=LuwuClasses
 local function prequire(name) local success, result = pcall(require, name); return success and result end
 local bench = script and require(script.Parent.bench_support) or prequire("bench_support") or require("../bench_support")
 
@@ -92,8 +92,8 @@ local FileG
 local FileH
 
 class Bitboard
-	public l: number
-	public h: number
+	l: number
+	h: number
 
 	function toString(self)
 		local out = {}
@@ -287,17 +287,17 @@ local KNIGHT_MOVES = {{2,1}, {2,-1}, {-2,1}, {-2,-1}, {1,2}, {1,-2}, {-1,2}, {-1
 class Board
 
 	-- Spellcheck?
-	public ocupied: Bitboard
-	public white: Bitboard
-	public black: Bitboard
-	public unocupied: Bitboard
-	public ep: Bitboard
-	public castle: Bitboard
-	public toMove: number
-	public hm: number
-	public moves: number
-	public material: number
-	public state: { [number]: Bitboard }
+	ocupied: Bitboard
+	white: Bitboard
+	black: Bitboard
+	unocupied: Bitboard
+	ep: Bitboard
+	castle: Bitboard
+	toMove: number
+	hm: number
+	moves: number
+	material: number
+	state: { [number]: Bitboard }
 
 	function new()
 		return Board {

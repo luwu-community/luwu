@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include "Luau/Error.h"
@@ -125,6 +125,13 @@ std::vector<TypeId> reduceUnion(const std::vector<TypeId>& types);
  * @returns a type with nil removed, or nil itself if that were the only option.
  */
 TypeId stripNil(NotNull<BuiltinTypes> builtinTypes, TypeArena& arena, TypeId ty);
+
+// Luwu: `v:m(...)` where `v` is a union whose members each have their own `m`: one function that takes any of their
+// `self`s, arguments every `m` accepts (each parameter after `self` is the intersection of theirs), and returns any of
+// their results. Sound only for a method call, where each member's `m` only ever gets that member as `self`; `local f =
+// v.m; f(v)` could pair one member's `m` with another member. Nothing when the `m`s have generics, or different numbers of
+// parameters or returns.
+std::optional<TypeId> mergeUnionMethods(NotNull<BuiltinTypes> builtinTypes, NotNull<TypeArena> arena, TypeId fn);
 
 struct ErrorSuppression
 {
@@ -443,5 +450,26 @@ bool isBlocked(TypeId ty);
  *         union of functions.
  */
 std::optional<TypePackId> getApproximateReturnTypeForFunctionCall(TypeId ty);
+
+/**
+ * Names the operands of an operator that could be `nil`, for an error message: "one or both operands
+ * could be `nil`", "the left operand could be `nil`", "the operand could be `nil`".
+ *
+ * `nil` never carries a metamethod, so an optional operand is always a reason the operator could not
+ * be applied -- and, unlike a missing metamethod on a type the reader did not think they were using,
+ * it is the reason they can act on.
+ *
+ * Pass nullopt for `right` for a unary operator. Returns nullopt when no operand could be `nil`.
+ * Deliberately narrower than `isOptional`, which also answers true for `any` and `unknown`.
+ */
+std::optional<std::string> describeOptionalOperands(TypeId left, std::optional<TypeId> right);
+
+/**
+ * Luwu Classes (rfcs/classes): whether `location`, a position in module `moduleName`, lies inside
+ * `cls`'s class declaration (for `private` members and private constructors). A class's location
+ * belongs to the module that declares it, so a location in any other module is outside, whatever
+ * its line and column.
+ */
+bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleName, const Location& location);
 
 } // namespace Luau

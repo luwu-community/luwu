@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #pragma once
 
@@ -142,6 +142,16 @@
 
 #ifndef LUA_VECTOR_SIZE
 #define LUA_VECTOR_SIZE 3 // must be 3 or 4
+#endif
+
+#ifndef LUA_VECTOR_DOUBLE
+#define LUA_VECTOR_DOUBLE 0
+#endif
+
+#if LUA_VECTOR_DOUBLE == 1
+#define LUA_VECTOR_TYPE double
+#else
+#define LUA_VECTOR_TYPE float
 #endif
 
 #define LUA_EXTRA_SIZE (LUA_VECTOR_SIZE - 2)

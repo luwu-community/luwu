@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
 #include <string.h>
@@ -8,6 +8,7 @@
 #ifdef _MSC_VER
 #define LUAU_NORETURN __declspec(noreturn)
 #define LUAU_NOINLINE __declspec(noinline)
+#define LUAU_MAYBE_UNUSED
 #define LUAU_FORCEINLINE __forceinline
 #define LUAU_LIKELY(x) x
 #define LUAU_UNLIKELY(x) x
@@ -16,6 +17,7 @@
 #else
 #define LUAU_NORETURN __attribute__((__noreturn__))
 #define LUAU_NOINLINE __attribute__((noinline))
+#define LUAU_MAYBE_UNUSED __attribute__((unused))
 #define LUAU_FORCEINLINE inline __attribute__((always_inline))
 #define LUAU_LIKELY(x) __builtin_expect(x, 1)
 #define LUAU_UNLIKELY(x) __builtin_expect(x, 0)

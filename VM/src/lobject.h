@@ -1,4 +1,4 @@
-// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+// This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #pragma once
 
@@ -50,6 +50,18 @@ typedef struct lua_TValue
     int tt;
 } TValue;
 
+#if LUA_VECTOR_SIZE == 4
+#define condvector4(vec4expr, vec3expr) vec4expr
+#else
+#define condvector4(vec4expr, vec3expr) vec3expr
+#endif
+
+#if LUA_VECTOR_DOUBLE == 1
+#define condvectordouble(vecdoubleexpr, vecfloatexpr) vecdoubleexpr
+#else
+#define condvectordouble(vecdoubleexpr, vecfloatexpr) vecfloatexpr
+#endif
+
 // Macros to test type
 #define ttisnil(o) (ttype(o) == LUA_TNIL)
 #define ttissymnone(o) (ttype(o) == LUA_TSYMNONE)
@@ -74,7 +86,7 @@ typedef struct lua_TValue
 #define pvalue(o) check_exp(ttislightuserdata(o), (o)->value.p)
 #define nvalue(o) check_exp(ttisnumber(o), (o)->value.n)
 #define lvalue(o) check_exp(ttisinteger(o), (o)->value.l)
-#define vvalue(o) check_exp(ttisvector(o), (o)->value.v)
+#define vvalue(o) check_exp(ttisvector(o), condvectordouble((o)->value.gc->vec.v, (o)->value.v))
 #define tsvalue(o) check_exp(ttisstring(o), &(o)->value.gc->ts)
 #define uvalue(o) check_exp(ttisuserdata(o), &(o)->value.gc->u)
 #define clvalue(o) check_exp(ttisfunction(o), &(o)->value.gc->cl)
@@ -119,25 +131,24 @@ typedef struct lua_TValue
         i_o->extra[0] = 0; \
     }
 
-#if LUA_VECTOR_SIZE == 4
-#define setvvalue(obj, x, y, z, w) \
+#if LUA_VECTOR_DOUBLE == 1
+#define setvvalue(L, obj, x, y, z, w) \
     { \
         TValue* i_o = (obj); \
-        float* i_v = i_o->value.v; \
-        i_v[0] = (x); \
-        i_v[1] = (y); \
-        i_v[2] = (z); \
-        i_v[3] = (w); \
+        LuauVector* i_vec = luaVec_newvector((L), double(x), double(y), double(z), condvector4(double(w), 0)); \
+        i_o->value.gc = cast_to(GCObject*, i_vec); \
         i_o->tt = LUA_TVECTOR; \
+        checkliveness((L)->global, i_o); \
     }
 #else
-#define setvvalue(obj, x, y, z, w) \
+#define setvvalue(L, obj, x, y, z, w) \
     { \
         TValue* i_o = (obj); \
         float* i_v = i_o->value.v; \
-        i_v[0] = (x); \
-        i_v[1] = (y); \
-        i_v[2] = (z); \
+        i_v[0] = float(x); \
+        i_v[1] = float(y); \
+        i_v[2] = float(z); \
+        condvector4(i_v[3] = float(w), (void)(w)); \
         i_o->tt = LUA_TVECTOR; \
     }
 #endif
@@ -258,12 +269,19 @@ typedef struct lua_TValue
 #define setobj2t setobj
 // to new object (no barrier)
 #define setobj2n setobj
-// to class instance or static member (needs barrier)
+// to object or static member (needs barrier)
 #define setobj2class setobj
 
 #define setttype(obj, tt) (ttype(obj) = (tt))
 
 #define iscollectable(o) (ttype(o) >= LUA_TSTRING)
+
+// wrapper for returning userdata properties directly
+struct DirectFieldResult
+{
+    lua_State* L;
+    TValue* slot;
+};
 
 typedef TValue* StkId; // index to stack elements
 
@@ -378,6 +396,14 @@ inline void setintegerheap(TValue* obj, HeapInteger* heap, IntegerMode mode) {
     obj->extra[0] = mode;
 }
 
+typedef struct LuauVector
+{
+    CommonHeader;
+    // 1 byte padding
+
+    LUA_VECTOR_TYPE v[LUA_VECTOR_SIZE];
+} LuauVector;
+
 enum FeedbackVectorSlotKind
 {
     CALL_TARGET
@@ -432,6 +458,20 @@ typedef struct Proto
     uint8_t* typeinfo;
 
     void* userdata;
+
+    // Luwu Classes (rfcs/classes): the class this proto belongs to, or NULL. A proto belongs to a
+    // class if it is one of the class's own methods (including `__init` and `__defaults`), or if it is
+    // lexically nested anywhere inside one.
+    //
+    // It is set on the whole tree of nested protos when the method closure is registered
+    // (luaR_addclassmember, luaR_stampownerclass). It is GC-marked in traverseproto.
+    //
+    // The interpreter (luaR_closureownsprivateaccess) and native codegen both use it to authorize
+    // private and const member access without scanning the class's static members. Method protos and
+    // the protos nested in them are unique per class, so `object->lclass ==
+    // currentClosure->l.p->ownerclass` is exactly the "closure owns private access" test. A const write
+    // additionally requires the closure to be the class's `__init`.
+    struct LuauClass* ownerclass;
 
     GCObject* gclist;
 
@@ -525,6 +565,9 @@ typedef struct Closure
             const char* debugname;
             void (*dtor)(struct lua_State* L, void* data, size_t sz);
             size_t size;
+            // Luwu: the function lua_pushdatacfunctionk was given, which `f` (luaF_calldatacfunction) calls; NULL for other
+            // fat closures
+            int (*df)(struct lua_State* L, void* data, int nargs);
             alignas(8) char data[1];
         } fatc;
 
@@ -622,7 +665,8 @@ typedef struct LuauClass
     // Mapping from member name to offset.
     LuaTable* memberstooffset;
 
-    // Mapping from offset to member name.
+    // Mapping from offset to member name. NULL at `initoffset`: `__init` is only ever resolved by name
+    // (see luaR_sealclassshape).
     TString** offsettomember;
 
     // Metatable for this *class object*. At time of writing this only contains
@@ -644,8 +688,54 @@ typedef struct LuauClass
     // to reference the specific number of static members, but it's very common
     // to reference the total number of members (for validating hot paths in
     // the interpreter) and the number of instance members (branching on
-    // instance or static members, creating class instances).
+    // instance or static members, creating objects).
     uint32_t numberofallmembers;
+
+    // Set when this class defines a user `__init` method. When true, the
+    // class's constructor (`ClassName(...)`) calls `__init(self, ...)`
+    // instead of the default POD table-copy constructor.
+    bool hascustominit;
+
+    // The member offset of `__init` (index `staticmembers` with it minus `numberofinstancemembers`).
+    // Every class has an `__init` member; its slot holds a closure only when `hascustominit` is set.
+    // Used by construction, the private-constructor check and the `const`-write check.
+    uint32_t initoffset;
+
+    // Set when this class's `__init` is the one a primary constructor implies (`class Cat(name)`),
+    // i.e. it does nothing but assign fields from its parameters. That is what makes it sound for a
+    // construction site to initialize the instance positionally and skip the call entirely -- see
+    // LOP_NEWOBJECT's FIELDS form, which checks this before honoring that shape on a class with a
+    // custom `__init`. Only ever set together with `hascustominit`.
+    bool hasprimaryinit;
+
+    // Per-member attribute bits, indexed by the same offset as `offsettomember` (see
+    // LBC_CLASSMEMBER_* in Luau/Bytecode.h). Owned by this class object; freed in luaR_freeclass.
+    uint8_t* memberflags;
+
+    // True if any entry in `memberflags` has LBC_CLASSMEMBER_PRIVATE set. Lets a member access whose
+    // slot is already cached skip the private-access check entirely for classes without one.
+    bool hasprivatemembers;
+
+    // True if any entry in `memberflags` has LBC_CLASSMEMBER_CONST set. Same idea as
+    // `hasprivatemembers`, but for skipping the const-write check on SETTABLEKS.
+    bool hasconstmembers;
+
+    // True if this class has a synthesized `__defaults` static member: a niladic function,
+    // compiled alongside POD classes with at least one field default, that returns every field's
+    // default value (nil where unset) in declaration order. Only ever set when some field has a
+    // default and there's no custom `__init` (see hascustominit).
+    bool haspoddefaultsfn;
+
+    // The offset of `__defaults` in `staticmembers`, only meaningful when haspoddefaultsfn is set.
+    uint32_t poddefaultsoffset;
+
+    // Compile-time-constant field defaults: one TValue per instance member, in the same offset order
+    // as `offsettomember`, nil for a member with no default. Copied straight into a new instance by
+    // the POD constructor, which is why such a class needs no `__defaults` closure at all. NULL when
+    // the class has no defaults, or when any default is a non-constant expression (that one has to be
+    // re-evaluated per construction, so the whole class falls back to `__defaults`). Owned by this
+    // class object; freed in luaR_freeclass and marked in traverseclass.
+    TValue* memberdefaults;
 
 } LuauClass;
 
@@ -667,6 +757,12 @@ typedef struct LuauObject
     TValue* members;
 
 } LuauObject;
+
+// Luwu Classes (rfcs/classes): an object's members are allocated inline, immediately after its
+// header (luaR_objectsize, luaR_newobject, luaR_newobjectuninit), so `members` always equals
+// `(TValue*)(object + 1)`. Native code addresses members from the object pointer with this offset
+// instead of loading `members`; anything that ever allocates members out of line must change both.
+#define LUAR_OBJECT_MEMBERS_OFFSET sizeof(LuauObject)
 
 /*
 ** `module' operation for hashing (size is always a power of 2)
