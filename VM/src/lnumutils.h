@@ -129,6 +129,8 @@ inline double luai_lerpd(double a, double b, double t)
 
 LUAI_FUNC char* luai_num2str(char* buf, double n);
 LUAI_FUNC char* luai_int2str(char* buf, int64_t n);
+// Luwu: `n` the way snprintf's `%.<precision>f` prints it, or null when snprintf has to (see lnumprint.cpp)
+LUAI_FUNC char* luai_fixed2str(char* buf, double n, int precision);
 
 #define luai_str2num(s, p) strtod((s), (p))
 #define luai_str2long(s, p, base) strtoll((s), (p), base)
