@@ -1143,13 +1143,9 @@ struct Compiler
             return;
 
         const char* owner = nullptr;
-        const char* name = describeInlineTarget(func, owner);
-        // a method is written `Class:method`, a static function `Class.f`
-        std::string written = name;
-        if (owner)
-            written = format("%s:%s", owner, name);
-        else if (AstStatClass* staticOwner = staticFunctionClass(func))
-            written = format("%s.%s", staticOwner->name->name.value, name);
+        char separator = 0;
+        const char* name = describeInlineTarget(func, owner, separator);
+        std::string written = owner ? format("%s%c%s", owner, separator, name) : name;
         CompileError::raise(call->location, "'%s' is marked @[inline] but can't be inlined here because %s", written.c_str(), because.c_str());
     }
 
@@ -1174,8 +1170,10 @@ struct Compiler
     unsigned encouragedCallSites(AstExprFunction* func)
     {
         const char* owner = nullptr;
-        const char* name = describeInlineTarget(func, owner);
-        const unsigned* sites = owner ? methodCallSites.find(names.getOrAdd(name)) : directCallSites.find(func);
+        char separator = 0;
+        const char* name = describeInlineTarget(func, owner, separator);
+        bool method = owner && separator == ':';
+        const unsigned* sites = method ? methodCallSites.find(names.getOrAdd(name)) : directCallSites.find(func);
         return sites ? std::max(*sites, 1u) : 1u;
     }
 
@@ -1224,11 +1222,12 @@ struct Compiler
     void reportInlineTooExpensive(AstExprFunction* func, int inlinedCost, int inlineProfit)
     {
         const char* owner = nullptr;
-        const char* name = describeInlineTarget(func, owner);
+        char separator = 0;
+        const char* name = describeInlineTarget(func, owner, separator);
 
         if (owner)
             bytecode.addDebugRemark(
-                "inlining failed: %s:%s is too expensive (cost %d, profit %.2fx)", owner, name, inlinedCost, double(inlineProfit) / 100
+                "inlining failed: %s%c%s is too expensive (cost %d, profit %.2fx)", owner, separator, name, inlinedCost, double(inlineProfit) / 100
             );
         else
             bytecode.addDebugRemark("inlining failed: %s is too expensive (cost %d, profit %.2fx)", name, inlinedCost, double(inlineProfit) / 100);
@@ -1402,7 +1401,8 @@ struct Compiler
         }
 
         const char* inlinedOwner = nullptr;
-        const char* inlinedName = describeInlineTarget(func, inlinedOwner);
+        char inlinedSeparator = 0;
+        const char* inlinedName = describeInlineTarget(func, inlinedOwner, inlinedSeparator);
 
         // Luwu: the instructions inlining has added to this function so far, counting an inline still being compiled
         uint32_t spent = inlinedInstructions;
@@ -1424,12 +1424,25 @@ struct Compiler
         if (onlyCallSite && overLimit)
             bytecode.addDebugRemark("inlining past the cost model: the only call site of a function (cost %d)", inlinedCost);
 
+        // Luwu: a call @[inline] decided says so, and whether the cost model would have inlined it anyway
+        if (encouraged && bytecode.needsDebugRemarks())
+        {
+            std::string written = inlinedOwner ? format("%s%c%s", inlinedOwner, inlinedSeparator, inlinedName) : inlinedName;
+            if (inlinedCost <= threshold || onlyCallSite)
+                bytecode.addDebugRemark("inlining forced by @inline: %s (it would have inlined without it)", written.c_str());
+            else
+                bytecode.addDebugRemark(
+                    "inlining forced by @inline: %s (without it, cost %d is over the threshold of %d)", written.c_str(), inlinedCost, threshold
+                );
+        }
+
         // Luwu Classes: a method call's remark says how its receiver's class was known, `proven` or `trusted` (from an
         // annotation under `--!trust`), since only a trusted one turns a wrong annotation into a runtime error
         if (inlinedOwner && receiverKnownBy)
             bytecode.addDebugRemark(
-                "inlining succeeded: %s:%s (cost %d, profit %.2fx, depth %d, %s)",
+                "inlining succeeded: %s%c%s (cost %d, profit %.2fx, depth %d, %s)",
                 inlinedOwner,
+                inlinedSeparator,
                 inlinedName,
                 inlinedCost,
                 double(inlineProfit) / 100,
@@ -1438,8 +1451,9 @@ struct Compiler
             );
         else if (inlinedOwner)
             bytecode.addDebugRemark(
-                "inlining succeeded: %s:%s (cost %d, profit %.2fx, depth %d)",
+                "inlining succeeded: %s%c%s (cost %d, profit %.2fx, depth %d)",
                 inlinedOwner,
+                inlinedSeparator,
                 inlinedName,
                 inlinedCost,
                 double(inlineProfit) / 100,
@@ -1865,15 +1879,45 @@ struct Compiler
     //
     // Cheap enough to call unconditionally: remarks are dropped unless Dump_Remarks is set, but the
     // arguments are still evaluated, so this does lookups rather than building a string.
-    const char* describeInlineTarget(AstExprFunction* func, const char*& owner)
+    // `owner` is the class of a method (written `Class:method`, `separator` ':') or a static function (`Class.f`, '.'),
+    // and null for any other function.
+    const char* describeInlineTarget(AstExprFunction* func, const char*& owner, char& separator)
     {
         owner = nullptr;
+        separator = 0;
 
         if (FFlag::LuwuClasses)
+        {
             if (AstStatClass** cls = classMethodOwner.find(func); cls && *cls)
+            {
                 owner = (*cls)->name->name.value;
+                separator = ':';
+            }
+            else if (AstStatClass* cls = staticFunctionClass(func))
+            {
+                owner = cls->name->name.value;
+                separator = '.';
+            }
+        }
 
         return func->debugname.value ? func->debugname.value : "<anonymous>";
+    }
+
+    // Luwu @noinline (rfcs/noinline-attribute.md): the remark for a call that `@noinline` kept from inlining. False
+    // when the callee isn't marked.
+    bool remarkNoinline(AstExprFunction* func)
+    {
+        if (!FFlag::LuwuNoinlineAttribute || !func->hasAttribute(AstAttr::Type::Noinline))
+            return false;
+
+        const char* owner = nullptr;
+        const char* name = describeInlineTarget(func, owner);
+
+        if (owner)
+            bytecode.addDebugRemark("inlining failed: %s:%s is marked @noinline", owner, name);
+        else
+            bytecode.addDebugRemark("inlining failed: %s is marked @noinline", name);
+        return true;
     }
 
     // May this compilation act on a type annotation nothing verified? Only when the file says so with
@@ -4496,7 +4540,7 @@ struct Compiler
                 return;
 
             // add a debug remark for cases when we didn't even call tryCompileInlinedCall
-            if (func && !(fi && fi->canInline))
+            if (func && !(fi && fi->canInline) && !remarkNoinline(func))
             {
                 refuseEncouragedInline(expr, func, whyNeverInlined(func, fi != nullptr));
 
@@ -4571,6 +4615,9 @@ struct Compiler
                         /* receiverKnownBy= */ trusted ? "trusted" : "proven"
                     ))
                     return;
+
+                if (fi && !fi->canInline)
+                    remarkNoinline(mfunc);
             }
         }
 

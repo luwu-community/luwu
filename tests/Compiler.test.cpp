@@ -14373,6 +14373,32 @@ RETURN R1 1
     );
 }
 
+TEST_CASE("NoinlineAttributeExplainsItselfInRemarks")
+{
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    std::string remarks = compileWithRemarks(R"(
+@noinline
+local function foo()
+    return 42
+end
+
+class Cat
+    @noinline
+    function meow(self)
+        return 1
+    end
+end
+
+local cat = Cat()
+return foo(), cat:meow()
+)");
+
+    CHECK(remarks.find("inlining failed: foo is marked @noinline") != std::string::npos);
+    CHECK(remarks.find("inlining failed: Cat:meow is marked @noinline") != std::string::npos);
+}
+
 TEST_CASE("NoinlineAttributeIsNotMarkedInlinable")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuwuNoinlineAttribute, true}, {FFlag::LuauEmitCallFeedback, true}};
@@ -16278,6 +16304,35 @@ TEST_CASE("EncouragedInlineWeighsAThirdOfTheSize")
     const char* encouraged = "@[inline(\"main's hot path\")]\n"
                              "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n" LUWU_SIX_CALLS("big");
     CHECK_EQ(countCalls(compileFunction(encouraged, 1, 2)), 0);
+}
+
+// Luwu: a call `@[inline]` decided says so in its remark, and whether the cost model would have inlined it anyway
+TEST_CASE("EncouragedInlineSaysSoInRemarks")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuEncourageInline, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    std::string remarks = compileWithRemarks("@[inline(\"main's hot path\")]\n"
+                                             "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n" LUWU_SIX_CALLS("big"));
+    CHECK_MESSAGE(remarks.find("inlining forced by @inline: big (without it, cost") != std::string::npos, remarks);
+
+    remarks = compileWithRemarks(R"(
+class Size
+    @[inline("a tiny helper")]
+    function double(n: number): number
+        return n * 2
+    end
+end
+
+local function main(n)
+    return Size.double(n) + Size.double(n + 1)
+end
+return main
+)");
+    CHECK_MESSAGE(remarks.find("inlining forced by @inline: Size.double (it would have inlined without it)") != std::string::npos, remarks);
+    CHECK_MESSAGE(remarks.find("inlining succeeded: Size.double (cost") != std::string::npos, remarks);
 }
 
 // Luwu: a call to an `@[inline]` function that still isn't inlined is a compile error at the call, saying why. Where the
