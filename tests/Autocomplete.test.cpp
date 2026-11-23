@@ -5488,6 +5488,33 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_without_required_ar
     CHECK(!ac.entryMap["deprecated"].insertText);
 }
 
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_inserts_its_required_arguments")
+{
+    // `@[lint]` has to name the lints it turns on, and a `@[nolint]` that names none is linted against
+    check(R"(
+        \@[li@1]
+        function foo() end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("lint"));
+    CHECK_EQ(ac.entryMap["lint"].insertText, "lint()");
+    REQUIRE(ac.entryMap.count("nolint"));
+    CHECK_EQ(ac.entryMap["nolint"].insertText, "nolint()");
+    REQUIRE(ac.entryMap.count("native"));
+    CHECK(!ac.entryMap["native"].insertText);
+
+    // Only a `@[...]` list takes arguments
+    check(R"(
+        \@li@1
+        function foo() end
+    )");
+
+    ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("lint"));
+    CHECK_EQ(ac.entryMap["lint"].insertText, "[lint()]");
+}
+
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_braced_attribute")
 {
     check(R"(
