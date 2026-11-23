@@ -3841,6 +3841,47 @@ return f, g
     CHECK_EQ(found[2].location, Location(Position(6, 4), Position(6, 10)));
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): arms indented under `match` close with an `end` at their
+// indent and another at the `match`'s column. Either one alone is pointed out; arms at the `match`'s column need one.
+TEST_CASE_FIXTURE(Fixture, "MisleadingIndentationOfAMatchEnd")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+    };
+
+    LintResult result = lint(R"(
+local function f(v: number)
+    match v
+        case is 1 then
+            print("one")
+    end
+    match v
+        case is 1 then
+            print("one")
+        end
+    match v
+        case is 1 then
+            print("one")
+        end
+    end
+    match v
+    case is 1 then
+        print("one")
+    end
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MisleadingIndentation);
+    REQUIRE_EQ(found.size(), 2);
+    CHECK(found[0].text.find("Consider putting an 'end' here") != std::string::npos);
+    CHECK_EQ(found[0].location, Location(Position(5, 4), Position(5, 7)));
+    CHECK(found[1].text.find("closes the 'match' on line 7") != std::string::npos);
+    CHECK_EQ(found[1].location, Location(Position(9, 8), Position(9, 11)));
+}
+
 // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a `do` body is indented one level past the line the `do` is on. A table
 // comprehension's `when` clauses, at the `for`'s indent or one level in, don't change that for `give do`.
 // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): a comprehension's clauses are parts of the statement around it, so

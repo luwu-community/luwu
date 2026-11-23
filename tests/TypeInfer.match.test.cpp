@@ -827,6 +827,76 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_match_statement_without_else_can_fall_thro
     CHECK(toString(result.errors[1]).find("This 'match' has no 'else'") != std::string::npos);
 }
 
+// Arms indented under `match` can close with an `end` at their indent before the match's `end`. A single `end` there
+// still closes only the match, and the next `end` to its left closes the function.
+TEST_CASE_FIXTURE(BuiltinsFixture, "indented_match_arms_can_close_with_their_own_end")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function f(v: number): string
+            match v
+                case is 1 then
+                    return "one"
+                else
+                    return "other"
+                end
+            end
+        end
+
+        local function g(v: number): string
+            match v
+                case is 1 then
+                    return "one"
+                else
+                    return "other"
+                end
+        end
+
+        print(f(1), g(1))
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    for (AstStat* stat : getMainSourceModule()->root->body)
+    {
+        if (AstStatLocalFunction* fn = stat->as<AstStatLocalFunction>(); fn && fn->name->name == "f")
+        {
+            AstStatMatch* match = fn->func->body->body.data[0]->as<AstStatMatch>();
+            REQUIRE(match);
+            REQUIRE(match->armsEndLocation);
+            CHECK_EQ(match->armsEndLocation->begin, Position(8, 16));
+        }
+        if (AstStatLocalFunction* fn = stat->as<AstStatLocalFunction>(); fn && fn->name->name == "g")
+        {
+            AstStatMatch* match = fn->func->body->body.data[0]->as<AstStatMatch>();
+            REQUIRE(match);
+            CHECK(!match->armsEndLocation);
+        }
+    }
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_indented_match_arms_with_their_own_end")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    checkTypewriting(
+        *this,
+        kTypewriterBefore,
+        "match maybe()\n    case is nil then\n        print(\"none\")\n    else\n        print(\"some\")\n    end\nend",
+        kTypewriterAfter
+    );
+}
+
 // A guard statement can start with a pattern, and narrows after it like the written-out test
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_guard_can_start_with_a_pattern")
 {

@@ -24,6 +24,7 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 
 using namespace Luau;
 
@@ -3329,6 +3330,27 @@ TEST_CASE("prettyPrint_drops_comment_attributes")
     std::string printed = prettyPrint(code, {}, true).code;
     CHECK(printed.find('@') == std::string::npos);
     CHECK(printed.find("local puppy = \"whimper\"") != std::string::npos);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the `end` closing indented arms prints back where it was
+TEST_CASE("prettyPrint_match_with_an_end_for_its_arms")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    std::string code = R"(
+local function f(v)
+    match v
+        case is 1 then
+            return "one"
+        end
+    end
+end
+)";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
 TEST_SUITE_END();
