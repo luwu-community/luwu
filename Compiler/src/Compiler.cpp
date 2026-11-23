@@ -1632,6 +1632,23 @@ struct Compiler
         }
     };
 
+    // Luwu pretty bytecode dumps: the instructions of an inlined call, its arguments included, sit under the call
+    struct InlinedCallDumpScope
+    {
+        BytecodeBuilder& bytecode;
+
+        InlinedCallDumpScope(BytecodeBuilder& bytecode, AstExprFunction* func)
+            : bytecode(bytecode)
+        {
+            bytecode.pushInlinedDumpScope(func->location.begin.line + 1, func->location.end.line + 1);
+        }
+
+        ~InlinedCallDumpScope()
+        {
+            bytecode.popInlinedDumpScope();
+        }
+    };
+
     // Luwu: marks code compiled more than once (an unrolled loop's body) while it's compiled. isOnlyCallSite never
     // takes a call there for its function's only call site.
     struct RepeatedCompile
@@ -2564,6 +2581,7 @@ struct Compiler
         bool noTargetMoveElision = !fi || fi->returnLocalCaptured || targetCount == 0 || regCaptured[target];
 
         RegScope rs(this);
+        InlinedCallDumpScope dumpScope(bytecode, func);
 
         size_t oldLocals = localStack.size();
 
