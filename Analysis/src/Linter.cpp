@@ -4680,6 +4680,12 @@ public:
             context.root->visit(&collector);
         }
 
+        if (FFlag::LuwuClasses)
+        {
+            ClassCollector collector{&pass.declaredClasses};
+            context.root->visit(&collector);
+        }
+
         context.root->visit(&pass);
         pass.reportFieldMethodCalls(context.root);
     }
@@ -4691,6 +4697,8 @@ private:
     LintContext* context;
     // The names of the classes declared in this file. Empty when class hints are off.
     std::unordered_set<std::string> classes;
+    // The names of the classes declared in this file, whatever the class hints
+    std::unordered_set<std::string> declaredClasses;
 
     struct ClassCollector : AstVisitor
     {
@@ -5021,6 +5029,67 @@ private:
         checkFloorDivision(node);
         checkFenv(node);
         return true;
+    }
+
+    bool visit(AstStatReturn* node) override
+    {
+        if (node->list.size > 0)
+            checkReturnedCall(node->list.data[node->list.size - 1]);
+        return true;
+    }
+
+    // Could the compiler inline a call to `callee`? A local function, a static function of a class in this file
+    // (`Self.f` too) and a method called on `self`.
+    bool calleeMayInline(AstExprCall* call)
+    {
+        AstExpr* callee = unwrapGroup(call->func);
+        if (callee->is<AstExprLocal>())
+            return !call->self;
+
+        AstExprIndexName* index = callee->as<AstExprIndexName>();
+        if (!index)
+            return false;
+
+        AstExpr* object = unwrapGroup(index->expr);
+        if (call->self)
+        {
+            AstExprLocal* receiver = object->as<AstExprLocal>();
+            return receiver && receiver->local->name == "self";
+        }
+
+        AstExprGlobal* cls = object->as<AstExprGlobal>();
+        return cls && declaredClasses.count(cls->name.value) > 0;
+    }
+
+    // `return f(x)` passes on every value `f` gives, so the compiler can't inline `f` there. When `f` is typed to give
+    // one value, `return (f(x))` means the same and lets it.
+    void checkReturnedCall(AstExpr* last)
+    {
+        AstExprCall* call = last->as<AstExprCall>();
+        bool hintApplies = context->asksForSpeed && call && context->warningEnabled(LintWarning::Code_OptimizationHint);
+        if (!hintApplies || !calleeMayInline(call))
+            return;
+
+        std::optional<TypeId> calleeType = context->getType(call->func);
+        const FunctionType* function = calleeType ? get<FunctionType>(follow(*calleeType)) : nullptr;
+        if (!function)
+            return;
+
+        auto [values, tail] = flatten(function->retTypes);
+        bool returnsOneValue = values.size() == 1 && !tail;
+        if (!returnsOneValue)
+            return;
+
+        std::string callee = toString(call->func);
+        emitWarning(
+            *context,
+            LintWarning::Code_OptimizationHint,
+            call->location,
+            "Wrap this call in parentheses, 'return (%s(...))', so '%s' can be inlined; a returned call passes on every value "
+            "it gives, and the compiler only inlines a call it knows gives one",
+            callee.c_str(),
+            callee.c_str()
+        );
     }
 
     // `self.pos:add(...)` several times in one function: a field can't be proven in place, so none of the calls are
@@ -8816,7 +8885,10 @@ std::vector<LintWarning> lint(
     }
 
     if (context.anyWarningEnabled(
-            {LintWarning::Code_MethodsNotInlined, LintWarning::Code_FloorDivision, LintWarning::Code_FenvDeoptimization}
+            {LintWarning::Code_OptimizationHint,
+             LintWarning::Code_MethodsNotInlined,
+             LintWarning::Code_FloorDivision,
+             LintWarning::Code_FenvDeoptimization}
         ))
     {
         LintOptimizationHint::process(context, hotcomments);
