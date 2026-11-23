@@ -1,11 +1,15 @@
 # Bug Severity
 
+This page is also on the website as [Reporting Bugs](https://luwu.org/development/reporting-bugs.html).
+
 Every Luwu bug gets a severity so the most serious ones are fixed first. Features enabled by default count for more
 than experimental features, which sit behind FFlags starting with `Debug`.
 
 Bugs in the language, compiler, VM, native code generation (NCG) and Analysis go to
 [luwu's issues](https://github.com/luwu-community/luwu/issues). Bugs in editor support go to
 [luwu-lsp's issues](https://github.com/luwu-community/luwu-lsp/issues).
+[Bugs and Improvements](https://luwu.org/editor-support/bugs-and-improvements.html) helps tell the two apart when the
+language server crashes.
 
 > **Memory safety vulnerabilities must be reported privately**, through this repository's
 > [security advisories](https://github.com/luwu-community/luwu/security/advisories/new), never in a public issue.
@@ -28,12 +32,12 @@ Bugs in the language, compiler, VM, native code generation (NCG) and Analysis go
 
 - Analysis crashes in experimental (`Debug`) features.
 - Runtime behavior that differs from its RFC, or a feature whose RFC is missing or underspecified.
-- Development tooling bugs that stop the community from working on Luwu, or that affect `master`.
+- Bugs in Luwu's development tooling that stop the community from working on Luwu, or that affect `master`.
 
 ## Low
 
-- Misleading or unhelpful Analysis error messages, including ones inherited from upstream Luau.
-- Development tooling bugs that only get in the way, or only affect `integration`.
+- Misleading or unhelpful Analysis error messages, including ones Luwu inherited from upstream Luau.
+- Bugs in Luwu's development tooling that only get in the way, or only affect `integration`.
 
 ## Development tooling
 
