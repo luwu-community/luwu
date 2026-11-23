@@ -2098,6 +2098,44 @@ static bool stringPartOfInterpString(const AstNode* node, Position position)
     return true;
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the type of the value a pattern tests, when the last
+// node of `ancestry` is one of its alternatives: the value in `x is ...`, or the match's subject for a `case` arm. A
+// fragment's type check records types only for what the pattern stands for, so a tested name is looked up in `scope`.
+static std::optional<TypeId> patternTestedType(const Module& module, const std::vector<AstNode*>& ancestry, const ScopePtr& scope)
+{
+    if (ancestry.size() < 2)
+        return std::nullopt;
+
+    const AstExprMatchPattern* pattern = ancestry[ancestry.size() - 2]->as<AstExprMatchPattern>();
+    if (!pattern)
+        return std::nullopt;
+
+    const AstExpr* tested = pattern->value;
+    const AstLocal* testedLocal = pattern->subject;
+    for (auto it = ancestry.rbegin() + 2; !tested && it != ancestry.rend(); ++it)
+    {
+        if (const AstStatMatch* statMatch = (*it)->as<AstStatMatch>())
+            tested = statMatch->subject.value;
+        else if (const AstExprMatch* exprMatch = (*it)->as<AstExprMatch>())
+            tested = exprMatch->subject.value;
+    }
+
+    if (const TypeId* ty = tested ? module.astTypes.find(tested) : nullptr)
+        return *ty;
+
+    const char* name = testedLocal ? testedLocal->name.value : nullptr;
+    if (const AstExprLocal* local = tested ? tested->as<AstExprLocal>() : nullptr)
+        name = local->local->name.value;
+    else if (const AstExprGlobal* global = tested ? tested->as<AstExprGlobal>() : nullptr)
+        name = global->name.value;
+
+    if (!name || !scope)
+        return std::nullopt;
+    if (std::optional<Binding> binding = scope->linearSearchForBinding(name, /* traverseScopeChain= */ true))
+        return binding->typeId;
+    return std::nullopt;
+}
+
 static bool isSimpleInterpolatedString(const AstNode* node)
 {
     const AstExprInterpString* interpString = node->as<AstExprInterpString>();
@@ -3167,6 +3205,9 @@ AutocompleteResult autocomplete_(
 
         if (auto it = module->astExpectedTypes.find(node->asExpr()))
             autocompleteStringSingleton(*it, false, node, position, result);
+
+        if (std::optional<TypeId> tested = patternTestedType(*module, ancestry, scopeAtPosition))
+            autocompleteStringSingleton(*tested, false, node, position, result);
 
         return {std::move(result), ancestry, AutocompleteContext::String};
     }

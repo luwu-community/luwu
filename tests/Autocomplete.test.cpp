@@ -6396,6 +6396,55 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
     CHECK(ac.entryMap.count("Animator"));
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a string in a pattern completes the singletons of the
+// value the pattern tests: the match's subject in a `case` arm, the value before `is` elsewhere
+TEST_CASE_FIXTURE(ACFixture, "pattern_strings_complete_the_tested_singletons")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    check(R"(
+        type Unit = "KiB" | "MiB"
+        local function f(unit: Unit)
+            local s = match unit
+                case is "@1"
+            local ok = unit is "@2"
+            match unit
+            case is "KiB" | "@3" then
+                print(s, ok)
+            end
+        end
+    )");
+
+    for (char marker : {'1', '2', '3'})
+    {
+        INFO("marker " << marker);
+        auto ac = autocomplete(marker);
+        CHECK_EQ(ac.context, AutocompleteContext::String);
+        CHECK(ac.entryMap.count("KiB"));
+        CHECK(ac.entryMap.count("MiB"));
+    }
+
+    // an arm still being typed, with the code after the match on the next line
+    check(R"(
+        type Unit = "KiB" | "MiB"
+        local function f(unit: Unit): string
+            const stringified = match unit
+                case is "@4"
+            const v = "x" .. unit
+            return v
+        end
+    )");
+
+    auto ac = autocomplete('4');
+    CHECK_EQ(ac.context, AutocompleteContext::String);
+    CHECK(ac.entryMap.count("KiB"));
+    CHECK(ac.entryMap.count("MiB"));
+}
+
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a match arm's `then` completes as the keyword, like an
 // `if`'s, so accepting a completion there doesn't replace it with a name
 TEST_CASE_FIXTURE(ACFixture, "match_arm_then_completes_the_keyword")
