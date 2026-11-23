@@ -3810,8 +3810,9 @@ return f
 
     std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MisleadingIndentation);
     REQUIRE_EQ(found.size(), 2);
-    CHECK(found[0].text.find("Consider putting an 'end' here") != std::string::npos);
-    CHECK_EQ(found[0].location, Location(Position(5, 4), Position(5, 7)));
+    CHECK(found[0].text.find("Consider putting an extra 'end' under here") != std::string::npos);
+    CHECK(found[0].text.find("'match' keyword on line 3") != std::string::npos);
+    CHECK_EQ(found[0].location, Location(Position(4, 12), Position(4, 24)));
     CHECK(found[1].text.find("closes the 'match' on line 7") != std::string::npos);
     CHECK_EQ(found[1].location, Location(Position(9, 8), Position(9, 11)));
 }

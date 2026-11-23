@@ -5984,6 +5984,22 @@ private:
         return true;
     }
 
+    // The last line of `arm`, where an `end` balancing it would go under: its block's last line, or its head when the block
+    // is empty
+    static Location lastArmLine(const AstMatchArm& arm)
+    {
+        AstArray<AstStat*> body = arm.body ? arm.body->body : AstArray<AstStat*>{nullptr, 0};
+        if (body.size == 0)
+            return arm.thenLocation.value_or(arm.keywordLocation);
+
+        Location first = body.data[0]->location;
+        Location last = body.data[body.size - 1]->location;
+        if (last.begin.line == last.end.line)
+            return last;
+        // a statement spanning lines: its last line, from the block's indent
+        return Location(Position(last.end.line, std::min(first.begin.column, last.end.column)), last.end);
+    }
+
     void checkMatchEnd(AstStatMatch* node)
     {
         if (!node->hasEnd || node->armsEndLocation || node->arms.size == 0)
@@ -6004,8 +6020,10 @@ private:
             emitWarning(
                 *context,
                 LintWarning::Code_MisleadingIndentation,
-                endKeyword,
-                "Consider putting an 'end' here to balance the last case or unindent these case arms"
+                lastArmLine(node->arms.data[node->arms.size - 1]),
+                "Consider putting an extra 'end' under here to visually balance the last case when indented or unindent all cases to "
+                "align with the 'match' keyword on line %d",
+                matchBegin.line + 1
             );
         }
         else if (endColumn == armBegin.column)
