@@ -1490,4 +1490,12 @@ bool containsErrorType(TypeId ty)
     return finder.found;
 }
 
+const ClassFieldUserData* getClassFieldUserData(TypeId ty)
+{
+    if (const ExternType* etv = get<ExternType>(follow(ty)))
+        return dynamic_cast<const ClassFieldUserData*>(etv->userData.get());
+
+    return nullptr;
+}
+
 } // namespace Luau
