@@ -17,6 +17,15 @@ LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauTruthyFalsy)
 LUAU_FASTFLAG(LuauAlwaysIntersectTablesWithTables)
+LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
+
+// Luwu Traits (rfcs/classes/traits.md): `trait` is a nominal root with traits on, so it is part of every negation's
+// expansion
+static std::string traitRoot(const char* separator)
+{
+    return FFlag::LuwuClasses && FFlag::LuwuTraits ? std::string("trait") + separator : std::string();
+}
 
 using namespace Luau;
 
@@ -724,13 +733,13 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negated_function_is_anything_except_a_funct
 {
     if (FFlag::LuauIntegerType2)
     {
-        CHECK("(boolean | buffer | class | integer | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
+        CHECK("(boolean | buffer | class | integer | none | number | object | string | table | thread | " + traitRoot(" | ") + "userdata | vector)?" == toString(normal(R"(
         Not<fun>
     )")));
     }
     else
     {
-        CHECK("(boolean | buffer | class | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
+        CHECK("(boolean | buffer | class | none | number | object | string | table | thread | " + traitRoot(" | ") + "userdata | vector)?" == toString(normal(R"(
         Not<fun>
     )")));
     }
@@ -758,13 +767,13 @@ TEST_CASE_FIXTURE(NormalizeFixture, "bare_negated_boolean")
 {
     if (FFlag::LuauIntegerType2)
     {
-        CHECK("(buffer | class | function | integer | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
+        CHECK("(buffer | class | function | integer | none | number | object | string | table | thread | " + traitRoot(" | ") + "userdata | vector)?" == toString(normal(R"(
             Not<boolean>
         )")));
     }
     else
     {
-        CHECK("(buffer | class | function | none | number | object | string | table | thread | userdata | vector)?" == toString(normal(R"(
+        CHECK("(buffer | class | function | none | number | object | string | table | thread | " + traitRoot(" | ") + "userdata | vector)?" == toString(normal(R"(
             Not<boolean>
         )")));
     }
@@ -986,9 +995,9 @@ TEST_CASE_FIXTURE(NormalizeFixture, "negations_of_tables")
 {
     CHECK(nullptr == toNormalizedType("Not<{}>", !FFlag::DebugLuauForceOldSolver ? 1 : 0));
     if (FFlag::LuauIntegerType2)
-        CHECK("(boolean | buffer | class | function | integer | none | number | object | string | thread | userdata | vector)?" == toString(normal("Not<tbl>")));
+        CHECK("(boolean | buffer | class | function | integer | none | number | object | string | thread | " + traitRoot(" | ") + "userdata | vector)?" == toString(normal("Not<tbl>")));
     else
-        CHECK("(boolean | buffer | class | function | none | number | object | string | thread | userdata | vector)?" == toString(normal("Not<tbl>")));
+        CHECK("(boolean | buffer | class | function | none | number | object | string | thread | " + traitRoot(" | ") + "userdata | vector)?" == toString(normal("Not<tbl>")));
     CHECK("table" == toString(normal("Not<Not<tbl>>")));
 }
 
@@ -1211,7 +1220,7 @@ TEST_CASE_FIXTURE(NormalizeFixture, "intersection_of_table_and_truthy")
     // CLI-214308: This does not seem correct, we should be saying ...
     //
     //  (userdata & { x: number }) | { x: number }
-    CHECK("class | object | userdata | vector | { x: number }" == toString(ty));
+    CHECK("class | object | " + traitRoot(" | ") + "userdata | vector | { x: number }" == toString(ty));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "normalizer_should_be_able_to_detect_cyclic_tables_and_not_stack_overflow")
