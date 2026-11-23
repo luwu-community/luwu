@@ -7308,11 +7308,26 @@ private:
             return false;
         }
 
-        if (node->is<AstStatReturn>() || node->is<AstStatBreak>() || node->is<AstStatContinue>())
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `give` leaves its block like `return`
+        if (node->is<AstStatReturn>() || node->is<AstStatBreak>() || node->is<AstStatContinue>() || node->is<AstStatGive>())
             return true;
 
         if (AstStatIf* stat = node->as<AstStatIf>())
             return stat->elsebody && alwaysLeaves(stat->thenbody) && alwaysLeaves(stat->elsebody);
+
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): every arm leaves, and some arm always matches
+        if (AstStatMatch* stat = node->as<AstStatMatch>())
+        {
+            if (!matchesEveryValue(stat->arms))
+                return false;
+
+            for (const AstMatchArm& arm : stat->arms)
+            {
+                if (!alwaysLeaves(arm.body))
+                    return false;
+            }
+            return true;
+        }
 
         return false;
     }

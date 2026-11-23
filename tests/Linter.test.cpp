@@ -5139,6 +5139,46 @@ return f
     CHECK(optimizationHints(lint(source)).empty());
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match` whose arms all return leaves the function the
+// way an `if` with an `else` does. One whose last arm calls `error` runs off its end as far as the compiler can tell.
+TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintFollowsMatchArmsThatLeave")
+{
+    ScopedFastFlag matchExpressions{FFlag::DebugLuwuMatchExpressions, true};
+
+    const std::string source = R"(
+local function sign(n: number): number
+    match n
+        case is 0 then
+            return 0
+        else
+            return 1
+    end
+end
+
+local function checked(n: number): number
+    match n
+        case is 0 then
+            return 0
+        case other then
+            error("bad")
+    end
+end
+
+local function f(n: number)
+    if n > 1 then
+        return sign(n)
+    end
+    return checked(n)
+end
+
+return f
+)";
+
+    std::vector<LintWarning> hints = optimizationHints(lint("--!optimize 2\n" + source));
+    REQUIRE(1 == hints.size());
+    CHECK(hints[0].text.find("checked") != std::string::npos);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "OptimizationHintOnlyWhereParenthesesLetTheCallInline")
 {
     const std::string source = R"(
