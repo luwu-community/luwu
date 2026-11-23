@@ -3872,6 +3872,60 @@ RETURN R0 0
 )");
 }
 
+// Luwu pretty bytecode dumps: an inlined call's arguments and body sit under its remark, a call inlined into it one level
+// further, and source lines are indented relative to the function they're in
+TEST_CASE("PrettyDumpIndentsInlinedCalls")
+{
+    const char* source = R"(
+local function clamp(n, low)
+    if n < low then
+        return low
+    end
+    return n
+end
+
+local function scaled(n)
+    local clamped = clamp(n, 0)
+    return clamped * 2
+end
+
+return function(t)
+    local result = scaled(t.n)
+    return result
+end
+)";
+
+    Luau::BytecodeBuilder bcb;
+    bcb.setDumpFlags(
+        Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Source | Luau::BytecodeBuilder::Dump_Remarks |
+        Luau::BytecodeBuilder::Dump_Pretty
+    );
+    bcb.setDumpSource(source);
+
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+    Luau::compileOrThrow(bcb, source, options);
+
+    CHECK_EQ("\n" + bcb.dumpFunction(2), R"(
+    REMARK inlining succeeded: scaled (cost 6, profit 1.50x, depth 0)
+    15:     local result = scaled(t.n)
+        GETTABLEKS R2 R0 K0 ['n']
+        REMARK inlining succeeded: clamp (cost 2, profit 2.50x, depth 1)
+            3:     if n < low then
+            LOADN R4 0
+            JUMPIFNOTLT R2 R4 L0
+            4:         return low
+            LOADN R3 0
+            JUMP L1
+            6:     return n
+            L0: MOVE R3 R2
+        11:     return clamped * 2
+        L1: MULK R1 R3 K1 [2]
+    16:     return result
+    RETURN R1 1
+)");
+}
+
 TEST_CASE("DebugTypes")
 {
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
