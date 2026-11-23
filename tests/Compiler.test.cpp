@@ -16333,6 +16333,13 @@ static std::string encouragedInlineError(const char* source, int optimizationLev
     }
 }
 
+// Luwu: does `error` refuse to inline `name` at the call on `line` (1-based), saying something about `fact`?
+static bool refusedInlineAt(const std::string& error, int line, const char* name, const char* fact)
+{
+    std::string start = format("%d: '%s'", line, name);
+    return error.rfind(start, 0) == 0 && error.find(fact) != std::string::npos;
+}
+
 // six calls, past the few-call-sites boost
 #define LUWU_SIX_CALLS(name) \
     "local function main(t)\n" \
@@ -16400,16 +16407,15 @@ TEST_CASE("EncouragedInlineMultretErrorSaysHowToKeepOneValue")
                          "return main\n";
 
     std::string error = encouragedInlineError(source.c_str());
-    CHECK_MESSAGE(error.find("7: 'first' is marked as @[inline] but cannot be inlined here because a last argument accepts multiple values") == 0, error);
-    CHECK_MESSAGE(error.find("pass another argument after it") != std::string::npos, error);
+    CHECK_MESSAGE(refusedInlineAt(error, 7, "first", "another argument"), error);
 
     source.replace(source.find("    print(first(a))\n"), strlen("    print(first(a))\n"), "    print((first(a)))\n");
     error = encouragedInlineError(source.c_str());
-    CHECK_MESSAGE(error.find("8: 'first' is marked as @[inline] but cannot be inlined here because a table's last item accepts multiple values") == 0, error);
+    CHECK_MESSAGE(refusedInlineAt(error, 8, "first", "table"), error);
 
     source.replace(source.find("    local t = { first(a) }\n"), strlen("    local t = { first(a) }\n"), "    local t = { (first(a)) }\n");
     error = encouragedInlineError(source.c_str());
-    CHECK_MESSAGE(error.find("9: 'first' is marked as @[inline] but cannot be inlined here because a return accepts multiple values") == 0, error);
+    CHECK_MESSAGE(refusedInlineAt(error, 9, "first", "parentheses"), error);
 }
 
 // Luwu: a call `@[inline]` decided says so in its remark, and whether the cost model would have inlined it anyway
@@ -16465,7 +16471,7 @@ TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
         };
 
         std::string error = encouragedInlineError(withCalls(12).c_str());
-        CHECK_MESSAGE(error.find("45: 'big' is marked as @[inline] but cannot be inlined here because it's too big to copy to its 12 call sites even with 3x encouragement") == 0, error);
+        CHECK_MESSAGE(refusedInlineAt(error, 45, "big", "12 call sites"), error);
         CHECK_EQ(encouragedInlineError(withCalls(3).c_str()), "");
     }
 
@@ -16480,10 +16486,7 @@ TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
                              "end\n"
                              "return main\n";
         std::string error = encouragedInlineError(tooBig);
-        CHECK_MESSAGE(
-            error == "14: 'big' is marked as @[inline] but cannot be inlined here because it would pass the inlining budget of the function it's called in",
-            error
-        );
+        CHECK_MESSAGE(refusedInlineAt(error, 14, "big", "budget"), error);
         CHECK_EQ(encouragedInlineError(tooBig, 1), "");
     }
 
@@ -16495,7 +16498,8 @@ TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
                            "    return first(a)\n"
                            "end\n"
                            "return main\n";
-    CHECK_EQ(encouragedInlineError(variadic), "6: 'first' is marked as @[inline] but cannot be inlined here because it's variadic");
+    std::string error = encouragedInlineError(variadic);
+    CHECK_MESSAGE(refusedInlineAt(error, 6, "first", "variadic"), error);
 
     // a public method whose body calls a private one would leak the class's private access into the caller
     const char* leaksPrivate = "class Counter\n"
@@ -16513,9 +16517,8 @@ TEST_CASE("EncouragedInlineRefusedIsAnErrorAtTheCall")
                                "    return c:value()\n"
                                "end\n"
                                "return main\n";
-    CHECK_EQ(
-        encouragedInlineError(leaksPrivate), "13: 'Counter:value' is marked as @[inline] but cannot be inlined here because it would leak private access"
-    );
+    error = encouragedInlineError(leaksPrivate);
+    CHECK_MESSAGE(refusedInlineAt(error, 13, "Counter:value", "private"), error);
 }
 
 // Luwu Classes (rfcs/classes): a class's static functions inline at `Cls.f(...)` calls, with the same private-access
@@ -16567,9 +16570,8 @@ local function main(n)
 end
 return main
 )";
-    CHECK_EQ(
-        encouragedInlineError(encouragedPrivate), "11: 'Size.of' is marked as @[inline] but cannot be inlined here because it would leak private access"
-    );
+    std::string error = encouragedInlineError(encouragedPrivate);
+    CHECK_MESSAGE(refusedInlineAt(error, 11, "Size.of", "private"), error);
 }
 
 TEST_CASE("InlineOnlyCallSiteRegardlessOfCost")

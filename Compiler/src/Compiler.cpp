@@ -1185,7 +1185,7 @@ struct Compiler
         char separator = 0;
         const char* name = describeInlineTarget(func, owner, separator);
         std::string written = owner ? format("%s%c%s", owner, separator, name) : name;
-        CompileError::raise(call->location, "'%s' is marked as @[inline] but cannot be inlined here because %s", written.c_str(), because.c_str());
+        CompileError::raise(call->location, "'%s' is marked @[inline] but cannot be inlined here because %s", written.c_str(), because.c_str());
     }
 
     // Luwu: why an `@[inline]` call that passes on all its values can't be inlined, and how to keep one
