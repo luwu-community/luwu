@@ -3775,6 +3775,42 @@ return f, g
     CHECK_EQ(found[2].location, Location(Position(6, 4), Position(6, 10)));
 }
 
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `do` in a match expression's `else do` is indented
+// against the `else`, so its block one level in isn't outdented
+TEST_CASE_FIXTURE(Fixture, "MisleadingIndentationOfADoInAMatchArm")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+    };
+
+    LintResult result = lint(R"(
+local function f(bytes: number)
+    const formatted = match bytes
+        when bytes < 1024 then
+            `{bytes} bytes`
+        else do
+            const kibis = bytes / 1024
+            give string.format("%.2f KiB", kibis)
+    const outdented = match bytes
+        when bytes < 1024 then
+            `{bytes} bytes`
+        else do
+        const kibis = bytes / 1024
+            give string.format("%.2f KiB", kibis)
+    return formatted, outdented
+end
+return f
+)");
+
+    std::vector<LintWarning> found = warningsWithCode(result, LintWarning::Code_MisleadingIndentation);
+    // only the second `do`, whose first line is at the `else`'s indent
+    REQUIRE_EQ(found.size(), 3);
+    for (const LintWarning& warning : found)
+        CHECK(warning.location.begin.line >= 11);
+}
+
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a match statement's arms line up at or past the
 // `match`, each block is indented past its arm, and its `end`s line up with what they close. Indented arms close with an
 // `end` at their indent and another at the `match`'s; arms at the `match`'s column need only the one.
