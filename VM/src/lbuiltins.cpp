@@ -793,7 +793,12 @@ static int luauF_type(lua_State* L, StkId res, TValue* arg0, int nresults, StkId
         int tt = ttype(arg0);
         if (tt == LUA_TSYMNONE)
             return -1;
+
         TString* ttname = L->global->ttname[tt];
+
+        // Luwu Traits (rfcs/classes/traits.md): a trait is tagged as a class, but its type is "trait"
+        if (tt == LUA_TCLASS && classvalue(arg0)->istrait)
+            ttname = L->global->traittypename;
 
         setsvalue(L, res, ttname);
         return 1;
@@ -989,6 +994,25 @@ static int luauF_class_isinstance(lua_State* L, StkId res, TValue* arg0, int nre
     if (nparams >= 2 && nresults <= 1 && ttisclass(args))
     {
         setbvalue(res, ttisobject(arg0) && objectvalue(arg0)->lclass == classvalue(args));
+        return 1;
+    }
+
+    return -1;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): class.of(value) -> the class of an object, and nil for any other value
+static int luauF_class_of(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    if (nparams >= 1 && nresults <= 1)
+    {
+        if (ttisobject(arg0))
+        {
+            setclassvalue(L, res, objectvalue(arg0)->lclass);
+        }
+        else
+        {
+            setnilvalue(res);
+        }
         return 1;
     }
 
@@ -2801,6 +2825,8 @@ const luau_FastFunction luauF_table[256] = {
     luauF_bufferisfrozen,
 
     luauF_class_isinstance,
+
+    luauF_class_of,
 
 // When adding builtins, add them above this line; what follows is 64 "dummy" entries with luauF_missing fallback.
 // This is important so that older versions of the runtime that don't support newer builtins automatically fall back via luauF_missing.
