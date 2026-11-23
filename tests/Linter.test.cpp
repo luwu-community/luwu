@@ -3761,7 +3761,7 @@ return f
     CHECK_EQ(hints[3].location.begin.line, 32);
     CHECK(hints[3].text.find("or pass another argument after it") != std::string::npos);
     CHECK_EQ(hints[4].location.begin.line, 33);
-    CHECK(hints[4].text.find("a table's last item") != std::string::npos);
+    CHECK(hints[4].text.find("'(half(...))' proves") != std::string::npos);
     CHECK_EQ(hints[5].location.begin.line, 40);
 
     // without `--!optimize 2` or `--!native` nothing is inlined, so there's nothing to hint

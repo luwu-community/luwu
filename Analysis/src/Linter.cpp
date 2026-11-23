@@ -5212,10 +5212,8 @@ private:
                 *context,
                 LintWarning::Code_OptimizationHint,
                 call->location,
-                "Wrap this call in parentheses, 'return (%s(...))', so '%s' can be inlined; a returned call passes on every "
-                "value it gives, and the compiler can't tell that '%s' gives one",
-                callee.c_str(),
-                callee.c_str(),
+                "Wrap this call in parentheses so it gets inlined by the compiler: 'return (%s(...))' proves the call "
+                "evaluates to exactly one value at runtime",
                 callee.c_str()
             );
             break;
@@ -5224,9 +5222,8 @@ private:
                 *context,
                 LintWarning::Code_OptimizationHint,
                 call->location,
-                "Wrap this call in parentheses or pass another argument after it so '%s' can be inlined; a last argument passes "
-                "on every value the call gives, and the compiler can't tell that '%s' gives one",
-                callee.c_str(),
+                "Wrap this call in parentheses or pass another argument after it so it gets inlined by the compiler: "
+                "'(%s(...))' proves the call evaluates to exactly one value at runtime",
                 callee.c_str()
             );
             break;
@@ -5235,9 +5232,8 @@ private:
                 *context,
                 LintWarning::Code_OptimizationHint,
                 call->location,
-                "Wrap this call in parentheses so '%s' can be inlined; a table's last item takes every value the call gives, and "
-                "the compiler can't tell that '%s' gives one",
-                callee.c_str(),
+                "Wrap this call in parentheses so it gets inlined by the compiler: '(%s(...))' proves the call evaluates to "
+                "exactly one value at runtime",
                 callee.c_str()
             );
             break;
