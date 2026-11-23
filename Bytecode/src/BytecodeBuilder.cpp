@@ -10,6 +10,7 @@
 
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuStringFormatFastcall)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
 
@@ -1473,8 +1474,9 @@ std::string BytecodeBuilder::getError(const std::string& message)
 
 uint8_t BytecodeBuilder::getVersion()
 {
-    // Luwu Classes (rfcs/classes): class bytecode is still a work-in-progress format
-    if (FFlag::LuwuClasses)
+    // Luwu Classes (rfcs/classes): class bytecode is still a work-in-progress format, and so is the string.format
+    // fastcall
+    if (FFlag::LuwuClasses || FFlag::LuwuStringFormatFastcall)
         return LWBC_VERSION_WIP;
 
     return LWBC_VERSION_TARGET;
