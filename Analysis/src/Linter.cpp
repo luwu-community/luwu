@@ -5946,6 +5946,25 @@ private:
         statementStarts.pop_back();
         return false;
     }
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a match expression's arm starts its line like a
+    // statement, so a `do` in `else do` is indented against the arm's keyword
+    bool visit(AstExprMatch* node) override
+    {
+        if (node->subject.declaration)
+            node->subject.declaration->visit(this);
+        else
+            node->subject.value->visit(this);
+
+        for (const AstMatchArm& arm : node->arms)
+        {
+            statementStarts.push_back(arm.keywordLocation.begin);
+            arm.visitCondition(this);
+            if (arm.value)
+                arm.value->visit(this);
+            statementStarts.pop_back();
+        }
+        return false;
+    }
 
     bool visit(AstExprDo* node) override
     {
