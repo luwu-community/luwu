@@ -1388,4 +1388,24 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_unknown_class_instance_properties_
     CHECK(up3->key == "__index");
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_method_whose_self_is_inferred_grows_the_table_it_is_called_on")
+{
+    ScopedFastFlag newSolver{FFlag::DebugLuauForceOldSolver, false};
+
+    // `push`'s `self` is only `{ string }` once its body is solved, after the call through the metatable has been seen;
+    // the empty literal still takes the indexer, as it would if they had met directly
+    CheckResult result = check(R"(
+        --!strict
+        local lines = setmetatable({}, { __index = {
+            push = function(self, msg: string)
+                table.insert(self, "\n" .. msg)
+            end,
+        }})
+        lines:push("meow")
+        local first: string = lines[1]
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_SUITE_END();
