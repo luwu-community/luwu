@@ -2152,6 +2152,32 @@ end
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): `Self` prints as written, whether it's the class or a trait method's `class.of(self)`
+TEST_CASE("self_class_values_print_as_written")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    std::string code = R"(
+class Point
+    function copy(self)
+        return Self { x = self.x }
+    end
+end
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    // the printer doesn't print traits as traits yet, so only their bodies are compared
+    std::string trait = R"(
+trait Cloner
+    function clone(self)
+        return Self(self)
+    end
+end
+    )";
+    std::string printed = prettyPrint(trait, {}, true).code;
+    CHECK(printed.find("return Self(self)") != std::string::npos);
+}
+
 TEST_CASE("remixed_simple_class")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
