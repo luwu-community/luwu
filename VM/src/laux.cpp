@@ -651,9 +651,10 @@ void luaL_addvalueany(luaL_Strbuf* B, int idx)
     }
     case LUA_TINTEGER:
     {
-        int64_t n = lua_tointeger64(L, idx, nullptr);
+        // Luwu Integers (rfcs/integers.md): upstream writes every integer as a signed int64, which prints a u64 past
+        // INT64_MAX as negative. A bigint goes through luaL_tolstring below.
         char s[LUAI_MAXINT2STR];
-        char* e = luai_int2str(s, n);
+        char* e = luaZ_formatinline(luaA_toobject(L, idx), s);
         luaL_addlstring(B, s, e - s);
         break;
     }
