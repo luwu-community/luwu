@@ -1581,11 +1581,11 @@ trait Flora
 end
 
 class Kitten implements Creature, Flora
-    Creature.species = "Felis Catus"
+    shared Creature.species = "Felis Catus"
 end
 
 class Sparrow implements Creature
-    Creature.species = "Passer"
+    shared Creature.species = "Passer"
     Creature.legs = 2
 end
 
@@ -1699,6 +1699,146 @@ do
     raises(function() local n = 1; n:Keeper.count = 1 end, "attempt to write 'Keeper.count' of a number; it needs an object or a class")
 end
 
+-- a per-object scoped field's starting value is computed for every object, like a field default: the trait's default in
+-- the trait's `__traitinit`, then the class's value, which wins. Constants are in place from allocation. A `scoped shared`
+-- or `scoped static` value is computed once, when its statement runs.
+local scopedlog = {}
+local function scopednote(label)
+    table.insert(scopedlog, label)
+    return { label }
+end
+
+trait Stocked
+    public scoped items = scopednote("trait items")
+    public scoped const id = scopednote("trait id")
+    private scoped stash = scopednote("trait stash")
+    public scoped count = 0
+    public scoped shared ledger = scopednote("trait ledger")
+    public scoped static registry = scopednote("trait registry")
+    expect public scoped label: { string }
+
+    public function stashof(self)
+        return self:Stocked.stash
+    end
+end
+
+class Shop implements Stocked
+    Stocked.label = scopednote("shop label")
+    Stocked.items = scopednote("shop items")
+    Stocked.count = 5
+    shared Stocked.ledger = scopednote("shop ledger")
+end
+
+class Stall implements Stocked
+    Stocked.label = scopednote("stall label")
+    Stocked.items = 3
+end
+
+do
+    -- the class-level values ran once, when their statements did
+    assert(table.concat(scopedlog, ",") == "trait ledger,trait registry,shop ledger", table.concat(scopedlog, ","))
+    table.clear(scopedlog)
+
+    local a, b = Shop(), Shop()
+    assert(
+        table.concat(scopedlog, ",") == "trait items,trait id,trait stash,shop label,shop items,trait items,trait id,trait stash,shop label,shop items",
+        table.concat(scopedlog, ",")
+    )
+    assert(not rawequal(a:Stocked.items, b:Stocked.items) and a:Stocked.items[1] == "shop items")
+    assert(not rawequal(a:Stocked.id, b:Stocked.id) and a:Stocked.id[1] == "trait id")
+    assert(not rawequal(a:stashof(), b:stashof()))
+    assert(not rawequal(a:Stocked.label, b:Stocked.label) and b:Stocked.label[1] == "shop label")
+    assert(a:Stocked.count == 5)
+    assert(rawequal(a:Stocked.ledger, b:Stocked.ledger) and a:Stocked.ledger[1] == "shop ledger")
+    assert(Stall:Stocked.registry[1] == "trait registry" and rawequal(Shop:Stocked.registry, Stall:Stocked.registry))
+
+    -- mutating one object's value leaves the other's alone
+    table.insert(a:Stocked.items, "more")
+    assert(#a:Stocked.items == 2 and #b:Stocked.items == 1)
+
+    -- a constant from the class replaces the trait's computed default after the trait's initializer wrote it
+    local s = Stall()
+    assert(s:Stocked.items == 3 and s:Stocked.count == 0 and s:Stocked.label[1] == "stall label")
+    assert(not pcall(function() a:Stocked.id = 1 end))
+
+    -- computing the value can yield, like the rest of construction
+    local co = coroutine.wrap(function()
+        local x = Shop()
+        return x:Stocked.items[1]
+    end)
+    assert(co() == "shop items")
+end
+
+-- a class spells the placement of the scoped field it gives a value: none for each object's, `shared` and `static` for
+-- one on the class. The class's own slot holds each object's value, computed with its field defaults in declaration order.
+local placedlog = {}
+local function placednote(label)
+    table.insert(placedlog, label)
+    return { label }
+end
+
+trait Placed
+    scoped items = placednote("trait items")
+    scoped shared kind = "trait"
+    scoped static registry = "trait"
+end
+
+class Placer implements Placed
+    first = placednote("first")
+    Placed.items = placednote("class items")
+    last = placednote("last")
+    shared Placed.kind = placednote("class kind")
+    static Placed.registry = "class"
+
+    function __init(self, n)
+        self.last = { n }
+    end
+end
+
+class PlacerPrimary(n: number) implements Placed
+    first = placednote("first")
+    Placed.items = placednote("class items")
+    last = n
+end
+
+do
+    assert(table.concat(placedlog, ",") == "class kind", table.concat(placedlog, ","))
+    table.clear(placedlog)
+
+    local a, b = Placer(1), Placer(2)
+    assert(table.concat(placedlog, ",") == "trait items,first,class items,last,trait items,first,class items,last", table.concat(placedlog, ","))
+    table.clear(placedlog)
+    assert(a:Placed.items[1] == "class items" and not rawequal(a:Placed.items, b:Placed.items))
+    assert(a.last[1] == 1 and b.last[1] == 2 and a.first[1] == "first")
+    assert(Placer:Placed.kind[1] == "class kind" and rawequal(a:Placed.kind, b:Placed.kind) and Placer:Placed.registry == "class")
+
+    local p = PlacerPrimary(7)
+    assert(table.concat(placedlog, ",") == "trait items,first,class items", table.concat(placedlog, ","))
+    assert(p.last == 7 and p:Placed.items[1] == "class items" and not rawequal(p:Placed.items, PlacerPrimary(8):Placed.items))
+    table.clear(placedlog)
+
+    local function fails(source, message)
+        local f, err = loadstring(source)
+        if f then
+            local ok, runerr = pcall(f)
+            assert(not ok, source)
+            err = runerr
+        end
+        assert(string.find(err, message, 1, true), err)
+    end
+
+    fails(
+        "trait T scoped x = 1 end class C implements T shared T.x = 2 end",
+        "'T.x' must be a field of each object for 'C' to implement 'T': write 'T.x = value'"
+    )
+    fails("trait T scoped shared x = 1 end class C implements T T.x = 2 end", "'T.x' must be shared for 'C' to implement 'T': write 'shared T.x = value'")
+    fails(
+        "trait T scoped static x = 1 end class C implements T shared T.x = 2 end",
+        "'T.x' must be static for 'C' to implement 'T': write 'static T.x = value'"
+    )
+    fails("trait T scoped shared x = 1 end class C implements T static T.x = 2 end", "'T.x' must be shared for 'C' to implement 'T'")
+end
+
 -- a first parameter named `Self` makes a class method: `Self` is the class it's called on, checked on entry
 class Clicker
     static clicks = 0
@@ -1755,5 +1895,48 @@ do
     raises(function() return Catalog:register() end, "'Catalog.register' expects a class implementing 'Catalog', got trait")
     raises(function() return Catalog.register(Clicker) end, "'Catalog.register' expects a class implementing 'Catalog', got class")
     raises(function() return Shelf.register(Drawer) end, "attempt to call class method 'Shelf.register' with 'Self' of class 'Drawer'")
+end
+-- a class value's own `__tostring` takes the class as `Self`, next to its objects' one; a trait value's own is `traitonly`
+class ValueLabeled
+    static shown = 0
+    name = "lab"
+
+    function __tostring(Self)
+        Self.shown += 1
+        return `class {class.name(Self)} #{Self.shown}`
+    end
+
+    function __tostring(self)
+        return `labeled {self.name}`
+    end
+end
+
+class ValueUnlabeled
+end
+
+class ValueBroken
+    static function __tostring(Self)
+        error("no label")
+    end
+end
+
+trait ValueLabels
+    traitonly function __tostring(trait)
+        return `trait {class.name(trait)}`
+    end
+end
+
+class ValueTagged implements ValueLabels
+end
+
+do
+    assert(tostring(ValueLabeled) == "class ValueLabeled #1" and `{ValueLabeled}` == "class ValueLabeled #2")
+    assert(tostring(ValueLabeled()) == "labeled lab")
+    assert(tostring(ValueLabels) == "trait ValueLabels")
+    -- neither goes to the classes and objects that don't define one
+    assert(string.find(tostring(ValueUnlabeled), "^class: ") and string.find(tostring(ValueTagged), "^class: "))
+    assert(string.find(tostring(ValueTagged()), "^object: "))
+    local ok, err = pcall(tostring, ValueBroken)
+    assert(not ok and string.find(err, "no label", 1, true))
 end
 return 'OK'

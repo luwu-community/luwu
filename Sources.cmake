@@ -4,6 +4,7 @@ target_sources(Luwu.Common PRIVATE
     Common/include/Luau/Bytecode.h
     Common/include/Luau/BytecodeUtils.h
     Common/include/Luau/BytecodeWire.h
+    Common/include/Luau/ClassMemberNames.h
     Common/include/Luau/DenseHash.h
     Common/include/Luau/ExperimentalFlags.h
     Common/include/Luau/HashUtil.h
@@ -16,6 +17,7 @@ target_sources(Luwu.Common PRIVATE
     Common/include/Luau/VecDeque.h
 
     Common/src/BytecodeWire.cpp
+    Common/src/ClassMemberNames.cpp
     Common/src/LuwuFlags.cpp
     Common/src/StringUtils.cpp
     Common/src/TimeTrace.cpp

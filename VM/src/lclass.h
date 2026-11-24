@@ -312,6 +312,11 @@ LUAI_FUNC void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* n
 // the class statement runs (LBC_NEWCLASSMEMBER_FIELD)
 LUAI_FUNC void luaR_addclassfield(lua_State* L, LuauClass* classdef, TString* name, const TValue* value);
 
+// Luwu Traits (rfcs/classes/traits.md): adds the metamethod `name` of the class or trait value itself to its metatable, as
+// the class statement runs (LBC_NEWCLASSMEMBER_VALUEMETAMETHOD): `tostring(Cat)` calls a class's `function __tostring(Self)`
+// with the class. A Lua function is the class's code, for its `Self` check and private access.
+LUAI_FUNC void luaR_addvaluemetamethod(lua_State* L, LuauClass* classdef, TString* name, const TValue* fn);
+
 /**
  * Luwu Traits (rfcs/classes/traits.md): writes the field at `offset` of the class value `classdef`, `Cat.species = v`.
  * Raises unless it's a field on the class value (LBC_CLASSMEMBER_CLASSFIELD) that isn't const, and checks private
@@ -324,12 +329,15 @@ LUAI_FUNC l_noret luaR_sharedfieldwriteerror(lua_State* L, const LuauObject* obj
 
 LUAI_FUNC void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page);
 
-// Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits.
+// Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits, which
+// place a member the way a class body's modifiers do. A name the language gives a meaning follows its entry in
+// Luau/ClassMemberNames.h: a metamethod goes on the objects, or with LBC_CLASSMEMBER_STATIC on the class value when the
+// registry allows it there (`__tostring`).
 struct luaR_NativeMember
 {
     const char* name;
     lua_CFunction method;
-    uint8_t flags;
+    uint16_t flags;
     // A method's frameless version for the interpreter, or NULL
     luaR_FastMethod fast;
 };
@@ -341,6 +349,10 @@ struct luaR_NativeMember
  * like a class without `__init`. Names must outlive the state: methods use them as their debug names.
  */
 LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init);
+
+// Luwu builtin classes: a builtin class value's `__tostring`, which prints it like a primitive, by name and without an
+// address. Builtin libraries list it as a static member (luaR_NativeMember).
+LUAI_FUNC int luaR_builtinclasstostring(lua_State* L);
 
 /**
  * Luwu Native Classes (rfcs/native-classes.md): gives every object of `classdef` constructed from now on `size` bytes of
@@ -558,11 +570,13 @@ LUAI_FUNC bool luaR_nexttraitinit(lua_State* L, StkId state, StkId frame, int na
 
 /**
  * Luwu Traits (rfcs/classes/traits.md): records `value` as `classdef`'s qualified implementation of the member `name` of
- * the trait `trait`: a function (`function Json.name`, LBC_NEWCLASSMEMBER_QUALIFIED), or the value of a scoped field when
- * `isfield` is set (`Animal.species = value`, LBC_NEWCLASSMEMBER_QUALIFIEDFIELD). Raises when the trait's member is the
- * other kind; luaR_implementtraits checks the rest. Ignored once the class has implemented its traits.
+ * the trait `trait`. `form` is the LOP_NEWCLASSMEMBER form that says what `value` is: a function (`function Json.name`,
+ * LBC_NEWCLASSMEMBER_QUALIFIED), the class's object slot for each object's value of a scoped field (`Animal.items = {}`,
+ * LBC_NEWCLASSMEMBER_QUALIFIEDFIELD), or the value of a scoped field on the class (`shared Animal.kind = "cat"`,
+ * LBC_NEWCLASSMEMBER_QUALIFIEDSHARED, and LBC_NEWCLASSMEMBER_QUALIFIEDSTATIC). Raises when the trait's member is the other
+ * kind or has another placement; luaR_implementtraits checks the rest. Ignored once the class has implemented its traits.
  */
-LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* value, bool isfield);
+LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* value, int form);
 
 /**
  * Luwu Traits (rfcs/classes/traits.md): sets `ra` to the class's version of the member `name` of `trait`, for

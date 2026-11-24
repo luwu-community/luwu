@@ -472,7 +472,8 @@ enum LuauOpcode
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_QUALIFIED for a qualified implementation, `function
     // Json.name`: C holds the function, C+1 the trait, and AUX names it. Emitted before the IMPLEMENTS form, which checks it.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_QUALIFIEDFIELD for a class's value of a trait's scoped
-    // field, `Animal.species = value`, with the same operands.
+    // field, `Animal.species = value`: C holds its object slot, C+1 the trait. B is LBC_NEWCLASSMEMBER_QUALIFIEDSHARED or
+    // LBC_NEWCLASSMEMBER_QUALIFIEDSTATIC for one on the class: C holds the value.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_FIELD for a field on the class value (`shared x = 1`):
     // C holds its value and AUX names it.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_TRAITCOPY for the class's own copy of a trait's
@@ -587,11 +588,12 @@ enum LuauOpcode
     // INITTRAITS: Luwu Traits (rfcs/classes/traits.md): starts initializing the fields an object gets from its class's
     // traits, which construction does after allocating the object and before the class's own fields. Emitted at the
     // top of a class's `__init`, in a class's synthesized `__implements`, and after NEWOBJECT's ALLOC form, as a loop:
-    // `INITTRAITS A; CALL F, N + 2, 1; JUMPBACK` to the INITTRAITS. Each run lays out the CALL's frame for the class's
+    // `INITTRAITS A; CALL F, N + 2, 2; JUMPBACK` to the INITTRAITS. Each run lays out the CALL's frame for the class's
     // copy of the next trait's `__traitinit`, in dependency order: the function in F, the object in F + 1, and that
-    // trait's `implements` arguments from F + 2, padded with nil to N values. Once every initializer has run, it puts
-    // back the overridden constant fields (LuauClass::overriddenconsts) and jumps past the loop. The initializers are
-    // ordinary calls, so they may yield.
+    // trait's `implements` arguments from F + 2, padded with nil to N values. After those come the class's values of
+    // per-object scoped fields: the next run stores the result such a call leaves in F. Once every initializer has run,
+    // it puts back the overridden constant fields (LuauClass::overriddenconsts) and jumps past the loop. The
+    // initializers are ordinary calls, so they may yield.
     // A: how many initializers have run, 0 at first; A + 1 holds the object, and A + 2 onwards the N `implements`
     //    arguments (every entry's, in list order, one value each)
     // D: jump offset (-32768..32767) past the loop, taken once every initializer has run
@@ -825,8 +827,10 @@ enum LuwuBytecodeTag
 #define LBC_CLASSMEMBER_EXPECTTRAIT (1 << 12)
 // Luwu Traits (rfcs/classes/traits.md): a trait's scoped field that each object of an implementing class has a value of
 // (`scoped species = value`), with LBC_CLASSMEMBER_SCOPED and LBC_CLASSMEMBER_CLASSFIELD. The trait's static slot holds
-// the value every object starts with. Without this bit a scoped field is one value on the class (`scoped shared`,
-// `scoped static`).
+// the value every object starts with when it's a constant. Otherwise the trait's `__traitinit` computes it for each
+// object. Without this bit a scoped field is one value on the class (`scoped shared`, `scoped static`).
+// On a class's object field, it marks the slot that holds the class's value of such a field (`Animal.species = value`):
+// the slot has no name, and LBC_NEWCLASSMEMBER_QUALIFIEDFIELD says which trait's field it is.
 #define LBC_CLASSMEMBER_SCOPEDOBJECTFIELD (1 << 13)
 // Luwu Traits (rfcs/classes/traits.md): set on a trait's class method, a function whose first parameter is `Self`. Like a
 // method (LBC_CLASSMEMBER_TAKESSELF), it's read through the trait as a dispatcher to the receiver's class, here the class
@@ -845,10 +849,25 @@ enum LuwuBytecodeTag
 #define LBC_NEWCLASSMEMBER_FIELD 4
 // Luwu Classes (rfcs/classes): operand B of LOP_NEWCLASSMEMBER for the class's constructor, the function a call on the
 // class runs (LuauClass::constructor). C holds the function; AUX is unused.
-#define LBC_NEWCLASSMEMBER_CONSTRUCTOR 5
-// Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's value of a trait's scoped field,
-// `Animal.species = value`: C holds the value, C+1 the trait, and AUX names the field as a constant string
-#define LBC_NEWCLASSMEMBER_QUALIFIEDFIELD 6
+#define LBC_NEWCLASSMEMBER_CONSTRUCTOR 9
+// Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's value of a trait's per-object scoped
+// field, `Animal.species = value`. C holds the number of the class's object slot that holds each object's value
+// (LBC_CLASSMEMBER_SCOPEDOBJECTFIELD), C+1 the trait, and AUX names the field as a constant string. The class's
+// constructors compute the value like a field default.
+#define LBC_NEWCLASSMEMBER_QUALIFIEDFIELD 5
+// Luwu Traits (rfcs/classes/traits.md): operands B of LOP_NEWCLASSMEMBER for a class's value of a trait's scoped field on
+// the class, `shared Animal.species = value` (`scoped shared`) and `static Animal.species = value` (`scoped static`). C
+// holds the value, C+1 the trait, and AUX names the field as a constant string.
+#define LBC_NEWCLASSMEMBER_QUALIFIEDSHARED 6
+#define LBC_NEWCLASSMEMBER_QUALIFIEDSTATIC 7
+// Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a metamethod of the class or trait value itself
+// (`function __tostring(Self)`, a trait's `traitonly function __tostring(trait)`): C holds the function and AUX names it
+#define LBC_NEWCLASSMEMBER_VALUEMETAMETHOD 8
+// Luwu Traits (rfcs/classes/traits.md): whether operand B of LOP_NEWCLASSMEMBER gives a trait's member a value for the class,
+// with the trait in C+1
+#define LBC_NEWCLASSMEMBER_ISQUALIFIED(b) \
+    ((b) == LBC_NEWCLASSMEMBER_QUALIFIED || (b) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD || (b) == LBC_NEWCLASSMEMBER_QUALIFIEDSHARED || \
+     (b) == LBC_NEWCLASSMEMBER_QUALIFIEDSTATIC)
 
 // Luwu Traits (rfcs/classes/traits.md): bits of the shape flags varint of LBC_CONSTANT_CLASS_SHAPE, written after the member
 // counts.

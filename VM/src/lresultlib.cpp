@@ -31,7 +31,7 @@ static LuauClass* builtinclass(lua_State* L, LuwuBuiltinClass kind)
 }
 
 // The value of a `Some`, `Ok` or `Err`, readable as `value` (`error` for `Err`)
-static const uint8_t kPayloadField = LBC_CLASSMEMBER_CONST;
+static const uint16_t kPayloadField = LBC_CLASSMEMBER_CONST;
 
 // The first field of a `Some`, `Ok` or `Err`
 static const int kPayload = 0;
@@ -234,6 +234,7 @@ static const luaR_NativeMember kSomeMembers[] = {
     {"expect", payloadexpect<LUWU_BUILTIN_SOME>, 0, payloadexpectfast},
     {"__eq", payloadeq<LUWU_BUILTIN_SOME>, 0},
     {"__tostring", payloadtostring<LUWU_BUILTIN_SOME>, 0},
+    {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC},
 };
 
 static const luaR_NativeMember kOkMembers[] = {
@@ -243,6 +244,7 @@ static const luaR_NativeMember kOkMembers[] = {
     {"err", okerr, 0, nonefast},
     {"__eq", payloadeq<LUWU_BUILTIN_OK>, 0},
     {"__tostring", payloadtostring<LUWU_BUILTIN_OK>, 0},
+    {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC},
 };
 
 static const luaR_NativeMember kErrMembers[] = {
@@ -255,6 +257,7 @@ static const luaR_NativeMember kErrMembers[] = {
     {"err", errerr, 0, payloadgetfast},
     {"__eq", payloadeq<LUWU_BUILTIN_ERR>, 0},
     {"__tostring", payloadtostring<LUWU_BUILTIN_ERR>, 0},
+    {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC},
 };
 
 // `none:get()`: an empty option has no value, so `none`
@@ -845,7 +848,8 @@ LuauObject* luaR_newerrorvariant(lua_State* L)
     return variant;
 }
 
-#define LUWU_VARIANT_TOSTRING(kind) {"__tostring", varianttostring<kind>, 0}
+// a variant's objects print through `varianttostring`, and the variant itself like every builtin class
+#define LUWU_VARIANT_TOSTRING(kind) {"__tostring", varianttostring<kind>, 0}, {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC}
 
 static const luaR_NativeMember kRuntimeMembers[] = {
     {"kind", NULL, kPayloadField},

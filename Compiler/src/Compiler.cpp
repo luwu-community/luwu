@@ -209,6 +209,14 @@ static bool isObjectField(const AstClassProperty& prop)
     return prop.placement == AstClassMemberPlacement::Default && !prop.scopedLocation && !prop.qualifiedTrait;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a trait's scoped field that each object has a value of, and whose default isn't a
+// constant. Every object gets a fresh value, like a field default: the trait's `__traitinit` writes it, qualified.
+static bool isComputedScopedObjectField(const AstClassProperty& prop)
+{
+    bool perObject = prop.scopedLocation && prop.placement == AstClassMemberPlacement::Default;
+    return perObject && !prop.expectLocation && prop.defaultValue && !isConstantClassDefault(prop.defaultValue);
+}
+
 // Luwu Classes (rfcs/classes): whether the class or trait body declares a field `name`, which restates the primary
 // constructor parameter of that name
 static bool classBodyDeclaresProperty(AstStatClass* decl, AstName name)
@@ -220,6 +228,62 @@ static bool classBodyDeclaresProperty(AstStatClass* decl, AstName name)
     }
 
     return false;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class's value of a trait's per-object scoped field, `Animal.items = {}`. Each
+// object holds it in an unnamed slot of the class's own fields, and the class's constructors compute it like a field
+// default.
+static bool isScopedObjectValue(const AstClassProperty& prop)
+{
+    return prop.qualifiedTrait && prop.placement == AstClassMemberPlacement::Default;
+}
+
+// Luwu Classes (rfcs/classes): how many named fields of its own a class has: its body's fields, then the primary
+// constructor parameters the body doesn't restate. Its scoped values' slots come after them (classScopedValueSlots).
+static uint32_t classNamedFieldCount(AstStatClass* decl)
+{
+    uint32_t count = 0;
+    for (const AstClassMember& member : decl->members)
+    {
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && isObjectField(*prop))
+            count++;
+    }
+
+    if (decl->primaryConstructor)
+    {
+        for (AstLocal* param : decl->primaryConstructor->args)
+            if (!classBodyDeclaresProperty(decl, param->name))
+                count++;
+    }
+
+    return count;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the class's per-object scoped values (isScopedObjectValue) in declaration order,
+// each with its object slot
+static std::vector<std::pair<const AstClassProperty*, uint32_t>> classScopedValueSlots(AstStatClass* decl)
+{
+    std::vector<std::pair<const AstClassProperty*, uint32_t>> values;
+    uint32_t slot = classNamedFieldCount(decl);
+
+    for (const AstClassMember& member : decl->members)
+    {
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && isScopedObjectValue(*prop))
+            values.emplace_back(prop, slot++);
+    }
+
+    return values;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the object slot of the class's per-object scoped value `prop`
+static uint32_t classScopedValueSlot(AstStatClass* decl, const AstClassProperty* prop)
+{
+    for (const auto& [value, slot] : classScopedValueSlots(decl))
+        if (value == prop)
+            return slot;
+
+    LUAU_ASSERT(!"not a scoped value of the class");
+    return 0;
 }
 
 struct Compiler
@@ -655,6 +719,9 @@ struct Compiler
                     lv.reg = selfReg;
                     lv.name = sref(fd.name);
                     lv.location = fd.value->location;
+                    // Luwu Traits (rfcs/classes/traits.md): the prologue's CHECKSELFCLASS proved `self` is an object of
+                    // the class, whose own slots are where the compiler put them
+                    lv.objectMember = fd.slot;
 
                     compileAssign(lv, valueReg, nullptr);
                 }
@@ -3109,7 +3176,9 @@ struct Compiler
                 parameterFields.push_back(param);
         }
 
-        size_t fieldCount = properties.size() + parameterFields.size();
+        // Luwu Traits (rfcs/classes/traits.md): the class's per-object scoped values have the slots after those
+        std::vector<std::pair<const AstClassProperty*, uint32_t>> scopedSlots = classScopedValueSlots(decl);
+        size_t fieldCount = properties.size() + parameterFields.size() + scopedSlots.size();
 
         if (fieldCount > kMaxNewObjectFields)
             return false;
@@ -3139,6 +3208,10 @@ struct Compiler
 
         for (const AstClassProperty* prop : properties)
             if (prop->defaultValue && !isInlinable(prop->defaultValue))
+                return false;
+
+        for (const auto& [prop, slot] : scopedSlots)
+            if (!isInlinable(prop->defaultValue))
                 return false;
 
         for (AstExpr* paramDefault : primaryConstructor->argsDefaults)
@@ -3296,8 +3369,20 @@ struct Compiler
         std::vector<bool> initialized(fieldCount, true);
         size_t slot = 0;
 
-        for (const AstClassProperty* prop : properties)
+        // the initializers run in declaration order, the scoped values among the fields, as the synthesized `__init` runs them
+        for (const AstClassMember& member : decl->members)
         {
+            const AstClassProperty* prop = member.get_if<AstClassProperty>();
+            if (prop && isScopedObjectValue(*prop))
+            {
+                setDebugLine(prop->defaultValue);
+                compileExprTemp(prop->defaultValue, uint8_t(base + 1 + classScopedValueSlot(decl, prop)));
+                continue;
+            }
+
+            if (!prop || !isObjectField(*prop))
+                continue;
+
             uint8_t reg = uint8_t(base + 1 + slot);
 
             if (prop->defaultValue)
@@ -3335,7 +3420,7 @@ struct Compiler
                 bytecode.emitABC(LOP_MOVE, reg, uint8_t(paramReg), 0);
         }
 
-        LUAU_ASSERT(slot == fieldCount);
+        LUAU_ASSERT(slot + scopedSlots.size() == fieldCount);
 
         popLocals(oldLocals);
 
@@ -3604,10 +3689,18 @@ struct Compiler
         bool computedDefaults = classPodDefaultsFn.contains(decl);
         bool hasTraits = decl->implements.size > 0;
 
-        std::vector<const AstClassProperty*> properties;
+        // the class's own fields with their slots, in declaration order: its named fields come first in its layout, and its
+        // per-object scoped values (Luwu Traits, rfcs/classes/traits.md) have the slots after them
+        std::vector<std::pair<const AstClassProperty*, uint32_t>> fields;
+        uint32_t namedSlot = 0;
         for (const AstClassMember& member : decl->members)
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && isObjectField(*prop))
-                properties.push_back(prop);
+        {
+            const AstClassProperty* prop = member.get_if<AstClassProperty>();
+            if (prop && isObjectField(*prop))
+                fields.emplace_back(prop, namedSlot++);
+            else if (prop && isScopedObjectValue(*prop))
+                fields.emplace_back(prop, classScopedValueSlot(decl, prop));
+        }
 
         DenseHashSet<AstLocal*> noParameters{nullptr};
 
@@ -3616,7 +3709,7 @@ struct Compiler
 
         if (computedDefaults)
         {
-            for (const AstClassProperty* prop : properties)
+            for (const auto& [prop, slot] : fields)
                 if (prop->defaultValue && !constructionCanEvaluate(decl, prop->defaultValue, noParameters))
                     return false;
         }
@@ -3650,12 +3743,11 @@ struct Compiler
 
             compileTraitInit(decl, object);
 
-            // the class's own fields come first in its layout, in declaration order
             if (computedDefaults)
             {
-                for (size_t offset = 0; offset < properties.size(); ++offset)
+                for (const auto& [prop, slot] : fields)
                 {
-                    AstExpr* value = properties[offset]->defaultValue;
+                    AstExpr* value = prop->defaultValue;
                     if (!value)
                         continue;
 
@@ -3664,7 +3756,7 @@ struct Compiler
                     uint8_t valueReg = compileExprAuto(value, rsValue);
 
                     bytecode.emitABC(LOP_SETOBJECTMEMBER, valueReg, object, 0);
-                    bytecode.emitAux(uint32_t(offset));
+                    bytecode.emitAux(slot);
                 }
             }
 
@@ -4324,6 +4416,9 @@ struct Compiler
         DenseHashMap<AstName, uint32_t> fieldSlots{AstName()};
         // The fields declared more than once: by the class and a trait, or by traits that need each other
         DenseHashSet<AstName> overridden{AstName()};
+        // Where each per-object scoped field of a trait lives, keyed by the trait's property: the class's own slot when the
+        // class gives it a value, otherwise the unnamed slot luaR_implementtraits appends after every named field
+        DenseHashMap<const AstClassProperty*, uint32_t> scopedSlots{nullptr};
     };
 
     // Luwu Traits (rfcs/classes/traits.md): a trait's fields in its shape's order (compileClassDeclaration):
@@ -4521,8 +4616,10 @@ struct Compiler
                 plan->overridden.insert(name);
         }
 
-        // each winner's fields are appended when the runtime reaches that trait (luaR_implementtraits)
-        uint32_t nextSlot = ownFields;
+        // each winner's fields are appended when the runtime reaches that trait (luaR_implementtraits), after the class's own
+        // unnamed slots for its scoped values
+        std::vector<std::pair<const AstClassProperty*, uint32_t>> ownScoped = classScopedValueSlots(cls);
+        uint32_t nextSlot = ownFields + uint32_t(ownScoped.size());
 
         for (AstStatClass* trait : attached)
         {
@@ -4531,6 +4628,31 @@ struct Compiler
                 AstStatClass* const* winner = winners.find(name);
                 if (winner && *winner == trait)
                     plan->fieldSlots[name] = nextSlot++;
+            }
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): the per-object scoped fields, in the order luaR_implementqualified places them.
+        // The class's scoped values name their traits, which have to be ones the plan knows.
+        for (const auto& [value, slot] : ownScoped)
+        {
+            AstStatClass* trait = sameFileTrait(value->qualifiedTrait);
+            const AstClassProperty* field = trait ? findScopedField(trait, value->name) : nullptr;
+            bool perObject = field && field->placement == AstClassMemberPlacement::Default;
+            bool known = perObject && std::find(attached.begin(), attached.end(), trait) != attached.end();
+            if (!known)
+                return nullptr;
+
+            plan->scopedSlots[field] = slot;
+        }
+
+        for (AstStatClass* trait : attached)
+        {
+            for (const AstClassMember& member : trait->members)
+            {
+                const AstClassProperty* prop = member.get_if<AstClassProperty>();
+                bool perObject = prop && prop->scopedLocation && prop->placement == AstClassMemberPlacement::Default;
+                if (perObject && !plan->scopedSlots.contains(prop))
+                    plan->scopedSlots[prop] = nextSlot++;
             }
         }
 
@@ -4588,6 +4710,13 @@ struct Compiler
             for (const auto& [name, prop] : traitProvidedFields(trait))
                 if (prop && prop->defaultValue && !movable(prop->defaultValue))
                     return false;
+
+            for (const AstClassMember& member : trait->members)
+            {
+                const AstClassProperty* prop = member.get_if<AstClassProperty>();
+                if (prop && isComputedScopedObjectField(*prop) && !movable(prop->defaultValue))
+                    return false;
+            }
         }
 
         return true;
@@ -4610,12 +4739,21 @@ struct Compiler
             bytecode.emitAux(*slot);
         };
 
-        auto storeField = [&](AstName name, AstExpr* value)
+        auto storeSlot = [&](uint32_t slot, AstExpr* value)
         {
             RegScope rsValue(this);
             uint8_t reg = allocReg(value, 1u);
             compileExprTemp(value, reg);
-            storeRegister(name, reg);
+
+            bytecode.emitABC(LOP_SETOBJECTMEMBER, reg, objectReg, 0);
+            bytecode.emitAux(slot);
+        };
+
+        auto storeField = [&](AstName name, AstExpr* value)
+        {
+            const uint32_t* slot = plan.fieldSlots.find(name);
+            LUAU_ASSERT(slot);
+            storeSlot(*slot, value);
         };
 
         for (AstStatClass* trait : plan.initOrder)
@@ -4666,23 +4804,47 @@ struct Compiler
                 }
             }
 
-            for (const auto& [name, prop] : traitProvidedFields(trait))
+            auto initField = [&](AstName name, const AstClassProperty* prop)
             {
                 bool constant = prop && isTraitConstantField(*prop);
                 if (constant && !plan.overridden.contains(name))
-                    continue;
+                    return;
 
                 if (prop && prop->defaultValue)
                 {
                     storeField(name, prop->defaultValue);
-                    continue;
+                    return;
                 }
 
                 // a body field without a default restates the parameter it is named after, as does a parameter's own field
                 AstLocal* param = primaryConstructorParam(trait, name);
                 LUAU_ASSERT(param);
                 storeRegister(name, uint8_t(getLocalReg(param)));
+            };
+
+            // in `__traitinit`'s order: the body's fields with the computed per-object scoped fields among them, then the
+            // parameters the body doesn't restate
+            std::vector<std::pair<AstName, const AstClassProperty*>> fields = traitProvidedFields(trait);
+            size_t nextField = 0;
+
+            for (const AstClassMember& member : trait->members)
+            {
+                const AstClassProperty* prop = member.get_if<AstClassProperty>();
+                if (prop && isComputedScopedObjectField(*prop))
+                {
+                    const uint32_t* slot = plan.scopedSlots.find(prop);
+                    LUAU_ASSERT(slot);
+                    storeSlot(*slot, prop->defaultValue);
+                }
+                else if (prop && nextField < fields.size() && fields[nextField].second == prop)
+                {
+                    initField(fields[nextField].first, prop);
+                    nextField++;
+                }
             }
+
+            for (; nextField < fields.size(); nextField++)
+                initField(fields[nextField].first, fields[nextField].second);
 
             popLocals(oldLocals);
         }
@@ -4698,6 +4860,27 @@ struct Compiler
             if (prop && isObjectField(*prop) && prop->defaultValue && plan.overridden.contains(prop->name))
                 storeField(prop->name, prop->defaultValue);
         }
+
+        // ...and so is a constant scoped value whose trait computed its own default above
+        for (const auto& [value, slot] : classScopedValueSlots(cls))
+        {
+            const AstClassProperty* field = findScopedField(sameFileTrait(value->qualifiedTrait), value->name);
+            if (isComputedScopedObjectField(*field))
+                storeSlot(slot, value->defaultValue);
+        }
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): the scoped field `name` of `trait`, if it declares one
+    static const AstClassProperty* findScopedField(AstStatClass* trait, AstName name)
+    {
+        for (const AstClassMember& member : trait->members)
+        {
+            const AstClassProperty* prop = member.get_if<AstClassProperty>();
+            if (prop && prop->scopedLocation && prop->name == name)
+                return prop;
+        }
+
+        return nullptr;
     }
 
     // Luwu Traits (rfcs/classes/traits.md): whether constructing `cls` has no trait fields to initialize, so construction
@@ -4878,7 +5061,7 @@ struct Compiler
                 {
                     const AstClassMethod* method = member.get_if<AstClassMethod>();
 
-                    bool traitOnly = method && (classFunctionPlacementFlags(trait, *method) & LBC_CLASSMEMBER_TRAITONLY) != 0;
+                    bool traitOnly = method && (classFunctionPlacementFlags(*method) & LBC_CLASSMEMBER_TRAITONLY) != 0;
                     if (!method || method->expectLocation || traitOnly)
                         continue;
 
@@ -4899,15 +5082,9 @@ struct Compiler
         }
     }
 
-    // Luwu Traits (rfcs/classes/traits.md): the placement bits of a class's or trait's function. A method is shared and a
-    // function without `self` static, unless it says otherwise. A metamethod is never static: the VM finds it by name.
-    // A trait's factory and hook belong to the trait alone.
-    static uint16_t classFunctionPlacementFlags(AstStatClass* decl, const AstClassMethod& method)
+    // Luwu Traits (rfcs/classes/traits.md): the placement bits of a class's or trait's function (effectivePlacement)
+    static uint16_t classFunctionPlacementFlags(const AstClassMethod& method)
     {
-        bool hook = decl->isTrait && (method.functionName == "__create" || method.functionName == "__implemented");
-        if (hook && method.placement == AstClassMemberPlacement::Default)
-            return LBC_CLASSMEMBER_STATIC | LBC_CLASSMEMBER_TRAITONLY;
-
         // a scoped function is placed like any other, in the trait's slot of the class
         uint16_t scoped = method.scopedLocation ? LBC_CLASSMEMBER_SCOPED : 0;
 
@@ -5062,12 +5239,13 @@ struct Compiler
                         checkConstant(propNameCid, prop.nameLocation);
 
                         // Luwu Traits (rfcs/classes/traits.md): a field on the class value has a static slot, which
-                        // gets its value now, as the class statement runs
+                        // gets its value now, as the class statement runs. A scoped field's slot holds the value each
+                        // object starts with when that's a constant, and `__traitinit` computes the others.
                         if (!isObjectField(prop))
                         {
                             addStaticSlot(propNameCid, classFieldFlags(decl, prop));
 
-                            if (prop.defaultValue && !prop.expectLocation)
+                            if (prop.defaultValue && !prop.expectLocation && !isComputedScopedObjectField(prop))
                             {
                                 compileExprTemp(prop.defaultValue, temp);
                                 bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_FIELD, temp);
@@ -5122,12 +5300,25 @@ struct Compiler
                             int methodNameCid = bytecode.addConstantString(sref(method.functionName));
                             checkConstant(methodNameCid, method.nameLocation);
 
-                            uint16_t flags = LBC_CLASSMEMBER_EXPECTED | expectTargetFlags(method.expectTarget) | classFunctionPlacementFlags(decl, method);
+                            uint16_t flags = LBC_CLASSMEMBER_EXPECTED | expectTargetFlags(method.expectTarget) | classFunctionPlacementFlags(method);
                             if (method.visibility == AstClassMemberVisibility::Private)
                                 flags |= LBC_CLASSMEMBER_PRIVATE;
                             if (method.isOptional)
                                 flags |= LBC_CLASSMEMBER_OPTIONAL;
                             addStaticSlot(methodNameCid, flags);
+                            return;
+                        }
+
+                        // Luwu Traits (rfcs/classes/traits.md): the class or trait value's own metamethod has no member slot; it
+                        // goes in the value's metatable
+                        if (isValueMetamethod(method))
+                        {
+                            compileExprFunction(method.function, temp);
+                            int nameCid = bytecode.addConstantString(sref(method.functionName));
+                            checkConstant(nameCid, method.nameLocation);
+
+                            bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_VALUEMETAMETHOD, temp);
+                            bytecode.emitAux(nameCid);
                             return;
                         }
 
@@ -5144,7 +5335,7 @@ struct Compiler
                         int methodNameCid = bytecode.addConstantString(sref(method.functionName));
                         checkConstant(methodNameCid, method.function->location);
 
-                        uint16_t flags = classFunctionPlacementFlags(decl, method);
+                        uint16_t flags = classFunctionPlacementFlags(method);
                         if (method.visibility == AstClassMemberVisibility::Private)
                             flags |= LBC_CLASSMEMBER_PRIVATE;
                         if (method.finalLocation)
@@ -5204,6 +5395,31 @@ struct Compiler
                 shape.propertyFlags.emplace_back(flags);
                 shape.propertyDefaults.emplace_back(-1);
             }
+        }
+
+        // Luwu Traits (rfcs/classes/traits.md): an unnamed slot for each of the class's per-object scoped values, after its
+        // named fields. The name is only for reading the shape; the trait's field gives the slot its access and constness
+        // once the class implements its traits.
+        for (const auto& [prop, slot] : classScopedValueSlots(decl))
+        {
+            LUAU_ASSERT(slot == shape.propertyNames.size());
+
+            int propNameCid = bytecode.addConstantString(sref(prop->name));
+            checkConstant(propNameCid, prop->nameLocation);
+            shape.propertyNames.emplace_back(propNameCid);
+
+            uint16_t flags = LBC_CLASSMEMBER_SCOPEDOBJECTFIELD | LBC_CLASSMEMBER_HASDEFAULT;
+            int32_t defaultCid = -1;
+
+            if (podConstDefaults)
+            {
+                defaultCid = addClassDefaultConstant(prop->defaultValue);
+                checkConstant(defaultCid, prop->nameLocation);
+                flags |= LBC_CLASSMEMBER_CONSTDEFAULT;
+            }
+
+            shape.propertyFlags.emplace_back(flags);
+            shape.propertyDefaults.emplace_back(defaultCid);
         }
 
         if (AstExprFunction* const* primaryInitFn = classPrimaryInitFn.find(decl))
@@ -5296,11 +5512,11 @@ struct Compiler
         }
 
         // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementations, `function Json.name`, and its values of
-        // scoped fields, `Animal.species = value`, each with its trait
+        // scoped fields, each with its trait. A per-object value is computed by the class's constructors, so the class
+        // statement only says which slot holds it; a value on the class (`shared Animal.kind = v`) is computed here, once.
         {
             RegScope rsQualified(this);
             uint8_t qualifiedRegs = allocReg(decl, 2u);
-
             for (const AstClassMember& member : decl->members)
             {
                 const AstClassMethod* method = member.get_if<AstClassMethod>();
@@ -5311,10 +5527,33 @@ struct Compiler
 
                 // the parser refuses a qualified field without a value
                 LUAU_ASSERT(method || prop->defaultValue);
+                uint8_t form = LBC_NEWCLASSMEMBER_QUALIFIEDFIELD;
+
                 if (method)
+                {
                     compileExprFunction(method->function, qualifiedRegs);
+                    form = LBC_NEWCLASSMEMBER_QUALIFIED;
+                }
+                else if (isScopedObjectValue(*prop))
+                {
+                    uint32_t slot = classScopedValueSlot(decl, prop);
+                    if (slot <= uint32_t(std::numeric_limits<int16_t>::max()))
+                    {
+                        bytecode.emitAD(LOP_LOADN, qualifiedRegs, int16_t(slot));
+                    }
+                    else
+                    {
+                        int32_t cid = bytecode.addConstantNumber(double(slot));
+                        checkConstant(cid, prop->nameLocation);
+                        emitLoadK(qualifiedRegs, cid);
+                    }
+                }
                 else
+                {
                     compileExprTemp(prop->defaultValue, qualifiedRegs);
+                    bool isStatic = prop->placement == AstClassMemberPlacement::Static;
+                    form = isStatic ? LBC_NEWCLASSMEMBER_QUALIFIEDSTATIC : LBC_NEWCLASSMEMBER_QUALIFIEDSHARED;
+                }
 
                 compileExprTemp(trait, uint8_t(qualifiedRegs + 1));
 
@@ -5322,7 +5561,7 @@ struct Compiler
                 int nameCid = bytecode.addConstantString(sref(name));
                 checkConstant(nameCid, method ? method->nameLocation : prop->nameLocation);
 
-                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, method ? LBC_NEWCLASSMEMBER_QUALIFIED : LBC_NEWCLASSMEMBER_QUALIFIEDFIELD, qualifiedRegs);
+                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, form, qualifiedRegs);
                 bytecode.emitAux(nameCid);
             }
         }
@@ -7794,6 +8033,18 @@ struct Compiler
 
             return result;
         }
+        else if (AstExprIndexName* expr = node->as<AstExprIndexName>(); expr && scopedValueTargets.contains(expr))
+        {
+            // Luwu Traits (rfcs/classes/traits.md): a primary constructor storing a per-object scoped value. Its prologue's
+            // CHECKSELFCLASS proved `self` is an object of the class, whose own slots are where the compiler put them.
+            LValue result = {LValue::Kind_IndexName};
+            result.reg = compileExprAuto(expr->expr, rs);
+            result.name = sref(expr->index);
+            result.location = node->location;
+            result.objectMember = int(scopedValueTargets[expr]);
+
+            return result;
+        }
         else if (AstExprIndexName* expr = node->as<AstExprIndexName>(); expr && expr->qualifiedTrait)
         {
             LValue result = {LValue::Kind_Qualified};
@@ -9891,6 +10142,9 @@ struct Compiler
     {
         AstName name;
         AstExpr* value;
+        // Luwu Traits (rfcs/classes/traits.md): the object slot of a per-object scoped value, which has no name to write it
+        // by; -1 for a named field
+        int slot = -1;
     };
 
     // Finds each class's user-defined `__init`, if any, together with the default value expressions
@@ -9921,6 +10175,7 @@ struct Compiler
         DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner;
         DenseHashMap<AstName, AstStatClass*>& classByName;
         DenseHashSet<AstStatClass*>& classesWithPrivateMembers;
+        DenseHashMap<AstExprIndexName*, uint32_t>& scopedValueTargets;
         std::vector<AstExprFunction*>& functionsToCompile;
 
         ClassInitDefaultsVisitor(
@@ -9938,6 +10193,7 @@ struct Compiler
             DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner,
             DenseHashMap<AstName, AstStatClass*>& classByName,
             DenseHashSet<AstStatClass*>& classesWithPrivateMembers,
+            DenseHashMap<AstExprIndexName*, uint32_t>& scopedValueTargets,
             std::vector<AstExprFunction*>& functionsToCompile
         )
             : allocator(allocator)
@@ -9954,6 +10210,7 @@ struct Compiler
             , methodOwner(methodOwner)
             , classByName(classByName)
             , classesWithPrivateMembers(classesWithPrivateMembers)
+            , scopedValueTargets(scopedValueTargets)
             , functionsToCompile(functionsToCompile)
         {
         }
@@ -10042,6 +10299,17 @@ struct Compiler
             for (const auto& member : node->members)
             {
                 const AstClassProperty* prop = member.get_if<AstClassProperty>();
+
+                // Luwu Traits (rfcs/classes/traits.md): a per-object scoped value, stored at its slot. The target names no
+                // trait: the slot says which field it is, and the trait isn't evaluated per construction.
+                if (prop && isScopedObjectValue(*prop))
+                {
+                    AstStat* assign = buildFieldAssign(self, prop->name, prop->nameLocation, prop->defaultValue);
+                    AstExprIndexName* target = assign->as<AstStatAssign>()->vars.data[0]->as<AstExprIndexName>();
+                    scopedValueTargets[target] = classScopedValueSlot(node, prop);
+                    body.push_back(assign);
+                    continue;
+                }
 
                 if (!prop || !isObjectField(*prop))
                     continue;
@@ -10139,6 +10407,15 @@ struct Compiler
             return allocator.alloc<AstStatAssign>(Location(nameLocation, value->location), AstArray<AstExpr*>{vars, 1}, AstArray<AstExpr*>{values, 1});
         }
 
+        // Luwu Traits (rfcs/classes/traits.md): `self:Trait.name = value` in a function of the trait `trait`
+        AstStat* buildScopedFieldAssign(AstLocal* self, AstStatClass* trait, const AstClassProperty& prop)
+        {
+            AstStat* assign = buildFieldAssign(self, prop.name, prop.nameLocation, prop.defaultValue);
+            AstExprIndexName* target = assign->as<AstStatAssign>()->vars.data[0]->as<AstExprIndexName>();
+            target->qualifiedTrait = allocator.alloc<AstExprLocal>(prop.nameLocation, trait->name, /* upvalue= */ true);
+            return assign;
+        }
+
         template<typename T>
         AstArray<T> copyToAst(const std::vector<T>& items)
         {
@@ -10191,7 +10468,8 @@ struct Compiler
 
         // Luwu Traits (rfcs/classes/traits.md): a trait's `__traitinit(self, params...)` assigns every field of `self` the
         // trait provides that isn't a constant (those are in the trait's shape, see isTraitConstantField): a default, or
-        // the parameter a field restates, then the parameters the body doesn't restate. It writes by name, and the VM
+        // the parameter a field restates, then the parameters the body doesn't restate. A per-object scoped field whose
+        // default isn't a constant is written qualified, in its place among the fields. It writes by name, and the VM
         // only ever runs an implementing class's copy of it, so its slot caches learn that class's layout. The VM calls a
         // class's copy on every construction, with the arguments of the class's `implements` entry.
         void visitTrait(AstStatClass* node)
@@ -10222,6 +10500,10 @@ struct Compiler
                     // a field with neither starts out nil, as every member does
                     if (value)
                         body.push_back(buildFieldAssign(self, prop->name, prop->nameLocation, value));
+                }
+                else if (prop && isComputedScopedObjectField(*prop))
+                {
+                    body.push_back(buildScopedFieldAssign(self, node, *prop));
                 }
                 else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
                 {
@@ -10363,6 +10645,7 @@ struct Compiler
             bool anyPropertyDefault = false;
             bool allPropertyDefaultsConstant = true;
 
+
             classByName[node->name->name] = node;
 
             // Luwu Classes (rfcs/classes): a class goes in classesWithPrivateMembers when any part
@@ -10391,6 +10674,16 @@ struct Compiler
                         {
                             if (prop.visibility == AstClassMemberVisibility::Private)
                                 classesWithPrivateMembers.insert(node);
+
+                            // Luwu Traits (rfcs/classes/traits.md): a per-object scoped value is a default of one of the class's
+                            // unnamed slots
+                            if (isScopedObjectValue(prop))
+                            {
+                                defaults.push_back({prop.name, prop.defaultValue, int(classScopedValueSlot(node, &prop))});
+                                anyPropertyDefault = true;
+                                allPropertyDefaultsConstant &= isConstantClassDefault(prop.defaultValue);
+                                return;
+                            }
 
                             // Luwu Traits (rfcs/classes/traits.md): a field on the class value isn't part of an object
                             if (!isObjectField(prop))
@@ -10432,6 +10725,11 @@ struct Compiler
 
             if (node->implements.size > 0 && !node->primaryConstructor && !init)
                 visitPodImplements(node);
+
+            // a class without a constructor returns the scoped values from `__defaults` or keeps them in its shape, after
+            // the named fields
+            for (const auto& [prop, slot] : classScopedValueSlots(node))
+                propertyDefaultsInOrder.push_back(prop->defaultValue);
 
             if (node->primaryConstructor)
             {
@@ -10803,6 +11101,9 @@ struct Compiler
     // Classes that declare at least one private member. Their methods inline into outside code only when
     // classInlinedBodyKeepsPrivateAccess holds (see tryResolveMethodCall).
     DenseHashSet<AstStatClass*> classesWithPrivateMembers{nullptr};
+    // Luwu Traits (rfcs/classes/traits.md): populated by ClassInitDefaultsVisitor. The targets of the stores a primary
+    // constructor's `__init` makes of the class's per-object scoped values, each with its object slot (classScopedValueSlots).
+    DenseHashMap<AstExprIndexName*, uint32_t> scopedValueTargets{nullptr};
     // Seeded false for every hoisted (top-level) class by preallocateHoistedClasses, flipped to
     // true by compileClassDeclaration right after that class's real LOADKX write is emitted, ahead
     // of compiling its methods. A class local is only safe to capture immutably once this is true:
@@ -10935,6 +11236,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
             compiler.classMethodOwner,
             compiler.classByName,
             compiler.classesWithPrivateMembers,
+            compiler.scopedValueTargets,
             functions
         );
         root->visit(&classInitDefaultsVisitor);

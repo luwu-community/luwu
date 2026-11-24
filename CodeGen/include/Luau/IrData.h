@@ -1042,7 +1042,7 @@ enum class IrCmd : uint8_t
     // writes nil there once every initializer has run (a jump on C's tag follows). Runs no Luau code.
     // A: unsigned int (bytecode instruction index)
     // B: Rn (how many initializers have run, read and written; the object and the arguments follow it)
-    // C: Rn (the call frame, written)
+    // C: Rn (the call frame: read for the previous call's result, then written)
     // D: int (how many `implements` arguments there are)
     FALLBACK_INITTRAITS,
 
