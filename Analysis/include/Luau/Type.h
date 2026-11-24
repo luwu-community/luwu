@@ -762,12 +762,16 @@ struct ExternType
         std::vector<Parameter> parameters;
         // The trait's `final` functions, which implementing classes can't define.
         std::set<Name> finals;
-        // The functions scoped to the trait (`scoped function name`) and their types. Implementing classes don't get them as
-        // members: code reads them through the trait (`obj:Trait:name()`, `Class:Trait.name`). The trait's value has the
-        // ones with a body. An optional expected function's type is `F?`.
-        std::map<Name, TypeId> scopedFunctions;
-        // The scoped functions the trait expects (`expect scoped function name`), and whether each is optional. A class
-        // that lists the trait implements them (`function Trait.name`); a trait that needs it declares them.
+        // The functions and fields scoped to the trait (`scoped function name`, `scoped name = value`) and their types.
+        // Implementing classes don't get them as members: code reads them through the trait (`obj:Trait:name()`,
+        // `Class:Trait.name`). The trait's value has the ones with a body or a value. An optional expected function's type
+        // is `F?`.
+        std::map<Name, TypeId> scopedMembers;
+        // Which of `scopedMembers` are fields. A class gives one its value with `Trait.name = value`.
+        std::set<Name> scopedFields;
+        // The scoped members the trait expects (`expect scoped function name`, `expect scoped name: T`), and whether each is
+        // optional. A class that lists the trait implements them (`function Trait.name`, `Trait.name = value`); a trait that
+        // needs it declares them.
         std::map<Name, bool> scopedExpectations;
         // The trait's `traitonly` members, which implementing classes and `class<Trait>` don't get. Its `__init`,
         // `__create` and `__implemented` are the trait's alone too, without being listed here.

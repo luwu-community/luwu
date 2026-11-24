@@ -155,7 +155,8 @@ type Trait = {
     tostring: boolean,
     -- has a `__implemented` hook, which logs `<trait>:<class>` in `shared.hooks` for each class implementing it
     hooked: boolean,
-    -- has a `shared` field `t<i>_sh`, a `static` field `t<i>_st` and a `traitonly` field `t<i>_to`, with values from `i`
+    -- has a `shared` field `t<i>_sh`, a `static` field `t<i>_st` next to an object field of the same name, a `traitonly`
+    -- field `t<i>_to` and a `scoped` field `t<i>_sc`, with values from `i`
     placed: boolean,
     implementors: { Cls },
 }
@@ -1554,7 +1555,9 @@ const function generate(seed: number): (string, string)
         if t.placed then
             table.insert(out, `    public shared t{t.index}_sh = {t.index * 10}`)
             table.insert(out, `    public static t{t.index}_st = {t.index}`)
+            table.insert(out, `    public t{t.index}_st = {t.index + 1000}`)
             table.insert(out, `    public traitonly t{t.index}_to = {t.index}`)
+            table.insert(out, `    public scoped t{t.index}_sc = {t.index * 100}`)
         end
         for _, fn in t.fns do
             const params = table.clone(fn.params)
@@ -1617,19 +1620,26 @@ const function generate(seed: number): (string, string)
             })
 
             -- a trait's shared field is read through the class and its objects, its static field through the class
-            -- only, and its trait-only field through the trait only
+            -- only (objects read the object field of the same name), its trait-only field through the trait only, and
+            -- its scoped field qualified only
             if kind == "placed" and t.placed and implements then
                 local i = t.index
-                op("t_placed", {
+                local lines = {
                     `local o = {C}.make()`,
                     `check({C}.t{i}_sh == {i * 10} and o.t{i}_sh == {i * 10}, "{t.name}'s shared field on {c.name}")`,
                     `check({C}.t{i}_st == {i}, "{t.name}'s static field on {c.name}")`,
-                    `check(not pcall(function() return o.t{i}_st end), "{t.name}'s static field read through an object of {c.name}")`,
+                    `check(o.t{i}_st == {i + 1000}, "{t.name}'s object field next to its static field on {c.name}")`,
                     `check(not pcall(function() o.t{i}_sh = 0 end), "{t.name}'s shared field written through an object of {c.name}")`,
                     `check(not pcall(function() return {C}.t{i}_to end), "{t.name}'s trait-only field read through {c.name}")`,
                     `check({T}.t{i}_to == {i}, "{t.name}'s trait-only field")`,
-                    "return true",
-                }, false, true)
+                    `check(not pcall(function() return o.t{i}_sc end), "{t.name}'s scoped field read unqualified on {c.name}")`,
+                }
+                -- a qualified read names the trait with a single name
+                if not string.find(T, ".", 1, true) then
+                    table.insert(lines, `check(o:{T}.t{i}_sc == {i * 100} and {C}:{T}.t{i}_sc == {i * 100}, "{t.name}'s scoped field on {c.name}")`)
+                end
+                table.insert(lines, "return true")
+                op("t_placed", lines, false, true)
             end
 
             if kind == "hooks" and t.hooked then

@@ -3569,8 +3569,120 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
     // ... must fail. This gets the job done but maybe we can do something
     // slightly more performant here (e.g.: a "scratch" set).
     DenseHashSet<AstName> classMemberNamespace{{}};
+    // Luwu Traits (rfcs/classes/traits.md): a `static` member is only read through the class value and an object field only
+    // through objects, so the two may share a name. Static members are kept out of classMemberNamespace, which holds
+    // every other name.
+    DenseHashSet<AstName> staticMemberNamespace{{}};
+    DenseHashSet<AstName> objectFieldNames{{}};
+
+    // Reserves a member's name, or reports it when another member has it already
+    auto claimMemberName = [&](const Name& name, bool isObjectField, bool isStatic)
+    {
+        bool takenByField = objectFieldNames.contains(name.name);
+        bool takenByOther = classMemberNamespace.contains(name.name) && !takenByField;
+        bool takenByStatic = staticMemberNamespace.contains(name.name);
+
+        bool clashes = takenByOther;
+        if (isStatic)
+            clashes |= takenByStatic;
+        else
+            clashes |= takenByField || (!isObjectField && takenByStatic);
+
+        if (!clashes)
+        {
+            if (isStatic)
+                staticMemberNamespace.insert(name.name);
+            else
+                classMemberNamespace.insert(name.name);
+
+            if (isObjectField)
+                objectFieldNames.insert(name.name);
+
+            return true;
+        }
+
+        // objects would read both: the field and a shared member or method
+        bool fieldAndShared = !isStatic && (isObjectField ? takenByOther : takenByField);
+        if (fieldAndShared)
+            report(name.location, "Duplicate %s member '%s': only a 'static' member can share a name with an object field", kind, name.name.value);
+        else
+            report(name.location, "Duplicate %s member '%s'", kind, name.name.value);
+
+        return false;
+    };
+
+    // Luwu Traits (rfcs/classes/traits.md): a class member written `Json.name` is the class's version of trait Json's member
+    // `name`, for Json alone. Given the name's first part, parses the rest and returns the trait it's qualified with, leaving
+    // `name` as the member's name; nullptr when no `.` follows.
+    auto parseMemberQualifier = [&](Name& name, const char* context) -> AstExpr*
+    {
+        if (!FFlag::LuwuTraits || isTrait || lexer.current().type != '.' || lexer.lookahead().type != Lexeme::Name)
+            return nullptr;
+
+        Location qualifierStart = name.location;
+        AstExpr* qualifier = nameExpr(name);
+
+        while (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+        {
+            Position opPosition = lexer.current().location.begin;
+            nextLexeme();
+            Name next = parseName(context);
+
+            if (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+                qualifier =
+                    allocator.alloc<AstExprIndexName>(Location(qualifierStart, next.location), qualifier, next.name, next.location, opPosition, '.');
+
+            if (lexer.current().type != '.')
+                name = next;
+        }
+
+        if (implements.size == 0)
+            report(
+                qualifierStart,
+                "Class '%s' implements no traits, so it can't implement '%s.%s'",
+                nameLocal->name.value,
+                printedQualifier(qualifier).c_str(),
+                name.name.value
+            );
+
+        return qualifier;
+    };
+
+    // Luwu Traits (rfcs/classes/traits.md): whether the class body continues with `Animal.species = value`, a listed trait's
+    // name and a `.`, which would otherwise read as an assignment statement after a missing `end`
+    auto startsQualifiedField = [&]()
+    {
+        if (isTrait || lexer.current().type != Lexeme::Name || lexer.lookahead().type != '.')
+            return false;
+
+        AstName first(lexer.current().name);
+        for (const AstClassTraitRef& ref : implements)
+        {
+            AstExpr* root = ref.trait;
+            while (AstExprIndexName* index = root->as<AstExprIndexName>())
+                root = index->expr;
+
+            AstExprGlobal* global = root->as<AstExprGlobal>();
+            AstExprLocal* local = root->as<AstExprLocal>();
+            AstName rootName = global ? global->name : local ? local->local->name : AstName();
+            if (rootName == first)
+                return true;
+        }
+
+        return false;
+    };
+
     // Luwu Traits (rfcs/classes/traits.md): the qualified implementations, `Json.encode`, which don't share the class's names
     std::unordered_set<std::string> qualifiedMemberNamespace;
+
+    auto claimQualifiedName = [&](const std::string& qualifiedName, const Location& location)
+    {
+        if (qualifiedMemberNamespace.insert(qualifiedName).second)
+            return true;
+
+        report(location, "Duplicate %s member '%s'", kind, qualifiedName.c_str());
+        return false;
+    };
 
     // Members without an access specifier, collected while parsing the body. Whether they are errors
     // depends on whether any other member has a specifier, which is only known once the whole class is
@@ -3591,7 +3703,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         // missing its `end` swallows the statements after it, and the error shows up at whichever token
         // finally isn't a member, often many lines away. When the current token reads as a statement,
         // report the missing `end` here and hand the rest of the file back to the enclosing block.
-        if (classBodyLooksLikeStatement())
+        if (!startsQualifiedField() && classBodyLooksLikeStatement())
         {
             report(
                 lexer.current().location,
@@ -3879,6 +3991,26 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 continue;
             }
 
+            // Luwu Traits (rfcs/classes/traits.md): `Animal.species = value` gives trait Animal's scoped field its value for
+            // this class
+            AstExpr* qualifiedTrait = parseMemberQualifier(*propName, "class field name");
+            std::string qualifiedName;
+            if (qualifiedTrait)
+            {
+                qualifiedName = printedQualifier(qualifiedTrait) + "." + propName->name.value;
+
+                const char* modifierMessage = "Remove '%s': '%s' only gives a trait's scoped field its value for this class";
+                if (placementLocation)
+                    report(*placementLocation, modifierMessage, toString(placement), qualifiedName.c_str());
+                if (constLocation)
+                    report(*constLocation, modifierMessage, "const", qualifiedName.c_str());
+
+                placement = AstClassMemberPlacement::Scoped;
+                placementLocation = std::nullopt;
+                isConst = false;
+            }
+            int paramIndex = qualifiedTrait ? -1 : findPrimaryConstructorParam(propName->name);
+
             if (isDisallowedClassMemberName(propName->name))
                 report(propName->location, "Fields are not allowed to be named '%s'", propName->name.value);
 
@@ -3889,15 +4021,10 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             // body is how an *unqualified* parameter gets its access specifier. A parameter that already
             // has one can be restated, but not contradicted: with `public text` in the header and
             // `private text` in the body, a reader couldn't trust either.
-            // Luwu Traits (rfcs/classes/traits.md): a shared, static or trait-only field is one value, on the class or the
-            // trait, and a scoped one isn't built yet
-            bool onClassValue = placement == AstClassMemberPlacement::Shared || placement == AstClassMemberPlacement::Static ||
-                                placement == AstClassMemberPlacement::TraitOnly;
-            // a bare name after `scoped` is most often `function` being typed
-            bool fieldIsWritten = lexer.current().type == ':' || lexer.current().type == '=';
-            if (placement == AstClassMemberPlacement::Scoped && fieldIsWritten)
-                report(*placementLocation, "Only functions can be 'scoped' for now; scoped fields aren't implemented yet");
-            else if (onClassValue && findPrimaryConstructorParam(propName->name) >= 0)
+            // Luwu Traits (rfcs/classes/traits.md): a shared, static, trait-only or scoped field is one value, on the class or
+            // the trait
+            bool onClassValue = placement != AstClassMemberPlacement::Default;
+            if (onClassValue && paramIndex >= 0)
                 report(
                     *placementLocation,
                     "'%s' is a parameter, so it's a field of each object and can't be '%s'",
@@ -3905,7 +4032,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                     toString(placement)
                 );
 
-            if (int paramIndex = findPrimaryConstructorParam(propName->name); paramIndex >= 0)
+            if (paramIndex >= 0)
             {
                 const AstClassPrimaryConstructorParamQualifiers& param = primaryConstructor->argsQualifiers.data[paramIndex];
 
@@ -3999,24 +4126,28 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 functionStack.pop_back();
             }
 
-            if (strncmp(propName->name.value, "__", 2) == 0)
+            // Luwu Traits (rfcs/classes/traits.md): `__ok` is an ordinary field, which tells the `?` operators whether a value
+            // is ok
+            if (strncmp(propName->name.value, "__", 2) == 0 && propName->name != "__ok" && !qualifiedTrait)
                 report(propName->location, "%s fields cannot start with '__'", isTrait ? "Trait" : "Class");
 
             if (expectLocation && equalsLocation)
                 report(*equalsLocation, "Expected fields can't have default values");
+
+            if (qualifiedTrait && !equalsLocation)
+                report(propName->location, "'%s' needs a value: write '%s = value'", qualifiedName.c_str(), qualifiedName.c_str());
 
             // Luwu Traits (rfcs/classes/traits.md): a final field's value is the trait's default, which nothing else can set
             bool isFinalField = isTrait && finalLocation && !expectLocation;
             // a declared trait's final field may leave its default out: the value is the trait's business
             if (isFinalField && !defaultValue && !declared)
                 report(propName->location, "Final field '%s' needs a default value", propName->name.value);
-            else if (isFinalField && findPrimaryConstructorParam(propName->name) >= 0)
+            else if (isFinalField && paramIndex >= 0)
                 report(propName->location, "Final field '%s' can't be a trait parameter", propName->name.value);
 
             // Luwu Traits (rfcs/classes/traits.md): a trait field the trait provides needs a value to provide. Without one it
             // would be nil in every implementing class, whatever its type says.
-            bool traitFieldHasNoValue =
-                isTrait && !declared && !expectLocation && !finalLocation && !defaultValue && findPrimaryConstructorParam(propName->name) < 0;
+            bool traitFieldHasNoValue = isTrait && !declared && !expectLocation && !finalLocation && !defaultValue && paramIndex < 0;
             if (traitFieldHasNoValue)
                 report(
                     propName->location, "Trait field '%s' needs a default value; did you mean 'expect %s'?", propName->name.value, propName->name.value
@@ -4043,14 +4174,12 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 hasSemicolon = true;
             }
 
-            if (classMemberNamespace.contains(propName->name))
-            {
-                report(propName->location, "Duplicate %s member '%s'", kind, propName->name.value);
-            }
-            else
-            {
-                classMemberNamespace.insert(propName->name);
+            bool isObjectField = placement == AstClassMemberPlacement::Default;
+            bool claimed = qualifiedTrait ? claimQualifiedName(qualifiedName, propName->location)
+                                          : claimMemberName(*propName, isObjectField, placement == AstClassMemberPlacement::Static);
 
+            if (claimed)
+            {
                 // Either both of these are present or neither are, except for a declared class's `name = T`.
                 LUAU_ASSERT((bool)propType == (bool)typeColonLocation || (declared && equalsLocation && !typeColonLocation));
                 declarations.push_back(
@@ -4073,6 +4202,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                         expectTargetLocation,
                         placement,
                         placementLocation,
+                        qualifiedTrait,
                     }
                 );
             }
@@ -4092,37 +4222,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
             // Luwu Traits (rfcs/classes/traits.md): `function Json.name` in a class implements trait Json's `name` for Json
             // alone. A trait scopes its own functions with `scoped` instead.
-            AstExpr* qualifiedTrait = nullptr;
-            if (FFlag::LuwuTraits && !isTrait && lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
-            {
-                Location qualifierStart = name.location;
-                AstExpr* qualifier = nameExpr(name);
-
-                while (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
-                {
-                    Position opPosition = lexer.current().location.begin;
-                    nextLexeme();
-                    Name next = parseName("method name");
-
-                    if (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
-                        qualifier = allocator.alloc<AstExprIndexName>(
-                            Location(qualifierStart, next.location), qualifier, next.name, next.location, opPosition, '.'
-                        );
-
-                    if (lexer.current().type != '.')
-                        name = next;
-                }
-
-                if (implements.size == 0)
-                    report(
-                        qualifierStart,
-                        "Class '%s' implements no traits, so it can't implement '%s.%s'",
-                        nameLocal->name.value,
-                        printedQualifier(qualifier).c_str(),
-                        name.name.value
-                    );
-                qualifiedTrait = qualifier;
-            }
+            AstExpr* qualifiedTrait = parseMemberQualifier(name, "method name");
 
             // Luwu Traits (rfcs/classes/traits.md): `expect function name?(self)` is an expected function a class may leave out
             bool isOptional = false;
@@ -4269,21 +4369,16 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             if (qualifiedTrait)
                 qualifiedName = printedQualifier(qualifiedTrait) + "." + name.name.value;
 
-            if (qualifiedTrait && qualifiedMemberNamespace.count(qualifiedName))
-            {
-                report(name.location, "Duplicate %s member '%s'", kind, qualifiedName.c_str());
-            }
-            else if (!qualifiedTrait && (classMemberNamespace.contains(name.name) || primaryConstructorParams.contains(name.name)))
-            {
+            bool claimed = false;
+            if (qualifiedTrait)
+                claimed = claimQualifiedName(qualifiedName, name.location);
+            else if (primaryConstructorParams.contains(name.name))
                 report(name.location, "Duplicate %s member '%s'", kind, name.name.value);
-            }
             else
-            {
-                if (qualifiedTrait)
-                    qualifiedMemberNamespace.insert(qualifiedName);
-                else
-                    classMemberNamespace.insert(name.name);
+                claimed = claimMemberName(name, /* isObjectField= */ false, placement == AstClassMemberPlacement::Static);
 
+            if (claimed)
+            {
                 if (!qualifierLocation)
                     unqualifiedMemberLocations.push_back({name.location, /* isFunction */ true});
 

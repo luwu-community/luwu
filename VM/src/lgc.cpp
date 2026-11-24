@@ -466,6 +466,8 @@ static void traverseclass(global_State* g, LuauClass* classdef)
 {
     markobject(g, classdef->name);
     markobject(g, classdef->memberstooffset);
+    if (classdef->staticshadows)
+        markobject(g, classdef->staticshadows);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
         if (classdef->offsettomember[i])
             markobject(g, classdef->offsettomember[i]);

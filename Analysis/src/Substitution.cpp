@@ -322,7 +322,7 @@ void Tarjan::visitChildren(TypeId ty, int index)
                 visitChild(*etv->traitInfo->selfMarker);
             for (const auto& [_, field] : etv->traitInfo->selfFieldTemplates)
                 visitChild(field);
-            for (const auto& [_, function] : etv->traitInfo->scopedFunctions)
+            for (const auto& [_, function] : etv->traitInfo->scopedMembers)
                 visitChild(function);
             for (const auto& [_, function] : etv->traitInfo->selfFunctions)
             {
@@ -989,7 +989,7 @@ void Substitution::replaceChildren(TypeId ty)
                 etv->traitInfo->selfMarker = replace(*etv->traitInfo->selfMarker);
             for (auto& [_, field] : etv->traitInfo->selfFieldTemplates)
                 field = replace(field);
-            for (auto& [_, function] : etv->traitInfo->scopedFunctions)
+            for (auto& [_, function] : etv->traitInfo->scopedMembers)
                 function = replace(function);
             for (auto& [_, function] : etv->traitInfo->selfFunctions)
             {

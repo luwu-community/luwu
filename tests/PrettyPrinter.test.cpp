@@ -2204,12 +2204,17 @@ trait Animal
     scoped function encode(self)
         return "json"
     end
+    expect scoped species: string
+    scoped legs = 4
 end
 trait Pet needs Animal
 end
-class Cat implements Pet
+class Cat implements Pet, Animal
     shared sound = "meow"
     static const MAX = 10
+    Animal.species = "Felis Catus"
+    static count = 0
+    count = 1
     static function make(self)
         return self
     end
