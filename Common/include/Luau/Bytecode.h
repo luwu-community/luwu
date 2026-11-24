@@ -79,6 +79,7 @@
 //   Luwu try expressions: WRAPRESULT, RESULTGET, and each function's protected ranges after its inlining cost: a varint count,
 //   then per range the varints start pc, end pc (exclusive) and handler pc, and a byte for the target register.
 //   Luwu bundles: LBF_BUNDLE_PACK and LBF_BUNDLE_UNPACK.
+//   Luwu string.format fastcall: LBF_STRING_FORMAT, including after the format string of an interpolated string.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -1154,6 +1155,9 @@ enum LuauBuiltinFunction
     // Luwu bundles: `bundle.pack` and `bundle.unpack` without a call frame
     LBF_BUNDLE_PACK,
     LBF_BUNDLE_UNPACK,
+
+    // Luwu: string.format(format, ...) -> string, which interpolated strings compile to
+    LBF_STRING_FORMAT,
 };
 
 // Capture type, used in LOP_CAPTURE
