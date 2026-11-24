@@ -3211,8 +3211,8 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         build.ldr(lclass, mem(regOp(OP_A(inst)), offsetof(LuauObject, lclass)));
 
-        // bounds check: slot must be a valid member offset (instance or static)
-        build.ldr(tempw, mem(lclass, offsetof(LuauClass, numberofallmembers)));
+        // bounds check: slot must be a member an object can read (instance, or static but not class-only)
+        build.ldr(tempw, mem(lclass, offsetof(LuauClass, numberofobjectmembers)));
         build.cmp(slotw, tempw);
         build.b(ConditionA64::CarrySet, mismatch);
 

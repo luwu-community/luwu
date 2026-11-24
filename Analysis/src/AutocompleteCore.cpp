@@ -3082,11 +3082,20 @@ AutocompleteResult autocomplete_(
         ret["private"] = {AutocompleteEntryKind::Keyword};
         ret["function"] = {AutocompleteEntryKind::Keyword};
 
-        // Luwu Traits (rfcs/classes/traits.md): a trait's members may be expected or final
+        // Luwu Traits (rfcs/classes/traits.md): a member's placement, and in a trait, whether it's expected or final and the
+        // placements only a trait has
+        if (FFlag::LuwuTraits)
+        {
+            ret["shared"] = {AutocompleteEntryKind::Keyword};
+            ret["static"] = {AutocompleteEntryKind::Keyword};
+        }
+
         if (classStat->isTrait)
         {
             ret["expect"] = {AutocompleteEntryKind::Keyword};
             ret["final"] = {AutocompleteEntryKind::Keyword};
+            ret["traitonly"] = {AutocompleteEntryKind::Keyword};
+            ret["scoped"] = {AutocompleteEntryKind::Keyword};
         }
 
         // Luwu Traits (rfcs/classes/traits.md): on the declaration's own line, before its first member, the next word may

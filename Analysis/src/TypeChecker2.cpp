@@ -4235,6 +4235,31 @@ bool TypeChecker2::isInitWritingItsSelf(const ExternType* cls, const AstExpr* ob
     return aliases->contains(object->local);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a class or trait value, whose const fields not even `__init` writes
+static bool isClassValue(const ExternType* cls, NotNull<BuiltinTypes> builtinTypes)
+{
+    return cls->root == builtinTypes->classType || cls->root == builtinTypes->traitType;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): writing a `shared` field through an object, which the runtime refuses with the
+// same message. The receiver is named as written when it's a name, and by its class otherwise.
+void TypeChecker2::reportSharedFieldWrite(const ExternType* cls, const AstExpr* objectExpr, const std::string& prop, const Location& location)
+{
+    std::string receiver = cls->name;
+    if (const AstExprLocal* local = objectExpr ? objectExpr->as<AstExprLocal>() : nullptr)
+        receiver = local->local->name.value;
+    else if (const AstExprGlobal* global = objectExpr ? objectExpr->as<AstExprGlobal>() : nullptr)
+        receiver = global->name.value;
+
+    std::string message = format(
+        "%s.%s is shared between all objects of its class and cannot be mutated through this object; mutate it through class '%s' instead",
+        receiver.c_str(),
+        prop.c_str(),
+        cls->name.c_str()
+    );
+    reportError(GenericError{std::move(message)}, location);
+}
+
 void TypeChecker2::checkConstPropertyAssignment(
     TypeId tableTy,
     const AstExpr* objectExpr,
@@ -4257,6 +4282,10 @@ void TypeChecker2::checkConstPropertyAssignment(
         {
             if (it->second.isFinal)
                 reportError(GenericError{format("'%s' is a final field of '%s' and can't be assigned", prop.c_str(), cls->name.c_str())}, location);
+            else if (it->second.isSharedField)
+                reportSharedFieldWrite(cls, objectExpr, prop, location);
+            else if (it->second.isConst && isClassValue(cls, builtinTypes))
+                reportError(GenericError{format("'%s' is a const field of class '%s' and can't be assigned", prop.c_str(), cls->name.c_str())}, location);
             else if (it->second.isConst && !isInitWritingItsSelf(cls, objectExpr))
                 reportError(ConstPropertyAssignment{tableTy, prop, cls->name}, location);
             return;
@@ -4332,7 +4361,7 @@ void TypeChecker2::visitExprName(
 }
 
 // Luwu Traits (rfcs/classes/traits.md): the type of the function `name` scoped to the trait whose value has type
-// `traitValue` (`function Self.name`)
+// `traitValue` (`scoped function name`)
 static std::optional<TypeId> scopedFunctionOf(TypeId traitValue, const std::string& name)
 {
     const ExternType* value = get<ExternType>(follow(traitValue));

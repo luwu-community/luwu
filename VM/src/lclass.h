@@ -259,6 +259,20 @@ LUAU_FORCEINLINE void luaR_checkconstassignfast(
  */
 LUAI_FUNC void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValue* method);
 
+// Luwu Traits (rfcs/classes/traits.md): gives the field `name` on the class value (LBC_CLASSMEMBER_CLASSFIELD) its value, as
+// the class statement runs (LBC_NEWCLASSMEMBER_FIELD)
+LUAI_FUNC void luaR_addclassfield(lua_State* L, LuauClass* classdef, TString* name, const TValue* value);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): writes the field at `offset` of the class value `classdef`, `Cat.species = v`.
+ * Raises unless it's a field on the class value (LBC_CLASSMEMBER_CLASSFIELD) that isn't const, and checks private
+ * access against `cl`. `key` is the field's name, for messages.
+ */
+LUAI_FUNC void luaR_setclassfield(lua_State* L, LuauClass* classdef, const TValue* key, const Closure* cl, uint32_t offset, const TValue* value);
+
+// Luwu Traits (rfcs/classes/traits.md): raised by a write through an object to a field on its class value
+LUAI_FUNC l_noret luaR_sharedfieldwriteerror(lua_State* L, const LuauObject* object, const TValue* key);
+
 LUAI_FUNC void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page);
 
 // Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits.
