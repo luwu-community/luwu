@@ -810,4 +810,92 @@ expectpass("native shared and static fields", function()
     assert(NcgShared.scale == 3)
 end)
 
+-- Luwu Traits (rfcs/classes/traits.md): a static and an object field with one name, read in loops that run natively. Their
+-- slots differ, and a slot one of them taught an instruction can't serve the other.
+class NcgCount(n: number)
+    count = n
+    static count = 100
+end
+
+expectpass("native static and object fields sharing a name", function()
+    local objects = {}
+    for i = 1, 50 do
+        objects[i] = NcgCount(i)
+    end
+
+    local sum = 0
+    for i = 1, 50 do
+        sum += objects[i].count + NcgCount.count
+        NcgCount.count += 1
+    end
+    assert(sum == 50 * 51 / 2 + (100 + 149) * 50 / 2 and NcgCount.count == 150)
+
+    local function read(v)
+        return v.count
+    end
+    for i = 1, 6 do
+        local v = if i % 2 == 0 then NcgCount else objects[i]
+        assert(read(v) == if i % 2 == 0 then 150 else i)
+    end
+end)
+
+-- A member's access bits are read from `memberflags`, whose entries are 16 bits: a private member at a later slot has to
+-- be read at that slot, not at an earlier member's. A slot one class taught an instruction serves another class only once
+-- the member there passes the check.
+class NcgOpen(public a: number, public b: number, public c: number, public d: number, public secret: number)
+end
+
+class NcgShut private (public a: number, public b: number, public c: number, public d: number, private secret: number)
+    public function make()
+        return NcgShut(1, 2, 3, 4, 5)
+    end
+end
+
+expectpass("native private checks read the member's own flags", function()
+    local function sum(list)
+        local total = 0
+        for _, o in list do
+            total += o.secret
+        end
+        return total
+    end
+
+    local open = NcgOpen(1, 2, 3, 4, 5)
+    assert(sum({ open, open, open }) == 15)
+    assert(not pcall(sum, { NcgShut.make() }))
+
+    local function construct()
+        local total = 0
+        for i = 1, 20 do
+            total += NcgShut(i, 2, 3, 4, 5).a
+        end
+        return total
+    end
+    assert(not pcall(construct))
+end)
+
+-- Luwu Traits (rfcs/classes/traits.md): scoped fields, read qualified in loops that run natively (GETQUALIFIED's fallback)
+trait NcgSized
+    expect scoped size: number
+    scoped unit = 1
+end
+
+trait NcgWeighted
+    scoped size = 1000
+end
+
+class NcgBox implements NcgSized, NcgWeighted
+    NcgSized.size = 3
+end
+
+expectpass("native scoped fields", function()
+    local box = NcgBox()
+    local sum = 0
+    for _ = 1, 50 do
+        sum += box:NcgSized.size + NcgBox:NcgWeighted.size + box:NcgSized.unit
+    end
+    assert(sum == 50 * 1004)
+    assert(not pcall(function() return box.size end))
+end)
+
 return 'OK'

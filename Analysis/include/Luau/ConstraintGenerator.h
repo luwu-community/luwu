@@ -92,6 +92,10 @@ struct ClassDeclRecord
     // through the class value, blocked until the method is generalized (see GeneralizationConstraint).
     // A non-generic class shares the instance member's type instead.
     DenseHashMap<AstName, TypeId> classValueMethodTypes{AstName{""}};
+
+    // Luwu Traits (rfcs/classes/traits.md): the types of the `static` members, which `memberTypes` doesn't have: a static
+    // member may share its name with an object field
+    DenseHashMap<AstName, TypeId> staticMemberTypes{AstName{""}};
 };
 
 struct ConstraintGenerator
@@ -420,6 +424,19 @@ private:
     // Luwu Traits (rfcs/classes/traits.md): a class's `function Json.name`, checked like an override of trait Json's `name`
     // with `self` the class
     void checkQualifiedImplementation(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record, const AstClassMethod& method, bool declared);
+    // Luwu Traits (rfcs/classes/traits.md): a class's `Animal.species = value`, which has to set a scoped field of trait Animal
+    // with a value of its type
+    void checkQualifiedField(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record, const AstClassProperty& prop);
+    // Luwu Traits (rfcs/classes/traits.md): the trait a class's qualified member `name` names, or nullptr after reporting
+    // that it names no trait the class implements. `what` says what the member does to the trait, for the message.
+    TypeId qualifiedMemberTrait(
+        const ScopePtr& scope,
+        AstStatClass* cls,
+        ClassDeclRecord* record,
+        AstExpr* qualifiedTrait,
+        const char* name,
+        const char* what
+    );
     // Luwu Traits (rfcs/classes/traits.md): the scoped functions the class's listed traits expect, which it implements as
     // `function Trait.name`, and the ones its needed traits expect, which a trait declares as `scoped function name`
     void checkScopedExpectations(const ScopePtr& scope, AstStatClass* cls);
