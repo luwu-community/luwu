@@ -9462,7 +9462,7 @@ bb_bytecode_0:
   STORE_POINTER R3, %8
   STORE_TAG R3, ttable
   STORE_POINTER R4, 0i
-  STORE_EXTRA R4, 128i
+  STORE_EXTRA R4, 144i
   STORE_TAG R4, tlightuserdata
   STORE_TAG R2, tnil
   JUMP bb_bytecode_2
