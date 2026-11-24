@@ -314,6 +314,9 @@ class Normalizer
     std::unordered_map<const TypeIds*, TypeId> cachedUnions;
     std::unordered_map<const TypeIds*, std::unique_ptr<TypeIds>> cachedTypeIds;
 
+    // Luwu Traits (rfcs/classes/traits.md): the type made for each intersection of traits, keyed by its traits (see intersectTraits)
+    std::map<std::vector<TypeId>, TypeId> cachedTraitIntersections;
+
     DenseHashMap<TypeId, bool> cachedIsInhabited{nullptr};
     DenseHashMap<std::pair<TypeId, TypeId>, bool, TypeIdPairHash> cachedIsInhabitedIntersection{{nullptr, nullptr}};
 
@@ -405,6 +408,9 @@ private:
     TypeId intersectionOfBools(TypeId here, TypeId there);
     void intersectExternTypes(NormalizedExternType& heres, const NormalizedExternType& theres);
     void intersectExternTypesWithExternType(NormalizedExternType& heres, TypeId there);
+    // Luwu Traits (rfcs/classes/traits.md): `here & there` for two traits or intersections of traits, neither a subtype of the other: the
+    // objects of classes implementing all of the traits (ExternType::traitIntersection)
+    TypeId intersectTraits(TypeId here, TypeId there);
     void intersectExternTypesWithShape(NormalizedExternType& heres, TypeId there);
     void intersectStrings(NormalizedStringType& here, const NormalizedStringType& there);
     std::optional<TypeId> intersectionOfTables(TypeId here, TypeId there, SeenTablePropPairs& seenTablePropPairs, Set<TypeId>& seenSet);
