@@ -481,6 +481,8 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_PRESIZETABLE";
     case IrCmd::FALLBACK_GETQUALIFIED:
         return "FALLBACK_GETQUALIFIED";
+    case IrCmd::FALLBACK_SETQUALIFIED:
+        return "FALLBACK_SETQUALIFIED";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:

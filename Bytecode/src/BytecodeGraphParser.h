@@ -1062,6 +1062,13 @@ struct BytecodeGraphParser
                 addProducer(LUAU_INSN_A(insn), nodeOp);
                 break;
 
+            case LOP_SETQUALIFIED:
+                addVmRegInput(node, LUAU_INSN_A(insn));
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addVmRegInput(node, LUAU_INSN_C(insn));
+                addVmConstInput(node, aux);
+                break;
+
             case LOP_SETOBJECTMEMBER:
                 addVmRegInput(node, LUAU_INSN_A(insn));
                 addVmRegInput(node, LUAU_INSN_B(insn));

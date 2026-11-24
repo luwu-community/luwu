@@ -49,6 +49,7 @@ inline int getOpLength(LuauOpcode op)
     case LOP_GETQUALIFIED:
     case LOP_JUMPXTYPE:
     case LOP_JUMPXMATCH:
+    case LOP_SETQUALIFIED:
         return 2;
 
     default:

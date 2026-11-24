@@ -1168,6 +1168,23 @@ const Instruction* executeGETQUALIFIED(lua_State* L, const Instruction* pc, StkI
     return pc;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): LOP_SETQUALIFIED for native code (see FALLBACK_SETQUALIFIED). Kept in step with
+// VM_CASE(LOP_SETQUALIFIED) in lvmexecute.cpp.
+const Instruction* executeSETQUALIFIED(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    uint32_t aux = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = VM_REG(LUAU_INSN_B(insn));
+    StkId rc = VM_REG(LUAU_INSN_C(insn));
+    TValue* name = VM_KV(aux);
+    LUAU_ASSERT(ttisstring(name));
+
+    VM_PROTECT(luaR_setqualified(L, rb, rc, tsvalue(name), ra));
+    return pc;
+}
+
 // Luwu Traits (rfcs/classes/traits.md): the test half of LOP_INITTRAITS for native code (see FALLBACK_INITTRAITS). Kept in
 // step with VM_CASE(LOP_INITTRAITS) in lvmexecute.cpp.
 const Instruction* executeINITTRAITS(lua_State* L, const Instruction* pc, StkId base, TValue* k)

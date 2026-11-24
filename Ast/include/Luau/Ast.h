@@ -626,6 +626,9 @@ public:
     // Luwu Traits (rfcs/classes/traits.md): the trait in a qualified read, `obj:Trait:name` or `Class:Trait.name`, which
     // reads the class's version of the trait's member `name`. `op` is the second operator. nullptr for a plain index.
     AstExpr* qualifiedTrait = nullptr;
+    // Luwu Traits (rfcs/classes/traits.md): the trait was written in brackets, `obj:[expr]:name`, so it's whatever value
+    // `expr` has at runtime rather than a binding in scope
+    bool dynamicTrait = false;
 };
 
 class AstExprIndexExpr : public AstExpr
@@ -1505,8 +1508,6 @@ enum class AstClassMemberPlacement
     Static,
     // `traitonly`: on the trait value only; implementing classes don't get it
     TraitOnly,
-    // `scoped`: on each implementing class in the trait's slot, read qualified (`obj:Json:encode()`)
-    Scoped,
 };
 
 // Luwu Traits (rfcs/classes/traits.md): who may provide an expected member. `Any` is a bare `expect`.
@@ -1554,12 +1555,15 @@ struct AstClassProperty
     // `trait to override` phrase that says so
     AstClassExpectTarget expectTarget = AstClassExpectTarget::Any;
     std::optional<Location> expectTargetLocation = std::nullopt;
-    // Luwu Traits (rfcs/classes/traits.md): `shared`, `static`, `traitonly` or `scoped`, and where it's written. A scoped
-    // field isn't a field of implementing classes: `obj:Trait.name` and `Class:Trait.name` read it.
+    // Luwu Traits (rfcs/classes/traits.md): `shared`, `static` or `traitonly`, and where it's written
     AstClassMemberPlacement placement = AstClassMemberPlacement::Default;
     std::optional<Location> placementLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): location of `scoped` in a trait's `scoped species = value`. A scoped field is
+    // in the trait's slot of each implementing class, and only `obj:Trait.name` and `Class:Trait.name` reach it. Its
+    // placement says where: on each object by default, or on the class when `shared` or `static`.
+    std::optional<Location> scopedLocation = std::nullopt;
     // Luwu Traits (rfcs/classes/traits.md): the trait in a class's `Animal.species = value`, which gives that trait's scoped
-    // field `species` its value for the class. Its placement is `Scoped`, without a placementLocation. nullptr otherwise.
+    // field `species` its value for the class. nullptr otherwise.
     AstExpr* qualifiedTrait = nullptr;
 };
 
@@ -1585,16 +1589,24 @@ struct AstClassMethod
     // `trait to override` phrase that says so
     AstClassExpectTarget expectTarget = AstClassExpectTarget::Any;
     std::optional<Location> expectTargetLocation = std::nullopt;
-    // Luwu Traits (rfcs/classes/traits.md): `shared`, `static`, `traitonly` or `scoped`, and where it's written. A scoped
-    // function isn't a member of implementing classes: `obj:Trait:name()` and `Class:Trait.name()` reach it.
+    // Luwu Traits (rfcs/classes/traits.md): `shared`, `static` or `traitonly`, and where it's written
     AstClassMemberPlacement placement = AstClassMemberPlacement::Default;
     std::optional<Location> placementLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): location of `scoped` in a trait's `scoped function name`. A scoped function
+    // isn't a member of implementing classes: `obj:Trait:name()` and `Class:Trait.name()` reach it.
+    std::optional<Location> scopedLocation = std::nullopt;
     // Luwu Traits (rfcs/classes/traits.md): the trait in a class's `function Json.name`, a qualified implementation of that
     // trait's member `name`. It isn't a member of the class. nullptr otherwise.
     AstExpr* qualifiedTrait = nullptr;
 };
 
 using AstClassMember = Variant<AstClassProperty, AstClassMethod>;
+
+// Luwu Traits (rfcs/classes/traits.md): where a function lives when it's written without `shared`, `static` or
+// `traitonly`: a method (`self`) and a metamethod are shared, and any other function, a class method (`Self`) among them,
+// is static. A placement written on the function is returned as written. A trait's `__create` and `__implemented` belong
+// to the trait alone, which the caller decides.
+AstClassMemberPlacement effectivePlacement(const AstClassMethod& method);
 
 // Luwu Classes (rfcs/classes): the access specifier and modifiers written directly on a primary
 // constructor parameter, Kotlin-style: `class SshKey(public const public_key: string)`. A parameter

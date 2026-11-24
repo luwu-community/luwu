@@ -604,8 +604,15 @@ struct Printer
         {
             visualize(*a->expr);
 
-            // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name`, `Class:Trait.name`
-            if (a->qualifiedTrait)
+            // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name`, `Class:Trait.name`, `obj:[expr]:name`
+            if (a->qualifiedTrait && a->dynamicTrait)
+            {
+                writer.symbol(":");
+                writer.symbol("[");
+                visualize(*a->qualifiedTrait);
+                writer.symbol("]");
+            }
+            else if (a->qualifiedTrait)
             {
                 writer.symbol(":");
                 visualize(*a->qualifiedTrait);
@@ -1728,7 +1735,7 @@ struct Printer
                         [&](const AstClassProperty& prop)
                         {
                             visualizeExpectModifiers(prop.expectLocation, prop.expectTarget, prop.expectTargetLocation);
-                            ClassMemberModifierLocations after{prop.placement, prop.placementLocation, prop.finalLocation};
+                            ClassMemberModifierLocations after{prop.scopedLocation, prop.placement, prop.placementLocation, prop.finalLocation};
                             visualizeQualifiersAndAttributes(prop.attributes, prop.qualifierLocation, prop.visibility, prop.constLocation, &after);
                             // Luwu Traits (rfcs/classes/traits.md): `Animal.species = value`
                             if (prop.qualifiedTrait)
@@ -1784,7 +1791,7 @@ struct Printer
                                     visualizeMethodAttributes();
                             }
 
-                            visualizePlacementAndFinal({method.placement, method.placementLocation, method.finalLocation});
+                            visualizePlacementAndFinal({method.scopedLocation, method.placement, method.placementLocation, method.finalLocation});
                             writer.advance(method.keywordLocation.begin);
                             writer.keyword("function");
                             // Luwu Traits (rfcs/classes/traits.md): `function Json.name`
@@ -1823,6 +1830,7 @@ struct Printer
     // Luwu Traits (rfcs/classes/traits.md): the modifiers a member has between its access specifier and `const`
     struct ClassMemberModifierLocations
     {
+        std::optional<Location> scopedLocation;
         AstClassMemberPlacement placement;
         std::optional<Location> placementLocation;
         std::optional<Location> finalLocation;
@@ -1918,6 +1926,12 @@ struct Printer
 
     void visualizePlacementAndFinal(const ClassMemberModifierLocations& modifiers)
     {
+        if (modifiers.scopedLocation)
+        {
+            writer.advance(modifiers.scopedLocation->begin);
+            writer.keyword("scoped");
+        }
+
         if (modifiers.placementLocation)
         {
             writer.advance(modifiers.placementLocation->begin);
