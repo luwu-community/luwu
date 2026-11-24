@@ -2623,18 +2623,21 @@ TEST_CASE("pretty_print_explicit_type_instantiations")
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
+// Luwu Export Values (rfcs/export-values.md): exports are always const, so upstream's `export local` and `export const`
+// cases are plain exports here
 TEST_CASE("export")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
     std::string code;
 
     code = (R"(
-export                      local version = "1.0.0"
-export           const tabbed = ...
-export const TAU = math.pi * 2
-export local settings: Settings = getSettings()
-export local a, b, c = 1, 2, 3
-export local d
+export                      version = "1.0.0"
+export           tabbed = ...
+export TAU = math.pi * 2
+export settings: Settings = getSettings()
+export a, b, c = 1, 2, 3
+export implied = 1
+export   implied2, implied3: number = 2, 3
     )");
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 
@@ -2668,7 +2671,7 @@ end
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 
     code = (R"(
-export local f, g
+local f, g
 
 function f()
     return g()
@@ -2677,6 +2680,8 @@ end
 function g()
     return 42
 end
+
+export f, g = f, g
     )");
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 
@@ -2686,16 +2691,23 @@ export type Config = {
     timeout: number,
 }
 
-export local currentConfig: Config
-
 export function createConfig(debug: boolean, timeout: number): Config
     return {
         debug = debug,
         timeout = timeout,
     }
 end
+
+export currentConfig: Config = createConfig(false, 5)
     )");
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
+
+    // `export local` and `export const` are parse errors, but the keyword is still printed as written
+    code = (R"(
+export   local x = 5
+export  const y = 6
+    )");
+    CHECK_EQ(code, prettyPrint(code, {}, true, /* ignoreParseErrors= */ true).code);
 }
 
 TEST_CASE("pretty_print_incomplete_expr_group")
