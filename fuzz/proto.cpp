@@ -141,7 +141,7 @@ int registerTypes(Luau::Frontend& frontend, Luau::GlobalTypes& globals, bool for
     TypeId vector3MetaType = arena.addType(TableType{});
 
     TypeId vector3InstanceType = arena.addType(ExternType{"Vector3", {}, nullopt, vector3MetaType, {}, {}, "Test", {}});
-    getMutable<ExternType>(vector3InstanceType)->props = {
+    getMutable<ExternType>(vector3InstanceType)->props() = {
         {"X", {builtinTypes.numberType}},
         {"Y", {builtinTypes.numberType}},
         {"Z", {builtinTypes.numberType}},
@@ -156,7 +156,7 @@ int registerTypes(Luau::Frontend& frontend, Luau::GlobalTypes& globals, bool for
 
     // Instance stub
     TypeId instanceType = arena.addType(ExternType{"Instance", {}, nullopt, nullopt, {}, {}, "Test", {}});
-    getMutable<ExternType>(instanceType)->props = {
+    getMutable<ExternType>(instanceType)->props() = {
         {"Name", {builtinTypes.stringType}},
     };
 
@@ -164,7 +164,7 @@ int registerTypes(Luau::Frontend& frontend, Luau::GlobalTypes& globals, bool for
 
     // Part stub
     TypeId partType = arena.addType(ExternType{"Part", {}, instanceType, nullopt, {}, {}, "Test", {}});
-    getMutable<ExternType>(partType)->props = {
+    getMutable<ExternType>(partType)->props() = {
         {"Position", {vector3InstanceType}},
     };
 
