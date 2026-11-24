@@ -89,7 +89,7 @@ struct LuwonSyntaxChecker
             return;
 
         if (expr->is<AstExprConstantInteger>())
-            report(expr->location, "Luau's 'i' integer suffix isn't allowed in a data file");
+            report(expr->location, "Write a number here: data files can't hold integers yet");
         else if (AstExprGlobal* global = expr->as<AstExprGlobal>())
             checkGlobal(global);
         else if (AstExprGroup* group = expr->as<AstExprGroup>())

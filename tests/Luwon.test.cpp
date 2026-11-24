@@ -15,6 +15,7 @@
 #include <vector>
 
 LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
@@ -200,11 +201,14 @@ TEST_CASE("luwon_rejects_everything_but_data")
     CHECK(firstError("const x = 1") == "End the data file with 'return <value>'");
 }
 
-TEST_CASE("luwon_rejects_luau_integers")
+TEST_CASE("luwon_rejects_integers")
 {
-    ScopedFastFlag integers{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag flags[] = {
+        {FFlag::LuauIntegerType2, true},
+        {FFlag::DebugLuwuIntegers, true},
+    };
 
-    CHECK(firstError("return 7i") == "Luau's 'i' integer suffix isn't allowed in a data file");
+    CHECK(firstError("return 7u8") == "Write a number here: data files can't hold integers yet");
 }
 
 TEST_CASE("luwon_reports_evaluation_errors_at_the_expression")
