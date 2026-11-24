@@ -183,6 +183,7 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::FORGPREP_XNEXT_FALLBACK:
     case IrCmd::FALLBACK_SETGLOBAL:
     case IrCmd::FALLBACK_SETTABLEKS:
+    case IrCmd::FALLBACK_SETQUALIFIED:
     case IrCmd::FALLBACK_PREPVARARGS:
     case IrCmd::ADJUST_STACK_TO_TOP:
     case IrCmd::GET_TYPEOF:

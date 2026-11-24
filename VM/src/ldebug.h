@@ -28,6 +28,8 @@ LUAI_FUNC l_noret luaG_constassignerror(lua_State* L, const TValue* p2, const TS
 LUAI_FUNC l_noret luaG_blockedinitaccesserror(lua_State* L, const TString* className);
 LUAI_FUNC l_noret luaG_constassignnotselferror(lua_State* L, const TValue* p2, const TString* className);
 LUAI_FUNC l_noret luaG_privateconstructorerror(lua_State* L, const TString* className);
+// Luwu Traits (rfcs/classes/traits.md): a class method (`function f(Self)`) called with something other than its class as `Self`
+LUAI_FUNC l_noret luaG_classmethoderror(lua_State* L, const TValue* self, const LuauClass* expected, const TString* methodName);
 LUAI_FUNC l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* expected, const TString* methodName, bool selfCall);
 
 LUAI_FUNC LUA_PRINTF_ATTR(2, 3) l_noret luaG_runerrorL(lua_State* L, const char* fmt, ...);

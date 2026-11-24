@@ -2013,6 +2013,7 @@ void BytecodeBuilder::validateInstructions() const
             break;
 
         case LOP_GETQUALIFIED:
+        case LOP_SETQUALIFIED:
             VREG(LUAU_INSN_A(insn));
             VREG(LUAU_INSN_B(insn));
             VREG(LUAU_INSN_C(insn));
@@ -2823,13 +2824,23 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         break;
 
     case LOP_CHECKSELFCLASS:
+    {
         if (LUAU_INSN_B(insn) == LBC_SELFCLASS_OWNER)
             formatAppend(result, "CHECKSELFCLASS R%d OWNER K%d [", LUAU_INSN_A(insn), *code);
         else
             formatAppend(result, "CHECKSELFCLASS R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code);
         dumpConstant(result, int(*code++), false);
-        formatAppend(result, "]%s\n", LUAU_INSN_C(insn) ? " SELF" : "");
+
+        // Luwu Traits (rfcs/classes/traits.md): a class method's check is marked CLASS
+        const char* form = "";
+        if (LUAU_INSN_C(insn) == LBC_SELFCLASS_CLASSMETHOD)
+            form = " CLASS";
+        else if (LUAU_INSN_C(insn) != 0)
+            form = " SELF";
+
+        formatAppend(result, "]%s\n", form);
         break;
+    }
 
     case LOP_JUMPXISA:
         formatAppend(
@@ -2865,6 +2876,13 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_GETQUALIFIED:
         formatAppend(result, "GETQUALIFIED R%d R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), *code);
+        dumpConstant(result, *code, false);
+        result.append("]\n");
+        code++;
+        break;
+
+    case LOP_SETQUALIFIED:
+        formatAppend(result, "SETQUALIFIED R%d R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), *code);
         dumpConstant(result, *code, false);
         result.append("]\n");
         code++;

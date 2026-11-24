@@ -98,6 +98,9 @@ static const std::unordered_map<std::string, const char*> kUnaryOps{{"unm", "-"}
 
 // this list of type functions will receive a special error indicating that the user should file a bug on the GitHub repository
 // putting a type function in this list indicates that it is expected to _always_ reduce
+// Luwu Traits (rfcs/classes/traits.md): the help on reading a trait the object's class implements as a member
+static constexpr const char* kTraitScopedHint = "Did you mean to put a ':' here to use a trait-scoped member?";
+
 static const std::unordered_set<std::string> kUnreachableTypeFunctions{"refine", "singleton", "union", "intersect", "and", "or"};
 
 // An ExternType is only "external" when the embedder handed it to us. A Luwu class value is rooted
@@ -1024,6 +1027,9 @@ struct ErrorConverter
                 std::string(memberNoun(t)) + " '" + e.key + "' not found in " + externTypeNoun(t) + " '" + Luau::toString(t) + "'";
             // Luwu Classes (rfcs/classes): the runtime says this in one long line. A hover gets the short message with
             // this help under it when help is on.
+            if (e.traitScoped)
+                Helpifier{e.showHelp}.appendTo(message, "trait-scoped member", {kTraitScopedHint});
+
             if (e.fieldOfItsObjects)
             {
                 std::string name = Luau::toString(t);
@@ -1584,7 +1590,11 @@ struct ErrorConverter
 
     std::string operator()(const DynamicPropertyLookupOnExternTypesUnsafe& e) const
     {
-        return "Attempting a dynamic property access on type '" + Luau::toString(e.ty) + "' is unsafe and may cause exceptions at runtime";
+        std::string message =
+            "Attempting a dynamic property access on type '" + Luau::toString(e.ty) + "' is unsafe and may cause exceptions at runtime";
+        if (e.traitScoped)
+            Helpifier{e.showHelp}.appendTo(message, "trait-scoped member", {kTraitScopedHint});
+        return message;
     }
 
     std::string operator()(const UninhabitedTypeFunction& e) const
@@ -2319,7 +2329,7 @@ UnknownSymbol unknownTypeReference(const Scope& scope, const AstTypeReference& r
 
 bool UnknownProperty::operator==(const UnknownProperty& rhs) const
 {
-    return *table == *rhs.table && key == rhs.key && fieldOfItsObjects == rhs.fieldOfItsObjects;
+    return *table == *rhs.table && key == rhs.key && fieldOfItsObjects == rhs.fieldOfItsObjects && traitScoped == rhs.traitScoped;
 }
 
 bool PropertyAccessViolation::operator==(const PropertyAccessViolation& rhs) const
@@ -2607,7 +2617,7 @@ bool TypePackMismatch::operator==(const TypePackMismatch& rhs) const
 
 bool DynamicPropertyLookupOnExternTypesUnsafe::operator==(const DynamicPropertyLookupOnExternTypesUnsafe& rhs) const
 {
-    return ty == rhs.ty;
+    return ty == rhs.ty && traitScoped == rhs.traitScoped;
 }
 
 bool UninhabitedTypeFunction::operator==(const UninhabitedTypeFunction& rhs) const
