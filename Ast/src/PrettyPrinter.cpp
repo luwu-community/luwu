@@ -1646,6 +1646,12 @@ struct Printer
                             visualizeExpectModifiers(prop.expectLocation, prop.expectTarget, prop.expectTargetLocation);
                             ClassMemberModifierLocations after{prop.placement, prop.placementLocation, prop.finalLocation};
                             visualizeQualifiersAndAttributes(prop.attributes, prop.qualifierLocation, prop.visibility, prop.constLocation, &after);
+                            // Luwu Traits (rfcs/classes/traits.md): `Animal.species = value`
+                            if (prop.qualifiedTrait)
+                            {
+                                visualize(*prop.qualifiedTrait);
+                                writer.symbol(".");
+                            }
                             writer.advance(prop.nameLocation.begin);
                             writer.identifier(prop.name.value);
                             if (writeTypes && prop.ty)

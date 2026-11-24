@@ -202,7 +202,7 @@ static bool classBodyDeclaresProperty(AstStatClass* decl, AstName name)
 {
     for (const AstClassMember& member : decl->members)
     {
-        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name && isObjectField(*prop))
             return true;
     }
 
@@ -1372,15 +1372,10 @@ struct Compiler
         {
             const AstClassProperty* prop = member.get_if<AstClassProperty>();
 
-            if (!prop)
+            // Luwu Traits (rfcs/classes/traits.md): a field on the class value has no object slot, and a static one may
+            // share its name with an object field
+            if (!prop || !isObjectField(*prop))
                 continue;
-
-            if (!isObjectField(*prop))
-            {
-                if (prop->name == name)
-                    return -1;
-                continue;
-            }
 
             if (prop->name == name)
                 return forWrite && prop->isConst ? -1 : offset;
@@ -1399,7 +1394,7 @@ struct Compiler
                 bool restated = false;
 
                 for (const AstClassMember& member : decl->members)
-                    if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == param->name)
+                    if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == param->name && isObjectField(*prop))
                     {
                         restated = true;
                         break;
@@ -1425,7 +1420,7 @@ struct Compiler
     {
         for (const AstClassMember& member : decl->members)
         {
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name && isObjectField(*prop))
                 return prop->visibility == AstClassMemberVisibility::Private;
         }
 
@@ -1606,16 +1601,30 @@ struct Compiler
 
     // Luwu Classes (rfcs/classes): whether the member `name` of `cls` is private: a field (in the class body, or
     // declared by a primary constructor parameter), a method or static, or `__init`, the constructor.
+    // Luwu Traits (rfcs/classes/traits.md): a static member and an object field may share a name, and then the name is
+    // private when either member is.
     bool classMemberIsPrivate(AstStatClass* cls, AstName name)
     {
+        bool declared = false;
+        bool isPrivate = false;
+
         for (const AstClassMember& member : cls->members)
         {
             if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
-                return prop->visibility == AstClassMemberVisibility::Private;
+            {
+                declared = true;
+                isPrivate |= prop->visibility == AstClassMemberVisibility::Private;
+            }
 
             if (const AstClassMethod* m = member.get_if<AstClassMethod>(); m && m->functionName == name && !m->qualifiedTrait)
-                return m->visibility == AstClassMemberVisibility::Private;
+            {
+                declared = true;
+                isPrivate |= m->visibility == AstClassMemberVisibility::Private;
+            }
         }
+
+        if (declared)
+            return isPrivate;
 
         if (AstClassPrimaryConstructor* ctor = cls->primaryConstructor)
         {
@@ -2495,13 +2504,14 @@ struct Compiler
         return decl ? *decl : nullptr;
     }
 
+    // The object field `name` of `cls`, as its body declares it
     const AstClassProperty* findClassProperty(AstStatClass* cls, AstName name)
     {
         for (const AstClassMember& member : cls->members)
         {
             if (const AstClassProperty* p = member.get_if<AstClassProperty>())
             {
-                if (p->name == name)
+                if (p->name == name && isObjectField(*p))
                     return p;
             }
         }
@@ -4886,10 +4896,12 @@ struct Compiler
     static uint16_t classFieldFlags(AstStatClass* decl, const AstClassProperty& prop)
     {
         uint16_t flags = LBC_CLASSMEMBER_CLASSFIELD;
-        if (prop.placement != AstClassMemberPlacement::Shared)
+        if (prop.placement == AstClassMemberPlacement::Static || prop.placement == AstClassMemberPlacement::TraitOnly)
             flags |= LBC_CLASSMEMBER_STATIC;
         if (prop.placement == AstClassMemberPlacement::TraitOnly)
             flags |= LBC_CLASSMEMBER_TRAITONLY;
+        if (prop.placement == AstClassMemberPlacement::Scoped)
+            flags |= LBC_CLASSMEMBER_SCOPED;
         if (prop.visibility == AstClassMemberVisibility::Private)
             flags |= LBC_CLASSMEMBER_PRIVATE;
         if (prop.isConst)
@@ -4990,6 +5002,11 @@ struct Compiler
                 overloaded{
                     [&](const AstClassProperty& prop)
                     {
+                        // Luwu Traits (rfcs/classes/traits.md): `Animal.species = value` isn't a member of the class; it is
+                        // registered with its trait below
+                        if (prop.qualifiedTrait)
+                            return;
+
                         int propNameCid = bytecode.addConstantString(sref(prop.name));
                         checkConstant(propNameCid, prop.nameLocation);
 
@@ -5107,7 +5124,7 @@ struct Compiler
                 bool restated = false;
 
                 for (const AstClassMember& member : decl->members)
-                    if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == arg->name)
+                    if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == arg->name && isObjectField(*prop))
                     {
                         restated = true;
                         break;
@@ -5239,7 +5256,8 @@ struct Compiler
             }
         }
 
-        // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementations, `function Json.name`, each with its trait
+        // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementations, `function Json.name`, and its values of
+        // scoped fields, `Animal.species = value`, each with its trait
         {
             RegScope rsQualified(this);
             uint8_t qualifiedRegs = allocReg(decl, 2u);
@@ -5247,16 +5265,25 @@ struct Compiler
             for (const AstClassMember& member : decl->members)
             {
                 const AstClassMethod* method = member.get_if<AstClassMethod>();
-                if (!method || !method->qualifiedTrait)
+                const AstClassProperty* prop = member.get_if<AstClassProperty>();
+                AstExpr* trait = method ? method->qualifiedTrait : prop->qualifiedTrait;
+                if (!trait)
                     continue;
 
-                compileExprFunction(method->function, qualifiedRegs);
-                compileExprTemp(method->qualifiedTrait, uint8_t(qualifiedRegs + 1));
+                // the parser refuses a qualified field without a value
+                LUAU_ASSERT(method || prop->defaultValue);
+                if (method)
+                    compileExprFunction(method->function, qualifiedRegs);
+                else
+                    compileExprTemp(prop->defaultValue, qualifiedRegs);
 
-                int nameCid = bytecode.addConstantString(sref(method->functionName));
-                checkConstant(nameCid, method->nameLocation);
+                compileExprTemp(trait, uint8_t(qualifiedRegs + 1));
 
-                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_QUALIFIED, qualifiedRegs);
+                AstName name = method ? method->functionName : prop->name;
+                int nameCid = bytecode.addConstantString(sref(name));
+                checkConstant(nameCid, method ? method->nameLocation : prop->nameLocation);
+
+                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, method ? LBC_NEWCLASSMEMBER_QUALIFIED : LBC_NEWCLASSMEMBER_QUALIFIEDFIELD, qualifiedRegs);
                 bytecode.emitAux(nameCid);
             }
         }

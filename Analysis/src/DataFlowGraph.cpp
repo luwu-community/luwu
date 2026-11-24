@@ -957,6 +957,9 @@ void DataFlowGraphBuilder::visitClassShape(AstStatClass* d)
             overloaded{
                 [&](const AstClassProperty& prop)
                 {
+                    // Luwu Traits (rfcs/classes/traits.md): the trait of `Animal.species = value`, read by the class statement
+                    if (prop.qualifiedTrait)
+                        visitExpr(prop.qualifiedTrait);
                     if (prop.ty)
                         visitType(prop.ty);
                     if (prop.defaultValue)
