@@ -105,6 +105,74 @@ void AssemblyBuilderA64::mov(RegisterA64 dst, RegisterA64 src)
     }
 }
 
+// Copied from tempInt64
+void AssemblyBuilderA64::mov64(RegisterA64 dst, uint64_t imm)
+{
+    CODEGEN_ASSERT(dst.kind == KindA64::x);
+
+    // Count non-zero halfwords (movz path) vs non-0xFFFF halfwords (movn path)
+    int movzCount = 0;
+    int movnCount = 0;
+
+    for (int shift = 0; shift < 64; shift += 16)
+    {
+        uint16_t hw = uint16_t(imm >> shift);
+        if (hw != 0)
+            movzCount++;
+        if (hw != 0xFFFF)
+            movnCount++;
+    }
+
+    if (movzCount <= movnCount)
+    {
+        // movz path: emit movz for first non-zero halfword, movk for rest
+        bool first = true;
+        for (int shift = 0; shift < 64; shift += 16)
+        {
+            uint16_t hw = uint16_t(imm >> shift);
+            if (hw != 0)
+            {
+                if (first)
+                {
+                    movz(dst, hw, shift);
+                    first = false;
+                }
+                else
+                {
+                    movk(dst, hw, shift);
+                }
+            }
+        }
+
+        if (first)
+            movz(dst, 0);
+    }
+    else
+    {
+        // movn path: use movn for first non-0xFFFF halfword, movk for rest
+        bool first = true;
+        for (int shift = 0; shift < 64; shift += 16)
+        {
+            uint16_t hw = uint16_t(imm >> shift);
+            if (hw != 0xFFFF)
+            {
+                if (first)
+                {
+                    movn(dst, uint16_t(~hw), shift);
+                    first = false;
+                }
+                else
+                {
+                    movk(dst, hw, shift);
+                }
+            }
+        }
+
+        if (first)
+            movn(dst, 0);
+    }
+}
+
 void AssemblyBuilderA64::mov(RegisterA64 dst, int src)
 {
     if (src >= 0)

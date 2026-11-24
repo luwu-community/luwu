@@ -1448,6 +1448,7 @@ struct BuiltinTypes
     friend TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode);
     friend void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes);
     friend void makeNoneMetatable(NotNull<BuiltinTypes> builtinTypes);
+    friend void makeIntegerMetatable(NotNull<BuiltinTypes> builtinTypes);
     friend struct GlobalTypes;
 
 private:

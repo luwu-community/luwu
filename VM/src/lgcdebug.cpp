@@ -212,6 +212,10 @@ static void validateobj(global_State* g, GCObject* o)
     case LUA_TBUFFER:
         break;
 
+    // Luwu Integers (rfcs/integers.md): a bigint references no other object
+    case LUA_THEAPINTEGER:
+        break;
+
     case LUA_TPROTO:
         validateproto(g, gco2p(o));
         break;
@@ -564,6 +568,17 @@ static void dumpbuffer(FILE* f, Buffer* b)
     fprintf(f, "{\"type\":\"buffer\",\"cat\":%d,\"size\":%d}", b->memcat, int(sizebuffer(b->len)));
 }
 
+// Luwu Integers (rfcs/integers.md)
+static size_t sizebigint(const HeapInteger* h)
+{
+    return sizeof(HeapInteger) + sizeof(uint64_t) * h->capacity;
+}
+
+static void dumpbigint(FILE* f, HeapInteger* h)
+{
+    fprintf(f, "{\"type\":\"integer\",\"cat\":%d,\"size\":%d}", h->memcat, int(sizebigint(h)));
+}
+
 static void dumpproto(FILE* f, Proto* p)
 {
     size_t size = sizeof(Proto) + sizeof(Instruction) * p->sizecode + sizeof(Proto*) * p->sizep + sizeof(TValue) * p->sizek + p->sizelineinfo +
@@ -692,6 +707,9 @@ static void dumpobj(FILE* f, GCObject* o)
 
     case LUA_TBUFFER:
         return dumpbuffer(f, gco2buf(o));
+
+    case LUA_THEAPINTEGER:
+        return dumpbigint(f, gco2integer(o));
 
     case LUA_TCLASS:
         return dumpclass(f, gco2class(o));
@@ -1127,6 +1145,9 @@ static void enumobj(EnumContext* ctx, GCObject* o)
 
     case LUA_TBUFFER:
         return enumbuffer(ctx, gco2buf(o));
+
+    case LUA_THEAPINTEGER:
+        return enumnode(ctx, o, sizebigint(gco2integer(o)), NULL);
 
     case LUA_TCLASS:
         return enumclass(ctx, gco2class(o));

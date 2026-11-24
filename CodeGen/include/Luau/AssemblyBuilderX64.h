@@ -74,6 +74,7 @@ public:
     void mov64(RegisterX64 lhs, int64_t imm);
     void movsx(RegisterX64 lhs, OperandX64 rhs);
     void movzx(RegisterX64 lhs, OperandX64 rhs);
+    void movsxd(RegisterX64 lhs, OperandX64 rhs);
 
     // Base one operand instruction with 2 opcode selection
     void div(OperandX64 op);
