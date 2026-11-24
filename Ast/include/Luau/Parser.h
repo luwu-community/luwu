@@ -62,6 +62,24 @@ struct LuwuFeature
     const char* flag;
 };
 
+// Luwu Traits (rfcs/classes/traits.md): a class or trait member's modifier as written, ranked by where it goes
+struct WrittenClassModifier
+{
+    enum Rank
+    {
+        Expect,
+        Target,
+        Access,
+        Placement,
+        Final,
+        Const,
+    };
+
+    Rank rank;
+    const char* text;
+    Location location;
+};
+
 class Parser
 {
     template<typename Node, typename F>
@@ -329,6 +347,9 @@ private:
     // True when the class body is looking at something that reads as a statement rather than a class
     // member, which means the class was never closed. See its definition.
     bool classBodyLooksLikeStatement();
+
+    // Luwu Traits (rfcs/classes/traits.md): reports a member's modifiers written out of order or twice
+    void reportClassModifierOrder(const std::vector<WrittenClassModifier>& written);
 
     // Luwu Classes (rfcs/classes): parse a class's primary constructor parameter list, e.g. the
     // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`.

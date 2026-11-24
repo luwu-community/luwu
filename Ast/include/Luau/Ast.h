@@ -1480,6 +1480,35 @@ enum class AstClassMemberVisibility
 };
 
 std::string toString(AstClassMemberVisibility visibility);
+
+// Luwu Traits (rfcs/classes/traits.md): where a member lives, written as one modifier after the access specifier.
+// `Default` is a field on each object, a method (shared) or a function without `self` (static), by its shape.
+enum class AstClassMemberPlacement
+{
+    Default,
+    // `shared`: one value on the class, readable through its objects too
+    Shared,
+    // `static`: on the class value only
+    Static,
+    // `traitonly`: on the trait value only; implementing classes don't get it
+    TraitOnly,
+    // `scoped`: on each implementing class in the trait's slot, read qualified (`obj:Json:encode()`)
+    Scoped,
+};
+
+// Luwu Traits (rfcs/classes/traits.md): who may provide an expected member. `Any` is a bare `expect`.
+enum class AstClassExpectTarget
+{
+    Any,
+    // `expect class to override`: only an implementing class
+    Class,
+    // `expect trait to override`: only a trait that needs this one
+    Trait,
+};
+
+// The keyword a placement is written with; nullptr for `Default`
+const char* toString(AstClassMemberPlacement placement);
+
 template<>
 std::optional<AstClassMemberVisibility> fromString<AstClassMemberVisibility>(std::string_view s);
 
@@ -1508,6 +1537,13 @@ struct AstClassProperty
     // Luwu Traits (rfcs/classes/traits.md): location of `final` in a trait's `final name = value`: a const field only the
     // trait sets, from its default; not even an implementing class's `__init` can write it. nullopt in a class.
     std::optional<Location> finalLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): who may provide an expected field, and the `class to override` or
+    // `trait to override` phrase that says so
+    AstClassExpectTarget expectTarget = AstClassExpectTarget::Any;
+    std::optional<Location> expectTargetLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): `shared`, `static` or `traitonly`, and where it's written
+    AstClassMemberPlacement placement = AstClassMemberPlacement::Default;
+    std::optional<Location> placementLocation = std::nullopt;
 };
 
 struct AstClassMethod
@@ -1528,9 +1564,14 @@ struct AstClassMethod
     // Luwu Traits (rfcs/classes/traits.md): location of `final` in a trait's `final function`, which no implementing class may
     // define itself. nullopt in a class.
     std::optional<Location> finalLocation = std::nullopt;
-    // Luwu Traits (rfcs/classes/traits.md): location of `Self` in a trait's `function Self.name`, a member scoped to the
-    // trait. Implementing classes don't get it as a member; `obj:Trait:name()` and `Class:Trait.name()` reach it.
-    std::optional<Location> scopeLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): who may provide an expected function, and the `class to override` or
+    // `trait to override` phrase that says so
+    AstClassExpectTarget expectTarget = AstClassExpectTarget::Any;
+    std::optional<Location> expectTargetLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): `shared`, `static`, `traitonly` or `scoped`, and where it's written. A scoped
+    // function isn't a member of implementing classes: `obj:Trait:name()` and `Class:Trait.name()` reach it.
+    AstClassMemberPlacement placement = AstClassMemberPlacement::Default;
+    std::optional<Location> placementLocation = std::nullopt;
     // Luwu Traits (rfcs/classes/traits.md): the trait in a class's `function Json.name`, a qualified implementation of that
     // trait's member `name`. It isn't a member of the class. nullptr otherwise.
     AstExpr* qualifiedTrait = nullptr;

@@ -761,4 +761,53 @@ expectpass("native construction of classes with traits", function()
     assert(not ok and string.find(err, "private", 1, true), err)
 end)
 
+-- Luwu Traits (rfcs/classes/traits.md): shared fields read through objects and the class, written through the class, in
+-- loops that run natively; a static member read through an object misses into the fallback and raises
+class NcgShared(n: number)
+    shared scale = 2
+    static total = 0
+
+    function scaled(self)
+        return self.n * self.scale
+    end
+end
+
+expectpass("native shared and static fields", function()
+    local objects = {}
+    for i = 1, 50 do
+        objects[i] = NcgShared(i)
+    end
+
+    local sum = 0
+    for i = 1, 50 do
+        sum += objects[i]:scaled() + objects[i].scale
+        NcgShared.total += 1
+    end
+    assert(sum == 2 * (50 * 51 / 2) + 100 and NcgShared.total == 50)
+
+    NcgShared.scale = 3
+    sum = 0
+    for i = 1, 50 do
+        sum += objects[i]:scaled()
+    end
+    assert(sum == 3 * (50 * 51 / 2))
+
+    -- the same instruction sees an object and then the class, so a slot it learned from the class can't serve the object
+    local function read(v)
+        return v.total
+    end
+    for _ = 1, 3 do
+        assert(read(NcgShared) == 50)
+    end
+    assert(not pcall(read, objects[1]))
+
+    for i = 1, 3 do
+        local ok, err = pcall(function()
+            objects[i].scale = 4
+        end)
+        assert(not ok and string.find(err, "NcgShared.scale is shared", 1, true), err)
+    end
+    assert(NcgShared.scale == 3)
+end)
+
 return 'OK'
