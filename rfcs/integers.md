@@ -673,16 +673,17 @@ first value fixes the mode, like the element type of any `Vec`, and pushing an i
 ```luwu
 const .{ Vec } = collections
 
-const bytes = Vec.fromstring("héllo") -- 6 elements, since é takes two bytes
+const bytes = Vec.from("héllo") -- 6 elements, since é takes two bytes
 bytes:push(0x21_u8)
 print(bytes:at(1)) -- 104
 const text = bytes:tostring() -- "héllo!"
 ```
 
-`Vec.fromstring(s)` gives a `Vec<integer.u8>` of the bytes of `s`, and `v:tostring()` gives the bytes of a `Vec` of
-`u8` back as a string. Both are a single copy. `v:tostring()` raises on a `Vec` of anything else, while `tostring(v)`
-keeps showing the `Vec` itself, as `buffer.tostring(b)` and `tostring(b)` differ for buffers. `push`, `at` and `get`
-on these vectors are builtin fast methods with native code lowering, like the integer methods.
+`Vec.from(s)` gives a `Vec<integer.u8>` of the bytes of a string or a buffer, and `VecDeque.from(s)` gives a
+`VecDeque<integer.u8>` the same way. `v:tostring()` gives the bytes of a `Vec` of `u8` back as a string. Each is a
+single copy. `v:tostring()` raises on a `Vec` of anything else, while `tostring(v)` keeps showing the `Vec` itself, as
+`buffer.tostring(b)` and `tostring(b)` differ for buffers. `push`, `at` and `get` on these vectors are builtin fast
+methods with native code lowering, like the integer methods.
 
 A `buffer` is still the type for data with a layout of mixed widths, like a file header or a network packet. A list of
 bytes that grows, shrinks and gets iterated is a `Vec<integer.u8>`.
