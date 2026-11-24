@@ -146,7 +146,7 @@ LUAU_FLAGVERSION(LuauBackedgeHeapCheck, 2)
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), \
         VM_DISPATCH_OP(LOP_WRAPRESULT), VM_DISPATCH_OP(LOP_RESULTGET), VM_DISPATCH_OP(LOP_GETQUALIFIED), \
-        VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE),
+        VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETQUALIFIED),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -718,7 +718,7 @@ reentry:
                         // slow-er path: the slot mismatched so we fall back to looking up the offset from the string.
                         else
                         {
-                            const TValue* offset = luaH_getstr(lco->memberstooffset, tsvalue(kv));
+                            const TValue* offset = luaR_classvalueoffset(lco, tsvalue(kv));
                             if (ttisnil(offset))
                             {
                                 VM_PROTECT_PC();
@@ -3890,12 +3890,14 @@ reentry:
                     VM_NEXT();
                 }
 
-                // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function
-                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+                // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function, or its value of a
+                // trait's scoped field
+                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
                 {
                     TValue* name = VM_KV(aux);
                     LUAU_ASSERT(ttisstring(name));
-                    VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc));
+                    bool isfield = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD;
+                    VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc, isfield));
                     VM_NEXT();
                 }
 
@@ -3982,9 +3984,21 @@ reentry:
                     classdef = classvalue(classReg);
                 }
 
-                if (LUAU_LIKELY(ttisobject(self) && objectvalue(self)->lclass == classdef))
+                // Luwu Traits (rfcs/classes/traits.md): a class method's `Self` is the class itself
+                bool classmethod = LUAU_INSN_C(insn) == LBC_SELFCLASS_CLASSMETHOD;
+
+                if (LUAU_LIKELY(ttisobject(self) && objectvalue(self)->lclass == classdef && !classmethod))
                 {
                     VM_NEXT();
+                }
+                else if (classmethod && ttisclass(self) && classvalue(self) == classdef)
+                {
+                    VM_NEXT();
+                }
+                else if (classmethod)
+                {
+                    VM_PROTECT_PC();
+                    luaG_classmethoderror(L, self, classdef, tsvalue(VM_KV(aux)));
                 }
                 else
                 {
@@ -4282,6 +4296,21 @@ reentry:
                 LUAU_ASSERT(ttisstring(name));
 
                 VM_PROTECT(luaR_getqualified(L, ra, rb, rc, tsvalue(name)));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_SETQUALIFIED)
+            {
+                // Luwu Traits (rfcs/classes/traits.md): `obj:Trait.name = value`, `Class:Trait.name = value`
+                Instruction insn = *pc++;
+                uint32_t aux = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                StkId rc = VM_REG(LUAU_INSN_C(insn));
+                TValue* name = VM_KV(aux);
+                LUAU_ASSERT(ttisstring(name));
+
+                VM_PROTECT(luaR_setqualified(L, rb, rc, tsvalue(name), ra));
                 VM_NEXT();
             }
 

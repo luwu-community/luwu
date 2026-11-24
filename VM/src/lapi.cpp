@@ -1753,7 +1753,11 @@ static const TValue* findclassmember(lua_State* L, int idx, const char* memberna
     if (!*classdef)
         luaG_runerror(L, "expected a class or object, got %s", luaT_objtypename(L, o));
 
-    return luaH_getstr((*classdef)->memberstooffset, luaS_new(L, membername));
+    TString* name = luaS_new(L, membername);
+    if (ttisclass(o))
+        return luaR_classvalueoffset(*classdef, name);
+
+    return luaH_getstr((*classdef)->memberstooffset, name);
 }
 
 void lua_setclassopaque(lua_State* L, int idx)

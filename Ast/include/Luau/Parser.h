@@ -70,6 +70,7 @@ struct WrittenClassModifier
         Expect,
         Target,
         Access,
+        Scoped,
         Placement,
         Final,
         Const,

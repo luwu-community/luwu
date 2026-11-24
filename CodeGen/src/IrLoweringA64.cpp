@@ -394,9 +394,10 @@ static void emitClassMemberAuthA64(
     RegisterA64 owner = regs.allocTemp(KindA64::x);
     RegisterA64 flagw = regs.allocTemp(KindA64::w);
 
-    // flag = classReg->memberflags[slot]
+    // flag = the low byte of classReg->memberflags[slot], whose entries are 16 bits
     build.ldr(owner, mem(classReg, offsetof(LuauClass, memberflags)));
-    build.ldrb(flagw, mem(owner, slotReg));
+    build.add(owner, owner, slotReg, 1);
+    build.ldrb(flagw, mem(owner, 0));
 
     // PRIVATE | INITBLOCKED (bits 0 and 7) has no logical-immediate encoding, so test against a register
     RegisterA64 maskw = regs.allocTemp(KindA64::w);
@@ -3100,9 +3101,11 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.ldrb(tempw, mem(classReg, offsetof(LuauClass, hascustominit)));
         build.cbz(tempw, constructible);
 
+        // the low byte of memberflags[initoffset], whose entries are 16 bits
         build.ldr(tempx, mem(classReg, offsetof(LuauClass, memberflags)));
         build.ldr(tempw, mem(classReg, offsetof(LuauClass, initoffset)));
-        build.ldrb(tempw, mem(tempx, castReg(KindA64::x, tempw)));
+        build.add(tempx, tempx, castReg(KindA64::x, tempw), 1);
+        build.ldrb(tempw, mem(tempx, 0));
         build.tst(tempw, uint32_t(LBC_CLASSMEMBER_PRIVATE));
         build.b(ConditionA64::Equal, constructible);
 
@@ -3782,6 +3785,14 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeTABLEBUNDLE), uintOp(OP_A(inst)));
+        break;
+    case IrCmd::FALLBACK_SETQUALIFIED:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_D(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executeSETQUALIFIED), uintOp(OP_A(inst)));
         break;
     case IrCmd::FALLBACK_INITTRAITS:
         CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);

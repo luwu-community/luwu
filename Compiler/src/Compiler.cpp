@@ -202,10 +202,11 @@ static bool isTraitConstantField(const AstClassProperty& prop)
 }
 
 // Luwu Traits (rfcs/classes/traits.md): whether a field is one of each object's, rather than one value on the class or
-// trait (`shared`, `static`, `traitonly`), which lives in a static slot like a function
+// trait (`shared`, `static`, `traitonly`), which lives in a static slot like a function. A scoped field and a class's
+// value for one (`Animal.species = value`) aren't the class's fields either.
 static bool isObjectField(const AstClassProperty& prop)
 {
-    return prop.placement == AstClassMemberPlacement::Default;
+    return prop.placement == AstClassMemberPlacement::Default && !prop.scopedLocation && !prop.qualifiedTrait;
 }
 
 // Luwu Classes (rfcs/classes): whether the class or trait body declares a field `name`, which restates the primary
@@ -214,7 +215,7 @@ static bool classBodyDeclaresProperty(AstStatClass* decl, AstName name)
 {
     for (const AstClassMember& member : decl->members)
     {
-        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name && isObjectField(*prop))
             return true;
     }
 
@@ -611,6 +612,12 @@ struct Compiler
                 // DUPCLOSURE sharing). See LBC_SELFCLASS_OWNER. Inline sites cannot use this form --
                 // they run under the caller's proto -- and still pass a register.
                 emitSelfClassCheck(selfCheck->methodName, args, LBC_SELFCLASS_OWNER, /* selfCall= */ false, func->location);
+            }
+            else if (const AstClassMethod* classMethod = classMethodOf(func))
+            {
+                // Luwu Traits (rfcs/classes/traits.md): a class method's `Self` is the class it belongs to, checked the
+                // same way
+                emitSelfClassCheck(classMethod->functionName, args, LBC_SELFCLASS_OWNER, /* selfCall= */ false, func->location, true);
             }
         }
 
@@ -1387,15 +1394,10 @@ struct Compiler
         {
             const AstClassProperty* prop = member.get_if<AstClassProperty>();
 
-            if (!prop)
+            // Luwu Traits (rfcs/classes/traits.md): a field on the class value has no object slot, and a static one may
+            // share its name with an object field
+            if (!prop || !isObjectField(*prop))
                 continue;
-
-            if (!isObjectField(*prop))
-            {
-                if (prop->name == name)
-                    return -1;
-                continue;
-            }
 
             if (prop->name == name)
                 return forWrite && prop->isConst ? -1 : offset;
@@ -1414,7 +1416,7 @@ struct Compiler
                 bool restated = false;
 
                 for (const AstClassMember& member : decl->members)
-                    if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == param->name)
+                    if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == param->name && isObjectField(*prop))
                     {
                         restated = true;
                         break;
@@ -1440,7 +1442,7 @@ struct Compiler
     {
         for (const AstClassMember& member : decl->members)
         {
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name && isObjectField(*prop))
                 return prop->visibility == AstClassMemberVisibility::Private;
         }
 
@@ -1603,6 +1605,28 @@ struct Compiler
         return owner ? *owner : nullptr;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): the class or trait member `func` is when it's a class method, a function whose
+    // first parameter is `Self`. A class's copy of a trait's function is the trait's member.
+    const AstClassMethod* classMethodOf(AstExprFunction* func)
+    {
+        if (!FFlag::LuwuTraits || func->args.size == 0 || func->args.data[0]->name != "Self")
+            return nullptr;
+
+        AstExprFunction** original = copiedFunctionOriginal.find(func);
+        AstExprFunction* declared = original ? *original : func;
+        AstStatClass* owner = lexicalClassOf(declared);
+        if (!owner)
+            return nullptr;
+
+        for (const AstClassMember& member : owner->members)
+        {
+            if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method->function == declared)
+                return method;
+        }
+
+        return nullptr;
+    }
+
     bool functionContainsNestedFunctions(AstExprFunction* func)
     {
         if (bool* cached = functionHasNestedFunctions.find(func))
@@ -1621,16 +1645,30 @@ struct Compiler
 
     // Luwu Classes (rfcs/classes): whether the member `name` of `cls` is private: a field (in the class body, or
     // declared by a primary constructor parameter), a method or static, or `__init`, the constructor.
+    // Luwu Traits (rfcs/classes/traits.md): a static member and an object field may share a name, and then the name is
+    // private when either member is.
     bool classMemberIsPrivate(AstStatClass* cls, AstName name)
     {
+        bool declared = false;
+        bool isPrivate = false;
+
         for (const AstClassMember& member : cls->members)
         {
             if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
-                return prop->visibility == AstClassMemberVisibility::Private;
+            {
+                declared = true;
+                isPrivate |= prop->visibility == AstClassMemberVisibility::Private;
+            }
 
             if (const AstClassMethod* m = member.get_if<AstClassMethod>(); m && m->functionName == name && !m->qualifiedTrait)
-                return m->visibility == AstClassMemberVisibility::Private;
+            {
+                declared = true;
+                isPrivate |= m->visibility == AstClassMemberVisibility::Private;
+            }
         }
+
+        if (declared)
+            return isPrivate;
 
         if (AstClassPrimaryConstructor* ctor = cls->primaryConstructor)
         {
@@ -2090,14 +2128,23 @@ struct Compiler
     // otherwise.
     //
     // `selfCall`: the check is emitted at an inline site for a `:` call. Only affects the error message.
-    void emitSelfClassCheck(AstName methodName, uint8_t selfReg, uint8_t classReg, bool selfCall, const Location& location)
+    // Luwu Traits (rfcs/classes/traits.md): `classMethod`: the check is a class method's, whose `Self` is the class itself.
+    void emitSelfClassCheck(
+        AstName methodName,
+        uint8_t selfReg,
+        uint8_t classReg,
+        bool selfCall,
+        const Location& location,
+        bool classMethod = false
+    )
     {
         int32_t methodNameCid = bytecode.addConstantString(sref(methodName));
 
         if (methodNameCid < 0)
             CompileError::raise(location, "Exceeded constant limit; simplify the code to compile");
 
-        bytecode.emitABC(LOP_CHECKSELFCLASS, selfReg, classReg, selfCall ? 1 : 0);
+        uint8_t form = classMethod ? LBC_SELFCLASS_CLASSMETHOD : selfCall ? 1 : 0;
+        bytecode.emitABC(LOP_CHECKSELFCLASS, selfReg, classReg, form);
         bytecode.emitAux(methodNameCid);
     }
 
@@ -2510,13 +2557,14 @@ struct Compiler
         return decl ? *decl : nullptr;
     }
 
+    // The object field `name` of `cls`, as its body declares it
     const AstClassProperty* findClassProperty(AstStatClass* cls, AstName name)
     {
         for (const AstClassMember& member : cls->members)
         {
             if (const AstClassProperty* p = member.get_if<AstClassProperty>())
             {
-                if (p->name == name)
+                if (p->name == name && isObjectField(*p))
                     return p;
             }
         }
@@ -2537,7 +2585,8 @@ struct Compiler
             if (const AstClassMethod* m = member.get_if<AstClassMethod>())
             {
                 // Luwu Traits (rfcs/classes/traits.md): a static, trait-only or scoped method can't be read through an object
-                bool readableThroughObjects = m->placement == AstClassMemberPlacement::Default || m->placement == AstClassMemberPlacement::Shared;
+                bool readableThroughObjects =
+                    !m->scopedLocation && (m->placement == AstClassMemberPlacement::Default || m->placement == AstClassMemberPlacement::Shared);
                 if (m->functionName == name && classMethodOwner.contains(m->function) && !m->qualifiedTrait && readableThroughObjects)
                     return m->function;
             }
@@ -4855,30 +4904,25 @@ struct Compiler
     // A trait's factory and hook belong to the trait alone.
     static uint16_t classFunctionPlacementFlags(AstStatClass* decl, const AstClassMethod& method)
     {
-        bool takesSelf = method.function->args.size > 0 && method.function->args.data[0]->name == "self";
-        bool reserved = strncmp(method.functionName.value, "__", 2) == 0;
         bool hook = decl->isTrait && (method.functionName == "__create" || method.functionName == "__implemented");
+        if (hook && method.placement == AstClassMemberPlacement::Default)
+            return LBC_CLASSMEMBER_STATIC | LBC_CLASSMEMBER_TRAITONLY;
 
-        switch (method.placement)
+        // a scoped function is placed like any other, in the trait's slot of the class
+        uint16_t scoped = method.scopedLocation ? LBC_CLASSMEMBER_SCOPED : 0;
+
+        switch (effectivePlacement(method))
         {
         case AstClassMemberPlacement::Static:
-            return LBC_CLASSMEMBER_STATIC;
+            return scoped | LBC_CLASSMEMBER_STATIC;
         case AstClassMemberPlacement::TraitOnly:
             return LBC_CLASSMEMBER_STATIC | LBC_CLASSMEMBER_TRAITONLY;
-        case AstClassMemberPlacement::Scoped:
-            return LBC_CLASSMEMBER_SCOPED;
         case AstClassMemberPlacement::Shared:
-            return 0;
         case AstClassMemberPlacement::Default:
             break;
         }
 
-        if (hook)
-            return LBC_CLASSMEMBER_STATIC | LBC_CLASSMEMBER_TRAITONLY;
-
-        // with the placement modifiers off, objects read a class's functions without `self` too
-        bool implicitlyStatic = FFlag::LuwuTraits && !takesSelf && !reserved;
-        return implicitlyStatic ? LBC_CLASSMEMBER_STATIC : 0;
+        return scoped;
     }
 
     // Luwu Traits (rfcs/classes/traits.md): who may provide an expected member
@@ -4901,10 +4945,14 @@ struct Compiler
     static uint16_t classFieldFlags(AstStatClass* decl, const AstClassProperty& prop)
     {
         uint16_t flags = LBC_CLASSMEMBER_CLASSFIELD;
-        if (prop.placement != AstClassMemberPlacement::Shared)
+        if (prop.placement == AstClassMemberPlacement::Static || prop.placement == AstClassMemberPlacement::TraitOnly)
             flags |= LBC_CLASSMEMBER_STATIC;
         if (prop.placement == AstClassMemberPlacement::TraitOnly)
             flags |= LBC_CLASSMEMBER_TRAITONLY;
+        if (prop.scopedLocation)
+            flags |= LBC_CLASSMEMBER_SCOPED;
+        if (prop.scopedLocation && prop.placement == AstClassMemberPlacement::Default)
+            flags |= LBC_CLASSMEMBER_SCOPEDOBJECTFIELD;
         if (prop.visibility == AstClassMemberVisibility::Private)
             flags |= LBC_CLASSMEMBER_PRIVATE;
         if (prop.isConst)
@@ -5005,6 +5053,11 @@ struct Compiler
                 overloaded{
                     [&](const AstClassProperty& prop)
                     {
+                        // Luwu Traits (rfcs/classes/traits.md): `Animal.species = value` isn't a member of the class; it is
+                        // registered with its trait below
+                        if (prop.qualifiedTrait)
+                            return;
+
                         int propNameCid = bytecode.addConstantString(sref(prop.name));
                         checkConstant(propNameCid, prop.nameLocation);
 
@@ -5100,6 +5153,8 @@ struct Compiler
                         bool takesSelf = method.function->args.size > 0 && method.function->args.data[0]->name == "self";
                         if (decl->isTrait && takesSelf)
                             flags |= LBC_CLASSMEMBER_TAKESSELF;
+                        if (decl->isTrait && classMethodOf(method.function))
+                            flags |= LBC_CLASSMEMBER_TAKESCLASS;
                         addStaticSlot(methodNameCid, flags);
 
                         bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, 0, temp);
@@ -5122,7 +5177,7 @@ struct Compiler
                 bool restated = false;
 
                 for (const AstClassMember& member : decl->members)
-                    if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == arg->name)
+                    if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == arg->name && isObjectField(*prop))
                     {
                         restated = true;
                         break;
@@ -5240,7 +5295,8 @@ struct Compiler
             }
         }
 
-        // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementations, `function Json.name`, each with its trait
+        // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementations, `function Json.name`, and its values of
+        // scoped fields, `Animal.species = value`, each with its trait
         {
             RegScope rsQualified(this);
             uint8_t qualifiedRegs = allocReg(decl, 2u);
@@ -5248,16 +5304,25 @@ struct Compiler
             for (const AstClassMember& member : decl->members)
             {
                 const AstClassMethod* method = member.get_if<AstClassMethod>();
-                if (!method || !method->qualifiedTrait)
+                const AstClassProperty* prop = member.get_if<AstClassProperty>();
+                AstExpr* trait = method ? method->qualifiedTrait : prop->qualifiedTrait;
+                if (!trait)
                     continue;
 
-                compileExprFunction(method->function, qualifiedRegs);
-                compileExprTemp(method->qualifiedTrait, uint8_t(qualifiedRegs + 1));
+                // the parser refuses a qualified field without a value
+                LUAU_ASSERT(method || prop->defaultValue);
+                if (method)
+                    compileExprFunction(method->function, qualifiedRegs);
+                else
+                    compileExprTemp(prop->defaultValue, qualifiedRegs);
 
-                int nameCid = bytecode.addConstantString(sref(method->functionName));
-                checkConstant(nameCid, method->nameLocation);
+                compileExprTemp(trait, uint8_t(qualifiedRegs + 1));
 
-                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_QUALIFIED, qualifiedRegs);
+                AstName name = method ? method->functionName : prop->name;
+                int nameCid = bytecode.addConstantString(sref(name));
+                checkConstant(nameCid, method ? method->nameLocation : prop->nameLocation);
+
+                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, method ? LBC_NEWCLASSMEMBER_QUALIFIED : LBC_NEWCLASSMEMBER_QUALIFIEDFIELD, qualifiedRegs);
                 bytecode.emitAux(nameCid);
             }
         }
@@ -7583,12 +7648,14 @@ struct Compiler
             Kind_IndexExpr,
             // Luwu bundles: a table indexed by a bundle literal, whose values are in `index` onwards, `number` of them
             Kind_IndexBundle,
+            // Luwu Traits (rfcs/classes/traits.md): `obj:Trait.name`, a trait's scoped field
+            Kind_Qualified,
         };
 
         Kind kind;
-        uint8_t reg; // register for local (Local) or table (Index*)
+        uint8_t reg; // register for local (Local), table (Index*) or object or class (Qualified)
         uint8_t upval;
-        uint8_t index;  // register for index in IndexExpr
+        uint8_t index;  // register for index in IndexExpr, or the trait in Qualified
         uint8_t number; // index-1 (0-255) in IndexNumber
         BytecodeBuilder::StringRef name;
         Location location;
@@ -7727,6 +7794,16 @@ struct Compiler
 
             return result;
         }
+        else if (AstExprIndexName* expr = node->as<AstExprIndexName>(); expr && expr->qualifiedTrait)
+        {
+            LValue result = {LValue::Kind_Qualified};
+            result.reg = compileExprAuto(expr->expr, rs);
+            result.index = compileExprAuto(expr->qualifiedTrait, rs);
+            result.name = sref(expr->index);
+            result.location = node->location;
+
+            return result;
+        }
         else if (AstExprIndexName* expr = node->as<AstExprIndexName>())
         {
             LValue result = {LValue::Kind_IndexName};
@@ -7801,6 +7878,17 @@ struct Compiler
                 if (AstExprIndexName* targetExprIndexName = targetExpr->as<AstExprIndexName>())
                     hintTemporaryExprRegType(targetExprIndexName->expr, lv.reg, LBC_TYPE_TABLE, /* instLength */ 2);
             }
+        }
+        break;
+
+        case LValue::Kind_Qualified:
+        {
+            int32_t cid = bytecode.addConstantString(lv.name);
+            if (cid < 0)
+                CompileError::raise(lv.location, "Exceeded constant limit; simplify the code to compile");
+
+            bytecode.emitABC(set ? LOP_SETQUALIFIED : LOP_GETQUALIFIED, reg, lv.reg, lv.index);
+            bytecode.emitAux(cid);
         }
         break;
 
@@ -8836,12 +8924,13 @@ struct Compiler
             const LValue& li = var.lvalue;
 
             bool indexes = li.kind == LValue::Kind_IndexName || li.kind == LValue::Kind_IndexNumber || li.kind == LValue::Kind_IndexExpr ||
-                           li.kind == LValue::Kind_IndexBundle;
+                           li.kind == LValue::Kind_IndexBundle || li.kind == LValue::Kind_Qualified;
 
             if (indexes && visitor.assigned[li.reg])
                 visitor.conflict[li.reg] = true;
 
-            if (li.kind == LValue::Kind_IndexExpr && visitor.assigned[li.index])
+            bool usesIndexReg = li.kind == LValue::Kind_IndexExpr || li.kind == LValue::Kind_Qualified;
+            if (usesIndexReg && visitor.assigned[li.index])
                 visitor.conflict[li.index] = true;
         }
 

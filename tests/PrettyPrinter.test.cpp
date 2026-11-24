@@ -2194,19 +2194,37 @@ trait Animal
     scoped function encode(self)
         return "json"
     end
+    expect scoped species: string
+    scoped legs = 4
+    scoped shared total = 0
+    scoped static const tag = "a"
+    scoped static function make()
+        return 1
+    end
 end
 trait Pet needs Animal
 end
-class Cat implements Pet
+class Cat implements Pet, Animal
     shared sound = "meow"
     static const MAX = 10
-    static function make(self)
-        return self
+    Animal.species = "Felis Catus"
+    static count = 0
+    count = 1
+    function make(Self)
+        return Self
+    end
+    shared function noise()
+        return "meow"
     end
     function Animal.encode(self)
         return "cat"
     end
 end
+local cat = Cat()
+cat:Animal.legs = 3
+cat:Animal.legs += 1
+Cat:[traits.animal].total = 2
+local json = cat:[traits[1]]:encode()
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }

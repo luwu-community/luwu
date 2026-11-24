@@ -153,7 +153,7 @@ void luaV_gettablefor(lua_State* L, const TValue* t, TValue* key, StkId val, con
         else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisclass(t)))
         {
             LuauClass* lco = classvalue(t);
-            const TValue* res = luaH_get(lco->memberstooffset, key);
+            const TValue* res = luaR_classvalueoffset(lco, key);
 
             // Class objects throw if you try to access a member that is not
             // present.
@@ -341,7 +341,7 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
             // Luwu Traits (rfcs/classes/traits.md): `Cat.species = v` writes a field on the class value. Writing any other
             // member, or a name the class doesn't have, raises as it always has.
             LuauClass* lco = classvalue(t);
-            const TValue* offset = luaH_get(lco->memberstooffset, key);
+            const TValue* offset = luaR_classvalueoffset(lco, key);
             bool classfield = !ttisnil(offset) && (lco->memberflags[uint32_t(nvalue(offset))] & LBC_CLASSMEMBER_CLASSFIELD);
             if (classfield)
             {

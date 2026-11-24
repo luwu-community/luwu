@@ -3,7 +3,10 @@
 
 #include "Luau/Common.h"
 
+#include <cstring>
+
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuTraits)
 
 namespace Luau
 {
@@ -1231,6 +1234,8 @@ void AstStatClass::visit(AstVisitor* visitor)
                     {
                         visitAttributes(prop.attributes, visitor);
 
+                        if (prop.qualifiedTrait)
+                            prop.qualifiedTrait->visit(visitor);
                         if (prop.ty)
                             prop.ty->visit(visitor);
                         if (prop.defaultValue)
@@ -1273,13 +1278,23 @@ const char* toString(AstClassMemberPlacement placement)
         return "static";
     case AstClassMemberPlacement::TraitOnly:
         return "traitonly";
-    case AstClassMemberPlacement::Scoped:
-        return "scoped";
     case AstClassMemberPlacement::Default:
         break;
     }
 
     return nullptr;
+}
+
+AstClassMemberPlacement effectivePlacement(const AstClassMethod& method)
+{
+    if (method.placement != AstClassMemberPlacement::Default)
+        return method.placement;
+
+    // with the placement modifiers off, objects read every function of a class
+    bool takesSelf = method.function->args.size > 0 && method.function->args.data[0]->name == "self";
+    bool reserved = strncmp(method.functionName.value, "__", 2) == 0;
+    bool shared = !FFlag::LuwuTraits || takesSelf || reserved;
+    return shared ? AstClassMemberPlacement::Shared : AstClassMemberPlacement::Static;
 }
 
 template<>

@@ -6,6 +6,7 @@
 #include "lobject.h"
 #include "lstate.h"
 #include "lbytecode.h"
+#include "ltable.h"
 
 // An instance's members are allocated inline, immediately after the LuauObject header, so a
 // construction costs one GC allocation rather than two. Everything that allocates, frees or
@@ -252,6 +253,54 @@ LUAU_FORCEINLINE void luaR_checkconstassignfast(
         luaR_checkconstassign(L, key, object, cl, offset);
     }
 }
+
+// The lookup luaR_classvalueoffset makes for each kind of key
+inline const TValue* luaR_membermapget(LuaTable* map, const TValue* key)
+{
+    return luaH_get(map, key);
+}
+
+inline const TValue* luaR_membermapget(LuaTable* map, TString* key)
+{
+    return luaH_getstr(map, key);
+}
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): the offset of `classdef`'s member `key` as a read through the class value finds
+ * it, or nil. A static member may share its name with an object field: `memberstooffset` then has the field and
+ * `staticshadows` the static. The second lookup only happens where the first found an object field, which can't be read
+ * through the class value.
+ */
+template<typename Key>
+LUAU_FORCEINLINE const TValue* luaR_classvalueoffset(const LuauClass* classdef, Key key)
+{
+    const TValue* offset = luaR_membermapget(classdef->memberstooffset, key);
+    bool objectfield = !ttisnil(offset) && uint32_t(nvalue(offset)) < classdef->numberofinstancemembers;
+
+    if (LUAU_UNLIKELY(objectfield && classdef->staticshadows))
+    {
+        const TValue* shadow = luaR_membermapget(classdef->staticshadows, key);
+        if (!ttisnil(shadow))
+            return shadow;
+    }
+
+    return offset;
+}
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): maps the member `name` to `offset` in `map`, a members-to-offset table being
+ * filled in offset order. A static member (`isstatic`) whose name an object field already has goes in `*shadows` instead,
+ * which is created when it's first needed (see LuauClass::staticshadows).
+ */
+LUAI_FUNC void luaR_mapmembername(
+    lua_State* L,
+    LuaTable* map,
+    LuaTable** shadows,
+    TString* name,
+    uint32_t offset,
+    bool isstatic,
+    uint32_t numberofinstancemembers
+);
 
 /**
  * Add a new class member to `classdef` named `name` and with value `method`. As the naming implies
@@ -508,11 +557,12 @@ LUAI_FUNC void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, cons
 LUAI_FUNC bool luaR_nexttraitinit(lua_State* L, StkId state, StkId frame, int nargs);
 
 /**
- * Luwu Traits (rfcs/classes/traits.md): records `fn` as `classdef`'s qualified implementation of the member `name` of
- * the trait `trait` (`function Json.name`, LBC_NEWCLASSMEMBER_QUALIFIED). luaR_implementtraits checks it. Ignored once
- * the class has implemented its traits.
+ * Luwu Traits (rfcs/classes/traits.md): records `value` as `classdef`'s qualified implementation of the member `name` of
+ * the trait `trait`: a function (`function Json.name`, LBC_NEWCLASSMEMBER_QUALIFIED), or the value of a scoped field when
+ * `isfield` is set (`Animal.species = value`, LBC_NEWCLASSMEMBER_QUALIFIEDFIELD). Raises when the trait's member is the
+ * other kind; luaR_implementtraits checks the rest. Ignored once the class has implemented its traits.
  */
-LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* fn);
+LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* value, bool isfield);
 
 /**
  * Luwu Traits (rfcs/classes/traits.md): sets `ra` to the class's version of the member `name` of `trait`, for
@@ -520,6 +570,14 @@ LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue
  * doesn't implement the trait, or the trait has no such function.
  */
 LUAI_FUNC void luaR_getqualified(lua_State* L, StkId ra, const TValue* receiver, const TValue* trait, TString* name);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): writes `value` to the scoped field `name` of the trait `trait`, for
+ * `obj:Trait.name = value` (LOP_SETQUALIFIED). A per-object field is written through an object, and a `scoped shared` or
+ * `scoped static` one through the class. Raises when `receiver` doesn't implement the trait, the field is const, or it's
+ * written through the wrong receiver.
+ */
+LUAI_FUNC void luaR_setqualified(lua_State* L, const TValue* receiver, const TValue* trait, TString* name, const TValue* value);
 
 // Luwu Traits (rfcs/classes/traits.md): whether `classdef` implements `trait`, listed or implied through `needs`.
 LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait);

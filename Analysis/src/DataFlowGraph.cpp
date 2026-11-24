@@ -955,6 +955,9 @@ void DataFlowGraphBuilder::visitClassShape(AstStatClass* d)
             overloaded{
                 [&](const AstClassProperty& prop)
                 {
+                    // Luwu Traits (rfcs/classes/traits.md): the trait of `Animal.species = value`, read by the class statement
+                    if (prop.qualifiedTrait)
+                        visitExpr(prop.qualifiedTrait);
                     if (prop.ty)
                         visitType(prop.ty);
                     if (prop.defaultValue)
@@ -1463,6 +1466,14 @@ DefId DataFlowGraphBuilder::visitLValue(AstExprGlobal* g, DefId incomingDef)
 
 DefId DataFlowGraphBuilder::visitLValue(AstExprIndexName* i, DefId incomingDef)
 {
+    // Luwu Traits (rfcs/classes/traits.md): `obj:Trait.name = value` writes the trait's scoped field, which nothing refines
+    if (i->qualifiedTrait)
+    {
+        visitExpr(i->expr);
+        visitExpr(i->qualifiedTrait);
+        return defArena->freshCell(Symbol{}, i->location);
+    }
+
     DefId parentDef = visitExpr(i->expr).def;
 
     DfgScope* scope = currentScope();

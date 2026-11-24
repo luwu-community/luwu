@@ -66,6 +66,7 @@ int getOpLength(LuauOpcode op)
     case LOP_GETQUALIFIED:
     case LOP_GETTABLEBUNDLE:
     case LOP_SETTABLEBUNDLE:
+    case LOP_SETQUALIFIED:
         return 2;
 
     default:
@@ -390,6 +391,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FALLBACK_WRAPRESULT:
     case IrCmd::FALLBACK_GETQUALIFIED:
     case IrCmd::FALLBACK_TABLEBUNDLE:
+    case IrCmd::FALLBACK_SETQUALIFIED:
         return IrValueKind::None;
     case IrCmd::SUBSTITUTE:
         return IrValueKind::Unknown;

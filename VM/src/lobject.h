@@ -663,6 +663,11 @@ typedef struct LuauClass
     // Mapping from member name to offset.
     LuaTable* memberstooffset;
 
+    // Luwu Traits (rfcs/classes/traits.md): the static members (LBC_CLASSMEMBER_STATIC) that share their name with an
+    // object field, by name. `memberstooffset` maps such a name to the field, which is what objects read, and reads
+    // through the class value look here (luaR_classvalueoffset). NULL when there are none.
+    LuaTable* staticshadows;
+
     // Mapping from offset to member name. NULL at `initoffset`: `__init` is only ever resolved by name
     // (see luaR_sealclassshape).
     TString** offsettomember;

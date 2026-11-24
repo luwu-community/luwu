@@ -674,7 +674,7 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
             }
             else
             {
-                const TValue* offset = luaH_getstr(lco->memberstooffset, tsvalue(kv));
+                const TValue* offset = luaR_classvalueoffset(lco, tsvalue(kv));
                 if (ttisnil(offset))
                     luaG_missingmembererror(L, rb, kv);
                 const uint32_t offsetnum = uint32_t(nvalue(offset));
@@ -1175,12 +1175,14 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
         return pc;
     }
 
-    // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function
-    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+    // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function, or its value of a
+    // trait's scoped field
+    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
     {
         TValue* name = VM_KV(aux);
         LUAU_ASSERT(ttisstring(name));
-        VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc));
+        bool isfield = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD;
+        VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc, isfield));
         return pc;
     }
 
@@ -1235,6 +1237,23 @@ const Instruction* executeGETQUALIFIED(lua_State* L, const Instruction* pc, StkI
     LUAU_ASSERT(ttisstring(name));
 
     VM_PROTECT(luaR_getqualified(L, ra, rb, rc, tsvalue(name)));
+    return pc;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): LOP_SETQUALIFIED for native code (see FALLBACK_SETQUALIFIED). Kept in step with
+// VM_CASE(LOP_SETQUALIFIED) in lvmexecute.cpp.
+const Instruction* executeSETQUALIFIED(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    uint32_t aux = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = VM_REG(LUAU_INSN_B(insn));
+    StkId rc = VM_REG(LUAU_INSN_C(insn));
+    TValue* name = VM_KV(aux);
+    LUAU_ASSERT(ttisstring(name));
+
+    VM_PROTECT(luaR_setqualified(L, rb, rc, tsvalue(name), ra));
     return pc;
 }
 

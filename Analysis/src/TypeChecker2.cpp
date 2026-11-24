@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/TypeChecker2.h"
+
 #include "Luau/UnreachableProof.h"
 
 #include "Luau/ApplyTypeFunction.h"
@@ -7,6 +8,7 @@
 #include "Luau/AstUtils.h"
 #include "Luau/AstQuery.h"
 #include "Luau/BuiltinDefinitions.h"
+#include "Luau/BuiltinTypeFunctions.h"
 #include "Luau/Common.h"
 #include "Luau/DcrLogger.h"
 #include "Luau/DenseHash.h"
@@ -1763,7 +1765,7 @@ static std::optional<Location> classMemberLocation(AstStatClass* stat, const Nam
 {
     for (const AstClassMember& member : stat->members)
     {
-        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && name == prop->name.value)
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && name == prop->name.value && !prop->qualifiedTrait)
             return prop->nameLocation;
         if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && name == method->functionName.value && !method->qualifiedTrait)
             return method->nameLocation;
@@ -1969,6 +1971,15 @@ std::optional<TypeId> TypeChecker2::selfFieldFor(const ExternType* traitType, Ty
     return replacer.substitute(fieldTemplate->second);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): the member `name` of the value of the class or trait whose object type is
+// `objectType`, where its statics are
+static const Property* classValueMember(const ExternType* objectType, const Name& name)
+{
+    const Klass* klass = objectType->relation ? get_if<Klass>(&*objectType->relation) : nullptr;
+    const ExternType* classValue = klass ? get<ExternType>(follow(klass->ty)) : nullptr;
+    return classValue ? findNominalMember(classValue, name) : nullptr;
+}
+
 void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
 {
     NotNull<Scope> scope{findInnermostScope(stat->location)};
@@ -2040,18 +2051,26 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
 
         for (const auto& [name, optional] : traitType->traitInfo->expectations)
         {
-            // an expected constructor is checked by checkTraitConstructorExpectation
-            if (name != "__init" && !findNominalMember(classType, name))
-                addMissingTraitMember(missing, stat, traitType, name, traitFields->fieldNames.count(name) > 0);
-
+            // A static member is on the class value only: objects don't read it
             const Property* expected = findNominalMember(traitType, name);
-            const Property* found = findNominalMember(classType, name);
+            bool isStatic = !expected && name != "__init";
+            if (isStatic)
+                expected = classValueMember(traitType, name);
+            const Property* found = isStatic ? classValueMember(classType, name) : findNominalMember(classType, name);
+            // a static field's type is the only thing that tells it from a static function
+            bool isStaticField = isStatic && expected && expected->readTy && !get<FunctionType>(follow(*expected->readTy));
+            bool isField = traitFields->fieldNames.count(name) > 0 || isStaticField;
+
+            // an expected constructor is checked by checkTraitConstructorExpectation
+            if (name != "__init" && !found)
+                addMissingTraitMember(missing, stat, traitType, name, isField);
+
             if (name == "__init" || !expected || !found || !expected->readTy || !found->readTy)
                 continue;
 
             Location location = classMemberLocation(stat, name).value_or(traitRefLocation(scope, stat, traitType));
 
-            if (traitFields->fieldNames.count(name))
+            if (isField)
             {
                 testIsSubtype(*found->readTy, *expected->readTy, location);
                 continue;
@@ -2448,7 +2467,7 @@ void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
     std::vector<Declared> declared;
     for (const AstClassMember& member : stat->members)
     {
-        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && !prop->expectLocation)
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && !prop->expectLocation && !prop->qualifiedTrait)
             declared.push_back({prop->name.value, prop->nameLocation, /* isField */ true});
         else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && !method->expectLocation && !method->qualifiedTrait)
             declared.push_back({method->functionName.value, method->nameLocation, /* isField */ false});
@@ -2567,8 +2586,12 @@ void TypeChecker2::addMissingTraitMember(
         group = missing.end() - 1;
     }
 
-    // the member as the trait declares it: `name: type` for a field, a signature for a function
+    // the member as the trait declares it: `name: type` for a field, a signature for a function, on the trait's value for
+    // a static one
     const Property* expected = findNominalMember(traitType, name);
+    bool isStatic = !expected && classValueMember(traitType, name);
+    if (isStatic)
+        expected = classValueMember(traitType, name);
     std::optional<TypeId> expectedTy = expected ? expected->readTy : std::nullopt;
     const FunctionType* expectedFn = expectedTy ? get<FunctionType>(follow(*expectedTy)) : nullptr;
 
@@ -2581,6 +2604,8 @@ void TypeChecker2::addMissingTraitMember(
     // written as the class has to write it
     if (expected && isField && expected->isConst)
         member = "const " + member;
+    if (isStatic)
+        member = "static " + member;
     if (expected && traitType->traitInfo->hasAccessSpecifiers)
         member = (expected->isPrivate ? "private " : "public ") + member;
 
@@ -2697,12 +2722,13 @@ void TypeChecker2::visit(AstStatClass* stat)
 
     for (const AstClassMember& member : stat->members)
     {
-        if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+        const AstClassProperty* prop = member.get_if<AstClassProperty>();
+        if (prop && !prop->qualifiedTrait)
         {
             ++fieldCount;
             hasPublicField |= prop->visibility == AstClassMemberVisibility::Public;
         }
-        else
+        else if (!prop)
             hasFunction = true;
     }
 
@@ -2718,7 +2744,7 @@ void TypeChecker2::visit(AstStatClass* stat)
             for (const AstClassMember& member : stat->members)
             {
                 const AstClassProperty* prop = member.get_if<AstClassProperty>();
-                if (prop && prop->name == paramName)
+                if (prop && prop->name == paramName && prop->placement == AstClassMemberPlacement::Default && !prop->scopedLocation)
                     restated = true;
             }
 
@@ -2894,6 +2920,14 @@ void TypeChecker2::visit(AstStatClass* stat)
             // value itself (see ConstraintGenerator), so there's nothing to compare against here.
             if (prop->ty && prop->defaultValue)
                 testIsSubtype(lookupType(prop->defaultValue), lookupAnnotation(prop->ty), prop->defaultValue->location);
+
+            // Luwu Traits (rfcs/classes/traits.md): `Animal.species = value` gives the trait's scoped field a value of its type
+            std::optional<TypeId> scopedType =
+                prop->qualifiedTrait ? scopedMemberOf(lookupType(prop->qualifiedTrait), prop->name.value) : std::nullopt;
+            if (scopedType && prop->ty)
+                testIsSubtype(lookupAnnotation(prop->ty), *scopedType, prop->ty->location);
+            else if (scopedType && prop->defaultValue)
+                testIsSubtype(lookupType(prop->defaultValue), *scopedType, prop->defaultValue->location);
         }
         else if (const auto* method = member.get_if<AstClassMethod>())
         {
@@ -4244,8 +4278,15 @@ static bool isClassValue(const ExternType* cls, NotNull<BuiltinTypes> builtinTyp
 }
 
 // Luwu Traits (rfcs/classes/traits.md): writing a `shared` field through an object, which the runtime refuses with the
-// same message. The receiver is named as written when it's a name, and by its class otherwise.
-void TypeChecker2::reportSharedFieldWrite(const ExternType* cls, const AstExpr* objectExpr, const std::string& prop, const Location& location)
+// same message. The receiver is named as written when it's a name, and by its class otherwise. A scoped field's `prop` is
+// `Trait.name`, after a ':' `separator`.
+void TypeChecker2::reportSharedFieldWrite(
+    const ExternType* cls,
+    const AstExpr* objectExpr,
+    const std::string& prop,
+    const Location& location,
+    const char* separator
+)
 {
     std::string receiver = cls->name;
     if (const AstExprLocal* local = objectExpr ? objectExpr->as<AstExprLocal>() : nullptr)
@@ -4254,12 +4295,71 @@ void TypeChecker2::reportSharedFieldWrite(const ExternType* cls, const AstExpr* 
         receiver = global->name.value;
 
     std::string message = format(
-        "%s.%s is shared between all objects of its class and cannot be mutated through this object; mutate it through class '%s' instead",
+        "%s%s%s is shared between all objects of its class and cannot be mutated through this object; mutate it through class '%s' instead",
         receiver.c_str(),
+        separator,
         prop.c_str(),
         cls->name.c_str()
     );
     reportError(GenericError{std::move(message)}, location);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): whether `objectTy` is an object whose class implements the trait `trait` (an object type),
+// or one named `traitName` when `trait` is null
+static bool implementsTrait(TypeId objectTy, TypeId trait, const std::string& traitName)
+{
+    const ExternType* object = get<ExternType>(follow(objectTy));
+    if (!object)
+        return false;
+
+    for (TypeId implemented : object->implementedTraits)
+    {
+        const ExternType* implementedType = get<ExternType>(follow(implemented));
+        bool matches = trait ? follow(implemented) == follow(trait) : implementedType && implementedType->name == traitName;
+        if (matches)
+            return true;
+    }
+
+    return false;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the runtime's rules for `obj:Trait.name` and `Class:Trait.name` on a member of
+// `trait`: a per-object scoped field goes through an object and a static scoped member through the class, and only a
+// scoped field that isn't const is written
+void TypeChecker2::checkScopedMemberAccess(AstExprIndexName* indexName, const ExternType* trait, ValueContext context)
+{
+    const ExternType::TraitInfo& info = *trait->traitInfo;
+    const std::string& name = indexName->index.value;
+    std::string member = trait->name + "." + name;
+
+    const ExternType* receiver = get<ExternType>(follow(lookupType(indexName->expr)));
+    if (!receiver)
+        return;
+
+    bool throughClass = isClassValue(receiver, builtinTypes);
+    std::optional<TypeId> objectType = throughClass ? objectTypeOfClassValue(builtinTypes, lookupType(indexName->expr)) : std::nullopt;
+    const ExternType* cls = objectType ? get<ExternType>(follow(*objectType)) : receiver;
+    if (!cls)
+        return;
+
+    const char* verb = context == ValueContext::LValue ? "write" : "read";
+    const Location& location = indexName->location;
+
+    if (throughClass && info.scopedObjectFields.count(name))
+        reportError(
+            GenericError{format("%s:%s is a field of each object; %s it through an object of class '%s'", cls->name.c_str(), member.c_str(), verb, cls->name.c_str())},
+            location
+        );
+    else if (!throughClass && info.scopedStatics.count(name))
+        reportError(GenericError{format("%s:%s is static; %s it through class '%s'", cls->name.c_str(), member.c_str(), verb, cls->name.c_str())}, location);
+    else if (context != ValueContext::LValue)
+        return;
+    else if (!info.scopedFields.count(name))
+        reportError(GenericError{format("Trait '%s' has no scoped field '%s' to write", trait->name.c_str(), name.c_str())}, location);
+    else if (!throughClass && !info.scopedObjectFields.count(name))
+        reportSharedFieldWrite(cls, indexName->expr, member, location, ":");
+    else if (info.scopedConsts.count(name) && (throughClass || !isInitWritingItsSelf(cls, indexName->expr)))
+        reportError(GenericError{format("'%s' is a const field of '%s' and can't be assigned", member.c_str(), cls->name.c_str())}, location);
 }
 
 void TypeChecker2::checkConstPropertyAssignment(
@@ -4362,23 +4462,6 @@ void TypeChecker2::visitExprName(
     checkConstPropertyAssignment(leftType, expr, propName, context, location);
 }
 
-// Luwu Traits (rfcs/classes/traits.md): the type of the function `name` scoped to the trait whose value has type
-// `traitValue` (`scoped function name`)
-static std::optional<TypeId> scopedFunctionOf(TypeId traitValue, const std::string& name)
-{
-    const ExternType* value = get<ExternType>(follow(traitValue));
-    const Obj* object = value && value->relation ? get_if<Obj>(&*value->relation) : nullptr;
-    const ExternType* trait = object ? get<ExternType>(follow(object->ty)) : nullptr;
-    if (!trait || !trait->traitInfo)
-        return std::nullopt;
-
-    auto scoped = trait->traitInfo->scopedFunctions.find(name);
-    if (scoped == trait->traitInfo->scopedFunctions.end())
-        return std::nullopt;
-
-    return scoped->second;
-}
-
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
 {
     // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name` reads `Trait.name`, or the trait's scoped function `name`, which
@@ -4387,10 +4470,21 @@ void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
     {
         visit(indexName->expr, ValueContext::RValue);
 
-        if (scopedFunctionOf(lookupType(indexName->qualifiedTrait), indexName->index.value))
+        TypeId traitValue = lookupType(indexName->qualifiedTrait);
+        const ExternType* trait = traitOfValue(traitValue);
+        bool scoped = trait && scopedMemberOf(traitValue, indexName->index.value);
+
+        // `obj:[expr]` with an `expr` that isn't a known trait is checked at runtime
+        bool unknownTrait = indexName->dynamicTrait && !trait;
+        // a write to a trait's member that isn't a scoped field is checkScopedMemberAccess's to report
+        bool traitWrite = trait && context == ValueContext::LValue;
+        if (scoped || unknownTrait || traitWrite)
             visit(indexName->qualifiedTrait, ValueContext::RValue);
         else
             visitExprName(indexName->qualifiedTrait, indexName->location, indexName->index.value, context, builtinTypes->stringType, '.');
+
+        if (scoped || traitWrite)
+            checkScopedMemberAccess(indexName, trait, context);
         return;
     }
 
@@ -4460,7 +4554,12 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
                 reportError(PropertyAccessViolation{exprType, "indexer", PropertyAccessViolation::CannotWrite}, indexExpr->location);
         }
         else
-            reportError(DynamicPropertyLookupOnExternTypesUnsafe{exprType}, indexExpr->location);
+        {
+            // Luwu Traits (rfcs/classes/traits.md): `cat[Animal]` for `cat:Animal.species`
+            std::optional<TypeId> trait = traitOfValue(indexType) ? objectTypeOfClassValue(builtinTypes, indexType) : std::nullopt;
+            bool traitScoped = trait && implementsTrait(exprType, *trait, "");
+            reportError(DynamicPropertyLookupOnExternTypesUnsafe{exprType, traitScoped, helpifier.enabled}, indexExpr->location);
+        }
     }
     else if (get<UnionType>(exprType) && isOptional(exprType))
     {
@@ -8268,6 +8367,15 @@ static bool isFieldOfItsObjects(TypeId tableTy, const std::string& prop)
 
 void TypeChecker2::reportMissingProperty(TypeErrorData error, TypeId tableTy, const std::string& prop, const std::string& receiver, const Location& location)
 {
+    // `cat.Animal` for `cat:Animal.species`
+    if (UnknownProperty* unknown = get_if<UnknownProperty>(&error); unknown && implementsTrait(tableTy, nullptr, prop))
+    {
+        unknown->traitScoped = true;
+        unknown->showHelp = helpifier.enabled;
+        reportError(std::move(error), location);
+        return;
+    }
+
     // A field read off its class is spelled right, so it's never a typo
     if (UnknownProperty* unknown = get_if<UnknownProperty>(&error); unknown && isFieldOfItsObjects(tableTy, prop))
     {
