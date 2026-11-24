@@ -4642,7 +4642,7 @@ struct Compiler
                 {
                     const AstClassMethod* method = member.get_if<AstClassMethod>();
 
-                    bool traitOnly = method && (classFunctionPlacementFlags(trait, *method) & LBC_CLASSMEMBER_TRAITONLY) != 0;
+                    bool traitOnly = method && (classFunctionPlacementFlags(*method) & LBC_CLASSMEMBER_TRAITONLY) != 0;
                     if (!method || method->expectLocation || traitOnly)
                         continue;
 
@@ -4663,15 +4663,9 @@ struct Compiler
         }
     }
 
-    // Luwu Traits (rfcs/classes/traits.md): the placement bits of a class's or trait's function. A method is shared and a
-    // function without `self` static, unless it says otherwise. A metamethod is never static: the VM finds it by name.
-    // A trait's factory and hook belong to the trait alone.
-    static uint16_t classFunctionPlacementFlags(AstStatClass* decl, const AstClassMethod& method)
+    // Luwu Traits (rfcs/classes/traits.md): the placement bits of a class's or trait's function (effectivePlacement)
+    static uint16_t classFunctionPlacementFlags(const AstClassMethod& method)
     {
-        bool hook = decl->isTrait && (method.functionName == "__create" || method.functionName == "__implemented");
-        if (hook && method.placement == AstClassMemberPlacement::Default)
-            return LBC_CLASSMEMBER_STATIC | LBC_CLASSMEMBER_TRAITONLY;
-
         // a scoped function is placed like any other, in the trait's slot of the class
         uint16_t scoped = method.scopedLocation ? LBC_CLASSMEMBER_SCOPED : 0;
 
@@ -4887,7 +4881,7 @@ struct Compiler
                             int methodNameCid = bytecode.addConstantString(sref(method.functionName));
                             checkConstant(methodNameCid, method.nameLocation);
 
-                            uint16_t flags = LBC_CLASSMEMBER_EXPECTED | expectTargetFlags(method.expectTarget) | classFunctionPlacementFlags(decl, method);
+                            uint16_t flags = LBC_CLASSMEMBER_EXPECTED | expectTargetFlags(method.expectTarget) | classFunctionPlacementFlags(method);
                             if (method.visibility == AstClassMemberVisibility::Private)
                                 flags |= LBC_CLASSMEMBER_PRIVATE;
                             if (method.isOptional)
@@ -4909,7 +4903,7 @@ struct Compiler
                         int methodNameCid = bytecode.addConstantString(sref(method.functionName));
                         checkConstant(methodNameCid, method.function->location);
 
-                        uint16_t flags = classFunctionPlacementFlags(decl, method);
+                        uint16_t flags = classFunctionPlacementFlags(method);
                         if (method.visibility == AstClassMemberVisibility::Private)
                             flags |= LBC_CLASSMEMBER_PRIVATE;
                         if (method.finalLocation)

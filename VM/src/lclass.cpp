@@ -17,10 +17,40 @@
 #include "lvm.h"
 #include "lbytecode.h"
 
+#include "Luau/ClassMemberNames.h"
+
 #include <stdio.h>
 #include <string.h>
 
 LUAU_FASTFLAG(LuauCIProto)
+
+// The members the compiler synthesizes for the VM to call. Users can't declare them: names starting with `__` are reserved.
+// Every name the VM reserves for class and trait internals starts with `__`. Checked per member, so ordinary names
+// skip looking the reserved ones up.
+static bool luaR_hasreservedprefix(TString* name)
+{
+    return name->len >= 2 && getstr(name)[0] == '_' && getstr(name)[1] == '_';
+}
+
+static bool luaR_isvminternalname(TString* name)
+{
+    if (!luaR_hasreservedprefix(name))
+        return false;
+
+    const Luau::ClassMemberName* special = Luau::findClassMemberName(getstr(name));
+    return special && special->kind == Luau::ClassMemberNameKind::Internal;
+}
+
+// Members of a trait that implementing classes don't get: the functions the VM calls itself (the trait's `__init` slot
+// has no name at all, see luaR_sealclassshape).
+static bool luaR_istraitinternal(TString* name)
+{
+    if (!luaR_hasreservedprefix(name))
+        return false;
+
+    const Luau::ClassMemberName* special = Luau::findClassMemberName(getstr(name));
+    return special && special->kind == Luau::ClassMemberNameKind::Internal && special->traitAlone;
+}
 
 // Continuation for luaR_createobject: runs after a custom __init returns (possibly across a yield),
 // leaving the freshly-constructed object as the constructor's single result. See luaR_createobject.
@@ -175,15 +205,11 @@ void luaR_sealclassshape(lua_State* L, LuauClass* classdef)
     // blocked, which raises the trait's error.
     if (classdef->istrait)
     {
-        TString* traitinit = luaS_newliteral(L, "__traitinit");
-        TString* needs = luaS_newliteral(L, "__needs");
-
         for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
         {
             TString* name = classdef->offsettomember[i];
             bool isfunction = i >= classdef->numberofinstancemembers;
-            bool readable = isfunction && name && name != traitinit && name != needs &&
-                            !(classdef->memberflags[i] & LBC_CLASSMEMBER_EXPECTED);
+            bool readable = isfunction && name && !luaR_istraitinternal(name) && !(classdef->memberflags[i] & LBC_CLASSMEMBER_EXPECTED);
 
             if (!readable)
                 classdef->memberflags[i] |= LBC_CLASSMEMBER_INITBLOCKED;
@@ -263,23 +289,6 @@ bool luaR_isvminternalfunction(lua_State* L, const Closure* cl)
         return cl == L->global->traitinitrunner;
 
     return (cl->l.p->flags & LPF_VM_INTERNAL) != 0;
-}
-
-// The members the compiler synthesizes for the VM to call. Users can't declare them: names starting with `__` are reserved.
-// Every name the VM reserves for class and trait internals starts with `__`. Checked per member, so ordinary names
-// skip looking the reserved ones up.
-static bool luaR_hasreservedprefix(TString* name)
-{
-    return name->len >= 2 && getstr(name)[0] == '_' && getstr(name)[1] == '_';
-}
-
-static bool luaR_isvminternalname(lua_State* L, TString* name)
-{
-    if (!luaR_hasreservedprefix(name))
-        return false;
-
-    return name == luaS_newliteral(L, "__defaults") || name == luaS_newliteral(L, "__implements") ||
-           name == luaS_newliteral(L, "__traitinit") || name == luaS_newliteral(L, "__needs");
 }
 
 bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl)
@@ -587,7 +596,7 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
         luaR_stampownerclass(L, mcl->l.p, classdef);
 
     // Runtime copies of a trait's `__traitinit` copy the proto's flags, so they are internal too (luaR_copyproto)
-    if (!mcl->isC && luaR_isvminternalname(L, name))
+    if (!mcl->isC && luaR_isvminternalname(name))
         mcl->l.p->flags |= LPF_VM_INTERNAL;
 
     // Luwu Traits (rfcs/classes/traits.md): a trait's method is read through the trait as a dispatcher to the receiver's class, which keeps
@@ -627,8 +636,10 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
         classdef->podimplementsoffset = offsetint;
     }
 
-    // Only metamethods in the parser's allowlist are supported (see ALLOWED_METAMETHODS in Parser.cpp)
-    bool isMetamethod = (name == luaS_newlstr(L, "__tostring", 10));
+    // Only the metamethods the parser allows reach here (Luau::ClassMemberNameKind::Metamethod), `__tostring` the one that
+    // isn't a tag method
+    const Luau::ClassMemberName* special = luaR_hasreservedprefix(name) ? Luau::findClassMemberName(getstr(name)) : NULL;
+    bool isMetamethod = special && special->kind == Luau::ClassMemberNameKind::Metamethod;
     for (int i = 0; i < TM_N && !isMetamethod; i++)
         isMetamethod = (name == L->global->tmname[i]);
 
@@ -1336,21 +1347,11 @@ static Closure* luaR_classtraitfunction(lua_State* L, LuauClass* classdef, const
     return luaR_copytraitfunction(L, clvalue(fn));
 }
 
-// Members of a trait that implementing classes don't get: the functions the VM calls itself (the trait's `__init` slot
-// has no name at all, see luaR_sealclassshape).
-static bool luaR_istraitinternal(lua_State* L, TString* name)
-{
-    if (!luaR_hasreservedprefix(name))
-        return false;
-
-    return name == luaS_newliteral(L, "__traitinit") || name == luaS_newliteral(L, "__needs");
-}
-
 // Luwu Traits (rfcs/classes/traits.md): whether a read qualified with `trait` reaches its member `name` at `offset` (nil
 // when the trait has none): a function, or a scoped field. The VM's internal functions aren't reached.
 static bool luaR_isqualifiable(lua_State* L, const LuauClass* trait, const TValue* offset, TString* name)
 {
-    if (ttisnil(offset) || luaR_istraitinternal(L, name))
+    if (ttisnil(offset) || luaR_istraitinternal(name))
         return false;
 
     uint32_t off = uint32_t(nvalue(offset));
@@ -2183,7 +2184,7 @@ void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, const LuauClas
     LUAU_ASSERT(!(trait->memberflags[off] & LBC_CLASSMEMBER_EXPECTED));
     const TValue* fn = luaR_traitownfunction(trait, off);
 
-    if (luaR_isvminternalname(L, name))
+    if (luaR_isvminternalname(name))
         clvalue(copy)->l.p->flags |= LPF_VM_INTERNAL;
 
     if (!classdef->compiledtraitcopies)
@@ -2473,7 +2474,7 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
             bool isclassfield = (flags & LBC_CLASSMEMBER_CLASSFIELD) != 0;
 
             // a `traitonly` member, the trait's `__create` and `__implemented` among them, belongs to the trait alone
-            bool provided = name && !(flags & (LBC_CLASSMEMBER_EXPECTED | LBC_CLASSMEMBER_TRAITONLY)) && !luaR_istraitinternal(L, name) &&
+            bool provided = name && !(flags & (LBC_CLASSMEMBER_EXPECTED | LBC_CLASSMEMBER_TRAITONLY)) && !luaR_istraitinternal(name) &&
                             !luaR_isscoped(trait, off);
             if (!provided)
                 continue;

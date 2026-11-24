@@ -3,6 +3,7 @@
 
 #include "Luau/ApplyTypeFunction.h"
 #include "Luau/Ast.h"
+#include "Luau/ClassMemberNames.h"
 #include "Luau/AstUtils.h"
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/BuiltinTypeFunctions.h"
@@ -154,11 +155,12 @@ static std::optional<TypePackId> variadicTailOf(const FunctionType* function)
     return std::nullopt;
 }
 
-// Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get: its expected constructor,
-// its factory and its `__implemented` hook
+// Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get by their name: its expected
+// constructor, its factory and its `__implemented` hook (ClassMemberName::traitAlone)
 static bool belongsToTraitAlone(const std::string& name)
 {
-    return name == "__init" || name == "__create" || name == "__implemented";
+    const ClassMemberName* special = findClassMemberName(name.c_str());
+    return special && special->traitAlone;
 }
 
 // Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get, with its `traitonly` ones
@@ -252,9 +254,8 @@ static bool signatureNamesSelf(AstExprFunction* fn)
 
 static bool isValidClassMetamethod(const Name& name)
 {
-    return name == "__call" || name == "__concat" || name == "__unm" || name == "__add" || name == "__sub" || name == "__mul" || name == "__div" ||
-           name == "__mod" || name == "__pow" || name == "__tostring" || name == "__eq" || name == "__lt" || name == "__le" || name == "__iter" ||
-           name == "__len" || name == "__idiv";
+    const ClassMemberName* special = findClassMemberName(name.c_str());
+    return special && special->kind == ClassMemberNameKind::Metamethod;
 }
 
 static std::optional<AstExpr*> matchRequire(const AstExprCall& call)

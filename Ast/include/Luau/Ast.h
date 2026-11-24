@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include "Luau/ClassMemberNames.h"
 #include "Luau/Common.h"
 #include "Luau/Location.h"
 #include "Luau/Variant.h"
@@ -1394,6 +1395,10 @@ enum class AstClassExpectTarget
 // The keyword a placement is written with; nullptr for `Default`
 const char* toString(AstClassMemberPlacement placement);
 
+// Luwu Traits (rfcs/classes/traits.md): a written placement as the member name registry spells it (ClassMemberNames.h).
+// `Default` isn't a placement anyone writes; it maps to `Shared`.
+ClassMemberNamePlacement toClassMemberNamePlacement(AstClassMemberPlacement placement);
+
 template<>
 std::optional<AstClassMemberVisibility> fromString<AstClassMemberVisibility>(std::string_view s);
 
@@ -1474,9 +1479,9 @@ struct AstClassMethod
 using AstClassMember = Variant<AstClassProperty, AstClassMethod>;
 
 // Luwu Traits (rfcs/classes/traits.md): where a function lives when it's written without `shared`, `static` or
-// `traitonly`: a method (`self`) and a metamethod are shared, and any other function, a class method (`Self`) among them,
-// is static. A placement written on the function is returned as written. A trait's `__create` and `__implemented` belong
-// to the trait alone, which the caller decides.
+// `traitonly`: a name the language gives a meaning has its own placement (ClassMemberNames.h), a method (`self`) is
+// shared, and any other function, a class method (`Self`) among them, is static. A placement written on the function is
+// returned as written.
 AstClassMemberPlacement effectivePlacement(const AstClassMethod& method);
 
 // Luwu Classes (rfcs/classes): the access specifier and modifiers written directly on a primary

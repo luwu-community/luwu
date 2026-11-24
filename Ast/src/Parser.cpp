@@ -2,6 +2,7 @@
 #include "Luau/Parser.h"
 
 #include "Luau/Ast.h"
+#include "Luau/ClassMemberNames.h"
 #include "Luau/Common.h"
 #include "Luau/StringUtils.h"
 #include "Luau/TimeTrace.h"
@@ -2471,38 +2472,6 @@ AstStat* Parser::parseTypeAlias(
     return node;
 }
 
-namespace
-{
-
-const std::unordered_set<std::string> ALLOWED_METAMETHODS{
-    "__call",
-    "__concat",
-    "__unm",
-    "__add",
-    "__sub",
-    "__mul",
-    "__div",
-    "__mod",
-    "__pow",
-    "__tostring",
-    "__eq",
-    "__lt",
-    "__le",
-    "__iter",
-    "__len",
-    "__idiv",
-};
-
-const std::unordered_set<std::string> EXPLICITLY_DISALLOWED_METAMETHODS{
-    "__index",
-    "__newindex",
-    "__mode",
-    "__metatable",
-    "__type",
-};
-
-} // namespace
-
 // Luwu Classes (rfcs/classes): parse the parameter list of a class's primary constructor, e.g. the
 // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`. Each parameter also declares a field
 // of the same name, public and mutable unless qualified. The list is compiled into a synthesized `__init`.
@@ -3665,7 +3634,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
             // Luwu Traits (rfcs/classes/traits.md): `__ok` is an ordinary field, which tells the `?` operators whether a value
             // is ok
-            if (strncmp(propName->name.value, "__", 2) == 0 && propName->name != "__ok" && !qualifiedTrait)
+            const ClassMemberName* special = findClassMemberName(propName->name.value);
+            bool fieldName = special && special->kind == ClassMemberNameKind::Field;
+            if (strncmp(propName->name.value, "__", 2) == 0 && !fieldName && !qualifiedTrait)
                 report(propName->location, "%s fields cannot start with '__'", isTrait ? "Trait" : "Class");
 
             if (expectLocation && equalsLocation)
@@ -3826,14 +3797,14 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             }
 
             bool scopedOrQualified = scopedLocation || qualifiedTrait;
-            bool hookName = name.name == "__init" || name.name == "__create" || name.name == "__implemented";
-            bool specialName =
-                hookName || ALLOWED_METAMETHODS.count(name.name.value) > 0 || EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0;
+            // Luwu Classes (rfcs/classes): a function name the language gives a meaning, which the VM looks up itself
+            const ClassMemberName* special = findClassMemberName(name.name.value);
+            bool specialName = special && special->kind != ClassMemberNameKind::Field && special->kind != ClassMemberNameKind::Internal;
 
-            // Luwu Traits (rfcs/classes/traits.md): the VM finds these where they always are, so only a trait's own hooks
-            // can be marked as the trait's alone, which they are anyway
-            bool placedSpecialName = placementLocation && specialName && !scopedLocation &&
-                                     !(hookName && placement == AstClassMemberPlacement::TraitOnly);
+            // Luwu Traits (rfcs/classes/traits.md): the VM finds these where they always are, so a placement modifier can only
+            // restate the one a name already has (`traitonly function __create`)
+            bool placedSpecialName =
+                placementLocation && specialName && !scopedLocation && !allowsPlacement(*special, toClassMemberNamePlacement(placement));
             if (placedSpecialName)
                 report(*placementLocation, "'%s' can't be '%s'", name.name.value, toString(placement));
 
@@ -3920,10 +3891,10 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                     if (!takesSelf && body->argLocation)
                         report(name.location, "'__init' must take 'self' as its first parameter");
                 }
-                else if (EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0)
+                else if (special && special->kind == ClassMemberNameKind::ForbiddenMetamethod)
                     report(name.location, "%s cannot define '%s' as a metamethod", isTrait ? "Traits" : "Classes", name.name.value);
                 // Luwu: not while the parameter list is missing, which is how a special name being typed (`__ini`) reads
-                else if (ALLOWED_METAMETHODS.count(name.name.value) == 0 && body->argLocation)
+                else if (!(special && special->kind == ClassMemberNameKind::Metamethod) && body->argLocation)
                     report(name.location, "Cannot use '%s' as a method name: names starting with '__' are reserved", name.name.value);
             }
 
