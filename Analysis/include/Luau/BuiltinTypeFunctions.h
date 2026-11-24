@@ -47,17 +47,23 @@ struct BuiltinTypeFunctions
     TypeFunction setmetatableFunc;
     TypeFunction getmetatableFunc;
 
-    TypeFunction objectofFunc;
+    TypeFunction objectFunc;
     TypeFunction classFunc;
 
     TypeFunction weakoptionalFunc;
     // Luwu: `unlessnever<refined, fallback, tests...>` is `refined`, or `fallback` when `refined` is uninhabited
     // because tests on one property contradict each other (one of `tests` is uninhabited). See applyRefinements.
     TypeFunction unlessneverFunc;
+    // Luwu try expressions: `raises<F>` is what calling F can raise: the error hints of F (each overload's, for an
+    // intersection) joined with weakunknown, or weakunknown alone. `try f()` types its error with it.
+    TypeFunction raisesFunc;
 
     void addToScope(NotNull<TypeArena> arena, NotNull<Scope> scope) const;
 };
 
 const BuiltinTypeFunctions& builtinTypeFunctions_DEPRECATED();
+
+// Luwu Classes (rfcs/classes): the object type of a class or trait value (what `object<C>` gives), or nullopt for any other type
+std::optional<TypeId> objectTypeOfClassValue(NotNull<BuiltinTypes> builtinTypes, TypeId classValue);
 
 } // namespace Luau

@@ -27,6 +27,9 @@ namespace CodeGen
 namespace A64
 {
 
+// Luwu collections: where a `Vec`'s or `VecDeque`'s storage member is in the object
+static const int kStorageMemberOffset = int(LUAR_OBJECT_MEMBERS_OFFSET + LUAR_STORAGE_MEMBER * sizeof(TValue));
+
 inline ConditionA64 getConditionFP(IrCondition cond)
 {
     switch (cond)
@@ -417,6 +420,11 @@ static void emitClassMemberAuthA64(
     {
         build.tst(flagw, uint32_t(LBC_CLASSMEMBER_CONST));
         build.b(ConditionA64::Equal, authorized); // private but not const: authorized
+
+        // Luwu Traits (rfcs/classes/traits.md): a final field is written only by a trait initializer, which the interpreter
+        // authorizes (luaR_checkconstassign)
+        build.tst(flagw, uint32_t(LBC_CLASSMEMBER_FINAL));
+        build.b(ConditionA64::NotEqual, mismatch);
 
         // the flag and the mask are dead from here on, so they hold the index arithmetic
         RegisterA64 tempw = maskw;
@@ -2936,6 +2944,114 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             emitAbort(build, abort);
         break;
     }
+    case IrCmd::INVOKE_FAST_METHOD:
+    {
+        RegisterA64 object = regOp(OP_A(inst)); // note: we need to call regOp before spill so that we don't do redundant reloads
+        regs.spill(index, {object});
+        build.mov(x1, object);
+        build.mov(x0, rState);
+        build.mov(w2, uintOp(OP_B(inst)));
+        build.mov(w3, vmRegOp(OP_C(inst)));
+        build.mov(w4, intOp(OP_D(inst)));
+        build.mov(w5, intOp(OP_E(inst)));
+        build.ldr(x6, mem(rNativeContext, offsetof(NativeContext, invokeFastMethod)));
+        build.blr(x6);
+        inst.regA64 = regs.takeReg(w0, index);
+        break;
+    }
+    case IrCmd::CHECK_STORAGE:
+    {
+        // Luwu collections: see the X64 lowering
+        Label fresh; // used when guard aborts execution or jumps to a VM exit
+        Label& fail = getTargetLabel(OP_C(inst), index, fresh);
+        RegisterA64 object = regOp(OP_A(inst));
+        RegisterA64 temp = regs.allocTemp(KindA64::w);
+        int kind = intOp(OP_B(inst));
+
+        build.ldrb(temp, mem(object, offsetof(LuauObject, storagekind)));
+        if (kind == LUAR_STORAGE_CONTAINER)
+        {
+            build.tst(temp, uint32_t(LUAR_STORAGE_CONTAINER));
+            build.b(ConditionA64::Equal, fail);
+        }
+        else
+        {
+            build.cmp(temp, uint16_t(kind));
+            build.b(ConditionA64::NotEqual, fail);
+        }
+        build.ldr(temp, mem(object, kStorageMemberOffset + offsetof(TValue, tt)));
+        build.cmp(temp, uint16_t(LUA_TLIGHTUSERDATA));
+        build.b(ConditionA64::NotEqual, fail);
+        finalizeTargetLabel(OP_C(inst), index, fresh);
+        break;
+    }
+    case IrCmd::LOAD_STORAGE:
+        inst.regA64 = regs.allocReuse(KindA64::x, index, {OP_A(inst)});
+        build.ldr(inst.regA64, mem(regOp(OP_A(inst)), kStorageMemberOffset + offsetof(TValue, value)));
+        break;
+    case IrCmd::LOAD_STORAGE_INT:
+        inst.regA64 = regs.allocReg(KindA64::w, index);
+        build.ldr(inst.regA64, mem(regOp(OP_A(inst)), intOp(OP_B(inst))));
+        break;
+    case IrCmd::STORE_STORAGE_INT:
+    {
+        AddressA64 addr = mem(regOp(OP_A(inst)), intOp(OP_B(inst)));
+        if (OP_C(inst).kind == IrOpKind::Constant && intOp(OP_C(inst)) == 0)
+            build.str(wzr, addr);
+        else
+            build.str(tempInt(OP_C(inst)), addr);
+        break;
+    }
+    case IrCmd::GET_STORAGE_ENTRY_ADDR:
+    {
+        // Luwu collections: items[(head + B) & (capacity - 1)]
+        RegisterA64 storage = regOp(OP_A(inst));
+        RegisterA64 slot = regs.allocTemp(KindA64::w);
+        RegisterA64 mask = regs.allocTemp(KindA64::w);
+        inst.regA64 = regs.allocReg(KindA64::x, index);
+
+        build.ldr(slot, mem(storage, offsetof(LuauStorage, head)));
+        build.add(slot, slot, tempInt(OP_B(inst)));
+        build.ldr(mask, mem(storage, offsetof(LuauStorage, capacity)));
+        build.sub(mask, mask, uint16_t(1));
+        build.and_(slot, slot, mask);
+        build.add(inst.regA64, storage, slot, kTValueSizeLog2); // implicit uxtw
+        build.add(inst.regA64, inst.regA64, uint16_t(offsetof(LuauStorage, items)));
+        break;
+    }
+    case IrCmd::CHECK_STORAGE_ELEMENT:
+    {
+        // Luwu collections: see the X64 lowering
+        Label fresh; // used when guard aborts execution or jumps to a VM exit
+        Label& fail = getTargetLabel(OP_D(inst), index, fresh);
+        Label matched;
+        RegisterA64 storage = regOp(OP_A(inst));
+        RegisterA64 temp = regs.allocTemp(KindA64::w);
+        RegisterA64 lclass = regs.allocTemp(KindA64::x);
+        RegisterA64 expected = regs.allocTemp(KindA64::x);
+        bool knownNotObject = OP_B(inst).kind == IrOpKind::Constant && tagOp(OP_B(inst)) != LUA_TOBJECT;
+
+        build.ldrb(temp, mem(storage, offsetof(LuauStorage, elementtag)));
+        if (OP_B(inst).kind == IrOpKind::Constant)
+            build.cmp(temp, uint16_t(tagOp(OP_B(inst))));
+        else
+            build.cmp(temp, regOp(OP_B(inst)));
+        build.b(ConditionA64::NotEqual, fail);
+
+        if (!knownNotObject)
+        {
+            build.cmp(temp, uint16_t(LUA_TOBJECT));
+            build.b(ConditionA64::NotEqual, matched);
+            build.ldr(lclass, mem(regOp(OP_C(inst)), offsetof(LuauObject, lclass)));
+            build.ldr(expected, mem(storage, offsetof(LuauStorage, elementclass)));
+            build.cmp(lclass, expected);
+            build.b(ConditionA64::NotEqual, fail);
+            build.setLabel(matched);
+        }
+
+        finalizeTargetLabel(OP_D(inst), index, fresh);
+        break;
+    }
     case IrCmd::OBJECT_MEMBER_ADDR:
     {
         // See the X64 lowering: proven or freshly allocated object, constant offset, no check of any kind and no branch.
@@ -2960,6 +3076,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+    case IrCmd::CHECK_CLASS_ALLOCATABLE:
     {
         // See the X64 lowering.
         Label fresh;
@@ -2968,8 +3085,16 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         RegisterA64 tempw = regs.allocTemp(KindA64::w);
         RegisterA64 tempx = regs.allocTemp(KindA64::x);
 
-        build.ldr(tempx, mem(classReg, offsetof(LuauClass, memberdefaults)));
-        build.cbnz(tempx, fail);
+        if (inst.cmd == IrCmd::CHECK_CLASS_ALLOCATABLE)
+        {
+            build.ldrb(tempw, mem(classReg, offsetof(LuauClass, traitspending)));
+            build.cbnz(tempw, fail);
+        }
+        else
+        {
+            build.ldr(tempx, mem(classReg, offsetof(LuauClass, memberdefaults)));
+            build.cbnz(tempx, fail);
+        }
 
         Label constructible;
         build.ldrb(tempw, mem(classReg, offsetof(LuauClass, hascustominit)));
@@ -2992,12 +3117,15 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         break;
     }
     case IrCmd::NEW_OBJECT:
+    case IrCmd::NEW_OBJECT_DEFAULTS:
     {
+        size_t allocator = inst.cmd == IrCmd::NEW_OBJECT ? offsetof(NativeContext, luaR_newobjectuninit) : offsetof(NativeContext, luaR_newobject);
+
         RegisterA64 reg = regOp(OP_A(inst)); // note: we need to call regOp before spill so that we don't do redundant reloads
         regs.spill(index, {reg});
         build.mov(x1, reg);
         build.mov(x0, rState);
-        build.ldr(x2, mem(rNativeContext, offsetof(NativeContext, luaR_newobjectuninit)));
+        build.ldr(x2, mem(rNativeContext, int(allocator)));
         build.blr(x2);
         inst.regA64 = regs.takeReg(x0, index);
         break;
@@ -3639,6 +3767,36 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeNEWCLASSMEMBER), uintOp(OP_A(inst)));
         break;
+    case IrCmd::FALLBACK_GETQUALIFIED:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_D(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executeGETQUALIFIED), uintOp(OP_A(inst)));
+        break;
+    case IrCmd::FALLBACK_TABLEBUNDLE:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_D(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executeTABLEBUNDLE), uintOp(OP_A(inst)));
+        break;
+    case IrCmd::FALLBACK_INITTRAITS:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_C(inst).kind == IrOpKind::VmReg);
+        CODEGEN_ASSERT(OP_D(inst).kind == IrOpKind::Constant);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executeINITTRAITS), uintOp(OP_A(inst)));
+        break;
+    case IrCmd::FALLBACK_WRAPRESULT:
+        CODEGEN_ASSERT(OP_B(inst).kind == IrOpKind::VmReg);
+
+        regs.spill(index);
+        emitFallback(build, offsetof(NativeContext, executeWRAPRESULT), uintOp(OP_A(inst)));
+        break;
     case IrCmd::FALLBACK_FORGPREP:
         regs.spill(index);
         emitFallback(build, offsetof(NativeContext, executeFORGPREP), uintOp(OP_A(inst)));
@@ -3650,6 +3808,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     case IrCmd::SUBSTITUTE:
     case IrCmd::MARK_USED:
     case IrCmd::MARK_DEAD:
+    case IrCmd::MARK_TRY_READS:
         CODEGEN_ASSERT(!"Pseudo instructions should not be lowered");
         break;
 
@@ -3838,10 +3997,23 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     }
     case IrCmd::GET_TYPE:
     {
+        // Luwu Traits (rfcs/classes/traits.md): a class value whose class is a trait has the type "trait", which its tag can't tell
+        bool mayBeTrait = HAS_OP_B(inst) && OP_B(inst).kind == IrOpKind::VmReg &&
+                          (OP_A(inst).kind == IrOpKind::Inst || tagOp(OP_A(inst)) == LUA_TCLASS);
+
+        // Taken before the branch below: taking a register may spill another value, which both paths have to see. Taken
+        // before the compare too, so no spill lands between it and the branch.
+        RegisterA64 temp = mayBeTrait ? regs.allocTemp(KindA64::x) : noreg;
+
+        // compared before the result register is written, so the tag is intact whichever register the allocator picks
+        if (mayBeTrait && OP_A(inst).kind == IrOpKind::Inst)
+            build.cmp(regOp(OP_A(inst)), uint16_t(LUA_TCLASS));
+
         inst.regA64 = regs.allocReg(KindA64::x, index);
 
         CODEGEN_ASSERT(sizeof(TString*) == 8);
 
+        // neither instruction below touches the flags
         if (OP_A(inst).kind == IrOpKind::Inst)
             build.add(inst.regA64, rGlobalState, regOp(OP_A(inst)), 3); // implicit uxtw
         else if (OP_A(inst).kind == IrOpKind::Constant)
@@ -3850,6 +4022,22 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             CODEGEN_ASSERT(!"Unsupported instruction form");
 
         build.ldr(inst.regA64, mem(inst.regA64, offsetof(global_State, ttypename)));
+
+        if (mayBeTrait)
+        {
+            Label notTrait;
+
+            if (OP_A(inst).kind == IrOpKind::Inst)
+                build.b(ConditionA64::NotEqual, notTrait);
+
+            build.ldr(temp, mem(rBase, vmRegOp(OP_B(inst)) * sizeof(TValue) + offsetof(TValue, value)));
+            build.ldrb(castReg(KindA64::w, temp), mem(temp, offsetof(LuauClass, istrait)));
+            build.cbz(castReg(KindA64::w, temp), notTrait);
+
+            build.ldr(inst.regA64, mem(rGlobalState, offsetof(global_State, traittypename)));
+
+            build.setLabel(notTrait);
+        }
         break;
     }
     case IrCmd::GET_TYPEOF:

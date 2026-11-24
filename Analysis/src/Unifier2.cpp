@@ -465,6 +465,13 @@ UnifyResult Unifier2::unify_(TypeId subTy, const FunctionType* superFn)
 
     UnifyResult argResult = unify_(superFn->argTypes, subFn->argTypes);
     UnifyResult retResult = unify_(subFn->retTypes, superFn->retTypes);
+
+    // Luwu try expressions: a function's hint flows into the hint expected of it, so `f: (A...) -> R ! E` given a function
+    // that raises `BadCat` infers `E` as `BadCat`. A function without a hint can raise anything. A hint says what a
+    // function may raise, not what it's allowed to, so a mismatch is never a failure.
+    if (superFn->errorHint)
+        unify_(subFn->errorHint.value_or(builtinTypes->weakUnknownType), *superFn->errorHint);
+
     return argResult & retResult;
 }
 
@@ -638,6 +645,12 @@ UnifyResult Unifier2::unify_(TableType* subTable, const TableType* superTable)
 
 UnifyResult Unifier2::unify_(const ExternType* subExternType, const ExternType* superExternType)
 {
+    // Luwu bundles: bundles of two classes unify by position, so `.(1, "a", true)` passed to an `.(H, T...)` solves `H`
+    // and `T...` (see Subtyping's ExternType case)
+    bool bundlesOfTwoClasses = isBundle(subExternType) && isBundle(superExternType) && subExternType->name != superExternType->name;
+    if (bundlesOfTwoClasses)
+        return unify_(bundlePositionPack(arena, subExternType), bundlePositionPack(arena, superExternType));
+
     // Only positionally unify instantiated type parameters when both extern types stem from the
     // same nominal declaration (see LuwuGenericNominals) -- otherwise this pairing is unrelated
     // (e.g. unifying `Dog` against `Cat`) and there's nothing to propagate between them.

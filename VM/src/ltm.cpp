@@ -88,6 +88,8 @@ void luaT_init(lua_State* L)
         L->global->ttypename[i] = luaS_new(L, luaT_typenames[i]);
         luaS_fix(L->global->ttypename[i]); // never collect these names
     }
+    L->global->traittypename = luaS_new(L, "trait");
+    luaS_fix(L->global->traittypename);
     for (i = 0; i < TM_N; i++)
     {
         L->global->tmname[i] = luaS_new(L, luaT_eventname[i]);
@@ -180,6 +182,14 @@ const TString* luaT_objtypenamestr(lua_State* L, const TValue* o)
         LUAU_ASSERT(mode <= IntegerMode_U64);
         return luaS_new(L, kModeNames[mode]);
     }
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait is a class value, but its type is "trait"
+    if (ttisclass(o) && classvalue(o)->istrait)
+        return L->global->traittypename;
+
+    // Luwu builtin classes: an object of one is named after what it is ("bundle", "vec"), not "object"
+    if (ttisobject(o) && objectvalue(o)->lclass->typeofname)
+        return objectvalue(o)->lclass->typeofname;
 
     // For all types except userdata and table, a global metatable can be set with a global name override
     if (LuaTable* mt = L->global->mt[ttype(o)])

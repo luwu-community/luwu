@@ -20,6 +20,20 @@ namespace Luau
 namespace
 {
 
+// Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): a function's attributes are written
+// before the function, outside its own location, so a finder that only enters nodes containing the position
+// has to check them separately.
+AstAttr* findAttributeContaining(const AstArray<AstAttr*>& attributes, Position pos)
+{
+    for (AstAttr* attr : attributes)
+    {
+        if (attr->location.contains(pos))
+            return attr;
+    }
+
+    return nullptr;
+}
+
 struct AutocompleteNodeFinder : public AstVisitor
 {
     const Position pos;
@@ -38,6 +52,13 @@ struct AutocompleteNodeFinder : public AstVisitor
             ancestry.push_back(expr);
             return true;
         }
+        return false;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): `Self` is one name, though it holds the `class.of(self)` call it compiles to
+    bool visit(AstExprSelfClass* expr) override
+    {
+        visit(static_cast<AstExpr*>(expr));
         return false;
     }
 
@@ -159,9 +180,32 @@ struct FindNode : public AstVisitor
         visit(static_cast<AstNode*>(node));
         if (node->name->location.contains(pos))
             node->name->visit(this);
-        else if (node->func->location.contains(pos))
+        else if (node->func->location.contains(pos) || findAttributeContaining(node->func->attributes, pos))
             node->func->visit(this);
         return false;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): `Self` is one name, though it holds the `class.of(self)` call it compiles to
+    bool visit(AstExprSelfClass* node) override
+    {
+        visit(static_cast<AstNode*>(node));
+        return false;
+    }
+
+    bool visit(AstAttr* attr) override
+    {
+        return visit(static_cast<AstNode*>(attr));
+    }
+
+    bool visit(AstExprFunction* node) override
+    {
+        if (AstAttr* attr = findAttributeContaining(node->attributes, pos))
+        {
+            attr->visit(this);
+            return false;
+        }
+
+        return visit(static_cast<AstNode*>(node));
     }
 
     bool visit(AstStatBlock* block) override
@@ -204,8 +248,32 @@ bool FindFullAncestry::visit(AstStatFunction* node)
     visit(static_cast<AstNode*>(node));
     if (node->name->location.contains(pos))
         node->name->visit(this);
-    else if (node->func->location.contains(pos))
+    else if (node->func->location.contains(pos) || findAttributeContaining(node->func->attributes, pos))
         node->func->visit(this);
+    return false;
+}
+
+bool FindFullAncestry::visit(AstAttr* attr)
+{
+    return visit(static_cast<AstNode*>(attr));
+}
+
+bool FindFullAncestry::visit(AstExprFunction* node)
+{
+    // The function itself stays in the ancestry, so a caller can tell what the attribute is on.
+    if (AstAttr* attr = findAttributeContaining(node->attributes, pos))
+    {
+        nodes.push_back(node);
+        attr->visit(this);
+        return false;
+    }
+
+    return visit(static_cast<AstNode*>(node));
+}
+
+bool FindFullAncestry::visit(AstExprSelfClass* node)
+{
+    visit(static_cast<AstNode*>(node));
     return false;
 }
 
@@ -428,6 +496,13 @@ struct FindExprOrLocal : public AstVisitor
         return false;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): `Self` is one name, though it holds the `class.of(self)` call it compiles to
+    bool visit(AstExprSelfClass* expr) override
+    {
+        visit(static_cast<AstExpr*>(expr));
+        return false;
+    }
+
     bool visitLocal(AstLocal* local)
     {
         if (isCloserMatch(local->location))
@@ -446,10 +521,12 @@ struct FindExprOrLocal : public AstVisitor
 
     bool visit(AstStatLocal* al) override
     {
+        bool matchedVar = false;
         for (size_t i = 0; i < al->vars.size; ++i)
         {
-            visitLocal(al->vars.data[i]);
+            matchedVar |= visitLocal(al->vars.data[i]);
         }
+
         return true;
     }
 
@@ -587,7 +664,7 @@ std::optional<DocumentationSymbol> getDocumentationSymbolAtPosition(const Source
                 {
                     while (etv)
                     {
-                        if (auto propIt = etv->props.find(indexName->index.value); propIt != etv->props.end())
+                        if (auto propIt = etv->props().find(indexName->index.value); propIt != etv->props().end())
                         {
 
                             if (auto ty = propIt->second.readTy)
@@ -651,6 +728,24 @@ std::optional<DocumentationSymbol> getDocumentationSymbolAtPosition(const Source
     }
 
     return std::nullopt;
+}
+
+bool isErrorCall(const AstExprCall* call)
+{
+    const AstExprGlobal* callee = call->func->as<AstExprGlobal>();
+    return callee && callee->name == "error";
+}
+
+AstExprCall* finalErrorCall(const AstExprFunction* fn)
+{
+    if (fn->body->body.size == 0)
+        return nullptr;
+
+    AstStatExpr* expr = fn->body->body.data[fn->body->body.size - 1]->as<AstStatExpr>();
+    AstExprCall* call = expr ? expr->expr->as<AstExprCall>() : nullptr;
+    if (!call || !isErrorCall(call))
+        return nullptr;
+    return call;
 }
 
 } // namespace Luau

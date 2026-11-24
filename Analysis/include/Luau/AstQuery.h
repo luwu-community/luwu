@@ -74,6 +74,13 @@ struct FindFullAncestry final : public AstVisitor
 
     bool visit(AstStatFunction* node) override;
 
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): attributes and their arguments
+    // are part of the ancestry.
+    bool visit(AstAttr* attr) override;
+    bool visit(AstExprFunction* node) override;
+    // Luwu Traits (rfcs/classes/traits.md): `Self` is one name, though it holds the `class.of(self)` call it compiles to
+    bool visit(AstExprSelfClass* node) override;
+
     bool visit(AstNode* node) override;
 };
 
@@ -92,5 +99,12 @@ std::optional<TypeId> findTypeAtPosition(const Module& module, const SourceModul
 std::optional<TypeId> findExpectedTypeAtPosition(const Module& module, const SourceModule& sourceModule, Position pos);
 
 std::optional<DocumentationSymbol> getDocumentationSymbolAtPosition(const SourceModule& source, const Module& module, Position position);
+
+// Luwu try expressions: whether `call` calls the global `error`
+bool isErrorCall(const AstExprCall* call);
+
+// Luwu try expressions: the `error(...)` call that is `fn`'s last statement, if there is one. Reaching it is a bug, not an
+// error the function raises.
+AstExprCall* finalErrorCall(const AstExprFunction* fn);
 
 } // namespace Luau

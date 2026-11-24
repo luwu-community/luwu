@@ -795,6 +795,16 @@ struct BytecodeGraphParser
                 parseJump(op, getJumpTarget(insn, i));
                 break;
 
+            case LOP_INITTRAITS:
+                // Luwu Traits (rfcs/classes/traits.md): lays out the frame of the CALL after it from the registers that CALL
+                // names, which the graph pipeline can't express yet, so a function using it isn't rebuilt
+                return false;
+
+            case LOP_GETTABLEBUNDLE:
+            case LOP_SETTABLEBUNDLE:
+                // Luwu bundles: not supported by the graph pipeline yet
+                return false;
+
             case LOP_ADD:
             case LOP_SUB:
             case LOP_MUL:
@@ -1029,6 +1039,13 @@ struct BytecodeGraphParser
                 addProducer(LUAU_INSN_A(insn), nodeOp);
                 break;
 
+            case LOP_GETQUALIFIED:
+                addVmRegInput(node, LUAU_INSN_B(insn));
+                addVmRegInput(node, LUAU_INSN_C(insn));
+                addVmConstInput(node, aux);
+                addProducer(LUAU_INSN_A(insn), nodeOp);
+                break;
+
             case LOP_SETOBJECTMEMBER:
                 addVmRegInput(node, LUAU_INSN_A(insn));
                 addVmRegInput(node, LUAU_INSN_B(insn));
@@ -1041,6 +1058,11 @@ struct BytecodeGraphParser
                 // form in C (see LOP_NEWOBJECT in Bytecode.h).
                 Reg base = LUAU_INSN_A(insn);
                 int form = LUAU_INSN_C(insn);
+
+                // the APPLY form reads the instance it finishes from A, which the graph pipeline can't express yet, so
+                // a function using it isn't rebuilt
+                if (form == LBC_NEWOBJECT_APPLY)
+                    return false;
 
                 addVmRegInput(node, LUAU_INSN_B(insn));
                 addImmInput(node, static_cast<int32_t>(form));
@@ -1066,10 +1088,30 @@ struct BytecodeGraphParser
 
             case LOP_NEWCLASSMEMBER:
                 LUAU_ASSERT(FFlag::LuwuClasses);
+                // Luwu Classes (rfcs/classes): the constructor reads the same registers as a plain member add, and has no
+                // name constant. Its form goes in as an immediate in the name's place.
+                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_CONSTRUCTOR)
+                {
+                    addVmRegInput(node, LUAU_INSN_A(insn));
+                    addVmRegInput(node, LUAU_INSN_C(insn));
+                    addImmInput(node, int32_t(LBC_NEWCLASSMEMBER_CONSTRUCTOR));
+                    break;
+                }
+
+                // Luwu Traits (rfcs/classes/traits.md): the graph pipeline doesn't support the IMPLEMENTS and TRAITCOPY
+                // forms yet, so a function using them isn't rebuilt. They read other operands than a plain member add.
+                if (LUAU_INSN_B(insn) != 0)
+                    return false;
                 addVmRegInput(node, LUAU_INSN_A(insn));
                 addVmRegInput(node, LUAU_INSN_C(insn));
                 addVmConstInput(node, aux);
                 break;
+
+            case LOP_WRAPRESULT:
+            case LOP_RESULTGET:
+                // Luwu try expressions: a function with protected ranges isn't rebuilt, since the graph has nowhere to
+                // keep them
+                return false;
 
 
             case LOP__COUNT:

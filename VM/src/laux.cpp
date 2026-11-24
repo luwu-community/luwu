@@ -708,6 +708,24 @@ void luaL_pushresultsize(luaL_Strbuf* B, size_t size)
 
 // }======================================================
 
+// Luwu builtin classes: the builtin class at `idx`, or NULL when the value there isn't one. Only class values count, since
+// builtin objects print through their own `__tostring`.
+static LuauClass* builtinclassat(lua_State* L, int idx)
+{
+    const TValue* o = luaA_toobject(L, idx);
+    if (!ttisclass(o))
+        return NULL;
+
+    LuauClass* classdef = classvalue(o);
+    for (int i = 0; i < LUWU_BUILTIN__COUNT; ++i)
+    {
+        if (L->global->builtinclasses[i] == classdef)
+            return classdef;
+    }
+
+    return NULL;
+}
+
 const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
 {
     if (luaL_callmeta(L, idx, "__tostring")) // is there a metafield?
@@ -765,6 +783,13 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
     }
     default:
     {
+        // Luwu builtin classes: a builtin class prints like a primitive, by name and without an address
+        if (LuauClass* builtin = builtinclassat(L, idx))
+        {
+            lua_pushfstring(L, "builtin class %s", getstr(builtin->name));
+            break;
+        }
+
         const void* ptr = lua_topointer(L, idx);
         unsigned long long enc = lua_encodepointer(L, uintptr_t(ptr));
         lua_pushfstring(L, "%s: 0x%016llx", luaL_typename(L, idx), enc);

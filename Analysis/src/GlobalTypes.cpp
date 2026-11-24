@@ -2,8 +2,11 @@
 
 #include "Luau/GlobalTypes.h"
 
+#include "Luau/BuiltinDefinitions.h"
+
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauTruthyFalsy)
 
 namespace Luau
@@ -40,12 +43,16 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
         globalScope->addBuiltinTypeBinding("object", TypeFun{{}, builtinTypes->objectType});
         globalScope->addBuiltinTypeBinding("class", TypeFun{{}, builtinTypes->classType});
     }
+    if (FFlag::LuwuClasses && FFlag::LuwuTraits)
+        globalScope->addBuiltinTypeBinding("trait", TypeFun{{}, builtinTypes->traitType});
 
     unfreeze(*builtinTypes->arena);
     TypeId stringMetatableTy = makeStringMetatable(builtinTypes, mode);
     asMutable(builtinTypes->stringType)->ty.emplace<PrimitiveType>(PrimitiveType::String, stringMetatableTy);
     persist(stringMetatableTy);
     makeVectorMetatable(builtinTypes);
+    if (resultLibraryEnabled())
+        makeNoneMetatable(builtinTypes);
     freeze(*builtinTypes->arena);
 }
 

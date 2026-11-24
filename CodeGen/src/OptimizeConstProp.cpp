@@ -1292,7 +1292,8 @@ struct ConstPropState
         else
         {
             // GET_CLOSURE_UPVAL_ADDR writes aren't cached anywhere else in this pass, nothing to invalidate
-            CODEGEN_ASSERT(targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR);
+            // Luwu collections: neither are GET_STORAGE_ENTRY_ADDR writes
+            CODEGEN_ASSERT(targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR || targetAddr.cmd == IrCmd::GET_STORAGE_ENTRY_ADDR);
         }
     }
 
@@ -1317,7 +1318,11 @@ struct ConstPropState
         }
         else
         {
-            CODEGEN_ASSERT(targetAddr.cmd == IrCmd::TABLE_SETNUM || targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR);
+            // Luwu collections: loads from a GET_STORAGE_ENTRY_ADDR aren't cached, so nothing reads a forwarded store
+            CODEGEN_ASSERT(
+                targetAddr.cmd == IrCmd::TABLE_SETNUM || targetAddr.cmd == IrCmd::GET_CLOSURE_UPVAL_ADDR ||
+                targetAddr.cmd == IrCmd::GET_STORAGE_ENTRY_ADDR
+            );
         }
     }
 
@@ -1539,6 +1544,7 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_RAWGET:
     case LBF_RAWEQUAL:
     case LBF_CLASS_ISINSTANCE:
+    case LBF_CLASS_OF:
     case LBF_TABLE_UNPACK:
     case LBF_VECTOR:
     case LBF_BIT32_COUNTLZ:
@@ -1574,7 +1580,11 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
     case LBF_MATH_ISNAN:
     case LBF_MATH_ISINF:
     case LBF_MATH_ISFINITE:
-
+    case LBF_OPTION_SOME:
+    case LBF_RESULT_OK:
+    case LBF_RESULT_ERR:
+    case LBF_BUNDLE_PACK:
+    case LBF_BUNDLE_UNPACK:
         break;
     case LBF_BUFFER_WRITEU8:
     case LBF_BUFFER_WRITEU16:
@@ -2617,6 +2627,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::INVOKE_FASTCALL:
         handleBuiltinEffects(state, LuauBuiltinFunction(function.uintOp(OP_A(inst))), vmRegOp(OP_B(inst)), function.intOp(OP_G(inst)));
         break;
+    case IrCmd::INVOKE_FAST_METHOD:
+        // Luwu collections: a fast method writes its container's tables and its results, and never calls Lua
+        state.invalidateHeap();
+        state.invalidateRegistersFrom(vmRegOp(OP_C(inst)));
+        break;
 
         // These instructions don't have an effect on register/memory state we are tracking
     case IrCmd::NOP:
@@ -2732,6 +2747,12 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     }
     case IrCmd::GET_HASH_NODE_ADDR:
     case IrCmd::GET_CLOSURE_UPVAL_ADDR:
+        break;
+    case IrCmd::LOAD_STORAGE:
+    case IrCmd::LOAD_STORAGE_INT:
+    case IrCmd::STORE_STORAGE_INT:
+    case IrCmd::GET_STORAGE_ENTRY_ADDR:
+        // Luwu collections: a storage block changes under calls and its own stores, so nothing is cached
         break;
     case IrCmd::LOAD_OWNER_CLASS:
         // Proto::ownerclass is fixed for the executing closure; there is nothing to propagate
@@ -3068,9 +3089,11 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::DUP_TABLE:
         break;
     case IrCmd::NEW_OBJECT:
+    case IrCmd::NEW_OBJECT_DEFAULTS:
         // an allocation: reads and writes nothing the pass tracks, and runs no user code
         break;
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
+    case IrCmd::CHECK_CLASS_ALLOCATABLE:
         break;
     case IrCmd::TRY_NUM_TO_INDEX:
         for (uint32_t prevIdx : state.tryNumToIndexCache)
@@ -3427,6 +3450,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::CHECK_OBJECT_CLASS:
         // TODO(rfcs/classes): no redundant-check elimination yet, unlike CHECK_SLOT_MATCH above
         break;
+    case IrCmd::CHECK_STORAGE:
+    case IrCmd::CHECK_STORAGE_ELEMENT:
+        break;
 
     case IrCmd::ADD_VEC:
     case IrCmd::SUB_VEC:
@@ -3475,6 +3501,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::SUBSTITUTE:
     case IrCmd::MARK_USED:
     case IrCmd::MARK_DEAD:
+    case IrCmd::MARK_TRY_READS:
     case IrCmd::ADJUST_STACK_TO_REG: // Changes stack top, but not the values
     case IrCmd::ADJUST_STACK_TO_TOP: // Changes stack top, but not the values
     case IrCmd::CHECK_FASTCALL_RES:  // Changes stack top, but not the values
@@ -3603,6 +3630,28 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         break;
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         // Adding a member can run the collector, but writes no registers.
+        state.invalidateUserCall();
+        break;
+    case IrCmd::FALLBACK_INITTRAITS:
+        // writes the count and the call frame, and puts back overridden constant fields; the CALL after it runs the
+        // initializer
+        state.invalidate(OP_B(inst));
+        state.invalidateRegisterRange(vmRegOp(OP_C(inst)), 2 + function.intOp(OP_D(inst)));
+        state.invalidateHeap();
+        break;
+    case IrCmd::FALLBACK_WRAPRESULT:
+        // writes the result, and its allocation can run the collector
+        state.invalidate(OP_B(inst));
+        state.invalidateHeapTableData();
+        break;
+    case IrCmd::FALLBACK_GETQUALIFIED:
+        // writes the function, and runs nothing
+        state.invalidate(OP_B(inst));
+        break;
+    case IrCmd::FALLBACK_TABLEBUNDLE:
+        // a read writes its target, and either can run `__index` or `__newindex`
+        if (function.intOp(OP_F(inst)) == 0)
+            state.invalidate(OP_B(inst));
         state.invalidateUserCall();
         break;
     case IrCmd::FALLBACK_NEWOBJECT:

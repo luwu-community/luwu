@@ -51,6 +51,8 @@ public:
     const int classIndex;
 };
 
+struct CstAttrList;
+
 class CstAttr : public CstNode
 {
 public:
@@ -59,6 +61,11 @@ public:
     explicit CstAttr(bool hasAt);
 
     bool hasAt; // false when inside an attribute list, ie @[native checked]
+
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): the `@[...]` list this attribute
+    // is the first entry of, if any. Positions that keep no list of their own (upstream only has attributes on
+    // functions, which do) print each list through the attribute that opens it.
+    CstAttrList* openedList = nullptr;
 };
 
 class CstParametrizedAttr : public CstNode
@@ -73,6 +80,9 @@ public:
 
     // Commas inside the `(a, b, c)` arg list
     AstArray<Position> argsCommaPositions;
+
+    // Luwu Attributes (rfcs/attributes-for-types-variables-fields-classes.md): as CstAttr::openedList.
+    CstAttrList* openedList = nullptr;
 };
 
 struct CstAttrList
@@ -186,6 +196,8 @@ public:
     AstArray<Position> argsCommaPositions;
     Position varargAnnotationColonPosition = Position::missing();
     Position returnSpecifierPosition = Position::missing();
+    // Luwu try expressions: the `!` of an error hint
+    Position errorHintPosition = Position::missing();
 };
 
 class CstExprTable : public CstNode
@@ -422,6 +434,7 @@ public:
     AstArray<Position> genericsCommaPositions;
     Position genericsClosePosition;
     Position equalsPosition;
+    Position errorHintPosition = Position::missing();
 };
 
 class CstStatTypeFunction : public CstNode
@@ -508,6 +521,8 @@ public:
     AstArray<Position> argumentsCommaPositions;
     Position closeArgsPosition;
     Position returnArrowPosition;
+    // Luwu try expressions: the `!` of an error hint
+    Position errorHintPosition = Position::missing();
 };
 
 class CstTypeTypeof : public CstNode

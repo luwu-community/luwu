@@ -9,7 +9,10 @@
 #include "ldo.h"
 #include "lbytecode.h"
 #include "lvm.h"
+#include "lclass.h"
+#include "lstring.h"
 
+#include <limits.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -232,7 +235,14 @@ int lua_getinfo(lua_State* L, int level, const char* what, lua_Debug* ar)
         if (Closure* fcl = auxgetinfo(L, what, ar, f, ci))
         {
             luaC_threadbarrier(L);
-            setclvalue(L, L->top, fcl);
+
+            // Luwu Classes (rfcs/classes): a function only the VM calls is never handed out; its frame still counts as
+            // a level, and the option gives nil in its place
+            if (luaR_isvminternalfunction(L, fcl))
+                setnilvalue(L->top);
+            else
+                setclvalue(L, L->top, fcl);
+
             incr_top(L);
         }
     }
@@ -303,16 +313,24 @@ l_noret luaG_ordererror(lua_State* L, const TValue* p1, const TValue* p2, TMS op
     luaG_runerror(L, "attempt to compare %s %s %s", t1, opname, t2);
 }
 
-l_noret luaG_indexerror(lua_State* L, const TValue* p1, const TValue* p2)
+// Luwu builtin classes: luaG_indexerror's message, shared with luaG_indexerroratlua
+static void formatindexerror(lua_State* L, char* result, size_t size, const TValue* p1, const TValue* p2)
 {
     const char* t1 = luaT_objtypename(L, p1);
     const char* t2 = luaT_objtypename(L, p2);
     const TString* key = ttisstring(p2) ? tsvalue(p2) : 0;
 
     if (key && key->len <= 64) // limit length to make sure we don't generate very long error messages for very long keys
-        luaG_runerror(L, "attempt to index %s with '%s'", t1, getstr(key));
+        snprintf(result, size, "attempt to index %s with '%s'", t1, getstr(key));
     else
-        luaG_runerror(L, "attempt to index %s with %s", t1, t2);
+        snprintf(result, size, "attempt to index %s with %s", t1, t2);
+}
+
+l_noret luaG_indexerror(lua_State* L, const TValue* p1, const TValue* p2)
+{
+    char result[LUA_BUFFERSIZE];
+    formatindexerror(L, result, sizeof(result), p1, p2);
+    luaG_runerror(L, "%s", result);
 }
 
 // Luwu Classes (rfcs/classes): a name the value does not have. The RFC's glossary splits the two
@@ -326,6 +344,10 @@ l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2
         luaG_runerrorL(L, "cannot index %s with a %s", luaT_objtypename(L, p1), luaT_objtypename(L, p2));
 
     const char* key = getstr(tsvalue(p2));
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait has no objects of its own to point at
+    if (ttisclass(p1) && classvalue(p1)->istrait)
+        luaG_runerrorL(L, "trait '%s' does not have a member named '%s'", getstr(classvalue(p1)->name), key);
 
     if (ttisclass(p1))
         luaG_runerrorL(
@@ -347,6 +369,15 @@ l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2
 l_noret luaG_instancefieldonclasserror(lua_State* L, const TValue* p1, const TValue* p2)
 {
     const char* className = getstr(classvalue(p1)->name);
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait's fields only exist in the objects of implementing classes
+    if (classvalue(p1)->istrait)
+        luaG_runerrorL(
+            L,
+            "cannot read field '%s' of trait '%s': fields exist only on objects",
+            getstr(tsvalue(p2)),
+            className
+        );
 
     luaG_runerrorL(
         L,
@@ -397,6 +428,25 @@ l_noret luaG_blockedinitaccesserror(lua_State* L, const TString* className)
 
 static void pusherrorat(lua_State* L, CallInfo* ci, const char* msg);
 
+l_noret luaG_runerroratlua(lua_State* L, const char* msg)
+{
+    CallInfo* ci = L->ci;
+    while (ci > L->base_ci && !isLua(ci))
+        ci--;
+
+    lua_rawcheckstack(L, 1);
+    pusherrorat(L, ci, msg);
+    luaD_throw(L, LUA_ERRRUN);
+}
+
+// Luwu builtin classes: luaG_indexerror for an `__index` written in C (`none`'s), at the Lua code that indexed
+l_noret luaG_indexerroratlua(lua_State* L, const TValue* p1, const TValue* p2)
+{
+    char result[LUA_BUFFERSIZE];
+    formatindexerror(L, result, sizeof(result), p1, p2);
+    luaG_runerroratlua(L, result);
+}
+
 // Luwu Classes (rfcs/classes): raised by construction, which may be running in the class's C
 // constructor (`pcall(C)`), so the location is the Lua code constructing rather than the running frame.
 l_noret luaG_privateconstructorerror(lua_State* L, const TString* className)
@@ -404,14 +454,7 @@ l_noret luaG_privateconstructorerror(lua_State* L, const TString* className)
     const char* t1 = getstr(className);
     char result[LUA_BUFFERSIZE];
     snprintf(result, sizeof(result), "the constructor of '%s' is private; '%s' can only be constructed inside %s's class scope", t1, t1, t1);
-
-    CallInfo* ci = L->ci;
-    while (ci > L->base_ci && !isLua(ci))
-        ci--;
-
-    lua_rawcheckstack(L, 1);
-    pusherrorat(L, ci, result);
-    luaD_throw(L, LUA_ERRRUN);
+    luaG_runerroratlua(L, result);
 }
 
 // Luwu Classes (rfcs/classes): raised by CHECKSELFCLASS when `self` isn't an object of the method's class.
@@ -425,21 +468,27 @@ l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* e
 {
     const char* expectedName = getstr(expected->name);
     const char* method = getstr(methodName);
+    char result[LUA_BUFFERSIZE];
 
     if (!ttisobject(self))
     {
         int specificIndexingSyntax = selfCall ? ':' : '.';
-        luaG_runerrorL(
-            L, "attempt to call method '%s%c%s' with 'self' of type '%s'", expectedName, specificIndexingSyntax, method, luaT_objtypename(L, self)
+        snprintf(
+            result,
+            sizeof(result),
+            "attempt to call method '%s%c%s' with 'self' of type '%s'",
+            expectedName,
+            specificIndexingSyntax,
+            method,
+            luaT_objtypename(L, self)
         );
     }
-
-    const char* actualName = getstr(objectvalue(self)->lclass->name);
-
-    if (selfCall)
+    else if (selfCall)
     {
-        luaG_runerrorL(
-            L,
+        const char* actualName = getstr(objectvalue(self)->lclass->name);
+        snprintf(
+            result,
+            sizeof(result),
             "attempt to call inlined method '%s:%s' on an object of class '%s'; this occurred because inlining optimizations are enabled "
             "and the passed 'self' did not match the expected type annotation '%s'",
             expectedName,
@@ -448,8 +497,14 @@ l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* e
             expectedName
         );
     }
+    else
+    {
+        const char* actualName = getstr(objectvalue(self)->lclass->name);
+        snprintf(result, sizeof(result), "attempt to call method '%s.%s' with 'self' of class '%s'", expectedName, method, actualName);
+    }
 
-    luaG_runerrorL(L, "attempt to call method '%s.%s' with 'self' of class '%s'", expectedName, method, actualName);
+    // A builtin class's C method checks `self` itself (luaR_checknativeself), so the location is the Lua code calling it
+    luaG_runerroratlua(L, result);
 }
 
 static void pusherrorat(lua_State* L, CallInfo* ci, const char* msg)
@@ -773,51 +828,74 @@ static size_t append(char* buf, size_t bufsize, size_t offset, const char* data)
     return offset + copy;
 }
 
-const char* lua_debugtrace(lua_State* L)
+// Luwu try expressions: lua_debugtrace's lines for the top `levels` frames, so a `try` expression's traceback stops at
+// the frame that caught the error
+static size_t appendtrace(lua_State* L, char* buf, size_t bufsize, int levels)
 {
-    static char buf[4096];
-
     const int limit1 = 10;
     const int limit2 = 10;
 
     int depth = int(L->ci - L->base_ci);
+    if (depth > levels)
+        depth = levels;
     size_t offset = 0;
 
     lua_Debug ar;
-    for (int level = 0; lua_getinfo(L, level, "sln", &ar); ++level)
+    for (int level = 0; level < levels && lua_getinfo(L, level, "sln", &ar); ++level)
     {
         if (ar.source)
-            offset = append(buf, sizeof(buf), offset, ar.short_src);
+            offset = append(buf, bufsize, offset, ar.short_src);
 
         if (ar.currentline > 0)
         {
             char line[32];
             snprintf(line, sizeof(line), ":%d", ar.currentline);
 
-            offset = append(buf, sizeof(buf), offset, line);
+            offset = append(buf, bufsize, offset, line);
         }
 
         if (ar.name)
         {
-            offset = append(buf, sizeof(buf), offset, " function ");
-            offset = append(buf, sizeof(buf), offset, ar.name);
+            offset = append(buf, bufsize, offset, " function ");
+            offset = append(buf, bufsize, offset, ar.name);
         }
 
-        offset = append(buf, sizeof(buf), offset, "\n");
+        offset = append(buf, bufsize, offset, "\n");
 
         if (depth > limit1 + limit2 && level == limit1 - 1)
         {
             char skip[32];
             snprintf(skip, sizeof(skip), "... (+%d frames)\n", int(depth - limit1 - limit2));
 
-            offset = append(buf, sizeof(buf), offset, skip);
+            offset = append(buf, bufsize, offset, skip);
 
             level = depth - limit2 - 1;
         }
     }
 
+    return offset;
+}
+
+const char* lua_debugtrace(lua_State* L)
+{
+    static char buf[4096];
+
+    size_t offset = appendtrace(L, buf, sizeof(buf), INT_MAX);
+
     LUAU_ASSERT(offset < sizeof(buf));
     buf[offset] = '\0';
 
     return buf;
+}
+
+TString* luaG_traceback(lua_State* L, int levels)
+{
+    char buf[4096];
+    size_t offset = appendtrace(L, buf, sizeof(buf), levels);
+
+    // without the last line's newline
+    if (offset > 0 && buf[offset - 1] == '\n')
+        offset--;
+
+    return luaS_newlstr(L, buf, offset);
 }

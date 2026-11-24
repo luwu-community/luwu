@@ -7,6 +7,9 @@
 
 #include "doctest.h"
 
+LUAU_FASTFLAG(LuauExportValueSyntax)
+LUAU_FASTFLAG(LuauExportValueTypecheck)
+
 using namespace Luau;
 
 namespace
@@ -63,6 +66,23 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_tables_and_calls")
     checkTypewriting(*this, before, "local s = (\"abc\"):upper()", kAfter);
 }
 
+// Luwu: the DiscardedValues lint, on a call in an if-else branch
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_a_call_in_an_if_else_branch")
+{
+    const char* before = "local a = 1\nlocal function two(): (number, number) return a, a end\n";
+    checkTypewriting(*this, before, "local x = if a > 0 then two() else 0", kAfter);
+}
+
+// Luwu: the ExtraArguments lint, while a call's arguments are typed
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_call_arguments")
+{
+    const char* before = "local a = 1\n"
+                         "local function add(x: number, y: number): number return x + y end\n"
+                         "local function show(items: number | { number }) print(items) end\n";
+    checkTypewriting(*this, before, "local sum = add(a, a)", kAfter);
+    checkTypewriting(*this, before, "show({ a, a })", kAfter);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "typing_field_assignments_and_constants")
 {
     const char* before = "local t = { x = 1 }\n";
@@ -116,6 +136,20 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_blocks")
     checkTypewriting(*this, before, "for i = 1, a do\n    print(i)\nend", kAfter);
 }
 
+// Luwu: `export name = value`, which is `export const name = value`
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_exports")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}, {FFlag::LuauExportValueTypecheck, true}};
+
+    checkTypewriting(*this, "local a = 1\n", "export answer = a + 1", kAfter);
+
+    // Luwu Export Values (rfcs/export-values.md): upstream's forms are one parse error each
+    checkTypewriting(*this, "local a = 1\n", "export local answer = a + 1", kAfter);
+    checkTypewriting(*this, "local a = 1\n", "export const answer = a + 1", kAfter);
+    // A half-typed statement in the body reports its own error next to the one for 'local'
+    checkTypewriting(*this, "", "export local function f()\n    print(1)\nend", kAfter, {"try removing 'local'"});
+}
+
 // Luwu Classes (rfcs/classes): declaring classes, and using them from the code below
 TEST_CASE_FIXTURE(ClassesFixture, "typing_class_declarations")
 {
@@ -143,6 +177,16 @@ TEST_CASE_FIXTURE(ClassesFixture, "typing_class_declarations")
                                    "    private retries: number = 3\n"
                                    "end";
     checkTypewriting(*this, before, constAndDefaults, kAfter);
+
+    // Upstream Luau's `open` and `extends` report one error each, which stays up while the body is typed
+    const char* extends = "class Foo extends Bar\n"
+                          "    public x: string\n"
+                          "    function fooer(self)\n"
+                          "        print(\"x\")\n"
+                          "    end\n"
+                          "end";
+    checkTypewriting(*this, before, extends, kAfter, {"can't extend"});
+    checkTypewriting(*this, before, "open class Animal\n    public name: string\nend", kAfter, {"Remove 'open'"});
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "typing_class_uses")

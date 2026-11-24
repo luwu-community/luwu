@@ -192,7 +192,7 @@ private:
             }
         }
         else if (get<UnknownType>(ty))
-            target = typeFunctionRuntime->typeArena.allocate(TypeFunctionUnknownType{});
+            target = typeFunctionRuntime->typeArena.allocate(TypeFunctionUnknownType{/* weak */ ty == state->ctx->builtins->weakUnknownType});
         else if (get<NeverType>(ty))
             target = typeFunctionRuntime->typeArena.allocate(TypeFunctionNeverType{});
         else if (get<AnyType>(ty))
@@ -452,6 +452,10 @@ private:
         f2->argTypes = shallowSerialize(f1->argTypes);
         f2->retTypes = shallowSerialize(f1->retTypes);
 
+        // Luwu try expressions
+        if (f1->errorHint)
+            f2->errorHint = shallowSerialize(*f1->errorHint);
+
         if (FFlag::LuauTypeFunctionSerializeArgNames)
         {
             f2->argNames.reserve(f1->argNames.size());
@@ -467,8 +471,18 @@ private:
 
     void serializeChildren(const ExternType* c1, TypeFunctionExternType* c2)
     {
-        for (const auto& [k, p] : c1->props)
+        // Luwu Classes (rfcs/classes): a type function sees a class's or trait's members as code outside it does. Private
+        // members are left out, and so is the constructor (`__init`, a trait's `__create`): it isn't part of the type,
+        // and a generic class's `__init` is generic over the class's generics, which the type it would make has lost.
+        const NotNull<BuiltinTypes> builtins = state->ctx->builtins;
+        const bool isUserNominal = c1->root == builtins->objectType || c1->root == builtins->classType || c1->root == builtins->traitType;
+
+        for (const auto& [k, p] : c1->props())
         {
+            const bool hiddenFromOutside = p.isPrivate || k == "__init" || k == "__create";
+            if (isUserNominal && hiddenFromOutside)
+                continue;
+
             std::optional<TypeFunctionTypeId> readTy = std::nullopt;
             if (p.readTy)
                 readTy = shallowSerialize(*p.readTy);
@@ -760,8 +774,8 @@ private:
                 state->ctx->ice->ice("Deserializing user defined type function arguments: mysterious type is being deserialized");
             }
         }
-        else if (get<TypeFunctionUnknownType>(ty))
-            target = state->ctx->builtins->unknownType;
+        else if (const TypeFunctionUnknownType* unknown = get<TypeFunctionUnknownType>(ty))
+            target = unknown->weak ? state->ctx->builtins->weakUnknownType : state->ctx->builtins->unknownType;
         else if (get<TypeFunctionNeverType>(ty))
             target = state->ctx->builtins->neverType;
         else if (get<TypeFunctionAnyType>(ty))
@@ -1078,6 +1092,10 @@ private:
 
         if (f2->retTypes)
             f1->retTypes = shallowDeserialize(f2->retTypes);
+
+        // Luwu try expressions
+        if (f2->errorHint)
+            f1->errorHint = shallowDeserialize(*f2->errorHint);
 
         if (FFlag::LuauTypeFunctionSerializeArgNames)
         {

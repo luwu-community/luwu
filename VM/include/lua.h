@@ -564,8 +564,17 @@ enum lua_MemberAccess
 };
 
 LUA_API void lua_newobject(lua_State* L, int idx);
+// Luwu Traits (rfcs/classes/traits.md): whether the value at `idx` is a trait. A trait's lua_type is LUA_TCLASS.
+LUA_API int lua_istrait(lua_State* L, int idx);
+// Luwu Traits (rfcs/classes/traits.md): `class.implements` for embedders. Returns 1 if the value at `idx` is an object whose
+// class implements the trait at `traitidx`, directly or through `needs`, and 0 otherwise. Raises if the value at
+// `traitidx` isn't a trait.
+LUA_API int lua_classimplements(lua_State* L, int idx, int traitidx);
 LUA_API int lua_getmemberaccess(lua_State* L, int idx, const char* membername);
 LUA_API int lua_ismemberconst(lua_State* L, int idx, const char* membername);
+// Luwu Traits (rfcs/classes/traits.md): whether `membername` of the trait, class or object at `idx` is `final`. Returns 0
+// if the member doesn't exist. Raises if the value at `idx` isn't a trait, class or object.
+LUA_API int lua_ismemberfinal(lua_State* L, int idx, const char* membername);
 LUA_API const char* lua_getclassname(lua_State* L, int idx);
 // Luwu Classes (rfcs/classes): `class.of` for embedders. Pushes the class of the object at `idx` and returns 1. Returns 0
 // and pushes nothing for any other value, a class included.
@@ -573,6 +582,33 @@ LUA_API int lua_classof(lua_State* L, int idx);
 // Luwu Classes (rfcs/classes): `class.is` for embedders. Returns 1 if the value at `idx` is an object of exactly the class
 // at `classidx`, 0 otherwise. Raises if the value at `classidx` isn't a class.
 LUA_API int lua_classis(lua_State* L, int idx, int classidx);
+
+// Luwu try expressions: options and results for embedders. Building one raises if the result library (luaopen_result)
+// isn't open. lua_pushsome pushes `Some(v)` for the value at `idx`, which can be nil or none. An empty option is
+// lua_pushsymnone.
+LUA_API void lua_pushsome(lua_State* L, int idx);
+LUA_API void lua_pushresultok(lua_State* L, int idx);
+LUA_API void lua_pushresulterr(lua_State* L, int idx);
+LUA_API int lua_issome(lua_State* L, int idx);
+LUA_API int lua_isresultok(lua_State* L, int idx);
+LUA_API int lua_isresulterr(lua_State* L, int idx);
+// Pushes the value a `Some`, `Ok` or `Err` at `idx` holds and returns its type. Pushes nothing and returns LUA_TNONE for
+// any other value.
+LUA_API int lua_getpayload(lua_State* L, int idx);
+
+// Luwu Native Classes (rfcs/native-classes.md): the destructor of every object whose native data has `tag`, called with
+// the data once, when the object is freed. Like a userdata destructor, it must not call back into Luwu.
+LUA_API void lua_setobjectdtor(lua_State* L, int tag, lua_Destructor dtor);
+LUA_API lua_Destructor lua_getobjectdtor(lua_State* L, int tag);
+// Luwu Native Classes (rfcs/native-classes.md): the native data of the object at `idx` when it has data with `tag`, and
+// NULL for any other value
+LUA_API void* lua_toobjectdata(lua_State* L, int idx, int tag);
+
+// Luwu bundles: lua_packbundle pops `n` values and pushes a bundle of them, as `bundle.pack` does; it raises past 1024
+// values or when the bundle library (luaopen_bundle) isn't open. lua_unpackbundle pushes the values of the bundle at
+// `idx` and returns how many, or pushes nothing and returns -1 for any other value.
+LUA_API void lua_packbundle(lua_State* L, int n);
+LUA_API int lua_unpackbundle(lua_State* L, int idx);
 
 LUA_API int lua_getbuffermode(lua_State* L, int idx);
 LUA_API void* lua_getbufferuserdata(lua_State* L, int idx);

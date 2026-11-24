@@ -63,32 +63,6 @@ struct TempBuffer
     }
 };
 
-struct ScopedSetGCThreshold
-{
-public:
-    ScopedSetGCThreshold(global_State* global, size_t newThreshold) noexcept
-        : global{global}
-    {
-        originalThreshold = global->GCthreshold;
-        global->GCthreshold = newThreshold;
-    }
-
-    ScopedSetGCThreshold(const ScopedSetGCThreshold&) = delete;
-    ScopedSetGCThreshold(ScopedSetGCThreshold&&) = delete;
-
-    ScopedSetGCThreshold& operator=(const ScopedSetGCThreshold&) = delete;
-    ScopedSetGCThreshold& operator=(ScopedSetGCThreshold&&) = delete;
-
-    ~ScopedSetGCThreshold() noexcept
-    {
-        global->GCthreshold = originalThreshold;
-    }
-
-private:
-    global_State* global = nullptr;
-    size_t originalThreshold = 0;
-};
-
 void luaV_getimport(lua_State* L, LuaTable* env, TValue* k, StkId res, uint32_t id, bool propagatenil)
 {
     int count = id >> 30;
@@ -290,6 +264,8 @@ struct BytecodeFeatures
     bool feedbackVector = false;
     bool protoSizePrefix = false;
     bool inlineCost = false;
+    // Luwu try expressions: each function's protected ranges, after its inlining cost
+    bool tryRanges = false;
 };
 
 static BytecodeFeatures getLegacyFeatures(uint8_t version)
@@ -303,13 +279,14 @@ static BytecodeFeatures getLegacyFeatures(uint8_t version)
     return features;
 }
 
-static BytecodeFeatures getLuwuFeatures()
+static BytecodeFeatures getLuwuFeatures(uint8_t luwuVersion)
 {
     BytecodeFeatures features;
     features.typeInfo = true;
     features.feedbackVector = true;
     features.protoSizePrefix = true;
     features.inlineCost = true;
+    features.tryRanges = luwuVersion == LWBC_VERSION_WIP;
     return features;
 }
 
@@ -439,7 +416,7 @@ static int loadsafe(
                 LWBC_VERSION_WIP
             );
 
-        features = getLuwuFeatures();
+        features = getLuwuFeatures(luwuVersion);
     }
     else if (version >= LBC_VERSION_MIN && version <= LBC_VERSION_MAX)
     {
@@ -795,6 +772,7 @@ static int loadsafe(
                 uint32_t numProperties = readVarInt(data, size, offset);
                 uint32_t numMethods = readVarInt(data, size, offset);
                 uint32_t numMembers = numMethods + numProperties;
+                uint32_t shapeFlags = readVarInt(data, size, offset);
 
                 TString* initName = luaS_newlstr(L, "__init", 6);
                 bool hasCustomInit = false;
@@ -807,8 +785,9 @@ static int loadsafe(
                     uint32_t flags = readVarInt(data, size, peekOffset);
                     hasCustomInit |= tsvalue(&p->k[mid]) == initName;
 
-                    // a constant default is stored inline right after its member's flags
-                    if (flags & LBC_CLASSMEMBER_CONSTDEFAULT)
+                    // a constant default is stored inline right after its field's flags; a function's bit 3 is
+                    // LBC_CLASSMEMBER_SCOPED
+                    if (idx < numProperties && (flags & LBC_CLASSMEMBER_CONSTDEFAULT))
                     {
                         readVarInt(data, size, peekOffset);
                         hasConstDefaults = true;
@@ -821,6 +800,9 @@ static int loadsafe(
 
                 // The class owns its shape buffers from here on, so nothing leaks if a later allocation fails.
                 LuauClass* lco = luaR_newclass(L, tsvalue(classname), numProperties, numStaticWithInit, hasConstDefaults);
+                // Luwu Traits (rfcs/classes/traits.md): read by luaR_sealclassshape below
+                lco->istrait = (shapeFlags & LBC_CLASSSHAPE_TRAIT) != 0;
+                lco->traitspending = (shapeFlags & LBC_CLASSSHAPE_IMPLEMENTS) != 0;
 
                 // Members are written properties-first, so index idx here is exactly the member's runtime
                 // offset.
@@ -832,7 +814,7 @@ static int loadsafe(
                     lco->offsettomember[idx] = tsvalue(memberName);
                     lco->memberflags[idx] = uint8_t(readVarInt(data, size, offset));
 
-                    if (lco->memberflags[idx] & LBC_CLASSMEMBER_CONSTDEFAULT)
+                    if (idx < numProperties && (lco->memberflags[idx] & LBC_CLASSMEMBER_CONSTDEFAULT))
                     {
                         uint32_t did = readVarInt(data, size, offset);
                         LUAU_ASSERT(lco->memberdefaults && idx < numProperties);
@@ -1025,6 +1007,28 @@ static int loadsafe(
         {
             if ((p->flags & LPF_INLINABLE) != 0)
                 p->cost = readVarInt64(data, size, offset);
+        }
+
+        if (features.tryRanges)
+        {
+            int sizetryranges = readVarInt(data, size, offset);
+
+            if (sizetryranges > 0)
+            {
+                p->tryranges = luaM_newarray(L, sizetryranges, LuauTryRange, p->memcat);
+                p->sizetryranges = sizetryranges;
+
+                for (int j = 0; j < sizetryranges; ++j)
+                {
+                    LuauTryRange& range = p->tryranges[j];
+                    range.startpc = readVarInt(data, size, offset);
+                    range.endpc = readVarInt(data, size, offset);
+                    range.handlerpc = readVarInt(data, size, offset);
+                    range.target = read<uint8_t>(data, size, offset);
+                    LUAU_ASSERT(range.startpc < range.endpc && range.endpc <= range.handlerpc);
+                    LUAU_ASSERT(range.handlerpc < uint32_t(p->sizecode) && range.target + 3 < p->maxstacksize);
+                }
+            }
         }
 
         if (features.protoSizePrefix)

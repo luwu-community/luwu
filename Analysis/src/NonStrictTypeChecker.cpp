@@ -308,6 +308,8 @@ struct NonStrictTypeChecker
             return visit(s);
         else if (auto s = stat->as<AstStatDeclareExternType>())
             return visit(s);
+        else if (stat->is<AstStatDeclareClass>())
+            return {};
         else if (auto s = stat->as<AstStatClass>())
             return visit(s);
         else if (auto s = stat->as<AstStatError>())
@@ -491,7 +493,8 @@ struct NonStrictTypeChecker
 
     NonStrictContext visit(AstStatDeclareGlobal* declGlobal)
     {
-        visit(declGlobal->type);
+        if (declGlobal->type)
+            visit(declGlobal->type);
 
         return {};
     }
@@ -587,6 +590,11 @@ struct NonStrictTypeChecker
         else if (auto e = expr->as<AstExprError>())
             return visit(e);
         else if (auto e = expr->as<AstExprInstantiate>())
+            return visit(e);
+        // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
+        else if (auto e = expr->as<AstExprSelfClass>())
+            return visit(e->classOf);
+        else if (auto e = expr->as<AstExprTry>())
             return visit(e);
         else
         {
@@ -828,11 +836,11 @@ struct NonStrictTypeChecker
                 return {};
         }
 
-        for (auto [_, key, value] : table->items)
+        for (const AstExprTable::Item& item : table->items)
         {
-            if (key)
-                visit(key, ValueContext::RValue);
-            visit(value, ValueContext::RValue);
+            if (item.key)
+                visit(item.key, ValueContext::RValue);
+            visit(item.value, ValueContext::RValue);
         }
 
         // Luwu: a misspelled property is a mistake in nonstrict code too
@@ -885,6 +893,13 @@ struct NonStrictTypeChecker
         for (AstExpr* expr : error->expressions)
             visit(expr, ValueContext::RValue);
 
+        return {};
+    }
+
+    // Luwu try expressions: the errors `try` catches are expected, so what its expression needs doesn't flow out
+    NonStrictContext visit(AstExprTry* tryExpr)
+    {
+        visit(tryExpr->expr, ValueContext::RValue);
         return {};
     }
 

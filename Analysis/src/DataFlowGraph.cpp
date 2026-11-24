@@ -462,6 +462,8 @@ ControlFlow DataFlowGraphBuilder::visit(AstStat* s)
         return visit(d);
     else if (auto d = s->as<AstStatDeclareExternType>())
         return visit(d);
+    else if (auto d = s->as<AstStatDeclareClass>())
+        return visit(d);
     else if (auto d = s->as<AstStatClass>())
     {
         LUAU_ASSERT(FFlag::LuwuClasses);
@@ -844,7 +846,8 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatDeclareGlobal* d)
     currentScope()->bindings[d->name] = def;
     captures[d->name].allVersions.push_back(def);
 
-    visitType(d->type);
+    if (d->type)
+        visitType(d->type);
 
     return ControlFlow::None;
 }
@@ -889,6 +892,34 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatClass* d)
     graph.localDefs[d->name] = def;
     currentScope()->bindings[d->name->name] = def;
     captures[d->name->name].allVersions.push_back(def);
+
+    visitClassShape(d);
+
+    return ControlFlow::None;
+}
+
+// Luwu Declare Statements (rfcs/declare-statements.md): a declared class has no value, so its name gets no def. Its
+// primary constructor parameters and method parameters still need defs, for the type checker to bind their types to.
+ControlFlow DataFlowGraphBuilder::visit(AstStatDeclareClass* d)
+{
+    DfgScope* unreachable = makeChildScope();
+    PushScope ps{scopeStack, unreachable};
+
+    visitClassShape(d->shape);
+
+    return ControlFlow::None;
+}
+
+void DataFlowGraphBuilder::visitClassShape(AstStatClass* d)
+{
+    // Luwu Traits (rfcs/classes/traits.md): the object `Self` in a trait's defaults is the class of
+    if (AstLocal* initSelf = d->initSelf)
+    {
+        DefId def = defArena->freshCell(initSelf, initSelf->location);
+        graph.localDefs[initSelf] = def;
+        currentScope()->bindings[initSelf] = def;
+        captures[initSelf].allVersions.push_back(def);
+    }
 
     // Luwu Classes (rfcs/classes): a primary constructor's parameters are visible to the class's
     // field initializer expressions and to nothing else, so they get a scope of their own that the
@@ -939,6 +970,10 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatClass* d)
                 },
                 [&](const AstClassMethod& method)
                 {
+                    // Luwu Traits (rfcs/classes/traits.md): the trait of `function Json.name`, read by the class statement
+                    if (method.qualifiedTrait)
+                        visitExpr(method.qualifiedTrait);
+
                     visitExpr(method.function);
                 }
             },
@@ -946,8 +981,39 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatClass* d)
         );
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): every part of an `implements` or `needs` entry AstStatClass::visitChildren
+    // visits gets a def here: the name, the type arguments (`Box<typeof(v)>`) and the trait arguments. Trait arguments
+    // see the primary constructor's parameters, like field initializers. A `needs` entry with arguments is a parse
+    // error, but analysis still runs on it.
+    auto visitTraitRefs = [&](const AstArray<AstClassTraitRef>& refs)
+    {
+        for (const AstClassTraitRef& ref : refs)
+        {
+            visitExpr(ref.trait);
 
-    return ControlFlow::None;
+            for (const AstTypeOrPack& param : ref.typeArguments)
+            {
+                if (param.type)
+                    visitType(param.type);
+                else if (param.typePack)
+                    visitTypePack(param.typePack);
+            }
+
+            for (AstExpr* arg : ref.args)
+            {
+                if (primaryConstructorScope)
+                {
+                    PushScope ps{scopeStack, primaryConstructorScope};
+                    visitExpr(arg);
+                }
+                else
+                    visitExpr(arg);
+            }
+        }
+    };
+
+    visitTraitRefs(d->needs);
+    visitTraitRefs(d->implements);
 }
 
 ControlFlow DataFlowGraphBuilder::visit(AstStatError* error)
@@ -1014,6 +1080,11 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExpr* e)
             return visitExpr(i);
         else if (auto i = e->as<AstExprInstantiate>())
             return visitExpr(i);
+        // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
+        else if (auto s = e->as<AstExprSelfClass>())
+            return visitExpr(s->classOf);
+        else if (auto t = e->as<AstExprTry>())
+            return visitExpr(t);
         else if (auto error = e->as<AstExprError>())
             return visitExpr(error);
         else
@@ -1139,6 +1210,14 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprCall* c)
 
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIndexName* i)
 {
+    // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name` reads the trait's member, which nothing refines
+    if (i->qualifiedTrait)
+    {
+        visitExpr(i->expr);
+        visitExpr(i->qualifiedTrait);
+        return {defArena->freshCell(Symbol{}, i->location), nullptr};
+    }
+
     auto [parentDef, parentKey] = visitExpr(i->expr);
     std::string index = i->index.value;
 
@@ -1190,6 +1269,14 @@ DataFlowResult DataFlowGraphBuilder::visitFunction(AstExprFunction* f, NotNull<D
 
     if (f->returnAnnotation)
         visitTypePack(f->returnAnnotation);
+
+    // Luwu user-defined refinements: `@[truthy(param, Type)]`'s type is resolved in the signature like the return
+    // annotation, and an expression in it (a `typeof(...)`) needs a def like one there
+    for (AstAttr* attr : f->attributes)
+    {
+        if (attr->refinedType)
+            visitType(attr->refinedType);
+    }
 
     if (FFlag::LuwuDefaultArguments)
     {
@@ -1272,6 +1359,13 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIfElse* i)
     visitExpr(i->falseExpr);
 
     return {defArena->freshCell(Symbol{}, i->location), nullptr};
+}
+
+DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprTry* t)
+{
+    visitExpr(t->expr);
+
+    return {defArena->freshCell(Symbol{}, t->location), nullptr};
 }
 
 DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprInterpString* i)

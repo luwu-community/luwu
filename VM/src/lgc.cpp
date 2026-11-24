@@ -482,13 +482,40 @@ static void traverseclass(global_State* g, LuauClass* classdef)
     markobject(g, classdef->metatable);
     if (classdef->instancemetatable)
         markobject(g, classdef->instancemetatable);
+    if (classdef->constructor)
+        markobject(g, classdef->constructor);
+    for (uint32_t i = 0; i < classdef->numtraits; i++)
+        markobject(g, classdef->traits[i]);
+
+    for (uint32_t i = 0; i < classdef->numtraitinits; i++)
+        markvalue(g, &classdef->traitinits[i]);
+    if (classdef->traitdefaults)
+        markobject(g, classdef->traitdefaults);
+    if (classdef->compiledtraitcopies)
+        markobject(g, classdef->compiledtraitcopies);
+    if (classdef->qualified)
+        markobject(g, classdef->qualified);
+    if (classdef->typeofname)
+        markobject(g, classdef->typeofname);
 }
 
 static void traverseobject(global_State* g, LuauObject* object)
 {
     markobject(g, object->lclass);
     for (uint32_t i = 0; i < object->numberofmembers; i++)
-        markvalue(g, &object->members[i]);
+        markvalue(g, &luaR_members(object)[i]);
+
+    // Luwu collections: a `Vec`'s or `VecDeque`'s entries, in one or two runs of the ring
+    if (LuauStorage* storage = luaR_storage(object))
+    {
+        if (storage->elementclass)
+            markobject(g, storage->elementclass);
+        uint32_t first = storage->count < storage->capacity - storage->head ? storage->count : storage->capacity - storage->head;
+        for (uint32_t i = 0; i < first; i++)
+            markvalue(g, &storage->items[storage->head + i]);
+        for (uint32_t i = 0; i < storage->count - first; i++)
+            markvalue(g, &storage->items[i]);
+    }
 }
 
 static void clearstack(lua_State* l)
@@ -605,7 +632,8 @@ static size_t propagatemark(global_State* g)
         traverseproto(g, p);
 
         return sizeof(Proto) + sizeof(Instruction) * p->sizecode + sizeof(Proto*) * p->sizep + sizeof(TValue) * p->sizek + p->sizelineinfo +
-               sizeof(LocVar) * p->sizelocvars + sizeof(TString*) * p->sizeupvalues + p->sizetypeinfo;
+               sizeof(LocVar) * p->sizelocvars + sizeof(TString*) * p->sizeupvalues + p->sizetypeinfo +
+               sizeof(LuauTryRange) * p->sizetryranges;
     }
     case LUA_TCLASS:
     {
@@ -620,8 +648,8 @@ static size_t propagatemark(global_State* g)
         g->gray = object->gclist;
         traverseobject(g, object);
         // We've traversed the instance, header plus its inline fields (one allocation, see
-        // luaR_objectsize).
-        return luaR_objectsize(object->numberofmembers);
+        // luaR_objectsize), and its storage block if it has one.
+        return luaR_objectmemory(object);
     }
     default:
         LUAU_ASSERT(0);
@@ -903,6 +931,11 @@ static void markroot(lua_State* L)
     // make global table be traversed before main stack
     markobject(g, g->mainthread->gt);
     markvalue(g, registry(L));
+    for (int i = 0; i < LUWU_BUILTIN__COUNT; i++)
+    {
+        if (g->builtinclasses[i])
+            markobject(g, g->builtinclasses[i]);
+    }
     g->gc_ref_gray = 0;
     for (int i = 0; i < g->ref_size; i++) {
         if (g->ref_array[i].tt != LUA_TNONE)

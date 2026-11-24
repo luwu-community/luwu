@@ -424,6 +424,16 @@ struct FeedbackVectorSlot
     };
 };
 
+// Luwu try expressions: an error raised while the function runs [startpc, endpc) resumes at handlerpc, with the error
+// in register target and where it was raised in the three registers after it (see LOP_WRAPRESULT)
+struct LuauTryRange
+{
+    uint32_t startpc;
+    uint32_t endpc;
+    uint32_t handlerpc;
+    uint8_t target;
+};
+
 /*
 ** Function Prototypes
 */
@@ -492,6 +502,10 @@ typedef struct Proto
     Proto* optimized;
     Proto* deoptimized;
     uint64_t cost;
+
+    // Luwu try expressions: the protected ranges, innermost first where they nest; NULL when there are none
+    LuauTryRange* tryranges;
+    int sizetryranges;
 } Proto;
 // clang-format on
 
@@ -651,6 +665,12 @@ typedef struct LuaTable
 } LuaTable;
 // clang-format on
 
+// Luwu collections: a frameless version of a builtin class's method, which the interpreter runs at the NAMECALL
+// instead of calling the C method. It reads `self` and the `nargs` arguments at `args`, writes its results from `res`
+// and returns how many, or returns -1 to leave the call to the C method. It never allocates, raises or calls Lua, so
+// every error still comes from the C method.
+typedef int (*luaR_FastMethod)(lua_State* L, struct LuauObject* self, StkId res, StkId args, int nargs);
+
 typedef struct LuauClass
 {
     CommonHeader;
@@ -676,6 +696,11 @@ typedef struct LuauClass
     // Metatable for instances of this class. NULL until the first metamethod
     // is added via luaR_addclassmember.
     LuaTable* instancemetatable;
+
+    // The function calling the class runs: the compiler builds it from the class declaration, and a call on the class
+    // value runs it in place of the `__call` metamethod (luaV_tryfuncTM). NULL for a class built from C and for a
+    // trait, which construct through `__call`.
+    Closure* constructor;
 
     // Number of instance members that we expect instances of this class object
     // to have.
@@ -729,6 +754,15 @@ typedef struct LuauClass
     // The offset of `__defaults` in `staticmembers`, only meaningful when haspoddefaultsfn is set.
     uint32_t poddefaultsoffset;
 
+    // Luwu Traits (rfcs/classes/traits.md): a class without an `__init` that implements traits has a synthesized
+    // `__implements(self)`. It evaluates the `implements` arguments and initializes the trait fields (LOP_INITTRAITS),
+    // and the constructor calls it before the class's own field defaults. A class with an `__init` does the same work
+    // at the top of `__init` instead, so it has none.
+    bool haspodimplementsfn;
+
+    // The offset of `__implements` in `staticmembers`, only meaningful when haspodimplementsfn is set.
+    uint32_t podimplementsoffset;
+
     // Compile-time-constant field defaults: one TValue per instance member, in the same offset order
     // as `offsettomember`, nil for a member with no default. Copied straight into a new instance by
     // the POD constructor, which is why such a class needs no `__defaults` closure at all. NULL when
@@ -737,32 +771,190 @@ typedef struct LuauClass
     // class object; freed in luaR_freeclass and marked in traverseclass.
     TValue* memberdefaults;
 
+    // Luwu Traits (rfcs/classes/traits.md): this class value is a trait. A trait is never constructed, and none of its members
+    // can be read through it (the VM sets LBC_CLASSMEMBER_INITBLOCKED on all of them): implementing classes get copies.
+    bool istrait;
+
+    // Luwu Traits (rfcs/classes/traits.md): the class has an `implements` list that luaR_implementtraits hasn't finished implementing.
+    // Implementing grows the layout, so an object made before then would be too small for it: construction refuses.
+    // Code can reach the class that early -- its binding is set when its statement starts, and the statement runs user
+    // code before implementing (an `__index` in an `implements` expression, a trait's `needs`). A class whose
+    // implementing failed stays pending, so it never makes an object; one that succeeded is never implemented again.
+    bool traitspending;
+
+    // Luwu Traits (rfcs/classes/traits.md): the number of instance members the class itself declares. The fields of the
+    // traits it implements come after them (see luaR_implementtraits); the class's `__defaults` returns only its own.
+    uint32_t numberofownmembers;
+
+    // Luwu Traits (rfcs/classes/traits.md): every trait this class implements, listed or implied through `needs`, in the
+    // order luaR_implementtraits attached them. NULL when there are none. Owned by this class; marked in traverseclass.
+    struct LuauClass** traits;
+    uint32_t numtraits;
+
+    // Luwu Traits (rfcs/classes/traits.md): how construction initializes the fields the class gets from its traits
+    // (LOP_INITTRAITS, luaR_nexttraitinit). NULL when no trait has a field that needs computing. Owned by this class;
+    // marked in traverseclass.
+    // - `traitinits` holds the class's copy of each trait's `__traitinit`, in dependency order: a trait's needed traits
+    //   come before it, so an overriding trait's value is the one left in the field.
+    // - `traitinitargs` says which `implements` arguments each copy takes: two entries per copy, the offset into the
+    //   class's `implements` arguments (all entries' arguments, in list order) and the count. A copy of a trait the
+    //   class didn't list, or listed without arguments, takes none.
+    TValue* traitinits;
+    uint32_t* traitinitargs;
+    uint32_t numtraitinits;
+
+    // Luwu Traits (rfcs/classes/traits.md): the offsets of the overridden fields whose overriding value is a constant
+    // default. The overridden trait's initializer writes the field by name after allocation copied the constant in, so
+    // INITTRAITS copies these constants in again once the initializers have run. NULL when there are none. Owned by
+    // this class.
+    uint32_t* overriddenconsts;
+    uint32_t numoverriddenconsts;
+
+    // Luwu Traits (rfcs/classes/traits.md): the class's copies of the trait defaults it overrides, keyed by the trait's
+    // own closure, for `Trait.method(obj)`, which runs the trait's default (luaR_traitmethod). NULL when the class
+    // overrides none. Marked in traverseclass.
+    struct LuaTable* traitdefaults;
+
+    // Luwu Traits (rfcs/classes/traits.md): the copies of trait functions the compiler made for this class
+    // (LBC_NEWCLASSMEMBER_TRAITCOPY), keyed by the trait's own closure, for luaR_implementtraits to use instead of copying
+    // those functions. Only set while the class statement runs: implementing drops it. Marked in traverseclass.
+    struct LuaTable* compiledtraitcopies;
+
+    // Luwu collections: the number field `#` reads for a builtin container (vec, vecdeque, orderedmap) instead of
+    // calling its `__len`, which returns the same number. LUAR_NO_LENGTH_FIELD for every other class.
+    uint32_t lengthfield;
+
+    // Luwu collections: a builtin class's fast methods by member offset, with NULL for the members that have none. NULL
+    // for every other class. Owned by this class.
+    luaR_FastMethod* fastmethods;
+
+    // Luwu Traits (rfcs/classes/traits.md): the class's version of trait members read through a trait (luaR_getqualified),
+    // keyed by the trait, each a table from a member's name to its function: the class's qualified implementations
+    // (`function Json.name`) and its copies of the defaults of scoped members (`function Self.name`). Until the class
+    // implements its traits, it holds only the qualified implementations, unchecked. NULL when there are none. Marked in
+    // traverseclass.
+    struct LuaTable* qualified;
+
+    // Luwu builtin classes: what `typeof` gives an object of this builtin class ("bundle", "vec", ...), or NULL for
+    // "object". Marked in traverseclass.
+    TString* typeofname;
+
+    // Luwu Native Classes (rfcs/native-classes.md): the number of bytes of native data each new object gets after its
+    // members, zeroed, and the tag that picks their destructor. 0 bytes for a class without native data.
+    uint32_t nativesize;
+    uint8_t nativetag;
+
 } LuauClass;
 
+#define LUAR_NO_LENGTH_FIELD UINT32_MAX
+
+// Luwu Classes (rfcs/classes): the header is 24 bytes on 64-bit platforms, where upstream's is 40. Upstream also
+// stores a `members` pointer, which always points just past the header. Luwu computes it instead (luaR_members) and
+// keeps `numberofmembers` in the padding after CommonHeader, which saves 16 bytes per object.
 typedef struct LuauObject
 {
     CommonHeader;
 
-    GCObject* gclist;
-
-    // The class object that this value is an instance of.
-    LuauClass* lclass;
+    // Luwu collections: what the object's storage block holds (LuwuStorageKind), LUAR_STORAGE_BUNDLE for a bundle, or
+    // LUAR_STORAGE_NONE. The object keeps it because a sweep can free the class first. It sits in the padding after
+    // CommonHeader.
+    uint8_t storagekind;
 
     // The number of members that this instance contains. We need this in order
     // to free ourselves if we got swept in the same GC cycle as our class
     // pointer.
     uint32_t numberofmembers;
 
-    // The fields of this instance.
-    TValue* members;
+    GCObject* gclist;
+
+    // The class object that this value is an instance of.
+    LuauClass* lclass;
 
 } LuauObject;
 
+// Luwu collections: the kinds of storage block a builtin container owns (LuauObject::storagekind), and bundles. Each kind
+// is a separate bit, so native code tests for either container with one instruction.
+enum LuwuStorageKind
+{
+    LUAR_STORAGE_NONE = 0,
+    // `Vec`: entries 1 to count in items[0] to items[count - 1]
+    LUAR_STORAGE_VEC = 1,
+    // `VecDeque`: a ring. The entry i places from the front is in items[(head + i) & (capacity - 1)].
+    LUAR_STORAGE_RING = 2,
+    // Luwu bundles: no storage block. The values are the object's members, and a LuauBundleKey follows them in the same
+    // allocation (luaR_bundlekey).
+    LUAR_STORAGE_BUNDLE = 4,
+    // Luwu Native Classes (rfcs/native-classes.md): no storage block. A LuauNativeData header follows the members in the
+    // same allocation, and the embedder's bytes follow it (luaR_objectdata).
+    LUAR_STORAGE_NATIVE = 8,
+};
+
+// Luwu collections: the kinds that own a storage block
+#define LUAR_STORAGE_CONTAINER (LUAR_STORAGE_VEC | LUAR_STORAGE_RING)
+
+// Luwu bundles: what a bundle's key compares by, computed once when the bundle is built. Its values can't change, and
+// each one hashes by identity or by a value that can't change either.
+typedef struct LuauBundleKey
+{
+    // The hash of every value, nested bundles by their hashes (luaR_keyhash)
+    uint32_t hash;
+    // The number of values and bundles in the tree it unfolds to, itself included. Saturates at UINT32_MAX.
+    uint32_t weight;
+} LuauBundleKey;
+
+// Luwu Native Classes (rfcs/native-classes.md): the header of an object's native data. The object stores the size and
+// the tag itself because a sweep can free the class first.
+typedef struct LuauNativeData
+{
+    uint32_t size;
+    // Picks the destructor (global_State::objectdtors)
+    uint8_t tag;
+    uint8_t padding[3];
+} LuauNativeData;
+
+// Luwu collections: the entries of a `Vec` or `VecDeque`, in a block the object owns from its first value on. The
+// object's first member points to it as light userdata, and is nil before the first value. It's allocated with luaM_
+// in the object's memory category and freed with the object (luaR_freeobject). traverseobject marks the element type and the live entries; the slots
+// after them are never read.
+typedef struct LuauStorage
+{
+    uint32_t count;
+    // The number of slots in `items`, always a power of two
+    uint32_t capacity;
+    // A ring's front slot; always 0 for a `Vec`, so the ring's formula finds a `Vec`'s entries too
+    uint32_t head;
+    // The type the first value fixed (see lcollectionslib.cpp): the tag every entry has, or LUAR_STORAGE_ENUM when the
+    // entries are the values of a builtin enum. Entries tagged LUA_TOBJECT are objects of `elementclass`.
+    uint8_t elementtag;
+    // The builtin enum when `elementtag` is LUAR_STORAGE_ENUM
+    uint8_t elementenum;
+    uint16_t padding;
+    struct LuauClass* elementclass;
+    TValue items[1];
+} LuauStorage;
+
+// Luwu try expressions: LuauStorage::elementtag for a builtin enum, which no value's tag matches
+#define LUAR_STORAGE_ENUM 0xff
+
+// Luwu collections: the member of a builtin container that points to its LuauStorage
+#define LUAR_STORAGE_MEMBER 0
+
 // Luwu Classes (rfcs/classes): an object's members are allocated inline, immediately after its
-// header (luaR_objectsize, luaR_newobject, luaR_newobjectuninit), so `members` always equals
-// `(TValue*)(object + 1)`. Native code addresses members from the object pointer with this offset
-// instead of loading `members`; anything that ever allocates members out of line must change both.
+// header (luaR_objectsize, luaR_newobject, luaR_newobjectuninit). Native code addresses them from the
+// object pointer with this offset; anything that ever allocates members out of line must change it
+// and luaR_members.
 #define LUAR_OBJECT_MEMBERS_OFFSET sizeof(LuauObject)
+
+// Luwu Classes (rfcs/classes): the fields of `object`, which follow its header
+LUAU_FORCEINLINE TValue* luaR_members(LuauObject* object)
+{
+    return reinterpret_cast<TValue*>(object + 1);
+}
+
+LUAU_FORCEINLINE const TValue* luaR_members(const LuauObject* object)
+{
+    return reinterpret_cast<const TValue*>(object + 1);
+}
 
 /*
 ** `module' operation for hashing (size is always a power of 2)

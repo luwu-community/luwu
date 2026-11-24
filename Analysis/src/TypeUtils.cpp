@@ -10,6 +10,7 @@
 #include "Luau/Type.h"
 #include "Luau/TypeInfer.h"
 #include "Luau/TypePack.h"
+#include "Luau/VisitType.h"
 
 #include <algorithm>
 
@@ -521,6 +522,22 @@ std::optional<TypeId> mergeUnionMethods(NotNull<BuiltinTypes> builtinTypes, NotN
     merged.argNames = first->argNames;
     merged.hasSelf = true;
     return arena->addType(std::move(merged));
+}
+
+TypeId expectedTraitFunction(TypeId ty)
+{
+    ty = follow(ty);
+
+    if (const UnionType* options = get<UnionType>(ty))
+    {
+        for (TypeId option : options->options)
+        {
+            if (!isNil(option))
+                return follow(option);
+        }
+    }
+
+    return ty;
 }
 
 ErrorSuppression shouldSuppressErrors(NotNull<Normalizer> normalizer, TypeId ty)
@@ -1278,6 +1295,199 @@ std::optional<std::string> describeOptionalOperands(TypeId left, std::optional<T
 bool isInsideClassDeclaration(const ExternType* cls, const ModuleName& moduleName, const Location& location)
 {
     return cls->definitionLocation && cls->definitionModuleName == moduleName && cls->definitionLocation->encloses(location);
+}
+
+static const char* luwuNominalKindOfExternType(const ExternType* etv)
+{
+    // The roots `object`, `class` and `trait` have no root of their own.
+    const ExternType* rootEtv = etv->root ? get<ExternType>(follow(*etv->root)) : etv;
+    if (!rootEtv)
+        return nullptr;
+
+    if (rootEtv->name == "object")
+        return "object";
+    if (rootEtv->name == "class")
+        return "class";
+    if (rootEtv->name == "trait")
+        return "trait";
+
+    return nullptr;
+}
+
+const char* luwuNominalKind(TypeId ty)
+{
+    ty = follow(ty);
+
+    if (const ExternType* etv = get<ExternType>(ty))
+        return luwuNominalKindOfExternType(etv);
+
+    const UnionType* utv = get<UnionType>(ty);
+    if (!utv)
+        return nullptr;
+
+    // UnionTypeIterator follows and flattens nested unions, and stops on cycles.
+    const char* kind = nullptr;
+    for (TypeId option : utv)
+    {
+        const ExternType* etv = get<ExternType>(option);
+        const char* optionKind = etv ? luwuNominalKindOfExternType(etv) : nullptr;
+        if (!optionKind || (kind && std::string_view(kind) != optionKind))
+            return nullptr;
+
+        kind = optionKind;
+    }
+
+    return kind;
+}
+
+std::string describeLuwuNominalValue(TypeId ty)
+{
+    ty = follow(ty);
+    const ExternType* etv = get<ExternType>(ty);
+    const char* kind = etv ? luwuNominalKindOfExternType(etv) : nullptr;
+    if (!kind)
+        return "'" + toString(ty) + "'";
+
+    if (std::string_view(kind) != "object")
+        return std::string(kind) + " '" + etv->name + "'";
+
+    // An object's type points at its declaration (a class or a trait) through a `Klass` relation.
+    const Klass* klass = etv->relation ? etv->relation->get_if<Klass>() : nullptr;
+    const char* declarationKind = klass ? luwuNominalKind(klass->ty) : nullptr;
+    if (declarationKind && std::string_view(declarationKind) == "trait")
+        return "an object implementing '" + etv->name + "'";
+
+    // toString keeps a generic class's type arguments (`Box<number>`)
+    return "an object of class '" + toString(ty) + "'";
+}
+
+std::string luwuNominalCheckSuggestion(const std::string& declarationName, bool isTrait)
+{
+    if (isTrait)
+        return "to check whether a value implements '" + declarationName + "', use 'class.implements(value, " + declarationName + ")'";
+
+    return "to check whether a value is an object of class '" + declarationName + "', use 'class.isinstance(value, " + declarationName + ")'";
+}
+
+void applyDeprecatedAttribute(Property& prop, const AstArray<AstAttr*>& attributes)
+{
+    std::optional<AstAttr::DeprecatedInfo> info = findDeprecatedInfo(attributes);
+    if (!info)
+        return;
+
+    prop.deprecated = true;
+    if (info->use)
+        prop.deprecatedSuggestion = *info->use;
+}
+
+std::optional<TypeId> genericClassValueType(const Scope& scope, const AstType* argument)
+{
+    const AstTypeReference* ref = argument->as<AstTypeReference>();
+    if (!ref || ref->hasParameterList)
+        return std::nullopt;
+
+    std::optional<TypeFun> alias;
+    if (ref->prefix)
+        alias = scope.lookupImportedType(ref->prefix->value, ref->name.value);
+    else
+        alias = scope.lookupType(ref->name.value);
+
+    if (!alias || (alias->typeParams.empty() && alias->typePackParams.empty()))
+        return std::nullopt;
+
+    const ExternType* object = get<ExternType>(follow(alias->type));
+    if (!object || !object->relation)
+        return std::nullopt;
+
+    const Klass* klass = object->relation->get_if<Klass>();
+    if (!klass)
+        return std::nullopt;
+
+    return klass->ty;
+}
+
+std::optional<TypeId> classValueCallType(NotNull<BuiltinTypes> builtinTypes, TypeId ty)
+{
+    const ExternType* etv = get<ExternType>(follow(ty));
+    bool isClassOrTraitValue = etv && (etv->root == builtinTypes->classType || etv->root == builtinTypes->traitType);
+    if (!isClassOrTraitValue || !etv->metatable)
+        return std::nullopt;
+
+    const TableType* metatable = get<TableType>(follow(*etv->metatable));
+    auto call = metatable ? metatable->props.find("__call") : TableType::Props::const_iterator{};
+    if (!metatable || call == metatable->props.end() || !call->second.readTy)
+        return std::nullopt;
+
+    return *call->second.readTy;
+}
+
+TypeId withoutFirstParameter(TypeArena& arena, TypeId fnTy)
+{
+    const FunctionType* fn = get<FunctionType>(follow(fnTy));
+    if (!fn)
+        return fnTy;
+
+    auto [args, tail] = flatten(fn->argTypes);
+    if (args.empty())
+        return fnTy;
+
+    args.erase(args.begin());
+    FunctionType copy = *fn;
+    copy.argTypes = arena.addTypePack(TypePack{std::move(args), tail});
+    if (!copy.argNames.empty())
+        copy.argNames.erase(copy.argNames.begin());
+    copy.hasSelf = false;
+    return arena.addType(std::move(copy));
+}
+
+bool containsErrorType(TypeId ty)
+{
+    // TypeOnceVisitor visits each type once, so a cyclic type ends
+    struct ErrorTypeFinder : TypeOnceVisitor
+    {
+        bool found = false;
+
+        ErrorTypeFinder()
+            : TypeOnceVisitor("ErrorTypeFinder", /* skipBoundTypes */ true)
+        {
+        }
+
+        bool visit(TypeId ty) override
+        {
+            return !found;
+        }
+
+        bool visit(TypeId ty, const ErrorType&) override
+        {
+            found = true;
+            return false;
+        }
+
+        // A nominal type's members were checked where it is declared; only its type arguments are part of `ty`
+        bool visit(TypeId ty, const ExternType& etv) override
+        {
+            for (TypeId arg : etv.instantiatedTypeParams)
+                traverse(arg);
+            for (TypePackId arg : etv.instantiatedTypePackParams)
+                traverse(arg);
+            return false;
+        }
+
+        bool visit(TypePackId tp) override
+        {
+            return !found;
+        }
+
+        bool visit(TypePackId tp, const ErrorTypePack&) override
+        {
+            found = true;
+            return false;
+        }
+    };
+
+    ErrorTypeFinder finder;
+    finder.traverse(ty);
+    return finder.found;
 }
 
 } // namespace Luau

@@ -544,6 +544,14 @@ struct BytecodeGraphSerializer
 
         case LOP_NEWCLASSMEMBER:
             LUAU_ASSERT(FFlag::LuwuClasses);
+            // Luwu Classes (rfcs/classes): the constructor's form is an immediate where a member's name would be
+            if (insn.ops[2].kind == BcOpKind::Imm)
+            {
+                bcb.emitABC(LOP_NEWCLASSMEMBER, getRegInput(insn, 0), uint8_t(getImmInt(insn, 2)), getRegInput(insn, 1));
+                bcb.emitAux(0);
+                break;
+            }
+
             bcb.emitABC(LOP_NEWCLASSMEMBER, getRegInput(insn, 0), 0, getRegInput(insn, 1));
             bcb.emitAux(getVmConstInputAux(insn, 2));
             break;
@@ -566,6 +574,11 @@ struct BytecodeGraphSerializer
             bcb.emitAux(getVmConstInputAux(insn, 4));
             break;
 
+        case LOP_GETQUALIFIED:
+            bcb.emitABC(LOP_GETQUALIFIED, getRegister(insnOp), getRegInput(insn, 0), getRegInput(insn, 1));
+            bcb.emitAux(getVmConstInputAux(insn, 2));
+            break;
+
         case LOP_GETOBJECTMEMBER:
             bcb.emitABC(LOP_GETOBJECTMEMBER, getRegister(insnOp), getRegInput(insn, 0), 0);
             bcb.emitAux(getImmInt(insn, 1));
@@ -581,6 +594,13 @@ struct BytecodeGraphSerializer
             bcb.emitAux(getImmInt(insn, 2));
             break;
 
+        // Luwu: BytecodeGraphParser doesn't build a graph for a function using these
+        case LOP_INITTRAITS:
+        case LOP_GETTABLEBUNDLE:
+        case LOP_SETTABLEBUNDLE:
+        // Luwu try expressions: the parser refuses functions with protected ranges
+        case LOP_WRAPRESULT:
+        case LOP_RESULTGET:
         case LOP__COUNT:
             LUAU_UNREACHABLE();
         }

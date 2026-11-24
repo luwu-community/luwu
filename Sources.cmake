@@ -245,6 +245,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/IterativeTypeVisitor.h
     Analysis/include/Luau/JsonEmitter.h
     Analysis/include/Luau/Linter.h
+    Analysis/include/Luau/LuwuOnlyApi.h
     Analysis/include/Luau/LValue.h
     Analysis/include/Luau/Metamethods.h
     Analysis/include/Luau/MismatchExplanation.h
@@ -447,6 +448,8 @@ target_sources(Luwu.VM PRIVATE
     VM/src/lvmexecute.cpp
     VM/src/lclass.cpp
     VM/src/lclasslib.cpp
+    VM/src/lcollectionslib.cpp
+    VM/src/lresultlib.cpp
     VM/src/lvector.cpp
     VM/src/lvmload.cpp
     VM/src/lvmutils.cpp

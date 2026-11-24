@@ -176,6 +176,8 @@ private:
     ControlFlow visit(AstStatDeclareFunction* d);
     ControlFlow visit(AstStatDeclareExternType* d);
     ControlFlow visit(AstStatClass* d);
+    ControlFlow visit(AstStatDeclareClass* d);
+    void visitClassShape(AstStatClass* d);
     ControlFlow visit(AstStatError* error);
 
     DataFlowResult visitExpr(AstExpr* e);
@@ -196,6 +198,7 @@ private:
     DataFlowResult visitExpr(AstExprIfElse* i);
     DataFlowResult visitExpr(AstExprInterpString* i);
     DataFlowResult visitExpr(AstExprInstantiate* i);
+    DataFlowResult visitExpr(AstExprTry* t);
     DataFlowResult visitExpr(AstExprError* error);
 
     void visitLValue(AstExpr* e, DefId incomingDef);

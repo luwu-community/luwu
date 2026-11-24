@@ -10,6 +10,7 @@
 
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
 
@@ -223,6 +224,8 @@ void BytecodeBuilder::clearState()
     tableShapes.clear();
 
     debugLocals.clear();
+
+    tryRanges.clear();
     debugUpvals.clear();
 
     typedLocals.clear();
@@ -279,6 +282,8 @@ void BytecodeBuilder::endFunction(uint8_t maxstacksize, uint8_t numupvalues, uin
         tableShapes.clear();
 
         debugLocals.clear();
+
+        tryRanges.clear();
         debugUpvals.clear();
 
         typedLocals.clear();
@@ -707,6 +712,19 @@ void BytecodeBuilder::pushDebugLocal(StringRef name, uint8_t reg, uint32_t start
     debugLocals.push_back(local);
 }
 
+void BytecodeBuilder::pushTryRange(uint32_t startpc, uint32_t endpc, uint32_t handlerpc, uint8_t target)
+{
+    LUAU_ASSERT(startpc < endpc && endpc <= handlerpc);
+
+    TryRange range;
+    range.startpc = startpc;
+    range.endpc = endpc;
+    range.handlerpc = handlerpc;
+    range.target = target;
+
+    tryRanges.push_back(range);
+}
+
 void BytecodeBuilder::pushDebugUpval(StringRef name)
 {
     unsigned int index = addStringTableEntry(name);
@@ -1038,6 +1056,24 @@ void BytecodeBuilder::writeFunction(std::string& ss, uint32_t id, uint8_t flags,
 
     if ((flags & LPF_INLINABLE) != 0)
         writeVarInt(ss, cost);
+
+    // Luwu try expressions: only WIP bytecode has protected ranges
+    if (getVersion() == LWBC_VERSION_WIP)
+    {
+        writeVarInt(ss, uint32_t(tryRanges.size()));
+
+        for (const TryRange& range : tryRanges)
+        {
+            writeVarInt(ss, range.startpc);
+            writeVarInt(ss, range.endpc);
+            writeVarInt(ss, range.handlerpc);
+            writeByte(ss, range.target);
+        }
+    }
+    else
+    {
+        LUAU_ASSERT(tryRanges.empty());
+    }
 }
 
 void BytecodeBuilder::writeClassShape(std::string& ss, const ClassShape& cs) const
@@ -1049,6 +1085,12 @@ void BytecodeBuilder::writeClassShape(std::string& ss, const ClassShape& cs) con
     writeVarInt(ss, cs.className);
     writeVarInt(ss, cs.propertyNames.size());
     writeVarInt(ss, cs.methodNames.size());
+    uint32_t shapeFlags = 0;
+    if (cs.isTrait)
+        shapeFlags |= LBC_CLASSSHAPE_TRAIT;
+    if (cs.implementsTraits)
+        shapeFlags |= LBC_CLASSSHAPE_IMPLEMENTS;
+    writeVarInt(ss, shapeFlags);
     // Each member's name and flags byte are written together (properties first, then methods,
     // matching offset order) so the reader can fill in offsetToMember/memberFlags in one pass.
     for (size_t i = 0; i < cs.propertyNames.size(); i++)
@@ -1479,6 +1521,14 @@ std::vector<uint32_t> BytecodeBuilder::expandJumps()
         typedLocal.startpc = remap[typedLocal.startpc];
     }
 
+    for (TryRange& range : tryRanges)
+    {
+        // endpc is exclusive, and a range is never empty
+        range.endpc = remap[range.endpc - 1] + 1;
+        range.startpc = remap[range.startpc];
+        range.handlerpc = remap[range.handlerpc];
+    }
+
     return remap;
 }
 
@@ -1494,8 +1544,8 @@ std::string BytecodeBuilder::getError(const std::string& message)
 
 uint8_t BytecodeBuilder::getVersion()
 {
-    // Luwu Classes (rfcs/classes): class bytecode is still a work-in-progress format
-    if (FFlag::LuwuClasses)
+    // Luwu Classes (rfcs/classes) and Luwu try expressions: work-in-progress formats
+    if (FFlag::LuwuClasses || FFlag::DebugLuwuTryExpressions)
         return LWBC_VERSION_WIP;
 
     return LWBC_VERSION_TARGET;
@@ -1954,9 +2004,26 @@ void BytecodeBuilder::validateInstructions() const
 
         case LOP_NEWCLASSMEMBER:
             VREG(LUAU_INSN_A(insn));
-            LUAU_ASSERT(LUAU_INSN_B(insn) == 0);
-            VREG(LUAU_INSN_C(insn));
-            VCONST(insns[i + 1], String);
+
+            if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
+            {
+                VREGRANGE(LUAU_INSN_C(insn), int(insns[i + 1]) * 2);
+            }
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+            {
+                VREGRANGE(LUAU_INSN_C(insn), 2);
+                VCONST(insns[i + 1], String);
+            }
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_CONSTRUCTOR)
+            {
+                VREG(LUAU_INSN_C(insn));
+            }
+            else
+            {
+                LUAU_ASSERT(LUAU_INSN_B(insn) == 0);
+                VREG(LUAU_INSN_C(insn));
+                VCONST(insns[i + 1], String);
+            }
             break;
 
         case LOP_GETUDATAKS:
@@ -2000,11 +2067,43 @@ void BytecodeBuilder::validateInstructions() const
             break;
 
         case LOP_NEWOBJECT:
-            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_FIELDS);
+            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_APPLY);
             // with a user __init the instruction lays out `__init`, `self` and the arguments above A;
             // the other forms use one register per argument or per field
             VREG(LUAU_INSN_A(insn) + (LUAU_INSN_C(insn) == LBC_NEWOBJECT_INIT ? 2 : 0) + insns[i + 1]);
             VREG(LUAU_INSN_B(insn));
+            break;
+
+        case LOP_INITTRAITS:
+            // the count is in A and the object in A + 1; the CALL that follows names the arguments and the frame
+            VREG(LUAU_INSN_A(insn) + 1);
+            VJUMP(LUAU_INSN_D(insn));
+            break;
+
+        case LOP_WRAPRESULT:
+            // the `err` form reads where the error was raised from the three registers after A
+            LUAU_ASSERT(LUAU_INSN_B(insn) <= LBC_WRAPRESULT_ERR);
+            VREG(LUAU_INSN_A(insn) + (LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR ? 3 : 0));
+            break;
+
+        case LOP_RESULTGET:
+            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_RESULTGET_ERR);
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn) + LBC_TRYRESULT_OKFLAG);
+            break;
+
+        case LOP_GETQUALIFIED:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            VREG(LUAU_INSN_C(insn));
+            VCONST(insns[i + 1], String);
+            break;
+
+        case LOP_GETTABLEBUNDLE:
+        case LOP_SETTABLEBUNDLE:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            VREGRANGE(LUAU_INSN_C(insn), int(insns[i + 1]));
             break;
 
         default:
@@ -2342,7 +2441,15 @@ void BytecodeBuilder::dumpConstant(std::string& result, int k, bool detailed) co
         // This should always be printable, in fact this should always be a
         // valid Luau identifier!
         LUAU_ASSERT(printableStringConstant(str.data, str.length));
-        formatAppend(result, "class %.*s (props: %zu, methods: %zu)", int(str.length), str.data, cs.propertyNames.size(), cs.methodNames.size());
+        formatAppend(
+            result,
+            "%s %.*s (props: %zu, methods: %zu)",
+            cs.isTrait ? "trait" : "class",
+            int(str.length),
+            str.data,
+            cs.propertyNames.size(),
+            cs.methodNames.size()
+        );
     }
     }
 }
@@ -2773,9 +2880,27 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         break;
 
     case LOP_NEWCLASSMEMBER:
-        formatAppend(result, "NEWCLASSMEMBER R%d R%d [", LUAU_INSN_A(insn), LUAU_INSN_C(insn));
-        dumpConstant(result, *code, false);
-        result.append("]\n");
+        if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
+        {
+            formatAppend(result, "NEWCLASSMEMBER R%d IMPLEMENTS R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_C(insn), int(*code));
+        }
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+        {
+            const char* form = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY ? "TRAITCOPY" : "QUALIFIED";
+            formatAppend(result, "NEWCLASSMEMBER R%d %s R%d R%d [", LUAU_INSN_A(insn), form, LUAU_INSN_C(insn), LUAU_INSN_C(insn) + 1);
+            dumpConstant(result, *code, false);
+            result.append("]\n");
+        }
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_CONSTRUCTOR)
+        {
+            formatAppend(result, "NEWCLASSMEMBER R%d CONSTRUCTOR R%d\n", LUAU_INSN_A(insn), LUAU_INSN_C(insn));
+        }
+        else
+        {
+            formatAppend(result, "NEWCLASSMEMBER R%d R%d [", LUAU_INSN_A(insn), LUAU_INSN_C(insn));
+            dumpConstant(result, *code, false);
+            result.append("]\n");
+        }
         code++;
         break;
 
@@ -2814,10 +2939,41 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_NEWOBJECT:
     {
-        const char* form = LUAU_INSN_C(insn) == LBC_NEWOBJECT_INIT ? " INIT" : (LUAU_INSN_C(insn) == LBC_NEWOBJECT_FIELDS ? " FIELDS" : "");
-        formatAppend(result, "NEWOBJECT R%d R%d %d%s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++, form);
+        static const char* const kForms[] = {"", " INIT", " FIELDS", " ALLOC", " APPLY"};
+        LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_APPLY);
+        formatAppend(result, "NEWOBJECT R%d R%d %d%s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++, kForms[LUAU_INSN_C(insn)]);
         break;
     }
+
+    case LOP_INITTRAITS:
+        formatAppend(result, "INITTRAITS R%d L%d\n", LUAU_INSN_A(insn), targetLabel);
+        break;
+
+    case LOP_WRAPRESULT:
+        formatAppend(result, "WRAPRESULT R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR ? "ERR" : "OK");
+        break;
+
+    case LOP_RESULTGET:
+        formatAppend(
+            result, "RESULTGET R%d R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn) == LBC_RESULTGET_ERR ? "ERR" : "OK"
+        );
+        break;
+
+    case LOP_GETTABLEBUNDLE:
+    case LOP_SETTABLEBUNDLE:
+    {
+        const char* name = LUAU_INSN_OP(insn) == LOP_GETTABLEBUNDLE ? "GETTABLEBUNDLE" : "SETTABLEBUNDLE";
+        formatAppend(result, "%s R%d R%d R%d %d\n", name, LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), int(*code));
+        code++;
+        break;
+    }
+
+    case LOP_GETQUALIFIED:
+        formatAppend(result, "GETQUALIFIED R%d R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), *code);
+        dumpConstant(result, *code, false);
+        result.append("]\n");
+        code++;
+        break;
 
     default:
         LUAU_ASSERT(!"Unsupported opcode");
@@ -2946,6 +3102,13 @@ std::string BytecodeBuilder::dumpCurrentFunction(std::vector<int>& dumpinstoffs)
 
             formatAppend(result, "R%d: %s%s from %d to %d\n", l.reg, name, optional, l.startpc, l.endpc);
         }
+    }
+
+    // Luwu try expressions: the protected ranges, with pcs as the code below numbers them
+    if (dumpFlags & Dump_Code)
+    {
+        for (const TryRange& range : tryRanges)
+            formatAppend(result, "try: pc %d to %d, handler pc %d, R%d\n", range.startpc, range.endpc - 1, range.handlerpc, range.target);
     }
 
     if (dumpFlags & Dump_Constants)

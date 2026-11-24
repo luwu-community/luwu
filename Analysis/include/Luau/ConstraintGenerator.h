@@ -135,6 +135,18 @@ struct ConstraintGenerator
     // Map a function's signature scope back to its signature type.
     DenseHashMap<Scope*, TypeId> scopeToFunction{nullptr};
 
+    // Luwu try expressions: what the functions being checked raise with `error` and `assert`, innermost last.
+    // checkFunctionBody joins a function's onto its error hint.
+    struct RaisedErrors
+    {
+        // `error(...)` as the body's last statement: reaching it is a bug, not an error the function raises
+        AstExprCall* unreachableError = nullptr;
+        // the function's `! E` hint: its body's errors are checked against it instead of joining it
+        std::optional<TypeId> declared;
+        std::vector<TypeId> types;
+    };
+    std::vector<RaisedErrors> raisedErrors;
+
     // The private scope of type aliases for which the type parameters belong to.
     DenseHashMap<const AstStatTypeAlias*, ScopePtr> astTypeAliasDefiningScopes{nullptr};
 
@@ -147,6 +159,11 @@ struct ConstraintGenerator
     // class referenced past a control-flow join by its binding, and must not do that for any other
     // global: see the comment there.
     DenseHashSet<AstName> classGlobalNames{AstName{}};
+
+    // Luwu Declare Statements (rfcs/declare-statements.md): the placeholder type of each global a non-definition
+    // module declares. The whole file sees a declaration, so hoistDeclarations binds these before any code is
+    // visited, and the declaration's visit binds its placeholder to the declared type.
+    DenseHashMap<AstName, TypeId> hoistedDeclarations{AstName{}};
 
     NotNull<const DataFlowGraph> dfg;
     RefinementArena refinementArena;
@@ -162,6 +179,18 @@ struct ConstraintGenerator
     // Needed to register all available type functions for execution at later stages.
     NotNull<TypeFunctionRuntime> typeFunctionRuntime;
     DenseHashMap<const AstStatTypeFunction*, ScopePtr> astTypeFunctionEnvironmentScopes{nullptr};
+
+    // Luwu collections: an empty `Vec()` or `VecDeque()` whose local's next use is a push takes its element type from
+    // that push (findFirstPushes), the way the runtime fixes it from the first value. The constructor call's element
+    // type, bound by the push.
+    DenseHashMap<const AstExprCall*, TypeId> firstPushElementTypes{nullptr};
+    struct FirstPush
+    {
+        TypeId elementType;
+        // Which argument of the push holds the value
+        size_t valueIndex;
+    };
+    DenseHashMap<const AstExprCall*, FirstPush> firstPushes{nullptr};
 
     // Needed to resolve modules to make 'require' import types properly.
     NotNull<ModuleResolver> moduleResolver;
@@ -332,12 +361,92 @@ private:
     );
 
     LUAU_NOINLINE void prototypeTypeDefinitions(const ScopePtr& scope, AstStatBlock* block);
+    // Luwu Traits (rfcs/classes/traits.md): after the traits of a block are prototyped, record the traits each one needs.
+    void linkTraitNeeds(const ScopePtr& scope, const AstArray<AstStat*>& statements);
+    // Luwu Traits (rfcs/classes/traits.md): record the type arguments `trait`'s `needs` entry `ref` gives the trait it
+    // names (`needs Base<T>`), on `traitType`
+    void recordNeededTypeArguments(AstStatClass* trait, const AstClassTraitRef& ref, TypeId needed, ExternType* traitType);
+    // Luwu Traits (rfcs/classes/traits.md): the trait an `implements`/`needs` entry names, as its object type, or nullptr.
+    TypeId resolveTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref);
+    // Luwu Traits (rfcs/classes/traits.md): type calling `class<Trait>` from the trait's expected `__init` signature.
+    void bindTraitImplementorConstructor(ClassDeclRecord* traitRecord, TypeId initSignature);
+    // Luwu Traits (rfcs/classes/traits.md): record the traits a class implements and give it the members they provide.
+    // Returns the types of the fields the traits expect, by name.
+    std::map<Name, TypeId> implementTraits(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record);
+
+    // Luwu Traits (rfcs/classes/traits.md): a generic trait instantiated by an `implements` entry's type arguments
+    struct TraitInstantiation
+    {
+        // the instantiated trait, expanded by the solver
+        TypeId instantiated;
+        // the trait's generics, and the type each one stands for here
+        std::vector<TypeId> params;
+        std::vector<TypeId> args;
+    };
+    std::optional<TraitInstantiation> instantiateTraitRef(const ScopePtr& scope, const AstClassTraitRef& ref);
+    // Luwu Traits (rfcs/classes/traits.md): the type of `self` in each trait method generic over `Self` (`Self & Trait`).
+    // `class.of(self)(...)` there makes another object of self's class, so it has that type too (checkPack).
+    DenseHashSet<TypeId> traitSelfTypes{nullptr};
+
+    // Luwu Traits (rfcs/classes/traits.md): set while checking the signature of an override, whose expected type is the
+    // function it overrides. Its unannotated `...` then takes that function's variadic type too, which upstream leaves
+    // `any` for a lambda's.
+    bool checkingOverride = false;
+
+    // Luwu Traits (rfcs/classes/traits.md): each trait's function signatures in this module, keyed by the trait's object type,
+    // as checkFunctionSignature made them. A function's member type is blocked until the solver generalizes it, so an
+    // override in this module reads the function it overrides from here.
+    DenseHashMap<TypeId, std::map<Name, TypeId>> traitFunctionSignatures{nullptr};
+
+    // Luwu Traits (rfcs/classes/traits.md): records the template of a trait field naming `Self` (TraitInfo::selfFieldTemplates)
+    void resolveSelfFieldTemplate(const ScopePtr& traitScope, ClassDeclRecord* trait, const AstClassProperty& field);
+    // Luwu Traits (rfcs/classes/traits.md): `trait` instantiated with `args`, for a trait implied through `needs`.
+    // `copiedReferences` are alias references substituting the arguments copied, which this expands with the rest.
+    TraitInstantiation instantiateImpliedTrait(
+        const ScopePtr& scope,
+        Location location,
+        TypeId trait,
+        std::vector<TypeId> args,
+        std::vector<TypeId> copiedReferences
+    );
+    // Luwu Traits (rfcs/classes/traits.md): `ty`, a type from `trait`'s declaration, as `instantiation` of it sees it
+    TypeId instantiateTraitMember(
+        const ScopePtr& scope,
+        Location location,
+        TypeId trait,
+        const TraitInstantiation& instantiation,
+        TypeId ty
+    );
+    Property instantiateTraitProperty(
+        const ScopePtr& scope,
+        Location location,
+        TypeId trait,
+        const TraitInstantiation& instantiation,
+        const Property& prop
+    );
+    // Luwu Traits (rfcs/classes/traits.md): checks the arguments of each `implements` entry against its trait's parameters,
+    // in the scope the class's field initializers are checked in
+    void checkTraitArguments(const ScopePtr& initializerScope, AstStatClass* cls);
+    // Luwu Traits (rfcs/classes/traits.md): a class's `function Json.name`, checked like an override of trait Json's `name`
+    // with `self` the class
+    void checkQualifiedImplementation(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record, const AstClassMethod& method, bool declared);
+    // Luwu Traits (rfcs/classes/traits.md): the scoped functions the class's listed traits expect, which it implements as
+    // `function Trait.name`, and the ones its needed traits expect, which a trait declares as `function Self.name`
+    void checkScopedExpectations(const ScopePtr& scope, AstStatClass* cls);
+    void prototypeClass(
+        const ScopePtr& scope,
+        AstStatClass* classDecl,
+        DenseHashMap<Name, Location>& typeNameLocations,
+        bool declared
+    );
 
     ControlFlow visitBlockWithoutChildScope(const ScopePtr& scope, AstStatBlock* block);
+    void findFirstPushes(AstStatBlock* block);
 
     ControlFlow visit(const ScopePtr& scope, AstStat* stat);
     ControlFlow visit(const ScopePtr& scope, AstStatBlock* block);
     ControlFlow visit(const ScopePtr& scope, AstStatLocal* local);
+    void importRequiredTypes(const ScopePtr& scope, AstStatLocal* statLocal);
     ControlFlow visit(const ScopePtr& scope, AstStatFor* for_);
     ControlFlow visit(const ScopePtr& scope, AstStatForIn* forIn);
     ControlFlow visit(const ScopePtr& scope, AstStatWhile* while_);
@@ -351,6 +460,8 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatTypeAlias* alias);
     ControlFlow visit(const ScopePtr& scope, AstStatTypeFunction* function);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareGlobal* declareGlobal);
+    ControlFlow visit(const ScopePtr& scope, AstStatDeclareClass* declaredClass);
+    void visitClass(const ScopePtr& scope, AstStatClass* statClass, bool declared);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareExternType* declaredExternType);
     ControlFlow visit(const ScopePtr& scope, AstStatDeclareFunction* global);
     ControlFlow visit(const ScopePtr& scope, AstStatClass* statClass);
@@ -413,6 +524,7 @@ private:
     Inference check(const ScopePtr& scope, AstExprTypeAssertion* typeAssert);
     Inference check(const ScopePtr& scope, AstExprInterpString* interpString);
     Inference check(const ScopePtr& scope, AstExprInstantiate* explicitTypeInstantiation);
+    Inference check(const ScopePtr& scope, AstExprTry* tryExpr);
     Inference check(const ScopePtr& scope, AstExprTable* expr, std::optional<TypeId> expectedType);
     std::tuple<TypeId, TypeId, RefinementId> checkBinary(
         const ScopePtr& scope,
@@ -423,6 +535,7 @@ private:
     );
 
     void visitLValue(const ScopePtr& scope, AstExpr* expr, TypeId rhsType);
+    std::optional<TypeId> expectedTypeOfAssignedBundle(const ScopePtr& scope, AstExpr* target, AstExpr* value);
     void visitLValue(const ScopePtr& scope, AstExprLocal* local, TypeId rhsType);
     void visitLValue(const ScopePtr& scope, AstExprGlobal* global, TypeId rhsType);
     void visitLValue(const ScopePtr& scope, AstExprIndexName* expr, TypeId rhsType);
@@ -439,6 +552,10 @@ private:
         // The scope that encompasses the function's body. Is a child scope of
         // signatureScope, if present.
         ScopePtr bodyScope;
+        // Luwu Traits (rfcs/classes/traits.md): for a trait method generic over `Self`, that generic and the type of
+        // `self` (`Self & Trait`)
+        TypeId traitSelf = nullptr;
+        TypeId traitSelfType = nullptr;
     };
 
     FunctionSignature checkFunctionSignature(
@@ -455,9 +572,35 @@ private:
      * @param fn the function expression to check.
      */
     void checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn);
+    void recordRaisedError(
+        const ScopePtr& scope,
+        AstExprCall* call,
+        const std::vector<TypeId>& args,
+        std::optional<TypePackId> argTail
+    );
+    TypeId raisedErrorType(
+        const ScopePtr& scope,
+        AstExprCall* call,
+        const std::vector<TypeId>& args,
+        std::optional<TypePackId> argTail
+    );
+    std::optional<TypeId> annotatedHintFor(AstExprCall* call, size_t index);
+    void weakenUnknownMembers(AstTypeUnion* annotation, std::vector<TypeId>& members);
+    std::optional<FunctionType::TruthyRefinement> resolveTruthyRefinement(const ScopePtr& signatureScope, AstExprFunction* fn);
 
     // Specializations of 'resolveType' below
     TypeId resolveReferenceType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref, bool inTypeArguments, bool replaceErrorWithFresh);
+    // Luwu try expressions: the return annotation being resolved, when it's exactly one alias reference: the one place an
+    // alias with an error hint may go
+    AstTypeReference* hintedAliasReturn = nullptr;
+    TypePackId resolveReturnTypePack(
+        const ScopePtr& scope,
+        AstTypePack* returns,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh,
+        std::optional<Polarity> initialPolarity = std::nullopt
+    );
+    std::optional<TypeId> returnErrorHint(const ScopePtr& scope, AstTypePack* returns, std::optional<TypeId> declared, bool inTypeArguments);
     TypeId resolveTableType(const ScopePtr& scope, AstType* ty, AstTypeTable* tab, bool inTypeArguments, bool replaceErrorWithFresh);
     TypeId resolveFunctionType(const ScopePtr& scope, AstType* ty, AstTypeFunction* fn, bool inTypeArguments, bool replaceErrorWithFresh);
 
@@ -576,6 +719,12 @@ private:
      * initial scan of the AST and note what globals are defined.
      */
     void prepopulateGlobalScope(const ScopePtr& globalScope, AstStatBlock* program);
+
+    bool declaresFileGlobals() const;
+    void hoistDeclarations(AstStatBlock* block);
+    void bindDeclaration(AstName name, TypeId declaredTy);
+    void collectNestedTypeDeclarations(AstStatBlock* block, std::vector<AstStat*>& out);
+    std::unordered_map<Name, TypeFun>& externTypeBindings(Scope& scope, const AstStatDeclareExternType* declaration);
 
     // Luwu forwarded module types: a module root returning another module's value exports that module's types too
     void forwardRequiredTypes(AstStatBlock* block);

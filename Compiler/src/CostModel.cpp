@@ -220,6 +220,15 @@ struct CostVisitor : AstVisitor
         {
             return model(expr->expr);
         }
+        else if (AstExprSelfClass* expr = node->as<AstExprSelfClass>())
+        {
+            return model(expr->classOf);
+        }
+        else if (AstExprTry* expr = node->as<AstExprTry>())
+        {
+            // Luwu try expressions: wrapping the value and jumping over the handler
+            return model(expr->expr) + 3;
+        }
         else
         {
             LUAU_ASSERT(!"Unknown expression type");

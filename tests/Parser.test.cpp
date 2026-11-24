@@ -2,6 +2,7 @@
 #include "Luau/Parser.h"
 
 #include "AstQueryDsl.h"
+#include "Typewriter.h"
 #include "Fixture.h"
 #include "Luau/Ast.h"
 #include "Luau/Common.h"
@@ -19,12 +20,17 @@ LUAU_FASTINT(LuauTypeLengthLimit)
 LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_DYNAMIC_FASTFLAG(DebugLuauReportReturnTypeVariadicWithTypeSuffix)
 LUAU_FASTFLAG(LuauExportValueSyntax)
-LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(LuwuNoinlineAttribute)
+LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuDeclareStatements)
+LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuauTrackPrefixLocal)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuExternTypeGenericMethods)
 LUAU_FASTFLAG(LuwuGenericNominals)
 
@@ -2322,8 +2328,12 @@ TEST_CASE_FIXTURE(Fixture, "parse_declarations")
     CHECK(varFunc->vararg);
     CHECK(varFunc->varargLocation == Location({3, 29}, {3, 32}));
 
-    matchParseError("declare function foo(x)", "All declaration parameters must be annotated");
-    matchParseError("declare foo", "Expected ':' when parsing global variable declaration, got <eof>");
+    {
+        // Luwu Declare Statements (rfcs/declare-statements.md) lets a declared value leave its types out
+        ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+        matchParseError("declare function foo(x)", "All declaration parameters must be annotated");
+        matchParseError("declare foo", "Expected ':' when parsing global variable declaration, got <eof>");
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_gated")
@@ -2400,6 +2410,215 @@ TEST_CASE_FIXTURE(Fixture, "disabled_luwu_features_say_which_fflag_enables_them"
     CHECK_EQ(result.errors[0].getMessage(), "attempt to use disabled Luwu feature classes; enable via FFlag 'LuwuClasses'");
 }
 
+// Luwu try expressions: the whole value of a local, if it's a `try` expression
+static AstExprTry* tryExprOf(AstStatBlock* block, size_t index)
+{
+    if (!block || index >= block->body.size)
+        return nullptr;
+    AstStatLocal* local = block->body.data[index]->as<AstStatLocal>();
+    if (!local || local->values.size != 1)
+        return nullptr;
+    return local->values.data[0]->as<AstExprTry>();
+}
+
+TEST_CASE_FIXTURE(Fixture, "try_takes_the_whole_expression_after_it")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    AstStatBlock* block = parse(R"(
+        local function f(...)
+            local a = try g(x)
+            local b = try x + y * z
+            local c = try not x
+            local d = try #t
+            local e = try ...
+            local f = try 1
+            local g = try nil
+            local h = try `x{y}`
+            local i = try none
+        end
+    )");
+    REQUIRE(block);
+    AstStatLocalFunction* f = block->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(f);
+    AstStatBlock* body = f->func->body;
+    REQUIRE_EQ(body->body.size, 9);
+
+    for (size_t i = 0; i < body->body.size; i++)
+        CHECK_MESSAGE(tryExprOf(body, i), "local " << i << " isn't a try expression");
+
+    AstExprTry* sum = tryExprOf(body, 1);
+    REQUIRE(sum);
+    CHECK(sum->expr->is<AstExprBinary>());
+    CHECK_EQ(sum->tryLocation, Location{{3, 22}, {3, 25}});
+}
+
+// Luwu try expressions: wherever Luau reads `try` as a name, so does Luwu
+TEST_CASE_FIXTURE(Fixture, "try_stays_a_name_where_luau_reads_one")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    AstStatBlock* block = parse(R"(
+        local a = try(x)
+        local b = try.x
+        local c = try:m()
+        local d = try - 1
+        local e = try "s"
+        local f = try { 1 }
+        local g = try[1]
+        local h = try
+        local i = 1
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 9);
+
+    for (size_t i = 0; i < block->body.size; i++)
+        CHECK_MESSAGE(!tryExprOf(block, i), "statement " << i << " parsed as a try expression");
+
+    // In a Luwu file the tokens decide, not the lines: this is `local j = try f()`
+    block = parse(R"(
+        local j = try
+            f()
+    )");
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 1);
+    CHECK(tryExprOf(block, 0));
+}
+
+// Luwu try expressions: in a Luau module, `try` before something that can start a statement is a variable followed by
+// that statement, as in Luau, on the same line or the next
+TEST_CASE_FIXTURE(Fixture, "try_before_a_statement_stays_a_name_in_a_luau_module")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    ParseResult result = tryParse("local a = try x()\nlocal b = try\nf()\nlocal c = try do end", luau);
+    CHECK(result.errors.empty());
+    REQUIRE(result.root);
+    REQUIRE_EQ(result.root->body.size, 6);
+    CHECK(!tryExprOf(result.root, 0));
+}
+
+TEST_CASE_FIXTURE(Fixture, "try_expressions_are_gated_and_luwu_only")
+{
+    {
+        ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, false};
+        matchParseError("local r = try f()", "attempt to use disabled Luwu feature 'try' expressions; enable via FFlag 'DebugLuwuTryExpressions'");
+    }
+
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    // `try not` can't be Luau, so it's a `try` expression a Luau module can't have
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    ParseResult result = tryParse("local r = try not f()", luau);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: 'try' expressions");
+
+    // a Luau module's `try` function still works
+    result = tryParse("local r = try(f) - try.x", luau);
+    CHECK(result.errors.empty());
+}
+
+// Luwu try expressions: `! E` after a return type, alone, in a function type and in a declaration
+TEST_CASE_FIXTURE(Fixture, "error_hints_follow_the_return_type")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseResult result = tryParse(R"(
+        local function read(path: string): string ! NotFound | Denied
+            return path
+        end
+        local function meow(): ! string
+            error("meow")
+        end
+        type Reader = (string) -> string ! NotFound
+        type Returner = (string) -> ((string) -> number) ! NotFound
+        declare function open(path: string): number ! NotFound
+    )");
+    CHECK(result.errors.empty());
+    AstStatBlock* block = result.root;
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 5);
+
+    AstStatLocalFunction* read = block->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(read);
+    REQUIRE(read->func->returnAnnotation);
+    REQUIRE(read->func->errorHint);
+    CHECK(read->func->errorHint->is<AstTypeUnion>());
+
+    AstStatLocalFunction* meow = block->body.data[1]->as<AstStatLocalFunction>();
+    REQUIRE(meow);
+    CHECK(!meow->func->returnAnnotation);
+    CHECK(meow->func->errorHint);
+
+    AstStatTypeAlias* reader = block->body.data[2]->as<AstStatTypeAlias>();
+    REQUIRE(reader);
+    AstTypeFunction* readerType = reader->type->as<AstTypeFunction>();
+    REQUIRE(readerType);
+    CHECK(readerType->errorHint);
+
+    // the hint belongs to the outer function: the inner one is parenthesized
+    AstStatTypeAlias* returner = block->body.data[3]->as<AstStatTypeAlias>();
+    REQUIRE(returner);
+    AstTypeFunction* returnerType = returner->type->as<AstTypeFunction>();
+    REQUIRE(returnerType);
+    CHECK(returnerType->errorHint);
+
+    AstStatDeclareFunction* open = block->body.data[4]->as<AstStatDeclareFunction>();
+    REQUIRE(open);
+    CHECK(open->errorHint);
+}
+
+TEST_CASE_FIXTURE(Fixture, "error_hints_on_type_aliases")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseResult result = tryParse(R"(
+        type Result<T, E = string> = T ! E
+        type Lookup = string? ! NotFound | Denied
+        type Reader = (string) -> string ! NotFound
+    )");
+    CHECK(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatTypeAlias* resultAlias = result.root->body.data[0]->as<AstStatTypeAlias>();
+    REQUIRE(resultAlias);
+    REQUIRE(resultAlias->errorHint);
+    CHECK(resultAlias->errorHint->is<AstTypeReference>());
+    CHECK_EQ(resultAlias->location.end, resultAlias->errorHint->location.end);
+
+    AstStatTypeAlias* lookup = result.root->body.data[1]->as<AstStatTypeAlias>();
+    REQUIRE(lookup);
+    REQUIRE(lookup->errorHint);
+    CHECK(lookup->errorHint->is<AstTypeUnion>());
+
+    // a hint after a function type is the function's
+    AstStatTypeAlias* reader = result.root->body.data[2]->as<AstStatTypeAlias>();
+    REQUIRE(reader);
+    CHECK(!reader->errorHint);
+}
+
+TEST_CASE_FIXTURE(Fixture, "error_hints_are_gated_and_luwu_only")
+{
+    {
+        ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, false};
+        matchParseError(
+            "local function f(): string ! number return '' end",
+            "attempt to use disabled Luwu feature error hints; enable via FFlag 'DebugLuwuTryExpressions'"
+        );
+    }
+
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    ParseResult result = tryParse("local function f(): string ! number return '' end", luau);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: error hints");
+}
+
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_luwu_only")
 {
     ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
@@ -2423,6 +2642,9 @@ TEST_CASE_FIXTURE(Fixture, "default_arguments_are_luwu_only")
 
 TEST_CASE_FIXTURE(Fixture, "default_arguments_are_not_allowed_in_declarations")
 {
+    // Luwu Declare Statements (rfcs/declare-statements.md) writes a declared default as its type, `x = number`
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
     ScopedFastFlag sff{FFlag::LuwuDefaultArguments, true};
 
     matchParseError("declare function foo(x: number = 1)", "Expected ')' (to close '(' at column 21), got '='");
@@ -2575,6 +2797,9 @@ TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations")
 
 TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations_missing_with")
 {
+    // Luwu Declare Statements (rfcs/declare-statements.md) makes `with` optional; this is upstream's rule
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
     ParseResult result = tryParse(R"(
         declare extern type Foo
             prop: number
@@ -2680,6 +2905,9 @@ TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations")
 
 TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations_missing_with")
 {
+    // Luwu Declare Statements (rfcs/declare-statements.md) makes `with` optional; this is upstream's rule
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
     ParseResult result = tryParse(R"(
         declare extern type Foo
             prop: number
@@ -2735,17 +2963,29 @@ TEST_CASE_FIXTURE(Fixture, "parse_extern_type_declarations_missing_with")
 
 TEST_CASE_FIXTURE(Fixture, "deprecated_declare_class_syntax_is_rejected")
 {
-    // With LuauDisallowExternClassInTypeDefinitions on (default for tests via Fixture),
-    // `class` is no longer recognized as an extern-type keyword and is parsed as a global
-    // variable name, so the parser then expects `:` for the type annotation.
-    matchParseError(
-        R"(
+    // Luwu Declare Statements (rfcs/declare-statements.md) reads `declare class Foo` as a declared class missing `type`
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
+    const char* source = R"(
         declare class Foo
             prop: number
         end
-        )",
-        "Expected ':' when parsing global variable declaration, got 'Foo'"
-    );
+        )";
+
+    // Luwu: upstream reports "Expected ':' when parsing global variable declaration, got 'Foo'" here, or with
+    // LuauDisallowExternClassInTypeDefinitions off declares an extern type. Luwu names the fix, either way.
+    for (bool disallowExternClass : {true, false})
+    {
+        ScopedFastFlag sff{FFlag::LuauDisallowExternClassInTypeDefinitions, disallowExternClass};
+
+        ParseResult result = tryParse(source);
+        REQUIRE_EQ(result.errors.size(), 1);
+        CHECK_EQ(result.errors[0].getMessage(), "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead");
+        REQUIRE_EQ(result.root->body.size, 1);
+        AstStatDeclareExternType* declaration = result.root->body.data[0]->as<AstStatDeclareExternType>();
+        REQUIRE(declaration);
+        CHECK_EQ(declaration->props.size, 1);
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "class_method_properties")
@@ -2881,7 +3121,11 @@ TEST_CASE_FIXTURE(Fixture, "variadic_definition_parsing")
 
     REQUIRE(stat != nullptr);
 
-    matchParseError("declare function foo(...)", "All declaration parameters must be annotated");
+    {
+        // Luwu Declare Statements (rfcs/declare-statements.md) lets a declared value leave its types out
+        ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+        matchParseError("declare function foo(...)", "All declaration parameters must be annotated");
+    }
     matchParseError("declare extern type Foo with function a(self, ...) end", "All declaration parameters aside from 'self' must be annotated");
 }
 
@@ -3019,14 +3263,22 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_are_gated")
 {
     ScopedFastFlag sff{FFlag::LuwuGenericNominals, false};
 
-    matchParseError(
-        R"(
+    const char* source = R"(
         declare extern type Box<T> with
             value: T
         end
-        )",
-        "Expected `with` keyword before listing properties of the external type, but got (null) instead"
-    );
+        )";
+
+    {
+        ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+        matchParseError(source, "Expected `with` keyword before listing properties of the external type, but got (null) instead");
+    }
+
+    {
+        // Luwu Declare Statements (rfcs/declare-statements.md) makes `with` optional, so the `<` is read as the body
+        ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+        matchParseError(source, "Expected identifier when parsing property name, got '<'");
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "extern_type_generics")
@@ -4326,9 +4578,48 @@ TEST_CASE_FIXTURE(Fixture, "class_method_attributes")
     CHECK(cls->members.data[1].get_if<AstClassMethod>()->visibility == AstClassMemberVisibility::Private);
 }
 
-TEST_CASE_FIXTURE(Fixture, "class_field_cannot_have_attributes")
+TEST_CASE_FIXTURE(Fixture, "class_field_attributes")
 {
-    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuAttributesEverywhere, true},
+    };
+
+    AstStatBlock* stat = parse(R"(
+        class Foo
+            @deprecated
+            public x: number
+
+            private @deprecated y: string
+        end
+    )");
+
+    REQUIRE_EQ(stat->body.size, 1);
+    const AstStatClass* cls = stat->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+    REQUIRE_EQ(cls->members.size, 2);
+
+    // Written above the access specifier, and after it: both reach the field.
+    const AstClassProperty* x = cls->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(x);
+    CHECK(x->name == "x");
+    REQUIRE_EQ(x->attributes.size, 1);
+    CHECK(x->attributes.data[0]->type == AstAttr::Type::Deprecated);
+
+    const AstClassProperty* y = cls->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(y);
+    CHECK(y->name == "y");
+    REQUIRE_EQ(y->attributes.size, 1);
+    CHECK(y->attributes.data[0]->type == AstAttr::Type::Deprecated);
+    CHECK(y->visibility == AstClassMemberVisibility::Private);
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_field_cannot_have_a_function_only_attribute")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuAttributesEverywhere, true},
+    };
 
     ParseResult result = tryParse(R"(
         class Foo
@@ -4337,8 +4628,9 @@ TEST_CASE_FIXTURE(Fixture, "class_field_cannot_have_attributes")
         end
     )");
 
+    // `@native` describes how a function is compiled, so the attribute registry refuses it here.
     REQUIRE(!result.errors.empty());
-    CHECK_EQ(result.errors[0].getMessage(), "Expected 'function' after attribute, but got 'x' instead");
+    CHECK_EQ(result.errors[0].getMessage(), "Attribute '@native' can only be applied to functions");
 
     // The field itself still parses, so the rest of the class is not reported against.
     REQUIRE_EQ(result.root->body.size, 1);
@@ -4364,7 +4656,9 @@ TEST_CASE_FIXTURE(Fixture, "class_attribute_with_no_member_does_not_swallow_end"
 
     // One error, and the class still closes at its own `end`: the statement after it parses.
     REQUIRE_EQ(result.errors.size(), 1);
-    CHECK_EQ(result.errors[0].getMessage(), "Expected 'function' after attribute, but got 'end' instead");
+    const char* expected = FFlag::LuwuAttributesEverywhere ? "Expected 'function' or a field name after attribute, but got 'end' instead"
+                                                            : "Expected 'function' after attribute, but got 'end' instead";
+    CHECK_EQ(result.errors[0].getMessage(), expected);
 
     REQUIRE_EQ(result.root->body.size, 2);
     CHECK(result.root->body.data[0]->is<AstStatClass>());
@@ -4974,6 +5268,175 @@ end
     CHECK(freeFunction.errors.empty());
 }
 
+// Luwu Traits (rfcs/classes/traits.md): `Self` is const like `self`, in a class and in a trait, nested closures included
+TEST_CASE_FIXTURE(Fixture, "self_class_value_is_const")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    const char* writes[] = {
+        "Self = nil",
+        "local a; Self, a = nil, nil",
+        "Self ..= 'x'",
+        "function Self() end",
+        "local f = function() Self = nil end",
+    };
+
+    for (const char* write : writes)
+    {
+        for (const char* declaration : {"class C\n    function m(self)", "trait T\n    function m(self)"})
+        {
+            std::string code = std::string(declaration) + "\n        " + write + "\n    end\nend\n";
+            ParseResult result = tryParse(code);
+            REQUIRE_MESSAGE(result.errors.size() == 1, code);
+            CHECK_EQ(result.errors[0].getMessage(), "'Self' is constant and may not be reassigned");
+        }
+    }
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `Self` is the class's name in a class and `class.of(self)` in a trait method. A
+// trait function without `self` can't use it. A local the body declares shadows it, and outside a body it's a name.
+TEST_CASE_FIXTURE(Fixture, "self_class_value_shapes")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait Cloner
+            function clone(self)
+                return Self
+            end
+            function shadowed(self)
+                local Self = 1
+                return Self
+            end
+        end
+        class Point
+            function copy(self)
+                return function() return Self end
+            end
+        end
+        return Self
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 3);
+
+    AstStatClass* cloner = block->body.data[0]->as<AstStatClass>();
+    AstStatClass* point = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(cloner);
+    REQUIRE(point);
+    REQUIRE(cloner->members.size == 2);
+    REQUIRE(point->members.size == 1);
+
+    auto returned = [](const AstClassMember& member) -> AstExpr*
+    {
+        const AstClassMethod* method = member.get_if<AstClassMethod>();
+        REQUIRE(method);
+        AstStatBlock* body = method->function->body;
+        REQUIRE(body->body.size > 0);
+        AstStatReturn* ret = body->body.data[body->body.size - 1]->as<AstStatReturn>();
+        REQUIRE(ret);
+        REQUIRE(ret->list.size == 1);
+        return ret->list.data[0];
+    };
+
+    AstExprSelfClass* inMethod = returned(cloner->members.data[0])->as<AstExprSelfClass>();
+    REQUIRE(inMethod);
+    REQUIRE(inMethod->classOf->args.size == 1);
+    AstExprLocal* self = inMethod->classOf->args.data[0]->as<AstExprLocal>();
+    REQUIRE(self);
+    CHECK_EQ(self->local, cloner->members.data[0].get_if<AstClassMethod>()->function->args.data[0]);
+
+    CHECK(returned(cloner->members.data[1])->is<AstExprLocal>());
+
+    AstExprFunction* closure = returned(point->members.data[0])->as<AstExprFunction>();
+    REQUIRE(closure);
+    REQUIRE(closure->body->body.size == 1);
+    AstStatReturn* closureReturn = closure->body->body.data[0]->as<AstStatReturn>();
+    REQUIRE(closureReturn);
+    AstExprGlobal* inClass = closureReturn->list.data[0]->as<AstExprGlobal>();
+    REQUIRE(inClass);
+    CHECK(inClass->writtenAsSelf);
+    CHECK_EQ(inClass->name, "Point");
+
+    AstStatReturn* outside = block->body.data[2]->as<AstStatReturn>();
+    REQUIRE(outside);
+    AstExprGlobal* global = outside->list.data[0]->as<AstExprGlobal>();
+    REQUIRE(global);
+    CHECK(!global->writtenAsSelf);
+    CHECK_EQ(global->name, "Self");
+
+    ParseResult inStatic = tryParse("trait Cloner\n    function make()\n        return Self\n    end\nend\n");
+    REQUIRE(inStatic.errors.size() == 1);
+    CHECK_EQ(
+        inStatic.errors[0].getMessage(), "Write 'Cloner' here: 'Self' is the class of 'self', and this trait function doesn't take 'self'"
+    );
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `Self` in a trait's field defaults is the class of the object they initialize, the
+// trait's initSelf, which every `Self` there shares. A trait's parameters can't use it.
+TEST_CASE_FIXTURE(Fixture, "self_class_value_in_trait_defaults")
+{
+    ScopedFastFlag flags[3]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}, {FFlag::LuwuDefaultArguments, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait T
+            x = Self
+            y = function() return Self end
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 1);
+    AstStatClass* trait = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(trait);
+    REQUIRE(trait->initSelf);
+    REQUIRE(trait->members.size == 2);
+
+    const AstClassProperty* field = trait->members.data[0].get_if<AstClassProperty>();
+    const AstClassProperty* closureField = trait->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(field);
+    REQUIRE(closureField);
+    AstExprFunction* closure = closureField->defaultValue->as<AstExprFunction>();
+    REQUIRE(closure);
+    REQUIRE(closure->body->body.size == 1);
+    AstStatReturn* closureReturn = closure->body->body.data[0]->as<AstStatReturn>();
+    REQUIRE(closureReturn);
+
+    for (AstExpr* value : {field->defaultValue, closureReturn->list.data[0]})
+    {
+        REQUIRE(value);
+        AstExprSelfClass* selfClass = value->as<AstExprSelfClass>();
+        REQUIRE(selfClass);
+        REQUIRE(selfClass->classOf->args.size == 1);
+        AstExprLocal* object = selfClass->classOf->args.data[0]->as<AstExprLocal>();
+        REQUIRE(object);
+        CHECK_EQ(object->local, trait->initSelf);
+    }
+
+    AstStatBlock* noSelf = parse("trait U\n    x = 1\nend");
+    REQUIRE(noSelf);
+    AstStatClass* plain = noSelf->body.data[0]->as<AstStatClass>();
+    REQUIRE(plain);
+    CHECK(!plain->initSelf);
+
+    ParseResult inParameters = tryParse("trait V(a = Self)\nend");
+    REQUIRE(inParameters.errors.size() == 1);
+    CHECK_EQ(inParameters.errors[0].getMessage(), "'Self' can't be used in a trait's parameters");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait can't take a class or trait keyword as its name
+TEST_CASE_FIXTURE(Fixture, "trait_names_are_not_class_keywords")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    for (const char* name : {"class", "trait", "public", "private", "const", "extends", "implements", "needs", "expect", "final"})
+    {
+        std::string code = std::string("trait ") + name + "\nend";
+        ParseResult result = tryParse(code);
+        REQUIRE_MESSAGE(result.errors.size() == 1, code);
+        CHECK_EQ(result.errors[0].getMessage(), std::string("A trait can't be named '") + name + "': it's a keyword in classes and traits");
+    }
+
+    CHECK(tryParse("trait Needs\nend").errors.empty());
+}
 TEST_CASE_FIXTURE(Fixture, "class_primary_constructor_rejects_variadic")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
@@ -5063,17 +5526,68 @@ TEST_CASE_FIXTURE(Fixture, "class_extends_is_rejected")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
-    // no inheritance: `extends` gets its own error rather than parsing as two bare fields
+    // no inheritance: `extends` gets one error rather than parsing as bare fields, and the base stays in the AST
     ParseResult result = tryParse(R"(
-        class Base end
+        local m = {}
         class Derived extends Base end
-        class WithCtor(x: number) extends Base end
+        class WithCtor(x: number) extends m.Base
+            public y: number
+        end
+        class Indexed extends m["Base"] end
+        class Literal extends "Base" end
     )");
 
-    REQUIRE_EQ(result.errors.size(), 2);
-    CHECK_EQ(result.errors[0].getMessage(), "Luwu classes don't support classical inheritance ('extends'); consider composing your classes (holding an object of another class in your class) or waiting for Luwu traits");
-    CHECK_EQ(result.errors[0].getLocation().begin.line, 2);
-    CHECK_EQ(result.errors[1].getLocation().begin.line, 3);
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Luwu classes can't extend 'Base': give 'Derived' a field holding a 'Base', or put what they share in a trait and write 'implements' "
+        "instead of 'extends'"
+    );
+    CHECK_EQ(result.errors[0].getLocation(), Location{{2, 22}, {2, 34}});
+    CHECK_EQ(result.errors[1].getLocation(), Location{{3, 34}, {3, 48}});
+    CHECK_NE(result.errors[1].getMessage().find("'m.Base'"), std::string::npos);
+    CHECK_EQ(result.errors[2].getLocation(), Location{{6, 22}, {6, 39}});
+    CHECK_EQ(result.errors[3].getLocation(), Location{{7, 22}, {7, 36}});
+
+    REQUIRE_EQ(result.root->body.size, 5);
+    AstStatClass* derived = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(derived);
+    REQUIRE(derived->extendsLocation);
+    CHECK_EQ(*derived->extendsLocation, Location{{2, 22}, {2, 29}});
+    REQUIRE(derived->extendsBase);
+    CHECK(derived->extendsBase->is<AstExprGlobal>());
+
+    AstStatClass* withCtor = result.root->body.data[2]->as<AstStatClass>();
+    REQUIRE(withCtor);
+    CHECK(withCtor->primaryConstructor);
+    CHECK_EQ(withCtor->members.size, 1);
+    REQUIRE(withCtor->extendsBase);
+    AstExprIndexName* qualified = withCtor->extendsBase->as<AstExprIndexName>();
+    REQUIRE(qualified);
+    CHECK(qualified->expr->is<AstExprLocal>());
+
+    AstStatClass* indexed = result.root->body.data[3]->as<AstStatClass>();
+    REQUIRE(indexed);
+    REQUIRE(indexed->extendsBase);
+    CHECK(indexed->extendsBase->is<AstExprIndexExpr>());
+
+    AstStatClass* literal = result.root->body.data[4]->as<AstStatClass>();
+    REQUIRE(literal);
+    REQUIRE(literal->extendsBase);
+    CHECK(literal->extendsBase->is<AstExprConstantString>());
+
+    // A visitor sees the base, so `m` counts as used
+    struct FindsLocals : AstVisitor
+    {
+        size_t found = 0;
+        bool visit(AstExprLocal*) override
+        {
+            found++;
+            return true;
+        }
+    } findsLocals;
+    withCtor->visit(&findsLocals);
+    CHECK_EQ(findsLocals.found, 1);
 
     // and a field named `extends` is rejected as a keyword member name, not accepted as a field
     ParseResult field = tryParse(R"(
@@ -5084,9 +5598,48 @@ TEST_CASE_FIXTURE(Fixture, "class_extends_is_rejected")
     CHECK_EQ(field.errors.size(), 1);
 }
 
-TEST_CASE_FIXTURE(Fixture, "class_implements_is_rejected")
+TEST_CASE_FIXTURE(Fixture, "class_open_is_rejected")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    // upstream Luau's `open class` is one error, and the class still parses
+    ParseResult result = tryParse(R"(
+        open class Animal
+            public name: string
+        end
+        export open class Pet
+            public owner: string
+        end
+        local open = 1
+        print(open)
+    )");
+
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(result.errors[0].getMessage(), "Remove 'open' here: 'open class' is an upstream Luau feature for inheritance, not a Luwu feature");
+    CHECK_EQ(result.errors[0].getLocation(), Location{{1, 8}, {1, 12}});
+    CHECK_EQ(result.errors[1].getLocation(), Location{{4, 15}, {4, 19}});
+
+    REQUIRE_EQ(result.root->body.size, 4);
+    AstStatClass* animal = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(animal);
+    CHECK_EQ(animal->name->name, "Animal");
+    CHECK_EQ(animal->members.size, 1);
+    REQUIRE(animal->openLocation);
+    CHECK_EQ(*animal->openLocation, Location{{1, 8}, {1, 12}});
+    CHECK_EQ(animal->location.begin, Position{1, 8});
+
+    AstStatClass* pet = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(pet);
+    CHECK(pet->exported);
+    CHECK(pet->name->isExported);
+    REQUIRE(pet->openLocation);
+    CHECK_EQ(*pet->openLocation, Location{{4, 15}, {4, 19}});
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_implements_is_rejected")
+{
+    // Without traits, `implements` is reserved; trait_declarations_parse covers it with them.
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, false}};
 
     // `implements` is reserved for traits; one error for the whole interface list
     ParseResult result = tryParse(R"(
@@ -5426,6 +5979,268 @@ TEST_CASE_FIXTURE(Fixture, "class_self_cannot_be_annotated")
     )",
         "The 'self' parameter cannot have a type annotation"
     );
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `function Self.name` in a trait, `function Trait.name` in a class, and the
+// qualified reads `obj:Trait:name()` and `Class:Trait.name`
+TEST_CASE_FIXTURE(Fixture, "trait_scoped_functions_and_qualified_reads_parse")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait Json
+            function Self.encode(value) end
+            expect function Self.tag?(self)
+        end
+
+        class Cat() implements Json, mod.Toml
+            function Json.tag(self) end
+            function mod.Toml.tag(self) end
+            function tag(self) end
+        end
+
+        local a = Cat():Json:tag()
+        local b = Cat:Json.encode
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 4);
+
+    AstStatClass* json = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(json);
+    REQUIRE(json->members.size == 2);
+    for (const AstClassMember& member : json->members)
+    {
+        const AstClassMethod* method = member.get_if<AstClassMethod>();
+        REQUIRE(method);
+        CHECK(method->scopeLocation);
+        CHECK(!method->qualifiedTrait);
+    }
+
+    AstStatClass* cat = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(cat);
+    REQUIRE(cat->members.size == 3);
+    const AstClassMethod* forJson = cat->members.data[0].get_if<AstClassMethod>();
+    const AstClassMethod* forToml = cat->members.data[1].get_if<AstClassMethod>();
+    const AstClassMethod* own = cat->members.data[2].get_if<AstClassMethod>();
+    REQUIRE(forJson);
+    REQUIRE(forToml);
+    REQUIRE(own);
+    REQUIRE(forJson->qualifiedTrait);
+    CHECK(forJson->qualifiedTrait->is<AstExprGlobal>());
+    REQUIRE(forToml->qualifiedTrait);
+    CHECK(forToml->qualifiedTrait->is<AstExprIndexName>());
+    CHECK_EQ(std::string(forToml->functionName.value), "tag");
+    CHECK(!own->qualifiedTrait);
+
+    AstStatLocal* call = block->body.data[2]->as<AstStatLocal>();
+    REQUIRE(call);
+    AstExprCall* callExpr = call->values.data[0]->as<AstExprCall>();
+    REQUIRE(callExpr);
+    CHECK(callExpr->self);
+    AstExprIndexName* method = callExpr->func->as<AstExprIndexName>();
+    REQUIRE(method);
+    CHECK(method->qualifiedTrait);
+    CHECK_EQ(method->op, ':');
+
+    AstStatLocal* read = block->body.data[3]->as<AstStatLocal>();
+    REQUIRE(read);
+    AstExprIndexName* value = read->values.data[0]->as<AstExprIndexName>();
+    REQUIRE(value);
+    CHECK(value->qualifiedTrait);
+    CHECK_EQ(value->op, '.');
+}
+
+TEST_CASE_FIXTURE(Fixture, "trait_scoped_functions_and_qualified_reads_parse_errors")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    matchParseError("trait T function Other.f(self) end end", "A trait can only scope a function to itself: write 'function Self.f'");
+    matchParseError("trait T function Self.__tostring(self) end end", "'__tostring' can't be scoped to a trait: the VM looks it up as a member of the class");
+    matchParseError("class C() function T.f(self) end end", "Class 'C' implements no traits, so it can't implement 'T.f'");
+    matchParseError("class C() implements T function T.f(self) end function T.f(self) end end", "Duplicate class member 'T.f'");
+    matchParseError("local x = C:T.f\nC:T.f = 1", "Assigned expression must be a variable or a field");
+}
+
+// Luwu Traits (rfcs/classes/traits.md)
+TEST_CASE_FIXTURE(Fixture, "trait_declarations_parse")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait Item(public category: string)
+            expect public name: string
+            expect private function fire?(self)
+            public final function f(self) end
+        end
+
+        trait Tool needs Item, mod.Other<number>
+        end
+
+        class Rifle(level: number) implements Tool, Item(`h{level}`)
+            name = "x"
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 3);
+
+    AstStatClass* item = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(item);
+    CHECK(item->isTrait);
+    REQUIRE(item->primaryConstructor);
+    REQUIRE(item->members.size == 3);
+
+    const AstClassProperty* name = item->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(name);
+    CHECK(name->expectLocation);
+
+    const AstClassMethod* fire = item->members.data[1].get_if<AstClassMethod>();
+    REQUIRE(fire);
+    CHECK(fire->expectLocation);
+    CHECK(fire->isOptional);
+    CHECK(fire->visibility == AstClassMemberVisibility::Private);
+
+    const AstClassMethod* f = item->members.data[2].get_if<AstClassMethod>();
+    REQUIRE(f);
+    CHECK(f->finalLocation);
+
+    AstStatClass* tool = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(tool);
+    REQUIRE(tool->needs.size == 2);
+    CHECK(tool->needsLocation);
+    CHECK(!tool->implementsLocation);
+    CHECK(tool->needs.data[1].trait->is<AstExprIndexName>());
+    CHECK_EQ(tool->needs.data[1].typeArguments.size, 1);
+
+    AstStatClass* rifle = block->body.data[2]->as<AstStatClass>();
+    REQUIRE(rifle);
+    CHECK(!rifle->isTrait);
+    REQUIRE(rifle->implements.size == 2);
+    REQUIRE(rifle->implementsLocation);
+    CHECK_EQ(rifle->implementsLocation->begin.line, 10);
+    CHECK(!rifle->implements.data[0].hasArgs);
+    CHECK(rifle->implements.data[1].hasArgs);
+    CHECK_EQ(rifle->implements.data[1].args.size, 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "trait_lists_may_be_parenthesized")
+{
+    ScopedFastFlag _[3]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait A<T> end
+        trait B(n: number) end
+        trait C needs (
+            A<string>
+        )
+        end
+        class Flag<T = boolean>(
+            public name: string
+        ) implements (
+            A<T>,
+            B(1),
+            C
+        )
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 4);
+
+    AstStatClass* c = block->body.data[2]->as<AstStatClass>();
+    REQUIRE(c);
+    REQUIRE(c->needs.size == 1);
+    CHECK_EQ(c->needs.data[0].typeArguments.size, 1);
+
+    AstStatClass* flag = block->body.data[3]->as<AstStatClass>();
+    REQUIRE(flag);
+    REQUIRE(flag->implements.size == 3);
+    CHECK_EQ(flag->implements.data[0].typeArguments.size, 1);
+    CHECK(flag->implements.data[1].hasArgs);
+    CHECK(flag->implements.data[2].trait->is<AstExprGlobal>());
+    CHECK(flag->members.size == 0);
+
+    matchParseError("trait A end class C implements (A, ) end", "Expected identifier when parsing trait name, got ')'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "trait_syntax_errors")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    matchParseError("class C expect x: number end", "Only traits can 'expect' members");
+    matchParseError("class C final function f(self) end end", "Only trait members can be 'final'");
+    matchParseError("trait T function f?(self) end end", "Only expected functions can be optional: 'expect function f?()'");
+    matchParseError(
+        "trait T function __init(self) end end", "Traits can't define '__init'; give fields default values or trait parameters instead"
+    );
+    matchParseError("trait T expect x = 1 end", "Expected fields can't have default values");
+    matchParseError("trait T path: string end", "Trait field 'path' needs a default value; did you mean 'expect path'?");
+    matchParseError("trait T final x: number end", "Final field 'x' needs a default value");
+    matchParseError("trait T final const x = 1 end", "'final' fields are already const");
+    matchParseError("trait T(x: number) final x = 1 end", "Final field 'x' can't be a trait parameter");
+    matchParseError("class C final x = 1 end", "Only trait members can be 'final'");
+    matchParseError("trait A end trait T needs A(1) end", "Traits in a 'needs' list can't take arguments; the implementing class passes them");
+    matchParseError("class A end trait A end", "A class or trait named 'A' has already been declared in this module");
+    matchParseError("class C function __create() end end", "Only traits can define '__create'; did you mean '__init'?");
+    matchParseError("class C implements Later end trait Later end", "Trait 'Later' must be declared before class 'C'");
+    matchParseError("trait T expect function __create() end", "'__create' can't be expected");
+    matchParseError("trait T(x) function __create() end end", "Traits with parameters can't define '__create'");
+    matchParseError("trait T function __create(self) end end", "'__create' can't take 'self'");
+    matchParseError("class C final function __implemented(cls) end end", "Only trait members can be 'final'");
+    matchParseError("trait T function __implemented(cls) end end", "'__implemented' must be final: write 'final function __implemented'");
+    matchParseError("trait T expect function __implemented(cls) end", "'__implemented' can't be expected");
+    matchParseError("trait T final function __implemented(self) end end", "'__implemented' can't take 'self'; it's given the implementing class");
+    matchParseError(
+        "trait T final function __init(self) end end", "Traits can't define '__init'; give fields default values or trait parameters instead"
+    );
+    matchParseError("trait T expect function __init?(self) end", "An expected '__init' can't be optional");
+    // a trait may expect a constructor, to construct its implementing classes
+    CHECK_EQ(parse("trait T expect function __init(self, x: number) end")->body.size, 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "an_unterminated_trait_ends_at_the_next_declaration")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    ParseResult result = tryParse(R"(
+trait Started
+trait Next
+    function f(self) end
+end
+export class C implements Next
+end
+)");
+
+    // only the missing `end`: `Next` and `C` parse as declarations of their own, not as members of `Started`
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Expected 'end' (to close 'trait' at line 2), got 'trait'");
+    REQUIRE_EQ(result.root->body.size, 3);
+    AstStatClass* next = result.root->body.data[1]->as<AstStatClass>();
+    REQUIRE(next);
+    CHECK_EQ(next->members.size, 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "trait_parse_errors_say_trait")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    matchParseError("trait T(...) end", "A trait's parameter list cannot be variadic");
+    matchParseError("trait T x = 1 x = 2 end", "Duplicate trait member 'x'");
+    matchParseError("trait T __x = 1 end", "Trait fields cannot start with '__'");
+    matchParseError("trait T const function f(self) end end", "Functions in a trait are always const; remove 'const' here");
+}
+
+// `trait` stays an ordinary name outside a declaration
+TEST_CASE_FIXTURE(Fixture, "trait_is_a_contextual_keyword")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        local trait = 1
+        trait = trait + 1
+        local t = { trait = trait }
+        print(trait)
+    )");
+    REQUIRE(block);
+    CHECK_EQ(block->body.size, 4);
 }
 
 TEST_CASE_FIXTURE(Fixture, "classes_cannot_be_shadowed_by_classes")
@@ -6706,7 +7521,7 @@ void checkFirstErrorForAttributes(const std::vector<ParseError>& errors, const s
 {
     LUAU_ASSERT(minSize >= 1);
 
-    CHECK_GE(errors.size(), minSize);
+    REQUIRE_GE(errors.size(), minSize);
     CHECK_EQ(errors[0].getLocation(), location);
     CHECK_EQ(errors[0].getMessage(), message);
 }
@@ -6918,11 +7733,11 @@ end)");
     checkAttribute(attributes.data[0], AstAttr::Type::Checked, Location(Position(1, 0), Position(1, 8)));
 }
 
-TEST_CASE_FIXTURE(Fixture, "parse_debugnoinline_on_local_function")
+TEST_CASE_FIXTURE(Fixture, "parse_noinline_on_local_function")
 {
-    ScopedFastFlag noInline{FFlag::DebugLuauNoInline, true};
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
     AstStatBlock* stat = parse(R"(
-    @debugnoinline
+    @noinline
 local function hello(x, y)
     return x + y
 end)");
@@ -6936,18 +7751,111 @@ end)");
 
     CHECK_EQ(attributes.size, 1);
 
-    checkAttribute(attributes.data[0], AstAttr::Type::DebugNoinline, Location(Position(1, 4), Position(1, 18)));
+    checkAttribute(attributes.data[0], AstAttr::Type::Noinline, Location(Position(1, 4), Position(1, 13)));
 }
 
-TEST_CASE_FIXTURE(Fixture, "debugnoinline_not_allowed_without_flag")
+TEST_CASE_FIXTURE(Fixture, "noinline_not_allowed_without_flag")
 {
+    // Pinned off explicitly: LuwuNoinlineAttribute is not Debug-prefixed, so it is on in the
+    // all-flags test configuration.
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, false};
+
     ParseResult result = tryParse(R"(
-@debugnoinline
+@noinline
 local function hello(x, y)
     return x + y
 end)");
 
-    checkFirstErrorForAttributes(result.errors, 1, Location(Position(1, 0), Position(1, 14)), "Invalid attribute '@debugnoinline'");
+    checkFirstErrorForAttributes(result.errors, 1, Location(Position(1, 0), Position(1, 9)), "Invalid attribute '@noinline'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "noinline_is_only_allowed_where_inlining_can_happen")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuNoinlineAttribute, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    // A local function, a const function, a function expression and a class method are all resolved
+    // at their call sites, so all four are places the compiler can inline and `@noinline` means
+    // something.
+    {
+        ParseResult result = tryParse(R"(
+@noinline
+local function a() end
+
+@noinline
+const function b() end
+
+local c = @noinline function() end
+
+class D
+    @noinline
+    public function e(self) end
+end
+)");
+
+        CHECK(result.errors.empty());
+    }
+
+    // A global function is never resolved statically, so it is never inlined and the attribute would
+    // silently do nothing.
+    {
+        ParseResult result = tryParse(R"(
+@noinline
+function f() end
+)");
+
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute '@noinline' can only be applied to a local function, a const function, a class method or a function expression"
+        );
+    }
+
+    // `function t.m()` and `function t:m()` are the same case: the target is a table field, so the
+    // call is never resolved statically. The `:` form additionally binds `self`, which the
+    // compiler refuses to inline regardless.
+    {
+        ParseResult result = tryParse(R"(
+local cat = {}
+@noinline
+function cat.meow() end
+)");
+
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute '@noinline' can only be applied to a local function, a const function, a class method or a function expression"
+        );
+    }
+
+    {
+        ParseResult result = tryParse(R"(
+local cat = {}
+@noinline
+function cat:meow() end
+)");
+
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute '@noinline' can only be applied to a local function, a const function, a class method or a function expression"
+        );
+    }
+
+    // Neither a declared function nor a function type has a body to inline.
+    {
+        ParseOptions opts;
+        opts.allowDeclarationSyntax = true;
+
+        ParseResult result = tryParse("@noinline declare function g(): number", opts);
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute '@noinline' can only be applied to a local function, a const function, a class method or a function expression"
+        );
+    }
 }
 
 TEST_CASE_FIXTURE(Fixture, "empty_attribute_name_is_not_allowed")
@@ -6963,6 +7871,13 @@ end)");
 
 TEST_CASE_FIXTURE(Fixture, "dont_parse_attributes_on_non_function_stat")
 {
+    // Luwu: with LuwuAttributesEverywhere, attributes are also allowed before `type`, `class` and assignments,
+    // and the error lists them.
+    const std::string expectedAfterAttribute = FFlag::LuwuAttributesEverywhere
+        ? "Expected 'function', 'local function', 'const function', 'declare function', 'type', 'class', an assignment or a function type "
+          "declaration after attribute, but got "
+        : "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got ";
+
     ParseResult pr1 = tryParse(R"(
 @checked
 if a<0 then a = 0 end)");
@@ -6970,8 +7885,7 @@ if a<0 then a = 0 end)");
         pr1.errors,
         1,
         Location(Position(2, 0), Position(2, 2)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'if' instead"
+        expectedAfterAttribute + "'if' instead"
     );
 
     ParseResult pr2 = tryParse(R"(
@@ -6985,8 +7899,7 @@ end)");
         pr2.errors,
         1,
         Location(Position(3, 0), Position(3, 5)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'while' instead"
+        expectedAfterAttribute + "'while' instead"
     );
 
     ParseResult pr3 = tryParse(R"(
@@ -7001,8 +7914,7 @@ end)");
         pr3.errors,
         1,
         Location(Position(2, 0), Position(2, 2)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'do' instead"
+        expectedAfterAttribute + "'do' instead"
     );
 
     ParseResult pr4 = tryParse(R"(
@@ -7013,8 +7925,7 @@ for i=1,10 do print(i) end
         pr4.errors,
         1,
         Location(Position(2, 0), Position(2, 3)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'for' instead"
+        expectedAfterAttribute + "'for' instead"
     );
 
     ParseResult pr5 = tryParse(R"(
@@ -7027,8 +7938,7 @@ until line ~= ""
         pr5.errors,
         1,
         Location(Position(2, 0), Position(2, 6)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'repeat' instead"
+        expectedAfterAttribute + "'repeat' instead"
     );
 
 
@@ -7036,9 +7946,16 @@ until line ~= ""
 @checked
 local x = 10
 )");
-    checkFirstErrorForAttributes(
-        pr6.errors, 1, Location(Position(2, 6), Position(2, 7)), "Expected 'function' after local declaration with attribute, but got 'x' instead"
-    );
+    // Luwu: with LuwuAttributesEverywhere, a local can take attributes, so the error is that `@checked`
+    // doesn't allow that position, reported on the attribute.
+    if (FFlag::LuwuAttributesEverywhere)
+        checkFirstErrorForAttributes(
+            pr6.errors, 1, Location(Position(1, 0), Position(1, 8)), "Attribute '@checked' can only be applied to functions"
+        );
+    else
+        checkFirstErrorForAttributes(
+            pr6.errors, 1, Location(Position(2, 6), Position(2, 7)), "Expected 'function' after local declaration with attribute, but got 'x' instead"
+        );
 
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
 
@@ -7064,8 +7981,7 @@ end
         pr8.errors,
         1,
         Location(Position(3, 31), Position(3, 36)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'break' instead"
+        expectedAfterAttribute + "'break' instead"
     );
 
 
@@ -7076,8 +7992,7 @@ function foo1 () @checked return 'a' end
         pr9.errors,
         1,
         Location(Position(1, 26), Position(1, 32)),
-        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
-        "'return' instead"
+        expectedAfterAttribute + "'return' instead"
     );
 }
 
@@ -7221,6 +8136,302 @@ function hello(x, y)
 end)");
 
     checkFirstErrorForAttributes(result.errors, 1, Location(Position(2, 4), Position(2, 19)), "Invalid attribute '@cool_attribute'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "parse_attributes_beyond_functions")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuAttributesEverywhere, true};
+
+    AstStatBlock* stat = parse(R"(
+@deprecated
+type Puppy = string
+
+@deprecated
+local puppy = "whimper"
+
+local pet_sounds = {
+    @deprecated cat = "meow",
+    dog = "woof",
+}
+
+type PetSounds = {
+    @deprecated puppy: string,
+    dog: string,
+    @deprecated [string]: number,
+}
+
+local function speak(@deprecated old: string, new: string)
+    return old .. new
+end
+
+local m = {}
+@deprecated m.dog = "woof"
+)");
+
+    REQUIRE_EQ(stat->body.size, 7);
+
+    const AstStatTypeAlias* alias = stat->body.data[0]->as<AstStatTypeAlias>();
+    REQUIRE(alias);
+    REQUIRE_EQ(alias->attributes.size, 1);
+    checkAttribute(alias->attributes.data[0], AstAttr::Type::Deprecated, Location{{1, 0}, {1, 11}});
+
+    const AstStatLocal* local = stat->body.data[1]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->attributes.size, 1);
+    checkAttribute(local->attributes.data[0], AstAttr::Type::Deprecated, Location{{4, 0}, {4, 11}});
+
+    // A table constructor entry carries its own attributes; the entries without any stay empty.
+    const AstStatLocal* soundsLocal = stat->body.data[2]->as<AstStatLocal>();
+    REQUIRE(soundsLocal);
+    REQUIRE_EQ(soundsLocal->values.size, 1);
+    const AstExprTable* sounds = soundsLocal->values.data[0]->as<AstExprTable>();
+    REQUIRE(sounds);
+    REQUIRE_EQ(sounds->items.size, 2);
+    REQUIRE_EQ(sounds->items.data[0].attributes.size, 1);
+    CHECK(sounds->items.data[0].attributes.data[0]->type == AstAttr::Type::Deprecated);
+    CHECK_EQ(sounds->items.data[1].attributes.size, 0);
+
+    // A table type's fields and its indexer each carry theirs.
+    const AstStatTypeAlias* petSounds = stat->body.data[3]->as<AstStatTypeAlias>();
+    REQUIRE(petSounds);
+    const AstTypeTable* petSoundsTy = petSounds->type->as<AstTypeTable>();
+    REQUIRE(petSoundsTy);
+    REQUIRE_EQ(petSoundsTy->props.size, 2);
+    REQUIRE_EQ(petSoundsTy->props.data[0].attributes.size, 1);
+    CHECK(petSoundsTy->props.data[0].attributes.data[0]->type == AstAttr::Type::Deprecated);
+    CHECK_EQ(petSoundsTy->props.data[1].attributes.size, 0);
+    REQUIRE(petSoundsTy->indexer);
+    REQUIRE_EQ(petSoundsTy->indexer->attributes.size, 1);
+    CHECK(petSoundsTy->indexer->attributes.data[0]->type == AstAttr::Type::Deprecated);
+
+    // A parameter's attributes ride on its AstLocal.
+    const AstStatLocalFunction* speak = stat->body.data[4]->as<AstStatLocalFunction>();
+    REQUIRE(speak);
+    REQUIRE_EQ(speak->func->args.size, 2);
+    REQUIRE_EQ(speak->func->args.data[0]->attributes.size, 1);
+    CHECK(speak->func->args.data[0]->attributes.data[0]->type == AstAttr::Type::Deprecated);
+    CHECK_EQ(speak->func->args.data[1]->attributes.size, 0);
+
+    const AstStatAssign* assign = stat->body.data[6]->as<AstStatAssign>();
+    REQUIRE(assign);
+    REQUIRE_EQ(assign->attributes.size, 1);
+    CHECK(assign->attributes.data[0]->type == AstAttr::Type::Deprecated);
+}
+
+TEST_CASE_FIXTURE(Fixture, "bare_attribute_arguments_are_diagnosed_precisely")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuAttributesEverywhere, true};
+
+    // Writing the arguments bare is the likeliest mistake, since that is how other languages spell
+    // it, so it gets a diagnostic that talks about attributes rather than about the next token.
+    {
+        ParseResult result = tryParse(R"(
+@deprecated { use = "dog" }
+local puppy = "whimper"
+)");
+
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute arguments must be written as '@[deprecated ...]'; a bare '@deprecated' cannot take arguments"
+        );
+
+        // Recovered: the arguments are still attached, so this is the only error and the attribute
+        // means what was intended.
+        REQUIRE_EQ(result.root->body.size, 1);
+        const AstStatLocal* local = result.root->body.data[0]->as<AstStatLocal>();
+        REQUIRE(local);
+        REQUIRE_EQ(local->attributes.size, 1);
+        AstAttr::DeprecatedInfo info = local->attributes.data[0]->deprecatedInfo();
+        REQUIRE(info.use.has_value());
+        CHECK_EQ(*info.use, "dog");
+        CHECK_EQ(result.errors.size(), 1);
+    }
+
+    // A string argument written bare is the same mistake.
+    {
+        ParseResult result = tryParse(R"(
+@deprecated "some reason"
+local q = 1
+)");
+
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "Attribute arguments must be written as '@[deprecated ...]'; a bare '@deprecated' cannot take arguments"
+        );
+    }
+
+    // But inside a table -- value or type -- an entry may legitimately *be* a table or a string, so
+    // these are attributed entries and not arguments written the wrong way.
+    {
+        ParseResult result = tryParse("local t = { @deprecated {1, 2} }");
+        CHECK(result.errors.empty());
+    }
+
+    {
+        ParseResult result = tryParse("type T = { @deprecated {string} }");
+        CHECK(result.errors.empty());
+    }
+
+    // `(` is never treated as arguments: an attributed function type is existing syntax and the two
+    // would be ambiguous, which is the whole reason arguments are bracketed.
+    {
+        ParseOptions opts;
+        opts.allowDeclarationSyntax = true;
+
+        ParseResult result = tryParse(
+            R"(
+declare bit32: {
+    band: @checked (...number) -> number
+})",
+            opts
+        );
+        CHECK_EQ(result.errors.size(), 0);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "bare_attribute_arguments_are_upstream_errors_without_the_flag")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuAttributesEverywhere, false};
+
+    // Without the feature, `{` after a bare attribute is just the token after the attribute.
+    ParseResult result = tryParse(R"(
+@checked { use = "dog" }
+local function f() end
+)");
+
+    REQUIRE(!result.errors.empty());
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Expected 'function', 'local function', 'const function', 'declare function' or a function type declaration after attribute, but got "
+        "'{' instead"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "attributes_before_function_in_a_table_list_entry_belong_to_the_function")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuAttributesEverywhere, true};
+
+    ParseResult result = tryParse(R"(
+local t = {
+    @native function() return 1 end,
+    @deprecated function() end,
+    @deprecated key = function() end,
+}
+)");
+    REQUIRE_EQ(result.errors.size(), 0);
+
+    REQUIRE_EQ(result.root->body.size, 1);
+    const AstStatLocal* local = result.root->body.data[0]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->values.size, 1);
+    const AstExprTable* table = local->values.data[0]->as<AstExprTable>();
+    REQUIRE(table);
+    REQUIRE_EQ(table->items.size, 3);
+
+    for (size_t i = 0; i < 2; ++i)
+    {
+        const AstExprTable::Item& item = table->items.data[i];
+        CHECK_EQ(item.attributes.size, 0);
+        const AstExprFunction* function = item.value->as<AstExprFunction>();
+        REQUIRE(function);
+        REQUIRE_EQ(function->attributes.size, 1);
+    }
+
+    CHECK(table->items.data[0].value->as<AstExprFunction>()->hasNativeAttribute());
+    CHECK(table->items.data[1].value->as<AstExprFunction>()->hasAttribute(AstAttr::Type::Deprecated));
+
+    // A keyed entry's attributes stay on the entry.
+    const AstExprTable::Item& keyed = table->items.data[2];
+    REQUIRE_EQ(keyed.attributes.size, 1);
+    CHECK(keyed.attributes.data[0]->type == AstAttr::Type::Deprecated);
+    const AstExprFunction* keyedFunction = keyed.value->as<AstExprFunction>();
+    REQUIRE(keyedFunction);
+    CHECK_EQ(keyedFunction->attributes.size, 0);
+}
+
+TEST_CASE_FIXTURE(Fixture, "attributes_on_a_type_function_are_an_error")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuAttributesEverywhere, true};
+
+    ParseResult result = tryParse(R"(
+@deprecated
+type function f(t)
+    return t
+end
+)");
+
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Attributes cannot be applied to a type function");
+    CHECK_EQ(result.errors[0].getLocation(), Location{{1, 0}, {2, 4}});
+}
+
+TEST_CASE_FIXTURE(Fixture, "attributes_are_rejected_in_positions_they_do_not_allow")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuAttributesEverywhere, true};
+
+    // `@native` registers itself as function-only, so every other position refuses it -- and says
+    // which position it was written on. Nothing here is a hand-written check per position; they all
+    // come from the one registry entry.
+    auto checkRejected = [](const ParseResult& result, const char* message)
+    {
+        REQUIRE(!result.errors.empty());
+        CHECK_EQ(result.errors[0].getMessage(), message);
+    };
+
+    checkRejected(tryParse("@native type X = number"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("@native local x = 1"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("local t = { @native a = 1 }"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("type T = { @native a: number }"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("type T = { @native [string]: number }"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("local function f(@native a) return a end"), "Attribute '@native' can only be applied to functions");
+    checkRejected(tryParse("local m = {} @native m.x = 1"), "Attribute '@native' can only be applied to functions");
+
+    // An array-like table type desugars to an indexer, so that is what it is reported as.
+    checkRejected(tryParse("type T = { @native number }"), "Attribute '@native' can only be applied to functions");
+
+    // Exactly one error, not one from the parse and another from pinning the position down.
+    ParseResult result = tryParse("@native type X = number");
+    CHECK_EQ(result.errors.size(), 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "table_type_field_attributes_are_distinct_from_its_type_s_attributes")
+{
+    ScopedFastFlag betterAttributes{FFlag::LuwuAttributesEverywhere, true};
+
+    ParseOptions opts;
+    opts.allowDeclarationSyntax = true;
+
+    // Before the name the attribute belongs to the field; after the colon it belongs to the
+    // function type. `@checked (...number) -> number` is also why parametrized attributes are
+    // bracketed: if a bare attribute took arguments, `(...number)` would be ambiguous between the
+    // attribute's arguments and the function type's parameter list.
+    ParseResult pr = tryParse(
+        R"(
+declare bit32: {
+    @deprecated band: @checked (...number) -> number
+})",
+        opts
+    );
+    CHECK_EQ(pr.errors.size(), 0);
+
+    REQUIRE_EQ(pr.root->body.size, 1);
+    AstStatDeclareGlobal* glob = pr.root->body.data[0]->as<AstStatDeclareGlobal>();
+    REQUIRE(glob);
+
+    AstTypeTable* tbl = glob->type->as<AstTypeTable>();
+    REQUIRE(tbl);
+    REQUIRE_EQ(tbl->props.size, 1);
+
+    const AstTableProp& prop = tbl->props.data[0];
+    REQUIRE_EQ(prop.attributes.size, 1);
+    CHECK(prop.attributes.data[0]->type == AstAttr::Type::Deprecated);
+
+    AstTypeFunction* func = prop.type->as<AstTypeFunction>();
+    REQUIRE(func);
+    REQUIRE_EQ(func->attributes.size, 1);
+    CHECK(func->attributes.data[0]->type == AstAttr::Type::Checked);
 }
 
 TEST_CASE_FIXTURE(Fixture, "can_parse_leading_bar_unions_successfully")
@@ -7533,22 +8744,23 @@ TEST_CASE_FIXTURE(Fixture, "explicit_type_instantiation_errors")
     matchParseError("local a = x:a<<T>>", "Expected '(', '{' or <string> when parsing function call, got <eof>");
 }
 
+// Luwu: every export is const, so upstream's `export local` declarations are plain exports here, and its forward
+// declarations (`export local f, g`) are locals exported once they're assigned
 TEST_CASE_FIXTURE(Fixture, "export_value_rfc")
 {
     ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
 
     AstStatBlock* block = parse(R"(
-export local version = "1.0.0"
-export const TAU = math.pi * 2
-export local settings: Settings = getSettings()
-export local a, b, c = 1, 2, 3
-export local d
+export version = "1.0.0"
+export TAU = math.pi * 2
+export settings: Settings = getSettings()
+export a, b, c = 1, 2, 3
 
 export function add(a: number, b: number): number
     return a + b
 end
 
-export local f, g
+local f, g
 function f()
     return g()
 end
@@ -7556,88 +8768,53 @@ end
 function g()
     return 42
 end
+export f, g = f, g
 
 local function ret(): (string, number, boolean)
     return "heh", 42, false
 end
-export local x, y, z = ret()
+export x, y, z = ret()
     )");
 
     REQUIRE(block != nullptr);
     REQUIRE_EQ(11, block->body.size);
 
-    AstStatLocal* version = block->body.data[0]->as<AstStatLocal>();
-    REQUIRE(version != nullptr);
-    CHECK(version->isExported);
-    CHECK(!version->isConst);
-    REQUIRE_EQ(1, version->vars.size);
-    CHECK(version->vars.data[0]->isExported);
-    CHECK(!version->vars.data[0]->isConst);
-
-    AstStatLocal* tau = block->body.data[1]->as<AstStatLocal>();
-    REQUIRE(tau != nullptr);
-    CHECK(tau->isExported);
-    CHECK(tau->isConst);
-    REQUIRE_EQ(1, tau->vars.size);
-    CHECK(tau->vars.data[0]->isExported);
-    CHECK(tau->vars.data[0]->isConst);
+    // The exported declarations, which are all const
+    for (size_t index : {0, 1, 2, 3, 8, 10})
+    {
+        INFO(index);
+        AstStatLocal* exported = block->body.data[index]->as<AstStatLocal>();
+        REQUIRE(exported != nullptr);
+        CHECK(exported->isExported);
+        CHECK(exported->isConst);
+        for (AstLocal* local : exported->vars)
+        {
+            CHECK(local->isExported);
+            CHECK(local->isConst);
+        }
+    }
 
     AstStatLocal* settings = block->body.data[2]->as<AstStatLocal>();
-    REQUIRE(settings != nullptr);
-    CHECK(settings->isExported);
-    CHECK(!settings->isConst);
     REQUIRE_EQ(1, settings->vars.size);
     REQUIRE(settings->vars.data[0]->annotation != nullptr);
 
-    AstStatLocal* abc = block->body.data[3]->as<AstStatLocal>();
-    REQUIRE(abc != nullptr);
-    CHECK(abc->isExported);
-    CHECK(!abc->isConst);
-    REQUIRE_EQ(3, abc->vars.size);
-    for (AstLocal* local : abc->vars)
-    {
-        CHECK(local->isExported);
-        CHECK(!local->isConst);
-    }
+    REQUIRE_EQ(3, block->body.data[3]->as<AstStatLocal>()->vars.size);
 
-    AstStatLocal* d = block->body.data[4]->as<AstStatLocal>();
-    REQUIRE(d != nullptr);
-    CHECK(d->isExported);
-    CHECK(!d->isConst);
-    REQUIRE_EQ(1, d->vars.size);
-    CHECK_EQ(0, d->values.size);
-    CHECK(d->vars.data[0]->isExported);
-
-    AstStatLocalFunction* add = block->body.data[5]->as<AstStatLocalFunction>();
+    AstStatLocalFunction* add = block->body.data[4]->as<AstStatLocalFunction>();
     REQUIRE(add != nullptr);
     CHECK(add->name->isExported);
     CHECK(add->name->isConst);
 
-    AstStatLocal* forwardDecls = block->body.data[6]->as<AstStatLocal>();
+    AstStatLocal* forwardDecls = block->body.data[5]->as<AstStatLocal>();
     REQUIRE(forwardDecls != nullptr);
-    CHECK(forwardDecls->isExported);
-    CHECK(!forwardDecls->isConst);
+    CHECK(!forwardDecls->isExported);
     REQUIRE_EQ(2, forwardDecls->vars.size);
     CHECK_EQ(0, forwardDecls->values.size);
-    for (AstLocal* local : forwardDecls->vars)
-    {
-        CHECK(local->isExported);
-        CHECK(!local->isConst);
-    }
 
+    REQUIRE(block->body.data[6]->is<AstStatFunction>());
     REQUIRE(block->body.data[7]->is<AstStatFunction>());
-    REQUIRE(block->body.data[8]->is<AstStatFunction>());
 
-    AstStatLocal* xyz = block->body.data[3]->as<AstStatLocal>();
-    REQUIRE(xyz != nullptr);
-    CHECK(xyz->isExported);
-    CHECK(!xyz->isConst);
-    REQUIRE_EQ(3, xyz->vars.size);
-    for (AstLocal* local : xyz->vars)
-    {
-        CHECK(local->isExported);
-        CHECK(!local->isConst);
-    }
+    REQUIRE_EQ(3, block->body.data[10]->as<AstStatLocal>()->vars.size);
 
     parse(R"(
 export type Config = {
@@ -7664,10 +8841,8 @@ TEST_CASE_FIXTURE(Fixture, "export_value_parse_failures")
         return result;
     };
 
+    // Luwu: `export foo = 5` is `export const foo = 5`, so only the forms without a value fail
     for (const std::string source : {
-             R"(
-export foo = 5
-    )",
              R"(
 export foo
     )",
@@ -7686,14 +8861,14 @@ end
     }
 
     ParseResult duplicateExport = expectParseError(R"(
-export local foo = 1
-export local foo = 2
+export foo = 1
+export foo = 2
     )");
     CHECK_NE(duplicateExport.errors.front().getMessage().find("foo"), std::string::npos);
 
     matchParseError(
         R"(
-export local answer = 42
+export answer = 42
 return {answer = answer}
     )",
         "Exporting values is not compatible with top-level return (export/return conflict)"
@@ -7705,7 +8880,7 @@ if skip then
     return
 end
 
-export local answer = 42
+export answer = 42
     )",
         "Exporting values is not compatible with top-level return (export/return conflict)"
     );
@@ -7733,32 +8908,32 @@ return Player {health = 100}
     for (const std::string source : {
              R"(
 if true then
-    export local insideIf = 1
+    export insideIf = 1
 end
     )",
              R"(
 do
-    export const insideDo = 1
+    export insideDo = 1
 end
     )",
              R"(
 while true do
-    export local insideWhile = 1
+    export insideWhile = 1
 end
     )",
              R"(
 repeat
-    export local insideRepeat = 1
+    export insideRepeat = 1
 until true
     )",
              R"(
 for i = 1, 1 do
-    export local insideFor = i
+    export insideFor = i
 end
     )",
              R"(
 local function test()
-    export local insideFunction = 1
+    export insideFunction = 1
 end
     )",
          })
@@ -7782,16 +8957,153 @@ export()
     CHECK(contextualKeywordUses->body.data[1]->is<AstStatCompoundAssign>());
     CHECK(contextualKeywordUses->body.data[2]->is<AstStatExpr>());
 
-    parse("export local x = 5");
-    parse("export const x = 5");
+    parse("export x = 5");
     parse(R"(
 export function foo()
 end
     )");
 
+    // Luwu Export Values (rfcs/export-values.md): `export name = value` declares a const export
+    AstStatBlock* luwuForms = parse(R"(
+export function bar()
+end
+export answer = 42
+export a, b: number = 1, 2
+    )");
+    REQUIRE(luwuForms != nullptr);
+    REQUIRE_EQ(3, luwuForms->body.size);
+
+    AstStatLocalFunction* bar = luwuForms->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(bar != nullptr);
+    CHECK(bar->name->isExported);
+    CHECK(bar->name->isConst);
+
+    for (size_t i = 1; i < 3; ++i)
+    {
+        AstStatLocal* implied = luwuForms->body.data[i]->as<AstStatLocal>();
+        REQUIRE(implied != nullptr);
+        CHECK(implied->isExported);
+        CHECK(implied->isConst);
+        CHECK(!implied->keywordLocation);
+        for (AstLocal* local : implied->vars)
+        {
+            CHECK(local->isExported);
+            CHECK(local->isConst);
+        }
+    }
+
+    matchParseError("export answer", "Exported values are const and must be initialized");
     matchParseError("export 42", "Incomplete statement: expected assignment or a function call");
     matchParseError("export if true then end", "Incomplete statement: expected assignment or a function call");
     matchParseError("export", "Incomplete statement: expected assignment or a function call");
+}
+
+// Luwu Export Values (rfcs/export-values.md): exports are always const, so `local` or `const` after `export` is an error,
+// and only a Luwu module can export values
+TEST_CASE_FIXTURE(Fixture, "export_local_and_const_are_errors")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuauExportValueSyntax, true}};
+
+    const std::string exportLocal =
+        "Luwu does not support 'export local' syntax (exported values are always const), use a local binding and export it later";
+    const std::string exportConst = "Remove this 'const' keyword, exported values are always const";
+    matchParseError("export local x = 5", exportLocal);
+    matchParseError("export const x = 5", exportConst);
+    matchParseError("export const function f() end", exportConst);
+    const std::string hoistHint =
+        "Forward declare a local binding to export a hoisted function: local f; ... export function f() ... end";
+    matchParseError("export x", "Exported values are const and must be initialized");
+    matchParseError("export a, b = 1", "Exported values are const and must be initialized");
+    matchParseError("export local is_odd: (number) -> boolean", hoistHint);
+    // assigned later, so it was meant as a forward declaration (the assignment also reports reassigning a const)
+    ParseResult assignedLater = tryParse("export x\nx = 1");
+    bool hinted = std::any_of(
+        assignedLater.errors.begin(),
+        assignedLater.errors.end(),
+        [&](const ParseError& error)
+        {
+            return error.getMessage() == hoistHint;
+        }
+    );
+    CHECK(hinted);
+
+    // `export function f` assigns a local `f` that's already declared, like `function f()` does
+    AstStatBlock* filled = parse(R"(
+local is_odd
+export function is_even(n: number): boolean
+    return if n == 0 then true else is_odd(n - 1)
+end
+export function is_odd(n: number): boolean
+    return if n == 0 then false else is_even(n - 1)
+end
+    )");
+    REQUIRE(filled != nullptr);
+    REQUIRE_EQ(3, filled->body.size);
+    AstStatFunction* isOdd = filled->body.data[2]->as<AstStatFunction>();
+    REQUIRE(isOdd != nullptr);
+    AstExprLocal* isOddLocal = isOdd->name->as<AstExprLocal>();
+    REQUIRE(isOddLocal != nullptr);
+    CHECK_EQ(isOddLocal->local, filled->body.data[0]->as<AstStatLocal>()->vars.data[0]);
+    CHECK(isOddLocal->local->isExported);
+    CHECK(isOddLocal->local->isConst);
+
+    matchParseError("const c = 1\nexport function c() end", "Variable 'c' is constant and may not be reassigned");
+
+    // One error each, and the code after still parses
+    ParseResult result = tryParse(R"(
+export local x = 5
+export const y = 6
+export z = x + y
+    )");
+    REQUIRE_EQ(2, result.errors.size());
+    CHECK_EQ(result.errors[0].getLocation(), Location{{1, 7}, {1, 12}});
+    CHECK_EQ(result.errors[1].getLocation(), Location{{2, 7}, {2, 12}});
+    REQUIRE(result.root != nullptr);
+    REQUIRE_EQ(3, result.root->body.size);
+
+    // Both declare a const export, and the AST keeps the keyword that was written
+    for (size_t i = 0; i < 2; ++i)
+    {
+        AstStatLocal* declared = result.root->body.data[i]->as<AstStatLocal>();
+        REQUIRE(declared != nullptr);
+        CHECK(declared->isConst);
+        CHECK(declared->isExported);
+        CHECK_EQ(declared->exportWrittenAsLocal, i == 0);
+        REQUIRE(declared->keywordLocation);
+        CHECK_EQ(*declared->keywordLocation, result.errors[i].getLocation());
+        REQUIRE_EQ(1, declared->vars.size);
+        CHECK(declared->vars.data[0]->isConst);
+        CHECK(declared->vars.data[0]->isExported);
+    }
+
+    // Assigning an `export local` reports it like assigning any const
+    ParseResult reassigned = tryParse("export local x = 5\nx = 6");
+    REQUIRE_EQ(2, reassigned.errors.size());
+    CHECK_EQ(reassigned.errors[1].getMessage(), "Variable 'x' is constant and may not be reassigned");
+
+    // `export local function f()` is exported like `export function f()`, with one error
+    ParseResult localFunction = tryParse("export local function f() end\nprint(f)");
+    REQUIRE_EQ(1, localFunction.errors.size());
+    CHECK_EQ(localFunction.errors[0].getMessage(), "'export' must be followed by an identifier or 'function'; try removing 'local'");
+    REQUIRE(localFunction.root != nullptr);
+    REQUIRE_EQ(2, localFunction.root->body.size);
+    AstStatLocalFunction* exportedFunction = localFunction.root->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(exportedFunction != nullptr);
+    CHECK(exportedFunction->name->isExported);
+    CHECK(exportedFunction->name->isConst);
+
+    ParseOptions luau;
+    luau.language = Language::Luau;
+    for (const char* source : {"export x = 5", "export function f() end", "export local x = 5", "export local x", "export const x"})
+    {
+        INFO(source);
+        ParseResult inLuau = tryParse(source, luau);
+        REQUIRE_EQ(1, inLuau.errors.size());
+        CHECK(inLuau.errors.front().getMessage().find("Luwu-only feature") != std::string::npos);
+    }
+
+    ParseResult typeInLuau = tryParse("export type T = number", luau);
+    CHECK(typeInLuau.errors.empty());
 }
 
 TEST_CASE_FIXTURE(Fixture, "extern_read_write_attributes")
@@ -7822,6 +9134,870 @@ TEST_CASE_FIXTURE(Fixture, "extern_read_write_attributes")
     CHECK_EQ(declaredExternType->props.data[1].access, AstTableAccess::Write);
     CHECK_EQ(declaredExternType->props.data[2].access, AstTableAccess::ReadWrite);
     CHECK_EQ(declaredExternType->props.data[3].access, AstTableAccess::ReadWrite);
+}
+
+// Parses as ordinary source, the way the compiler and the Frontend do, rather than as a definition file.
+static ParseResult parseSource(Allocator& allocator, AstNameTable& names, const std::string& source)
+{
+    return Parser::parse(source.c_str(), source.size(), names, allocator, ParseOptions{});
+}
+
+static std::vector<std::string> sourceParseErrors(const std::string& source)
+{
+    Allocator allocator;
+    AstNameTable names(allocator);
+    std::vector<std::string> messages;
+    for (const ParseError& error : parseSource(allocator, names, source).errors)
+        messages.push_back(error.getMessage());
+    return messages;
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_in_source")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+declare script: { path: string }
+declare function exit(code: number): never
+do
+    declare shared: number
+    do
+        declare nested: string
+    end
+end
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+    CHECK(result.root->body.data[0]->is<AstStatDeclareGlobal>());
+    CHECK(result.root->body.data[1]->is<AstStatDeclareFunction>());
+    // Ends at its return type, not at the next statement
+    CHECK_EQ(result.root->body.data[1]->location.end, Position{2, 42});
+    AstStatBlock* block = result.root->body.data[2]->as<AstStatBlock>();
+    REQUIRE(block);
+    REQUIRE_EQ(block->body.size, 2);
+    CHECK(block->body.data[0]->is<AstStatDeclareGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_need_the_flag_outside_definition_files")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
+    std::vector<std::string> errors = sourceParseErrors("declare x: number");
+    REQUIRE_FALSE(errors.empty());
+    CHECK_EQ(errors[0], "Incomplete statement: expected assignment or a function call");
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_only_where_the_whole_file_sees_them")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    const std::string placement =
+        "'declare' applies to the whole file, so it must be at the top level of the file or in a 'do' block there";
+
+    for (const char* source : {
+             "local function f()\n    declare x: number\nend",
+             "if true then\n    declare x: number\nend",
+             "while true do\n    declare x: number\nend",
+             "for i = 1, 2 do\n    declare function f(): ()\nend",
+             "repeat\n    declare x: number\nuntil true",
+             "local function f()\n    do\n        declare x: number\n    end\nend",
+         })
+    {
+        INFO(source);
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], placement);
+    }
+
+    // Definition files keep upstream's rules
+    ParseResult result = tryParse("local function f()\n    declare x: number\nend");
+    CHECK(result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_statements_declare_each_global_once")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    std::vector<std::string> errors = sourceParseErrors("declare x: number\ndo\n    declare function x(): ()\nend");
+    REQUIRE_EQ(errors.size(), 1);
+    CHECK_EQ(errors[0], "'x' is already declared on line 1");
+
+    errors = sourceParseErrors("declare x: number\ndeclare x: number");
+    REQUIRE_EQ(errors.size(), 1);
+    CHECK_EQ(errors[0], "'x' is already declared on line 1");
+
+    // Definition files keep upstream's rules
+    ParseResult result = tryParse("declare x: number\ndeclare x: number");
+    CHECK(result.errors.empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_is_still_an_ordinary_name")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    for (const char* source : {"declare(x)", "declare = 1", "declare.x = 1", "declare, x = 1, 2", "declare 'x'", "declare { x = 1 }", "declare:x()"})
+    {
+        INFO(source);
+        CHECK(sourceParseErrors(source).empty());
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "export_declare_extern_type")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+export declare extern type Path
+    function exists(self): boolean
+end
+declare extern type Hidden with
+    name: string
+end
+declare export: number
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatDeclareExternType* path = result.root->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(path);
+    CHECK(path->exportLocation);
+    CHECK_FALSE(path->withLocation);
+    REQUIRE_EQ(path->props.size, 1);
+
+    AstStatDeclareExternType* hidden = result.root->body.data[1]->as<AstStatDeclareExternType>();
+    REQUIRE(hidden);
+    CHECK_FALSE(hidden->exportLocation);
+    CHECK(hidden->withLocation);
+
+    // `export` followed by `:` is the name of a global
+    AstStatDeclareGlobal* global = result.root->body.data[2]->as<AstStatDeclareGlobal>();
+    REQUIRE(global);
+    CHECK_EQ(std::string(global->name.value), "export");
+}
+
+TEST_CASE_FIXTURE(Fixture, "export_declare_is_for_types_only")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    // One error each, and the declaration after `export` still parses
+    for (const char* source : {"export declare x: number", "export declare function f(): ()"})
+    {
+        INFO(source);
+        Allocator allocator;
+        AstNameTable names(allocator);
+        ParseResult result = parseSource(allocator, names, source);
+
+        REQUIRE_EQ(result.errors.size(), 1);
+        CHECK_EQ(
+            result.errors[0].getMessage(),
+            "'export declare' exports classes, traits and types only; to declare a global for several files, use a definitions file"
+        );
+        REQUIRE_EQ(result.root->body.size, 1);
+        bool declaresValue = result.root->body.data[0]->is<AstStatDeclareGlobal>() || result.root->body.data[0]->is<AstStatDeclareFunction>();
+        CHECK(declaresValue);
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "export_declare_class_exports_the_class_value")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuauExportValueSyntax, true},
+    };
+
+    // The declaration, its global, then `export Semver = Semver`
+    AstStatBlock* block = parse("export declare class Semver(public major: number)\nend");
+    REQUIRE_EQ(block->body.size, 3);
+    CHECK(block->body.data[0]->is<AstStatDeclareClass>());
+    CHECK(block->body.data[1]->is<AstStatDeclareGlobal>());
+    AstStatLocal* exported = block->body.data[2]->as<AstStatLocal>();
+    REQUIRE(exported);
+    CHECK(exported->isExported);
+    CHECK(exported->vars.data[0]->isExported);
+    CHECK(exported->vars.data[0]->isConst);
+    CHECK(exported->values.data[0]->is<AstExprGlobal>());
+
+    // Exported values are top-level statements
+    ParseResult nested = tryParse("do\n    export declare class Semver(public major: number)\n    end\nend");
+    REQUIRE_EQ(nested.errors.size(), 1);
+    CHECK_EQ(
+        nested.errors[0].getMessage(),
+        "Move this 'export declare class' statement outside the 'do' block into the module's top level"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_extern_type_property_named_with")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    for (const char* source : {"declare extern type A\n    with: number\nend", "declare extern type A with\n    with: number\nend"})
+    {
+        INFO(source);
+        Allocator allocator;
+        AstNameTable names(allocator);
+        ParseResult result = parseSource(allocator, names, source);
+
+        REQUIRE(result.errors.empty());
+        REQUIRE_EQ(result.root->body.size, 1);
+        AstStatDeclareExternType* declaration = result.root->body.data[0]->as<AstStatDeclareExternType>();
+        REQUIRE(declaration);
+        REQUIRE_EQ(declaration->props.size, 1);
+        CHECK_EQ(std::string(declaration->props.data[0].name.value), "with");
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_extern_type_needs_with_without_the_flag")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, false};
+
+    matchParseError(
+        "declare extern type Path\n    name: string\nend", "Expected `with` keyword before listing properties of the external type, but got name instead"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_class")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+export class type Path(public raw: string, public sep = string)
+    public const drive: string?
+    private cache = { string }
+    public function join(self, other: string): Path
+    public function cwd(): Path
+    public function __tostring(self): string
+end
+class type Counter
+    function __init(self, start: number)
+    function bump(self)
+end
+declare class: number
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatDeclareClass* path = result.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(path);
+    AstStatClass* shape = path->shape;
+    CHECK(shape->exported);
+    CHECK_EQ(std::string(shape->name->name.value), "Path");
+    REQUIRE(shape->primaryConstructor);
+    REQUIRE_EQ(shape->primaryConstructor->args.size, 2);
+    CHECK_FALSE(shape->primaryConstructor->argsQualifiers.data[0].declaredDefaultLocation);
+    CHECK(shape->primaryConstructor->argsQualifiers.data[1].declaredDefaultLocation);
+    REQUIRE(shape->primaryConstructor->args.data[1]->annotation);
+
+    REQUIRE_EQ(shape->members.size, 5);
+    const AstClassProperty* cache = shape->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(cache);
+    CHECK(cache->ty);
+    CHECK(cache->equalsLocation);
+    CHECK_FALSE(cache->defaultValue);
+    const AstClassMethod* join = shape->members.data[2].get_if<AstClassMethod>();
+    REQUIRE(join);
+    CHECK_EQ(join->function->body->body.size, 0);
+    CHECK(join->function->returnAnnotation);
+
+    AstStatDeclareClass* counter = result.root->body.data[1]->as<AstStatDeclareClass>();
+    REQUIRE(counter);
+    CHECK_FALSE(counter->shape->exported);
+    REQUIRE_EQ(counter->shape->members.size, 2);
+
+    // `class` followed by `:` is the name of a global
+    CHECK(result.root->body.data[2]->is<AstStatDeclareGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_trait")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}, {FFlag::LuwuGenericNominals, true}
+    };
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+export trait type Container<T>
+    expect public function __len(self): number
+    expect public function front?(self): T?
+    expect public function back?(self): T?
+end
+trait type Handler(public name = string) needs Container<string>
+    private cb: (() -> ())?
+    public final tag: string
+    public final function on_callback(self, cb: () -> ())
+    public function describe(self): string
+end
+declare trait: number
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatDeclareClass* container = result.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(container);
+    CHECK(container->shape->isTrait);
+    CHECK(container->shape->exported);
+    REQUIRE_EQ(container->shape->members.size, 3);
+    const AstClassMethod* front = container->shape->members.data[1].get_if<AstClassMethod>();
+    REQUIRE(front);
+    CHECK(front->expectLocation);
+    CHECK(front->isOptional);
+
+    AstStatDeclareClass* handler = result.root->body.data[1]->as<AstStatDeclareClass>();
+    REQUIRE(handler);
+    AstStatClass* shape = handler->shape;
+    CHECK(shape->isTrait);
+    CHECK_FALSE(shape->exported);
+    REQUIRE(shape->primaryConstructor);
+    CHECK(shape->primaryConstructor->argsQualifiers.data[0].declaredDefaultLocation);
+    REQUIRE_EQ(shape->needs.size, 1);
+    REQUIRE_EQ(shape->members.size, 4);
+    const AstClassProperty* tag = shape->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(tag);
+    CHECK(tag->finalLocation);
+    const AstClassMethod* describe = shape->members.data[3].get_if<AstClassMethod>();
+    REQUIRE(describe);
+    CHECK_EQ(describe->function->body->body.size, 0);
+
+    // `trait` followed by `:` is the name of a global
+    CHECK(result.root->body.data[2]->is<AstStatDeclareGlobal>());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_trait_mistakes")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    auto onlyError = [](const char* source, const std::string& message)
+    {
+        INFO(std::string(source));
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], message);
+    };
+
+    onlyError(
+        "declare trait type Handler\nend",
+        "Write 'trait type Handler' for the type alone, or 'declare trait Handler' for the trait and its type: 'declare' declares a value"
+    );
+    onlyError("export declare trait type Handler\nend", "Remove 'declare' to export the type alone: write 'export trait type Handler'");
+    onlyError("trait type A\n    expect x = number\nend", "Expected fields can't have default values");
+    onlyError("trait type A\n    c\nend", "Declared trait field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
+    onlyError("trait type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
+    onlyError("trait type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("trait type A implements B\nend", "Traits can't implement traits; did you mean 'needs'?");
+    onlyError("trait A extends B\nend", "Traits can't extend traits; did you mean 'needs'?");
+
+    // `export` goes first
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, "declare export trait A\nend");
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "'export' goes before 'declare': write 'export declare'");
+    AstStatDeclareClass* trait = result.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(trait);
+    CHECK(trait->shape->exported);
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_class_mistakes")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    auto onlyError = [](const char* source, const std::string& message)
+    {
+        INFO(std::string(source));
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], message);
+    };
+
+    onlyError("class type A\n    x: number = 1\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("class type A\n    x: number = {}\n    y: string\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("class type A(x: number = string)\nend", "In a declaration, a default is written as its type: 'name = T'");
+    onlyError("class type A\n    function f(self, x)\nend", "All declaration parameters must be annotated");
+    onlyError("class type A(x)\nend", "All declaration parameters must be annotated");
+    onlyError("class type A\n    function f(self, ...)\nend", "All declaration parameters must be annotated");
+}
+
+TEST_CASE_FIXTURE(Fixture, "declared_parameter_defaults_are_types")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+declare function split(s: string, sep = string): { string }
+declare extern type File
+    function read(self, count = number): string
+end
+class type Path
+    function join(self, other = string): Path
+end
+)");
+
+    REQUIRE(result.errors.empty());
+    AstStatDeclareFunction* split = result.root->body.data[0]->as<AstStatDeclareFunction>();
+    REQUIRE(split);
+    REQUIRE_EQ(split->params.types.size, 2);
+    // `sep = string` is a `string?` parameter
+    AstTypeUnion* sep = split->params.types.data[1]->as<AstTypeUnion>();
+    REQUIRE(sep);
+    REQUIRE_EQ(sep->types.size, 2);
+    CHECK(sep->types.data[0]->is<AstTypeReference>());
+    CHECK(sep->types.data[1]->is<AstTypeOptional>());
+
+    // A value written after an annotation gets one error, and parsing carries on
+    std::vector<std::string> errors = sourceParseErrors("declare function f(x: number = 1, y: string): ()\nlocal z = 1");
+    REQUIRE_EQ(errors.size(), 1);
+    CHECK_EQ(errors[0], "In a declaration, a default is written as its type: 'name = T'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_class_is_followed_by_its_global")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    AstStatBlock* block = parse("declare class Semver(public major: number)\nend\nclass type Path\nend\n");
+
+    // `declare class Semver` is the class's type and `declare Semver: class<Semver>`; `class type Path` is the type alone
+    REQUIRE(block->body.size == 3);
+    AstStatDeclareClass* semver = block->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(semver);
+    CHECK(semver->declareLocation);
+
+    AstStatDeclareGlobal* global = block->body.data[1]->as<AstStatDeclareGlobal>();
+    REQUIRE(global);
+    CHECK(global->name == "Semver");
+    AstTypeReference* type = global->type ? global->type->as<AstTypeReference>() : nullptr;
+    REQUIRE(type);
+    CHECK(type->name == "class");
+    CHECK(type->parameters.size == 1);
+
+    AstStatDeclareClass* path = block->body.data[2]->as<AstStatDeclareClass>();
+    REQUIRE(path);
+    CHECK(!path->declareLocation);
+}
+
+TEST_CASE_FIXTURE(Fixture, "declare_export_is_written_export_declare")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    for (const char* source : {"declare export extern type Path\nend", "declare export class Path\nend"})
+    {
+        INFO(std::string(source));
+        Allocator allocator;
+        AstNameTable names(allocator);
+        ParseResult result = parseSource(allocator, names, source);
+
+        // One error, and the declaration is still exported
+        REQUIRE_EQ(result.errors.size(), 1);
+        CHECK_EQ(result.errors[0].getMessage(), "'export' goes before 'declare': write 'export declare'");
+        // A declared class is followed by the global holding it
+        REQUIRE(result.root->body.size >= 1);
+        AstStat* stat = result.root->body.data[0];
+        if (AstStatDeclareExternType* externType = stat->as<AstStatDeclareExternType>())
+            CHECK(externType->exportLocation);
+        else
+        {
+            AstStatDeclareClass* declaredClass = stat->as<AstStatDeclareClass>();
+            REQUIRE(declaredClass);
+            CHECK(declaredClass->shape->exported);
+        }
+    }
+
+    // The statement starts at `export`
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, "export class type Path\nend");
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 1);
+    CHECK_EQ(result.root->body.data[0]->location.begin, Position{0, 0});
+}
+
+TEST_CASE_FIXTURE(Fixture, "declared_types_are_written_out_and_never_shadowed")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    auto onlyError = [](const char* source, const std::string& message)
+    {
+        INFO(std::string(source));
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], message);
+    };
+
+    onlyError(
+        "declare class type Path\nend",
+        "Write 'class type Path' for the type alone, or 'declare class Path' for the class and its type: 'declare' declares a value"
+    );
+
+    // With `export`, removing `declare` gives `export class type Path`. The error is on `declare`, and the statement is
+    // still the exported type.
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult exported = parseSource(allocator, names, "export declare class type Path\n    raw: string\nend\nprint(1)");
+    REQUIRE_EQ(exported.errors.size(), 1);
+    CHECK_EQ(exported.errors[0].getMessage(), "Remove 'declare' to export the type alone: write 'export class type Path'");
+    CHECK_EQ(exported.errors[0].getLocation(), Location{{0, 7}, {0, 14}});
+    REQUIRE_EQ(exported.root->body.size, 2);
+    AstStatDeclareClass* exportedType = exported.root->body.data[0]->as<AstStatDeclareClass>();
+    REQUIRE(exportedType);
+    CHECK(exportedType->shape->exported);
+    CHECK_EQ(exportedType->shape->name->name, "Path");
+    CHECK_EQ(exportedType->shape->members.size, 1);
+    onlyError("class type A\n    c\nend", "Declared class field 'c' needs a type: 'name: T', or 'name = T' if it has a default");
+
+    const std::string declaredOnLine1 = "Type 'A' is declared on line 1, and a declared type can't be shadowed";
+    onlyError("declare extern type A\nend\nclass type A\nend", declaredOnLine1);
+    onlyError("declare extern type A\nend\nlocal function f()\n    type A = number\nend", declaredOnLine1);
+    onlyError("class type A\nend\nclass A\nend", declaredOnLine1);
+    onlyError("declare extern type A\nend\ntype function A()\n    return types.number\nend", declaredOnLine1);
+    onlyError("type A = number\ndeclare extern type A\nend", "Type 'A' is already defined on line 1, and a declared type can't shadow it");
+
+    // Different names, and two aliases, are fine
+    CHECK(sourceParseErrors("declare extern type A\nend\ntype B = A\ndo\n    type B = number\nend").empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "value_declarations_may_leave_types_out")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuClasses, true}};
+
+    Allocator allocator;
+    AstNameTable names(allocator);
+    ParseResult result = parseSource(allocator, names, R"(
+declare bundled
+declare function helper(a, b: number, ...)
+declare typed: number
+)");
+
+    REQUIRE(result.errors.empty());
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    AstStatDeclareGlobal* bundled = result.root->body.data[0]->as<AstStatDeclareGlobal>();
+    REQUIRE(bundled);
+    CHECK_FALSE(bundled->type);
+    // Ends at its name, so the next line is its own statement
+    CHECK_EQ(bundled->location.end, Position{1, 15});
+
+    // An untyped parameter is `any`, an untyped `...` is `...any`
+    AstStatDeclareFunction* helper = result.root->body.data[1]->as<AstStatDeclareFunction>();
+    REQUIRE(helper);
+    REQUIRE_EQ(helper->params.types.size, 2);
+    AstTypeReference* a = helper->params.types.data[0]->as<AstTypeReference>();
+    REQUIRE(a);
+    CHECK_EQ(std::string(a->name.value), "any");
+    REQUIRE(helper->params.tailType);
+    CHECK(helper->params.tailType->is<AstTypePackVariadic>());
+
+    // Type declarations still write their types
+    std::vector<std::string> errors = sourceParseErrors("declare extern type A\n    function f(self, x)\nend");
+    REQUIRE_FALSE(errors.empty());
+    errors = sourceParseErrors("class type A\n    function f(self, x)\nend");
+    REQUIRE_EQ(errors.size(), 1);
+    CHECK_EQ(errors[0], "All declaration parameters must be annotated");
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_and_trait_keywords_in_an_extern_type")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    auto onlyError = [](const char* source, const std::string& message)
+    {
+        INFO(std::string(source));
+        std::vector<std::string> errors = sourceParseErrors(source);
+        REQUIRE_EQ(errors.size(), 1);
+        CHECK_EQ(errors[0], message);
+    };
+
+    const std::string accessSpecifier = "Extern types have no access specifiers; every member is public. For a class's type, use 'class type'";
+    onlyError("declare extern type Cat\n    public function meow(self)\nend", accessSpecifier);
+    onlyError("declare extern type Cat\n    private name: string\nend", accessSpecifier);
+    onlyError("declare extern type Cat\n    const name: string\nend", "Extern types have no 'const'; write 'read' for a read-only property");
+    onlyError("declare extern type Cat\n    expect function meow(self)\nend", "'expect' belongs in a trait, not an extern type");
+    onlyError("declare extern type Cat\n    age = number\nend", "Extern type properties have no defaults; write 'name: T'");
+
+    // Names that happen to be those keywords are still properties
+    CHECK(sourceParseErrors("declare extern type Cat\n    public: number\n    const: string\nend").empty());
+}
+
+TEST_CASE_FIXTURE(Fixture, "declarations_have_no_value")
+{
+    ScopedFastFlag luwuDeclareStatements{FFlag::LuwuDeclareStatements, true};
+
+    const std::string message = "declare may only be used to initialize globals; assign to 'cat' on a new line to assign to the global variable";
+    for (const char* source : {"declare cat = 2\nprint(cat)", "declare cat: number = 2\nprint(cat)"})
+    {
+        INFO(std::string(source));
+        Allocator allocator;
+        AstNameTable names(allocator);
+        ParseResult result = parseSource(allocator, names, source);
+
+        // One error, and both the declaration and the next statement are intact
+        REQUIRE_EQ(result.errors.size(), 1);
+        CHECK_EQ(result.errors[0].getMessage(), message);
+        REQUIRE_EQ(result.root->body.size, 2);
+        CHECK(result.root->body.data[0]->is<AstStatDeclareGlobal>());
+    }
+}
+
+TEST_CASE_FIXTURE(Fixture, "lint_attributes_take_bare_lint_names")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    AstStatBlock* stat = parse(R"(
+@[nolint(LocalUnused, "LoopConcat")]
+local function f() end
+@[nolint]
+local function g() end
+@[lint(LocalUnused)]
+local function h() end
+)");
+    REQUIRE(stat != nullptr);
+    REQUIRE(3 == stat->body.size);
+
+    AstStatLocalFunction* f = stat->body.data[0]->as<AstStatLocalFunction>();
+    REQUIRE(f);
+    REQUIRE(1 == f->func->attributes.size);
+    CHECK(f->func->attributes.data[0]->type == AstAttr::Type::Nolint);
+    CHECK(2 == f->func->attributes.data[0]->args.size);
+
+    AstStatLocalFunction* h = stat->body.data[2]->as<AstStatLocalFunction>();
+    REQUIRE(h);
+    REQUIRE(1 == h->func->attributes.size);
+    CHECK(h->func->attributes.data[0]->type == AstAttr::Type::Lint);
+}
+
+TEST_CASE_FIXTURE(Fixture, "lint_attributes_reject_other_arguments")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    ParseResult result = tryParse(R"(
+@[nolint(1)]
+local function f() end
+@[lint]
+local function g() end
+)");
+
+    REQUIRE(2 == result.errors.size());
+    CHECK_EQ("Lint attributes take lint names, like '@[nolint(LocalUnused)]'", result.errors[0].getMessage());
+    CHECK_EQ("@lint needs the lints to turn on, like '@[lint(LocalUnused)]'", result.errors[1].getMessage());
+}
+
+TEST_CASE_FIXTURE(Fixture, "nodiscard_takes_an_optional_reason")
+{
+    ScopedFastFlag cstAttr{FFlag::LuauCstAttr, true};
+
+    ParseResult result = tryParse(R"(
+@nodiscard
+local function a() end
+@[nodiscard("use the copy")]
+local function b() end
+@[nodiscard(1)]
+local function c() end
+)");
+
+    REQUIRE(1 == result.errors.size());
+    CHECK_EQ("@nodiscard takes at most one string, the reason: '@[nodiscard(\"use the returned copy\")]'", result.errors[0].getMessage());
+}
+
+TEST_CASE_FIXTURE(Fixture, "luau_modules_write_attributes_outside_functions_as_comments")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    ParseOptions options;
+    options.language = Language::Luau;
+
+    ParseResult result = tryParse(
+        R"(
+type Fs = {
+    @[deprecated { use = "readfile" }]
+    read: (string) -> string,
+}
+
+@deprecated
+local x = 1
+
+@native
+local function f() end
+)",
+        options
+    );
+
+    // `@native` on a function stays valid Luau: upstream parses attributes on functions
+    REQUIRE_EQ(result.errors.size(), 2);
+    CHECK_EQ(
+        result.errors[0].getMessage(),
+        "Attributes on a table type field are Luwu-only; in a Luau file, write it as the comment '--@[deprecated ...]' on the line above"
+    );
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(2, 6));
+    CHECK_EQ(
+        result.errors[1].getMessage(),
+        "Attributes on a local variable are Luwu-only; in a Luau file, write it as the comment '--@[deprecated]' on the line above"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "comment_attributes_mean_the_same_as_written_ones")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    ParseOptions options;
+    options.language = Language::Luau;
+
+    ParseResult result = tryParse(
+        R"(
+type Fs = {
+    --- reads a file
+    --@[deprecated { use = "readfile" }]
+    read: (string) -> string,
+    readfile: (string) -> string,
+}
+
+--@[deprecated] text after the attribute is free
+local x = 1
+
+--@[deprecated]
+y = 2
+)",
+        options
+    );
+
+    REQUIRE_EQ(result.errors.size(), 0);
+    REQUIRE_EQ(result.root->body.size, 3);
+
+    const AstStatTypeAlias* alias = result.root->body.data[0]->as<AstStatTypeAlias>();
+    REQUIRE(alias);
+    const AstTypeTable* table = alias->type->as<AstTypeTable>();
+    REQUIRE(table);
+    REQUIRE_EQ(table->props.size, 2);
+    REQUIRE_EQ(table->props.data[0].attributes.size, 1);
+    const AstAttr* read = table->props.data[0].attributes.data[0];
+    CHECK(read->type == AstAttr::Type::Deprecated);
+    CHECK(read->comment);
+    CHECK(read->deprecatedInfo().use == "readfile");
+    // The location is the attribute's name in the comment
+    CHECK_EQ(read->location.begin, Position(3, 8));
+    CHECK_EQ(table->props.data[1].attributes.size, 0);
+
+    const AstStatLocal* local = result.root->body.data[1]->as<AstStatLocal>();
+    REQUIRE(local);
+    REQUIRE_EQ(local->attributes.size, 1);
+    CHECK(local->attributes.data[0]->type == AstAttr::Type::Deprecated);
+    // The statement starts at its keyword, not at the comment above it
+    CHECK_EQ(local->location.begin, Position(9, 0));
+
+    const AstStatAssign* assign = result.root->body.data[2]->as<AstStatAssign>();
+    REQUIRE(assign);
+    REQUIRE_EQ(assign->attributes.size, 1);
+    CHECK(assign->attributes.data[0]->type == AstAttr::Type::Deprecated);
+}
+
+TEST_CASE_FIXTURE(Fixture, "comment_attributes_are_checked_like_written_ones")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    const char* source = R"(
+--@[native]
+local x = 1
+
+--@[deprecated]
+print(x)
+
+--@[deprecated(1, 2)]
+local function f() end
+
+--@[deprecated]
+@deprecated
+function g() end
+)";
+
+    ParseOptions analysis;
+    analysis.analysisErrors = true;
+    ParseResult result = tryParse(source, analysis);
+
+    REQUIRE_EQ(result.errors.size(), 4);
+    CHECK_EQ(result.errors[0].getMessage(), "Attribute '@native' can only be applied to functions");
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(1, 4));
+    CHECK_EQ(result.errors[1].getMessage(), "Attribute '@deprecated' cannot be applied to this statement");
+    CHECK_EQ(result.errors[1].getLocation().begin, Position(4, 4));
+    CHECK_EQ(result.errors[2].getMessage(), "@deprecated can be parametrized only by 1 argument");
+    CHECK_EQ(result.errors[3].getMessage(), "Cannot duplicate attribute '@deprecated'");
+
+    // A compiler reports none of them: the source is valid Luau
+    ParseOptions compiler;
+    compiler.language = Language::Luau;
+    result = tryParse(source, compiler);
+    CHECK_EQ(result.errors.size(), 0);
+
+    // Only `--@[` starts an attribute
+    result = tryParse(R"(
+--@ the next local
+-- @[deprecated]
+--- @[deprecated]
+local y = 1
+)");
+    CHECK_EQ(result.errors.size(), 0);
+    REQUIRE_EQ(result.root->body.size, 1);
+    CHECK_EQ(result.root->body.data[0]->as<AstStatLocal>()->attributes.size, 0);
+}
+
+TEST_CASE_FIXTURE(Fixture, "lint_comments_are_left_to_the_linter")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+
+    ParseOptions analysis;
+    analysis.analysisErrors = true;
+
+    // The linter applies them to the next statement, whatever it is
+    ParseResult result = tryParse(
+        R"(
+--@[nolint(LocalUnused)]
+if true then
+end
+
+--@[lint(ConstLocal)]
+local x = 1
+)",
+        analysis
+    );
+
+    CHECK_EQ(result.errors.size(), 0);
+    REQUIRE_EQ(result.root->body.size, 2);
+    CHECK_EQ(result.root->body.data[1]->as<AstStatLocal>()->attributes.size, 0);
+}
+
+TEST_CASE_FIXTURE(Fixture, "comment_attributes_are_comments_without_the_flag")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, false};
+
+    ParseResult result = tryParse(R"(
+--@[deprecated]
+local x = 1
+)");
+
+    CHECK_EQ(result.errors.size(), 0);
+}
+
+TEST_CASE_FIXTURE(Fixture, "comment_attributes_typewriting")
+{
+    ScopedFastFlag attributesEverywhere{FFlag::LuwuAttributesEverywhere, true};
+    configResolver.defaultConfig.language = Language::Luau;
+
+    // The `--` is already typed: typing a lone `-` above code cascades without attributes too
+    checkTypewriting(
+        *this,
+        "type Fs = {\n    --",
+        "@[deprecated { use = \"readfile\" }]",
+        "\n    read: (string) -> string,\n    readfile: (string) -> string,\n}\n"
+    );
+    checkTypewriting(*this, "--", "@[deprecated]", "\ntype Old = number\n");
 }
 
 // TODO unit tests for various parse errors.

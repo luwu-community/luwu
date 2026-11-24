@@ -13,6 +13,8 @@ bool forgLoopNodeIter(lua_State* L, LuaTable* h, int index, TValue* ra);
 int forgLoopNonTableFallback(lua_State* L, int insnA, int aux);
 bool forgLoopNonTableFallback_DEPRECATED(lua_State* L, int insnA, int aux);
 
+int invokeFastMethod(lua_State* L, LuauObject* object, uint32_t pcpos, int ra, int nargs, int nresults);
+
 void forgPrepXnextFallback(lua_State* L, TValue* ra, int pc);
 
 Closure* callProlog(lua_State* L, TValue* ra, StkId argtop, int nresults);
@@ -36,6 +38,10 @@ const Instruction* executeSETLIST(lua_State* L, const Instruction* pc, StkId bas
 const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, StkId base, TValue* k);
+const Instruction* executeINITTRAITS(lua_State* L, const Instruction* pc, StkId base, TValue* k);
+const Instruction* executeWRAPRESULT(lua_State* L, const Instruction* pc, StkId base, TValue* k);
+const Instruction* executeGETQUALIFIED(lua_State* L, const Instruction* pc, StkId base, TValue* k);
+const Instruction* executeTABLEBUNDLE(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 void executeGETVARARGSMultRet(lua_State* L, const Instruction* pc, StkId base, int rai);
 void executeGETVARARGSConst(lua_State* L, StkId base, int rai, int b);
 const Instruction* executeDUPCLOSURE(lua_State* L, const Instruction* pc, StkId base, TValue* k);

@@ -14,6 +14,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(LuauDisallowExternClassInTypeDefinitions)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuClasses)
 
 struct JsonEncoderFixture
 {
@@ -470,13 +471,39 @@ TEST_CASE_FIXTURE(JsonEncoderFixture, "encode_AstStatDeclareClass")
 
     REQUIRE(2 == root->body.size);
 
+    // Luwu: the statement starts at `declare`; upstream starts it at the name (1,28 and 6,28)
     std::string_view expected1 =
-        R"({"type":"AstStatDeclareClass","location":"1,28 - 4,11","name":"Foo","props":[{"name":"prop","nameLocation":"2,12 - 2,16","type":"AstDeclaredClassProp","luauType":{"type":"AstTypeReference","location":"2,18 - 2,24","name":"number","nameLocation":"2,18 - 2,24","parameters":[]},"location":"2,12 - 2,24"},{"name":"method","nameLocation":"3,21 - 3,27","type":"AstDeclaredClassProp","luauType":{"type":"AstTypeFunction","location":"3,12 - 3,54","attributes":[],"generics":[],"genericPacks":[],"argTypes":{"type":"AstTypeList","types":[{"type":"AstTypeReference","location":"3,39 - 3,45","name":"number","nameLocation":"3,39 - 3,45","parameters":[]}]},"argNames":[{"type":"AstArgumentName","name":"foo","location":"3,34 - 3,37"}],"returnTypes":{"type":"AstTypePackExplicit","location":"3,48 - 3,54","typeList":{"type":"AstTypeList","types":[{"type":"AstTypeReference","location":"3,48 - 3,54","name":"string","nameLocation":"3,48 - 3,54","parameters":[]}]}}},"location":"3,12 - 3,54"}],"indexer":null})";
+        R"({"type":"AstStatDeclareClass","location":"1,8 - 4,11","name":"Foo","props":[{"name":"prop","nameLocation":"2,12 - 2,16","type":"AstDeclaredClassProp","luauType":{"type":"AstTypeReference","location":"2,18 - 2,24","name":"number","nameLocation":"2,18 - 2,24","parameters":[]},"location":"2,12 - 2,24"},{"name":"method","nameLocation":"3,21 - 3,27","type":"AstDeclaredClassProp","luauType":{"type":"AstTypeFunction","location":"3,12 - 3,54","attributes":[],"generics":[],"genericPacks":[],"argTypes":{"type":"AstTypeList","types":[{"type":"AstTypeReference","location":"3,39 - 3,45","name":"number","nameLocation":"3,39 - 3,45","parameters":[]}]},"argNames":[{"type":"AstArgumentName","name":"foo","location":"3,34 - 3,37"}],"returnTypes":{"type":"AstTypePackExplicit","location":"3,48 - 3,54","typeList":{"type":"AstTypeList","types":[{"type":"AstTypeReference","location":"3,48 - 3,54","name":"string","nameLocation":"3,48 - 3,54","parameters":[]}]}}},"location":"3,12 - 3,54"}],"indexer":null})";
     CHECK(toJson(root->body.data[0]) == expected1);
 
     std::string_view expected2 =
-        R"({"type":"AstStatDeclareClass","location":"6,28 - 8,11","name":"Bar","superName":"Foo","props":[{"name":"prop2","nameLocation":"7,12 - 7,17","type":"AstDeclaredClassProp","luauType":{"type":"AstTypeReference","location":"7,19 - 7,25","name":"string","nameLocation":"7,19 - 7,25","parameters":[]},"location":"7,12 - 7,25"}],"indexer":null})";
+        R"({"type":"AstStatDeclareClass","location":"6,8 - 8,11","name":"Bar","superName":"Foo","props":[{"name":"prop2","nameLocation":"7,12 - 7,17","type":"AstDeclaredClassProp","luauType":{"type":"AstTypeReference","location":"7,19 - 7,25","name":"string","nameLocation":"7,19 - 7,25","parameters":[]},"location":"7,12 - 7,25"}],"indexer":null})";
     CHECK(toJson(root->body.data[1]) == expected2);
+}
+
+// Luwu Classes (rfcs/classes): a class statement had no AstJsonEncoder override, so visiting it fell
+// through to AstStatClass::visit's manual child walk, which writes each primary constructor default
+// (and every other class child) as its own top-level JSON value with no enclosing object and no comma
+// between siblings -- invalid JSON like `..."value":false}{"type":"AstExprConstantString",...`.
+TEST_CASE_FIXTURE(JsonEncoderFixture, "encode_AstStatClass_primaryConstructorDefaults")
+{
+    ScopedFastFlag sffClasses{FFlag::LuwuClasses, true};
+
+    AstStatBlock* root = expectParse(R"(
+        class Writer(pretty = false, indent = "  ")
+        end
+    )");
+
+    REQUIRE(1 == root->body.size);
+
+    std::string actual = toJson(root->body.data[0]);
+
+    // No two sibling JSON values written back-to-back with a missing comma.
+    CHECK(actual.find("}{") == std::string::npos);
+
+    std::string_view expected =
+        R"({"type":"AstStatClass","location":"1,8 - 2,11","name":{"luauType":null,"name":"Writer","isConst":true,"type":"AstLocal","location":"1,14 - 1,20"},"exported":false,"generics":[],"genericPacks":[],"primaryConstructor":{"type":"AstClassPrimaryConstructor","visibility":"public","args":[{"luauType":null,"name":"pretty","isConst":false,"type":"AstLocal","location":"1,21 - 1,27"},{"luauType":null,"name":"indent","isConst":false,"type":"AstLocal","location":"1,37 - 1,43"}],"argsDefaults":[{"type":"AstExprConstantBool","location":"1,30 - 1,35","value":false},{"type":"AstExprConstantString","location":"1,46 - 1,50","value":"  "}],"argsQualifiers":[{"type":"AstClassPrimaryConstructorParamQualifiers","visibility":"public","isConst":false},{"type":"AstClassPrimaryConstructorParamQualifiers","visibility":"public","isConst":false}],"argLocation":"1,20 - 1,51"},"members":[],"hasEnd":true,"attributes":[],"implements":[],"needs":[]})";
+    CHECK(actual == expected);
 }
 
 TEST_CASE_FIXTURE(JsonEncoderFixture, "encode_annotation")
