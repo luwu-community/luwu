@@ -6800,6 +6800,40 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "option_and_result_types")
     CHECK_EQ(toString(requireType("missing")), "none");
 }
 
+// Luwu structured runtime errors: `unreachable` and `todo` return `never`, so the branch that calls one adds nothing to
+// an if-else expression's type. `unreachable` needs a message.
+TEST_CASE_FIXTURE(BuiltinsFixture, "unreachable_and_todo_return_never")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function pick(ok: boolean, v: number)
+            local x = if ok then v else unreachable("ok is checked by the caller")
+            local y = if ok then "done" else todo()
+            return x, y
+        end
+        local a, b = pick(true, 1)
+        local missing = Error.NotFound("a.txt")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("a")), "number");
+    CHECK_EQ(toString(requireType("b")), "string");
+
+    CheckResult needsMessage = check(R"(
+        --!strict
+        unreachable()
+    )");
+    LUAU_REQUIRE_ERROR_COUNT(1, needsMessage);
+}
+
 // Luwu try expressions: `try expr` is a Result of expr's type, with an unknown error
 TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
 {

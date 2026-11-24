@@ -1055,9 +1055,10 @@ l_noret luaR_raisevariant(lua_State* L, LuwuBuiltinClass kind, int nargs)
     luaG_raiseerror(L, kind, 0, LUWU_ERRORAT_NEARESTLUA, L->top - nargs, nargs);
 }
 
-// `unreachable(message?, invariants?)` raises `Error.Unreachable(message, invariants)` at the caller
+// `unreachable(message, invariants?)` raises `Error.Unreachable(message, invariants)` at the caller
 static int luaR_unreachable(lua_State* L)
 {
+    luaL_checkstring(L, 1);
     lua_settop(L, 2);
     luaG_raiseerror(L, LUWU_BUILTIN_ERR_UNREACHABLE, 0, LUWU_ERRORAT_CALLER, L->base, 2);
 }
