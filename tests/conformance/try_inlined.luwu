@@ -1,0 +1,23 @@
+--!optimize 2
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing try expressions next to inlined functions")
+
+-- `double` is inlined at both calls, so its proto is a stub. WIP bytecode loads the stub with the protected range count
+-- every function has.
+local function double(x: number): number
+    return x * 2
+end
+
+local function divide(a: number, b: number): number
+    if b == 0 then
+        error("division by zero")
+    end
+    return a / b
+end
+
+assert(double(21) == 42)
+const result = try divide(1, 0)
+assert(class.isinstance(result, Err) and string.find(result.error, "division by zero", 1, true))
+assert(double(2) == 4)
+
+return "OK"
