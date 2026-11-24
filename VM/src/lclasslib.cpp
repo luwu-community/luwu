@@ -82,6 +82,10 @@ static int class_fields(lua_State* L)
     bool complete = true;
     for (uint32_t offset = 0; offset < lclass->numberofinstancemembers; offset++)
     {
+        // Luwu Traits (rfcs/classes/traits.md): a trait's per-object scoped field has no name, and is no field of the class
+        if (!lclass->offsettomember[offset])
+            continue;
+
         if (lclass->memberflags[offset] & LBC_CLASSMEMBER_PRIVATE)
         {
             complete = false;

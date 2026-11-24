@@ -881,7 +881,7 @@ trait NcgSized
 end
 
 trait NcgWeighted
-    scoped size = 1000
+    scoped shared size = 1000
 end
 
 class NcgBox implements NcgSized, NcgWeighted
@@ -898,4 +898,58 @@ expectpass("native scoped fields", function()
     assert(not pcall(function() return box.size end))
 end)
 
+-- Luwu Traits (rfcs/classes/traits.md): per-object scoped fields written qualified, plainly, compounded and through a
+-- trait picked at runtime (SETQUALIFIED's fallback)
+trait NcgTally
+    scoped count = 0
+    scoped shared total = 0
+end
+
+class NcgTallied implements NcgTally
+end
+
+expectpass("native scoped writes", function()
+    local a, b = NcgTallied(), NcgTallied()
+    local traits = { NcgTally }
+    for i = 1, 50 do
+        a:NcgTally.count += 1
+        b:[traits[1]].count = i
+        NcgTallied:NcgTally.total += 2
+    end
+    assert(a:NcgTally.count == 50 and b:NcgTally.count == 50)
+    assert(a:[traits[1]].total == 100 and NcgTallied():NcgTally.count == 0)
+    assert(not pcall(function() a:NcgTally.total = 1 end))
+end)
+
+-- Luwu Traits (rfcs/classes/traits.md): a class method's prologue checks that `Self` is its class (CHECKSELFCLASS's class
+-- method form), in a class and in a trait's copy
+class NcgCounter
+    static count = 0
+
+    function bump(Self)
+        Self.count += 1
+        return Self.count
+    end
+end
+
+trait NcgNamed
+    function named(Self)
+        return class.name(Self)
+    end
+end
+
+class NcgNamedBox implements NcgNamed
+end
+
+expectpass("native class methods", function()
+    local total = 0
+    for _ = 1, 50 do
+        total += NcgCounter:bump()
+        assert(NcgNamedBox:named() == "NcgNamedBox")
+    end
+    assert(total == 50 * 51 / 2)
+    assert(not pcall(NcgCounter.bump))
+    assert(not pcall(NcgCounter.bump, NcgNamedBox))
+    assert(not pcall(NcgNamedBox.named, NcgCounter))
+end)
 return 'OK'

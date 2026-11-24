@@ -2844,12 +2844,15 @@ void translateInstCheckSelfClass(IrBuilder& build, const Instruction* pc, int pc
     // the success path as straight-line code with no basic blocks at all.
     IrOp fail = build.vmExit(pcpos);
 
+    // Luwu Traits (rfcs/classes/traits.md): a class method's `Self` is the class itself
+    bool classMethod = LUAU_INSN_C(*pc) == LBC_SELFCLASS_CLASSMETHOD;
+
     // note the LOAD_TAG: CHECK_TAG's operand has to be an SSA value, not a raw VmReg. Liveness
     // (visitVmRegDefsUses) has no case for CHECK_TAG, so a register operand reaches its default
     // branch and trips CODEGEN_ASSERT(op.kind != IrOpKind::VmReg); the register use is meant to be
     // recorded by the LOAD_TAG feeding it. This is exactly what IrBuilder::loadAndCheckTag does.
     IrOp selfTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(selfReg));
-    build.inst(IrCmd::CHECK_TAG, selfTag, build.constTag(LUA_TOBJECT), fail);
+    build.inst(IrCmd::CHECK_TAG, selfTag, build.constTag(classMethod ? LUA_TCLASS : LUA_TOBJECT), fail);
 
     IrOp selfPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(selfReg));
 
@@ -2858,6 +2861,20 @@ void translateInstCheckSelfClass(IrBuilder& build, const Instruction* pc, int pc
     // passes a register.
     IrOp classPtr = classReg == LBC_SELFCLASS_OWNER ? build.inst(IrCmd::LOAD_OWNER_CLASS)
                                                     : build.inst(IrCmd::LOAD_POINTER, build.vmReg(classReg));
+
+    // the comparison branches, so a mismatch goes through a block that leaves for the interpreter
+    if (classMethod)
+    {
+        IrOp next = build.block(IrBlockKind::Internal);
+        IrOp mismatch = build.fallbackBlock(pcpos);
+        build.inst(IrCmd::JUMP_EQ_POINTER, selfPtr, classPtr, next, mismatch);
+
+        build.beginBlock(mismatch);
+        build.inst(IrCmd::JUMP, fail);
+
+        build.beginBlock(next);
+        return;
+    }
 
     build.inst(IrCmd::CHECK_OBJECT_CLASS, selfPtr, classPtr, fail);
 }

@@ -1599,6 +1599,7 @@ static void analyzeBytecodeTypesPass(
             case LOP_JUMPXISA:
             case LOP_SETOBJECTMEMBER:
             case LOP_SETTABLEBUNDLE:
+            case LOP_SETQUALIFIED:
                 break;
             case LOP_GETQUALIFIED:
             case LOP_INITTRAITS:

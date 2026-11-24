@@ -1084,7 +1084,9 @@ static void enumobject(EnumContext* ctx, LuauObject* inst)
             continue;
 
         char membername[32];
-        snprintf(membername, sizeof(membername), "%s", getstr(inst->lclass->offsettomember[i]));
+        // a trait's per-object scoped field has no name
+        TString* name = inst->lclass->offsettomember[i];
+        snprintf(membername, sizeof(membername), "%s", name ? getstr(name) : "scoped field");
         enumedge(ctx, obj, gcvalue(&luaR_members(inst)[i]), membername);
     }
 

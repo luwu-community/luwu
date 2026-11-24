@@ -2772,6 +2772,59 @@ static std::optional<bool> uninhabited(TypeId ty, NotNull<TypeFunctionContext> c
     return ctx->normalizer->isInhabited(norm.get()) == NormalizationResult::False;
 }
 
+const ExternType* traitOfValue(TypeId traitValue)
+{
+    const ExternType* value = get<ExternType>(follow(traitValue));
+    const Obj* object = value && value->relation ? get_if<Obj>(&*value->relation) : nullptr;
+    const ExternType* trait = object ? get<ExternType>(follow(object->ty)) : nullptr;
+    return trait && trait->traitInfo ? trait : nullptr;
+}
+
+std::optional<TypeId> scopedMemberOf(TypeId traitValue, const std::string& name)
+{
+    const ExternType* trait = traitOfValue(traitValue);
+    if (!trait)
+        return std::nullopt;
+
+    auto scoped = trait->traitInfo->scopedMembers.find(name);
+    if (scoped == trait->traitInfo->scopedMembers.end())
+        return std::nullopt;
+
+    return scoped->second;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `qualified<V, "name">`, the trait's scoped member `name`, or `V.name` for one of
+// its other members
+static TypeFunctionReductionResult<TypeId> qualifiedTypeFunction(
+    TypeId instance,
+    const std::vector<TypeId>& typeParams,
+    const std::vector<TypePackId>& packParams,
+    NotNull<TypeFunctionContext> ctx
+)
+{
+    const SingletonType* nameSingleton = typeParams.size() == 2 ? get<SingletonType>(follow(typeParams[1])) : nullptr;
+    const StringSingleton* name = nameSingleton ? get<StringSingleton>(nameSingleton) : nullptr;
+    if (!name || !packParams.empty())
+    {
+        ctx->ice->ice("qualified type function: encountered a type function instance without the required argument structure");
+        LUAU_ASSERT(false);
+    }
+
+    TypeId traitValue = follow(typeParams[0]);
+    if (isPending(traitValue, ctx->solver))
+        return {std::nullopt, Reduction::MaybeOk, {traitValue}, {}};
+
+    if (std::optional<TypeId> scoped = scopedMemberOf(traitValue, name->value))
+        return {*scoped, Reduction::MaybeOk, {}, {}};
+
+    const ExternType* value = get<ExternType>(traitValue);
+    const Property* prop = value && traitOfValue(traitValue) ? lookupExternTypeProp(value, name->value) : nullptr;
+    if (prop && prop->readTy)
+        return {*prop->readTy, Reduction::MaybeOk, {}, {}};
+
+    return {ctx->builtins->unknownType, Reduction::MaybeOk, {}, {}};
+}
+
 TypeFunctionReductionResult<TypeId> unlessneverTypeFunction(
     TypeId instance,
     const std::vector<TypeId>& typeParams,
@@ -2845,6 +2898,7 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , classFunc{"class", classTypeFunction}
     , weakoptionalFunc{"weakoptional", weakoptionalTypeFunc}
     , unlessneverFunc{"unlessnever", unlessneverTypeFunction}
+    , qualifiedFunc{"qualified", qualifiedTypeFunction}
 {
 }
 
