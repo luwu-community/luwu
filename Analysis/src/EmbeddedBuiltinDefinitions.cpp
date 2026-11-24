@@ -513,6 +513,9 @@ class type Vec<T>
     public function __len(self): number
     public function __iter(self): ((Vec<T>, number?) -> (number?, T), Vec<T>, nil)
     public function __tostring(self): string
+    -- Luwu Integers (rfcs/integers.md): a string or a buffer gives a Vec of its bytes as `u8` integers
+    public function from<U>(items: {U} | string | buffer): Vec<U>
+    public function tostring(self): string
 end
 
 class type VecDeque<T>
@@ -532,6 +535,9 @@ class type VecDeque<T>
     public function __len(self): number
     public function __iter(self): ((VecDeque<T>, number?) -> (number?, T), VecDeque<T>, nil)
     public function __tostring(self): string
+    -- Luwu Integers (rfcs/integers.md): a string or a buffer gives a VecDeque of its bytes as `u8` integers
+    public function from<U>(items: {U} | string | buffer): VecDeque<U>
+    public function tostring(self): string
 end
 
 declare collections: {

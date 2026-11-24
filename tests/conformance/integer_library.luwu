@@ -327,6 +327,35 @@ do
     assert(not pcall(buffer.writeinteger, data, 15, 1u16))
 end
 
+-- Vec and VecDeque hold integers of one mode, and convert bytes to and from strings
+do
+    const Vec = collections.Vec
+    const bytes = Vec.from("héllo")
+    assert(#bytes == 6 and bytes:at(1) == 104u8 and typeof(bytes:at(2)) == "u8")
+    bytes:push(0x21_u8)
+    assert(bytes:tostring() == "héllo!" and Vec.from(""):tostring() == "")
+    assert(Vec.from(buffer.fromstring("ab")):tostring() == "ab")
+    assert(collections.VecDeque.from("bc"):tostring() == "bc")
+
+    -- pushing another mode raises, in a loop native code compiles too
+    local function pushall(v, values)
+        for _, value in values do
+            v:push(value)
+        end
+    end
+    for _ = 1, 3 do
+        assert(not pcall(pushall, Vec.from("x"), { 1u8, 2i8 }))
+    end
+    assert(not pcall(function()
+        return Vec.from({ 1, 2 }):tostring()
+    end))
+
+    -- an int Vec holds inline integers and bigints alike
+    const ints = Vec.from({ 1int, 100000000000000000000int })
+    ints:push(5int)
+    assert(#ints == 3 and ints:at(2) == 100000000000000000000int)
+end
+
 -- methods are the library functions with the integer first
 do
     const size = 4096u64
