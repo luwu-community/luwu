@@ -504,7 +504,8 @@ enum LuauOpcode
     // A: register holding the value to check
     // B: register holding the class, or LBC_SELFCLASS_OWNER to take the class from the executing closure's
     //    Proto::ownerclass instead (see LBC_SELFCLASS_OWNER). A register always holds a class (the VM asserts it).
-    // C: 1 at an inline site of a `:` call, 0 everywhere else; only affects the error message
+    // C: 1 at an inline site of a `:` call, 0 everywhere else; only affects the error message. Luwu Traits
+    //    (rfcs/classes/traits.md): LBC_SELFCLASS_CLASSMETHOD in a class method's prologue, where A holds the class itself.
     // AUX: string constant index of the method's name, for the error message
     LOP_CHECKSELFCLASS,
 
@@ -642,6 +643,14 @@ enum LuauOpcode
     // A: source register
     // B, C and AUX: as in GETTABLEBUNDLE
     LOP_SETTABLEBUNDLE,
+
+    // SETQUALIFIED: Luwu Traits (rfcs/classes/traits.md): writes a trait's scoped field, for `obj:Trait.name = value` (the
+    // object's value) and `Class:Trait.name = value` (a `scoped shared` or `scoped static` field) (luaR_setqualified)
+    // A: source register
+    // B: register holding the object or class
+    // C: register holding the trait
+    // AUX: the field's name as a constant string
+    LOP_SETQUALIFIED,
 
     // Enum entry for number of opcodes, not a valid opcode by itself!
     LOP__COUNT
@@ -828,6 +837,15 @@ enum LuwuBytecodeTag
 // override`), or only a trait that needs this one (`expect trait to override`)
 #define LBC_CLASSMEMBER_EXPECTCLASS (1 << 11)
 #define LBC_CLASSMEMBER_EXPECTTRAIT (1 << 12)
+// Luwu Traits (rfcs/classes/traits.md): a trait's scoped field that each object of an implementing class has a value of
+// (`scoped species = value`), with LBC_CLASSMEMBER_SCOPED and LBC_CLASSMEMBER_CLASSFIELD. The trait's static slot holds
+// the value every object starts with. Without this bit a scoped field is one value on the class (`scoped shared`,
+// `scoped static`).
+#define LBC_CLASSMEMBER_SCOPEDOBJECTFIELD (1 << 13)
+// Luwu Traits (rfcs/classes/traits.md): set on a trait's class method, a function whose first parameter is `Self`. Like a
+// method (LBC_CLASSMEMBER_TAKESSELF), it's read through the trait as a dispatcher to the receiver's class, here the class
+// value itself.
+#define LBC_CLASSMEMBER_TAKESCLASS (1 << 14)
 
 // Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's `implements` list
 #define LBC_NEWCLASSMEMBER_IMPLEMENTS 1
@@ -870,6 +888,9 @@ enum LuwuBytecodeTag
 // 255 is safe as a sentinel because the compiler never allocates it: kMaxRegisterCount is 255 and
 // allocation is bounded by `top + count > kMaxRegisterCount`, so valid registers are 0..254.
 #define LBC_SELFCLASS_OWNER 255
+// Luwu Traits (rfcs/classes/traits.md): operand C of LOP_CHECKSELFCLASS in a class method's prologue (`function f(Self)`),
+// which checks that A holds the class itself rather than one of its objects
+#define LBC_SELFCLASS_CLASSMETHOD 2
 
 // Type table tags
 enum LuauBytecodeType

@@ -6284,7 +6284,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "scoped_fields_are_read_through_their_trait")
         end
 
         trait Plant
-            scoped species = 0
+            scoped shared species = 0
         end
 
         class Cat implements Animal, Plant
@@ -6387,6 +6387,218 @@ TEST_CASE_FIXTURE(ClassesFixture, "typing_member_placements")
                           "    shared final kind = \"codec\"\n"
                           "end";
     checkTypewriting(*this, before, inTrait, kTraitTypewriterAfter);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a scoped field is written qualified, each object's through an object and a
+// `scoped shared` or `scoped static` one through the class, and never when it's const
+TEST_CASE_FIXTURE(ClassesFixture, "scoped_field_writes_are_checked")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Keeper
+            scoped count = 0
+            scoped shared total = 0
+            scoped static registry = "keeper"
+            scoped const id = "k"
+
+            function bump(self)
+                self:Keeper.count += 1
+                return self:Keeper.count
+            end
+        end
+
+        class Tick implements Keeper
+            function __init(self)
+                self:Keeper.id = "tick"
+            end
+        end
+
+        local tick = Tick()
+        tick:Keeper.count = 2
+        tick:Keeper.count += 1
+        Tick:Keeper.total = 3
+        Tick:Keeper.registry = "tick"
+        local count = tick:Keeper.count
+        local total = tick:Keeper.total
+
+        tick:Keeper.count = "two"
+        tick:Keeper.total = 1
+        Tick:Keeper.count = 1
+        local registry = tick:Keeper.registry
+        tick:Keeper.id = "other"
+        tick:Keeper.bump = nil
+    )");
+
+    CHECK_EQ("number", toString(requireType("count")));
+    CHECK_EQ("number", toString(requireType("total")));
+
+    // the last six statements are wrong; writing `bump` is also a type mismatch, since a function isn't nil
+    LUAU_REQUIRE_ERROR_COUNT(7, result);
+    std::vector<unsigned> lines;
+    for (const TypeError& error : result.errors)
+        lines.push_back(error.location.begin.line);
+    std::sort(lines.begin(), lines.end());
+    CHECK_EQ(lines, std::vector<unsigned>{27, 28, 29, 30, 31, 32, 32});
+
+    std::set<std::string> messages;
+    for (const TypeError& error : result.errors)
+        messages.insert(toString(error));
+    auto reports = [&](const std::string& text)
+    {
+        return std::any_of(
+            messages.begin(),
+            messages.end(),
+            [&](const std::string& message)
+            {
+                return message.find(text) != std::string::npos;
+            }
+        );
+    };
+    CHECK(reports("tick:Keeper.total is shared between all objects of its class"));
+    CHECK(reports("Tick:Keeper.count is a field of each object"));
+    CHECK(reports("Tick:Keeper.registry is static"));
+    CHECK(reports("'Keeper.id' is a const field of 'Tick'"));
+    CHECK(reports("Trait 'Keeper' has no scoped field 'bump' to write"));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `obj:[expr]` is typed through `expr`'s type: a known trait's member, or `unknown`
+TEST_CASE_FIXTURE(ClassesFixture, "dynamic_trait_qualifiers_are_typed")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Animal
+            scoped species = "cat"
+
+            function describe(self): string
+                return "animal"
+            end
+        end
+
+        class Cat implements Animal
+        end
+
+        local cat = Cat()
+        local traits = { animal = Animal }
+        local direct = cat:[Animal].species
+        local held = cat:[traits.animal].species
+        local described = cat:[traits.animal]:describe()
+        local picked: any = Animal
+        local unknownTrait = cat:[picked].species
+        cat:[traits.animal].species = "dog"
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ("string", toString(requireType("direct")));
+    CHECK_EQ("string", toString(requireType("held")));
+    CHECK_EQ("string", toString(requireType("described")));
+    CHECK_EQ("unknown", toString(requireType("unknownTrait")));
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a first parameter named `Self` makes a class method, whose `Self` is the class value
+TEST_CASE_FIXTURE(ClassesFixture, "class_methods_take_their_class_as_Self")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        class Button
+            static count = 0
+            label = "button"
+
+            function bump(Self): number
+                Self.count += 1
+                return Self.count
+            end
+
+            function make(Self)
+                return Self()
+            end
+        end
+
+        trait Registry
+            static total = 0
+
+            function register(Self): string
+                Self.total += 1
+                return class.name(Self)
+            end
+        end
+
+        class Widget implements Registry
+        end
+
+        local bumped = Button:bump()
+        local label = Button:make().label
+        local name = Widget:register()
+
+        Button.bump()
+        Button():bump()
+    )");
+
+    CHECK_EQ("number", toString(requireType("bumped")));
+    CHECK_EQ("string", toString(requireType("label")));
+    CHECK_EQ("string", toString(requireType("name")));
+
+    // the last two calls pass no class
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 31);
+    CHECK_EQ(result.errors[1].location.begin.line, 32);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): reading a trait the class implements as a member suggests the qualified read
+TEST_CASE_FIXTURE(ClassesFixture, "trait_names_read_as_members_suggest_a_colon")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Animal
+            scoped species = "cat"
+        end
+
+        trait Plant
+        end
+
+        class Cat implements Animal
+        end
+
+        local cat = Cat()
+        local a = cat.Animal
+        local b = cat[Animal]
+        local c = cat.Plant
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    const std::string hint = "Did you mean to put a ':' here to use a trait-scoped member?";
+    CHECK(toString(result.errors[0]).find(hint) != std::string::npos);
+    CHECK(toString(result.errors[1]).find(hint) != std::string::npos);
+    CHECK(toString(result.errors[2]).find(hint) == std::string::npos);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): typing scoped writes, `obj:[expr]` and class methods doesn't cascade
+TEST_CASE_FIXTURE(ClassesFixture, "typing_scoped_writes_dynamic_traits_and_class_methods")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+    const char* before = "trait Animal\n"
+                         "    scoped species = \"cat\"\n"
+                         "    scoped shared count = 0\n"
+                         "end\n"
+                         "class Cat implements Animal\n"
+                         "end\n"
+                         "local cat = Cat()\n"
+                         "local traits = { animal = Animal }\n";
+
+    checkTypewriting(*this, before, "cat:Animal.species = \"dog\"", kTraitTypewriterAfter);
+    checkTypewriting(*this, before, "Cat:Animal.count = 1", kTraitTypewriterAfter);
+    checkTypewriting(*this, before, "local species = cat:[traits.animal].species", kTraitTypewriterAfter);
+
+    const char* classMethod = "class Button\n"
+                              "    static count = 0\n"
+                              "    function bump(Self)\n"
+                              "        Self.count = Self.count + 1\n"
+                              "    end\n"
+                              "end";
+    checkTypewriting(*this, "local a = 1\n", classMethod, kTraitTypewriterAfter);
 }
 
 // Luwu Traits (rfcs/classes/traits.md): typing `Self` values doesn't cascade
@@ -7291,6 +7503,40 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "option_and_result_types")
     CHECK_EQ(toString(requireType("missing")), "none");
 }
 
+// Luwu structured runtime errors: `unreachable` and `todo` return `never`, so the branch that calls one adds nothing to
+// an if-else expression's type. `unreachable` needs a message.
+TEST_CASE_FIXTURE(BuiltinsFixture, "unreachable_and_todo_return_never")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function pick(ok: boolean, v: number)
+            local x = if ok then v else unreachable("ok is checked by the caller")
+            local y = if ok then "done" else todo()
+            return x, y
+        end
+        local a, b = pick(true, 1)
+        local missing = Error.NotFound("a.txt")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("a")), "number");
+    CHECK_EQ(toString(requireType("b")), "string");
+
+    CheckResult needsMessage = check(R"(
+        --!strict
+        unreachable()
+    )");
+    LUAU_REQUIRE_ERROR_COUNT(1, needsMessage);
+}
+
 // Luwu try expressions: `try expr` is a Result of expr's type, with an unknown error
 TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
 {
@@ -7496,6 +7742,54 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "try_types_its_error_from_the_callees_hint")
     CHECK_EQ(toString(requireType("r")), "Err<NotFound | unknown> | Ok<string>");
     CHECK_EQ(toString(requireType("s")), "Err<unknown> | Ok<number>");
     CHECK_EQ(toString(requireType("w")), "Err<unknown> | Ok<string>");
+}
+
+// Luwu try expressions: a hint that ends in `never`, as written, is closed: `try` gets exactly the errors it names
+TEST_CASE_FIXTURE(BuiltinsFixture, "closed_error_hints_have_no_unknown_part")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type NotFound = { kind: "NotFound" }
+        type PermissionDenied = { kind: "PermissionDenied" }
+        type IoErr = NotFound | never
+        local function pure(x: number): number ! never
+            return x
+        end
+        local function read(path: string): string ! NotFound | PermissionDenied | never
+            return path
+        end
+        local function aliased(path: string): string ! IoErr
+            return path
+        end
+        local function closedalias(path: string): string ! IoErr | never
+            return path
+        end
+        declare function exit(code: number): never ! never
+        local p = try pure(1)
+        local r = try read("x")
+        local a = try aliased("x")
+        local c = try closedalias("x")
+        local e = try exit(0)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("p")), "Err<never> | Ok<number>");
+    CHECK_EQ(toString(requireType("r")), "Err<NotFound | PermissionDenied> | Ok<string>");
+    // an alias holding `never` doesn't close the hint that names it
+    std::string aliased = toString(requireType("a"));
+    CHECK_MESSAGE(aliased.find("unknown") != std::string::npos, aliased);
+    std::string closedalias = toString(requireType("c"));
+    CHECK_MESSAGE(closedalias.find("unknown") == std::string::npos, closedalias);
+    std::string exited = toString(requireType("e"));
+    CHECK_MESSAGE(exited.find("Err<never>") != std::string::npos, exited);
 }
 
 // Luwu try expressions: `raises<F>` and `types.raises(f)` give what `try f()` would hold as its error

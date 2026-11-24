@@ -3,6 +3,7 @@
 #include "Luau/BuiltinDefinitions.h"
 
 #include "Fixture.h"
+#include "Typewriter.h"
 #include "ScopedFlags.h"
 
 #include "doctest.h"
@@ -4255,6 +4256,124 @@ return good, bad, hit, empty, shadowed
             names.push_back(warning.text.substr(0, warning.text.find(' ')));
 
     CHECK_EQ(names, std::vector<std::string>{"'Ok'", "'Err'", "'Some'", "'None'"});
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsErrorGlobalsInLuauFiles")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    fileResolver.source["game/a"] = R"(
+local missing = Error.NotFound("a.txt")
+local function check(ok: boolean)
+    if not ok then
+        unreachable("checked above")
+    end
+    todo()
+end
+return missing, check
+)";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    std::vector<std::string> names;
+    for (const LintWarning& warning : lintModule("game/a").warnings)
+        if (warning.code == LintWarning::Code_LuwuOnlyApi)
+            names.push_back(warning.text.substr(0, warning.text.find(' ')));
+
+    CHECK_EQ(names, std::vector<std::string>{"'Error'", "'unreachable'", "'todo'"});
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ErrorStringsPointAtUnreachableAndTodo")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    LintResult result = lint(R"(
+local function f(n: number, why: string)
+    if n == 1 then error("unreachable: n is never 1") end
+    if n == 2 then error("Unreachable") end
+    if n == 3 then assert(false, "UNREACHABLE: checked above") end
+    if n == 4 then error("TODO") end
+    if n == 5 then error("todo: parse octal") end
+    if n == 6 then error("not implemented") end
+    if n == 7 then error("Unimplemented") end
+    -- not the forms the globals replace
+    if n == 8 then error("todo list is empty") end
+    if n == 9 then error("unreachable", 2) end
+    if n == 10 then error(why) end
+    if n == 11 then assert(n > 0, "unreachable") end
+    if n == 12 then error("the unreachable branch") end
+end
+local function g()
+    local error = print
+    error("unreachable")
+end
+return f, g
+)");
+
+    std::vector<int> lines;
+    std::vector<std::string> texts;
+    for (const LintWarning& warning : result.warnings)
+    {
+        if (warning.code != LintWarning::Code_ErrorStrings)
+            continue;
+        lines.push_back(warning.location.begin.line);
+        texts.push_back(warning.text);
+    }
+
+    REQUIRE_EQ(lines, std::vector<int>{2, 3, 4, 5, 6, 7, 8});
+    CHECK(texts[0].find("unreachable(\"n is never 1\")") != std::string::npos);
+    CHECK(texts[1].find("with a reason") != std::string::npos);
+    CHECK(texts[2].find("unreachable(\"checked above\")") != std::string::npos);
+    CHECK(texts[3].find("todo()") != std::string::npos);
+    CHECK(texts[4].find("todo(\"parse octal\")") != std::string::npos);
+    CHECK(texts[5].find("todo()") != std::string::npos);
+    CHECK(texts[6].find("todo()") != std::string::npos);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "ErrorStringsOnlyInLuwuModules")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    fileResolver.source["game/a"] = R"(
+error("unreachable: never")
+)";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    for (const LintWarning& warning : lintModule("game/a").warnings)
+        CHECK_NE(warning.code, LintWarning::Code_ErrorStrings);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_unreachable_and_todo")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    const char* before = "local function check(ok: boolean)\n    if not ok then\n        ";
+    const char* after = "\n    end\n    print(ok)\nend\ncheck(true)\n";
+    checkTypewriting(*this, before, "unreachable(\"ok is checked by the caller\")", after);
+    checkTypewriting(*this, before, "todo(\"the false case\")", after);
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")

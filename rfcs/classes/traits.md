@@ -419,6 +419,44 @@ class Cat implements Animal
 end
 ```
 
+A scoped field has a value in each object unless it's `scoped shared`, one value on the class that objects can read, or `scoped static`, one value on
+the class value only. `scoped traitonly` is a syntax error. You can write a scoped field qualified, the same way you read it:
+
+```luwu
+trait Counted
+    scoped count = 0
+    scoped shared total = 0
+end
+class Tick implements Counted
+end
+local tick = Tick()
+tick:Counted.count += 1
+Tick:Counted.total = 5
+```
+
+Writing a `const` scoped field raises, and so does writing a `scoped shared` field through an object.
+
+To pick the trait at runtime, put an expression in brackets: `row:[formats[format]]:encode()` or `row:[Json].tag`. The expression's value has to be
+a trait, which is checked when the read or write runs.
+
+### Class methods
+
+A function whose first parameter is named `Self` is a class method, and `Self` is the class the method is called on:
+
+```luwu
+class Button
+    static count = 0
+    function bump(Self)
+        Self.count += 1
+        return Self.count
+    end
+end
+Button:bump()
+```
+
+`Self` must be the first parameter, can't be annotated and is `const`. The class is checked when the method is called, so `Button.bump()` raises. In
+a trait, `Self` is the implementing class the method is called on, and calling it on the trait itself raises.
+
 ### Class library
 
 A new function is added: `class.implements(object, trait)`. It returns `true` if the object implements `trait` or false if it doesn't.

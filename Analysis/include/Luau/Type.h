@@ -429,6 +429,9 @@ struct FunctionType
     // Luwu try expressions: the errors the function says it raises (`! E`), joined with the ones inferred from its body.
     // A hint types a `try` around a call; nothing checks it against what the function really raises.
     std::optional<TypeId> errorHint;
+    // Luwu try expressions: the hint ends in `never` (`! never`, `! NotFound | never`), so the function raises nothing
+    // else and `try` adds no weakunknown (raises<F>)
+    bool errorHintClosed = false;
 
     // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
     std::optional<std::string> name;
@@ -781,6 +784,13 @@ struct ExternType
         std::map<Name, TypeId> scopedMembers;
         // Which of `scopedMembers` are fields. A class gives one its value with `Trait.name = value`.
         std::set<Name> scopedFields;
+        // Which of `scopedFields` have a value in each object (`scoped species`), written `obj:Trait.name = value`. The
+        // others are one value on the class (`scoped shared`, `scoped static`), written `Class:Trait.name = value`.
+        std::set<Name> scopedObjectFields;
+        // Which of `scopedMembers` only the class value reads (`scoped static`, and scoped functions without `self`)
+        std::set<Name> scopedStatics;
+        // Which of `scopedFields` are const (`const` or `final`)
+        std::set<Name> scopedConsts;
         // The scoped members the trait expects (`expect scoped function name`, `expect scoped name: T`), and whether each is
         // optional. A class that lists the trait implements them (`function Trait.name`, `Trait.name = value`); a trait that
         // needs it declares them.

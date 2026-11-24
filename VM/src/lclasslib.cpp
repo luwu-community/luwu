@@ -80,11 +80,19 @@ static int class_fields(lua_State* L)
         luaL_argerror(L, 1, "class or object expected");
     }
 
+    // Luwu opaque values: an opaque class doesn't list its members
+    if (lclass->isopaque)
+        luaL_error(L, "can't list the fields of class '%s': it's opaque", getstr(lclass->name));
+
     lua_createtable(L, 0, lclass->numberofinstancemembers);
 
     bool complete = true;
     for (uint32_t offset = 0; offset < lclass->numberofinstancemembers; offset++)
     {
+        // Luwu Traits (rfcs/classes/traits.md): a trait's per-object scoped field has no name, and is no field of the class
+        if (!lclass->offsettomember[offset])
+            continue;
+
         if (lclass->memberflags[offset] & LBC_CLASSMEMBER_PRIVATE)
         {
             complete = false;

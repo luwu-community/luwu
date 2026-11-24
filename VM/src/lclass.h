@@ -175,6 +175,15 @@ LUAI_FUNC bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Cl
 // Luwu Classes (rfcs/classes): the closure of the Luwu code a VM-internal C function acts for, or NULL
 LUAI_FUNC const Closure* luaR_callinglua(lua_State* L);
 
+// Luwu opaque values: the metafield that marks a table or userdata opaque when its value is truthy. The name isn't
+// final, so nothing else spells it.
+#define LUWU_OPAQUE_MARK "__opaque"
+
+// Luwu opaque values: whether `value` is opaque, a class or object of a class marked with lua_setclassopaque, or a table
+// or userdata whose metatable has a truthy LUWU_OPAQUE_MARK. An opaque value hides what it holds from error records and
+// reflection. Only error paths call this: it looks the metafield up by name.
+LUAI_FUNC bool luaR_isopaque(lua_State* L, const TValue* value);
+
 /**
  * Errors (via luaG_privateaccesserror) if the member at `offset` is private and `cl` is not one
  * of `classdef`'s own methods, or (via luaG_blockedinitaccesserror) if it is `__init`
@@ -375,6 +384,22 @@ LUAI_FUNC void luaR_wrapresult(lua_State* L, StkId ra, bool caught);
 // Luwu try expressions: the value a `Some`, `Ok` or `Err` holds, or NULL for any other value
 LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
 
+// Luwu structured runtime errors: writes the `kind` positions of `record`, an `Error.Runtime`'s and an
+// `Error.NotIndexable`'s, from its `subkind` as the strings the variants hold. Call it while the record is a GC root.
+LUAI_FUNC void luaR_fillerrorsubkind(lua_State* L, LuwuErrorRecord& record);
+
+// Luwu structured runtime errors: adds the message of a recorded error to `b`, without its position.
+// luaR_fillerrorsubkind must have filled it.
+LUAI_FUNC void luaR_adderrorrecord(struct luaL_Strbuf* b, const LuwuErrorRecord& record);
+
+// Luwu structured runtime errors: a new object of the recorded error's variant, `Error.NotIndexable(...)` and the
+// others, or NULL when the result library (luaopen_result) isn't open. The record stays as it is.
+LUAI_FUNC LuauObject* luaR_newerrorvariant(lua_State* L);
+
+// Luwu structured runtime errors: raises error variant `kind` with the `nargs` values on top of the stack as its
+// positions, at the nearest Luwu code. `pcall` gets its message and `try` an object of the variant.
+LUAI_FUNC l_noret luaR_raisevariant(lua_State* L, LuwuBuiltinClass kind, int nargs);
+
 /**
  * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns
  * false otherwise. The loop calls neither `__iter` nor anything per step: `ra` becomes a boolean, which FORGLOOP hands
@@ -555,6 +580,14 @@ LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue
  * doesn't implement the trait, or the trait has no such function.
  */
 LUAI_FUNC void luaR_getqualified(lua_State* L, StkId ra, const TValue* receiver, const TValue* trait, TString* name);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): writes `value` to the scoped field `name` of the trait `trait`, for
+ * `obj:Trait.name = value` (LOP_SETQUALIFIED). A per-object field is written through an object, and a `scoped shared` or
+ * `scoped static` one through the class. Raises when `receiver` doesn't implement the trait, the field is const, or it's
+ * written through the wrong receiver.
+ */
+LUAI_FUNC void luaR_setqualified(lua_State* L, const TValue* receiver, const TValue* trait, TString* name, const TValue* value);
 
 // Luwu Traits (rfcs/classes/traits.md): whether `classdef` implements `trait`, listed or implied through `needs`.
 LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait);

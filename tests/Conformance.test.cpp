@@ -4849,6 +4849,8 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
     const Luau::TableType* library = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "collections")));
     REQUIRE(library);
     const auto& bundleTypes = frontend.globals.globalScope->importedTypeBindings["bundle"];
+    const Luau::TableType* errors = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "Error")));
+    REQUIRE(errors);
 
     StateRef state(luaL_newstate(), lua_close);
     luaL_openlibs(state.get());
@@ -4878,8 +4880,14 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
         }
 
         bool isGlobal = kind == LUWU_BUILTIN_SOME || kind == LUWU_BUILTIN_OK || kind == LUWU_BUILTIN_ERR;
-        std::optional<Luau::TypeId> declared =
-            isGlobal ? std::optional<Luau::TypeId>(Luau::getGlobalBinding(frontend.globals, name.c_str())) : declaredClassValue(library, name);
+        bool isErrorVariant = kind >= LUWU_BUILTIN_ERR_FIRST && kind <= LUWU_BUILTIN_ERR_LAST;
+        std::optional<Luau::TypeId> declared;
+        if (isGlobal)
+            declared = Luau::getGlobalBinding(frontend.globals, name.c_str());
+        else if (isErrorVariant)
+            declared = declaredClassValue(errors, name.substr(strlen("Error.")));
+        else
+            declared = declaredClassValue(library, name);
         REQUIRE(declared);
         CHECK_EQ(declaredClassMembers(*declared), vmClassMembers(classdef));
     }
@@ -4909,6 +4917,7 @@ TEST_CASE("TryExpressions")
 
     runConformance("try.luwu");
     runConformance("try_variants.luwu");
+    runConformance("try_errors.luwu");
 }
 
 TEST_CASE("OptionAndResult")
@@ -5050,6 +5059,31 @@ TEST_CASE("ClassesNativeCodegen")
     // with any `@native` function natively compiles only those, so the rest of its protos stay interpreted
     // and can't exercise the lowering of the class opcodes. See tests/conformance/classes_ncg.luwu.
     runConformance("classes_ncg.luwu");
+}
+
+TEST_CASE("ClassesOpaque")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    runConformance(
+        "classes_opaque.luwu",
+        [](lua_State* L)
+        {
+            lua_pushcfunction(
+                L,
+                [](lua_State* L)
+                {
+                    lua_setclassopaque(L, 1);
+                    return 0;
+                },
+                "markopaque"
+            );
+            lua_setglobal(L, "markopaque");
+        }
+    );
 }
 
 // Luwu Classes (rfcs/classes): regressions for review fixes, one file per area. Each runs at every

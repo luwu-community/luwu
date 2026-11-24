@@ -499,6 +499,8 @@ const char* getCmdName(IrCmd cmd)
         return "FALLBACK_GETPOSITIONAL";
     case IrCmd::FALLBACK_TABLEBUNDLE:
         return "FALLBACK_TABLEBUNDLE";
+    case IrCmd::FALLBACK_SETQUALIFIED:
+        return "FALLBACK_SETQUALIFIED";
     case IrCmd::SUBSTITUTE:
         return "SUBSTITUTE";
     case IrCmd::MARK_USED:

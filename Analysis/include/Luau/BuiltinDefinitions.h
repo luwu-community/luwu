@@ -162,6 +162,9 @@ bool resultLibraryEnabled();
 // Luwu class reflection (rfcs/classes): whether `class.member`, `class.ClassMember` and `class.fields` listing
 // ClassMembers are declared
 bool classReflectionEnabled();
+// Luwu structured runtime errors: the declarations of `Error` and its variant classes, a builtin module of their own.
+// Analysis has them with the result library.
+std::string getErrorDefinitionSource();
 // Luwu collections: whether Analysis has the `collections` library: the flags the VM opens it with
 // (luaL_openlibs), and LuwuDeclareStatements, which parses its declarations
 bool collectionsLibraryEnabled();
