@@ -105,6 +105,7 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.truthyRefinement = a.truthyRefinement;
             // Luwu try expressions
             clone.errorHint = a.errorHint;
+            clone.errorHintClosed = a.errorHintClosed;
             clone.name = a.name;
             clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));

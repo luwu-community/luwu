@@ -145,6 +145,9 @@ std::string getBuiltinDefinitionSource();
 // with (luaL_openlibs), LuwuDeclareStatements, which parses their declarations, and LuwuGenericNominals, which types
 // their generic classes
 bool resultLibraryEnabled();
+// Luwu structured runtime errors: the declarations of `Error` and its variant classes, a builtin module of their own.
+// Analysis has them with the result library.
+std::string getErrorDefinitionSource();
 // Luwu collections: whether Analysis has the `collections` library: the flags the VM opens it with
 // (luaL_openlibs), and LuwuDeclareStatements, which parses its declarations
 bool collectionsLibraryEnabled();
@@ -212,8 +215,6 @@ std::string getBundleDefinitionSource();
 bool integerLibraryEnabled();
 // Luwu Integers (rfcs/integers.md): the `integer` library's declarations, a definition file of its own
 std::string getIntegerDefinitionSource();
-// Luwu error variants (rfcs/integers.md): the declarations of `Error` and its classes, a definition file of its own
-std::string getErrorDefinitionSource();
 std::string getTypeFunctionDefinitionSource();
 
 void addGlobalBinding(GlobalTypes& globals, const std::string& name, TypeId ty, const std::string& packageName);

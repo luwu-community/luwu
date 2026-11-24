@@ -101,6 +101,7 @@ struct LintWarning
         Code_ExtraArguments = 66,          // Luwu: a call to a written function passing more arguments than it takes
         Code_ReturnSelf = 67,              // Luwu Traits: a trait method returning `self` typed as the trait, not `Self`
         Code_UncaughtErrors = 68,          // Luwu: a call to a function with error hints outside a `try`. Off by default.
+        Code_ErrorStrings = 69,            // Luwu: `error("unreachable")` or `error("TODO")`, which `unreachable()` and `todo()` raise as variants
 
         Code__Count
     };
@@ -219,6 +220,7 @@ inline constexpr const char* kWarningNames[] = {
     "ExtraArguments",
     "ReturnSelf",
     "UncaughtErrors",
+    "ErrorStrings",
 };
 // clang-format on
 

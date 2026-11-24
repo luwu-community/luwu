@@ -164,6 +164,15 @@ LUAI_FUNC bool luaR_isvminternalfunction(lua_State* L, const Closure* cl);
  */
 LUAI_FUNC bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl);
 
+// Luwu opaque values: the metafield that marks a table or userdata opaque when its value is truthy. The name isn't
+// final, so nothing else spells it.
+#define LUWU_OPAQUE_MARK "__opaque"
+
+// Luwu opaque values: whether `value` is opaque, a class or object of a class marked with lua_setclassopaque, or a table
+// or userdata whose metatable has a truthy LUWU_OPAQUE_MARK. An opaque value hides what it holds from error records and
+// reflection. Only error paths call this: it looks the metafield up by name.
+LUAI_FUNC bool luaR_isopaque(lua_State* L, const TValue* value);
+
 /**
  * Errors (via luaG_privateaccesserror) if the member at `offset` is private and `cl` is not one
  * of `classdef`'s own methods, or (via luaG_blockedinitaccesserror) if it is `__init`
@@ -299,13 +308,24 @@ LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const
 // holding the error in `ra` and where it was raised in `ra + 1` to `ra + 3`. Doesn't run the collector.
 LUAI_FUNC void luaR_wrapresult(lua_State* L, StkId ra, bool caught);
 
-// Luwu error variants (rfcs/integers.md): raises an object of the error variant `kind` (`Error.Overflow`, ...) whose
-// positions are the `nargs` values on top of the stack. Missing positions are nil. When the result library isn't open,
-// raises the object's message as a string instead.
-LUAI_FUNC l_noret luaR_raisevariant(lua_State* L, LuwuBuiltinClass kind, int nargs);
-
 // Luwu try expressions: the value a `Some`, `Ok` or `Err` holds, or NULL for any other value
 LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
+
+// Luwu structured runtime errors: writes the `kind` positions of `record`, an `Error.Runtime`'s and an
+// `Error.NotIndexable`'s, from its `subkind` as the strings the variants hold. Call it while the record is a GC root.
+LUAI_FUNC void luaR_fillerrorsubkind(lua_State* L, LuwuErrorRecord& record);
+
+// Luwu structured runtime errors: adds the message of a recorded error to `b`, without its position.
+// luaR_fillerrorsubkind must have filled it.
+LUAI_FUNC void luaR_adderrorrecord(struct luaL_Strbuf* b, const LuwuErrorRecord& record);
+
+// Luwu structured runtime errors: a new object of the recorded error's variant, `Error.NotIndexable(...)` and the
+// others, or NULL when the result library (luaopen_result) isn't open. The record stays as it is.
+LUAI_FUNC LuauObject* luaR_newerrorvariant(lua_State* L);
+
+// Luwu structured runtime errors: raises error variant `kind` with the `nargs` values on top of the stack as its
+// positions, at the nearest Luwu code. `pcall` gets its message and `try` an object of the variant.
+LUAI_FUNC l_noret luaR_raisevariant(lua_State* L, LuwuBuiltinClass kind, int nargs);
 
 /**
  * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns

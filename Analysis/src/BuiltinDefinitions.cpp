@@ -1301,10 +1301,11 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     }
     if (collectionsLibraryEnabled())
         registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
-
-    // Luwu error variants and Luwu Integers (rfcs/integers.md): `Error.Overflow` and `integer.Mode` are types too
+    // Luwu structured runtime errors: `Error.NotIndexable` and the other variants are types too
     if (resultLibraryEnabled())
         registerBuiltinModule(frontend, globals, "Error", getErrorDefinitionSource(), typeCheckForAutocomplete);
+
+    // Luwu Integers (rfcs/integers.md): `integer.Mode` is a type too
     if (integerLibraryEnabled())
         registerBuiltinModule(frontend, globals, "integer", getIntegerDefinitionSource(), typeCheckForAutocomplete);
 

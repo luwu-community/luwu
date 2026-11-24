@@ -316,7 +316,7 @@ local function vecrcp(a: vector)
 end
 )"),
         R"(
-; function vecrcp($arg0) line 2
+; function vecrcp(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -344,7 +344,7 @@ local function compsum(a: vector)
 end
 )"),
         R"(
-; function compsum($arg0) line 2
+; function compsum(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -378,7 +378,7 @@ local function vec3add(a: vector, b: vector)
 end
 )"),
         R"(
-; function vec3add($arg0, $arg1) line 2
+; function vec3add(a, b) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -408,7 +408,7 @@ local function vec3minus(a: vector)
 end
 )"),
         R"(
-; function vec3minus($arg0) line 2
+; function vec3minus(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -436,7 +436,7 @@ local function vec3combo(a: vector, b: vector, c: vector, d: vector)
 end
 )"),
         R"(
-; function vec3combo($arg0, $arg1, $arg2, $arg3) line 2
+; function vec3combo(a, b, c, d) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -473,7 +473,7 @@ local function vec3combo(a: vector)
 end
 )"),
         R"(
-; function vec3combo($arg0) line 2
+; function vec3combo(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -504,7 +504,7 @@ local function vec3combo(a: vector, b: vector, c: vector, d: vector)
 end
 )"),
         R"(
-; function vec3combo($arg0, $arg1, $arg2, $arg3) line 2
+; function vec3combo(a, b, c, d) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -548,7 +548,7 @@ local function vec3lerp(a: vector, b: vector, t: number)
 end
 )"),
         R"(
-; function vec3lerp($arg0, $arg1, $arg2) line 2
+; function vec3lerp(a, b, t) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -586,7 +586,7 @@ local function vecops(a: vector, b: vector)
 end
 )"),
         R"(
-; function vecops($arg0, $arg1) line 2
+; function vecops(a, b) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -619,7 +619,7 @@ local function vecops(a: vector)
 end
 )"),
         R"(
-; function vecops($arg0) line 2
+; function vecops(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -652,7 +652,7 @@ local function foo(a: number, b: number, c: number, d: number, e: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2, $arg3, $arg4) line 2
+; function foo(a, b, c, d, e) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -725,7 +725,7 @@ local function foo(a)
 end
 )"),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   CHECK_TAG R0, tnumber, exit(1)
@@ -747,7 +747,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_bytecode_0:
   %0 = LOAD_TAG R0
   %1 = LOAD_POINTER R0
@@ -774,7 +774,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_0:
   CHECK_TAG R0, tstring, exit(entry)
   JUMP bb_4
@@ -805,7 +805,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_bytecode_0:
   %0 = LOAD_TAG R0
   %1 = CMP_TAG %0, tnil, eq
@@ -830,7 +830,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_bytecode_0:
   SET_SAVEDPC 1u
   %1 = NEW_TABLE 4u, 0u
@@ -877,7 +877,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_bytecode_0:
   SET_SAVEDPC 1u
   %1 = NEW_TABLE 2u, 0u
@@ -914,7 +914,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(a, b, c) line 2
 bb_bytecode_0:
   SET_SAVEDPC 1u
   %1 = NEW_TABLE 2u, 0u
@@ -957,7 +957,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(a, b, c) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -1002,7 +1002,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   %1 = LOAD_TAG R0
@@ -1028,7 +1028,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   %8 = CMP_TAG R0, tnumber, eq
@@ -1053,7 +1053,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   %1 = GET_TYPEOF R0
@@ -1084,7 +1084,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   JUMP bb_4
@@ -1124,7 +1124,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   JUMP bb_4
@@ -1167,7 +1167,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   %1 = LOAD_TAG R0
@@ -1206,7 +1206,7 @@ local function vecrcp(a: vector)
 end
 )"),
         R"(
-; function vecrcp($arg0) line 2
+; function vecrcp(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -1236,7 +1236,7 @@ local function abs(a: vector)
 end
 )"),
         R"(
-; function abs($arg0) line 2
+; function abs(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -1262,7 +1262,7 @@ local function foo(a: vector)
 end
 )"),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -1305,7 +1305,7 @@ local function vec3magn(a: vector)
 end
 )"),
         R"(
-; function vec3magn($arg0) line 2
+; function vec3magn(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -1345,7 +1345,7 @@ local function vec3dot(a: vector, b: vector)
 end
 )"),
         R"(
-; function vec3dot($arg0, $arg1) line 2
+; function vec3dot(a, b) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -1388,7 +1388,7 @@ local function vec3dot(a: vector)
 end
 )"),
         R"(
-; function vec3dot($arg0) line 2
+; function vec3dot(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -1422,7 +1422,7 @@ local function foo(a: vector, b: vector)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -1479,7 +1479,7 @@ local function foo(n: vector, b: vector, t: vector)
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(n, b, t) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -1544,7 +1544,7 @@ local function foo(v: Vertex, t: vector)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 4
+; function foo(v, t) line 4
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -1621,7 +1621,7 @@ local function foo(t: vector)
 end
 )"),
         R"(
-; function foo($arg0) line 2
+; function foo(t) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -1653,7 +1653,7 @@ local function foo(a: vector, b: vector)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -1703,7 +1703,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(x) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -1744,7 +1744,7 @@ end
                    true
                ),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(vectors, i) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   JUMP bb_2
@@ -1795,7 +1795,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(vectors, i, t) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   CHECK_TAG R1, tstring, exit(entry)
@@ -1844,7 +1844,7 @@ local function vecrcp(a: vector)
 end
 )"),
         R"(
-; function vecrcp($arg0) line 2
+; function vecrcp(a) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -1871,7 +1871,7 @@ local function getxy(a: Point)
 end
 )"),
         R"(
-; function getxy($arg0) line 2
+; function getxy(a) line 2
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   JUMP bb_2
@@ -1904,7 +1904,7 @@ local function setxy(a: Point)
 end
 )"),
         R"(
-; function setxy($arg0) line 2
+; function setxy(a) line 2
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   JUMP bb_2
@@ -1934,7 +1934,7 @@ local function getxy(a: Point)
 end
 )"),
         R"(
-; function getxy($arg0) line 2
+; function getxy(a) line 2
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   JUMP bb_2
@@ -1975,7 +1975,7 @@ end
 )"
                ),
         R"(
-; function eq($arg0, $arg1, $arg2) line 2
+; function eq(a, b, limit) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -2024,7 +2024,7 @@ end
 )"
                ),
         R"(
-; function eq($arg0, $arg1) line 2
+; function eq(a, b) line 2
 bb_0:
   %0 = LOAD_TAG R0
   JUMP_EQ_TAG %0, tnil, bb_3, bb_4
@@ -2066,7 +2066,7 @@ end
 )"
                ),
         R"(
-; function eq($arg0, $arg1) line 2
+; function eq(a, b) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   %2 = LOAD_TAG R1
@@ -2111,7 +2111,7 @@ end
 )"
                ),
         R"(
-; function eq($arg0, $arg1, $arg2, $arg3, $arg4, $arg5) line 2
+; function eq(a, b, c, d, e, f) line 2
 bb_0:
   CHECK_TAG R0, tstring, exit(entry)
   %2 = LOAD_TAG R1
@@ -2169,9 +2169,9 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function getsum($arg0) line 4
-; U0: vector
-; R0: vector from 0 to 14
+; function getsum(t) line 4
+; U0: vector ['y']
+; R0: vector from 0 to 14 [local 't']
 bb_bytecode_0:
   CHECK_TAG R0, tvector, exit(0)
   %2 = LOAD_FLOAT R0, 0i
@@ -2215,7 +2215,7 @@ end
                    true
                ),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(n, t, u) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, ttable, exit(entry)
@@ -2279,7 +2279,7 @@ end
                    true
                ),
         R"(
-; function test($arg0, $arg1, $arg2) line 2
+; function test(t, a, b) line 2
 bb_0:
   CHECK_TAG R1, tnumber, exit(entry)
   CHECK_TAG R2, tnumber, exit(entry)
@@ -2364,7 +2364,7 @@ end
                    true
                ),
         R"(
-; function test($arg0, $arg1) line 2
+; function test(t, a) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -2427,7 +2427,7 @@ end
                    true
                ),
         R"(
-; function test($arg0, $arg1, $arg2) line 2
+; function test(t, a, i) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -2505,7 +2505,7 @@ end
                    true
                ),
         R"(
-; function test($arg0) line 2
+; function test(t) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   JUMP bb_2
@@ -2552,7 +2552,7 @@ end
                    true
                ),
         R"(
-; function test($arg0, $arg1, $arg2) line 2
+; function test(t, a, i) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -2609,7 +2609,7 @@ end
                    true
                ),
         R"(
-; function test($arg0) line 2
+; function test(t) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   JUMP bb_2
@@ -2683,7 +2683,7 @@ end
                    true
                ),
         R"(
-; function test($arg0, $arg1) line 2
+; function test(t, a) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -2742,7 +2742,7 @@ end
                    true
                ),
         R"(
-; function test($arg0, $arg1) line 2
+; function test(t, a) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   CHECK_TAG R1, tstring, exit(entry)
@@ -2796,7 +2796,7 @@ end
                    true
                ),
         R"(
-; function test($arg0, $arg1) line 2
+; function test(t, a) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   CHECK_TAG R1, tstring, exit(entry)
@@ -2855,7 +2855,7 @@ end
                    true
                ),
         R"(
-; function test($arg0, $arg1) line 2
+; function test(t, uv) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -2945,7 +2945,7 @@ end
                    true
                ),
         R"(
-; function test($arg0) line 2
+; function test(t) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   JUMP bb_2
@@ -2990,7 +2990,7 @@ end
                    true
                ),
         R"(
-; function test($arg0) line 2
+; function test(t) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   JUMP bb_2
@@ -3036,7 +3036,7 @@ end
                    true
                ),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -3081,7 +3081,7 @@ end
                    true
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(t) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   JUMP bb_2
@@ -3137,7 +3137,7 @@ end
                    true
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(t) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   JUMP bb_2
@@ -3193,7 +3193,7 @@ end
                    true
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(t) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   JUMP bb_2
@@ -3247,7 +3247,7 @@ end
                    true
                ),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(t, v, w) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   JUMP bb_2
@@ -3295,7 +3295,7 @@ end
                    true
                ),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(t, v, w) line 2
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   JUMP bb_2
@@ -3343,8 +3343,8 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function getsum($arg0, $arg1) line 2
-; R2: vector from 0 to 18
+; function getsum(x, c) line 2
+; R2: vector from 0 to 18 [local 'v']
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   CHECK_TAG R0, tnumber, bb_exit_4
@@ -3398,8 +3398,8 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function getsum($arg0, $arg1) line 4
-; U0: vector
+; function getsum(x, c) line 4
+; U0: vector ['v']
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   CHECK_TAG R0, tnumber, bb_exit_4
@@ -3462,9 +3462,9 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function getsum($arg0) line 2
-; R1: number from 0 to 13
-; R4: number from 1 to 11
+; function getsum(n) line 2
+; R1: number from 0 to 13 [local 'seqsum']
+; R4: number from 1 to 11 [local 'i']
 bb_bytecode_0:
   STORE_DOUBLE R1, 0
   STORE_TAG R1, tnumber
@@ -3531,7 +3531,7 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function getsum($arg0, $arg1) line 2
+; function getsum(x, y) line 2
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   CHECK_TAG R1, tnumber, bb_exit_2
@@ -3568,9 +3568,9 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function inl($arg0, $arg1) line 2
-; R0: vector [argument]
-; R1: number [argument]
+; function inl(v, s) line 2
+; R0: vector [argument 'v']
+; R1: number [argument 's']
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -3585,9 +3585,9 @@ bb_bytecode_1:
   STORE_TAG R2, tnumber
   INTERRUPT 3u
   RETURN R2, 1i
-; function getsum($arg0) line 6
-; R0: vector from 0 to 3
-; R0: vector from 3 to 6
+; function getsum(v) line 6
+; R0: vector from 0 to 3 [local 'v']
+; R0: vector from 3 to 6 [local 'v']
 bb_bytecode_0:
   CHECK_TAG R0, tvector, exit(0)
   %2 = LOAD_FLOAT R0, 4i
@@ -3785,8 +3785,8 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0, $arg1) line 4
-; R0: table [argument]
+; function foo(arr, i) line 4
+; R0: table [argument 'arr']
 ; R2: vector from 4 to 6
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
@@ -3849,7 +3849,7 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(arr, i) line 2
 ; R3: vector from 1 to 2
 bb_bytecode_0:
   CHECK_TAG R0, ttable, bb_fallback_1
@@ -4125,8 +4125,8 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0) line 2
-; R0: vec2 [argument]
+; function foo(v) line 2
+; R0: vec2 [argument 'v']
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   JUMP bb_2
@@ -4166,8 +4166,8 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0) line 2
-; R0: mat3 [argument]
+; function foo(a) line 2
+; R0: mat3 [argument 'a']
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   JUMP bb_2
@@ -4205,9 +4205,9 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0, $arg1) line 2
-; R0: vec2 [argument]
-; R1: vec2 [argument]
+; function foo(a, b) line 2
+; R0: vec2 [argument 'a']
+; R1: vec2 [argument 'b']
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   CHECK_TAG R1, tuserdata, exit(entry)
@@ -4257,9 +4257,9 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0, $arg1) line 2
-; R0: vec2 [argument]
-; R1: vec2 [argument]
+; function foo(a, b) line 2
+; R0: vec2 [argument 'a']
+; R1: vec2 [argument 'b']
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   CHECK_TAG R1, tuserdata, exit(entry)
@@ -4313,9 +4313,9 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0, $arg1) line 2
-; R0: mat3 [argument]
-; R1: mat3 [argument]
+; function foo(a, b) line 2
+; R0: mat3 [argument 'a']
+; R1: mat3 [argument 'b']
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   CHECK_TAG R1, tuserdata, exit(entry)
@@ -4347,8 +4347,8 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0) line 2
-; R0: mat3 [argument]
+; function foo(a) line 2
+; R0: mat3 [argument 'a']
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   JUMP bb_2
@@ -4379,8 +4379,8 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0) line 2
-; R0: userdata [argument]
+; function foo(a) line 2
+; R0: userdata [argument 'a']
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   JUMP bb_2
@@ -4411,10 +4411,10 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
-; R0: vec2 [argument]
-; R1: vec2 [argument]
-; R2: vec2 [argument]
+; function foo(a, b, c) line 2
+; R0: vec2 [argument 'a']
+; R1: vec2 [argument 'b']
+; R2: vec2 [argument 'c']
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   CHECK_TAG R1, tuserdata, exit(entry)
@@ -4476,8 +4476,8 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0) line 2
-; R0: mat3 [argument]
+; function foo(a) line 2
+; R0: mat3 [argument 'a']
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   JUMP bb_2
@@ -4519,8 +4519,8 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0) line 2
-; R0: vector [argument]
+; function foo(a) line 2
+; R0: vector [argument 'a']
 ; R2: vector from 3 to 4
 ; R3: vector from 1 to 2
 ; R3: vector from 3 to 4
@@ -4559,9 +4559,9 @@ end
                    /* includeIrTypes */ true
                ),
         R"(
-; function foo($arg0) line 2
-; R0: vector [argument]
-; R1: vector from 0 to 3
+; function foo(a) line 2
+; R0: vector [argument 'a']
+; R1: vector from 0 to 3 [local 'x']
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -4619,7 +4619,7 @@ local function foo(a: number)
 end
 )"),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   JUMP bb_2
@@ -4646,7 +4646,7 @@ local function foo(a: number)
 end
 )"),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   JUMP bb_2
@@ -4683,7 +4683,7 @@ local function foo(a: number, b: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -4729,7 +4729,7 @@ local function foo(a: number, b: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -4767,7 +4767,7 @@ local function foo(a: number, b: number, c: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(a, b, c) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -4805,7 +4805,7 @@ local function foo(a: number)
 end
 )"),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   JUMP bb_2
@@ -4835,7 +4835,7 @@ local function shuffle(v: vector)
 end
 )"),
         R"(
-; function shuffle($arg0) line 2
+; function shuffle(v) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -4870,7 +4870,7 @@ local function shuffle(v: vector)
 end
 )"),
         R"(
-; function shuffle($arg0) line 2
+; function shuffle(v) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -4903,7 +4903,7 @@ local function crossshuffle(v: vector, t: vector)
 end
 )"),
         R"(
-; function crossshuffle($arg0, $arg1) line 2
+; function crossshuffle(v, t) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -4937,7 +4937,7 @@ local function test(v: vertex)
 end
 )"),
         R"(
-; function test($arg0) line 2
+; function test(v) line 2
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   JUMP bb_2
@@ -4974,7 +4974,7 @@ local function test(v: vertex)
 end
 )"),
         R"(
-; function test($arg0) line 2
+; function test(v) line 2
 bb_0:
   CHECK_TAG R0, tuserdata, exit(entry)
   JUMP bb_2
@@ -5010,7 +5010,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(a) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   JUMP bb_2
@@ -5039,7 +5039,7 @@ local function foo(a: vector, b: vector)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -5068,7 +5068,7 @@ local function foo(a: vector, b)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_4
@@ -5100,7 +5100,7 @@ local function foo(a, b)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   %1 = LOAD_TAG R1
@@ -5143,7 +5143,7 @@ local function test(x: number, y: number)
 end
 )"),
         R"(
-; function test($arg0, $arg1) line 2
+; function test(x, y) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5177,7 +5177,7 @@ local function foo(a: string, b: string, c: {}, d: {})
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2, $arg3) line 2
+; function foo(a, b, c, d) line 2
 bb_0:
   CHECK_TAG R0, tstring, exit(entry)
   CHECK_TAG R1, tstring, exit(entry)
@@ -5214,7 +5214,7 @@ local function foo(a: string, b: string, c: {}, d: {})
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2, $arg3) line 2
+; function foo(a, b, c, d) line 2
 bb_0:
   CHECK_TAG R0, tstring, exit(entry)
   CHECK_TAG R1, tstring, exit(entry)
@@ -5257,7 +5257,7 @@ local function foo(buf: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(buf, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5298,7 +5298,7 @@ local function foo(buf: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(buf, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5342,7 +5342,7 @@ local function foo(index: buffer, data: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(index, data, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tbuffer, exit(entry)
@@ -5401,7 +5401,7 @@ local function foo(buf: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(buf, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5485,7 +5485,7 @@ local function foo(buf: buffer, pos: number, a: number, b: number, c: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2, $arg3, $arg4) line 2
+; function foo(buf, pos, a, b, c) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5533,7 +5533,7 @@ local function foo(buf: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(buf, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5576,7 +5576,7 @@ local function foo(buf: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(buf, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5632,7 +5632,7 @@ end
         CHECK_EQ(
             "\n" + getCodegenAssembly(source),
             R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(zero, b1, b2) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tbuffer, exit(entry)
@@ -5682,7 +5682,7 @@ bb_bytecode_1:
         CHECK_EQ(
             "\n" + getCodegenAssembly(source),
             R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(zero, b1, b2) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tbuffer, exit(entry)
@@ -5747,7 +5747,7 @@ local function foo(one: number, b1: buffer, b2: buffer)
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(one, b1, b2) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tbuffer, exit(entry)
@@ -5806,7 +5806,7 @@ local function foo(buf: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(buf, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5843,7 +5843,7 @@ local function foo(buf: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(buf, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5887,7 +5887,7 @@ local function foo(buf: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(buf, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5934,7 +5934,7 @@ local function foo(buf: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(buf, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -5973,7 +5973,7 @@ local function foo(buf: buffer, a: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(buf, a) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -6015,7 +6015,7 @@ local function foo(buf: buffer, a: number, b: number, c: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2, $arg3) line 2
+; function foo(buf, a, b, c) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -6068,7 +6068,7 @@ local function foo(buf: buffer, a: number, b: number, p: number, q: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2, $arg3, $arg4) line 2
+; function foo(buf, a, b, p, q) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -6123,7 +6123,7 @@ end
                    true
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(buf) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   JUMP bb_2
@@ -6187,7 +6187,7 @@ local function foo(a: number, b: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -6232,7 +6232,7 @@ local function foo(a: number, b: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -6280,7 +6280,7 @@ local function foo(a: number, b: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -6325,7 +6325,7 @@ local function foo(a: number, b: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -6376,7 +6376,7 @@ local function bar()
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_bytecode_0:
   %0 = LOAD_TVALUE R0
   %1 = LOAD_TVALUE K0 (0)
@@ -6419,7 +6419,7 @@ local function bar()
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(a, b) line 2
 bb_bytecode_0:
   %0 = LOAD_TVALUE R0
   %1 = LOAD_TVALUE R1
@@ -6452,7 +6452,7 @@ local function foo(a: boolean, b: number, c: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(a, b, c) line 2
 bb_0:
   CHECK_TAG R0, tboolean, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -6493,7 +6493,7 @@ local function foo(a: boolean, b: number, c: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(a, b, c) line 2
 bb_0:
   CHECK_TAG R0, tboolean, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -7139,7 +7139,7 @@ end
 function setm(x) m = x end
 )"),
         R"(
-; function foo($arg0, $arg1) line 4
+; function foo(a, b) line 4
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -7158,7 +7158,7 @@ bb_bytecode_1:
   STORE_TAG R2, tnumber
   INTERRUPT 5u
   RETURN R2, 1i
-; function setm($arg0) line 8
+; function setm(x) line 8
 bb_bytecode_0:
   %0 = LOAD_TVALUE R0
   SET_UPVALUE U0, %0, undef
@@ -7182,7 +7182,7 @@ local function foo(a: number, b: number)
 end
 )"),
         R"(
-; function foo($arg0, $arg1) line 4
+; function foo(a, b) line 4
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -7243,7 +7243,7 @@ bb_bytecode_0:
   STORE_TAG R2, tnumber
   INTERRUPT 7u
   RETURN R2, 1i
-; function setm($arg0, $arg1) line 12
+; function setm(x, y) line 12
 bb_bytecode_0:
   %0 = LOAD_TVALUE R0
   SET_UPVALUE U0, %0, undef
@@ -7270,7 +7270,7 @@ end
 arr = {1, 2, 3, 4}
 )"),
         R"(
-; function foo($arg0) line 4
+; function foo(a) line 4
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   JUMP bb_4
@@ -7396,7 +7396,7 @@ local function test(b: buffer)
 end
 )"),
         R"(
-; function test($arg0) line 2
+; function test(b) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   JUMP bb_2
@@ -7439,7 +7439,7 @@ local function test(b: buffer)
 end
 )"),
         R"(
-; function test($arg0) line 2
+; function test(b) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   JUMP bb_4
@@ -7502,7 +7502,7 @@ local function storeloadpreserve(b: buffer)
 end
 )"),
         R"(
-; function storeloadpreserve($arg0) line 2
+; function storeloadpreserve(b) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   JUMP bb_26
@@ -7622,7 +7622,7 @@ local function test(b: buffer, n: number, f: number)
 end
 )"),
         R"(
-; function test($arg0, $arg1, $arg2) line 2
+; function test(b, n, f) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -7709,7 +7709,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(n) line 2
 bb_0:
 ; in regs: R0
 ; out regs: R0
@@ -7772,7 +7772,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(n, t) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, ttable, exit(entry)
@@ -7848,7 +7848,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(b, a, s) line 2
 bb_0:
   CHECK_TAG R0, tbuffer, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -7910,7 +7910,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(p, v) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -7962,7 +7962,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0) line 2
+; function foo(c) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   JUMP bb_2
@@ -8005,7 +8005,7 @@ end
 )"
                ),
         R"(
-; function foo($arg0, $arg1) line 2
+; function foo(c, d) line 2
 bb_0:
   CHECK_TAG R0, tvector, exit(entry)
   CHECK_TAG R1, tvector, exit(entry)
@@ -8050,9 +8050,9 @@ end
                    true
                ),
         R"(
-; function test($arg0, $arg1) line 2
-; R0: table [argument]
-; R1: string [argument]
+; function test(t, a) line 2
+; R0: table [argument 't']
+; R1: string [argument 'a']
 bb_0:
   CHECK_TAG R0, ttable, exit(entry)
   CHECK_TAG R1, tstring, exit(entry)
@@ -8107,9 +8107,9 @@ end
                    true
                ),
         R"(
-; function test($arg0, $arg1, $arg2) line 2
-; R1: table [argument]
-; R2: number [argument]
+; function test(self, t, a) line 2
+; R1: table [argument 't']
+; R2: number [argument 'a']
 ; R4: string from 10 to 11
 ; R6: string from 17 to 18
 ; R8: string from 8 to 9
@@ -8183,8 +8183,8 @@ end
                    2
                ),
         R"(
-; function collatz($arg0) line 2
-; R0: number [argument]
+; function collatz(x) line 2
+; R0: number [argument 'x']
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   JUMP bb_3
@@ -8232,9 +8232,9 @@ end
                    2
                ),
         R"(
-; function meow($arg0, $arg1) line 5
-; R0: number [argument]
-; R1: number [argument]
+; function meow(foo, bar) line 5
+; R0: number [argument 'foo']
+; R1: number [argument 'bar']
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -8269,7 +8269,7 @@ end
                    2
                ),
         R"(
-; function meow($arg0, $arg1) line 5
+; function meow(foo, bar) line 5
 bb_bytecode_0:
   CHECK_TAG R0, tnumber, bb_fallback_1
   CHECK_TAG R1, tnumber, bb_fallback_1
@@ -8415,7 +8415,7 @@ end
                    /* clipToFirstReturn= */ true
                ),
         R"(
-; function bump($arg0) line 6
+; function bump(self) line 6
 bb_0:
   CHECK_TAG R0, tobject, exit(entry)
   JUMP bb_2
@@ -8471,7 +8471,7 @@ end
                    /* clipToFirstReturn= */ true
                ),
         R"(
-; function deposit($arg0, $arg1) line 2
+; function deposit(self, amount) line 2
 bb_bytecode_0:
   CHECK_TAG R0, ttable, bb_fallback_2
   %2 = LOAD_POINTER R0
@@ -8528,7 +8528,7 @@ end
                    /* optimizationLevel= */ 2
                ),
         R"(
-; function push($arg0, $arg1) line 2
+; function push(v, x) line 2
 bb_bytecode_0:
   %0 = LOAD_TVALUE R1
   STORE_TVALUE R4, %0
@@ -8620,7 +8620,7 @@ end
                    /* optimizationLevel= */ 2
                ),
         R"(
-; function get($arg0, $arg1) line 2
+; function get(m, k) line 2
 bb_bytecode_0:
   %0 = LOAD_TVALUE R1
   STORE_TVALUE R4, %0
@@ -8717,7 +8717,7 @@ end
                    /* clipToFirstReturn= */ true
                ),
         R"(
-; function get_x($arg0) line 5
+; function get_x(self) line 5
 bb_0:
   CHECK_TAG R0, tobject, exit(entry)
   JUMP bb_2
@@ -8769,7 +8769,7 @@ end
                    /* clipToFirstReturn= */ true
                ),
         R"(
-; function f($arg0) line 6
+; function f(self) line 6
 bb_0:
   CHECK_TAG R0, tobject, exit(entry)
   JUMP bb_2
@@ -8859,7 +8859,7 @@ end
                    /* clipToFirstReturn= */ true
                ),
         R"(
-; function make($arg0, $arg1) line 7
+; function make(a, b) line 7
 bb_bytecode_0:
   %0 = LOAD_TVALUE R0
   STORE_TVALUE R4, %0
@@ -8925,7 +8925,7 @@ end
                    /* clipToFirstReturn= */ false
                ),
         R"(
-; function meow($arg0) line 5
+; function meow(self) line 5
 bb_0:
   CHECK_TAG R0, tobject, exit(entry)
   JUMP bb_2
@@ -8947,7 +8947,7 @@ bb_bytecode_1:
 bb_4:
   INTERRUPT 5u
   RETURN R1, 1i
-; function g($arg0, $arg1) line 10
+; function g(c, k) line 10
 bb_0:
   CHECK_TAG R0, tobject, exit(entry)
   CHECK_TAG R1, tnumber, exit(entry)
@@ -8984,7 +8984,7 @@ bb_4:
 bb_6:
   INTERRUPT 8u
   RETURN R4, 1i
-; function Cat($arg0) line 2
+; function Cat(fields) line 2
 bb_bytecode_0:
   %0 = LOAD_TVALUE R0
   STORE_TVALUE R3, %0
@@ -9025,7 +9025,7 @@ end
                    /* clipToFirstReturn= */ false
                ),
         R"(
-; function f($arg0) line 6
+; function f(a) line 6
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   JUMP bb_3
@@ -9040,7 +9040,7 @@ bb_bytecode_2:
   STORE_TAG R2, tnumber
   INTERRUPT 7u
   RETURN R2, 1i
-; function C($arg0) line 2
+; function C(fields) line 2
 bb_bytecode_0:
   %0 = LOAD_TVALUE R0
   STORE_TVALUE R3, %0
@@ -9287,9 +9287,9 @@ end
                    /* clipToFirstReturn= */ true
                ),
         R"(
-; function f($arg0) line 6
-; R0: object [argument]
-; R1: any from 2 to 8
+; function f(self) line 6
+; R0: object [argument 'self']
+; R1: any from 2 to 8 [local 't']
 bb_0:
   CHECK_TAG R0, tobject, exit(entry)
   JUMP bb_2
@@ -9331,8 +9331,8 @@ end
                    /* clipToFirstReturn= */ true
                ),
         R"(
-; function f($arg0, $arg1) line 2
-; R2: any from 0 to 13
+; function f(o, mt) line 2
+; R2: any from 0 to 13 [local 't']
 bb_bytecode_0:
   implicit CHECK_SAFE_ENV exit(0)
   SET_SAVEDPC 1u
@@ -9386,10 +9386,10 @@ end
                    /* clipToFirstReturn= */ true
                ),
         R"(
-; function f($arg0) line 2
-; R0: boolean [argument]
-; R1: table from 0 to 11
-; R2: number from 2 to 11
+; function f(c) line 2
+; R0: boolean [argument 'c']
+; R1: table from 0 to 11 [local 't']
+; R2: number from 2 to 11 [local 'n']
 bb_0:
   CHECK_TAG R0, tboolean, exit(entry)
   JUMP bb_3
@@ -9461,7 +9461,7 @@ end
                    /* clipToFirstReturn= */ true
                ),
         R"(
-; function sum($arg0) line 2
+; function sum(t) line 2
 bb_bytecode_0:
   STORE_DOUBLE R1, 0
   STORE_TAG R1, tnumber
@@ -9523,7 +9523,7 @@ end
                    /* clipToFirstReturn= */ true
                ),
         R"(
-; function f($arg0, $arg1) line 2
+; function f(g, t) line 2
 bb_bytecode_0:
   %0 = LOAD_TVALUE R0
   STORE_TVALUE R2, %0

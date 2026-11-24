@@ -1,0 +1,318 @@
+--!nocheck
+-- Luwu structured runtime errors: the VM and the libraries record their errors as variants of `Error`. `try` gets an object
+-- of the variant, and `pcall` and the other protected calls get the message they always got, as a string with the
+-- position in front. Values raised with `error` stay what they were.
+
+-- Locals with a constant value are folded away, and only a register a named local holds can be named, so the cases
+-- below read parameters.
+local function nothing(): any
+    return nil
+end
+
+-- what `pcall` gives for `f`, without the `file:line: ` in front
+local function pcallmessage(f: () -> ()): string
+    local ok, message = pcall(f)
+    assert(not ok and type(message) == "string")
+    local stripped = string.gsub(message, "^[^:]*:%d+: ", "")
+    return stripped
+end
+
+-- the variant `try` gives for `f`, after checking that its message is the one `pcall` gives
+local function caught(f: () -> ())
+    local r = try f()
+    assert(class.isinstance(r, Err))
+    assert(tostring(r.error) == pcallmessage(f))
+    return r.error
+end
+
+-- indexing something that can't be indexed names how it was reached
+do
+    local missing = nothing()
+    local meow = tostring("meow")
+    local function indexlocal()
+        local t = nothing()
+        return t.meow
+    end
+    local function indexupvalue()
+        return missing.meow
+    end
+    local function indexfield()
+        local t = {}
+        return t.inner.meow
+    end
+    local function indexglobal()
+        return undefinedglobal[meow]
+
+    end
+
+    local e = caught(indexlocal)
+    assert(class.isinstance(e, Error.NotIndexable) and e.name == "t" and e.kind == "Local")
+    assert(e.indexed == nil and e.index == "meow")
+    assert(tostring(e) == "attempt to index nil (local 't') with 'meow'")
+
+    e = caught(indexupvalue)
+    assert(e.name == "missing" and e.kind == "Upvalue")
+
+    e = caught(indexfield)
+    assert(e.name == "inner" and e.kind == "Field")
+    assert(tostring(e) == "attempt to index nil (field 'inner') with 'meow'")
+
+    e = caught(indexglobal)
+    assert(e.name == "undefinedglobal" and e.kind == "Global")
+
+    -- the indexed value and the key are the real values
+    local key = {}
+    local five = tonumber("5")
+    local function bykey()
+        local n = five
+        return n[key]
+    end
+    e = caught(bykey)
+    assert(e.indexed == 5 and e.index == key)
+    assert(tostring(e) == "attempt to index number (local 'n') with table")
+end
+
+-- calling something that can't be called names it the same way
+do
+    local five = tonumber("5")
+    local function calllocal()
+        local f = five
+        f()
+    end
+    local function callmethod()
+        local t = { run = 1 }
+        t:run()
+    end
+
+    local e = caught(calllocal)
+    assert(class.isinstance(e, Error.NotCallable) and e.name == "f" and e.kind == "Local" and e.called == 5)
+    assert(tostring(e) == "attempt to call a number value (local 'f')")
+
+    e = caught(callmethod)
+    assert(e.name == "run" and e.kind == "Method")
+    assert(tostring(e) == "attempt to call a number value (method 'run')")
+end
+
+-- operators on operands they don't take
+do
+    local nothing = nil
+    local e = caught(function()
+        return 1 + nothing
+    end)
+    assert(class.isinstance(e, Error.InvalidOperation) and e.operator == "add" and e.left == 1 and e.right == nil)
+    assert(tostring(e) == "attempt to perform arithmetic (add) on number and nil")
+
+    e = caught(function()
+        return #5
+    end)
+    assert(e.operator == "len" and tostring(e) == "attempt to get length of a number value")
+
+    e = caught(function()
+        return {} < {}
+    end)
+    assert(e.operator == "lt" and tostring(e) == "attempt to compare table < table")
+
+    e = caught(function()
+        return "a" .. {}
+    end)
+    assert(e.operator == "concat" and tostring(e) == "attempt to concatenate string with table")
+end
+
+-- keys a table can't hold, readonly tables and stack overflows
+do
+    local t = {}
+    local e = caught(function()
+        t[nil] = 1
+    end)
+    assert(class.isinstance(e, Error.InvalidKey) and e.indexed == t and e.key == nil)
+    assert(tostring(e) == "table index is nil")
+
+    local frozen = table.freeze({})
+    e = caught(function()
+        frozen.x = 1
+    end)
+    assert(class.isinstance(e, Error.ReadOnly) and e.target == frozen)
+    assert(tostring(e) == "attempt to modify a readonly table")
+
+    local function forever(n: number): number
+        return forever(n + 1) + 1
+    end
+    e = caught(function()
+        forever(1)
+    end)
+    assert(class.isinstance(e, Error.StackOverflow))
+end
+
+-- a class's missing members
+class Cat(public name: string)
+end
+
+do
+    local cat = Cat("tom")
+    local e = caught(function()
+        return cat.bark
+    end)
+    assert(class.isinstance(e, Error.MissingMember) and e.object == cat and e.name == "bark")
+    assert(tostring(e) == "objects of class 'Cat' do not have a field named 'bark'")
+end
+
+-- the libraries' argument checks and `assert`
+do
+    local e = caught(function()
+        string.rep()
+    end)
+    assert(class.isinstance(e, Error.UnexpectedType) and e.expected == "string" and e.value == none)
+    assert(e.position == 1 and e.functionname == "rep")
+    assert(tostring(e) == "missing argument #1 to 'rep' (string expected)")
+
+    e = caught(function()
+        string.rep("x", {})
+    end)
+    assert(type(e.value) == "table" and e.position == 2)
+    assert(tostring(e) == "invalid argument #2 to 'rep' (number expected, got table)")
+
+    e = caught(function()
+        string.char(-1)
+    end)
+    assert(class.isinstance(e, Error.InvalidArgument) and e.value == -1 and e.position == 1 and e.functionname == "char")
+
+    e = caught(function()
+        assert(false)
+    end)
+    assert(class.isinstance(e, Error.AssertionFailed) and e.message == nil and tostring(e) == "assertion failed!")
+
+    e = caught(function()
+        assert(false, "it broke")
+    end)
+    assert(e.message == "it broke")
+
+    e = caught(function()
+        local _ = string.format("%d", "x")
+    end)
+    assert(class.isinstance(e, Error.UnexpectedType) and e.expected == "number" and e.value == "x" and e.position == 2)
+end
+
+-- `pcall` keeps the position, and an `xpcall` handler gets the message
+do
+    local ok, message = pcall(function()
+        local t = nothing()
+        return t.x
+    end)
+    assert(not ok and string.find(message, "^[^:]*:%d+: attempt to index nil %(local 't'%) with 'x'$"))
+
+    local handled = nil
+    xpcall(function()
+        return 1 + {}
+    end, function(m)
+        handled = m
+    end)
+    assert(type(handled) == "string" and string.find(handled, "attempt to perform arithmetic", 1, true))
+
+    local co = coroutine.create(function()
+        return #5
+    end)
+    local resumed, raised = coroutine.resume(co)
+    assert(not resumed and type(raised) == "string" and string.find(raised, "get length of", 1, true))
+end
+
+-- coroutine.wrap raises a coroutine's error again: `try` still gets the variant, and `pcall` the message with the
+-- caller's position in front, as for an error that's a string
+do
+    local wrapped = coroutine.wrap(function()
+        local t = nothing()
+        return t.x
+    end)
+    const r = try wrapped()
+    assert(class.isinstance(r.error, Error.NotIndexable) and r.error.name == "t")
+
+    local again = coroutine.wrap(function()
+        local t = nothing()
+        return t.x
+    end)
+    local ok, message = pcall(function()
+        return again()
+    end)
+    assert(not ok and select(2, string.gsub(message, ":%d+: ", "")) == 2)
+end
+
+-- values raised on purpose stay as they were
+do
+    const plain = try error("plain")
+    assert(type(plain.error) == "string" and string.find(plain.error, "plain", 1, true))
+
+    local payload = { code = 7 }
+    const structured = try error(payload)
+    assert(structured.error == payload)
+end
+
+-- `unreachable` and `todo` raise their variants at the caller
+do
+    local function check(n: number)
+        if n > 0 then
+            return n
+        end
+        unreachable("n is checked by the caller", { n = n })
+    end
+    const r = try check(-1)
+    assert(class.isinstance(r.error, Error.Unreachable) and r.error.message == "n is checked by the caller")
+    assert(r.error.invariants.n == -1)
+    assert(tostring(r.error) == "reached code that should be unreachable: n is checked by the caller\ninvariants:\n    \"n\" = -1")
+
+    local ok, message = pcall(check, -1)
+    assert(not ok and string.find(message, "^[^:]*:%d+: reached code that should be unreachable"))
+    assert(r.line == debug.info(check, "l") + 4)
+
+    const later = try todo("parse octal")
+    assert(class.isinstance(later.error, Error.Unimplemented) and tostring(later.error) == "not implemented yet: parse octal")
+end
+
+-- Luwu opaque values: a value whose metatable says `__opaque` never reaches a catcher. The error holds a shared
+-- placeholder instead, and its message still names the value's type.
+do
+    local secret = setmetatable({ password = "hunter2" }, { __opaque = true, __metatable = "locked" })
+
+    local e = caught(function()
+        secret[nil] = 1
+    end)
+    assert(class.isinstance(e, Error.InvalidKey) and e.indexed ~= secret and type(e.indexed) == "table")
+    assert(e.indexed.password == nil and table.isfrozen(e.indexed))
+
+    e = caught(function()
+        return secret + 1
+    end)
+    assert(e.left ~= secret and tostring(e) == "attempt to perform arithmetic (add) on table and number")
+
+    local five = tonumber("5")
+    local other = caught(function()
+        return five[secret]
+    end)
+    assert(other.index ~= secret and other.index == e.left)
+    assert(tostring(other) == "attempt to index number (upvalue 'five') with table")
+
+    -- a value that isn't marked is itself
+    local plain = {}
+    e = caught(function()
+        return plain + 1
+    end)
+    assert(e.left == plain)
+end
+
+-- the variants user code raises
+do
+    assert(tostring(Error.NotFound("a.txt")) == "\"a.txt\" was not found")
+    assert(tostring(Error.NotFound("a.txt", "deleted")) == "\"a.txt\" was not found: deleted")
+    assert(tostring(Error.NotFound()) == "not found")
+    assert(tostring(Error.AlreadyExists("b")) == "\"b\" already exists")
+    assert(tostring(Error.PermissionDenied("/root")) == "permission denied for \"/root\"")
+    assert(tostring(Error.OutOfRange(10, 1, 3)) == "10 is out of range (expected 1 to 3)")
+    assert(tostring(Error.OutOfRange(0, 1)) == "0 is out of range (expected at least 1)")
+    assert(tostring(Error.Unsupported("on wasm")) == "not supported: on wasm")
+    assert(tostring(Error.InvalidState("closed")) == "invalid state: closed")
+    assert(tostring(Error.TimedOut()) == "timed out")
+    assert(tostring(Error.Unimplemented()) == "not implemented yet")
+
+    const raised = try error(Error.NotFound("c"))
+    assert(class.isinstance(raised.error, Error.NotFound) and raised.error.what == "c")
+end
+
+return "OK"

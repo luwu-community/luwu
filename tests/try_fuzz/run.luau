@@ -102,9 +102,29 @@ local function kind_at(i, salt)
     return if kind == 7 then 8 else kind
 end
 
+-- An error the VM or a library raised is an `Error` variant under `try` and its message under `pcall`, which has the
+-- positions in front
+local function isvariant(value)
+    return string.sub(typeof(value), 1, 6) == "Error."
+end
+
+local function withoutpositions(message)
+    local stripped = message
+    while true do
+        local shorter = string.gsub(stripped, "^[^:\n]*:%d+: ", "", 1)
+        if shorter == stripped then
+            return stripped
+        end
+        stripped = shorter
+    end
+end
+
 local function equal(a, b)
     if rawequal(a, b) then
         return true
+    end
+    if isvariant(a) and type(b) == "string" then
+        return tostring(a) == withoutpositions(b)
     end
     if type(a) == "table" and type(b) == "table" then
         return a.code == b.code

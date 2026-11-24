@@ -8,6 +8,7 @@
 #include "lmem.h"
 #include "lvm.h"
 #include "ldebug.h"
+#include "lclass.h"
 
 #if LUA_USE_LONGJMP
 #include <setjmp.h>
@@ -47,7 +48,7 @@ struct lua_jmpbuf
 #define LUAU_LONGJMP(buf, code) longjmp(buf, code)
 #endif
 
-int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+int luaD_rawrunprotectedrecorded(lua_State* L, Pfunc f, void* ud)
 {
     lua_jmpbuf jb;
     jb.prev = L->global->errorjmp;
@@ -121,7 +122,7 @@ private:
     int status;
 };
 
-int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+int luaD_rawrunprotectedrecorded(lua_State* L, Pfunc f, void* ud)
 {
     int status = 0;
 
@@ -164,6 +165,22 @@ l_noret luaD_throw(lua_State* L, int errcode)
     throw lua_exception(L, errcode);
 }
 #endif
+
+int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+{
+    int status = luaD_rawrunprotectedrecorded(L, f, ud);
+    return status == LUA_OK ? status : luaD_finisherror(L, status);
+}
+
+int luaD_finisherror(lua_State* L, int status)
+{
+    if (status == LUA_ERRRUN && luaG_iserrorrecord(L, L->top - 1))
+        return luaG_replaceerrorrecord(L, L->top - 1);
+
+    // an error that isn't the recorded one ends it: running out of memory while raising it, for one
+    luaG_clearerrorrecord(L->global);
+    return status;
+}
 
 
 static void correctstack(lua_State* L, TValue* oldstack)
@@ -236,7 +253,7 @@ CallInfo* luaD_growCI(lua_State* L)
     luaD_reallocCI(L, L->size_ci >= LUAI_MAXCALLS ? hardlimit : request < LUAI_MAXCALLS ? request : LUAI_MAXCALLS);
 
     if (L->size_ci > LUAI_MAXCALLS)
-        luaG_runerror(L, "stack overflow");
+        luaG_stackoverflowerror(L, false);
 
     return ++L->ci;
 }
@@ -247,7 +264,7 @@ void luaD_checkCstack(lua_State* L)
     const int hardlimit = LUAI_MAXCCALLS + (LUAI_MAXCCALLS >> 3);
 
     if (L->nCcalls == LUAI_MAXCCALLS)
-        luaG_runerror(L, "C stack overflow");
+        luaG_stackoverflowerror(L, true);
     else if (L->nCcalls >= hardlimit)
         luaD_throw(L, LUA_ERRERR); // error while handling stack error
 }
@@ -728,11 +745,15 @@ static int resume_start(lua_State* L, lua_State* from, int nargs)
     return LUA_OK;
 }
 
-static int resume_finish(lua_State* L, int status, int oldnCcalls)
+// Finishes a resume. With `keeprecord`, an error that leaves the coroutine stays recorded (coroutine.wrap raises it
+// again); otherwise it's formatted, like every error a pcall in the coroutine catches.
+static int resume_finish(lua_State* L, int status, int oldnCcalls, bool keeprecord)
 {
     CallInfo* ch = NULL;
     while (status != LUA_OK && (ch = resume_findhandler(L)) != NULL)
     {
+        status = luaD_finisherror(L, status);
+
         if (lua_isyieldable(L) != 0 && L->global->cb.debugprotectederror)
         {
             L->global->cb.debugprotectederror(L);
@@ -758,7 +779,7 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
         }
 
         L->status = cast_byte(status);
-        status = luaD_rawrunprotected(L, resume_handle, ch);
+        status = luaD_rawrunprotectedrecorded(L, resume_handle, ch);
     }
 
     // C call count base was set to an incremented value of C call count in resume, so we decrement here
@@ -771,6 +792,9 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
 
     if (status != LUA_OK)
     {
+        if (!keeprecord || !luaG_iserrorrecord(L, L->top - 1))
+            status = luaD_finisherror(L, status);
+
         L->status = cast_byte(status);
         luaD_seterrorobj(L, status, L->top);
         L->ci->top = L->top;
@@ -786,16 +810,26 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
     return L->status;
 }
 
-int lua_resume(lua_State* L, lua_State* from, int nargs)
+static int resumewith(lua_State* L, lua_State* from, int nargs, bool keeprecord)
 {
     if (int starterror = resume_start(L, from, nargs))
         return starterror;
 
     int oldnCcalls = L->nCcalls;
 
-    int status = luaD_rawrunprotected(L, resume, L->top - nargs);
+    int status = luaD_rawrunprotectedrecorded(L, resume, L->top - nargs);
 
-    return resume_finish(L, status, oldnCcalls);
+    return resume_finish(L, status, oldnCcalls, keeprecord);
+}
+
+int lua_resume(lua_State* L, lua_State* from, int nargs)
+{
+    return resumewith(L, from, nargs, false);
+}
+
+int luaD_resumerecorded(lua_State* L, lua_State* from, int nargs)
+{
+    return resumewith(L, from, nargs, true);
 }
 
 int lua_resumeerror(lua_State* L, lua_State* from)
@@ -810,10 +844,10 @@ int lua_resumeerror(lua_State* L, lua_State* from)
     if (CallInfo* ci = resume_findhandler(L))
     {
         L->status = cast_byte(status);
-        status = luaD_rawrunprotected(L, resume_handle, ci);
+        status = luaD_rawrunprotectedrecorded(L, resume_handle, ci);
     }
 
-    return resume_finish(L, status, oldnCcalls);
+    return resume_finish(L, status, oldnCcalls, false);
 }
 
 int lua_yield(lua_State* L, int nresults)
@@ -822,7 +856,7 @@ int lua_yield(lua_State* L, int nresults)
     api_check(L, nresults <= L->top - L->base);
 
     if (L->nCcalls > L->baseCcalls)
-        luaG_runerror(L, "attempt to yield across metamethod/C-call boundary");
+        luaG_notyieldableerror(L);
     L->base = L->top - nresults; // protect stack slots below
     L->status = LUA_YIELD;
     return -1;
@@ -884,6 +918,21 @@ static const LuauTryRange* findtryrange(Proto* p, int pc)
 // stays native: the run's next luau_execute enters its code at the handler.
 static void resumeintry(lua_State* L, CallInfo* ci, const LuauTryRange& range, const TryRun& run)
 {
+    // Luwu structured runtime errors: a recorded error becomes an object of its variant, or its message when the result
+    // library that has the variants isn't open
+    if (luaG_iserrorrecord(L, L->top - 1))
+    {
+        if (LuauObject* variant = luaR_newerrorvariant(L))
+        {
+            setobjectvalue(L, L->top - 1, variant);
+            luaG_clearerrorrecord(L->global);
+        }
+        else
+        {
+            luaG_replaceerrorrecord(L, L->top - 1);
+        }
+    }
+
     // where the error was raised, read while the frames that raised it are still there
     TString* module = NULL;
     int line = 0;
@@ -983,7 +1032,7 @@ void luaD_executetry(lua_State* L, void (*execute)(lua_State* L))
     {
 #if LUA_USE_LONGJMP
         TryExecute ud = {execute};
-        int status = luaD_rawrunprotected(L, runexecute, &ud);
+        int status = luaD_rawrunprotectedrecorded(L, runexecute, &ud);
         if (status == 0)
             return;
         if (!catchintry(L, run, status))

@@ -80,6 +80,7 @@ LuauClass* luaR_newclass(
     classdef->typeofname = NULL;
     classdef->nativesize = 0;
     classdef->nativetag = 0;
+    classdef->isopaque = false;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -332,7 +333,28 @@ void luaR_checkprivateaccess(lua_State* L, const TValue* key, const LuauClass* c
     if (luaR_closureownsprivateaccess(classdef, cl))
         return;
 
+    // Luwu opaque values: an opaque class doesn't confirm that a private member exists. A private field can only be
+    // reached through an object, and a private static member is reported as read through the class.
+    if (classdef->isopaque && ttisstring(key))
+        luaG_classmembererror(L, classdef, offset < classdef->numberofinstancemembers, tsvalue(key));
+
     luaG_privateaccesserror(L, key, classdef->name);
+}
+
+bool luaR_isopaque(lua_State* L, const TValue* value)
+{
+    if (ttisclass(value))
+        return classvalue(value)->isopaque;
+    if (ttisobject(value))
+        return objectvalue(value)->lclass->isopaque;
+
+    LuaTable* metatable = NULL;
+    if (ttistable(value))
+        metatable = hvalue(value)->metatable;
+    else if (ttisuserdata(value))
+        metatable = uvalue(value)->metatable;
+
+    return metatable && !l_isfalse(luaH_getstr(metatable, luaS_new(L, LUWU_OPAQUE_MARK)));
 }
 
 void luaR_checkprivateconstructor(lua_State* L, const LuauClass* classdef, const Closure* cl)
@@ -371,8 +393,10 @@ void luaR_checkconstassign(lua_State* L, const TValue* key, const LuauObject* ob
     // deviaze: embedder code isn't allowed to bypass `const` access (unlike private access) because
     // allowing such could lead to UB in future const optimizations.
     // also if you're using `const` just to have embedder-only-assignable fields please just use userdata
+    TValue target;
+    setobjectvalue(L, &target, const_cast<LuauObject*>(object));
     if (!cl || (!isfinal && !luaR_closureisinit(classdef, cl)))
-        luaG_constassignerror(L, key, classdef->name);
+        luaG_constassignerror(L, &target, key);
 
     // `__init` constructs the object in its `self` parameter, which is register 0 of its frame. This
     // holds for a vararg `__init` too: its fixed parameters are moved up, and its frame base moves with
@@ -382,7 +406,7 @@ void luaR_checkconstassign(lua_State* L, const TValue* key, const LuauObject* ob
     bool writesownself = ttisobject(self) && objectvalue(self) == object;
 
     if (!writesownself)
-        luaG_constassignnotselferror(L, key, classdef->name);
+        luaG_constassignnotselferror(L, &target, key);
 }
 
 // Stamps `ownerclass` recursively on function proto `p` and every function proto lexically nested

@@ -7,10 +7,10 @@ local function id<T>(value: T): T
     return value
 end
 
--- the error a call raises, or nil when it doesn't
+-- the error a call raises, or nil when it doesn't. `try` gets the library's and the VM's errors as `Error` variants.
 local function raised(f: () -> ()): unknown
-    local ok, err = pcall(f)
-    return if ok then nil else err
+    local r = try f()
+    return if class.isinstance(r, Err) then r.error else nil
 end
 
 local function raisesvariant(f: () -> (), variant: unknown): boolean
@@ -44,6 +44,11 @@ do
     end)
     assert(class.isinstance(err, Error.Overflow) and err.value == 300int and err.info == integer.u8)
     assert(tostring(err) == "300 is too large for u8")
+    -- `pcall` gets the message, with the position of the code that called the library
+    local ok, message = pcall(function()
+        integer.cast(300int, integer.u8)
+    end)
+    assert(not ok and string.find(message, "^[^:]*:%d+: 300 is too large for u8$"))
     err = raised(function()
         integer.cast(-1int, integer.u64)
     end)

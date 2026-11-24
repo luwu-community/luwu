@@ -6800,6 +6800,40 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "option_and_result_types")
     CHECK_EQ(toString(requireType("missing")), "none");
 }
 
+// Luwu structured runtime errors: `unreachable` and `todo` return `never`, so the branch that calls one adds nothing to
+// an if-else expression's type. `unreachable` needs a message.
+TEST_CASE_FIXTURE(BuiltinsFixture, "unreachable_and_todo_return_never")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function pick(ok: boolean, v: number)
+            local x = if ok then v else unreachable("ok is checked by the caller")
+            local y = if ok then "done" else todo()
+            return x, y
+        end
+        local a, b = pick(true, 1)
+        local missing = Error.NotFound("a.txt")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("a")), "number");
+    CHECK_EQ(toString(requireType("b")), "string");
+
+    CheckResult needsMessage = check(R"(
+        --!strict
+        unreachable()
+    )");
+    LUAU_REQUIRE_ERROR_COUNT(1, needsMessage);
+}
+
 // Luwu try expressions: `try expr` is a Result of expr's type, with an unknown error
 TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
 {
@@ -7005,6 +7039,54 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "try_types_its_error_from_the_callees_hint")
     CHECK_EQ(toString(requireType("r")), "Err<NotFound | unknown> | Ok<string>");
     CHECK_EQ(toString(requireType("s")), "Err<unknown> | Ok<number>");
     CHECK_EQ(toString(requireType("w")), "Err<unknown> | Ok<string>");
+}
+
+// Luwu try expressions: a hint that ends in `never`, as written, is closed: `try` gets exactly the errors it names
+TEST_CASE_FIXTURE(BuiltinsFixture, "closed_error_hints_have_no_unknown_part")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type NotFound = { kind: "NotFound" }
+        type PermissionDenied = { kind: "PermissionDenied" }
+        type IoErr = NotFound | never
+        local function pure(x: number): number ! never
+            return x
+        end
+        local function read(path: string): string ! NotFound | PermissionDenied | never
+            return path
+        end
+        local function aliased(path: string): string ! IoErr
+            return path
+        end
+        local function closedalias(path: string): string ! IoErr | never
+            return path
+        end
+        declare function exit(code: number): never ! never
+        local p = try pure(1)
+        local r = try read("x")
+        local a = try aliased("x")
+        local c = try closedalias("x")
+        local e = try exit(0)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("p")), "Err<never> | Ok<number>");
+    CHECK_EQ(toString(requireType("r")), "Err<NotFound | PermissionDenied> | Ok<string>");
+    // an alias holding `never` doesn't close the hint that names it
+    std::string aliased = toString(requireType("a"));
+    CHECK_MESSAGE(aliased.find("unknown") != std::string::npos, aliased);
+    std::string closedalias = toString(requireType("c"));
+    CHECK_MESSAGE(closedalias.find("unknown") == std::string::npos, closedalias);
+    std::string exited = toString(requireType("e"));
+    CHECK_MESSAGE(exited.find("Err<never>") != std::string::npos, exited);
 }
 
 // Luwu try expressions: `raises<F>` and `types.raises(f)` give what `try f()` would hold as its error

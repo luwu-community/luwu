@@ -429,6 +429,9 @@ struct FunctionType
     // Luwu try expressions: the errors the function says it raises (`! E`), joined with the ones inferred from its body.
     // A hint types a `try` around a call; nothing checks it against what the function really raises.
     std::optional<TypeId> errorHint;
+    // Luwu try expressions: the hint ends in `never` (`! never`, `! NotFound | never`), so the function raises nothing
+    // else and `try` adds no weakunknown (raises<F>)
+    bool errorHintClosed = false;
 
     // Set when this function type is the target of a `type X = (...) -> ...` alias. See TableType::name/syntheticName.
     std::optional<std::string> name;

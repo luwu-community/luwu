@@ -2831,9 +2831,10 @@ TypeFunctionReductionResult<TypeId> unlessneverTypeFunction(
 }
 
 // Luwu try expressions: the error hints of each function `fnTy` can be (an overload set's, a union's), or nullopt while
-// `fnTy` is still pending
-static std::optional<std::vector<TypeId>> errorHintsOf(TypeId fnTy, NotNull<TypeFunctionContext> ctx)
+// `fnTy` is still pending. `closed` says whether every one of them has a closed hint (FunctionType::errorHintClosed).
+static std::optional<std::vector<TypeId>> errorHintsOf(TypeId fnTy, NotNull<TypeFunctionContext> ctx, bool& closed)
 {
+    closed = true;
     std::vector<TypeId> parts;
     if (const IntersectionType* overloads = get<IntersectionType>(fnTy))
         parts.assign(overloads->parts.begin(), overloads->parts.end());
@@ -2850,8 +2851,26 @@ static std::optional<std::vector<TypeId>> errorHintsOf(TypeId fnTy, NotNull<Type
             return std::nullopt;
 
         const FunctionType* function = get<FunctionType>(part);
-        if (function && function->errorHint)
-            hints.push_back(*function->errorHint);
+        bool partClosed = function && function->errorHint && function->errorHintClosed;
+        closed = closed && partClosed;
+        if (!function || !function->errorHint)
+            continue;
+
+        // the `never` that closes a hint isn't an error it raises
+        TypeId hint = follow(*function->errorHint);
+        const UnionType* members = get<UnionType>(hint);
+        if (partClosed && members)
+        {
+            for (TypeId member : members->options)
+            {
+                if (!get<NeverType>(follow(member)))
+                    hints.push_back(member);
+            }
+        }
+        else if (!partClosed || !get<NeverType>(hint))
+        {
+            hints.push_back(hint);
+        }
     }
     return hints;
 }
@@ -2873,13 +2892,18 @@ TypeFunctionReductionResult<TypeId> raisesTypeFunction(
     if (isPending(fnTy, ctx->solver))
         return {std::nullopt, Reduction::MaybeOk, {fnTy}, {}};
 
-    std::optional<std::vector<TypeId>> hints = errorHintsOf(fnTy, ctx);
+    bool closed = false;
+    std::optional<std::vector<TypeId>> hints = errorHintsOf(fnTy, ctx, closed);
     if (!hints)
         return {std::nullopt, Reduction::MaybeOk, {fnTy}, {}};
 
-    // A union built directly: simplifying it would let an `unknown` in a hint absorb the other members
+    // A union built directly: simplifying it would let an `unknown` in a hint absorb the other members. A closed hint
+    // raises nothing it doesn't name, so it gets no weakunknown.
     std::vector<TypeId> options = std::move(*hints);
-    options.push_back(ctx->builtins->weakUnknownType);
+    if (!closed)
+        options.push_back(ctx->builtins->weakUnknownType);
+    if (options.empty())
+        return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
     if (options.size() == 1)
         return {options[0], Reduction::MaybeOk, {}, {}};
     return {ctx->arena->addType(UnionType{std::move(options)}), Reduction::MaybeOk, {}, {}};

@@ -169,16 +169,10 @@ static l_noret divisionbyzero(lua_State* L)
     luaR_raisevariant(L, LUWU_BUILTIN_ERR_DIVISIONBYZERO, 0);
 }
 
-static l_noret invalidcomparison(lua_State* L, const TValue* l, const TValue* r)
+// Luwu structured runtime errors: ordering `l` and `r` with `op` (TM_LT or TM_LE) raises an Error.InvalidOperation
+static l_noret invalidcomparison(lua_State* L, const TValue* l, const TValue* r, TMS op)
 {
-    // copied first, since growing the stack can move them
-    TValue left = *l;
-    TValue right = *r;
-    lua_rawcheckstack(L, 2);
-    setobj2s(L, L->top, &left);
-    setobj2s(L, L->top + 1, &right);
-    L->top += 2;
-    luaR_raisevariant(L, LUWU_BUILTIN_ERR_INVALIDCOMPARISON, 2);
+    luaG_ordererror(L, l, r, op);
 }
 
 // `a / b`, `a // b` or `a % b` for a nonzero `b`, wrapping INT64_MIN / -1 to INT64_MIN
@@ -410,14 +404,14 @@ static bool comparable(const TValue* l, const TValue* r)
 int luaZ_lessthan(lua_State* L, const TValue* l, const TValue* r)
 {
     if (!comparable(l, r))
-        invalidcomparison(L, l, r);
+        invalidcomparison(L, l, r, TM_LT);
     return luaZ_compare(l, r) < 0;
 }
 
 int luaZ_lessequal(lua_State* L, const TValue* l, const TValue* r)
 {
     if (!comparable(l, r))
-        invalidcomparison(L, l, r);
+        invalidcomparison(L, l, r, TM_LE);
     return luaZ_compare(l, r) <= 0;
 }
 
