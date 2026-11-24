@@ -39,6 +39,20 @@ enum class ClassMemberNamePlacement : uint8_t
     TraitOnly,
 };
 
+// Luwu Classes (rfcs/classes): what a function of a given name must return, which Analysis checks
+enum class ClassMemberNameReturn : uint8_t
+{
+    // no rule
+    Anything,
+    // nothing: `__init` assigns fields to `self`
+    Nothing,
+    // at least one value
+    Value,
+    String,
+    Boolean,
+    Number,
+};
+
 // Luwu Classes (rfcs/classes): a member name the language gives a meaning, and the rules that come with it
 struct ClassMemberName
 {
@@ -54,6 +68,8 @@ struct ClassMemberName
     bool traitAlone;
     // the parameters and returns it's usually written with, which completion offers; nullptr when it offers none
     const char* signature;
+    // what a function of this name must return
+    ClassMemberNameReturn returns;
 };
 
 // Luwu Classes (rfcs/classes): the entry for `name`, or nullptr when the language gives it no meaning

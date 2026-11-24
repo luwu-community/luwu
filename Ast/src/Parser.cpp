@@ -3836,15 +3836,24 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             }
             else if (strncmp(name.name.value, "__", 2) == 0)
             {
-                if (name.name == "__create")
+                // Luwu Traits (rfcs/classes/traits.md): where a name can be declared (ClassMemberName::scopes). Nobody can
+                // declare an internal one, which the reserved-name error below says.
+                uint8_t scopeHere = isTrait ? ClassMemberName_InTraits : ClassMemberName_InClasses;
+                bool misplaced = special && special->kind != ClassMemberNameKind::Internal && (special->scopes & scopeHere) == 0;
+
+                if (misplaced)
+                {
+                    const char* where = isTrait ? "classes" : "traits";
+                    const char* hint = name.name == "__create" ? "; did you mean '__init'?" : "";
+                    report(name.location, "Only %s can define '%s'%s", where, name.name.value, hint);
+                }
+                else if (name.name == "__create")
                 {
                     // Luwu Traits (rfcs/classes/traits.md): `__create` makes a trait callable, as a factory: `Path("./src")` returns whatever
                     // it returns, usually an object of one of the classes implementing the trait. The trait defines it
                     // itself, and it runs before any object exists, so it takes no `self`. Trait parameters would make
                     // `Trait(...)` read two ways (trait arguments, or a factory call), so a trait has one or the other.
-                    if (!isTrait)
-                        report(name.location, "Only traits can define '__create'; did you mean '__init'?");
-                    else if (expectLocation)
+                    if (expectLocation)
                         report(name.location, "'__create' can't be expected");
                     else if (primaryConstructor)
                         report(name.location, "Traits with parameters can't define '__create'");
@@ -3855,9 +3864,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 {
                     // Luwu Traits (rfcs/classes/traits.md): `__implemented` runs once for each class implementing the trait, given
                     // the class. It's final so that no implementing class or needing trait can switch it off.
-                    if (!isTrait)
-                        report(name.location, "Only traits can define '__implemented'");
-                    else if (expectLocation)
+                    if (expectLocation)
                         report(name.location, "'__implemented' can't be expected");
                     else if (!finalLocation)
                         report(name.location, "'__implemented' must be final: write 'final function __implemented'");

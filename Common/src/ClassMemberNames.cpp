@@ -17,46 +17,46 @@ const uint8_t kTraitOnly = 1 << int(ClassMemberNamePlacement::TraitOnly);
 
 const ClassMemberName kNames[] = {
     // A trait's `__init` is the constructor it expects, which implementing classes write themselves
-    {"__init", ClassMemberNameKind::Constructor, kBoth, ClassMemberNamePlacement::Shared, kTraitOnly, true, nullptr},
+    {"__init", ClassMemberNameKind::Constructor, kBoth, ClassMemberNamePlacement::Shared, kTraitOnly, true, "(self)", ClassMemberNameReturn::Nothing},
 
     // A trait's factory, and its hook for each implementing class. Both run on the trait, never on an object.
-    {"__create", ClassMemberNameKind::TraitHook, ClassMemberName_InTraits, ClassMemberNamePlacement::TraitOnly, kTraitOnly, true, "(...)"},
-    {"__implemented", ClassMemberNameKind::TraitHook, ClassMemberName_InTraits, ClassMemberNamePlacement::TraitOnly, kTraitOnly, true, "(cls)"},
+    {"__create", ClassMemberNameKind::TraitHook, ClassMemberName_InTraits, ClassMemberNamePlacement::TraitOnly, kTraitOnly, true, "(...)", ClassMemberNameReturn::Anything},
+    {"__implemented", ClassMemberNameKind::TraitHook, ClassMemberName_InTraits, ClassMemberNamePlacement::TraitOnly, kTraitOnly, true, "(cls)", ClassMemberNameReturn::Anything},
 
     // The VM finds a metamethod on the object's class by name, so it's always shared
-    {"__tostring", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self): string"},
-    {"__eq", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other): boolean"},
-    {"__lt", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other): boolean"},
-    {"__le", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other): boolean"},
-    {"__len", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self): number"},
-    {"__add", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)"},
-    {"__sub", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)"},
-    {"__mul", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)"},
-    {"__div", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)"},
-    {"__idiv", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)"},
-    {"__mod", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)"},
-    {"__pow", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)"},
-    {"__unm", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self)"},
-    {"__concat", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)"},
-    {"__call", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, ...)"},
-    {"__iter", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self)"},
+    {"__tostring", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self): string", ClassMemberNameReturn::String},
+    {"__eq", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other): boolean", ClassMemberNameReturn::Boolean},
+    {"__lt", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other): boolean", ClassMemberNameReturn::Boolean},
+    {"__le", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other): boolean", ClassMemberNameReturn::Boolean},
+    {"__len", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self): number", ClassMemberNameReturn::Number},
+    {"__add", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)", ClassMemberNameReturn::Value},
+    {"__sub", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)", ClassMemberNameReturn::Value},
+    {"__mul", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)", ClassMemberNameReturn::Value},
+    {"__div", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)", ClassMemberNameReturn::Value},
+    {"__idiv", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)", ClassMemberNameReturn::Value},
+    {"__mod", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)", ClassMemberNameReturn::Value},
+    {"__pow", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)", ClassMemberNameReturn::Value},
+    {"__unm", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self)", ClassMemberNameReturn::Value},
+    {"__concat", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, other)", ClassMemberNameReturn::Value},
+    {"__call", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self, ...)", ClassMemberNameReturn::Anything},
+    {"__iter", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self)", ClassMemberNameReturn::Value},
 
     // Classes have their own member lookup and layout, which these would replace
-    {"__index", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr},
-    {"__newindex", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr},
-    {"__mode", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr},
-    {"__metatable", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr},
-    {"__type", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr},
+    {"__index", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr, ClassMemberNameReturn::Anything},
+    {"__newindex", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr, ClassMemberNameReturn::Anything},
+    {"__mode", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr, ClassMemberNameReturn::Anything},
+    {"__metatable", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr, ClassMemberNameReturn::Anything},
+    {"__type", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr, ClassMemberNameReturn::Anything},
 
     // The one field name that starts with `__`, in any placement
-    {"__ok", ClassMemberNameKind::Field, kBoth, ClassMemberNamePlacement::Shared, kAnyPlacement, false, nullptr},
+    {"__ok", ClassMemberNameKind::Field, kBoth, ClassMemberNamePlacement::Shared, kAnyPlacement, false, nullptr, ClassMemberNameReturn::Anything},
 
     // What the compiler writes: a class's computed field defaults and its trait initialization without an `__init`, and a
     // trait's initializer and `needs` list. A trait's are the VM's, which implementing classes don't get.
-    {"__defaults", ClassMemberNameKind::Internal, ClassMemberName_InClasses, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr},
-    {"__implements", ClassMemberNameKind::Internal, ClassMemberName_InClasses, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr},
-    {"__traitinit", ClassMemberNameKind::Internal, ClassMemberName_InTraits, ClassMemberNamePlacement::Shared, kNoPlacement, true, nullptr},
-    {"__needs", ClassMemberNameKind::Internal, ClassMemberName_InTraits, ClassMemberNamePlacement::Shared, kNoPlacement, true, nullptr},
+    {"__defaults", ClassMemberNameKind::Internal, ClassMemberName_InClasses, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr, ClassMemberNameReturn::Anything},
+    {"__implements", ClassMemberNameKind::Internal, ClassMemberName_InClasses, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr, ClassMemberNameReturn::Anything},
+    {"__traitinit", ClassMemberNameKind::Internal, ClassMemberName_InTraits, ClassMemberNamePlacement::Shared, kNoPlacement, true, nullptr, ClassMemberNameReturn::Anything},
+    {"__needs", ClassMemberNameKind::Internal, ClassMemberName_InTraits, ClassMemberNamePlacement::Shared, kNoPlacement, true, nullptr, ClassMemberNameReturn::Anything},
 };
 
 } // namespace

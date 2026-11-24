@@ -2410,8 +2410,9 @@ static void autocompleteMissingFunctions(
             add(specials[i].name, specials[i].signature, nullptr, "function ");
     }
 
+    const ClassMemberName* init = findClassMemberName("__init");
     if (!classStat->isTrait && !classStat->primaryConstructor)
-        add("__init", "(self)", nullptr, "function ");
+        add(init->name, init->signature, nullptr, "function ");
 
     // Luwu Traits (rfcs/classes/traits.md): a trait's factory, and its hook for each implementing class, which is always final
     const ClassMemberName* create = findClassMemberName("__create");

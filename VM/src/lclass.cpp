@@ -636,12 +636,9 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
         classdef->podimplementsoffset = offsetint;
     }
 
-    // Only the metamethods the parser allows reach here (Luau::ClassMemberNameKind::Metamethod), `__tostring` the one that
-    // isn't a tag method
+    // Only the metamethods the parser allows reach here (Luau::ClassMemberNameKind::Metamethod)
     const Luau::ClassMemberName* special = luaR_hasreservedprefix(name) ? Luau::findClassMemberName(getstr(name)) : NULL;
     bool isMetamethod = special && special->kind == Luau::ClassMemberNameKind::Metamethod;
-    for (int i = 0; i < TM_N && !isMetamethod; i++)
-        isMetamethod = (name == L->global->tmname[i]);
 
     if (isMetamethod)
     {
