@@ -781,6 +781,10 @@ typedef struct LuauClass
     uint32_t nativesize;
     uint8_t nativetag;
 
+    // Luwu opaque values: the class and its objects are opaque (luaR_isopaque). `class.fields` raises on them, and a
+    // private member read from outside raises the error a missing member gives.
+    bool isopaque;
+
 } LuauClass;
 
 #define LUAR_NO_LENGTH_FIELD UINT32_MAX

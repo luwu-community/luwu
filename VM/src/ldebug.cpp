@@ -341,24 +341,32 @@ l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2
     if (!ttisstring(p2))
         luaG_runerrorL(L, "cannot index %s with a %s", luaT_objtypename(L, p1), luaT_objtypename(L, p2));
 
-    const char* key = getstr(tsvalue(p2));
-
-    // Luwu Traits (rfcs/classes/traits.md): a trait has no objects of its own to point at
-    if (ttisclass(p1) && classvalue(p1)->istrait)
-        luaG_runerrorL(L, "trait '%s' does not have a member named '%s'", getstr(classvalue(p1)->name), key);
-
     if (ttisclass(p1))
-        luaG_runerrorL(
-            L,
-            "class '%s' does not have a member named '%s'; did you mean to access a field of an object of this class instead?",
-            getstr(classvalue(p1)->name),
-            key
-        );
+        luaG_classmembererror(L, classvalue(p1), false, tsvalue(p2));
 
     if (ttisobject(p1))
-        luaG_runerrorL(L, "objects of class '%s' do not have a field named '%s'", getstr(objectvalue(p1)->lclass->name), key);
+        luaG_classmembererror(L, objectvalue(p1)->lclass, true, tsvalue(p2));
 
-    luaG_runerrorL(L, "this %s does not have a field named '%s'", luaT_objtypename(L, p1), key);
+    luaG_runerrorL(L, "this %s does not have a field named '%s'", luaT_objtypename(L, p1), getstr(tsvalue(p2)));
+}
+
+l_noret luaG_classmembererror(lua_State* L, const LuauClass* classdef, bool onobject, const TString* key)
+{
+    const char* name = getstr(classdef->name);
+
+    if (onobject)
+        luaG_runerrorL(L, "objects of class '%s' do not have a field named '%s'", name, getstr(key));
+
+    // Luwu Traits (rfcs/classes/traits.md): a trait has no objects of its own to point at
+    if (classdef->istrait)
+        luaG_runerrorL(L, "trait '%s' does not have a member named '%s'", name, getstr(key));
+
+    luaG_runerrorL(
+        L,
+        "class '%s' does not have a member named '%s'; did you mean to access a field of an object of this class instead?",
+        name,
+        getstr(key)
+    );
 }
 
 // Luwu Classes (rfcs/classes): `Cat.age` where `age` is one of Cat's *fields*. The class knows the

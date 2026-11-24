@@ -4992,6 +4992,31 @@ TEST_CASE("ClassesNativeCodegen")
     runConformance("classes_ncg.luwu");
 }
 
+TEST_CASE("ClassesOpaque")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    runConformance(
+        "classes_opaque.luwu",
+        [](lua_State* L)
+        {
+            lua_pushcfunction(
+                L,
+                [](lua_State* L)
+                {
+                    lua_setclassopaque(L, 1);
+                    return 0;
+                },
+                "markopaque"
+            );
+            lua_setglobal(L, "markopaque");
+        }
+    );
+}
+
 // Luwu Classes (rfcs/classes): regressions for review fixes, one file per area. Each runs at every
 // optimization level, since several of the bugs were specific to O2 inlining or to O0's lack of it.
 static void runClassesFixesConformance(const char* name)

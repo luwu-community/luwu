@@ -164,6 +164,15 @@ LUAI_FUNC bool luaR_isvminternalfunction(lua_State* L, const Closure* cl);
  */
 LUAI_FUNC bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl);
 
+// Luwu opaque values: the metafield that marks a table or userdata opaque when its value is truthy. The name isn't
+// final, so nothing else spells it.
+#define LUWU_OPAQUE_MARK "__opaque"
+
+// Luwu opaque values: whether `value` is opaque, a class or object of a class marked with lua_setclassopaque, or a table
+// or userdata whose metatable has a truthy LUWU_OPAQUE_MARK. An opaque value hides what it holds from error records and
+// reflection. Only error paths call this: it looks the metafield up by name.
+LUAI_FUNC bool luaR_isopaque(lua_State* L, const TValue* value);
+
 /**
  * Errors (via luaG_privateaccesserror) if the member at `offset` is private and `cl` is not one
  * of `classdef`'s own methods, or (via luaG_blockedinitaccesserror) if it is `__init`

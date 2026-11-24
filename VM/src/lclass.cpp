@@ -80,6 +80,7 @@ LuauClass* luaR_newclass(
     classdef->typeofname = NULL;
     classdef->nativesize = 0;
     classdef->nativetag = 0;
+    classdef->isopaque = false;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -332,7 +333,28 @@ void luaR_checkprivateaccess(lua_State* L, const TValue* key, const LuauClass* c
     if (luaR_closureownsprivateaccess(classdef, cl))
         return;
 
+    // Luwu opaque values: an opaque class doesn't confirm that a private member exists. A private field can only be
+    // reached through an object, and a private static member is reported as read through the class.
+    if (classdef->isopaque && ttisstring(key))
+        luaG_classmembererror(L, classdef, offset < classdef->numberofinstancemembers, tsvalue(key));
+
     luaG_privateaccesserror(L, key, classdef->name);
+}
+
+bool luaR_isopaque(lua_State* L, const TValue* value)
+{
+    if (ttisclass(value))
+        return classvalue(value)->isopaque;
+    if (ttisobject(value))
+        return objectvalue(value)->lclass->isopaque;
+
+    LuaTable* metatable = NULL;
+    if (ttistable(value))
+        metatable = hvalue(value)->metatable;
+    else if (ttisuserdata(value))
+        metatable = uvalue(value)->metatable;
+
+    return metatable && !l_isfalse(luaH_getstr(metatable, luaS_new(L, LUWU_OPAQUE_MARK)));
 }
 
 void luaR_checkprivateconstructor(lua_State* L, const LuauClass* classdef, const Closure* cl)
