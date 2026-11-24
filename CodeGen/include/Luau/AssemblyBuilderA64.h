@@ -31,7 +31,8 @@ public:
 
     // Moves
     void mov(RegisterA64 dst, RegisterA64 src);
-    void mov(RegisterA64 dst, int src); // macro
+    void mov(RegisterA64 dst, int src);
+    void mov64(RegisterA64 dst, uint64_t src);
 
     // Moves of 32-bit immediates get decomposed into one or more of these
     void movz(RegisterA64 dst, uint16_t src, int shift = 0);

@@ -447,6 +447,52 @@ void makeNoneMetatable(NotNull<BuiltinTypes> builtinTypes)
     persist(*none->metatable);
 }
 
+// Luwu Integers (rfcs/integers.md): an integer's methods are the `integer` library's functions with the integer first,
+// which the VM gives integers through their type's metatable (lintegerlib.cpp). `tonumber`'s result is a class the
+// definitions declare, which this shared arena can't name, so it's `unknown` here.
+void makeIntegerMetatable(NotNull<BuiltinTypes> builtinTypes)
+{
+    PrimitiveType* integer = getMutable<PrimitiveType>(builtinTypes->integerType);
+    LUAU_ASSERT(integer);
+
+    // Every GlobalTypes (the checker's and autocomplete's) calls this on the same shared `integer`
+    if (integer->metatable)
+        return;
+
+    NotNull<TypeArena> arena{builtinTypes->arena.get()};
+    TypeId integerTy = builtinTypes->integerType;
+    TypeId optionalInteger = makeOption(builtinTypes, *arena, integerTy);
+
+    auto method = [&](std::initializer_list<TypeId> params, TypeId result)
+    {
+        return makeFunction(*arena, integerTy, params, {result});
+    };
+    auto variadic = [&](TypeId result)
+    {
+        TypePackId rest = arena->addTypePack(VariadicTypePack{integerTy});
+        TypePackId args = arena->addTypePack(TypePack{{integerTy}, rest});
+        return arena->addType(FunctionType{args, arena->addTypePack({result})});
+    };
+
+    TableType methods{{}, std::nullopt, TypeLevel{}, TableState::Sealed};
+    for (const char* name : {"abs", "signum", "sqrt", "log2", "log10", "bnot", "countlz", "countrz", "popcount", "bswap"})
+        methods.props[name] = {method({}, integerTy)};
+    for (const char* name : {"sadd", "ssub", "smul", "cadd", "csub", "cmul", "cdiv", "pow", "spow", "cpow", "lshift", "rshift", "lrotate", "rrotate"})
+        methods.props[name] = {method({integerTy}, integerTy)};
+    for (const char* name : {"band", "bor", "bxor"})
+        methods.props[name] = {variadic(integerTy)};
+    methods.props["btest"] = {variadic(builtinTypes->booleanType)};
+    methods.props["clamp"] = {method({integerTy, integerTy}, integerTy)};
+    methods.props["extract"] = {method({integerTy, optionalInteger}, integerTy)};
+    methods.props["replace"] = {method({integerTy, integerTy, optionalInteger}, integerTy)};
+    methods.props["cast"] = {method({builtinTypes->unknownType}, integerTy)};
+    methods.props["tonumber"] = {method({}, builtinTypes->unknownType)};
+
+    TableType metatable{{}, std::nullopt, TypeLevel{}, TableState::Sealed};
+    metatable.props["__index"] = {arena->addType(std::move(methods))};
+    integer->metatable = arena->addType(std::move(metatable));
+    persist(*integer->metatable);
+}
 
 void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
 {
@@ -1340,6 +1386,12 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     }
     if (collectionsLibraryEnabled())
         registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
+
+    // Luwu error variants and Luwu Integers (rfcs/integers.md): `Error.Overflow` and `integer.Mode` are types too
+    if (resultLibraryEnabled())
+        registerBuiltinModule(frontend, globals, "Error", getErrorDefinitionSource(), typeCheckForAutocomplete);
+    if (integerLibraryEnabled())
+        registerBuiltinModule(frontend, globals, "integer", getIntegerDefinitionSource(), typeCheckForAutocomplete);
 
     // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder
     globals.globalTypeFunctionScope->exportedTypeBindings = globals.globalScope->exportedTypeBindings;
