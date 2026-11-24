@@ -1484,6 +1484,11 @@ using AstClassMember = Variant<AstClassProperty, AstClassMethod>;
 // returned as written.
 AstClassMemberPlacement effectivePlacement(const AstClassMethod& method);
 
+// Luwu Traits (rfcs/classes/traits.md): whether a metamethod is the class or trait value's own rather than its objects':
+// `function __tostring(Self)` (or `static function __tostring(Self)`) in a class, `traitonly function __tostring(trait)`
+// in a trait. ClassMemberName::onValues says which names can be.
+bool isValueMetamethod(const AstClassMethod& method);
+
 // Luwu Classes (rfcs/classes): the access specifier and modifiers written directly on a primary
 // constructor parameter, Kotlin-style: `class SshKey(public const public_key: string)`. A parameter
 // that carries neither is described by a default-constructed instance of this.

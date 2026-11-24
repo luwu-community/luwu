@@ -233,6 +233,11 @@ LUAI_FUNC void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* n
 // the class statement runs (LBC_NEWCLASSMEMBER_FIELD)
 LUAI_FUNC void luaR_addclassfield(lua_State* L, LuauClass* classdef, TString* name, const TValue* value);
 
+// Luwu Traits (rfcs/classes/traits.md): adds the metamethod `name` of the class or trait value itself to its metatable, as
+// the class statement runs (LBC_NEWCLASSMEMBER_VALUEMETAMETHOD): `tostring(Cat)` calls a class's `function __tostring(Self)`
+// with the class. The function is the class's code, for its `Self` check and private access.
+LUAI_FUNC void luaR_addvaluemetamethod(lua_State* L, LuauClass* classdef, TString* name, const TValue* fn);
+
 /**
  * Luwu Traits (rfcs/classes/traits.md): writes the field at `offset` of the class value `classdef`, `Cat.species = v`.
  * Raises unless it's a field on the class value (LBC_CLASSMEMBER_CLASSFIELD) that isn't const, and checks private

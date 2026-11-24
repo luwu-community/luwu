@@ -797,6 +797,9 @@ enum LuwuBytecodeTag
 // holds the value, C+1 the trait, and AUX names the field as a constant string.
 #define LBC_NEWCLASSMEMBER_QUALIFIEDSHARED 6
 #define LBC_NEWCLASSMEMBER_QUALIFIEDSTATIC 7
+// Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a metamethod of the class or trait value itself
+// (`function __tostring(Self)`, a trait's `traitonly function __tostring(trait)`): C holds the function and AUX names it
+#define LBC_NEWCLASSMEMBER_VALUEMETAMETHOD 8
 // Luwu Traits (rfcs/classes/traits.md): whether operand B of LOP_NEWCLASSMEMBER gives a trait's member a value for the class,
 // with the trait in C+1
 #define LBC_NEWCLASSMEMBER_ISQUALIFIED(b) \

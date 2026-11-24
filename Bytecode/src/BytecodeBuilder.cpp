@@ -1951,7 +1951,9 @@ void BytecodeBuilder::validateInstructions() const
             }
             else
             {
-                LUAU_ASSERT(LUAU_INSN_B(insn) == 0 || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD);
+                LUAU_ASSERT(
+                    LUAU_INSN_B(insn) == 0 || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_VALUEMETAMETHOD
+                );
                 VREG(LUAU_INSN_C(insn));
                 VCONST(insns[i + 1], String);
             }
@@ -2806,9 +2808,10 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
             dumpConstant(result, *code, false);
             result.append("]\n");
         }
-        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD)
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_VALUEMETAMETHOD)
         {
-            formatAppend(result, "NEWCLASSMEMBER R%d FIELD R%d [", LUAU_INSN_A(insn), LUAU_INSN_C(insn));
+            const char* form = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD ? "FIELD" : "VALUEMETAMETHOD";
+            formatAppend(result, "NEWCLASSMEMBER R%d %s R%d [", LUAU_INSN_A(insn), form, LUAU_INSN_C(insn));
             dumpConstant(result, *code, false);
             result.append("]\n");
         }

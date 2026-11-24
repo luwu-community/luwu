@@ -70,6 +70,9 @@ struct ClassMemberName
     const char* signature;
     // what a function of this name must return
     ClassMemberNameReturn returns;
+    // Luwu Traits (rfcs/classes/traits.md): whether a metamethod can also be the class or trait value's own:
+    // `function __tostring(Self)` in a class, `traitonly function __tostring(trait)` in a trait
+    bool onValues;
 };
 
 // Luwu Classes (rfcs/classes): the entry for `name`, or nullptr when the language gives it no meaning

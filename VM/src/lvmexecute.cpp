@@ -3786,6 +3786,15 @@ reentry:
                     VM_NEXT();
                 }
 
+                // Luwu Traits (rfcs/classes/traits.md): a metamethod of the class value itself
+                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_VALUEMETAMETHOD)
+                {
+                    TValue* name = VM_KV(aux);
+                    LUAU_ASSERT(ttisstring(name));
+                    luaR_addvaluemetamethod(L, classvalue(ra), tsvalue(name), rc);
+                    VM_NEXT();
+                }
+
                 // Luwu Traits (rfcs/classes/traits.md): the value of a field on the class value
                 if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD)
                 {

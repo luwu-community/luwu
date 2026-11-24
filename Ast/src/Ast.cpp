@@ -1282,8 +1282,14 @@ AstClassMemberPlacement effectivePlacement(const AstClassMethod& method)
     if (!FFlag::LuwuTraits)
         return AstClassMemberPlacement::Shared;
 
+    bool takesClass = method.function->args.size > 0 && method.function->args.data[0]->name == "Self";
+
     if (const ClassMemberName* special = findClassMemberName(method.functionName.value))
     {
+        // the class value's own metamethod takes the class as `Self`
+        if (special->onValues && takesClass)
+            return AstClassMemberPlacement::Static;
+
         switch (special->placement)
         {
         case ClassMemberNamePlacement::Static:
@@ -1297,6 +1303,16 @@ AstClassMemberPlacement effectivePlacement(const AstClassMethod& method)
 
     bool takesSelf = method.function->args.size > 0 && method.function->args.data[0]->name == "self";
     return takesSelf ? AstClassMemberPlacement::Shared : AstClassMemberPlacement::Static;
+}
+
+bool isValueMetamethod(const AstClassMethod& method)
+{
+    const ClassMemberName* special = findClassMemberName(method.functionName.value);
+    if (!special || !special->onValues || method.qualifiedTrait || method.scopedLocation)
+        return false;
+
+    AstClassMemberPlacement placement = effectivePlacement(method);
+    return placement == AstClassMemberPlacement::Static || placement == AstClassMemberPlacement::TraitOnly;
 }
 
 template<>

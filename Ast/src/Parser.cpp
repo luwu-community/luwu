@@ -3832,6 +3832,41 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                     "Remove 'shared': a class method takes its class as 'Self', and an object calling it would arrive as 'Self' instead"
                 );
 
+            // Luwu Traits (rfcs/classes/traits.md): a class value's own metamethod takes the class as `Self`, and a trait value's
+            // own is `traitonly` and is given the trait. Only the names the registry allows can be one (ClassMemberName::onValues).
+            bool metamethod = special && special->kind == ClassMemberNameKind::Metamethod && !scopedOrQualified;
+            bool placedOnValue = placement == AstClassMemberPlacement::Static || placement == AstClassMemberPlacement::TraitOnly;
+            bool valueForm = metamethod && (takesClass || placedOnValue);
+            bool valueMetamethod = valueForm && special->onValues;
+            if (valueForm && !special->onValues && !placedSpecialName)
+            {
+                report(body->args.data[0]->location, "'%s' is a metamethod of objects: its first parameter is 'self', not 'Self'", name.name.value);
+            }
+            else if (valueMetamethod && isTrait && placement != AstClassMemberPlacement::TraitOnly)
+            {
+                report(
+                    name.location,
+                    "Write 'traitonly function %s(trait)' to give the trait value its own '%s'; each class writes its own 'function %s(Self)'",
+                    name.name.value,
+                    name.name.value,
+                    name.name.value
+                );
+            }
+            else if (valueMetamethod && isTrait && (takesSelf || takesClass))
+            {
+                report(
+                    body->args.data[0]->location,
+                    "Rename '%s': a trait value's own '%s' is given the trait, as in 'traitonly function %s(trait)'",
+                    firstParam,
+                    name.name.value,
+                    name.name.value
+                );
+            }
+            else if (valueMetamethod && !isTrait && !takesClass)
+            {
+                report(name.location, "A class value's own '%s' takes the class as 'Self': write 'function %s(Self)'", name.name.value, name.name.value);
+            }
+
             // Luwu Traits (rfcs/classes/traits.md): a scoped or qualified function is only reached through its trait, so
             // any `__` name is free except the ones the VM looks up on the class
             if (scopedOrQualified)
@@ -3926,6 +3961,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             bool claimed = false;
             if (qualifiedTrait)
                 claimed = claimQualifiedName(qualifiedName, name.location);
+            // Luwu Traits (rfcs/classes/traits.md): the value's own metamethod can sit next to the objects' one of the same name
+            else if (valueMetamethod)
+                claimed = claimQualifiedName(std::string("Self.") + name.name.value, name.location);
             else if (primaryConstructorParams.contains(name.name))
                 report(name.location, "Duplicate %s member '%s'", kind, name.name.value);
             else

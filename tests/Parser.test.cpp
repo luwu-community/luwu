@@ -5777,6 +5777,61 @@ TEST_CASE_FIXTURE(Fixture, "qualified_writes_and_dynamic_traits_parse")
 }
 
 // Luwu Traits (rfcs/classes/traits.md): a first parameter named `Self` makes a class method, and is const like `self`
+// Luwu Traits (rfcs/classes/traits.md): a class value's own `__tostring` takes `Self`, a trait value's own is `traitonly`, and
+// either can sit next to the objects' one
+TEST_CASE_FIXTURE(Fixture, "value_metamethods_parse")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        class Cat
+            function __tostring(Self) return "Cat" end
+            function __tostring(self) return "cat" end
+        end
+        class Dog
+            static function __tostring(Self) return "Dog" end
+        end
+        trait Json
+            traitonly function __tostring(trait) return "Json" end
+            function __tostring(self) return "json" end
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 3);
+
+    AstStatClass* cat = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(cat);
+    REQUIRE(cat->members.size == 2);
+    const AstClassMethod* classValue = cat->members.data[0].get_if<AstClassMethod>();
+    const AstClassMethod* objects = cat->members.data[1].get_if<AstClassMethod>();
+    REQUIRE(classValue);
+    REQUIRE(objects);
+    CHECK(isValueMetamethod(*classValue));
+    CHECK(!isValueMetamethod(*objects));
+
+    AstStatClass* json = block->body.data[2]->as<AstStatClass>();
+    REQUIRE(json);
+    const AstClassMethod* traitValue = json->members.data[0].get_if<AstClassMethod>();
+    REQUIRE(traitValue);
+    CHECK(isValueMetamethod(*traitValue));
+
+    matchParseError(
+        "class C function __add(Self) end end", "'__add' is a metamethod of objects: its first parameter is 'self', not 'Self'"
+    );
+    matchParseError(
+        "trait T function __tostring(Self) end end",
+        "Write 'traitonly function __tostring(trait)' to give the trait value its own '__tostring'; each class writes its own "
+        "'function __tostring(Self)'"
+    );
+    matchParseError(
+        "trait T traitonly function __tostring(self) end end",
+        "Rename 'self': a trait value's own '__tostring' is given the trait, as in 'traitonly function __tostring(trait)'"
+    );
+    matchParseError(
+        "class C function __tostring(Self) end static function __tostring(Self) end end", "Duplicate class member 'Self.__tostring'"
+    );
+}
+
 TEST_CASE_FIXTURE(Fixture, "class_method_Self_parameter_rules")
 {
     ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
@@ -6075,7 +6130,7 @@ TEST_CASE_FIXTURE(Fixture, "member_modifier_exclusions")
     matchParseError("class C(n: number) shared n = 1 end", "'n' is a parameter, so it's a field of each object and can't be 'shared'");
 
     // the VM finds metamethods and constructors where they always are
-    matchParseError("class C static function __tostring(self) end end", "'__tostring' can't be 'static'");
+    matchParseError("class C static function __tostring(self) end end", "A class value's own '__tostring' takes the class as 'Self': write 'function __tostring(Self)'");
     matchParseError("class C shared function __init(self) end end", "'__init' can't be 'shared'");
     CHECK_EQ(parse("trait T traitonly function __create() end end")->body.size, 1);
 }

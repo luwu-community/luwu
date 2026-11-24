@@ -646,6 +646,20 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
     }
 }
 
+void luaR_addvaluemetamethod(lua_State* L, LuauClass* classdef, TString* name, const TValue* fn)
+{
+    // the compiler only passes the names the registry allows on values (Luau::ClassMemberName::onValues)
+    LUAU_ASSERT(ttisfunction(fn) && !clvalue(fn)->isC);
+    LUAU_ASSERT(Luau::findClassMemberName(getstr(name)) && Luau::findClassMemberName(getstr(name))->onValues);
+
+    luaR_stampownerclass(L, clvalue(fn)->l.p, classdef);
+
+    // luaH_setstr ignores `readonly`, which keeps the metatable locked for everything else
+    TValue* dest = luaH_setstr(L, classdef->metatable, name);
+    setobj2t(L, dest, fn);
+    luaC_barriert(L, classdef->metatable, fn);
+}
+
 void luaR_addclassfield(lua_State* L, LuauClass* classdef, TString* name, const TValue* value)
 {
     const TValue* offset = luaR_classvalueoffset(classdef, name);

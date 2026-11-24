@@ -5013,6 +5013,19 @@ struct Compiler
                             return;
                         }
 
+                        // Luwu Traits (rfcs/classes/traits.md): the class or trait value's own metamethod has no member slot; it
+                        // goes in the value's metatable
+                        if (isValueMetamethod(method))
+                        {
+                            compileExprFunction(method.function, temp);
+                            int nameCid = bytecode.addConstantString(sref(method.functionName));
+                            checkConstant(nameCid, method.nameLocation);
+
+                            bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_VALUEMETAMETHOD, temp);
+                            bytecode.emitAux(nameCid);
+                            return;
+                        }
+
                         // For a method:
                         //
                         //  function foobar(a, b, c)

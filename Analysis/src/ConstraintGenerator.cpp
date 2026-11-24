@@ -1300,6 +1300,7 @@ void ConstraintGenerator::prototypeClass(
     DenseHashMap<AstName, TypeId> memberTypes{AstName{""}};
     DenseHashMap<AstName, TypeId> staticMemberTypes{AstName{""}};
     DenseHashMap<AstName, TypeId> classValueMethodTypes{AstName{""}};
+    DenseHashMap<AstName, TypeId> valueMetamethodTypes{AstName{""}};
     const bool isGenericClass = FFlag::LuwuGenericNominals &&
                                 (classDecl->generics.size != 0 || classDecl->genericPacks.size != 0);
     // Names of `props` entries that are actual fields (AstClassProperty), not methods.
@@ -1405,6 +1406,14 @@ void ConstraintGenerator::prototypeClass(
                 },
                 [&](const AstClassMethod& method)
                 {
+                    // Luwu Traits (rfcs/classes/traits.md): the value's own metamethod is in the class value's metatable
+                    if (isValueMetamethod(method))
+                    {
+                        if (!method.qualifiedTrait)
+                            valueMetamethodTypes.try_insert(method.functionName, arena->addType(BlockedType{}));
+                        return;
+                    }
+
                     // Luwu Traits (rfcs/classes/traits.md): a qualified implementation isn't a member of the class
                     // (checkQualifiedImplementation)
                     DenseHashMap<AstName, TypeId>& types = memberTypesFor(method.placement, memberTypes, staticMemberTypes);
@@ -1720,6 +1729,8 @@ void ConstraintGenerator::prototypeClass(
     TableType::Props classValueMetatableProps;
     if (ctorTy)
         classValueMetatableProps["__call"] = Property::readonly(ctorTy);
+    for (auto [name, ty] : valueMetamethodTypes)
+        classValueMetatableProps[name.value] = Property::readonly(ty);
 
     TypeId metatableTy =
         arena->addType(TableType{std::move(classValueMetatableProps), std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
@@ -1820,7 +1831,8 @@ void ConstraintGenerator::prototypeClass(
             std::move(classTypeParams),
             std::move(classTypePackParams),
             std::move(classValueMethodTypes),
-            std::move(staticMemberTypes)
+            std::move(staticMemberTypes),
+            std::move(valueMetamethodTypes)
         }
     );
 }
@@ -5041,7 +5053,10 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                         return;
                     }
 
-                    auto entry = memberTypesFor(method.placement, classDeclRecord->memberTypes, classDeclRecord->staticMemberTypes).find(method.functionName);
+                    DenseHashMap<AstName, TypeId>* types = &classDeclRecord->valueMetamethodTypes;
+                    if (!isValueMetamethod(method))
+                        types = &memberTypesFor(method.placement, classDeclRecord->memberTypes, classDeclRecord->staticMemberTypes);
+                    auto entry = types->find(method.functionName);
                     if (entry == nullptr)
                     {
                         LUAU_ASSERT(!"Unexpected missing class method type");

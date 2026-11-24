@@ -1888,4 +1888,47 @@ do
     raises(function() return Catalog.register(Clicker) end, "'Catalog.register' expects a class implementing 'Catalog', got class")
     raises(function() return Shelf.register(Drawer) end, "attempt to call class method 'Shelf.register' with 'Self' of class 'Drawer'")
 end
+-- a class value's own `__tostring` takes the class as `Self`, next to its objects' one; a trait value's own is `traitonly`
+class ValueLabeled
+    static shown = 0
+    name = "lab"
+
+    function __tostring(Self)
+        Self.shown += 1
+        return `class {class.name(Self)} #{Self.shown}`
+    end
+
+    function __tostring(self)
+        return `labeled {self.name}`
+    end
+end
+
+class ValueUnlabeled
+end
+
+class ValueBroken
+    static function __tostring(Self)
+        error("no label")
+    end
+end
+
+trait ValueLabels
+    traitonly function __tostring(trait)
+        return `trait {class.name(trait)}`
+    end
+end
+
+class ValueTagged implements ValueLabels
+end
+
+do
+    assert(tostring(ValueLabeled) == "class ValueLabeled #1" and `{ValueLabeled}` == "class ValueLabeled #2")
+    assert(tostring(ValueLabeled()) == "labeled lab")
+    assert(tostring(ValueLabels) == "trait ValueLabels")
+    -- neither goes to the classes and objects that don't define one
+    assert(string.find(tostring(ValueUnlabeled), "^class: ") and string.find(tostring(ValueTagged), "^class: "))
+    assert(string.find(tostring(ValueTagged()), "^object: "))
+    local ok, err = pcall(tostring, ValueBroken)
+    assert(not ok and string.find(err, "no label", 1, true))
+end
 return 'OK'

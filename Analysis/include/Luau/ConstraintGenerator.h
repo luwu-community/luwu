@@ -96,6 +96,10 @@ struct ClassDeclRecord
     // Luwu Traits (rfcs/classes/traits.md): the types of the `static` members, which `memberTypes` doesn't have: a static
     // member may share its name with an object field
     DenseHashMap<AstName, TypeId> staticMemberTypes{AstName{""}};
+
+    // Luwu Traits (rfcs/classes/traits.md): the types of the class or trait value's own metamethods (`function
+    // __tostring(Self)`), which are in the value's metatable rather than members
+    DenseHashMap<AstName, TypeId> valueMetamethodTypes{AstName{""}};
 };
 
 struct ConstraintGenerator
