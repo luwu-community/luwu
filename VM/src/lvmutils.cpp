@@ -132,8 +132,8 @@ void luaV_gettablefor(lua_State* L, const TValue* t, TValue* key, StkId val, con
             const TValue* offsettval = luaH_get(inst->lclass->memberstooffset, key);
 
             // Objects throw if you try to access a member that is not
-            // present.
-            if (ttisnil(offsettval))
+            // present. Luwu Traits (rfcs/classes/traits.md): a member only the class value reads is missing too.
+            if (ttisnil(offsettval) || uint32_t(nvalue(offsettval)) >= inst->lclass->numberofobjectmembers)
                 luaG_missingmembererror(L, t, key);
 
             const uint32_t offset = uint32_t(nvalue(offsettval));
@@ -219,10 +219,12 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
         {
             LuauObject* inst = objectvalue(t);
             const TValue* offset = luaH_get(inst->lclass->memberstooffset, key);
-            if (ttisnil(offset))
+            if (ttisnil(offset) || uint32_t(nvalue(offset)) >= inst->lclass->numberofobjectmembers)
                 luaG_missingmembererror(L, t, key);
             const uint32_t offsetnum = uint32_t(nvalue(offset));
             LUAU_ASSERT(offsetnum < inst->lclass->numberofallmembers);
+            if (offsetnum >= inst->lclass->numberofinstancemembers && (inst->lclass->memberflags[offsetnum] & LBC_CLASSMEMBER_CLASSFIELD))
+                luaR_sharedfieldwriteerror(L, inst, key);
             if (offsetnum >= inst->lclass->numberofinstancemembers)
                 luaG_indexerror(L, t, key);
             if (LUAU_UNLIKELY((inst->lclass->hasprivatemembers || inst->lclass->hasconstmembers)))
@@ -238,6 +240,22 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
             setobj2class(L, &inst->members[offsetnum], val);
             luaC_barrier(L, inst, val);
             return;
+        }
+        else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisclass(t)))
+        {
+            // Luwu Traits (rfcs/classes/traits.md): `Cat.species = v` writes a field on the class value. Writing any other
+            // member, or a name the class doesn't have, raises as it always has.
+            LuauClass* lco = classvalue(t);
+            const TValue* offset = luaH_get(lco->memberstooffset, key);
+            bool classfield = !ttisnil(offset) && (lco->memberflags[uint32_t(nvalue(offset))] & LBC_CLASSMEMBER_CLASSFIELD);
+            if (classfield)
+            {
+                Closure* cl = isLua(L->ci) ? clvalue(L->ci->func) : nullptr;
+                luaR_setclassfield(L, lco, key, cl, uint32_t(nvalue(offset)), val);
+                return;
+            }
+
+            luaG_indexerror(L, t, key);
         }
         else if (ttisnil(tm = luaT_gettmbyobj(L, t, TM_NEWINDEX)))
             luaG_indexerror(L, t, key);
