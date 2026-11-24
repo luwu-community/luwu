@@ -468,7 +468,8 @@ enum LuauOpcode
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_QUALIFIED for a qualified implementation, `function
     // Json.name`: C holds the function, C+1 the trait, and AUX names it. Emitted before the IMPLEMENTS form, which checks it.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_QUALIFIEDFIELD for a class's value of a trait's scoped
-    // field, `Animal.species = value`, with the same operands.
+    // field, `Animal.species = value`, with the same operands. B is LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN when the value
+    // isn't a constant: C holds a function that computes it.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_FIELD for a field on the class value (`shared x = 1`):
     // C holds its value and AUX names it.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_TRAITCOPY for the class's own copy of a trait's
@@ -766,8 +767,8 @@ enum LuwuBytecodeTag
 #define LBC_CLASSMEMBER_EXPECTTRAIT (1 << 12)
 // Luwu Traits (rfcs/classes/traits.md): a trait's scoped field that each object of an implementing class has a value of
 // (`scoped species = value`), with LBC_CLASSMEMBER_SCOPED and LBC_CLASSMEMBER_CLASSFIELD. The trait's static slot holds
-// the value every object starts with. Without this bit a scoped field is one value on the class (`scoped shared`,
-// `scoped static`).
+// the value every object starts with when it's a constant. Otherwise the trait's `__traitinit` computes it for each
+// object. Without this bit a scoped field is one value on the class (`scoped shared`, `scoped static`).
 #define LBC_CLASSMEMBER_SCOPEDOBJECTFIELD (1 << 13)
 // Luwu Traits (rfcs/classes/traits.md): set on a trait's class method, a function whose first parameter is `Self`. Like a
 // method (LBC_CLASSMEMBER_TAKESSELF), it's read through the trait as a dispatcher to the receiver's class, here the class
@@ -785,8 +786,14 @@ enum LuwuBytecodeTag
 // (LBC_CLASSMEMBER_CLASSFIELD): C holds the value and AUX names the field
 #define LBC_NEWCLASSMEMBER_FIELD 4
 // Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's value of a trait's scoped field,
-// `Animal.species = value`: C holds the value, C+1 the trait, and AUX names the field as a constant string
+// `Animal.species = value`: C holds the value, C+1 the trait, and AUX names the field as a constant string. The compiler
+// only uses this form for a constant value.
 #define LBC_NEWCLASSMEMBER_QUALIFIEDFIELD 5
+// Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's value of a trait's scoped field that
+// isn't a constant. C holds a function without parameters that returns the value, C+1 the trait, and AUX names the field.
+// The function runs once when the field is on the class (`scoped shared`, `scoped static`), and once for each new object
+// when every object has its own (luaR_traitinitrunner).
+#define LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN 6
 
 // Luwu Traits (rfcs/classes/traits.md): bits of the shape flags varint of LBC_CONSTANT_CLASS_SHAPE, written after the member
 // counts.

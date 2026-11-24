@@ -602,6 +602,9 @@ typedef struct LuaTable
 } LuaTable;
 // clang-format on
 
+// Luwu Traits (rfcs/classes/traits.md): how many entries of LuauClass::traitinitargs each trait initializer has
+#define LUAR_TRAITINIT_ARGS 3
+
 typedef struct LuauClass
 {
     CommonHeader;
@@ -731,10 +734,12 @@ typedef struct LuauClass
     // (LOP_INITTRAITS, luaR_newtraitinitrunner). NULL when no trait has a field that needs computing. Owned by this class;
     // marked in traverseclass.
     // - `traitinits` holds the class's copy of each trait's `__traitinit`, in dependency order: a trait's needed traits
-    //   come before it, so an overriding trait's value is the one left in the field.
-    // - `traitinitargs` says which `implements` arguments each copy takes: two entries per copy, the offset into the
-    //   class's `implements` arguments (all entries' arguments, in list order) and the count. A copy of a trait the
-    //   class didn't list, or listed without arguments, takes none.
+    //   come before it, so an overriding trait's value is the one left in the field. The class's values of per-object
+    //   scoped fields (`Animal.items = {}`) follow, each a function that computes it or a constant.
+    // - `traitinitargs` has LUAR_TRAITINIT_ARGS entries per initializer. The first two say which `implements` arguments a
+    //   copy takes: the offset into the class's `implements` arguments (all entries' arguments, in list order) and the
+    //   count. A copy of a trait the class didn't list, or listed without arguments, takes none. The third is 0 for a
+    //   copy, and one more than the object slot for a scoped field's value.
     TValue* traitinits;
     uint32_t* traitinitargs;
     uint32_t numtraitinits;
@@ -755,6 +760,12 @@ typedef struct LuauClass
     // (LBC_NEWCLASSMEMBER_TRAITCOPY), keyed by the trait's own closure, for luaR_implementtraits to use instead of copying
     // those functions. Only set while the class statement runs: implementing drops it. Marked in traverseclass.
     struct LuaTable* compiledtraitcopies;
+
+    // Luwu Traits (rfcs/classes/traits.md): the class's values of per-object scoped fields (`Animal.items = {}`), in the
+    // order it declares them: three entries each, the value (a constant, or a function that computes it), the trait and
+    // the field's name. luaR_implementtraits adds them to `traitinits`. Only set while the class statement runs. Marked
+    // in traverseclass.
+    struct LuaTable* scopedvalues;
 
     // Luwu Traits (rfcs/classes/traits.md): the class's version of trait members read through a trait (luaR_getqualified),
     // keyed by the trait, each a table from a member's name to its function: the class's qualified implementations
