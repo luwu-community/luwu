@@ -167,6 +167,13 @@ static bool belongsToTraitAlone(const ExternType::TraitInfo& info, const std::st
     return belongsToTraitAlone(name) || info.traitOnly.count(name) > 0;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): whether a field is each object's, rather than one value on the class or trait
+// (`shared`, `static`, `traitonly`) or one scoped to a trait
+static bool isObjectField(const AstClassProperty& prop)
+{
+    return prop.placement == AstClassMemberPlacement::Default && !prop.scopedLocation && !prop.qualifiedTrait;
+}
+
 // Luwu Traits (rfcs/classes/traits.md): the map of a class's member types that has the members of this placement. A static
 // member may share its name with an object field, so the static ones have a separate map.
 static DenseHashMap<AstName, TypeId>& memberTypesFor(
@@ -199,21 +206,7 @@ static std::optional<Location> providedMemberLocation(const AstStatClass* decl, 
 // function without `self` static, unless it says otherwise; a metamethod is found on its own.
 static bool isClassFunctionReadableThroughObjects(const AstClassMethod& method)
 {
-    switch (method.placement)
-    {
-    case AstClassMemberPlacement::Shared:
-        return true;
-    case AstClassMemberPlacement::Static:
-    case AstClassMemberPlacement::TraitOnly:
-    case AstClassMemberPlacement::Scoped:
-        return false;
-    case AstClassMemberPlacement::Default:
-        break;
-    }
-
-    // with the placement modifiers off, objects read a class's functions without `self` too
-    bool takesSelf = method.function->args.size >= 1 && method.function->args.data[0]->name == "self";
-    return !FFlag::LuwuTraits || takesSelf || strncmp(method.functionName.value, "__", 2) == 0;
+    return !method.scopedLocation && effectivePlacement(method) == AstClassMemberPlacement::Shared;
 }
 
 // Luwu Traits (rfcs/classes/traits.md): whether a method leaves out a parameter or return annotation, which an overridden
@@ -1329,7 +1322,7 @@ void ConstraintGenerator::prototypeClass(
     {
         for (const AstClassMember& member : classDecl->members)
             if (const AstClassProperty* prop = member.get_if<AstClassProperty>();
-                prop && prop->name == name && prop->placement == AstClassMemberPlacement::Default)
+                prop && prop->name == name && isObjectField(*prop))
                 return true;
 
         return false;
@@ -1354,7 +1347,8 @@ void ConstraintGenerator::prototypeClass(
 
                     // Luwu Traits (rfcs/classes/traits.md): a `shared`, `static` or `traitonly` field is one value on the class
                     // value, written through it unless it's const. A shared one is read through objects too, but not written.
-                    if (classProp.placement != AstClassMemberPlacement::Default)
+                    // The trait's value has its scoped fields' values too, which objects only reach qualified.
+                    if (!isObjectField(classProp))
                     {
                         Property classValueProp = Property::rw(propertyType);
                         classValueProp.location = classProp.nameLocation;
@@ -1364,7 +1358,7 @@ void ConstraintGenerator::prototypeClass(
                         classValueProp.isConst = classProp.isConst || classValueProp.isFinal;
                         staticProps[classProp.name.value] = classValueProp;
 
-                        if (classProp.placement == AstClassMemberPlacement::Shared)
+                        if (classProp.placement == AstClassMemberPlacement::Shared && !classProp.scopedLocation)
                         {
                             Property objectProp = classValueProp;
                             objectProp.isSharedField = true;
@@ -1541,13 +1535,21 @@ void ConstraintGenerator::prototypeClass(
                 info.expectTargets[memberName.value] = target == AstClassExpectTarget::Class ? ExternType::TraitInfo::Provider::Class
                                                                                                : ExternType::TraitInfo::Provider::Trait;
 
-            const AstClassProperty* scopedField =
-                written && written->placement == AstClassMemberPlacement::Scoped ? written : nullptr;
+            const AstClassProperty* scopedField = written && written->scopedLocation ? written : nullptr;
             if (scopedField)
             {
-                if (TypeId* type = memberTypes.find(scopedField->name))
-                    info.scopedMembers[scopedField->name.value] = *type;
-                info.scopedFields.insert(scopedField->name.value);
+                const char* fieldName = scopedField->name.value;
+                if (TypeId* type = memberTypesFor(scopedField->placement, memberTypes, staticMemberTypes).find(scopedField->name))
+                    info.scopedMembers[fieldName] = *type;
+                info.scopedFields.insert(fieldName);
+
+                if (scopedField->placement == AstClassMemberPlacement::Default)
+                    info.scopedObjectFields.insert(fieldName);
+                else if (scopedField->placement == AstClassMemberPlacement::Static)
+                    info.scopedStatics.insert(fieldName);
+
+                if (scopedField->isConst || scopedField->finalLocation)
+                    info.scopedConsts.insert(fieldName);
 
                 if (scopedField->expectLocation)
                     info.scopedExpectations[scopedField->name.value] = false;
@@ -1558,9 +1560,12 @@ void ConstraintGenerator::prototypeClass(
                 info.expectations[prop->name.value] = false;
             else if (prop && prop->finalLocation)
                 info.finals.insert(prop->name.value);
-            else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method->placement == AstClassMemberPlacement::Scoped)
+            else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method->scopedLocation)
             {
-                TypeId* type = memberTypes.find(method->functionName);
+                if (effectivePlacement(*method) == AstClassMemberPlacement::Static)
+                    info.scopedStatics.insert(method->functionName.value);
+
+                TypeId* type = memberTypesFor(method->placement, memberTypes, staticMemberTypes).find(method->functionName);
                 if (type && method->isOptional)
                     info.scopedMembers[method->functionName.value] = makeOption(builtinTypes, *arena, *type);
                 else if (type)
@@ -2469,9 +2474,9 @@ void ConstraintGenerator::checkScopedExpectations(const ScopePtr& scope, AstStat
             if (memberName != name.c_str())
                 continue;
 
-            AstClassMemberPlacement placement = method ? method->placement : prop->placement;
+            bool scoped = method ? method->scopedLocation.has_value() : prop->scopedLocation.has_value();
             AstExpr* qualifiedTrait = method ? method->qualifiedTrait : prop->qualifiedTrait;
-            if (cls->isTrait && placement == AstClassMemberPlacement::Scoped)
+            if (cls->isTrait && scoped)
                 return true;
             if (!cls->isTrait && qualifiedTrait && resolveTraitRef(scope, qualifierTraitRef(qualifiedTrait)) == trait)
                 return true;
@@ -4941,7 +4946,7 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
 
                     // Luwu Traits (rfcs/classes/traits.md): a field on the class value gets its value as the class statement
                     // runs, where no constructor parameter is in scope
-                    bool onClassValue = classProp.placement != AstClassMemberPlacement::Default;
+                    bool onClassValue = !isObjectField(classProp);
                     const ScopePtr& fieldScope = onClassValue ? bodyScope : initializerScope;
 
                     // With no explicit type annotation, infer the property's type from its default
@@ -6042,6 +6047,15 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprIndexName* in
     {
         check(scope, indexName->expr);
 
+        // `obj:[expr].name` is typed through `expr`'s type once it's known
+        if (indexName->dynamicTrait)
+        {
+            TypeId traitValue = check(scope, indexName->qualifiedTrait).ty;
+            TypeId name = arena->addType(SingletonType{StringSingleton{indexName->index.value}});
+            TypeId member = createTypeFunctionInstance(builtinTypes->typeFunctions->qualifiedFunc, {traitValue, name}, {}, scope, indexName->location);
+            return Inference{member};
+        }
+
         TypeId trait = resolveTraitRef(scope, qualifierTraitRef(indexName->qualifiedTrait));
         const ExternType* traitType = trait ? get<ExternType>(trait) : nullptr;
         if (traitType && traitType->traitInfo)
@@ -6603,6 +6617,14 @@ void ConstraintGenerator::visitLValue(const ScopePtr& scope, AstExprGlobal* glob
 
 void ConstraintGenerator::visitLValue(const ScopePtr& scope, AstExprIndexName* expr, TypeId rhsType)
 {
+    // Luwu Traits (rfcs/classes/traits.md): `obj:Trait.name = value` has the scoped field's type, which TypeChecker2 checks
+    // the value against
+    if (expr->qualifiedTrait)
+    {
+        module->astTypes[expr] = check(scope, expr).ty;
+        return;
+    }
+
     TypeId lhsTy = check(scope, expr->expr).ty;
     TypeId propTy = arena->addType(BlockedType{});
     module->astTypes[expr] = propTy;
@@ -6992,6 +7014,19 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     }
 
 
+    // Luwu Traits (rfcs/classes/traits.md): a class method's `Self` (`function f(Self)`) is the class value: the class's own,
+    // or in a trait, that of any class implementing it
+    std::optional<TypeId> classMethodSelf;
+    if (FFlag::LuwuTraits && enclosingClass && fn->args.size > 0 && fn->args.data[0]->name == "Self")
+    {
+        const ExternType* objectType = get<ExternType>(follow(enclosingClass->ty));
+        const Klass* klass = objectType && objectType->relation ? get_if<Klass>(&*objectType->relation) : nullptr;
+        if (objectType && objectType->traitInfo)
+            classMethodSelf = objectType->traitInfo->implementorClass;
+        else if (klass)
+            classMethodSelf = klass->ty;
+    }
+
     for (size_t i = 0; i < fn->args.size; ++i)
     {
         if (FFlag::LuwuClasses)
@@ -7011,7 +7046,16 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
 
         TypeId argTy = nullptr;
         bool hasSpecifiedArgTy = false;
-        if (local->annotation)
+        if (i == 0 && classMethodSelf)
+        {
+            // the parser refuses an annotation here, but TypeChecker2 still expects it resolved
+            if (local->annotation)
+                resolveType(signatureScope, local->annotation, /* inTypeArguments */ false, /* replaceErrorWithFresh */ true, Polarity::Negative);
+
+            argTy = *classMethodSelf;
+            hasSpecifiedArgTy = true;
+        }
+        else if (local->annotation)
         {
             argTy = resolveType(signatureScope, local->annotation, /* inTypeArguments */ false, /* replaceErrorWithFresh*/ true, Polarity::Negative);
             hasSpecifiedArgTy = true;

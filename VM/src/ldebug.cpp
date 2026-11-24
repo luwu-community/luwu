@@ -442,6 +442,27 @@ l_noret luaG_privateconstructorerror(lua_State* L, const TString* className)
 // `function push(list: List, v) list:push(v) end`: O0/O1 dispatch to `VecDeque:push`, but O2 inlined
 // `List:push`. Erroring rather than falling back to a dynamic call keeps inline sites small, and tells the
 // user their call site or annotation is wrong and isn't getting the O2 optimization they asked for.
+l_noret luaG_classmethoderror(lua_State* L, const TValue* self, const LuauClass* expected, const TString* methodName)
+{
+    const char* expectedName = getstr(expected->name);
+    const char* method = getstr(methodName);
+
+    if (ttisclass(self))
+        luaG_runerrorL(
+            L, "attempt to call class method '%s.%s' with 'Self' of class '%s'", expectedName, method, getstr(classvalue(self)->name)
+        );
+
+    luaG_runerrorL(
+        L,
+        "attempt to call class method '%s.%s' with 'Self' of type '%s'; call it on the class: '%s:%s()'",
+        expectedName,
+        method,
+        luaT_objtypename(L, self),
+        expectedName,
+        method
+    );
+}
+
 l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* expected, const TString* methodName, bool selfCall)
 {
     const char* expectedName = getstr(expected->name);
