@@ -47,7 +47,7 @@ class Player(name: string, user_id: Id) implements DamageDealer, Health
 end
 
 trait Json needs serialization.Codec<JsonReadConfig, JsonWriteConfig>
-    function Self.encode<T>(value: JsonSerializable<T>, config: JsonWriteConfig?)
+    scoped function encode<T>(value: JsonSerializable<T>, config: JsonWriteConfig?)
     end
     -- ...
     expect function detect?(value: string | buffer, position: number): boolean
@@ -160,7 +160,7 @@ Specifically:
   - Traits may define a real `function __create`, which allows them to be factories of concrete classes.
   - Traits may define a `final function __implemented(cls)`, which runs once for each class that implements the trait.
   - The `final` modifier may precede any real field or function in the trait.
-  - Fields or functions of traits may start with `Self.` to indicate they are trait-qualified and not class-qualified.
+  - Functions of traits may be marked `scoped` to indicate they are trait-qualified and not class-qualified.
 - The trait body and trait definition ends with the `end` keyword.
 
 Like classes, traits definitions are block constructs and do not evaluate to an expression, and may only be defined at the top level of a module.
@@ -383,7 +383,7 @@ end
 In the future, we want to allow for classes to override functions to resolve conflicts, but allowing so raises questions around how to resolve method
 arity differences when an object that implements the trait is narrowed via `class.implements` and the concrete class is not known.
 
-Instead, for now, we allow traits to introduce *trait-qualified* members. A trait qualified member is defined with `Self.member` syntax, and may only
+Instead, for now, we allow traits to introduce *trait-qualified* members. A trait qualified member is defined with the `scoped` modifier, and may only
 be called on an object by specifying its trait explicitly: `payment:Json:encode()` vs `payment:Csv:encode()`,  `cat:Screaming:meow()` vs
 `cat:Whispers:meow()`.
 
@@ -403,16 +403,18 @@ In classes and traits `Self` is now a `const` upvalue that refers to the concret
 in a class, and the class of `self` in a trait method. A trait function without `self` has no concrete class, so `Self` there is a syntax error.
 Like `self` in methods, `Self` may not be reassigned within the lexical scope of a class or trait definition block.
 
-`Self` is also used in trait-qualified member syntax:
+Trait-qualified members are marked `scoped`, and a class implements one with the trait's name:
 
 ```luwu
 trait Animal
-    expect Self.species: string
-    function Self.describe(self)
+    expect scoped function species(self): string
+    scoped function describe(self)
     end
 end
 class Cat implements Animal
-    Animal.species = "Felis Catus"
+    function Animal.species(self): string
+        return "Felis Catus"
+    end
     function Animal.describe(self)
         return "This animal is a Cat"
     end

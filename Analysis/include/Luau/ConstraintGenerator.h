@@ -407,7 +407,7 @@ private:
     // with `self` the class
     void checkQualifiedImplementation(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record, const AstClassMethod& method, bool declared);
     // Luwu Traits (rfcs/classes/traits.md): the scoped functions the class's listed traits expect, which it implements as
-    // `function Trait.name`, and the ones its needed traits expect, which a trait declares as `function Self.name`
+    // `function Trait.name`, and the ones its needed traits expect, which a trait declares as `scoped function name`
     void checkScopedExpectations(const ScopePtr& scope, AstStatClass* cls);
     void prototypeClass(
         const ScopePtr& scope,
