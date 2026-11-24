@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lualib.h"
+#include "linteger.h"
 
 #include "lobject.h"
 #include "lstate.h"
@@ -246,6 +247,9 @@ int luaL_checkinteger(lua_State* L, int narg)
 
 int64_t luaL_checkinteger64(lua_State* L, int narg)
 {
+    // Luwu Integers (rfcs/integers.md): a bigint has no 64-bit value
+    if (lua_type(L, narg) == LUA_THEAPINTEGER)
+        luaL_argerrorL(L, narg, "integer doesn't fit in 64 bits");
     if (!lua_isinteger64(L, narg))
         tag_error(L, narg, LUA_TINTEGER);
     return lua_tointeger64(L, narg, nullptr);
@@ -765,14 +769,11 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
     case LUA_TSTRING:
         lua_pushvalue(L, idx);
         break;
+    // Luwu Integers (rfcs/integers.md): an integer in decimal, without its suffix
     case LUA_TINTEGER:
-    {
-        int64_t l = lua_tointeger64(L, idx, nullptr);
-        char s[LUAI_MAXINT2STR];
-        char* e = luai_int2str(s, l);
-        lua_pushlstring(L, s, e - s);
+    case LUA_THEAPINTEGER:
+        luaZ_pushstring(L, luaA_toobject(L, idx));
         break;
-    }
     default:
     {
         // Luwu builtin classes: a builtin class prints like a primitive, by name and without an address

@@ -154,6 +154,11 @@ inline OperandX64 luauConstantTag(int ki)
     return dword[rConstants + ki * sizeof(TValue) + offsetof(TValue, tt)];
 }
 
+inline OperandX64 luauConstantExtra(int ki)
+{
+    return dword[rConstants + ki * sizeof(TValue) + offsetof(TValue, extra)];
+}
+
 inline OperandX64 luauConstantValue(int ki)
 {
     return qword[rConstants + ki * sizeof(TValue) + offsetof(TValue, value)];
