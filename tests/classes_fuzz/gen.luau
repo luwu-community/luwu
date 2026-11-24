@@ -114,6 +114,15 @@ type Cls = {
     -- sets them and the generator knows the value a new object ends up with
     fieldOverrides: { Field },
     definesMaybe: boolean,
+    -- the scoped fields of placed traits the class gives its own value, by trait index: `T.t<i>_sc = <i * 100 + 1>`,
+    -- `T.t<i>_sb = { <i>, 2, nextId() }` and `shared T.t<i>_ss = <i * 1000 + 5>`
+    scopedValues: { [number]: ScopedValues },
+}
+
+type ScopedValues = {
+    sc: boolean,
+    sb: boolean,
+    ss: boolean,
 }
 
 -- A trait's own members are named after it (`t2_f1`, `t2_m3`), so the traits a class implements never clash with each
@@ -156,7 +165,7 @@ type Trait = {
     -- has a `__implemented` hook, which logs `<trait>:<class>` in `shared.hooks` for each class implementing it
     hooked: boolean,
     -- has a `shared` field `t<i>_sh`, a `static` field `t<i>_st` next to an object field of the same name, a `traitonly`
-    -- field `t<i>_to` and a `scoped` field `t<i>_sc`, with values from `i`
+    -- field `t<i>_to`, and `scoped` fields `t<i>_sc` and `t<i>_sb` (a table each object computes), with values from `i`
     placed: boolean,
     implementors: { Cls },
 }
@@ -286,6 +295,7 @@ local function generate(seed: number): (string, string)
             overrides = {},
             fieldOverrides = {},
             definesMaybe = false,
+            scopedValues = {},
         }
         c.ctorPrivate = c.ctor ~= "pod" and rng.chance(0.4)
         c.generic = c.ctor == "primary" and rng.chance(0.2)
@@ -504,6 +514,23 @@ local function generate(seed: number): (string, string)
         end
         for _, f in c.fieldOverrides do
             table.insert(out, `    {if f.private then "private" else "public"} {if f.const then "const " else ""}{f.name} = {f.default}`)
+        end
+        -- its values of placed traits' scoped fields, spelled with the placement of each
+        for _, use in c.implements do
+            local values = c.scopedValues[use.trait.index]
+            if values then
+                local i = use.trait.index
+                local q = if use.trait.module and not c.module then `mod.{use.trait.name}` else use.trait.name
+                if values.sc then
+                    table.insert(out, `    public {q}.t{i}_sc = {i * 100 + 1}`)
+                end
+                if values.sb then
+                    table.insert(out, `    public {q}.t{i}_sb = \{ {i}, 2, nextId() }`)
+                end
+                if values.ss then
+                    table.insert(out, `    public shared {q}.t{i}_ss = {i * 1000 + 5}`)
+                end
+            end
         end
         if c.ctor == "init" then
             local params = {}
@@ -1150,6 +1177,9 @@ local function generate(seed: number): (string, string)
                         end
                     end
                     table.insert(c.implements, { trait = t, args = args })
+                    if t.placed and rng.chance(0.5) then
+                        c.scopedValues[t.index] = { sc = rng.chance(0.5), sb = rng.chance(0.5), ss = rng.chance(0.5) }
+                    end
                 end
                 c.traitSet = set
                 break
@@ -1295,6 +1325,7 @@ local function generate(seed: number): (string, string)
             table.insert(out, `    public traitonly t{t.index}_to = {t.index}`)
             table.insert(out, `    public scoped t{t.index}_sc = {t.index * 100}`)
             table.insert(out, `    public scoped shared t{t.index}_ss = {t.index * 1000}`)
+            table.insert(out, `    public scoped t{t.index}_sb = \{ {t.index} }`)
             table.insert(out, `    public function t{t.index}_cm(Self) return class.name(Self) end`)
         end
         for _, fn in t.fns do
@@ -1362,6 +1393,9 @@ local function generate(seed: number): (string, string)
             -- its scoped fields qualified only: each object's through objects, a `scoped shared` one through either
             if kind == "placed" and t.placed and implements then
                 local i = t.index
+                local values = c.scopedValues[i] or { sc = false, sb = false, ss = false }
+                local sc = if values.sc then i * 100 + 1 else i * 100
+                local ss = if values.ss then i * 1000 + 5 else i * 1000
                 local lines = {
                     `local o = {C}.make()`,
                     `check({C}.t{i}_sh == {i * 10} and o.t{i}_sh == {i * 10}, "{t.name}'s shared field on {c.name}")`,
@@ -1374,19 +1408,22 @@ local function generate(seed: number): (string, string)
                 }
                 -- a qualified read names the trait with a single name, and `obj:[expr]` with any expression
                 if not string.find(T, ".", 1, true) then
-                    table.insert(lines, `check(o:{T}.t{i}_sc == {i * 100} and {C}:{T}.t{i}_ss == {i * 1000}, "{t.name}'s scoped fields on {c.name}")`)
+                    table.insert(lines, `check(o:{T}.t{i}_sc == {sc} and {C}:{T}.t{i}_ss == {ss}, "{t.name}'s scoped fields on {c.name}")`)
                 end
                 local scopedLines = {
                     `local other = {C}.make()`,
-                    `check(o:[{T}].t{i}_sc == {i * 100} and o:[{T}].t{i}_ss == {i * 1000}, "{t.name}'s scoped fields through [{T}]")`,
+                    `check(o:[{T}].t{i}_sc == {sc} and o:[{T}].t{i}_ss == {ss}, "{t.name}'s scoped fields through [{T}]")`,
                     `o:[{T}].t{i}_sc = 7`,
                     `o:[{T}].t{i}_sc += 1`,
-                    `check(o:[{T}].t{i}_sc == 8 and other:[{T}].t{i}_sc == {i * 100}, "{t.name}'s scoped field written on one object of {c.name}")`,
+                    `check(o:[{T}].t{i}_sc == 8 and other:[{T}].t{i}_sc == {sc}, "{t.name}'s scoped field written on one object of {c.name}")`,
+                    -- a default that isn't a constant is computed for each object, the trait's or the class's
+                    `check(o:[{T}].t{i}_sb[1] == {i} and not rawequal(o:[{T}].t{i}_sb, other:[{T}].t{i}_sb), "{t.name}'s computed scoped field shared by objects of {c.name}")`,
+                    `check((o:[{T}].t{i}_sb[2] == 2) == {tostring(values.sb)}, "{t.name}'s computed scoped field from {c.name}")`,
                     `check(not pcall(function() return {C}:[{T}].t{i}_sc end), "{t.name}'s per-object scoped field read through {c.name}")`,
                     `check(not pcall(function() o:[{T}].t{i}_ss = 0 end), "{t.name}'s scoped shared field written through an object of {c.name}")`,
                     `{C}:[{T}].t{i}_ss += 1`,
-                    `check(other:[{T}].t{i}_ss == {i * 1000 + 1}, "{t.name}'s scoped shared field written through {c.name}")`,
-                    `{C}:[{T}].t{i}_ss = {i * 1000}`,
+                    `check(other:[{T}].t{i}_ss == {ss + 1}, "{t.name}'s scoped shared field written through {c.name}")`,
+                    `{C}:[{T}].t{i}_ss = {ss}`,
                     -- a class method's `Self` is the class it's called on, and nothing else
                     `check({C}:t{i}_cm() == "{c.name}", "{t.name}'s class method on {c.name}")`,
                     `check(not pcall({C}.t{i}_cm) and not pcall({C}.t{i}_cm, o), "{t.name}'s class method without its class")`,

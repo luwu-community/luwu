@@ -1177,12 +1177,12 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
 
     // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function, or its value of a
     // trait's scoped field
-    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
+    bool qualified = LBC_NEWCLASSMEMBER_ISQUALIFIED(LUAU_INSN_B(insn));
+    if (qualified)
     {
         TValue* name = VM_KV(aux);
         LUAU_ASSERT(ttisstring(name));
-        bool isfield = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD;
-        VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc, isfield));
+        VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc, LUAU_INSN_B(insn)));
         return pc;
     }
 
@@ -1191,6 +1191,15 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
     {
         VM_PROTECT_PC();
         luaR_setconstructor(L, classvalue(ra), rc);
+        return pc;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): a metamethod of the class value itself
+    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_VALUEMETAMETHOD)
+    {
+        TValue* name = VM_KV(aux);
+        LUAU_ASSERT(ttisstring(name));
+        luaR_addvaluemetamethod(L, classvalue(ra), tsvalue(name), rc);
         return pc;
     }
 

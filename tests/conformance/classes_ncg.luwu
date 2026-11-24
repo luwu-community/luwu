@@ -636,7 +636,7 @@ end)
 
 -- Natively, a generic for loop's prep runs through executeFORGPREP, which has its own copy of the
 -- interpreter's object branch for __iter.
-class NcgBag(items: { number })
+class NcgPouch(items: { number })
     public items
     public function __iter(self)
         return coroutine.wrap(function()
@@ -654,7 +654,7 @@ end
 
 expectpass("objects with __iter can be iterated natively", function()
     local sum, count = 0, 0
-    for i, v in NcgBag({ 10, 20, 30 }) do
+    for i, v in NcgPouch({ 10, 20, 30 }) do
         sum += v
         count = i
     end
@@ -921,6 +921,50 @@ expectpass("native scoped writes", function()
     assert(not pcall(function() a:NcgTally.total = 1 end))
 end)
 
+-- Luwu Traits (rfcs/classes/traits.md): a per-object scoped field's starting value is computed for every object, whether
+-- it's the trait's default or the class's value, on every construction path: a site that knows the class, a primary
+-- constructor, an `__init`, and a class held in a local
+trait NcgHamper
+    scoped items = {}
+    expect scoped tags: { string }
+    scoped shared all = {}
+end
+
+class NcgSack implements NcgHamper
+    NcgHamper.tags = {}
+end
+
+class NcgCrate(n: number) implements NcgHamper
+    NcgHamper.tags = { "crate" }
+    NcgHamper.items = { "crate" }
+end
+
+class NcgChest implements NcgHamper
+    NcgHamper.tags = {}
+
+    function __init(self)
+    end
+end
+
+expectpass("native scoped values per object", function()
+    local function fresh(a, b)
+        assert(not rawequal(a:NcgHamper.items, b:NcgHamper.items))
+        assert(not rawequal(a:NcgHamper.tags, b:NcgHamper.tags))
+        assert(rawequal(a:NcgHamper.all, b:NcgHamper.all))
+        table.insert(a:NcgHamper.items, true)
+        assert(#b:NcgHamper.items < #a:NcgHamper.items)
+    end
+
+    local held = NcgSack
+    for i = 1, 50 do
+        fresh(NcgSack(), NcgSack())
+        fresh(NcgCrate(i), NcgCrate(i))
+        fresh(NcgChest(), NcgChest())
+        fresh(held(), held())
+        assert(NcgCrate(i):NcgHamper.items[1] == "crate" and NcgCrate(i).n == i)
+    end
+end)
+
 -- Luwu Traits (rfcs/classes/traits.md): a class method's prologue checks that `Self` is its class (CHECKSELFCLASS's class
 -- method form), in a class and in a trait's copy
 class NcgCounter
@@ -951,5 +995,22 @@ expectpass("native class methods", function()
     assert(not pcall(NcgCounter.bump))
     assert(not pcall(NcgCounter.bump, NcgNamedBox))
     assert(not pcall(NcgNamedBox.named, NcgCounter))
+end)
+-- Luwu Traits (rfcs/classes/traits.md): a class value's own `__tostring`, called with the class
+class NcgShown
+    static count = 0
+
+    function __tostring(Self)
+        Self.count += 1
+        return "NcgShown"
+    end
+end
+
+expectpass("native class value tostring", function()
+    local parts = {}
+    for i = 1, 50 do
+        parts[i] = tostring(NcgShown)
+    end
+    assert(table.concat(parts) == string.rep("NcgShown", 50) and NcgShown.count == 50)
 end)
 return 'OK'

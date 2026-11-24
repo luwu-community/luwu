@@ -4,6 +4,7 @@
 #include "Luau/ApplyTypeFunction.h"
 #include "Luau/Ast.h"
 #include "Luau/AstQuery.h"
+#include "Luau/ClassMemberNames.h"
 #include "Luau/AstUtils.h"
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/BuiltinTypeFunctions.h"
@@ -157,11 +158,12 @@ static std::optional<TypePackId> variadicTailOf(const FunctionType* function)
     return std::nullopt;
 }
 
-// Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get: its expected constructor,
-// its factory and its `__implemented` hook
+// Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get by their name: its expected
+// constructor, its factory and its `__implemented` hook (ClassMemberName::traitAlone)
 static bool belongsToTraitAlone(const std::string& name)
 {
-    return name == "__init" || name == "__create" || name == "__implemented";
+    const ClassMemberName* special = findClassMemberName(name.c_str());
+    return special && special->traitAlone;
 }
 
 // Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get, with its `traitonly` ones
@@ -255,9 +257,8 @@ static bool signatureNamesSelf(AstExprFunction* fn)
 
 static bool isValidClassMetamethod(const Name& name)
 {
-    return name == "__call" || name == "__concat" || name == "__unm" || name == "__add" || name == "__sub" || name == "__mul" || name == "__div" ||
-           name == "__mod" || name == "__pow" || name == "__tostring" || name == "__eq" || name == "__lt" || name == "__le" || name == "__iter" ||
-           name == "__len" || name == "__idiv";
+    const ClassMemberName* special = findClassMemberName(name.c_str());
+    return special && special->kind == ClassMemberNameKind::Metamethod;
 }
 
 static std::optional<AstExpr*> matchRequire(const AstExprCall& call)
@@ -1310,6 +1311,7 @@ void ConstraintGenerator::prototypeClass(
     DenseHashMap<AstName, TypeId> memberTypes{AstName{""}};
     DenseHashMap<AstName, TypeId> staticMemberTypes{AstName{""}};
     DenseHashMap<AstName, TypeId> classValueMethodTypes{AstName{""}};
+    DenseHashMap<AstName, TypeId> valueMetamethodTypes{AstName{""}};
     const bool isGenericClass = FFlag::LuwuGenericNominals &&
                                 (classDecl->generics.size != 0 || classDecl->genericPacks.size != 0);
     // Names of `props` entries that are actual fields (AstClassProperty), not methods.
@@ -1415,6 +1417,14 @@ void ConstraintGenerator::prototypeClass(
                 },
                 [&](const AstClassMethod& method)
                 {
+                    // Luwu Traits (rfcs/classes/traits.md): the value's own metamethod is in the class value's metatable
+                    if (isValueMetamethod(method))
+                    {
+                        if (!method.qualifiedTrait)
+                            valueMetamethodTypes.try_insert(method.functionName, arena->addType(BlockedType{}));
+                        return;
+                    }
+
                     // Luwu Traits (rfcs/classes/traits.md): a qualified implementation isn't a member of the class
                     // (checkQualifiedImplementation)
                     DenseHashMap<AstName, TypeId>& types = memberTypesFor(method.placement, memberTypes, staticMemberTypes);
@@ -1739,6 +1749,8 @@ void ConstraintGenerator::prototypeClass(
     TableType::Props classValueMetatableProps;
     if (ctorTy)
         classValueMetatableProps["__call"] = Property::readonly(ctorTy);
+    for (auto [name, ty] : valueMetamethodTypes)
+        classValueMetatableProps[name.value] = Property::readonly(ty);
 
     TypeId metatableTy =
         arena->addType(TableType{std::move(classValueMetatableProps), std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
@@ -1839,7 +1851,8 @@ void ConstraintGenerator::prototypeClass(
             std::move(classTypeParams),
             std::move(classTypePackParams),
             std::move(classValueMethodTypes),
-            std::move(staticMemberTypes)
+            std::move(staticMemberTypes),
+            std::move(valueMetamethodTypes)
         }
     );
 }
@@ -2408,10 +2421,47 @@ void ConstraintGenerator::checkQualifiedField(const ScopePtr& scope, AstStatClas
             expected = it->second;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): the class spells the field's placement: `Animal.x = v` for one in each object,
+    // `shared Animal.x = v` and `static Animal.x = v` for one on the class
+    AstClassMemberPlacement placement = AstClassMemberPlacement::Shared;
+    const char* requirement = "shared";
+    if (info && info->scopedObjectFields.count(name))
+    {
+        placement = AstClassMemberPlacement::Default;
+        requirement = "a field of each object";
+    }
+    else if (info && info->scopedStatics.count(name))
+    {
+        placement = AstClassMemberPlacement::Static;
+        requirement = "static";
+    }
+
     if (info && !info->scopedFields.count(name))
+    {
         reportError(prop.nameLocation, GenericError{format("Trait '%s' has no scoped field '%s' to set", traitType->name.c_str(), name)});
+    }
     else if (info && info->finals.count(name))
+    {
         reportError(prop.nameLocation, GenericError{format("'%s' is final in trait '%s' and can't be overridden", name, traitType->name.c_str())});
+    }
+    else if (info && prop.placement != placement)
+    {
+        const char* traitName = traitType->name.c_str();
+        const char* modifier = toString(placement);
+        std::string message = format(
+            "'%s.%s' must be %s for '%s' to implement '%s': write '%s%s%s.%s = value'",
+            traitName,
+            name,
+            requirement,
+            cls->name->name.value,
+            traitName,
+            modifier ? modifier : "",
+            modifier ? " " : "",
+            traitName,
+            name
+        );
+        reportError(prop.placementLocation ? *prop.placementLocation : prop.nameLocation, GenericError{message});
+    }
 
     std::optional<TypeId> annotated = prop.ty ? std::optional<TypeId>{resolveType(scope, prop.ty, false)} : std::nullopt;
     std::optional<TypeId> target = annotated ? annotated : expected;
@@ -5469,7 +5519,10 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                         return;
                     }
 
-                    auto entry = memberTypesFor(method.placement, classDeclRecord->memberTypes, classDeclRecord->staticMemberTypes).find(method.functionName);
+                    DenseHashMap<AstName, TypeId>* types = &classDeclRecord->valueMetamethodTypes;
+                    if (!isValueMetamethod(method))
+                        types = &memberTypesFor(method.placement, classDeclRecord->memberTypes, classDeclRecord->staticMemberTypes);
+                    auto entry = types->find(method.functionName);
                     if (entry == nullptr)
                     {
                         LUAU_ASSERT(!"Unexpected missing class method type");

@@ -2961,70 +2961,44 @@ void TypeChecker2::visit(AstStatClass* stat)
 
             visit(method->function);
 
-            if (method->functionName == "__tostring")
+            // Luwu Classes (rfcs/classes): what a function the language gives a meaning must return (ClassMemberNames.h)
+            const ClassMemberName* special = findClassMemberName(method->functionName.value);
+            const FunctionType* ftv = special ? get<FunctionType>(lookupType(method->function)) : nullptr;
+            if (ftv)
             {
-                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                NotNull<Scope> scope{findInnermostScope(method->function->location)};
+                std::optional<TypeId> ret = first(ftv->retTypes);
+                auto returnsA = [&](TypeId expected)
                 {
-                    NotNull<Scope> scope{findInnermostScope(method->function->location)};
-                    std::optional<TypeId> ret = first(ftv->retTypes);
-                    if (!ret || !subtyping->isSubtype(follow(*ret), builtinTypes->stringType, scope).isSubtype)
-                        reportError(GenericError{"Metamethod '__tostring' must return a string"}, method->function->location);
-                }
-            }
-            else if (method->functionName == "__init")
-            {
-                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
+                    return ret && subtyping->isSubtype(follow(*ret), expected, scope).isSubtype;
+                };
+
+                const char* name = method->functionName.value;
+                Location location = method->function->location;
+                switch (special->returns)
                 {
-                    if (first(ftv->retTypes))
-                        reportError(
-                            GenericError{"__init constructor should assign fields to self and should not return a value"},
-                            method->function->location
-                        );
-                }
-            }
-            else if (method->functionName == "__eq" || method->functionName == "__lt" || method->functionName == "__le")
-            {
-                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
-                {
-                    NotNull<Scope> scope{findInnermostScope(method->function->location)};
-                    std::optional<TypeId> ret = first(ftv->retTypes);
-                    if (!ret || !subtyping->isSubtype(follow(*ret), builtinTypes->booleanType, scope).isSubtype)
-                        reportError(
-                            GenericError{format("Metamethod '%s' must return a boolean", method->functionName.value)},
-                            method->function->location
-                        );
-                }
-            }
-            else if (method->functionName == "__len")
-            {
-                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
-                {
-                    NotNull<Scope> scope{findInnermostScope(method->function->location)};
-                    std::optional<TypeId> ret = first(ftv->retTypes);
-                    if (!ret || !subtyping->isSubtype(follow(*ret), builtinTypes->numberType, scope).isSubtype)
-                        reportError(GenericError{"Metamethod '__len' must return a number"}, method->function->location);
-                }
-            }
-            else if (
-                method->functionName == "__add" || method->functionName == "__sub" || method->functionName == "__mul" ||
-                method->functionName == "__div" || method->functionName == "__mod" || method->functionName == "__pow" ||
-                method->functionName == "__idiv" || method->functionName == "__unm" || method->functionName == "__concat"
-            )
-            {
-                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
-                {
-                    if (!first(ftv->retTypes))
-                        reportError(
-                            GenericError{format("Metamethod '%s' must return a value", method->functionName.value)}, method->function->location
-                        );
-                }
-            }
-            else if (method->functionName == "__iter")
-            {
-                if (const FunctionType* ftv = get<FunctionType>(lookupType(method->function)))
-                {
-                    if (!first(ftv->retTypes))
-                        reportError(GenericError{"Metamethod '__iter' must return a value"}, method->function->location);
+                case ClassMemberNameReturn::Anything:
+                    break;
+                case ClassMemberNameReturn::Nothing:
+                    if (ret)
+                        reportError(GenericError{"__init constructor should assign fields to self and should not return a value"}, location);
+                    break;
+                case ClassMemberNameReturn::Value:
+                    if (!ret)
+                        reportError(GenericError{format("Metamethod '%s' must return a value", name)}, location);
+                    break;
+                case ClassMemberNameReturn::String:
+                    if (!returnsA(builtinTypes->stringType))
+                        reportError(GenericError{format("Metamethod '%s' must return a string", name)}, location);
+                    break;
+                case ClassMemberNameReturn::Boolean:
+                    if (!returnsA(builtinTypes->booleanType))
+                        reportError(GenericError{format("Metamethod '%s' must return a boolean", name)}, location);
+                    break;
+                case ClassMemberNameReturn::Number:
+                    if (!returnsA(builtinTypes->numberType))
+                        reportError(GenericError{format("Metamethod '%s' must return a number", name)}, location);
+                    break;
                 }
             }
         }

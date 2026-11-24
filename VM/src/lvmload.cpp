@@ -847,7 +847,11 @@ static int loadsafe(
                     if (!initPlaced && (flags & LBC_CLASSMEMBER_STATIC))
                         placeReservedInit();
 
-                    lco->offsettomember[memberOffset] = tsvalue(memberName);
+                    // Luwu Traits (rfcs/classes/traits.md): the class's slot for its value of a trait's per-object scoped
+                    // field has no name, so no read by name reaches it (LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
+                    bool unnamed = idx < numProperties && (flags & LBC_CLASSMEMBER_SCOPEDOBJECTFIELD);
+
+                    lco->offsettomember[memberOffset] = unnamed ? NULL : tsvalue(memberName);
                     lco->memberflags[memberOffset] = flags;
 
                     if (idx < numProperties && (flags & LBC_CLASSMEMBER_CONSTDEFAULT))
@@ -869,7 +873,8 @@ static int loadsafe(
                     // Luwu Traits (rfcs/classes/traits.md): a static member may share an object field's name; the fields come
                     // first, so the field is in the map by now
                     bool isStatic = (flags & LBC_CLASSMEMBER_STATIC) != 0;
-                    luaR_mapmembername(L, lco->memberstooffset, &lco->staticshadows, tsvalue(memberName), memberOffset, isStatic, numProperties);
+                    if (!unnamed)
+                        luaR_mapmembername(L, lco->memberstooffset, &lco->staticshadows, tsvalue(memberName), memberOffset, isStatic, numProperties);
                     memberOffset++;
                 }
 
