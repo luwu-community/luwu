@@ -1944,8 +1944,7 @@ void BytecodeBuilder::validateInstructions() const
             {
                 VREGRANGE(LUAU_INSN_C(insn), int(insns[i + 1]) * 2);
             }
-            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED ||
-                     LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN)
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LBC_NEWCLASSMEMBER_ISQUALIFIED(LUAU_INSN_B(insn)))
             {
                 VREGRANGE(LUAU_INSN_C(insn), 2);
                 VCONST(insns[i + 1], String);
@@ -2792,16 +2791,17 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         {
             formatAppend(result, "NEWCLASSMEMBER R%d IMPLEMENTS R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_C(insn), int(*code));
         }
-        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED ||
-                 LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN)
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LBC_NEWCLASSMEMBER_ISQUALIFIED(LUAU_INSN_B(insn)))
         {
             const char* form = "QUALIFIED";
             if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
                 form = "TRAITCOPY";
             else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
                 form = "QUALIFIEDFIELD";
-            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN)
-                form = "QUALIFIEDFIELDFN";
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDSHARED)
+                form = "QUALIFIEDSHARED";
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDSTATIC)
+                form = "QUALIFIEDSTATIC";
             formatAppend(result, "NEWCLASSMEMBER R%d %s R%d R%d [", LUAU_INSN_A(insn), form, LUAU_INSN_C(insn), LUAU_INSN_C(insn) + 1);
             dumpConstant(result, *code, false);
             result.append("]\n");

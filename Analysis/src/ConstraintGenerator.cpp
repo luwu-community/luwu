@@ -2389,10 +2389,47 @@ void ConstraintGenerator::checkQualifiedField(const ScopePtr& scope, AstStatClas
             expected = it->second;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): the class spells the field's placement: `Animal.x = v` for one in each object,
+    // `shared Animal.x = v` and `static Animal.x = v` for one on the class
+    AstClassMemberPlacement placement = AstClassMemberPlacement::Shared;
+    const char* requirement = "shared";
+    if (info && info->scopedObjectFields.count(name))
+    {
+        placement = AstClassMemberPlacement::Default;
+        requirement = "a field of each object";
+    }
+    else if (info && info->scopedStatics.count(name))
+    {
+        placement = AstClassMemberPlacement::Static;
+        requirement = "static";
+    }
+
     if (info && !info->scopedFields.count(name))
+    {
         reportError(prop.nameLocation, GenericError{format("Trait '%s' has no scoped field '%s' to set", traitType->name.c_str(), name)});
+    }
     else if (info && info->finals.count(name))
+    {
         reportError(prop.nameLocation, GenericError{format("'%s' is final in trait '%s' and can't be overridden", name, traitType->name.c_str())});
+    }
+    else if (info && prop.placement != placement)
+    {
+        const char* traitName = traitType->name.c_str();
+        const char* modifier = toString(placement);
+        std::string message = format(
+            "'%s.%s' must be %s for '%s' to implement '%s': write '%s%s%s.%s = value'",
+            traitName,
+            name,
+            requirement,
+            cls->name->name.value,
+            traitName,
+            modifier ? modifier : "",
+            modifier ? " " : "",
+            traitName,
+            name
+        );
+        reportError(prop.placementLocation ? *prop.placementLocation : prop.nameLocation, GenericError{message});
+    }
 
     std::optional<TypeId> annotated = prop.ty ? std::optional<TypeId>{resolveType(scope, prop.ty, false)} : std::nullopt;
     std::optional<TypeId> target = annotated ? annotated : expected;

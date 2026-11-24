@@ -6161,10 +6161,31 @@ TEST_CASE_FIXTURE(Fixture, "scoped_fields_parse")
     REQUIRE(kingdom->qualifiedTrait);
     CHECK(kingdom->qualifiedTrait->is<AstExprIndexName>());
     CHECK(kingdom->ty);
+    CHECK(catSpecies->placement == AstClassMemberPlacement::Default);
+
+    // the class spells the placement of a value on the class
+    AstStatBlock* placed = parse(R"(
+        class Cat implements Animal
+            shared Animal.kind = "cat"
+            static Animal.registry = {}
+        end
+    )");
+    REQUIRE(placed);
+    AstStatClass* placedCat = placed->body.data[0]->as<AstStatClass>();
+    REQUIRE(placedCat);
+    REQUIRE(placedCat->members.size == 2);
+    const AstClassProperty* kind = placedCat->members.data[0].get_if<AstClassProperty>();
+    const AstClassProperty* registry = placedCat->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(kind);
+    REQUIRE(registry);
+    CHECK(kind->placement == AstClassMemberPlacement::Shared);
+    CHECK(kind->placementLocation);
+    CHECK(kind->qualifiedTrait);
+    CHECK(registry->placement == AstClassMemberPlacement::Static);
 
     matchParseError("trait T end class C implements T T.x end", "'T.x' needs a value: write 'T.x = value'");
     matchParseError("trait T end class C implements T T.x = 1 T.x = 2 end", "Duplicate class member 'T.x'");
-    matchParseError("trait T end class C implements T static T.x = 1 end", "Remove 'static': 'T.x' only gives a trait's scoped field its value for this class");
+    matchParseError("trait T end class C implements T traitonly T.x = 1 end", "Only traits can have 'traitonly' members");
     matchParseError("trait T end class C implements T const T.x = 1 end", "Remove 'const': 'T.x' only gives a trait's scoped field its value for this class");
     matchParseError("class C T.x = 1 end", "Expected 'end' (to close 'class' at line 1), got 'T'");
 }

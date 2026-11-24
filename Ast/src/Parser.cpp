@@ -3488,16 +3488,21 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             {
                 qualifiedName = printedQualifier(qualifiedTrait) + "." + propName->name.value;
 
+                // Luwu Traits (rfcs/classes/traits.md): the class spells the field's placement, `shared Animal.kind = v` for a
+                // `scoped shared` field and `static Animal.kind = v` for a `scoped static` one, which the runtime and Analysis
+                // check against the trait. A value in each object is written without one. `traitonly` is already an error
+                // in a class.
                 const char* modifierMessage = "Remove '%s': '%s' only gives a trait's scoped field its value for this class";
                 if (scopedLocation)
                     report(*scopedLocation, modifierMessage, "scoped", qualifiedName.c_str());
-                if (placementLocation)
-                    report(*placementLocation, modifierMessage, toString(placement), qualifiedName.c_str());
                 if (constLocation)
                     report(*constLocation, modifierMessage, "const", qualifiedName.c_str());
 
-                placement = AstClassMemberPlacement::Default;
-                placementLocation = std::nullopt;
+                if (placement == AstClassMemberPlacement::TraitOnly)
+                {
+                    placement = AstClassMemberPlacement::Default;
+                    placementLocation = std::nullopt;
+                }
                 scopedLocation = std::nullopt;
                 isConst = false;
             }
@@ -3565,8 +3570,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 propType = parseType();
             }
 
-            // Luwu Traits (rfcs/classes/traits.md): a trait's per-object scoped field, or a class's value for a scoped field
-            bool scopedValue = qualifiedTrait || (scopedLocation && placement == AstClassMemberPlacement::Default);
+            // Luwu Traits (rfcs/classes/traits.md): a trait's per-object scoped field, or a class's value for one
+            bool scopedValue = (qualifiedTrait || scopedLocation) && placement == AstClassMemberPlacement::Default;
 
             std::optional<Location> equalsLocation;
             AstExpr* defaultValue = nullptr;
@@ -3587,9 +3592,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             }
             else if (lexer.current().type == '=' && scopedValue)
             {
-                // Luwu Traits (rfcs/classes/traits.md): each object computes the value when the field is per object, so it's
-                // parsed one function deeper like a field default. A trait's `__traitinit` or a function the class statement
-                // creates computes it, so it sees no constructor parameters.
+                // Luwu Traits (rfcs/classes/traits.md): each object computes the value, so it's parsed one function deeper
+                // like a field default. A trait's `__traitinit` or the class's constructors compute it, and it sees no
+                // constructor parameters.
                 equalsLocation = lexer.current().location;
                 nextLexeme();
 
