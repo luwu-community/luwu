@@ -3657,10 +3657,11 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_function_overrides_keep_their_access")
     CHECK_EQ("'hidden' must be private for 'A' to implement 'T'", toString(result.errors[1]));
     CHECK_EQ(result.errors[0].location.begin.line, 8);
     CHECK_EQ(result.errors[1].location.begin.line, 10);
-    CHECK_EQ("'make' must be public for 'A' to implement 'T'", toString(result.errors[2]));
-    CHECK_EQ(result.errors[3].location.begin.line, 11);
-    CHECK_EQ("'shown' must be public for 'A' to implement 'T'", toString(result.errors[4]));
-    CHECK_EQ(result.errors[5].location.begin.line, 9);
+    CHECK_EQ("'shown' must be public for 'A' to implement 'T'", toString(result.errors[2]));
+    CHECK_EQ(result.errors[3].location.begin.line, 9);
+    // a function without `self` is static, so its access is checked with the class value's members
+    CHECK_EQ("'make' must be public for 'A' to implement 'T'", toString(result.errors[4]));
+    CHECK_EQ(result.errors[5].location.begin.line, 11);
 }
 
 TEST_CASE_FIXTURE(ClassesFixture, "trait_final_fields_are_never_assigned")
@@ -5926,6 +5927,164 @@ TEST_CASE_FIXTURE(ClassesFixture, "typing_trait_declarations")
     checkTypewriting(*this, before, access, kTraitTypewriterAfter, {"Incomplete statement"});
 }
 
+// Luwu Traits (rfcs/classes/traits.md): `shared` members are read through objects and the class, `static` ones only
+// through the class, and only the class value writes either
+TEST_CASE_FIXTURE(ClassesFixture, "member_placements_are_typed")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        class Cat(name: string)
+            shared species = "Felis catus"
+            static count = 0
+            static const MAX = 10
+
+            function new(name: string): Cat
+                Cat.count += 1
+                return Cat(name)
+            end
+
+            shared function describe(): string
+                return Cat.species
+            end
+        end
+
+        local taz = Cat.new("taz")
+        local a = taz.species
+        local b = Cat.species
+        local c = Cat.count
+        local d = taz.describe()
+        Cat.species = "cat"
+        taz.species = "dog"
+        local e = taz.count
+        local f = taz.new
+        Cat.MAX = 3
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    CHECK_EQ("string", toString(requireType("a")));
+    CHECK_EQ("string", toString(requireType("b")));
+    CHECK_EQ("number", toString(requireType("c")));
+    CHECK_EQ("string", toString(requireType("d")));
+
+    CHECK_EQ(result.errors[0].location.begin.line, 22);
+    CHECK_EQ(
+        toString(result.errors[0]),
+        "taz.species is shared between all objects of its class and cannot be mutated through this object; mutate it through class 'Cat' "
+        "instead"
+    );
+    // a static member, a field or a function, isn't read through an object
+    CHECK_EQ(result.errors[1].location.begin.line, 23);
+    CHECK_EQ(result.errors[2].location.begin.line, 24);
+    // not even `__init` writes a const field on the class value
+    CHECK_EQ(result.errors[3].location.begin.line, 25);
+    CHECK_EQ(toString(result.errors[3]), "'MAX' is a const field of class 'Cat' and can't be assigned");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait's `static` and `shared` members land on implementing classes, and its
+// `traitonly` ones stay on the trait
+TEST_CASE_FIXTURE(ClassesFixture, "trait_member_placements_reach_implementing_classes")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Animal
+            shared sound = "..."
+            static registry: { string } = {}
+            traitonly hooks = 0
+            traitonly function count(): number
+                return Animal.hooks
+            end
+        end
+
+        class Dog implements Animal
+            shared sound = "woof"
+        end
+
+        local a = Dog.registry
+        local b = Dog().sound
+        local c = Animal.hooks
+        local d = Animal.count()
+        local e = Dog.hooks
+        local f = Dog().registry
+        local function make(cls: class<Animal>)
+            return cls.count
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ("{string}", toString(requireType("a")));
+    CHECK_EQ("string", toString(requireType("b")));
+    CHECK_EQ("number", toString(requireType("c")));
+    CHECK_EQ("number", toString(requireType("d")));
+    CHECK_EQ(result.errors[0].location.begin.line, 18);
+    CHECK_EQ(result.errors[1].location.begin.line, 19);
+    CHECK_EQ(result.errors[2].location.begin.line, 21);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `expect class to override` and `expect trait to override` say who provides a member
+TEST_CASE_FIXTURE(ClassesFixture, "trait_expectation_targets_are_checked")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Codec
+            expect class to override name: string
+            expect trait to override function encode(self): string
+            expect function decode(self): string
+        end
+
+        trait Json needs Codec
+            name = "json"
+            function encode(self): string return "{}" end
+            function decode(self): string return "" end
+        end
+
+        class Row implements Json
+            name = "row"
+        end
+
+        class Bad implements Codec
+            name = "bad"
+            function encode(self): string return "" end
+            function decode(self): string return "" end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    // a needing trait can't provide what only a class may
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+    CHECK_EQ(toString(result.errors[0]), "Trait 'Json' can't provide 'name': trait 'Codec' expects an implementing class to provide it");
+    // a class can't provide what only a needing trait may, reported on the entry and on the member
+    CHECK_EQ(result.errors[1].location.begin.line, 17);
+    CHECK_EQ(result.errors[2].location.begin.line, 19);
+    CHECK_EQ(toString(result.errors[2]), "Class 'Bad' can't provide 'encode': trait 'Codec' expects a trait that needs it to provide it");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): typing placement modifiers and expectation targets doesn't cascade
+TEST_CASE_FIXTURE(ClassesFixture, "typing_member_placements")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+    const char* before = "local a = 1\n";
+
+    const char* inClass = "class Cat(name: string)\n"
+                          "    shared species = \"Felis catus\"\n"
+                          "    static count = 0\n"
+                          "    static function make(name: string): Cat\n"
+                          "        return Cat(name)\n"
+                          "    end\n"
+                          "end";
+    checkTypewriting(*this, before, inClass, kTraitTypewriterAfter);
+
+    const char* inTrait = "trait Codec\n"
+                          "    expect class to override name: string\n"
+                          "    expect trait to override scoped function encode(self): string\n"
+                          "    traitonly registry = {}\n"
+                          "    shared final kind = \"codec\"\n"
+                          "end";
+    checkTypewriting(*this, before, inTrait, kTraitTypewriterAfter);
+}
+
 // Luwu Traits (rfcs/classes/traits.md): typing `Self` values doesn't cascade
 TEST_CASE_FIXTURE(ClassesFixture, "typing_self_class_values")
 {
@@ -5993,15 +6152,15 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_scoped_functions_and_qualified_implemen
 
     CheckResult result = check(R"(
         trait Json
-            function Self.encode(value: unknown): string
+            scoped function encode(value: unknown): string
                 return "json"
             end
 
-            function Self.serialize(self): string
+            scoped function serialize(self): string
                 return "default"
             end
 
-            expect function Self.tag(self): string
+            expect scoped function tag(self): string
         end
 
         class Cat(public name: string) implements Json
@@ -6041,7 +6200,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_qualified_implementations_are_checked")
 
     CheckResult result = check(R"(
         trait Json
-            expect function Self.tag(self): string
+            expect scoped function tag(self): string
         end
 
         trait Other
@@ -6076,7 +6235,7 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_qualified_implementations_are_checked")
     CHECK(toString(result.errors[2]).find("Other") != std::string::npos);
     // a needing trait declares the scoped functions the trait it needs expects
     CHECK_EQ(result.errors[3].location.begin.line, 21);
-    CHECK(toString(result.errors[3]).find("Self.tag") != std::string::npos);
+    CHECK(toString(result.errors[3]).find("scoped function tag") != std::string::npos);
 }
 
 // Luwu Traits (rfcs/classes/traits.md): typing scoped functions, qualified implementations and qualified reads
@@ -6086,10 +6245,10 @@ TEST_CASE_FIXTURE(ClassesFixture, "typing_trait_scoped_functions")
     const char* before = "local a = 1\n";
 
     const char* scoped = "trait Json\n"
-                         "    function Self.encode(value: unknown): string\n"
+                         "    scoped function encode(value: unknown): string\n"
                          "        return \"json\"\n"
                          "    end\n"
-                         "    expect function Self.tag(self): string\n"
+                         "    expect scoped function tag(self): string\n"
                          "end\n"
                          "class Cat() implements Json\n"
                          "    function Json.tag(self): string\n"

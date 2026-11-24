@@ -467,6 +467,8 @@ enum LuauOpcode
     // listed trait values, and C+N..C+2N-1 how many trait arguments each entry passes, as numbers.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_QUALIFIED for a qualified implementation, `function
     // Json.name`: C holds the function, C+1 the trait, and AUX names it. Emitted before the IMPLEMENTS form, which checks it.
+    // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_FIELD for a field on the class value (`shared x = 1`):
+    // C holds its value and AUX names it.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_TRAITCOPY for the class's own copy of a trait's
     // function, which the compiler made because the trait is declared in the same file. C holds the copy, C+1 the trait,
     // and AUX names the trait's function as a constant string. Emitted before the IMPLEMENTS form, which uses the copy
@@ -696,8 +698,9 @@ enum LuwuBytecodeTag
 #define LBC_LEGACY_LAST_TYPE LBC_TYPE_SYMNONE
 
 // Luwu Classes (rfcs/classes): per-member attribute bits serialized as part of
-// LBC_CONSTANT_CLASS_SHAPE. The single source of truth for these bits; both the compiler
-// (Compiler/src/Compiler.cpp) and the VM (VM/src/lclass.h/.cpp) use these directly.
+// LBC_CONSTANT_CLASS_SHAPE, as a varint. The single source of truth for these bits; both the compiler
+// (Compiler/src/Compiler.cpp) and the VM (VM/src/lclass.h/.cpp) use these directly. The VM keeps them in
+// 16 bits; native code only tests bits in the low byte.
 #define LBC_CLASSMEMBER_PRIVATE (1 << 0)
 #define LBC_CLASSMEMBER_CONST (1 << 1)
 // Set on properties that get a value when constructed: a default value expression (see AstClassProperty::defaultValue),
@@ -712,7 +715,7 @@ enum LuwuBytecodeTag
 // straight into each new instance, instead of being produced by the synthesized `__defaults` closure.
 // Implies LBC_CLASSMEMBER_HASDEFAULT.
 #define LBC_CLASSMEMBER_CONSTDEFAULT (1 << 3)
-// Luwu Traits (rfcs/classes/traits.md): set on a trait's function declared `function Self.name`, which implementing
+// Luwu Traits (rfcs/classes/traits.md): set on a trait's `scoped` function, which implementing
 // classes don't get as a member: they read it through the trait (luaR_getqualified). Shares its bit with
 // LBC_CLASSMEMBER_CONSTDEFAULT, which only fields carry.
 #define LBC_CLASSMEMBER_SCOPED (1 << 3)
@@ -735,6 +738,21 @@ enum LuwuBytecodeTag
 // reassign its `const` fields. Construction never reads `__init` by name, so it is unaffected. Lives
 // here so no compiler-emitted bit can collide with it.
 #define LBC_CLASSMEMBER_INITBLOCKED (1 << 7)
+// Luwu Traits (rfcs/classes/traits.md): a field with one value on the class (`shared`, `static`) or the trait
+// (`traitonly`) rather than one in each object. It has a static slot like a function, written through the class value
+// unless it's const. Writing it through an object raises.
+#define LBC_CLASSMEMBER_CLASSFIELD (1 << 8)
+// Luwu Traits (rfcs/classes/traits.md): a member readable through the class value only (`static`, a function without
+// `self`, or anything `traitonly`). Reading it through an object raises. These members take the last static slots,
+// from LuauClass::numberofobjectmembers on, so an object's slot check leaves them out.
+#define LBC_CLASSMEMBER_STATIC (1 << 9)
+// Luwu Traits (rfcs/classes/traits.md): a trait's member that implementing classes don't get (`traitonly`, and the
+// trait's `__create` and `__implemented`)
+#define LBC_CLASSMEMBER_TRAITONLY (1 << 10)
+// Luwu Traits (rfcs/classes/traits.md): an expected member only an implementing class may provide (`expect class to
+// override`), or only a trait that needs this one (`expect trait to override`)
+#define LBC_CLASSMEMBER_EXPECTCLASS (1 << 11)
+#define LBC_CLASSMEMBER_EXPECTTRAIT (1 << 12)
 
 // Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's `implements` list
 #define LBC_NEWCLASSMEMBER_IMPLEMENTS 1
@@ -743,6 +761,9 @@ enum LuwuBytecodeTag
 // Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's qualified implementation of a trait's
 // function, `function Json.name`: C holds the function, C+1 the trait, and AUX names the function as a constant string
 #define LBC_NEWCLASSMEMBER_QUALIFIED 3
+// Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for the value of a field on the class value
+// (LBC_CLASSMEMBER_CLASSFIELD): C holds the value and AUX names the field
+#define LBC_NEWCLASSMEMBER_FIELD 4
 
 // Luwu Traits (rfcs/classes/traits.md): bits of the shape flags varint of LBC_CONSTANT_CLASS_SHAPE, written after the member
 // counts.

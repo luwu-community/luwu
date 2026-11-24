@@ -1341,6 +1341,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_unknown_class_instance_properties_
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
         {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
     };
 
     CheckResult result = check(R"(
@@ -1373,10 +1374,10 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "writes_to_unknown_class_instance_properties_
     CHECK(pav0->key == "magnitude");
     CHECK(pav0->context == PropertyAccessViolation::CannotWrite);
 
-    auto* pav1 = get<PropertyAccessViolation>(result.errors[1]);
-    REQUIRE(pav1);
-    CHECK(pav1->key == "zero");
-    CHECK(pav1->context == PropertyAccessViolation::CannotWrite);
+    // Luwu Traits (rfcs/classes/traits.md): a function without `self` is static, so objects don't have it at all
+    auto* up1 = get<UnknownProperty>(result.errors[1]);
+    REQUIRE(up1);
+    CHECK(up1->key == "zero");
 
     // Luwu: upstream reports writing a member an object doesn't have as read-only (see the test above)
     auto* up2 = get<UnknownProperty>(result.errors[2]);

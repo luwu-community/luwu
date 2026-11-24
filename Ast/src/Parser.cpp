@@ -161,7 +161,35 @@ const std::unordered_set<std::string> CLASS_AND_TRAIT_KEYWORDS{
     "needs",
     "expect",
     "final",
+    "shared",
+    "static",
+    "traitonly",
+    "scoped",
 };
+
+// Luwu Traits (rfcs/classes/traits.md): the placement a modifier word gives a member, or nullopt for any other word
+std::optional<AstClassMemberPlacement> classMemberPlacementOf(AstName word)
+{
+    if (word == "shared")
+        return AstClassMemberPlacement::Shared;
+    if (word == "static")
+        return AstClassMemberPlacement::Static;
+    if (word == "traitonly")
+        return AstClassMemberPlacement::TraitOnly;
+    if (word == "scoped")
+        return AstClassMemberPlacement::Scoped;
+    return std::nullopt;
+}
+
+const char* classExpectTargetText(AstClassExpectTarget target)
+{
+    return target == AstClassExpectTarget::Trait ? "trait to override" : "class to override";
+}
+
+const char* const kConstFunctionError = "Functions in a %s are always const; remove 'const' here";
+
+const char* const kClassModifierOrder =
+    "expect, 'class to override' or 'trait to override', public or private, shared, static, traitonly or scoped, final, const";
 
 // Only ask this from a position that is unambiguously a field or a function, so the caller's message
 // can say which one it is.
@@ -2701,7 +2729,54 @@ bool Parser::classBodyLooksLikeStatement()
         return false;
 
     AstName ident(lexer.current().name);
+
+    // Luwu Traits (rfcs/classes/traits.md): `class to override` and `trait to override` are a member's modifiers
+    bool overrideTargetFollows = (ident == "class" || ident == "trait") && AstName(lexer.lookahead().name) == "to";
+    if (overrideTargetFollows)
+        return false;
+
     return ident == "class" || ident == "export" || ident == "type" || (ident == "trait" && traitsEnabled());
+}
+
+void Parser::reportClassModifierOrder(const std::vector<WrittenClassModifier>& written)
+{
+    // The same modifier twice, or two that can't go together: `public private`, `shared static`
+    for (size_t i = 0; i < written.size(); ++i)
+    {
+        for (size_t j = 0; j < i; ++j)
+        {
+            if (written[j].rank != written[i].rank)
+                continue;
+
+            if (strcmp(written[j].text, written[i].text) == 0)
+                report(written[i].location, "Remove the second '%s'", written[i].text);
+            else
+                report(written[i].location, "Remove '%s': this member is already '%s'", written[i].text, written[j].text);
+            break;
+        }
+    }
+
+    auto byRank = [](const WrittenClassModifier& a, const WrittenClassModifier& b)
+    {
+        return a.rank < b.rank;
+    };
+
+    if (std::is_sorted(written.begin(), written.end(), byRank))
+        return;
+
+    std::vector<WrittenClassModifier> ordered = written;
+    std::stable_sort(ordered.begin(), ordered.end(), byRank);
+
+    std::string text;
+    for (const WrittenClassModifier& modifier : ordered)
+    {
+        if (!text.empty())
+            text += " ";
+        text += modifier.text;
+    }
+
+    Location location(written.front().location, written.back().location);
+    report(location, "Write '%s' instead: modifiers go in the order %s", text.c_str(), kClassModifierOrder);
 }
 
 // Luwu Classes (rfcs/classes): the grammar is also in the RFC's "Class definition syntax" section.
@@ -2715,9 +2790,12 @@ bool Parser::classBodyLooksLikeStatement()
 // Luwu Traits (rfcs/classes/traits.md): a trait is parsed by the same function.
 // traitStatement ::= [`export'] `trait' Name [`<' GenericTypeListWithDefaults `>'] [`(' [ctorParam {`,' ctorParam}] `)']
 //                    [`needs' traitRefList] {traitMember} `end'
-// traitMember ::= classMember | [access] `final' `function' Name funcbody [`;']
-//              | `expect' [access] [`const'] Name [`:' Type] [`;']
-//              | `expect' [access] `function' Name [`?'] funcsignature [`;']
+// traitMember ::= classMember | [access] [placement] `final' `function' Name funcbody [`;']
+//              | `expect' [target] [access] [placement] [`const'] Name [`:' Type] [`;']
+//              | `expect' [target] [access] [placement] `function' Name [`?'] funcsignature [`;']
+// placement ::= `shared' | `static' | `traitonly' | `scoped'
+// target ::= `class' `to' `override' | `trait' `to' `override'
+// A class member may be `shared' or `static' too, after its access specifier.
 LUAU_NOINLINE AstStat* Parser::parseClassStat(
     const Location& start,
     bool exported,
@@ -3055,111 +3133,214 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         if (attributesFollow())
             parseMemberAttributes();
 
-        // Luwu Traits (rfcs/classes/traits.md): `expect` leads a trait member that implementing classes must declare
-        // themselves, before its access specifier: `expect private model: Model`, `expect public function fire(self)`.
-        // It is a keyword only where a member follows it, so `expect: number` is a field named `expect`.
+        // Luwu Traits (rfcs/classes/traits.md): a member's modifiers, in this order:
+        //   expect, `class to override` or `trait to override`, public or private, shared, static, traitonly or scoped,
+        //   final, const
+        // Each word is a modifier only where a member follows it, so `expect: number` is a field named `expect`. The
+        // words are collected first and their order checked after, so a misordered member still parses as written.
         std::optional<Location> expectLocation;
+        AstClassExpectTarget expectTarget = AstClassExpectTarget::Any;
+        std::optional<Location> expectTargetLocation;
+        AstClassMemberPlacement placement = AstClassMemberPlacement::Default;
+        std::optional<Location> placementLocation;
+        std::optional<Location> finalLocation;
+        std::optional<Location> constLocation;
 
-        bool expectFollows = FFlag::LuwuTraits && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "expect" &&
-                             (lexer.lookahead().type == Lexeme::Name || lexer.lookahead().type == Lexeme::ReservedFunction);
-        if (expectFollows)
-        {
-            expectLocation = lexer.current().location;
-
-            if (!isTrait)
-                report(*expectLocation, "Only traits can 'expect' members");
-
-            nextLexeme();
-        }
-
-        // Luwu Classes (rfcs/classes): functions in a class are always const, so `const function` is rejected
-        // rather than being read as a field -- it's valid outside a class, and easy to paste into one. The `const`
-        // is dropped so the function itself still parses.
-        auto rejectConstFunction = [&]()
-        {
-            if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const" &&
-                lexer.lookahead().type == Lexeme::ReservedFunction)
-            {
-                report(lexer.current().location, "Functions in a %s are always const; remove 'const' here", kind);
-                nextLexeme();
-            }
-        };
-
-        rejectConstFunction();
-
-        if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const")
-        {
-            const Lexeme& next = lexer.lookahead();
-            if (next.type == Lexeme::Name && (AstName(next.name) == "public" || AstName(next.name) == "private"))
-            {
-                report(lexer.current().location, "The 'const' modifier must come after the access specifier, e.g. '%s const'", next.name);
-                nextLexeme(); // skip the misplaced 'const' and let the access specifier parse normally
-            }
-        }
-
-        // An access specifier only counts as one when a member follows it. `public: number` is a member
-        // *named* `public`. The RFC disallows that name, and reporting it is clearer than reporting a
-        // missing field name (rfcs/classes).
-        auto qualifierIntroducesMember = [&]()
+        // An access specifier, like any modifier, only counts as one when a member follows it. `public: number` is a
+        // member *named* `public`. The RFC disallows that name, and reporting it is clearer than reporting a missing
+        // field name (rfcs/classes). An attribute can only introduce a method, so it counts as a member following the
+        // specifier: `private @native function ...`.
+        auto modifierIntroducesMember = [&]()
         {
             Lexeme::Type next = lexer.lookahead().type;
-            // An attribute can only introduce a method, so it counts as a member following the
-            // specifier: `private @native function ...`.
             return next == Lexeme::Name || next == Lexeme::ReservedFunction || next == Lexeme::Attribute || next == Lexeme::AttributeOpen;
         };
 
-        if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "public" && qualifierIntroducesMember())
-        {
-            qualifierLocation = lexer.current().location;
-            explicitPublicQualifierLocations.push_back(*qualifierLocation);
-            nextLexeme();
-        }
-        else if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "private" &&
-                 qualifierIntroducesMember())
-        {
-            qualifierLocation = lexer.current().location;
-            visibility = AstClassMemberVisibility::Private;
-            sawPrivateMember = true;
-            nextLexeme();
-        }
+        std::vector<WrittenClassModifier> written;
+        // set when a modifier is still being typed, which ends the member there
+        bool abandonedMember = false;
 
-        // `public @native function` -- the attributes may equally well follow the access specifier.
-        if (qualifierLocation && attributesFollow())
+        while (lexer.current().type == Lexeme::Name)
         {
-            if (attributes.size > 0)
+            AstName word(lexer.current().name);
+            Location location = lexer.current().location;
+            bool memberFollows = modifierIntroducesMember();
+
+            // Luwu Classes (rfcs/classes): functions in a class are always const, so `const function` is rejected
+            // rather than being read as a field -- it's valid outside a class, and easy to paste into one. The `const`
+            // is dropped so the function itself still parses.
+            if (word == "const" && lexer.lookahead().type == Lexeme::ReservedFunction)
             {
-                report(lexer.current().location, "Attributes on a %s member must all be written on the same side of the access specifier", kind);
+                report(location, kConstFunctionError, kind);
+                nextLexeme();
+                continue;
+            }
 
-                // Report and keep going: both lists are still kept on the function, so the member
-                // behaves as written and the CST has an entry for every attribute it prints.
-                AstArray<AstAttr*> after = parseAttributes(AstAttr::Context::ClassMember, FFlag::LuauCstAttr ? &cstAttrLists : nullptr);
-                attributes = concatAttributes(attributes, after);
+            std::optional<AstClassMemberPlacement> placementWord = FFlag::LuwuTraits ? classMemberPlacementOf(word) : std::nullopt;
+            // `class to override` or `trait to override`. Right after `expect`, `class` or `trait` followed by another
+            // name on its line is the phrase too, half typed, since neither can name a field there.
+            bool nameFollowsOnLine =
+                lexer.lookahead().type == Lexeme::Name && lexer.lookahead().location.begin.line == location.begin.line;
+            bool afterExpect = !written.empty() && written.back().rank == WrittenClassModifier::Expect;
+            bool targetFollows = FFlag::LuwuTraits && (word == "class" || word == "trait") && nameFollowsOnLine &&
+                                 (AstName(lexer.lookahead().name) == "to" || afterExpect);
+
+            if (targetFollows)
+            {
+                AstClassExpectTarget target = word == "class" ? AstClassExpectTarget::Class : AstClassExpectTarget::Trait;
+                nextLexeme(); // `class` or `trait`
+
+                // Reports a missing word of the phrase. A prefix of it is the word being typed, which is consumed so the
+                // member reports nothing else.
+                bool halfTyped = false;
+                auto phraseWord = [&](const char* expected, const char* message)
+                {
+                    const Lexeme& current = lexer.current();
+                    if (current.type == Lexeme::Name && AstName(current.name) == expected)
+                    {
+                        nextLexeme();
+                        return true;
+                    }
+
+                    report(current.location, message, word.value, current.toString().c_str());
+
+                    bool prefix = current.type == Lexeme::Name && current.location.begin.line == location.begin.line &&
+                                  strncmp(expected, current.name, strlen(current.name)) == 0;
+                    if (prefix)
+                    {
+                        halfTyped = true;
+                        nextLexeme();
+                    }
+                    return false;
+                };
+
+                Location end = lexer.current().location;
+                bool complete = phraseWord("to", "Expected 'to override' after '%s', got %s");
+                if (complete)
+                {
+                    end = lexer.current().location;
+                    phraseWord("override", "Expected 'override' after '%s to', got %s");
+                }
+
+                if (halfTyped)
+                {
+                    abandonedMember = true;
+                    break;
+                }
+
+                Location phrase(location, end);
+                const char* text = target == AstClassExpectTarget::Class ? "class to override" : "trait to override";
+                written.push_back({WrittenClassModifier::Target, text, phrase});
+
+                if (!expectTargetLocation)
+                {
+                    expectTarget = target;
+                    expectTargetLocation = phrase;
+                }
+                continue;
+            }
+
+            if (!memberFollows)
+                break;
+
+            if (word == "public" || word == "private")
+            {
+                written.push_back({WrittenClassModifier::Access, word.value, location});
+
+                if (!qualifierLocation)
+                {
+                    qualifierLocation = location;
+                    if (word == "private")
+                    {
+                        visibility = AstClassMemberVisibility::Private;
+                        sawPrivateMember = true;
+                    }
+                    else
+                        explicitPublicQualifierLocations.push_back(location);
+                }
+
+                nextLexeme();
+
+                // `public @native function` -- the attributes may equally well follow the access specifier.
+                if (attributesFollow())
+                {
+                    if (attributes.size > 0)
+                    {
+                        report(lexer.current().location, "Attributes on a %s member must all be written on the same side of the access specifier", kind);
+
+                        // Report and keep going: both lists are still kept on the function, so the member
+                        // behaves as written and the CST has an entry for every attribute it prints.
+                        AstArray<AstAttr*> after = parseAttributes(AstAttr::Context::ClassMember, FFlag::LuauCstAttr ? &cstAttrLists : nullptr);
+                        attributes = concatAttributes(attributes, after);
+                    }
+                    else
+                        parseMemberAttributes();
+                }
+                continue;
+            }
+
+            // The remaining modifiers can't be followed by an attribute
+            bool nameOrFunctionFollows = lexer.lookahead().type == Lexeme::Name || lexer.lookahead().type == Lexeme::ReservedFunction;
+            if (!nameOrFunctionFollows)
+                break;
+
+            if (FFlag::LuwuTraits && word == "expect")
+            {
+                written.push_back({WrittenClassModifier::Expect, "expect", location});
+                if (!expectLocation)
+                    expectLocation = location;
+            }
+            else if (placementWord)
+            {
+                written.push_back({WrittenClassModifier::Placement, word.value, location});
+                if (!placementLocation)
+                {
+                    placement = *placementWord;
+                    placementLocation = location;
+                }
+            }
+            else if (FFlag::LuwuTraits && word == "final")
+            {
+                written.push_back({WrittenClassModifier::Final, "final", location});
+                if (!finalLocation)
+                    finalLocation = location;
+            }
+            else if (word == "const" && lexer.lookahead().type == Lexeme::Name)
+            {
+                written.push_back({WrittenClassModifier::Const, "const", location});
+                if (!constLocation)
+                    constLocation = location;
             }
             else
-                parseMemberAttributes();
-        }
-
-        // `public const function`
-        if (qualifierLocation)
-            rejectConstFunction();
-
-        // Luwu Traits (rfcs/classes/traits.md): `final` follows the access specifier, like `const`. A final function can't
-        // be defined by an implementing class.
-        std::optional<Location> finalLocation;
-
-        bool finalFollows = FFlag::LuwuTraits && lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "final" &&
-                            (lexer.lookahead().type == Lexeme::Name || lexer.lookahead().type == Lexeme::ReservedFunction);
-        if (finalFollows)
-        {
-            finalLocation = lexer.current().location;
-
-            if (!isTrait)
-                report(*finalLocation, "Only trait members can be 'final'");
-            else if (expectLocation)
-                report(*finalLocation, "Expected members can't be 'final'");
+                break;
 
             nextLexeme();
         }
+
+        if (abandonedMember)
+            continue;
+
+        reportClassModifierOrder(written);
+
+        if (expectLocation && !isTrait)
+            report(*expectLocation, "Only traits can 'expect' members");
+        else if (expectTargetLocation && !isTrait)
+            report(*expectTargetLocation, "Only traits can 'expect' members");
+        else if (expectTargetLocation && !expectLocation)
+            report(*expectTargetLocation, "Write 'expect' before '%s': it says who provides an expected member", classExpectTargetText(expectTarget));
+
+        bool placedOnlyInTraits = placement == AstClassMemberPlacement::TraitOnly || placement == AstClassMemberPlacement::Scoped;
+        if (placedOnlyInTraits && !isTrait)
+            report(*placementLocation, "Only traits can have '%s' members", toString(placement));
+        else if (expectLocation && placement == AstClassMemberPlacement::TraitOnly)
+            report(*placementLocation, "Expected members can't be 'traitonly': no class or other trait could provide them");
+
+        if (finalLocation && !isTrait)
+            report(*finalLocation, "Only trait members can be 'final'");
+        else if (finalLocation && expectLocation)
+            report(*finalLocation, "Expected members can't be 'final'");
+        else if (finalLocation && placement == AstClassMemberPlacement::TraitOnly)
+            report(*finalLocation, "Remove 'final': nothing can override a 'traitonly' member");
 
         // Attributes are parsed before the member kind is known, and both members can carry them, so
         // the only shapes rejected here are the ones that are no member at all -- the class's own
@@ -3196,17 +3377,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         // the class body.
         if (lexer.current().type != Lexeme::ReservedFunction)
         {
-            std::optional<Location> constLocation;
-            bool isConst = false;
-            // As with the access specifiers above, `const` is only the modifier when a field name
-            // follows it; `const = 1` declares a field named `const`.
-            if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const" &&
-                lexer.lookahead().type == Lexeme::Name)
-            {
-                constLocation = lexer.current().location;
-                isConst = true;
-                nextLexeme();
-            }
+            bool isConst = constLocation.has_value();
 
             if (finalLocation && constLocation)
                 report(*constLocation, "'final' fields are already const");
@@ -3228,6 +3399,22 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             // body is how an *unqualified* parameter gets its access specifier. A parameter that already
             // has one can be restated, but not contradicted: with `public text` in the header and
             // `private text` in the body, a reader couldn't trust either.
+            // Luwu Traits (rfcs/classes/traits.md): a shared, static or trait-only field is one value, on the class or the
+            // trait, and a scoped one isn't built yet
+            bool onClassValue = placement == AstClassMemberPlacement::Shared || placement == AstClassMemberPlacement::Static ||
+                                placement == AstClassMemberPlacement::TraitOnly;
+            // a bare name after `scoped` is most often `function` being typed
+            bool fieldIsWritten = lexer.current().type == ':' || lexer.current().type == '=';
+            if (placement == AstClassMemberPlacement::Scoped && fieldIsWritten)
+                report(*placementLocation, "Only functions can be 'scoped' for now; scoped fields aren't implemented yet");
+            else if (onClassValue && findPrimaryConstructorParam(propName->name) >= 0)
+                report(
+                    *placementLocation,
+                    "'%s' is a parameter, so it's a field of each object and can't be '%s'",
+                    propName->name.value,
+                    toString(placement)
+                );
+
             if (int paramIndex = findPrimaryConstructorParam(propName->name); paramIndex >= 0)
             {
                 const AstClassPrimaryConstructorParamQualifiers& param = primaryConstructor->argsQualifiers.data[paramIndex];
@@ -3286,6 +3473,14 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 }
                 else
                     propType = parseType();
+            }
+            else if (lexer.current().type == '=' && onClassValue)
+            {
+                // Luwu Traits (rfcs/classes/traits.md): a field on the class value gets its value once, when the class
+                // statement runs, so its expression is part of the enclosing function and sees no constructor parameters
+                equalsLocation = lexer.current().location;
+                nextLexeme();
+                defaultValue = parseExpr();
             }
             else if (lexer.current().type == '=')
             {
@@ -3383,6 +3578,10 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                         attributes,
                         expectLocation,
                         finalLocation,
+                        expectTarget,
+                        expectTargetLocation,
+                        placement,
+                        placementLocation,
                     }
                 );
             }
@@ -3391,20 +3590,22 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         {
             validateAttributeContexts(attributes, AstAttr::Context::InlinableFunction);
 
+            // `const shared function`, where the `const` came before another modifier
+            if (constLocation)
+                report(*constLocation, kConstFunctionError, kind);
+
             auto matchFunction = lexer.current();
             nextLexeme();
 
             Name name = parseName("method name");
 
-            // Luwu Traits (rfcs/classes/traits.md): `function Self.name` in a trait scopes the function to the trait, and
-            // `function Json.name` in a class implements trait Json's `name` for Json alone
-            std::optional<Location> scopeLocation;
+            // Luwu Traits (rfcs/classes/traits.md): `function Json.name` in a class implements trait Json's `name` for Json
+            // alone. A trait scopes its own functions with `scoped` instead.
             AstExpr* qualifiedTrait = nullptr;
-            if (FFlag::LuwuTraits && lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
+            if (FFlag::LuwuTraits && !isTrait && lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
             {
                 Location qualifierStart = name.location;
-                AstExpr* qualifier = isTrait ? nullptr : nameExpr(name);
-                bool selfOnly = name.name == "Self";
+                AstExpr* qualifier = nameExpr(name);
 
                 while (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
                 {
@@ -3413,36 +3614,23 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                     Name next = parseName("method name");
 
                     if (lexer.current().type == '.' && lexer.lookahead().type == Lexeme::Name)
-                    {
-                        selfOnly = false;
-                        if (qualifier)
-                            qualifier = allocator.alloc<AstExprIndexName>(
-                                Location(qualifierStart, next.location), qualifier, next.name, next.location, opPosition, '.'
-                            );
-                    }
+                        qualifier = allocator.alloc<AstExprIndexName>(
+                            Location(qualifierStart, next.location), qualifier, next.name, next.location, opPosition, '.'
+                        );
 
                     if (lexer.current().type != '.')
                         name = next;
                 }
 
-                if (isTrait)
-                {
-                    if (!selfOnly)
-                        report(qualifierStart, "A trait can only scope a function to itself: write 'function Self.%s'", name.name.value);
-                    scopeLocation = qualifierStart;
-                }
-                else
-                {
-                    if (implements.size == 0)
-                        report(
-                            qualifierStart,
-                            "Class '%s' implements no traits, so it can't implement '%s.%s'",
-                            nameLocal->name.value,
-                            printedQualifier(qualifier).c_str(),
-                            name.name.value
-                        );
-                    qualifiedTrait = qualifier;
-                }
+                if (implements.size == 0)
+                    report(
+                        qualifierStart,
+                        "Class '%s' implements no traits, so it can't implement '%s.%s'",
+                        nameLocal->name.value,
+                        printedQualifier(qualifier).c_str(),
+                        name.name.value
+                    );
+                qualifiedTrait = qualifier;
             }
 
             // Luwu Traits (rfcs/classes/traits.md): `expect function name?(self)` is an expected function a class may leave out
@@ -3494,9 +3682,17 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             if (body->args.size > 0 && body->args.data[0]->name == "self" && body->args.data[0]->annotation != nullptr)
                 report(body->args.data[0]->annotation->location, "The 'self' parameter cannot have a type annotation");
 
-            bool scopedOrQualified = scopeLocation || qualifiedTrait;
-            bool specialName = name.name == "__init" || name.name == "__create" || name.name == "__implemented" ||
-                               ALLOWED_METAMETHODS.count(name.name.value) > 0 || EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0;
+            bool scopedOrQualified = placement == AstClassMemberPlacement::Scoped || qualifiedTrait;
+            bool hookName = name.name == "__init" || name.name == "__create" || name.name == "__implemented";
+            bool specialName =
+                hookName || ALLOWED_METAMETHODS.count(name.name.value) > 0 || EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0;
+
+            // Luwu Traits (rfcs/classes/traits.md): the VM finds these where they always are, so only a trait's own hooks
+            // can be marked as the trait's alone, which they are anyway
+            bool placedSpecialName = placementLocation && specialName && placement != AstClassMemberPlacement::Scoped &&
+                                     !(hookName && placement == AstClassMemberPlacement::TraitOnly);
+            if (placedSpecialName)
+                report(*placementLocation, "'%s' can't be '%s'", name.name.value, toString(placement));
 
             // Luwu Traits (rfcs/classes/traits.md): a scoped or qualified function is only reached through its trait, so
             // any `__` name is free except the ones the VM looks up on the class
@@ -3612,7 +3808,10 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                         expectLocation,
                         isOptional,
                         finalLocation,
-                        scopeLocation,
+                        expectTarget,
+                        expectTargetLocation,
+                        placement,
+                        placementLocation,
                         qualifiedTrait,
                     }
                 );

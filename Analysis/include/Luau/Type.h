@@ -550,6 +550,10 @@ struct Property
     // default, so not even an implementing class's `__init` may assign it.
     bool isFinal = false;
 
+    // Luwu Traits (rfcs/classes/traits.md): a `shared` field read through an object. It's one value on the class, which
+    // only the class value may write.
+    bool isSharedField = false;
+
     // If this property was inferred from an expression, this field will be
     // populated with the source location of the corresponding table property.
     std::optional<Location> location = std::nullopt;
@@ -842,13 +846,24 @@ struct ExternType
         std::vector<Parameter> parameters;
         // The trait's `final` functions, which implementing classes can't define.
         std::set<Name> finals;
-        // The functions scoped to the trait (`function Self.name`) and their types. Implementing classes don't get them as
+        // The functions scoped to the trait (`scoped function name`) and their types. Implementing classes don't get them as
         // members: code reads them through the trait (`obj:Trait:name()`, `Class:Trait.name`). The trait's value has the
         // ones with a body. An optional expected function's type is `F?`.
         std::map<Name, TypeId> scopedFunctions;
-        // The scoped functions the trait expects (`expect function Self.name`), and whether each is optional. A class
+        // The scoped functions the trait expects (`expect scoped function name`), and whether each is optional. A class
         // that lists the trait implements them (`function Trait.name`); a trait that needs it declares them.
         std::map<Name, bool> scopedExpectations;
+        // The trait's `traitonly` members, which implementing classes and `class<Trait>` don't get. Its `__init`,
+        // `__create` and `__implemented` are the trait's alone too, without being listed here.
+        std::set<Name> traitOnly;
+        // Who may provide an expected member, for the members whose `expect` says so (`expect class to override`,
+        // `expect trait to override`). Any provider may fill the others.
+        enum class Provider
+        {
+            Class,
+            Trait,
+        };
+        std::map<Name, Provider> expectTargets;
         // The members `props` has from the traits this one needs (directly or not): every implementing class implements
         // those too, so a trait-typed value has their members. They stay those traits' members everywhere else.
         std::set<Name> fromNeeds;
