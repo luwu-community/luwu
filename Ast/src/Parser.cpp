@@ -4035,8 +4035,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             // has one can be restated, but not contradicted: with `public text` in the header and
             // `private text` in the body, a reader couldn't trust either.
             // Luwu Traits (rfcs/classes/traits.md): a shared, static or trait-only field is one value, on the class or the
-            // trait. A scoped field's value is evaluated once too, and implementing classes copy it into each object unless
-            // it's shared or static.
+            // trait. A scoped field is in the trait's slot. Neither can be a constructor parameter's field.
             bool onClassValue = placement != AstClassMemberPlacement::Default || scopedLocation;
             if (onClassValue && paramIndex >= 0)
             {
@@ -4087,6 +4086,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 propType = parseType();
             }
 
+            // Luwu Traits (rfcs/classes/traits.md): a trait's per-object scoped field, or a class's value for a scoped field
+            bool scopedValue = qualifiedTrait || (scopedLocation && placement == AstClassMemberPlacement::Default);
+
             std::optional<Location> equalsLocation;
             AstExpr* defaultValue = nullptr;
             if (declared && lexer.current().type == '=')
@@ -4103,6 +4105,19 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 }
                 else
                     propType = parseType();
+            }
+            else if (lexer.current().type == '=' && scopedValue)
+            {
+                // Luwu Traits (rfcs/classes/traits.md): each object computes the value when the field is per object, so it's
+                // parsed one function deeper like a field default. A trait's `__traitinit` or a function the class statement
+                // creates computes it, so it sees no constructor parameters.
+                equalsLocation = lexer.current().location;
+                nextLexeme();
+
+                static Function dummyFunction;
+                functionStack.emplace_back(dummyFunction);
+                defaultValue = parseExpr();
+                functionStack.pop_back();
             }
             else if (lexer.current().type == '=' && onClassValue)
             {

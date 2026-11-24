@@ -196,6 +196,14 @@ static bool isObjectField(const AstClassProperty& prop)
     return prop.placement == AstClassMemberPlacement::Default && !prop.scopedLocation && !prop.qualifiedTrait;
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a trait's scoped field that each object has a value of, and whose default isn't a
+// constant. Every object gets a fresh value, like a field default: the trait's `__traitinit` writes it, qualified.
+static bool isComputedScopedObjectField(const AstClassProperty& prop)
+{
+    bool perObject = prop.scopedLocation && prop.placement == AstClassMemberPlacement::Default;
+    return perObject && !prop.expectLocation && prop.defaultValue && !isConstantClassDefault(prop.defaultValue);
+}
+
 // Luwu Classes (rfcs/classes): whether the class or trait body declares a field `name`, which restates the primary
 // constructor parameter of that name
 static bool classBodyDeclaresProperty(AstStatClass* decl, AstName name)
@@ -4423,13 +4431,58 @@ struct Compiler
         }
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): whether constructing `cls` computes a per-object scoped field's value: a trait's
+    // `__traitinit` writes one qualified, and a value the class gives one runs in INITTRAITS (luaR_traitinitrunner). Either
+    // way only INITTRAITS can initialize the object's trait fields. `plan` says every trait is in this file.
+    bool computesScopedObjectFields(AstStatClass* cls, const TraitInitPlan& plan)
+    {
+        for (AstStatClass* trait : plan.initOrder)
+        {
+            for (const AstClassMember& member : trait->members)
+            {
+                const AstClassProperty* prop = member.get_if<AstClassProperty>();
+                if (prop && isComputedScopedObjectField(*prop))
+                    return true;
+            }
+        }
+
+        for (const AstClassMember& member : cls->members)
+        {
+            const AstClassProperty* prop = member.get_if<AstClassProperty>();
+            if (!prop || !prop->qualifiedTrait || !qualifiedFieldFn.contains(prop->defaultValue))
+                continue;
+
+            // a value for a field on the class runs once, as the class statement runs
+            AstStatClass* trait = sameFileTrait(prop->qualifiedTrait);
+            const AstClassProperty* target = trait ? findScopedField(trait, prop->name) : nullptr;
+            bool onClass = target && target->placement != AstClassMemberPlacement::Default;
+            if (!onClass)
+                return true;
+        }
+
+        return false;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): the scoped field `name` of `trait`, if it declares one
+    static const AstClassProperty* findScopedField(AstStatClass* trait, AstName name)
+    {
+        for (const AstClassMember& member : trait->members)
+        {
+            const AstClassProperty* prop = member.get_if<AstClassProperty>();
+            if (prop && prop->scopedLocation && prop->name == name)
+                return prop;
+        }
+
+        return nullptr;
+    }
+
     // Luwu Traits (rfcs/classes/traits.md): whether constructing `cls` has no trait fields to initialize, so construction
     // can leave out INITTRAITS. That takes knowing every trait it gets (traitInitPlan): a trait from another module could
     // have anything.
     bool traitsNeedNoInit(AstStatClass* cls)
     {
         const TraitInitPlan* plan = traitInitPlan(cls);
-        if (!plan)
+        if (!plan || computesScopedObjectFields(cls, *plan))
             return false;
 
         return std::none_of(
@@ -4471,7 +4524,7 @@ struct Compiler
 
         size_t argCount = implementsArgCount(cls);
         const TraitInitPlan* plan = traitInitPlan(cls);
-        bool inlined = plan && traitInitInlinable(*plan);
+        bool inlined = plan && traitInitInlinable(*plan) && !computesScopedObjectFields(cls, *plan);
 
         RegScope rs(this);
 
@@ -4775,12 +4828,13 @@ struct Compiler
                         checkConstant(propNameCid, prop.nameLocation);
 
                         // Luwu Traits (rfcs/classes/traits.md): a field on the class value has a static slot, which
-                        // gets its value now, as the class statement runs
+                        // gets its value now, as the class statement runs. A scoped field's slot holds the value each
+                        // object starts with when that's a constant, and `__traitinit` computes the others.
                         if (!isObjectField(prop))
                         {
                             addStaticSlot(propNameCid, classFieldFlags(decl, prop));
 
-                            if (prop.defaultValue && !prop.expectLocation)
+                            if (prop.defaultValue && !prop.expectLocation && !isComputedScopedObjectField(prop))
                             {
                                 compileExprTemp(prop.defaultValue, temp);
                                 bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_FIELD, temp);
@@ -5015,10 +5069,23 @@ struct Compiler
 
                 // the parser refuses a qualified field without a value
                 LUAU_ASSERT(method || prop->defaultValue);
+                const QualifiedFieldFunction* computed = prop ? qualifiedFieldFn.find(prop->defaultValue) : nullptr;
+                uint8_t form = LBC_NEWCLASSMEMBER_QUALIFIEDFIELD;
+
                 if (method)
+                {
                     compileExprFunction(method->function, qualifiedRegs);
+                    form = LBC_NEWCLASSMEMBER_QUALIFIED;
+                }
+                else if (computed)
+                {
+                    compileExprFunction(computed->function, qualifiedRegs);
+                    form = LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN;
+                }
                 else
+                {
                     compileExprTemp(prop->defaultValue, qualifiedRegs);
+                }
 
                 compileExprTemp(trait, uint8_t(qualifiedRegs + 1));
 
@@ -5026,7 +5093,7 @@ struct Compiler
                 int nameCid = bytecode.addConstantString(sref(name));
                 checkConstant(nameCid, method ? method->nameLocation : prop->nameLocation);
 
-                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, method ? LBC_NEWCLASSMEMBER_QUALIFIED : LBC_NEWCLASSMEMBER_QUALIFIEDFIELD, qualifiedRegs);
+                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, form, qualifiedRegs);
                 bytecode.emitAux(nameCid);
             }
         }
@@ -10189,6 +10256,13 @@ struct Compiler
         }
     };
 
+    // Luwu Traits (rfcs/classes/traits.md): the function that computes a class's value for a trait's scoped field, and the class
+    struct QualifiedFieldFunction
+    {
+        AstExprFunction* function = nullptr;
+        AstStatClass* owner = nullptr;
+    };
+
     // A single `field = defaultExpr` to inline into a class's `__init` prologue.
     struct ClassFieldDefault
     {
@@ -10223,6 +10297,7 @@ struct Compiler
         DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner;
         DenseHashMap<AstName, AstStatClass*>& classByName;
         DenseHashSet<AstStatClass*>& classesWithPrivateMembers;
+        DenseHashMap<AstExpr*, QualifiedFieldFunction>& qualifiedFieldFn;
         std::vector<AstExprFunction*>& functionsToCompile;
 
         ClassInitDefaultsVisitor(
@@ -10239,6 +10314,7 @@ struct Compiler
             DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner,
             DenseHashMap<AstName, AstStatClass*>& classByName,
             DenseHashSet<AstStatClass*>& classesWithPrivateMembers,
+            DenseHashMap<AstExpr*, QualifiedFieldFunction>& qualifiedFieldFn,
             std::vector<AstExprFunction*>& functionsToCompile
         )
             : allocator(allocator)
@@ -10254,6 +10330,7 @@ struct Compiler
             , methodOwner(methodOwner)
             , classByName(classByName)
             , classesWithPrivateMembers(classesWithPrivateMembers)
+            , qualifiedFieldFn(qualifiedFieldFn)
             , functionsToCompile(functionsToCompile)
         {
         }
@@ -10439,6 +10516,15 @@ struct Compiler
             return allocator.alloc<AstStatAssign>(Location(nameLocation, value->location), AstArray<AstExpr*>{vars, 1}, AstArray<AstExpr*>{values, 1});
         }
 
+        // Luwu Traits (rfcs/classes/traits.md): `self:Trait.name = value` in a function of the trait `trait`
+        AstStat* buildScopedFieldAssign(AstLocal* self, AstStatClass* trait, const AstClassProperty& prop)
+        {
+            AstStat* assign = buildFieldAssign(self, prop.name, prop.nameLocation, prop.defaultValue);
+            AstExprIndexName* target = assign->as<AstStatAssign>()->vars.data[0]->as<AstExprIndexName>();
+            target->qualifiedTrait = allocator.alloc<AstExprLocal>(prop.nameLocation, trait->name, /* upvalue= */ true);
+            return assign;
+        }
+
         template<typename T>
         AstArray<T> copyToAst(const std::vector<T>& items)
         {
@@ -10491,7 +10577,8 @@ struct Compiler
 
         // Luwu Traits (rfcs/classes/traits.md): a trait's `__traitinit(self, params...)` assigns every field of `self` the
         // trait provides that isn't a constant (those are in the trait's shape, see isTraitConstantField): a default, or
-        // the parameter a field restates, then the parameters the body doesn't restate. It writes by name, and the VM
+        // the parameter a field restates, then the parameters the body doesn't restate. A per-object scoped field whose
+        // default isn't a constant is written qualified, in its place among the fields. It writes by name, and the VM
         // only ever runs an implementing class's copy of it, so its slot caches learn that class's layout. The VM calls a
         // class's copy on every construction, with the arguments of the class's `implements` entry.
         void visitTrait(AstStatClass* node)
@@ -10522,6 +10609,10 @@ struct Compiler
                     // a field with neither starts out nil, as every member does
                     if (value)
                         body.push_back(buildFieldAssign(self, prop->name, prop->nameLocation, value));
+                }
+                else if (prop && isComputedScopedObjectField(*prop))
+                {
+                    body.push_back(buildScopedFieldAssign(self, node, *prop));
                 }
                 else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
                 {
@@ -10641,6 +10732,17 @@ struct Compiler
                         {
                             if (prop.visibility == AstClassMemberVisibility::Private)
                                 classesWithPrivateMembers.insert(node);
+
+                            // Luwu Traits (rfcs/classes/traits.md): a value for a trait's scoped field that isn't a constant is
+                            // computed by a function. The runtime knows whether the field is on the class, where the function
+                            // runs once, or in each object, where it runs for every object; the compiler may not see the trait.
+                            bool computedScopedValue = prop.qualifiedTrait && prop.defaultValue && !isConstantClassDefault(prop.defaultValue);
+                            if (computedScopedValue)
+                            {
+                                AstExprFunction* fn = buildReturningFunction(node, prop.defaultValue->location, {prop.defaultValue}, prop.name.value);
+                                qualifiedFieldFn[prop.defaultValue] = QualifiedFieldFunction{fn, node};
+                                functionsToCompile.push_back(fn);
+                            }
 
                             // Luwu Traits (rfcs/classes/traits.md): a field on the class value isn't part of an object
                             if (!isObjectField(prop))
@@ -11060,6 +11162,9 @@ struct Compiler
     // Classes that declare at least one private member. Their methods inline into outside code only when
     // classInlinedBodyKeepsPrivateAccess holds (see tryResolveMethodCall).
     DenseHashSet<AstStatClass*> classesWithPrivateMembers{nullptr};
+    // Luwu Traits (rfcs/classes/traits.md): populated by ClassInitDefaultsVisitor. A class's value for a trait's scoped field
+    // (`Animal.items = {}`) that isn't a constant maps to a function that computes it (LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN).
+    DenseHashMap<AstExpr*, QualifiedFieldFunction> qualifiedFieldFn{nullptr};
     // Seeded false for every hoisted (top-level) class by preallocateHoistedClasses, flipped to
     // true by compileClassDeclaration right after that class's real LOADKX write is emitted, ahead
     // of compiling its methods. A class local is only safe to capture immutably once this is true:
@@ -11214,6 +11319,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
             compiler.classMethodOwner,
             compiler.classByName,
             compiler.classesWithPrivateMembers,
+            compiler.qualifiedFieldFn,
             functions
         );
         root->visit(&classInitDefaultsVisitor);
@@ -11236,6 +11342,9 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
 
         for (auto [decl, fn] : compiler.classImplementsFn)
             compiler.classLexicalOwner[fn] = decl;
+
+        for (auto [value, fn] : compiler.qualifiedFieldFn)
+            compiler.classLexicalOwner[fn.function] = fn.owner;
 
         for (auto [name, decl] : compiler.classByName)
         {

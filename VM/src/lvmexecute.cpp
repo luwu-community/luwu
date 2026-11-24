@@ -3815,12 +3815,13 @@ reentry:
 
                 // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function, or its value of a
                 // trait's scoped field
-                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
+                bool qualified = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD ||
+                                 LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN;
+                if (qualified)
                 {
                     TValue* name = VM_KV(aux);
                     LUAU_ASSERT(ttisstring(name));
-                    bool isfield = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD;
-                    VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc, isfield));
+                    VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc, LUAU_INSN_B(insn)));
                     VM_NEXT();
                 }
 
