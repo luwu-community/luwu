@@ -996,4 +996,21 @@ expectpass("native class methods", function()
     assert(not pcall(NcgCounter.bump, NcgNamedBox))
     assert(not pcall(NcgNamedBox.named, NcgCounter))
 end)
+-- Luwu Traits (rfcs/classes/traits.md): a class value's own `__tostring`, called with the class
+class NcgShown
+    static count = 0
+
+    function __tostring(Self)
+        Self.count += 1
+        return "NcgShown"
+    end
+end
+
+expectpass("native class value tostring", function()
+    local parts = {}
+    for i = 1, 50 do
+        parts[i] = tostring(NcgShown)
+    end
+    assert(table.concat(parts) == string.rep("NcgShown", 50) and NcgShown.count == 50)
+end)
 return 'OK'
