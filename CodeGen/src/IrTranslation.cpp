@@ -1585,6 +1585,16 @@ void translateInstGetTableN(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::JUMP, next);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): only objects have positions, and an object's class decides where each one
+// is, so the interpreter's implementation reads it. A read the compiler can prove the class of is a field read instead.
+void translateInstGetPositional(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    int rb = LUAU_INSN_B(*pc);
+
+    build.inst(IrCmd::FALLBACK_GETPOSITIONAL, build.constUint(pcpos), build.vmReg(ra), build.vmReg(rb));
+}
+
 void translateInstSetTableN(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);
