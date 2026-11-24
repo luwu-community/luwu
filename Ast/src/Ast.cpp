@@ -1235,6 +1235,25 @@ std::string toString(AstClassMemberVisibility visibility)
     }
 }
 
+const char* toString(AstClassMemberPlacement placement)
+{
+    switch (placement)
+    {
+    case AstClassMemberPlacement::Shared:
+        return "shared";
+    case AstClassMemberPlacement::Static:
+        return "static";
+    case AstClassMemberPlacement::TraitOnly:
+        return "traitonly";
+    case AstClassMemberPlacement::Scoped:
+        return "scoped";
+    case AstClassMemberPlacement::Default:
+        break;
+    }
+
+    return nullptr;
+}
+
 template<>
 std::optional<AstClassMemberVisibility> fromString<AstClassMemberVisibility>(std::string_view s)
 {

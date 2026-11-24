@@ -801,36 +801,52 @@ static int loadsafe(
                 lco->istrait = (shapeFlags & LBC_CLASSSHAPE_TRAIT) != 0;
                 lco->traitspending = (shapeFlags & LBC_CLASSSHAPE_IMPLEMENTS) != 0;
 
-                // Members are written properties-first, so index idx here is exactly the member's runtime
-                // offset.
+                // A reserved `__init` goes before the members only the class value can read (LBC_CLASSMEMBER_STATIC),
+                // which the compiler writes last, so those stay at the end.
+                uint32_t memberOffset = 0;
+                bool initPlaced = hasCustomInit;
+
+                auto placeReservedInit = [&]()
+                {
+                    lco->offsettomember[memberOffset] = initName;
+                    lco->memberflags[memberOffset] = 0;
+                    TValue* val = luaH_setstr(L, lco->memberstooffset, initName);
+                    setnvalue(val, memberOffset);
+                    memberOffset++;
+                    initPlaced = true;
+                };
+
+                // Members are written properties-first, so each member's runtime offset is its index here, past a
+                // reserved `__init`.
                 for (uint32_t idx = 0; idx < numMembers; idx++)
                 {
                     uint32_t mid = readVarInt(data, size, offset);
                     TValue* memberName = &p->k[mid];
                     LUAU_ASSERT(ttisstring(memberName));
-                    lco->offsettomember[idx] = tsvalue(memberName);
-                    lco->memberflags[idx] = uint8_t(readVarInt(data, size, offset));
+                    uint16_t flags = uint16_t(readVarInt(data, size, offset));
 
-                    if (idx < numProperties && (lco->memberflags[idx] & LBC_CLASSMEMBER_CONSTDEFAULT))
+                    if (!initPlaced && (flags & LBC_CLASSMEMBER_STATIC))
+                        placeReservedInit();
+
+                    lco->offsettomember[memberOffset] = tsvalue(memberName);
+                    lco->memberflags[memberOffset] = flags;
+
+                    if (idx < numProperties && (flags & LBC_CLASSMEMBER_CONSTDEFAULT))
                     {
                         uint32_t did = readVarInt(data, size, offset);
                         LUAU_ASSERT(lco->memberdefaults && idx < numProperties);
                         // a constant field default; its own constant is written before the shape, so it's
                         // already loaded
-                        setobj(L, &lco->memberdefaults[idx], &p->k[did]);
+                        setobj(L, &lco->memberdefaults[memberOffset], &p->k[did]);
                     }
 
                     TValue* val = luaH_setstr(L, lco->memberstooffset, tsvalue(memberName));
-                    setnvalue(val, idx);
+                    setnvalue(val, memberOffset);
+                    memberOffset++;
                 }
 
-                if (!hasCustomInit)
-                {
-                    lco->offsettomember[numMembers] = initName;
-                    lco->memberflags[numMembers] = 0;
-                    TValue* val = luaH_setstr(L, lco->memberstooffset, initName);
-                    setnvalue(val, numMembers);
-                }
+                if (!initPlaced)
+                    placeReservedInit();
 
                 luaR_sealclassshape(L, lco);
                 setclassvalue(L, &p->k[j], lco);

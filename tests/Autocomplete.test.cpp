@@ -1192,6 +1192,37 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_metamethods_where_a_member_sta
     CHECK(ac.entryMap.count("public"));
 }
 
+// Luwu Traits (rfcs/classes/traits.md): where a member starts, its placement modifiers; `traitonly` and `scoped` only in a
+// trait
+TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_member_placements")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+    };
+
+    check(R"(
+        class Cat
+            @1
+        end
+        trait Pet
+            @2
+        end
+    )");
+
+    auto inClass = autocomplete('1');
+    CHECK(inClass.entryMap.count("shared"));
+    CHECK(inClass.entryMap.count("static"));
+    CHECK(!inClass.entryMap.count("traitonly"));
+    CHECK(!inClass.entryMap.count("scoped"));
+
+    auto inTrait = autocomplete('2');
+    CHECK(inTrait.entryMap.count("shared"));
+    CHECK(inTrait.entryMap.count("traitonly"));
+    CHECK(inTrait.entryMap.count("scoped"));
+    CHECK(inTrait.entryMap.count("expect"));
+}
+
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_offers_a_traits_special_functions")
 {
     ScopedFastFlag sffs[] = {

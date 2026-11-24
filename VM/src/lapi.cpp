@@ -1883,8 +1883,9 @@ int lua_ismemberconst(lua_State* L, int idx, const char* membername)
         return 0;
 
     uint32_t offsetnum = uint32_t(nvalue(offset));
-    // functions (static members) are always immutable
-    return offsetnum >= classdef->numberofinstancemembers || (classdef->memberflags[offsetnum] & LBC_CLASSMEMBER_CONST) != 0;
+    // functions (static members) are always immutable; a field on the class value is unless it's const
+    bool function = offsetnum >= classdef->numberofinstancemembers && !(classdef->memberflags[offsetnum] & LBC_CLASSMEMBER_CLASSFIELD);
+    return function || (classdef->memberflags[offsetnum] & LBC_CLASSMEMBER_CONST) != 0;
 }
 
 // Whether a trait the class implements, directly or through `needs`, declares `name` final. The class's own copy of a
