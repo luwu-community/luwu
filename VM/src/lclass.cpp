@@ -74,6 +74,7 @@ LuauClass* luaR_newclass(
     classdef->numoverriddenconsts = 0;
     classdef->traitdefaults = NULL;
     classdef->compiledtraitcopies = NULL;
+    classdef->scopedvalues = NULL;
     classdef->qualified = NULL;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
@@ -226,7 +227,7 @@ size_t luaR_classsize(const LuauClass* classdef)
            // ... plus the constant field defaults, when the class carries them ...
            (classdef->memberdefaults ? classdef->numberofinstancemembers * sizeof(TValue) : 0) +
            // ... plus what it keeps about the traits it implements.
-           (classdef->numtraits * sizeof(LuauClass*)) + (classdef->numtraitinits * (sizeof(TValue) + 2 * sizeof(uint32_t))) +
+           (classdef->numtraits * sizeof(LuauClass*)) + (classdef->numtraitinits * (sizeof(TValue) + LUAR_TRAITINIT_ARGS * sizeof(uint32_t))) +
            (classdef->numoverriddenconsts * sizeof(uint32_t));
 }
 
@@ -247,9 +248,10 @@ bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
 
 bool luaR_closureistraitinit(const LuauClass* classdef, const Closure* cl)
 {
-    // The class's copies of its traits' `__traitinit` initialize the trait fields, const and final ones included
+    // The class's copies of its traits' `__traitinit` initialize the trait fields, const and final ones included. The other
+    // entries are scoped fields' values, which construction writes itself.
     for (uint32_t i = 0; i < classdef->numtraitinits; i++)
-        if (clvalue(&classdef->traitinits[i]) == cl)
+        if (classdef->traitinitargs[LUAR_TRAITINIT_ARGS * i + 2] == 0 && clvalue(&classdef->traitinits[i]) == cl)
             return true;
 
     return false;
@@ -1110,7 +1112,7 @@ void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
     if (classdef->traitinits)
         luaM_freearray(L, classdef->traitinits, classdef->numtraitinits, TValue, classdef->memcat);
     if (classdef->traitinitargs)
-        luaM_freearray(L, classdef->traitinitargs, 2 * classdef->numtraitinits, uint32_t, classdef->memcat);
+        luaM_freearray(L, classdef->traitinitargs, LUAR_TRAITINIT_ARGS * classdef->numtraitinits, uint32_t, classdef->memcat);
     if (classdef->overriddenconsts)
         luaM_freearray(L, classdef->overriddenconsts, classdef->numoverriddenconsts, uint32_t, classdef->memcat);
 
@@ -2059,9 +2061,43 @@ static LuaTable* luaR_qualifiedtable(lua_State* L, LuauClass* classdef, const Lu
     return names;
 }
 
-void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* value, bool isfield)
+// Appends the class's value of the per-object scoped field `name` of `trait` to LuauClass::scopedvalues
+static void luaR_addscopedvalue(lua_State* L, LuauClass* classdef, const LuauClass* trait, TString* name, const TValue* value)
 {
-    LUAU_ASSERT(!classdef->istrait && (isfield || (ttisfunction(value) && !clvalue(value)->isC)));
+    // a nil value leaves the trait's, as if the class gave none (luaR_implementqualified)
+    if (ttisnil(value))
+        return;
+
+    if (!classdef->scopedvalues)
+    {
+        classdef->scopedvalues = luaH_new(L, 3, 0);
+        luaC_objbarrier(L, classdef, classdef->scopedvalues);
+    }
+
+    LuaTable* values = classdef->scopedvalues;
+    int n = luaH_getn(values);
+
+    TValue* entry = luaH_setnum(L, values, n + 1);
+    setobj2t(L, entry, value);
+    luaC_barriert(L, values, entry);
+
+    entry = luaH_setnum(L, values, n + 2);
+    setclassvalue(L, entry, const_cast<LuauClass*>(trait));
+    luaC_barriert(L, values, entry);
+
+    entry = luaH_setnum(L, values, n + 3);
+    setsvalue(L, entry, name);
+    luaC_barriert(L, values, entry);
+}
+
+void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* value, int form)
+{
+    bool isfield = form != LBC_NEWCLASSMEMBER_QUALIFIED;
+    bool computed = form == LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN;
+    LUAU_ASSERT(!classdef->istrait);
+    // the compiler passes a field's value itself only when it's a constant, and a function otherwise
+    bool constantfield = isfield && !computed;
+    LUAU_ASSERT(constantfield ? !ttisfunction(value) : (ttisfunction(value) && !clvalue(value)->isC));
 
     // The chunk that declares the class ran again. The class constant is shared, and already implements its traits.
     if (!classdef->traitspending)
@@ -2081,17 +2117,37 @@ void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, T
             L, "'%s' is a scoped field of trait '%s': write '%s.%s = value'", getstr(name), getstr(traitdef->name), getstr(traitdef->name), getstr(name)
         );
 
-    if (!isfield)
+    // the function that computes a field's value is the class's code, like a qualified implementation
+    if (!isfield || computed)
         luaR_stampownerclass(L, clvalue(value)->l.p, classdef);
+
+    // A field on the class gets its value now. One in each object keeps the function, which construction runs
+    // (LuauClass::scopedvalues).
+    bool perobject = scopedfield && luaR_isscopedobjectfield(traitdef, uint32_t(nvalue(offset)));
+    if (computed && !perobject)
+    {
+        luaD_checkstack(L, 1);
+        setobj2s(L, L->top, value);
+        L->top++;
+        luaD_call(L, L->top - 1, 1);
+        value = L->top - 1;
+    }
 
     LuaTable* names = luaR_qualifiedtable(L, classdef, traitdef, true);
     setobj2t(L, luaH_setstr(L, names, name), value);
     luaC_barriert(L, names, value);
+
+    if (computed && !perobject)
+        L->top--;
+
+    if (isfield && perobject)
+        luaR_addscopedvalue(L, classdef, traitdef, name, value);
 }
 
-// Gives the per-object scoped field at `off` of `trait` the unnamed object slot `slot`. Each object starts with the
-// class's value when `implementedhere`, or else the trait's (nil for an expectation nothing met), and the class's table of
-// `trait`'s members records the slot.
+// Gives the per-object scoped field at `off` of `trait` the unnamed object slot `slot`, and the class's table of `trait`'s
+// members records the slot. Each object starts with the class's value when `implementedhere` and it's a constant, or else
+// the trait's constant (nil for an expectation nothing met). Construction computes the others: the trait's `__traitinit`,
+// or the class's function (LuauClass::scopedvalues).
 static void luaR_placescopedobjectfield(lua_State* L, LuauClass* classdef, const LuauClass* trait, uint32_t off, uint32_t slot, bool implementedhere)
 {
     LuaTable* names = luaR_qualifiedtable(L, classdef, trait, true);
@@ -2101,7 +2157,8 @@ static void luaR_placescopedobjectfield(lua_State* L, LuauClass* classdef, const
     TValue* initial = &classdef->memberdefaults[slot];
     if (implementedhere)
     {
-        setobj(L, initial, entry);
+        if (!ttisfunction(entry))
+            setobj(L, initial, entry);
     }
     else if (!expected)
     {
@@ -2199,17 +2256,23 @@ static void luaR_addtraitdefaultcopy(lua_State* L, LuauClass* classdef, const Lu
 }
 
 // Checks the class's qualified implementations against the traits it now implements, and gives it a copy of every scoped
-// default it doesn't implement itself. `traits` holds the `numtraits` traits, the `nlisted` listed ones first. The
-// per-object scoped fields have the unnamed object slots from `firstscoped` on, in the order of `traits`: each starts
-// with the class's value or the trait's, and the class's table records the slot in place of a value.
-static void luaR_implementqualified(lua_State* L, LuauClass* classdef, StkId traits, int numtraits, uint32_t nlisted, uint32_t firstscoped)
+// default it doesn't implement itself. The stack holds the `numtraits` traits from `first` (an index from the frame's
+// base), the `nlisted` listed ones first. The per-object scoped fields have the unnamed object slots from `firstscoped` on, in the order of `traits`, and the class's
+// table records the slot in place of a value (luaR_placescopedobjectfield).
+static void luaR_implementqualified(lua_State* L, LuauClass* classdef, int first, int numtraits, uint32_t nlisted, uint32_t firstscoped)
 {
     uint32_t nextscoped = firstscoped;
+
+    // the functions this pushes can move the stack
+    auto traitat = [&](int i)
+    {
+        return classvalue(L->base + first + i);
+    };
 
     auto implemented = [&](const LuauClass* trait)
     {
         for (int i = 0; i < numtraits; i++)
-            if (classvalue(traits + i) == trait)
+            if (traitat(i) == trait)
                 return true;
 
         return false;
@@ -2253,7 +2316,7 @@ static void luaR_implementqualified(lua_State* L, LuauClass* classdef, StkId tra
     // The scoped members: the class's implementation, or else its copy of the default
     for (int i = 0; i < numtraits; i++)
     {
-        LuauClass* trait = classvalue(traits + i);
+        LuauClass* trait = traitat(i);
 
         for (uint32_t off = trait->numberofinstancemembers; off < trait->numberofallmembers; off++)
         {
@@ -2832,7 +2895,7 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
         }
     }
 
-    luaR_implementqualified(L, classdef, L->base + first, numtraits, n, firstscoped);
+    luaR_implementqualified(L, classdef, first, numtraits, n, firstscoped);
 
     classdef->traits = luaM_newarray(L, numtraits, LuauClass*, classdef->memcat);
     classdef->numtraits = uint32_t(numtraits);
@@ -2911,6 +2974,19 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
         numinits++;
     }
 
+    // After them, the class's values of per-object scoped fields in the order the class declares them, so they're written
+    // last. A computed one runs for every object. A constant one is in place from allocation, and only needs writing again
+    // when an initializer runs before it.
+    LuaTable* values = classdef->scopedvalues;
+    uint32_t numvalues = values ? uint32_t(luaH_getn(values)) / 3 : 0;
+    uint32_t numcopies = numinits;
+    bool computesvalues = false;
+    for (uint32_t i = 0; i < numvalues; i++)
+        computesvalues |= ttisfunction(luaH_getnum(values, int(3 * i + 1)));
+
+    if (numcopies > 0 || computesvalues)
+        numinits += numvalues;
+
     if (numinits > 0)
     {
         // each array is installed as soon as it exists, so luaR_freeclass frees it if the next allocation raises
@@ -2920,7 +2996,8 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
         classdef->traitinits = inits;
         classdef->numtraitinits = numinits;
 
-        uint32_t* initargs = luaM_newarray(L, 2 * numinits, uint32_t, classdef->memcat);
+        uint32_t* initargs = luaM_newarray(L, LUAR_TRAITINIT_ARGS * numinits, uint32_t, classdef->memcat);
+        memset(initargs, 0, LUAR_TRAITINIT_ARGS * numinits * sizeof(uint32_t));
         classdef->traitinitargs = initargs;
 
         uint32_t next = 0;
@@ -2931,8 +3008,18 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
                 continue;
 
             setobj(L, &inits[next], L->base + copiesbase + next);
-            argsof(trait, &initargs[2 * next], &initargs[2 * next + 1]);
+            argsof(trait, &initargs[LUAR_TRAITINIT_ARGS * next], &initargs[LUAR_TRAITINIT_ARGS * next + 1]);
             next++;
+        }
+
+        for (; next < numinits; next++)
+        {
+            int entry = int(3 * (next - numcopies));
+            const LuauClass* trait = classvalue(luaH_getnum(values, entry + 2));
+            const TValue* slot = luaH_getstr(luaR_qualifiedtable(L, classdef, trait, false), tsvalue(luaH_getnum(values, entry + 3)));
+
+            setobj(L, &inits[next], luaH_getnum(values, entry + 1));
+            initargs[LUAR_TRAITINIT_ARGS * next + 2] = uint32_t(nvalue(slot)) + 1;
         }
 
         for (uint32_t i = 0; i < numinits; i++)
@@ -2949,8 +3036,10 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
     if (classdef->staticshadows)
         classdef->staticshadows->readonly = true;
     classdef->traitspending = false;
-    // every compiled copy the class uses is a member, a trait default or a trait initializer by now
+    // every compiled copy the class uses is a member, a trait default or a trait initializer by now, and so is every
+    // scoped value
     classdef->compiledtraitcopies = NULL;
+    classdef->scopedvalues = NULL;
 
     // Each trait's `__implemented` hook, given the finished class, in dependency order: a trait's needed traits' hooks run
     // before its own. An error in one is raised from the class statement.
@@ -2975,22 +3064,44 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
 // `implements` arguments, so that trait initializers may yield like the rest of construction. A C function can't keep
 // going after a call that yields, so each call is the last thing a step does and the next step is this function's
 // continuation, which luaL_callyieldable calls right away when nothing yielded, and resume calls otherwise. The runner is
-// called with the object and every `implements` argument; its progress lives in two stack slots above them, the
-// argument count and the next initializer.
+// called with the object and every `implements` argument; its progress lives in three stack slots above them: the
+// argument count, the next initializer, and the previous call's result, which a scoped field's value function returns.
 static int luaR_traitinitstep(lua_State* L, int status)
 {
     // an initializer that raises takes this frame with it, so it's never resumed after one
     LUAU_ASSERT(status == LUA_OK);
 
-    int nargs = int(lua_tointeger(L, -2));
-    uint32_t next = uint32_t(lua_tointeger(L, -1));
+    // the previous call's one result is on top, nil before the first
+    int nargs = int(lua_tointeger(L, -3));
+    uint32_t next = uint32_t(lua_tointeger(L, -2));
     LuauObject* object = objectvalue(L->base);
     LuauClass* classdef = object->lclass;
 
+    // A scoped field's computed value goes in its slot
+    if (next > 0)
+    {
+        uint32_t slot = classdef->traitinitargs[LUAR_TRAITINIT_ARGS * (next - 1) + 2];
+        if (slot > 0)
+        {
+            setobj(L, &object->members[slot - 1], L->top - 1);
+            luaC_barrier(L, object, L->top - 1);
+        }
+    }
+    L->top--;
+
+    // and a scoped field's constant value goes back in after the initializers before it
+    while (next < classdef->numtraitinits && !ttisfunction(&classdef->traitinits[next]))
+    {
+        uint32_t slot = classdef->traitinitargs[LUAR_TRAITINIT_ARGS * next + 2];
+        LUAU_ASSERT(slot > 0);
+        setobj(L, &object->members[slot - 1], &classdef->traitinits[next]);
+        next++;
+    }
+
     if (next < classdef->numtraitinits)
     {
-        uint32_t argoffset = classdef->traitinitargs[2 * next];
-        uint32_t argcount = classdef->traitinitargs[2 * next + 1];
+        uint32_t argoffset = classdef->traitinitargs[LUAR_TRAITINIT_ARGS * next];
+        uint32_t argcount = classdef->traitinitargs[LUAR_TRAITINIT_ARGS * next + 1];
 
         // the compiler passes every entry's arguments, but the runner can be reached through the debug library
         if (argoffset + argcount > uint32_t(nargs))
@@ -3008,7 +3119,8 @@ static int luaR_traitinitstep(lua_State* L, int status)
             setobj2s(L, fn + 2 + a, L->base + 1 + argoffset + a);
         L->top = fn + 2 + argcount;
 
-        return luaL_callyieldable(L, 1 + int(argcount), 0);
+        // a scoped field's value function has no parameters, so it ignores the object
+        return luaL_callyieldable(L, 1 + int(argcount), 1);
     }
 
     // An overridden field's constant goes back in last: allocation copied it in, then the overridden trait's initializer
@@ -3037,6 +3149,7 @@ static int luaR_traitinitrunner(lua_State* L)
     int nargs = lua_gettop(L) - 1;
     lua_pushinteger(L, nargs);
     lua_pushinteger(L, 0);
+    lua_pushnil(L);
 
     return luaR_traitinitstep(L, LUA_OK);
 }
