@@ -151,6 +151,8 @@ static void validateclass(global_State* g, LuauClass* lco)
     validateobjref(g, obj, obj2gco(lco->name));
     if (lco->memberstooffset)
         validateobjref(g, obj, obj2gco(lco->memberstooffset));
+    if (lco->staticshadows)
+        validateobjref(g, obj, obj2gco(lco->staticshadows));
     if (lco->offsettomember)
         for (uint32_t i = 0; i < lco->numberofallmembers; i++)
             if (lco->offsettomember[i])
@@ -655,6 +657,8 @@ static void dumpclass(FILE* f, LuauClass* lco)
     dumpoptref(f, (GCObject*)lco->instancemetatable);
     fprintf(f, R"(,"memberstooffset":)");
     dumpoptref(f, (GCObject*)lco->memberstooffset);
+    fprintf(f, R"(,"staticshadows":)");
+    dumpoptref(f, (GCObject*)lco->staticshadows);
     fprintf(f, "}");
 }
 
@@ -1040,6 +1044,8 @@ static void enumclass(EnumContext* ctx, LuauClass* lco)
     enumedge(ctx, obj, obj2gco(lco->name), "classname");
     if (lco->memberstooffset)
         enumedge(ctx, obj, obj2gco(lco->memberstooffset), "classoffsets");
+    if (lco->staticshadows)
+        enumedge(ctx, obj, obj2gco(lco->staticshadows), "classstaticshadows");
     uint32_t numberofstaticmembers = lco->numberofallmembers - lco->numberofinstancemembers;
     for (uint32_t i = 0; lco->staticmembers && i < numberofstaticmembers; i++)
     {

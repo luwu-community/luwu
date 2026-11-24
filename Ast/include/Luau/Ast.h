@@ -1425,9 +1425,13 @@ struct AstClassProperty
     // `trait to override` phrase that says so
     AstClassExpectTarget expectTarget = AstClassExpectTarget::Any;
     std::optional<Location> expectTargetLocation = std::nullopt;
-    // Luwu Traits (rfcs/classes/traits.md): `shared`, `static` or `traitonly`, and where it's written
+    // Luwu Traits (rfcs/classes/traits.md): `shared`, `static`, `traitonly` or `scoped`, and where it's written. A scoped
+    // field isn't a field of implementing classes: `obj:Trait.name` and `Class:Trait.name` read it.
     AstClassMemberPlacement placement = AstClassMemberPlacement::Default;
     std::optional<Location> placementLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): the trait in a class's `Animal.species = value`, which gives that trait's scoped
+    // field `species` its value for the class. Its placement is `Scoped`, without a placementLocation. nullptr otherwise.
+    AstExpr* qualifiedTrait = nullptr;
 };
 
 struct AstClassMethod

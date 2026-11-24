@@ -840,8 +840,10 @@ static int loadsafe(
                         setobj(L, &lco->memberdefaults[memberOffset], &p->k[did]);
                     }
 
-                    TValue* val = luaH_setstr(L, lco->memberstooffset, tsvalue(memberName));
-                    setnvalue(val, memberOffset);
+                    // Luwu Traits (rfcs/classes/traits.md): a static member may share an object field's name; the fields come
+                    // first, so the field is in the map by now
+                    bool isStatic = (flags & LBC_CLASSMEMBER_STATIC) != 0;
+                    luaR_mapmembername(L, lco->memberstooffset, &lco->staticshadows, tsvalue(memberName), memberOffset, isStatic, numProperties);
                     memberOffset++;
                 }
 

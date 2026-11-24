@@ -468,6 +468,8 @@ enum LuauOpcode
     // listed trait values, and C+N..C+2N-1 how many trait arguments each entry passes, as numbers.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_QUALIFIED for a qualified implementation, `function
     // Json.name`: C holds the function, C+1 the trait, and AUX names it. Emitted before the IMPLEMENTS form, which checks it.
+    // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_QUALIFIEDFIELD for a class's value of a trait's scoped
+    // field, `Animal.species = value`, with the same operands.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_FIELD for a field on the class value (`shared x = 1`):
     // C holds its value and AUX names it.
     // Luwu Traits (rfcs/classes/traits.md): B is LBC_NEWCLASSMEMBER_TRAITCOPY for the class's own copy of a trait's
@@ -789,6 +791,9 @@ enum LuwuBytecodeTag
 // Luwu Classes (rfcs/classes): operand B of LOP_NEWCLASSMEMBER for the class's constructor, the function a call on the
 // class runs (LuauClass::constructor). C holds the function; AUX is unused.
 #define LBC_NEWCLASSMEMBER_CONSTRUCTOR 5
+// Luwu Traits (rfcs/classes/traits.md): operand B of LOP_NEWCLASSMEMBER for a class's value of a trait's scoped field,
+// `Animal.species = value`: C holds the value, C+1 the trait, and AUX names the field as a constant string
+#define LBC_NEWCLASSMEMBER_QUALIFIEDFIELD 6
 
 // Luwu Traits (rfcs/classes/traits.md): bits of the shape flags varint of LBC_CONSTANT_CLASS_SHAPE, written after the member
 // counts.
