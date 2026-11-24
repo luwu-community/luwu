@@ -1755,6 +1755,16 @@ static const TValue* findclassmember(lua_State* L, int idx, const char* memberna
     return luaH_getstr((*classdef)->memberstooffset, luaS_new(L, membername));
 }
 
+void lua_setclassopaque(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    LuauClass* classdef = classofvalue(o);
+    if (!classdef)
+        luaG_runerror(L, "expected a class or object, got %s", luaT_objtypename(L, o));
+
+    classdef->isopaque = true;
+}
+
 int lua_istrait(lua_State* L, int idx)
 {
     const TValue* o = index2addr(L, idx);

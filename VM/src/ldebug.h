@@ -25,6 +25,9 @@ LUAI_FUNC l_noret luaG_indexerroratlua(lua_State* L, const TValue* p1, const TVa
 LUAI_FUNC l_noret luaG_runerroratlua(lua_State* L, const char* msg);
 LUAI_FUNC l_noret luaG_methoderror(lua_State* L, const TValue* p1, const TString* p2);
 LUAI_FUNC l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2);
+// Luwu Classes (rfcs/classes): luaG_missingmembererror for a missing `key` of `classdef`, read on one of its objects
+// when `onobject` is set and on the class otherwise
+LUAI_FUNC l_noret luaG_classmembererror(lua_State* L, const LuauClass* classdef, bool onobject, const TString* key);
 LUAI_FUNC l_noret luaG_instancefieldonclasserror(lua_State* L, const TValue* p1, const TValue* p2);
 LUAI_FUNC l_noret luaG_readonlyerror(lua_State* L);
 LUAI_FUNC l_noret luaG_privateaccesserror(lua_State* L, const TValue* p2, const TString* className);

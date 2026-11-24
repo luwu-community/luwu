@@ -73,6 +73,10 @@ static int class_fields(lua_State* L)
         luaL_argerror(L, 1, "class or object expected");
     }
 
+    // Luwu opaque values: an opaque class doesn't list its members
+    if (lclass->isopaque)
+        luaL_error(L, "can't list the fields of class '%s': it's opaque", getstr(lclass->name));
+
     lua_createtable(L, 0, lclass->numberofinstancemembers);
 
     bool complete = true;
