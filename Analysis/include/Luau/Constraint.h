@@ -342,6 +342,10 @@ struct TypeInstantiationConstraint
     TypeId placeholderType;
     std::vector<TypeId> typeArguments;
     std::vector<TypePackId> typePackArguments;
+
+    // Luwu collections: an empty `Vec()` or `VecDeque()` whose element type comes from its first push. The type argument
+    // only applies when the callee turns out to be one of those classes; any other callee is left as it is.
+    bool fromFirstPush = false;
 };
 
 // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): fills in one member of a generic class instantiation (`Box<number>`) whose type
