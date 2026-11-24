@@ -3,12 +3,17 @@
 
 #include "lcommon.h"
 #include "lbuffer.h"
+#include "lapi.h"
+#include "ldo.h"
+#include "linteger.h"
+#include "lstate.h"
 
 #if defined(LUAU_BIG_ENDIAN)
 #include <endian.h>
 #endif
 
 LUAU_FASTFLAGVARIABLE(LuwuBufferIsFrozen)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 
 #include <string.h>
 
@@ -371,6 +376,57 @@ static const luaL_Reg bufferlib[] = {
 };
 
 
+// Luwu Integers (rfcs/integers.md): the width in bytes of the sized mode at `arg`. A dynamically-sized integer has none.
+static size_t checkintegerbytes(lua_State* L, int arg, IntegerMode mode)
+{
+    int width = luaZ_modewidth(mode);
+    if (width == 0)
+        luaL_argerrorL(L, arg, "a dynamically-sized integer has no fixed width; cast it to a sized mode first");
+    return size_t(width / 8);
+}
+
+// Luwu Integers (rfcs/integers.md): `buffer.readinteger(b, offset, mode)`, little-endian in as many bytes as the mode
+// takes
+static int buffer_readintegerofmode(lua_State* L)
+{
+    size_t len = 0;
+    const unsigned char* data = (const unsigned char*)luaL_checkbuffer(L, 1, &len);
+    int offset = luaL_checkinteger(L, 2);
+    IntegerMode mode = luaZ_checkmode(L, 3);
+    size_t bytes = checkintegerbytes(L, 3, mode);
+
+    if (isoutofbounds(offset, len, bytes))
+        luaL_error(L, "buffer access out of bounds");
+
+    uint64_t bits = 0;
+    for (size_t i = 0; i < bytes; i++)
+        bits |= uint64_t(data[offset + i]) << (8 * i);
+
+    luaZ_setint(L->top, int64_t(bits), mode);
+    incr_top(L);
+    return 1;
+}
+
+// Luwu Integers (rfcs/integers.md): `buffer.writeinteger(b, offset, value)`, in as many bytes as the value's mode takes
+static int buffer_writeintegerofmode(lua_State* L)
+{
+    size_t len = 0;
+    unsigned char* data = (unsigned char*)luaL_checkbuffermutable(L, 1, &len);
+    int offset = luaL_checkinteger(L, 2);
+    const TValue* value = luaA_toobject(L, 3);
+    if (!value || !ttisinteger(value))
+        luaL_typeerrorL(L, 3, "integer");
+    size_t bytes = checkintegerbytes(L, 3, integermode(value));
+
+    if (isoutofbounds(offset, len, bytes))
+        luaL_error(L, "buffer access out of bounds");
+
+    uint64_t bits = luaZ_bits(value);
+    for (size_t i = 0; i < bytes; i++)
+        data[offset + i] = (unsigned char)(bits >> (8 * i));
+    return 0;
+}
+
 int luaopen_buffer(lua_State* L)
 {
     luaL_register(L, LUA_BUFFERLIBNAME, bufferlib);
@@ -379,6 +435,14 @@ int luaopen_buffer(lua_State* L)
     {
         lua_pushcfunction(L, buffer_isfrozen, "isfrozen");
         lua_setfield(L, -2, "isfrozen");
+    }
+
+    if (FFlag::DebugLuwuIntegers)
+    {
+        lua_pushcfunction(L, buffer_readintegerofmode, "readinteger");
+        lua_setfield(L, -2, "readinteger");
+        lua_pushcfunction(L, buffer_writeintegerofmode, "writeinteger");
+        lua_setfield(L, -2, "writeinteger");
     }
 
     return 1;

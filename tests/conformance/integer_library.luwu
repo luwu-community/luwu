@@ -311,6 +311,22 @@ do
     end, Error.InvalidArgument))
 end
 
+-- buffers read and write integers little-endian at their width
+do
+    const data = buffer.create(16)
+    buffer.writeinteger(data, 0, 0x0102030405060708_u64)
+    assert(buffer.readu8(data, 0) == 8 and buffer.readu8(data, 7) == 1)
+    assert(buffer.readinteger(data, 0, integer.u64) == 0x0102030405060708_u64)
+    buffer.writeinteger(data, 8, -2i16)
+    assert(buffer.readinteger(data, 8, integer.i16) == -2i16 and buffer.readinteger(data, 8, integer.u16) == 65534u16)
+    buffer.writeinteger(data, 8, 18446744073709551615u64 // 2u64 + 1u64)
+    assert(buffer.readinteger(data, 8, integer.i64) == -9223372036854775808i64)
+    assert(not pcall(buffer.writeinteger, data, 0, 5int))
+    assert(not pcall(buffer.readinteger, data, 0, integer.dynamic))
+    assert(not pcall(buffer.readinteger, data, 12, integer.u64))
+    assert(not pcall(buffer.writeinteger, data, 15, 1u16))
+end
+
 -- methods are the library functions with the integer first
 do
     const size = 4096u64

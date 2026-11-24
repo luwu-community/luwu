@@ -67,6 +67,7 @@ LUAU_FASTFLAGVARIABLE(LuauBetterPackAndVariadicMismatchErrors)
 LUAU_FASTFLAGVARIABLE(LuwuHelpfulSubtypingErrors)
 
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
@@ -4760,7 +4761,10 @@ void TypeChecker2::visit(AstExprUnary* expr)
     }
     else if (expr->op == AstExprUnary::Op::Minus)
     {
-        testIsSubtype(operandType, builtinTypes->numberType, expr->location);
+        // Luwu Integers (rfcs/integers.md): an integer can be negated too. Upstream's integers have no operators.
+        bool integerOperand = FFlag::DebugLuwuIntegers && isInteger(operandType);
+        if (!integerOperand)
+            testIsSubtype(operandType, builtinTypes->numberType, expr->location);
     }
     else if (expr->op == AstExprUnary::Op::Not)
     {
@@ -5191,10 +5195,18 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
     case AstExprBinary::Op::FloorDiv:
     case AstExprBinary::Op::Pow:
     case AstExprBinary::Op::Mod:
+    {
+        // Luwu Integers (rfcs/integers.md): arithmetic on two integers gives an integer, except `^`. Upstream's integers
+        // have no operators.
+        bool integerArithmetic = FFlag::DebugLuwuIntegers && expr->op != AstExprBinary::Op::Pow && isInteger(leftType) && isInteger(rightType);
+        if (integerArithmetic)
+            return builtinTypes->integerType;
+
         testIsSubtype(leftType, builtinTypes->numberType, expr->left->location);
         testIsSubtype(rightType, builtinTypes->numberType, expr->right->location);
 
         return builtinTypes->numberType;
+    }
     case AstExprBinary::Op::Concat:
     {
         const TypeId numberOrString = module->internalTypes->addType(UnionType{{builtinTypes->numberType, builtinTypes->stringType}});
@@ -5225,6 +5237,13 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
         if (subtyping->isSubtype(leftType, builtinTypes->stringType, scope).isSubtype)
         {
             testIsSubtype(rightType, builtinTypes->stringType, expr->right->location);
+            return builtinTypes->booleanType;
+        }
+
+        // Luwu Integers (rfcs/integers.md): integers are ordered. Upstream's integers have no operators.
+        if (FFlag::DebugLuwuIntegers && subtyping->isSubtype(leftType, builtinTypes->integerType, scope).isSubtype)
+        {
+            testIsSubtype(rightType, builtinTypes->integerType, expr->right->location);
             return builtinTypes->booleanType;
         }
 

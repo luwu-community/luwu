@@ -612,6 +612,7 @@ if(TARGET Luwu.UnitTest)
         tests/TypeInfer.builtins.test.cpp
         tests/TypeInfer.cfa.test.cpp
         tests/TypeInfer.classes.test.cpp
+        tests/TypeInfer.integers.test.cpp
         tests/TypeInfer.const.test.cpp
         tests/TypeInfer.definitions.test.cpp
         tests/TypeInfer.typeInstantiations.test.cpp

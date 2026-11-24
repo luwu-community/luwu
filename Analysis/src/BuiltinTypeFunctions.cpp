@@ -22,6 +22,7 @@ LUAU_DYNAMIC_FASTINTVARIABLE(LuauStepRefineRecursionLimit, 64)
 
 LUAU_FASTFLAGVARIABLE(LuauConcatDoesntAlwaysReturnString)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuauRemoveExtraSubtypingInstances)
@@ -353,6 +354,10 @@ TypeFunctionReductionResult<TypeId> unmTypeFunction(
     if (normTy->isExactlyNumber())
         return {ctx->builtins->numberType, Reduction::MaybeOk, {}, {}};
 
+    // Luwu Integers (rfcs/integers.md): negating an integer gives an integer. Upstream's integers have no operators.
+    if (FFlag::DebugLuwuIntegers && isInteger(operandTy))
+        return {ctx->builtins->integerType, Reduction::MaybeOk, {}, {}};
+
     if (auto result = tryDistributeTypeFunctionApp(unmTypeFunction, instance, typeParams, packParams, ctx))
         return *result;
 
@@ -459,6 +464,12 @@ TypeFunctionReductionResult<TypeId> numericBinopTypeFunction(
     // if we're adding two `number` types, the result is `number`.
     if (normLhsTy->isExactlyNumber() && normRhsTy->isExactlyNumber())
         return {ctx->builtins->numberType, Reduction::MaybeOk, {}, {}};
+
+    // Luwu Integers (rfcs/integers.md): arithmetic on two integers gives an integer, except `^`, which raises. Upstream's
+    // integers have no operators.
+    bool integerArithmetic = FFlag::DebugLuwuIntegers && metamethod != "__pow" && isInteger(lhsTy) && isInteger(rhsTy);
+    if (integerArithmetic)
+        return {ctx->builtins->integerType, Reduction::MaybeOk, {}, {}};
 
     if (auto result = tryDistributeTypeFunctionApp(numericBinopTypeFunction, instance, typeParams, packParams, ctx, metamethod))
         return *result;
@@ -876,6 +887,10 @@ static TypeFunctionReductionResult<TypeId> comparisonTypeFunction(
 
     // If both types are exactly `number`, we can reduce now.
     if (normLhsTy->isExactlyNumber() && normRhsTy->isExactlyNumber())
+        return {ctx->builtins->booleanType, Reduction::MaybeOk, {}, {}};
+
+    // Luwu Integers (rfcs/integers.md): integers are ordered. Upstream's integers have no operators.
+    if (FFlag::DebugLuwuIntegers && isInteger(lhsTy) && isInteger(rhsTy))
         return {ctx->builtins->booleanType, Reduction::MaybeOk, {}, {}};
 
     if (auto result = tryDistributeTypeFunctionApp(comparisonTypeFunction, instance, typeParams, packParams, ctx, metamethod))

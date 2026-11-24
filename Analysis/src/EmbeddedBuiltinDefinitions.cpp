@@ -288,6 +288,12 @@ static constexpr const char* kBuiltinDefinitionBufferSrcIsFrozen = R"BUILTIN_SRC
     isfrozen: @checked (b: buffer) -> boolean,
 )BUILTIN_SRC";
 
+// Luwu Integers (rfcs/integers.md): `mode` is an `integer.Mode`, which the `integer` library's own definitions declare
+static constexpr const char* kBuiltinDefinitionBufferSrcIntegers = R"BUILTIN_SRC(
+    readinteger: @checked (b: buffer, offset: number, mode: unknown) -> integer,
+    writeinteger: @checked (b: buffer, offset: number, value: integer) -> (),
+)BUILTIN_SRC";
+
 static constexpr const char* kBuiltinDefinitionBufferSrcClose = R"BUILTIN_SRC(
 }
 
@@ -602,6 +608,8 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionBufferSrcCore;
     if (FFlag::LuwuBufferIsFrozen)
         result += kBuiltinDefinitionBufferSrcIsFrozen;
+    if (integerLibraryEnabled())
+        result += kBuiltinDefinitionBufferSrcIntegers;
     result += kBuiltinDefinitionBufferSrcClose;
 
     result += kBuiltinDefinitionVectorSrc;
