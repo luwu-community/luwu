@@ -571,6 +571,14 @@ LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue
  */
 LUAI_FUNC void luaR_getqualified(lua_State* L, StkId ra, const TValue* receiver, const TValue* trait, TString* name);
 
+/**
+ * Luwu Traits (rfcs/classes/traits.md): writes `value` to the scoped field `name` of the trait `trait`, for
+ * `obj:Trait.name = value` (LOP_SETQUALIFIED). A per-object field is written through an object, and a `scoped shared` or
+ * `scoped static` one through the class. Raises when `receiver` doesn't implement the trait, the field is const, or it's
+ * written through the wrong receiver.
+ */
+LUAI_FUNC void luaR_setqualified(lua_State* L, const TValue* receiver, const TValue* trait, TString* name, const TValue* value);
+
 // Luwu Traits (rfcs/classes/traits.md): whether `classdef` implements `trait`, listed or implied through `needs`.
 LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait);
 

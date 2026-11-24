@@ -3718,6 +3718,10 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             state.invalidate(OP_B(inst));
         state.invalidateUserCall();
         break;
+    case IrCmd::FALLBACK_SETQUALIFIED:
+        // writes an object's or a class's memory, like FALLBACK_SETTABLEKS
+        state.invalidateUserCall();
+        break;
     case IrCmd::FALLBACK_NEWOBJECT:
         // Construction writes the instance (and, for a user __init, the frame it lays out above it),
         // and applying fields can run an __index metamethod, i.e. arbitrary Lua.

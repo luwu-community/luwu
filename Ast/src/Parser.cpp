@@ -179,8 +179,6 @@ std::optional<AstClassMemberPlacement> classMemberPlacementOf(AstName word)
         return AstClassMemberPlacement::Static;
     if (word == "traitonly")
         return AstClassMemberPlacement::TraitOnly;
-    if (word == "scoped")
-        return AstClassMemberPlacement::Scoped;
     return std::nullopt;
 }
 
@@ -192,7 +190,7 @@ const char* classExpectTargetText(AstClassExpectTarget target)
 const char* const kConstFunctionError = "Functions in a %s are always const; remove 'const' here";
 
 const char* const kClassModifierOrder =
-    "expect, 'class to override' or 'trait to override', public or private, shared, static, traitonly or scoped, final, const";
+    "expect, 'class to override' or 'trait to override', public or private, scoped, shared, static or traitonly, final, const";
 
 // Only ask this from a position that is unambiguously a field or a function, so the caller's message
 // can say which one it is.
@@ -1483,12 +1481,13 @@ AstStatClass* Parser::getMatchingClass(AstExpr* expr)
 
 bool Parser::isExprLValue(AstExpr* expr)
 {
-    // Luwu Traits (rfcs/classes/traits.md): `Class:Trait.name` reads a function, and nothing writes one
+    // Luwu Traits (rfcs/classes/traits.md): `obj:Trait.name = value` writes a scoped field. `obj:Trait:name` is only ever
+    // called.
     AstExprIndexName* index = expr->as<AstExprIndexName>();
     AstExprGlobal* global = expr->as<AstExprGlobal>();
     return (expr->is<AstExprLocal>() && !expr->as<AstExprLocal>()->local->isConst) ||
            (global && !global->writtenAsSelf && !(FFlag::LuwuClasses && getMatchingClass(expr) != nullptr)) ||
-           expr->is<AstExprIndexExpr>() || (index && !index->qualifiedTrait);
+           expr->is<AstExprIndexExpr>() || (index && (!index->qualifiedTrait || index->op == '.'));
 }
 
 // function funcname funcbody
@@ -2804,10 +2803,10 @@ void Parser::reportClassModifierOrder(const std::vector<WrittenClassModifier>& w
 // Luwu Traits (rfcs/classes/traits.md): a trait is parsed by the same function.
 // traitStatement ::= [`export'] `trait' Name [`<' GenericTypeListWithDefaults `>'] [`(' [ctorParam {`,' ctorParam}] `)']
 //                    [`needs' traitRefList] {traitMember} `end'
-// traitMember ::= classMember | [access] [placement] `final' `function' Name funcbody [`;']
-//              | `expect' [target] [access] [placement] [`const'] Name [`:' Type] [`;']
-//              | `expect' [target] [access] [placement] `function' Name [`?'] funcsignature [`;']
-// placement ::= `shared' | `static' | `traitonly' | `scoped'
+// traitMember ::= classMember | [access] [`scoped'] [placement] `final' `function' Name funcbody [`;']
+//              | `expect' [target] [access] [`scoped'] [placement] [`const'] Name [`:' Type] [`;']
+//              | `expect' [target] [access] [`scoped'] [placement] `function' Name [`?'] funcsignature [`;']
+// placement ::= `shared' | `static' | `traitonly'
 // target ::= `class' `to' `override' | `trait' `to' `override'
 // A class member may be `shared' or `static' too, after its access specifier.
 LUAU_NOINLINE AstStat* Parser::parseClassStat(
@@ -3260,7 +3259,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             parseMemberAttributes();
 
         // Luwu Traits (rfcs/classes/traits.md): a member's modifiers, in this order:
-        //   expect, `class to override` or `trait to override`, public or private, shared, static, traitonly or scoped,
+        //   expect, `class to override` or `trait to override`, public or private, scoped, shared, static or traitonly,
         //   final, const
         // Each word is a modifier only where a member follows it, so `expect: number` is a field named `expect`. The
         // words are collected first and their order checked after, so a misordered member still parses as written.
@@ -3269,6 +3268,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         std::optional<Location> expectTargetLocation;
         AstClassMemberPlacement placement = AstClassMemberPlacement::Default;
         std::optional<Location> placementLocation;
+        std::optional<Location> scopedLocation;
         std::optional<Location> finalLocation;
         std::optional<Location> constLocation;
 
@@ -3416,6 +3416,12 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 if (!expectLocation)
                     expectLocation = location;
             }
+            else if (FFlag::LuwuTraits && word == "scoped")
+            {
+                written.push_back({WrittenClassModifier::Scoped, "scoped", location});
+                if (!scopedLocation)
+                    scopedLocation = location;
+            }
             else if (placementWord)
             {
                 written.push_back({WrittenClassModifier::Placement, word.value, location});
@@ -3455,8 +3461,12 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
         else if (expectTargetLocation && !expectLocation)
             report(*expectTargetLocation, "Write 'expect' before '%s': it says who provides an expected member", classExpectTargetText(expectTarget));
 
-        bool placedOnlyInTraits = placement == AstClassMemberPlacement::TraitOnly || placement == AstClassMemberPlacement::Scoped;
-        if (placedOnlyInTraits && !isTrait)
+        if (scopedLocation && !isTrait)
+            report(*scopedLocation, "Only traits can have 'scoped' members");
+        else if (scopedLocation && placement == AstClassMemberPlacement::TraitOnly)
+            report(*placementLocation, "Remove 'traitonly': a scoped member is on each implementing class");
+
+        if (placement == AstClassMemberPlacement::TraitOnly && !isTrait)
             report(*placementLocation, "Only traits can have '%s' members", toString(placement));
         else if (expectLocation && placement == AstClassMemberPlacement::TraitOnly)
             report(*placementLocation, "Expected members can't be 'traitonly': no class or other trait could provide them");
@@ -3524,13 +3534,16 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 qualifiedName = printedQualifier(qualifiedTrait) + "." + propName->name.value;
 
                 const char* modifierMessage = "Remove '%s': '%s' only gives a trait's scoped field its value for this class";
+                if (scopedLocation)
+                    report(*scopedLocation, modifierMessage, "scoped", qualifiedName.c_str());
                 if (placementLocation)
                     report(*placementLocation, modifierMessage, toString(placement), qualifiedName.c_str());
                 if (constLocation)
                     report(*constLocation, modifierMessage, "const", qualifiedName.c_str());
 
-                placement = AstClassMemberPlacement::Scoped;
+                placement = AstClassMemberPlacement::Default;
                 placementLocation = std::nullopt;
+                scopedLocation = std::nullopt;
                 isConst = false;
             }
             int paramIndex = qualifiedTrait ? -1 : findPrimaryConstructorParam(propName->name);
@@ -3545,16 +3558,16 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             // body is how an *unqualified* parameter gets its access specifier. A parameter that already
             // has one can be restated, but not contradicted: with `public text` in the header and
             // `private text` in the body, a reader couldn't trust either.
-            // Luwu Traits (rfcs/classes/traits.md): a shared, static, trait-only or scoped field is one value, on the class or
-            // the trait
-            bool onClassValue = placement != AstClassMemberPlacement::Default;
+            // Luwu Traits (rfcs/classes/traits.md): a shared, static or trait-only field is one value, on the class or the
+            // trait. A scoped field's value is evaluated once too, and implementing classes copy it into each object unless
+            // it's shared or static.
+            bool onClassValue = placement != AstClassMemberPlacement::Default || scopedLocation;
             if (onClassValue && paramIndex >= 0)
-                report(
-                    *placementLocation,
-                    "'%s' is a parameter, so it's a field of each object and can't be '%s'",
-                    propName->name.value,
-                    toString(placement)
-                );
+            {
+                Location modifier = scopedLocation ? *scopedLocation : *placementLocation;
+                const char* modifierText = scopedLocation ? "scoped" : toString(placement);
+                report(modifier, "'%s' is a parameter, so it's a field of each object and can't be '%s'", propName->name.value, modifierText);
+            }
 
             if (paramIndex >= 0)
             {
@@ -3697,7 +3710,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 hasSemicolon = true;
             }
 
-            bool isObjectField = placement == AstClassMemberPlacement::Default;
+            bool isObjectField = placement == AstClassMemberPlacement::Default && !scopedLocation;
             bool claimed = qualifiedTrait ? claimQualifiedName(qualifiedName, propName->location)
                                           : claimMemberName(*propName, isObjectField, placement == AstClassMemberPlacement::Static);
 
@@ -3725,6 +3738,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                         expectTargetLocation,
                         placement,
                         placementLocation,
+                        scopedLocation,
                         qualifiedTrait,
                     }
                 );
@@ -3796,17 +3810,50 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             if (body->args.size > 0 && body->args.data[0]->name == "self" && body->args.data[0]->annotation != nullptr)
                 report(body->args.data[0]->annotation->location, "The 'self' parameter cannot have a type annotation");
 
-            bool scopedOrQualified = placement == AstClassMemberPlacement::Scoped || qualifiedTrait;
+            // Luwu Traits (rfcs/classes/traits.md): a first parameter named `Self` makes a class method, called on the class
+            // (`Button:f()`). The class is checked on entry, so `Self` can't be annotated or reassigned.
+            for (size_t i = 0; FFlag::LuwuTraits && i < body->args.size; ++i)
+            {
+                AstLocal* arg = body->args.data[i];
+                if (arg->name != nameSelfClass)
+                    continue;
+
+                if (i > 0)
+                    report(arg->location, "'Self' must be the first parameter: it's the class a class method is called on");
+                else if (arg->annotation)
+                    report(arg->annotation->location, "The 'Self' parameter cannot have a type annotation");
+            }
+
+            bool scopedOrQualified = scopedLocation || qualifiedTrait;
             bool hookName = name.name == "__init" || name.name == "__create" || name.name == "__implemented";
             bool specialName =
                 hookName || ALLOWED_METAMETHODS.count(name.name.value) > 0 || EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0;
 
             // Luwu Traits (rfcs/classes/traits.md): the VM finds these where they always are, so only a trait's own hooks
             // can be marked as the trait's alone, which they are anyway
-            bool placedSpecialName = placementLocation && specialName && placement != AstClassMemberPlacement::Scoped &&
+            bool placedSpecialName = placementLocation && specialName && !scopedLocation &&
                                      !(hookName && placement == AstClassMemberPlacement::TraitOnly);
             if (placedSpecialName)
                 report(*placementLocation, "'%s' can't be '%s'", name.name.value, toString(placement));
+
+            // Luwu Traits (rfcs/classes/traits.md): a function's first parameter places it by default: `self` makes a shared
+            // method, `Self` a class method, and anything else a static. A modifier may restate that, or make a function
+            // without `self` shared, but not contradict it.
+            const char* firstParam = body->args.size > 0 ? body->args.data[0]->name.value : nullptr;
+            bool takesSelf = firstParam && strcmp(firstParam, "self") == 0;
+            bool takesClass = firstParam && strcmp(firstParam, "Self") == 0;
+            bool checkPlacement = !specialName && placementLocation;
+            if (checkPlacement && takesSelf && placement == AstClassMemberPlacement::Static)
+                report(
+                    body->args.data[0]->location,
+                    "A static function can't take 'self': write 'function %s(Self)' for a class method, or drop 'self' for a static",
+                    name.name.value
+                );
+            else if (checkPlacement && takesClass && placement == AstClassMemberPlacement::Shared)
+                report(
+                    *placementLocation,
+                    "Remove 'shared': a class method takes its class as 'Self', and an object calling it would arrive as 'Self' instead"
+                );
 
             // Luwu Traits (rfcs/classes/traits.md): a scoped or qualified function is only reached through its trait, so
             // any `__` name is free except the ones the VM looks up on the class
@@ -3921,6 +3968,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                         expectTargetLocation,
                         placement,
                         placementLocation,
+                        scopedLocation,
                         qualifiedTrait,
                     }
                 );
@@ -5501,6 +5549,10 @@ std::pair<AstExprFunction*, AstLocal*> Parser::parseFunctionBody(
     // `function self()`, a write from a nested closure) is rejected like a write to any const local.
     // Field writes (`self.x = v`) and a new `local self` are unaffected.
     if (isClassFunction && vars.size > 0 && vars.data[0]->name == "self")
+        vars.data[0]->isConst = true;
+
+    // Luwu Traits (rfcs/classes/traits.md): so is a class method's `Self`
+    if (FFlag::LuwuTraits && isClassFunction && vars.size > 0 && vars.data[0]->name == nameSelfClass)
         vars.data[0]->isConst = true;
 
     // Luwu Traits (rfcs/classes/traits.md): `Self` in this function's body depends on whether it takes `self`
@@ -7208,24 +7260,53 @@ AstExpr* Parser::parseMethodCall(Position start, AstExpr* expr)
     Position opPosition = lexer.current().location.begin;
     nextLexeme();
 
-    Name index = parseIndexName("method name", opPosition);
-
     // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name(...)` calls the class's version of a trait's method, and
-    // `Class:Trait.name` reads the class's version of a trait's static
-    Lexeme::Type afterName = lexer.current().type;
-    bool qualified = FFlag::LuwuTraits && index.name != nameError && (afterName == ':' || afterName == '.');
+    // `Class:Trait.name` reads the class's version of a trait's static. `obj:[expr]:name(...)` qualifies with whatever
+    // trait `expr` holds.
+    AstExpr* trait = nullptr;
+    bool dynamicTrait = FFlag::LuwuTraits && lexer.current().type == '[';
+    Name index(nameError, lexer.current().location);
+
+    if (dynamicTrait)
+    {
+        MatchLexeme matchBracket = lexer.current();
+        nextLexeme();
+        size_t errorsBeforeTrait = parseErrors.size();
+        trait = parseExpr();
+        expectMatchAndConsume(']', matchBracket);
+
+        // a trait expression still being typed has reported that already
+        Lexeme::Type afterTrait = lexer.current().type;
+        bool memberFollows = afterTrait == ':' || afterTrait == '.';
+        if (!memberFollows && parseErrors.size() == errorsBeforeTrait)
+            report(lexer.current().location, "Expected '.' or ':' after the trait in brackets, got %s", lexer.current().toString().c_str());
+
+        if (!memberFollows)
+        {
+            Location location(start, lexer.current().location.begin);
+            return allocator.alloc<AstExprError>(location, copy<AstExpr*>({expr, trait}), unsigned(parseErrors.size() - 1));
+        }
+    }
+    else
+    {
+        index = parseIndexName("method name", opPosition);
+
+        Lexeme::Type afterName = lexer.current().type;
+        if (FFlag::LuwuTraits && index.name != nameError && (afterName == ':' || afterName == '.'))
+            trait = nameExpr(index);
+    }
 
     AstExprIndexName* func = nullptr;
-    if (qualified)
+    if (trait)
     {
-        AstExpr* trait = nameExpr(index);
-        char op = char(afterName);
+        char op = char(lexer.current().type);
         opPosition = lexer.current().location.begin;
         nextLexeme();
 
         index = parseIndexName("method name", opPosition);
         func = allocator.alloc<AstExprIndexName>(Location(start, index.location.end), expr, index.name, index.location, opPosition, op);
         func->qualifiedTrait = trait;
+        func->dynamicTrait = dynamicTrait;
 
         // `Class:Trait.` with no name yet reported that, and reads as an error node like `obj:` below
         if (op == '.' && index.name == nameError)
