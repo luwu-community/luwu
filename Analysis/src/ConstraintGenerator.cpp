@@ -4632,6 +4632,22 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
     return ControlFlow::None;
 }
 
+// Luwu try expressions: whether a written error hint is closed, `! never` or a union whose last member is `never`
+// (`! NotFound | never`). A closed hint says the function raises nothing else, so `try` gets no weakunknown. It's read
+// from what was written: an alias that holds `never` doesn't close a hint.
+static bool closesErrorHint(AstType* hint)
+{
+    auto isNever = [](AstType* type)
+    {
+        AstTypeReference* reference = type ? type->as<AstTypeReference>() : nullptr;
+        return reference && !reference->prefix && !reference->hasParameterList && reference->name == "never";
+    };
+
+    if (AstTypeUnion* options = hint ? hint->as<AstTypeUnion>() : nullptr)
+        return options->types.size > 0 && isNever(options->types.data[options->types.size - 1]);
+    return isNever(hint);
+}
+
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunction* global)
 {
     std::vector<std::pair<Name, GenericTypeDefinition>> generics = createGenerics(scope, global->generics);
@@ -4696,6 +4712,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunc
     if (global->errorHint)
         declaredHint = resolveType(funScope, global->errorHint, /* inTypeArguments */ false);
     ftv->errorHint = returnErrorHint(funScope, global->retTypes, declaredHint, /* inTypeArguments */ false);
+    ftv->errorHintClosed = closesErrorHint(global->errorHint);
 
     Name fnName(global->name.value);
 
@@ -7201,6 +7218,7 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     if (fn->errorHint)
         declaredHint = resolveType(signatureScope, fn->errorHint, /* inTypeArguments */ false);
     actualFunction.errorHint = returnErrorHint(signatureScope, fn->returnAnnotation, declaredHint, /* inTypeArguments */ false);
+    actualFunction.errorHintClosed = closesErrorHint(fn->errorHint);
 
     TypeId actualFunctionType = arena->addType(std::move(actualFunction));
     LUAU_ASSERT(actualFunctionType);
@@ -7803,6 +7821,7 @@ TypeId ConstraintGenerator::resolveFunctionType(
     if (fn->errorHint)
         declaredHint = resolveType_(signatureScope, fn->errorHint, inTypeArguments, replaceErrorWithFresh);
     ftv.errorHint = returnErrorHint(signatureScope, fn->returnTypes, declaredHint, inTypeArguments);
+    ftv.errorHintClosed = closesErrorHint(fn->errorHint);
     ftv.isCheckedFunction = fn->isCheckedFunction();
     AstAttr* deprecatedAttr = fn->getAttribute(AstAttr::Type::Deprecated);
     ftv.isDeprecatedFunction = deprecatedAttr != nullptr;
