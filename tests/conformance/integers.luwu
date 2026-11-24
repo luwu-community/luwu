@@ -236,6 +236,10 @@ do
     assert(string.format("%5d|%-5d|%+d|% d|%.3d", 42int, 42int, 42int, 42int, 7int) == "   42|42   |+42| 42|007")
     assert(string.format("%05d", -42i32) == "-0042")
     assert(string.format("%s", 5u8) == "5" and `{5u8}` == "5")
+    -- `%*` and interpolation write a u64 past INT64_MAX as unsigned, through the fastcall and through a plain call
+    const big_u64 = 18446744073709551615u64
+    assert(string.format("%*", big_u64) == "18446744073709551615" and `{big_u64}` == "18446744073709551615")
+    assert(select(2, pcall(string.format, "%*", big_u64)) == "18446744073709551615")
 end
 
 return "OK"
