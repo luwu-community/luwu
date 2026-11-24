@@ -435,6 +435,57 @@ expectpass("class methods can carry attributes", function()
     assert(not mid:beats(top))
 end)
 
+-- Attributes go on fields, on primary constructor parameters, and on the class itself. None of them
+-- change what the class does at runtime; this pins that they parse and run rather than being dropped
+-- on the floor or shifting a field's visibility or constness.
+@deprecated
+class Annotated
+    @deprecated
+    public sound: string
+
+    @deprecated private const uses: number = 0
+
+    -- after the access specifier parses too, which is the ordering a method already allowed
+    public @deprecated const tag: string = "t"
+
+    public function speak(self): string
+        return `{self.sound}/{self.uses}/{self.tag}`
+    end
+end
+
+class AnnotatedKey(@deprecated public const key: string, public @deprecated const alg: string) -- both orderings
+    public function describe(self): string
+        return `{self.key}:{self.alg}`
+    end
+end
+
+expectpass("class fields and primary constructor parameters can carry attributes", function()
+    local a = Annotated { sound = "meow" }
+    assert(a:speak() == "meow/0/t", `expected meow/0/t, got {a:speak()}`)
+
+    local k = AnnotatedKey("abc", "ed25519")
+    assert(k:describe() == "abc:ed25519", `expected abc:ed25519, got {k:describe()}`)
+end)
+
+-- An attribute must not quietly change what the qualifiers next to it mean.
+expectfail(
+    "a deprecated private field is still private",
+    "'uses' is a private member of 'Annotated', it cannot be accessed outside Annotated's class scope",
+    function()
+        local a = Annotated { sound = "meow" }
+        print(a.uses)
+    end
+)
+
+expectfail(
+    "a deprecated const field is still const",
+    "'tag' is a const member of 'Annotated' and cannot be assigned outside Annotated's '__init' constructor",
+    function()
+        local a = Annotated { sound = "meow" }
+        a.tag = "u"
+    end
+)
+
 expectfail("classes cannot be iterated over", "attempt to iterate over a object value", function ()
     local p = Point { x = 1, y = 2}
     for k, v in p do
