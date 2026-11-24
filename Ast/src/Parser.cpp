@@ -2,6 +2,7 @@
 #include "Luau/Parser.h"
 
 #include "Luau/Ast.h"
+#include "Luau/ClassMemberNames.h"
 #include "Luau/Common.h"
 #include "Luau/StringUtils.h"
 #include "Luau/TimeTrace.h"
@@ -2485,38 +2486,6 @@ AstStat* Parser::parseTypeAlias(
     return node;
 }
 
-namespace
-{
-
-const std::unordered_set<std::string> ALLOWED_METAMETHODS{
-    "__call",
-    "__concat",
-    "__unm",
-    "__add",
-    "__sub",
-    "__mul",
-    "__div",
-    "__mod",
-    "__pow",
-    "__tostring",
-    "__eq",
-    "__lt",
-    "__le",
-    "__iter",
-    "__len",
-    "__idiv",
-};
-
-const std::unordered_set<std::string> EXPLICITLY_DISALLOWED_METAMETHODS{
-    "__index",
-    "__newindex",
-    "__mode",
-    "__metatable",
-    "__type",
-};
-
-} // namespace
-
 // Luwu Classes (rfcs/classes): parse the parameter list of a class's primary constructor, e.g. the
 // `(name: string, age = 0)` of `class Cat(name: string, age = 0)`. Each parameter also declares a field
 // of the same name, public and mutable unless qualified. The list is compiled into a synthesized `__init`.
@@ -3533,16 +3502,21 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             {
                 qualifiedName = printedQualifier(qualifiedTrait) + "." + propName->name.value;
 
+                // Luwu Traits (rfcs/classes/traits.md): the class spells the field's placement, `shared Animal.kind = v` for a
+                // `scoped shared` field and `static Animal.kind = v` for a `scoped static` one, which the runtime and Analysis
+                // check against the trait. A value in each object is written without one. `traitonly` is already an error
+                // in a class.
                 const char* modifierMessage = "Remove '%s': '%s' only gives a trait's scoped field its value for this class";
                 if (scopedLocation)
                     report(*scopedLocation, modifierMessage, "scoped", qualifiedName.c_str());
-                if (placementLocation)
-                    report(*placementLocation, modifierMessage, toString(placement), qualifiedName.c_str());
                 if (constLocation)
                     report(*constLocation, modifierMessage, "const", qualifiedName.c_str());
 
-                placement = AstClassMemberPlacement::Default;
-                placementLocation = std::nullopt;
+                if (placement == AstClassMemberPlacement::TraitOnly)
+                {
+                    placement = AstClassMemberPlacement::Default;
+                    placementLocation = std::nullopt;
+                }
                 scopedLocation = std::nullopt;
                 isConst = false;
             }
@@ -3610,8 +3584,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 propType = parseType();
             }
 
-            // Luwu Traits (rfcs/classes/traits.md): a trait's per-object scoped field, or a class's value for a scoped field
-            bool scopedValue = qualifiedTrait || (scopedLocation && placement == AstClassMemberPlacement::Default);
+            // Luwu Traits (rfcs/classes/traits.md): a trait's per-object scoped field, or a class's value for one
+            bool scopedValue = (qualifiedTrait || scopedLocation) && placement == AstClassMemberPlacement::Default;
 
             std::optional<Location> equalsLocation;
             AstExpr* defaultValue = nullptr;
@@ -3632,9 +3606,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             }
             else if (lexer.current().type == '=' && scopedValue)
             {
-                // Luwu Traits (rfcs/classes/traits.md): each object computes the value when the field is per object, so it's
-                // parsed one function deeper like a field default. A trait's `__traitinit` or a function the class statement
-                // creates computes it, so it sees no constructor parameters.
+                // Luwu Traits (rfcs/classes/traits.md): each object computes the value, so it's parsed one function deeper
+                // like a field default. A trait's `__traitinit` or the class's constructors compute it, and it sees no
+                // constructor parameters.
                 equalsLocation = lexer.current().location;
                 nextLexeme();
 
@@ -3679,7 +3653,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
 
             // Luwu Traits (rfcs/classes/traits.md): `__ok` is an ordinary field, which tells the `?` operators whether a value
             // is ok
-            if (strncmp(propName->name.value, "__", 2) == 0 && propName->name != "__ok" && !qualifiedTrait)
+            const ClassMemberName* special = findClassMemberName(propName->name.value);
+            bool fieldName = special && special->kind == ClassMemberNameKind::Field;
+            if (strncmp(propName->name.value, "__", 2) == 0 && !fieldName && !qualifiedTrait)
                 report(propName->location, "%s fields cannot start with '__'", isTrait ? "Trait" : "Class");
 
             if (expectLocation && equalsLocation)
@@ -3840,14 +3816,14 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             }
 
             bool scopedOrQualified = scopedLocation || qualifiedTrait;
-            bool hookName = name.name == "__init" || name.name == "__create" || name.name == "__implemented";
-            bool specialName =
-                hookName || ALLOWED_METAMETHODS.count(name.name.value) > 0 || EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0;
+            // Luwu Classes (rfcs/classes): a function name the language gives a meaning, which the VM looks up itself
+            const ClassMemberName* special = findClassMemberName(name.name.value);
+            bool specialName = special && special->kind != ClassMemberNameKind::Field && special->kind != ClassMemberNameKind::Internal;
 
-            // Luwu Traits (rfcs/classes/traits.md): the VM finds these where they always are, so only a trait's own hooks
-            // can be marked as the trait's alone, which they are anyway
-            bool placedSpecialName = placementLocation && specialName && !scopedLocation &&
-                                     !(hookName && placement == AstClassMemberPlacement::TraitOnly);
+            // Luwu Traits (rfcs/classes/traits.md): the VM finds these where they always are, so a placement modifier can only
+            // restate the one a name already has (`traitonly function __create`)
+            bool placedSpecialName =
+                placementLocation && specialName && !scopedLocation && !allowsPlacement(*special, toClassMemberNamePlacement(placement));
             if (placedSpecialName)
                 report(*placementLocation, "'%s' can't be '%s'", name.name.value, toString(placement));
 
@@ -3870,6 +3846,41 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                     "Remove 'shared': a class method takes its class as 'Self', and an object calling it would arrive as 'Self' instead"
                 );
 
+            // Luwu Traits (rfcs/classes/traits.md): a class value's own metamethod takes the class as `Self`, and a trait value's
+            // own is `traitonly` and is given the trait. Only the names the registry allows can be one (ClassMemberName::onValues).
+            bool metamethod = special && special->kind == ClassMemberNameKind::Metamethod && !scopedOrQualified;
+            bool placedOnValue = placement == AstClassMemberPlacement::Static || placement == AstClassMemberPlacement::TraitOnly;
+            bool valueForm = metamethod && (takesClass || placedOnValue);
+            bool valueMetamethod = valueForm && special->onValues;
+            if (valueForm && !special->onValues && !placedSpecialName)
+            {
+                report(body->args.data[0]->location, "'%s' is a metamethod of objects: its first parameter is 'self', not 'Self'", name.name.value);
+            }
+            else if (valueMetamethod && isTrait && placement != AstClassMemberPlacement::TraitOnly)
+            {
+                report(
+                    name.location,
+                    "Write 'traitonly function %s(trait)' to give the trait value its own '%s'; each class writes its own 'function %s(Self)'",
+                    name.name.value,
+                    name.name.value,
+                    name.name.value
+                );
+            }
+            else if (valueMetamethod && isTrait && (takesSelf || takesClass))
+            {
+                report(
+                    body->args.data[0]->location,
+                    "Rename '%s': a trait value's own '%s' is given the trait, as in 'traitonly function %s(trait)'",
+                    firstParam,
+                    name.name.value,
+                    name.name.value
+                );
+            }
+            else if (valueMetamethod && !isTrait && !takesClass)
+            {
+                report(name.location, "A class value's own '%s' takes the class as 'Self': write 'function %s(Self)'", name.name.value, name.name.value);
+            }
+
             // Luwu Traits (rfcs/classes/traits.md): a scoped or qualified function is only reached through its trait, so
             // any `__` name is free except the ones the VM looks up on the class
             if (scopedOrQualified)
@@ -3879,15 +3890,24 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             }
             else if (strncmp(name.name.value, "__", 2) == 0)
             {
-                if (name.name == "__create")
+                // Luwu Traits (rfcs/classes/traits.md): where a name can be declared (ClassMemberName::scopes). Nobody can
+                // declare an internal one, which the reserved-name error below says.
+                uint8_t scopeHere = isTrait ? ClassMemberName_InTraits : ClassMemberName_InClasses;
+                bool misplaced = special && special->kind != ClassMemberNameKind::Internal && (special->scopes & scopeHere) == 0;
+
+                if (misplaced)
+                {
+                    const char* where = isTrait ? "classes" : "traits";
+                    const char* hint = name.name == "__create" ? "; did you mean '__init'?" : "";
+                    report(name.location, "Only %s can define '%s'%s", where, name.name.value, hint);
+                }
+                else if (name.name == "__create")
                 {
                     // Luwu Traits (rfcs/classes/traits.md): `__create` makes a trait callable, as a factory: `Path("./src")` returns whatever
                     // it returns, usually an object of one of the classes implementing the trait. The trait defines it
                     // itself, and it runs before any object exists, so it takes no `self`. Trait parameters would make
                     // `Trait(...)` read two ways (trait arguments, or a factory call), so a trait has one or the other.
-                    if (!isTrait)
-                        report(name.location, "Only traits can define '__create'; did you mean '__init'?");
-                    else if (expectLocation)
+                    if (expectLocation)
                         report(name.location, "'__create' can't be expected");
                     else if (primaryConstructor)
                         report(name.location, "Traits with parameters can't define '__create'");
@@ -3898,9 +3918,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                 {
                     // Luwu Traits (rfcs/classes/traits.md): `__implemented` runs once for each class implementing the trait, given
                     // the class. It's final so that no implementing class or needing trait can switch it off.
-                    if (!isTrait)
-                        report(name.location, "Only traits can define '__implemented'");
-                    else if (expectLocation)
+                    if (expectLocation)
                         report(name.location, "'__implemented' can't be expected");
                     else if (!finalLocation)
                         report(name.location, "'__implemented' must be final: write 'final function __implemented'");
@@ -3934,10 +3952,10 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
                     if (!takesSelf && body->argLocation)
                         report(name.location, "'__init' must take 'self' as its first parameter");
                 }
-                else if (EXPLICITLY_DISALLOWED_METAMETHODS.count(name.name.value) > 0)
+                else if (special && special->kind == ClassMemberNameKind::ForbiddenMetamethod)
                     report(name.location, "%s cannot define '%s' as a metamethod", isTrait ? "Traits" : "Classes", name.name.value);
                 // Luwu: not while the parameter list is missing, which is how a special name being typed (`__ini`) reads
-                else if (ALLOWED_METAMETHODS.count(name.name.value) == 0 && body->argLocation)
+                else if (!(special && special->kind == ClassMemberNameKind::Metamethod) && body->argLocation)
                     report(name.location, "Cannot use '%s' as a method name: names starting with '__' are reserved", name.name.value);
             }
 
@@ -3957,6 +3975,9 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(
             bool claimed = false;
             if (qualifiedTrait)
                 claimed = claimQualifiedName(qualifiedName, name.location);
+            // Luwu Traits (rfcs/classes/traits.md): the value's own metamethod can sit next to the objects' one of the same name
+            else if (valueMetamethod)
+                claimed = claimQualifiedName(std::string("Self.") + name.name.value, name.location);
             else if (primaryConstructorParams.contains(name.name))
                 report(name.location, "Duplicate %s member '%s'", kind, name.name.value);
             else

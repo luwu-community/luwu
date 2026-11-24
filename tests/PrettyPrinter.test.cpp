@@ -2208,6 +2208,8 @@ class Cat implements Pet, Animal
     shared sound = "meow"
     static const MAX = 10
     Animal.species = "Felis Catus"
+    shared Animal.total = 1
+    static Animal.tag = "b"
     static count = 0
     count = 1
     function make(Self)
