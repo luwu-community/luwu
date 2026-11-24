@@ -157,6 +157,64 @@ Property makeProperty(TypeId ty, std::optional<std::string> documentationSymbol 
 void assignPropDocumentationSymbols(TableType::Props& props, const std::string& baseName);
 
 std::string getBuiltinDefinitionSource();
+
+// Luwu collections: whether Analysis has the `collections` library: the flags the VM opens it with
+// (luaL_openlibs), and LuwuDeclareStatements, which parses its declarations
+bool collectionsLibraryEnabled();
+// Luwu collections: the library's declarations, a definition file of its own (see registerBuiltinGlobals)
+std::string getCollectionsDefinitionSource();
+// Luwu builtin classes: whether `typeof` gives `name` for an object of a builtin class ("bundle", "vec", ...)
+bool isBuiltinClassTypeofName(const std::string& name);
+// Luwu builtin classes: the class type whose objects `typeof` names `name`, and `.(...unknown)` for "bundle". nullopt
+// for any other name, or when the library isn't loaded. Alias references copied into a new type go to
+// `copiedReferences` for the caller to expand.
+std::optional<TypeId> builtinClassTypeofType(
+    TypeArena* arena,
+    NotNull<BuiltinTypes> builtinTypes,
+    const Scope* globalScope,
+    const std::string& name,
+    std::vector<TypeId>& copiedReferences
+);
+
+// Luwu collections: "Vec" or "VecDeque" when `classValue` is that class's value, whose objects fix their element type to
+// their first value's at runtime. nullopt for any other type. `scope` is any scope of the module.
+std::optional<std::string> fixedElementContainerName(TypeArena* arena, const Scope* scope, TypeId classValue);
+
+// Luwu bundles: the most values a bundle with a class of its size holds (LUWU_BUNDLE_FIXED_MAX in the VM). Larger
+// bundles share the class `BigBundle`.
+constexpr size_t kBundleFixedMax = 6;
+
+// Luwu bundles: whether `call` is `bundle.pack(...)`, which a bundle literal `.(a, b)` is parsed as
+bool isBundlePackCall(const AstExprCall* call);
+
+// Luwu bundles: the expected type of each position of the bundle literal `literal`, from the type `expected` where it
+// goes: a bundle type, an intersection's first bundle part, or the bundles of a union that have as many positions and
+// whose positions fit the literal's strings and booleans. `completing`, the value being typed, fits any position. With
+// several bundles left, a position expects any of theirs, as a union in `arena`. nullopt when none of these gives one.
+std::optional<std::vector<TypeId>> expectedBundlePositions(
+    TypeArena* arena,
+    const Scope* scope,
+    TypeId expected,
+    const AstExprCall* literal,
+    const AstExpr* completing = nullptr
+);
+
+// Luwu bundles: the type of each position of the bundle type `ty`, or nullopt when it isn't a bundle class instance
+std::optional<std::vector<TypeId>> bundlePositions(const Scope* scope, TypeId ty);
+
+// Luwu bundles: the positions of `ty`, which is a bundle or an intersection with one (the first bundle part's). nullopt
+// when there's no bundle.
+std::optional<BundleShape> bundleShapeOf(TypeId ty);
+
+// Luwu bundles: the type at 0-based `position` of `ty`, which is a bundle or an intersection with bundles among its parts
+// (the intersection of theirs, in `arena`). The error type past a bundle's end, and nullopt when there's no bundle.
+std::optional<TypeId> readBundlePosition(NotNull<BuiltinTypes> builtinTypes, NotNull<TypeArena> arena, TypeId ty, size_t position);
+
+// Luwu bundles: whether Analysis has the `bundle` library: the flags the VM opens it with (luaL_openlibs), and
+// LuwuDeclareStatements, which parses its declarations
+bool bundleLibraryEnabled();
+// Luwu bundles: the `bundle` library's declarations, a definition file of its own (see registerBuiltinGlobals)
+std::string getBundleDefinitionSource();
 std::string getTypeFunctionDefinitionSource();
 
 void addGlobalBinding(GlobalTypes& globals, const std::string& name, TypeId ty, const std::string& packageName);
