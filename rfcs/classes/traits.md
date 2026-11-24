@@ -160,7 +160,7 @@ Specifically:
   - Traits may define a real `function __create`, which allows them to be factories of concrete classes.
   - Traits may define a `final function __implemented(cls)`, which runs once for each class that implements the trait.
   - The `final` modifier may precede any real field or function in the trait.
-  - Functions of traits may be marked `scoped` to indicate they are trait-qualified and not class-qualified.
+  - Fields or functions of traits may be marked `scoped` to indicate they are trait-qualified and not class-qualified.
 - The trait body and trait definition ends with the `end` keyword.
 
 Like classes, traits definitions are block constructs and do not evaluate to an expression, and may only be defined at the top level of a module.
@@ -403,18 +403,16 @@ In classes and traits `Self` is now a `const` upvalue that refers to the concret
 in a class, and the class of `self` in a trait method. A trait function without `self` has no concrete class, so `Self` there is a syntax error.
 Like `self` in methods, `Self` may not be reassigned within the lexical scope of a class or trait definition block.
 
-Trait-qualified members are marked `scoped`, and a class implements one with the trait's name:
+`scoped` marks trait-qualified members:
 
 ```luwu
 trait Animal
-    expect scoped function species(self): string
+    expect scoped species: string
     scoped function describe(self)
     end
 end
 class Cat implements Animal
-    function Animal.species(self): string
-        return "Felis Catus"
-    end
+    Animal.species = "Felis Catus"
     function Animal.describe(self)
         return "This animal is a Cat"
     end
