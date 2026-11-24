@@ -689,11 +689,12 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
     case LOP_NEWCLASSMEMBER:
     {
         // Luwu Traits (rfcs/classes/traits.md): the IMPLEMENTS form reads the traits and their argument counts, and the
-        // TRAITCOPY and QUALIFIED forms a function and its trait
+        // TRAITCOPY, QUALIFIED and QUALIFIEDFIELD forms a value and its trait
         int regCount = 1;
         if (LUAU_INSN_B(*pc) == LBC_NEWCLASSMEMBER_IMPLEMENTS)
             regCount = int(pc[1]) * 2;
-        else if (LUAU_INSN_B(*pc) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(*pc) == LBC_NEWCLASSMEMBER_QUALIFIED)
+        else if (LUAU_INSN_B(*pc) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(*pc) == LBC_NEWCLASSMEMBER_QUALIFIED ||
+                 LUAU_INSN_B(*pc) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
             regCount = 2;
         inst(IrCmd::FALLBACK_NEWCLASSMEMBER, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_C(*pc)), constInt(regCount));
         break;

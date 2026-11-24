@@ -1203,6 +1203,8 @@ void AstStatClass::visit(AstVisitor* visitor)
                     {
                         visitAttributes(prop.attributes, visitor);
 
+                        if (prop.qualifiedTrait)
+                            prop.qualifiedTrait->visit(visitor);
                         if (prop.ty)
                             prop.ty->visit(visitor);
                         if (prop.defaultValue)
