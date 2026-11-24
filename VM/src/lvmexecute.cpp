@@ -3836,8 +3836,7 @@ reentry:
 
                 // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function, or its value of a
                 // trait's scoped field
-                bool qualified = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD ||
-                                 LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN;
+                bool qualified = LBC_NEWCLASSMEMBER_ISQUALIFIED(LUAU_INSN_B(insn));
                 if (qualified)
                 {
                     TValue* name = VM_KV(aux);
@@ -3851,6 +3850,15 @@ reentry:
                 {
                     VM_PROTECT_PC();
                     luaR_setconstructor(L, classvalue(ra), rc);
+                    VM_NEXT();
+                }
+
+                // Luwu Traits (rfcs/classes/traits.md): a metamethod of the class value itself
+                if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_VALUEMETAMETHOD)
+                {
+                    TValue* name = VM_KV(aux);
+                    LUAU_ASSERT(ttisstring(name));
+                    luaR_addvaluemetamethod(L, classvalue(ra), tsvalue(name), rc);
                     VM_NEXT();
                 }
 

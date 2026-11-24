@@ -294,9 +294,12 @@ int luaL_getmetafield(lua_State* L, int obj, const char* event)
     // metamethods still apply (`__tostring` through luaL_tolstring, for one), so read the field
     // straight out of it. The metamethods are static members of the class anyway, so this reveals
     // nothing new.
-    if (lua_isobject(L, obj))
+    // Luwu Traits (rfcs/classes/traits.md): a class or trait value's own metamethods (`function __tostring(Self)`) are in its
+    // metatable, which lua_getmetatable doesn't expose either
+    if (lua_isobject(L, obj) || lua_isclass(L, obj))
     {
-        LuaTable* mt = objectvalue(luaA_toobject(L, obj))->lclass->instancemetatable;
+        const TValue* value = luaA_toobject(L, obj);
+        LuaTable* mt = ttisobject(value) ? objectvalue(value)->lclass->instancemetatable : classvalue(value)->metatable;
         const TValue* field = mt ? luaH_getstr(mt, luaS_new(L, event)) : luaO_nilobject;
         if (ttisnil(field))
             return 0;

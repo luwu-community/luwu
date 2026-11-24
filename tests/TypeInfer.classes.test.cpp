@@ -6136,6 +6136,106 @@ TEST_CASE_FIXTURE(ClassesFixture, "scoped_fields_are_read_through_their_trait")
     checkTypewriting(*this, "local a = 1\n", typed, kTraitTypewriterAfter);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a class spells the placement of the scoped field it gives a value, which has to be
+// the field's
+TEST_CASE_FIXTURE(ClassesFixture, "scoped_value_placements_are_checked")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Animal
+            scoped items = {}
+            scoped shared kind = "animal"
+            scoped static registry = 0
+        end
+
+        class Cat implements Animal
+            Animal.items = { "yarn" }
+            shared Animal.kind = "cat"
+            static Animal.registry = 1
+        end
+
+        class Dog implements Animal
+            shared Animal.items = {}
+            Animal.kind = "dog"
+            shared Animal.registry = 2
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 14);
+    CHECK(toString(result.errors[0]).find("'Animal.items' must be a field of each object") != std::string::npos);
+    CHECK_EQ(result.errors[1].location.begin.line, 15);
+    CHECK(toString(result.errors[1]).find("'Animal.kind' must be shared") != std::string::npos);
+    CHECK_EQ(result.errors[2].location.begin.line, 16);
+    CHECK(toString(result.errors[2]).find("'Animal.registry' must be static") != std::string::npos);
+
+    const char* typed = "trait Animal\n"
+                        "    scoped shared kind = \"animal\"\n"
+                        "    scoped static registry = 0\n"
+                        "end\n"
+                        "class Cat implements Animal\n"
+                        "    shared Animal.kind = \"cat\"\n"
+                        "    static Animal.registry = 1\n"
+                        "end";
+    checkTypewriting(*this, "local a = 1\n", typed, kTraitTypewriterAfter);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a class value's own `__tostring` is checked like its objects' one, with `Self` the
+// class, and the two don't clash
+TEST_CASE_FIXTURE(ClassesFixture, "value_metamethods_are_typed")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        class Cat
+            static count = 0
+            name = "tom"
+
+            function __tostring(Self)
+                Self.count += 1
+                return `{Self.count}`
+            end
+
+            function __tostring(self)
+                return self.name
+            end
+        end
+
+        class Bad
+            function __tostring(Self)
+                return Self.missing
+            end
+        end
+
+        trait Json
+            traitonly function __tostring(trait)
+                return "json"
+            end
+        end
+
+        local a: string = tostring(Cat)
+        local b: string = tostring(Cat())
+    )");
+
+    // Bad reads a member its class doesn't have, which also leaves its return type unknown to be a string
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 17);
+    CHECK(get<UnknownProperty>(result.errors[0]));
+    CHECK_EQ(result.errors[1].location.begin.line, 16);
+    CHECK(toString(result.errors[1]).find("must return a string") != std::string::npos);
+
+    const char* typed = "class Cat\n"
+                        "    function __tostring(Self)\n"
+                        "        return \"Cat\"\n"
+                        "    end\n"
+                        "    function __tostring(self)\n"
+                        "        return \"cat\"\n"
+                        "    end\n"
+                        "end";
+    checkTypewriting(*this, "local a = 1\n", typed, kTraitTypewriterAfter);
+}
+
 // Luwu Traits (rfcs/classes/traits.md): `expect class to override` and `expect trait to override` say who provides a member
 TEST_CASE_FIXTURE(ClassesFixture, "trait_expectation_targets_are_checked")
 {
