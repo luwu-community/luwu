@@ -1255,6 +1255,9 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     }
     if (collectionsLibraryEnabled())
         registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
+    // Luwu structured runtime errors: `Error.NotIndexable` and the other variants are types too
+    if (resultLibraryEnabled())
+        registerBuiltinModule(frontend, globals, "Error", getErrorDefinitionSource(), typeCheckForAutocomplete);
 
     // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder
     globals.globalTypeFunctionScope->exportedTypeBindings = globals.globalScope->exportedTypeBindings;

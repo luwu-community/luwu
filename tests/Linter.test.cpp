@@ -4160,6 +4160,36 @@ return good, bad, hit, empty, shadowed
     CHECK_EQ(names, std::vector<std::string>{"'Ok'", "'Err'", "'Some'", "'None'"});
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsErrorGlobalsInLuauFiles")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+    };
+
+    fileResolver.source["game/a"] = R"(
+local missing = Error.NotFound("a.txt")
+local function check(ok: boolean)
+    if not ok then
+        unreachable("checked above")
+    end
+    todo()
+end
+return missing, check
+)";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    std::vector<std::string> names;
+    for (const LintWarning& warning : lintModule("game/a").warnings)
+        if (warning.code == LintWarning::Code_LuwuOnlyApi)
+            names.push_back(warning.text.substr(0, warning.text.find(' ')));
+
+    CHECK_EQ(names, std::vector<std::string>{"'Error'", "'unreachable'", "'todo'"});
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")
 {
     const std::string source = R"(

@@ -83,6 +83,16 @@ LUAI_FUNC void luaD_seterrorobj_multi(lua_State* L, int errcode, StkId oldtop, i
 
 LUAI_FUNC l_noret luaD_throw(lua_State* L, int errcode);
 LUAI_FUNC int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud);
+// Luwu structured runtime errors: luaD_rawrunprotected, except that a recorded error stays recorded, its sentinel on top
+// of the stack, for a catch that decides what it becomes (`try`, coroutine.wrap)
+LUAI_FUNC int luaD_rawrunprotectedrecorded(lua_State* L, Pfunc f, void* ud);
+// Luwu structured runtime errors: what a catch that gives errors to Luwu code as values does with the error on top of
+// the stack after a protected call failed with `status`: a recorded error becomes its message. Returns the status to
+// report.
+LUAI_FUNC int luaD_finisherror(lua_State* L, int status);
+// Luwu structured runtime errors: lua_resume for coroutine.wrap, which raises a coroutine's error again; a recorded error
+// stays recorded
+LUAI_FUNC int luaD_resumerecorded(lua_State* L, lua_State* from, int nargs);
 
 // Luwu: calls the C function of `ccl` on the arguments from L->base to L->top. A data function gets its closure's data
 // and argument count without the call through luaF_calldatacfunction.

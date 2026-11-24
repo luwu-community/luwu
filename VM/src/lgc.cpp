@@ -912,6 +912,24 @@ static void marktaggetmt(global_State* g)
     }
 }
 
+// Luwu structured runtime errors: the recorded error's values, which nothing else may hold until it's caught
+static void markerrorrecord(global_State* g)
+{
+    LuwuErrorRecord& record = g->errorrecord;
+    for (int i = 0; i < LUWU_ERROR_MAXFIELDS; i++)
+    {
+        markvalue(g, &record.fields[i]);
+        if (record.opaquetypes[i])
+            markobject(g, record.opaquetypes[i]);
+    }
+    if (record.source)
+        markobject(g, record.source);
+    if (record.prefix)
+        markobject(g, record.prefix);
+    if (g->opaqueplaceholder)
+        markobject(g, g->opaqueplaceholder);
+}
+
 // mark root set
 static void markroot(lua_State* L)
 {
@@ -928,6 +946,7 @@ static void markroot(lua_State* L)
         if (g->builtinclasses[i])
             markobject(g, g->builtinclasses[i]);
     }
+    markerrorrecord(g);
     g->gc_ref_gray = 0;
     for (int i = 0; i < g->ref_size; i++) {
         if (g->ref_array[i].tt != LUA_TNONE)
@@ -1051,6 +1070,7 @@ static size_t atomic(lua_State* L)
 
     markobject(g, L); // mark running thread
     markmt(g);        // mark basic metatables (again)
+    markerrorrecord(g); // Luwu structured runtime errors: an error can be recorded after markroot
 
     if (FFlag::LuauUdataMetatablePinned)
         marktaggetmt(g); // mark tagged userdata metatables (again)

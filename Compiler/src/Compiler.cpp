@@ -713,7 +713,10 @@ struct Compiler
         if (options.debugLevel >= 1 && func->debugname.value)
             bytecode.setDebugFunctionName(sref(func->debugname));
 
-        if (options.debugLevel >= 2 && !upvals.empty())
+        // Luwu structured runtime errors: upvalue and local names are kept from debug level 1, the default, where upstream
+        // only keeps them at level 2. Runtime errors name the value they're about with them (`(upvalue 'foo')`). They
+        // only add to the bytecode's debug section, so nothing at runtime gets slower.
+        if (options.debugLevel >= 1 && !upvals.empty())
         {
             for (AstLocal* l : upvals)
                 bytecode.pushDebugUpval(sref(l->name));
@@ -9243,7 +9246,8 @@ struct Compiler
 
             l->allocated = false;
 
-            if (options.debugLevel >= 2)
+            // Luwu structured runtime errors: kept from debug level 1, like upvalue names (see compileFunction)
+            if (options.debugLevel >= 1)
             {
                 uint32_t debugpc = bytecode.getDebugPC();
 

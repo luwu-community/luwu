@@ -145,6 +145,9 @@ std::string getBuiltinDefinitionSource();
 // with (luaL_openlibs), LuwuDeclareStatements, which parses their declarations, and LuwuGenericNominals, which types
 // their generic classes
 bool resultLibraryEnabled();
+// Luwu structured runtime errors: the declarations of `Error` and its variant classes, a builtin module of their own.
+// Analysis has them with the result library.
+std::string getErrorDefinitionSource();
 // Luwu collections: whether Analysis has the `collections` library: the flags the VM opens it with
 // (luaL_openlibs), and LuwuDeclareStatements, which parses its declarations
 bool collectionsLibraryEnabled();

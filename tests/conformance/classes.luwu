@@ -151,7 +151,7 @@ expectfail("classobject invalid key", "cannot index class with a table", functio
     return Point[{}]
 end)
 
-expectfail("classobject set method", "attempt to index class with 'zero'", function ()
+expectfail("classobject set method", "attempt to index class (upvalue 'Point') with 'zero'", function ()
     Point.zero = function () end
 end)
 
@@ -206,7 +206,7 @@ expectfail("object get nonexistent field", "objects of class 'Point' do not have
     print(p.huh)
 end)
 
-expectfail("object assign method", "attempt to index object with 'zero'", function()
+expectfail("object assign method", "attempt to index object (local 'p') with 'zero'", function()
     local p = Point({ x = 3, y = 4 })
     p.zero = "???"
 end)
