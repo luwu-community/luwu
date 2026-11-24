@@ -302,7 +302,7 @@ LUAI_FUNC void luaR_addclassfield(lua_State* L, LuauClass* classdef, TString* na
 
 // Luwu Traits (rfcs/classes/traits.md): adds the metamethod `name` of the class or trait value itself to its metatable, as
 // the class statement runs (LBC_NEWCLASSMEMBER_VALUEMETAMETHOD): `tostring(Cat)` calls a class's `function __tostring(Self)`
-// with the class. The function is the class's code, for its `Self` check and private access.
+// with the class. A Lua function is the class's code, for its `Self` check and private access.
 LUAI_FUNC void luaR_addvaluemetamethod(lua_State* L, LuauClass* classdef, TString* name, const TValue* fn);
 
 /**
@@ -317,12 +317,15 @@ LUAI_FUNC l_noret luaR_sharedfieldwriteerror(lua_State* L, const LuauObject* obj
 
 LUAI_FUNC void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page);
 
-// Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits.
+// Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits, which
+// place a member the way a class body's modifiers do. A name the language gives a meaning follows its entry in
+// Luau/ClassMemberNames.h: a metamethod goes on the objects, or with LBC_CLASSMEMBER_STATIC on the class value when the
+// registry allows it there (`__tostring`).
 struct luaR_NativeMember
 {
     const char* name;
     lua_CFunction method;
-    uint8_t flags;
+    uint16_t flags;
     // A method's frameless version for the interpreter, or NULL
     luaR_FastMethod fast;
 };
@@ -334,6 +337,10 @@ struct luaR_NativeMember
  * like a class without `__init`. Names must outlive the state: methods use them as their debug names.
  */
 LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init);
+
+// Luwu builtin classes: a builtin class value's `__tostring`, which prints it like a primitive, by name and without an
+// address. Builtin libraries list it as a static member (luaR_NativeMember).
+LUAI_FUNC int luaR_builtinclasstostring(lua_State* L);
 
 /**
  * Luwu Native Classes (rfcs/native-classes.md): gives every object of `classdef` constructed from now on `size` bytes of

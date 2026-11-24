@@ -17,8 +17,9 @@
 #include "lvm.h"
 #include "lbytecode.h"
 
-#include <math.h>
 #include "Luau/ClassMemberNames.h"
+
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -716,11 +717,12 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
 
 void luaR_addvaluemetamethod(lua_State* L, LuauClass* classdef, TString* name, const TValue* fn)
 {
-    // the compiler only passes the names the registry allows on values (Luau::ClassMemberName::onValues)
-    LUAU_ASSERT(ttisfunction(fn) && !clvalue(fn)->isC);
+    // the compiler and luaR_newnativeclass only pass the names the registry allows on values (Luau::ClassMemberName::onValues)
+    LUAU_ASSERT(ttisfunction(fn));
     LUAU_ASSERT(Luau::findClassMemberName(getstr(name)) && Luau::findClassMemberName(getstr(name))->onValues);
 
-    luaR_stampownerclass(L, clvalue(fn)->l.p, classdef);
+    if (!clvalue(fn)->isC)
+        luaR_stampownerclass(L, clvalue(fn)->l.p, classdef);
 
     // luaH_setstr ignores `readonly`, which keeps the metatable locked for everything else
     TValue* dest = luaH_setstr(L, classdef->metatable, name);
@@ -3438,15 +3440,54 @@ l_noret luaR_bundleassignerror(lua_State* L, const TValue* key)
     luaG_runerror(L, "a bundle can't be changed");
 }
 
-static void luaR_addnativemethod(lua_State* L, LuauClass* classdef, const char* name, lua_CFunction method)
+// Whether a builtin class's member is the class value's own metamethod: a name the registry allows on values, written
+// static (luaR_NativeMember)
+static bool luaR_isnativevaluemetamethod(const luaR_NativeMember& member)
+{
+    const Luau::ClassMemberName* special = Luau::findClassMemberName(member.name);
+    return member.method && special && special->onValues && (member.flags & LBC_CLASSMEMBER_STATIC);
+}
+
+// Whether a builtin class's member follows the registry's rules for its name, as the parser holds a class body to them: a
+// `__` field is one the registry names as a field, and a `__` function a metamethod, placed on the objects or (when the
+// registry allows it) on the class value
+static bool luaR_isvalidnativemember(const luaR_NativeMember& member)
+{
+    if (member.name[0] != '_' || member.name[1] != '_')
+        return true;
+
+    const Luau::ClassMemberName* special = Luau::findClassMemberName(member.name);
+    if (!special)
+        return false;
+
+    if (!member.method)
+        return special->kind == Luau::ClassMemberNameKind::Field;
+
+    bool placed = (member.flags & LBC_CLASSMEMBER_STATIC) != 0;
+    return special->kind == Luau::ClassMemberNameKind::Metamethod && (!placed || special->onValues);
+}
+
+static Closure* luaR_newnativemethod(lua_State* L, const char* name, lua_CFunction method)
 {
     Closure* cl = luaF_newCclosure(L, 0, L->gt);
     cl->c.f = method;
     cl->c.debugname = name;
+    return cl;
+}
 
+static void luaR_addnativemethod(lua_State* L, LuauClass* classdef, const char* name, lua_CFunction method)
+{
     TValue value;
-    setclvalue(L, &value, cl);
+    setclvalue(L, &value, luaR_newnativemethod(L, name, method));
     luaR_addclassmember(L, classdef, luaS_new(L, name), &value);
+}
+
+int luaR_builtinclasstostring(lua_State* L)
+{
+    // the class value's metatable only calls it with that class
+    LUAU_ASSERT(L->top > L->base && ttisclass(L->base));
+    lua_pushfstring(L, "builtin class %s", getstr(classvalue(L->base)->name));
+    return 1;
 }
 
 LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init)
@@ -3455,6 +3496,14 @@ LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_Native
     while (numfields < uint32_t(count) && !members[numfields].method)
         numfields++;
 
+    // the class value's own metamethods have no member slot
+    uint32_t numvalue = 0;
+    for (int idx = 0; idx < count; idx++)
+    {
+        LUAU_ASSERT(luaR_isvalidnativemember(members[idx]));
+        numvalue += luaR_isnativevaluemetamethod(members[idx]) ? 1 : 0;
+    }
+
     luaD_checkstack(L, 1);
 
     // Every part of the class is allocated separately, as the loader does it, so no GC step may run until the class is
@@ -3462,40 +3511,59 @@ LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_Native
     const ScopedSetGCThreshold pauseGC{L->global, SIZE_MAX};
 
     // every class has an `__init` member, `init` or the one that's only there to be refused by name
-    uint32_t numstatic = uint32_t(count) - numfields + 1;
+    uint32_t numslots = uint32_t(count) - numvalue;
+    uint32_t numstatic = numslots - numfields + 1;
     LuauClass* classdef = luaR_newclass(L, luaS_new(L, name), numfields, numstatic, /* hasmemberdefaults= */ false);
     setclassvalue(L, L->top, classdef);
     incr_top(L);
 
-    for (uint32_t idx = 0; idx < uint32_t(count); idx++)
+    uint32_t slot = 0;
+    for (int idx = 0; idx < count; idx++)
     {
-        LUAU_ASSERT((idx < numfields) == !members[idx].method);
+        if (luaR_isnativevaluemetamethod(members[idx]))
+            continue;
+
+        LUAU_ASSERT((slot < numfields) == !members[idx].method);
         TString* membername = luaS_new(L, members[idx].name);
-        classdef->offsettomember[idx] = membername;
-        classdef->memberflags[idx] = members[idx].flags;
-        setnvalue(luaH_setstr(L, classdef->memberstooffset, membername), double(idx));
+        classdef->offsettomember[slot] = membername;
+        classdef->memberflags[slot] = members[idx].flags;
+        setnvalue(luaH_setstr(L, classdef->memberstooffset, membername), double(slot));
+        slot++;
     }
 
     TString* initname = luaS_newliteral(L, "__init");
-    classdef->offsettomember[count] = initname;
-    classdef->memberflags[count] = 0;
-    setnvalue(luaH_setstr(L, classdef->memberstooffset, initname), double(count));
+    classdef->offsettomember[numslots] = initname;
+    classdef->memberflags[numslots] = 0;
+    setnvalue(luaH_setstr(L, classdef->memberstooffset, initname), double(numslots));
 
     luaR_sealclassshape(L, classdef);
 
-    for (uint32_t idx = numfields; idx < uint32_t(count); idx++)
+    slot = numfields;
+    for (int idx = int(numfields); idx < count; idx++)
     {
-        luaR_addnativemethod(L, classdef, members[idx].name, members[idx].method);
-        if (!members[idx].fast)
-            continue;
-
-        if (!classdef->fastmethods)
+        if (luaR_isnativevaluemetamethod(members[idx]))
         {
-            classdef->fastmethods = luaM_newarray(L, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
-            for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
-                classdef->fastmethods[i] = NULL;
+            luaD_checkstack(L, 1);
+            setclvalue(L, L->top, luaR_newnativemethod(L, members[idx].name, members[idx].method));
+            incr_top(L);
+            luaR_addvaluemetamethod(L, classdef, luaS_new(L, members[idx].name), L->top - 1);
+            L->top--;
+            continue;
         }
-        classdef->fastmethods[idx] = members[idx].fast;
+
+        luaR_addnativemethod(L, classdef, members[idx].name, members[idx].method);
+
+        if (members[idx].fast)
+        {
+            if (!classdef->fastmethods)
+            {
+                classdef->fastmethods = luaM_newarray(L, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
+                for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+                    classdef->fastmethods[i] = NULL;
+            }
+            classdef->fastmethods[slot] = members[idx].fast;
+        }
+        slot++;
     }
 
     if (init)

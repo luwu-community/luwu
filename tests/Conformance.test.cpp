@@ -6069,6 +6069,71 @@ TEST_CASE("ClassesNativeData")
 // sets neither -O nor --codegen, not again under each of them.
 //
 // Run it from an assert-enabled build: it uses the luau CLI built alongside this binary.
+static int nativeClassValueToString(lua_State* L)
+{
+    lua_pushstring(L, "the Gadget class");
+    return 1;
+}
+
+static int nativeObjectToString(lua_State* L)
+{
+    lua_pushstring(L, "a gadget");
+    return 1;
+}
+
+static int nativeObjectLength(lua_State* L)
+{
+    lua_pushnumber(L, 3);
+    return 1;
+}
+
+// Luwu builtin classes: a class built in C++ places its `__` members the way a class body does (Luau/ClassMemberNames.h):
+// metamethods go on its objects, and a static `__tostring` on the class value
+TEST_CASE("ClassesNativeMembersFollowTheRegistry")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    const luaR_NativeMember members[] = {
+        {"label", nullptr, 0, nullptr},
+        {"__tostring", nativeObjectToString, 0, nullptr},
+        {"__tostring", nativeClassValueToString, LBC_CLASSMEMBER_STATIC, nullptr},
+        {"__len", nativeObjectLength, 0, nullptr},
+    };
+
+    luaR_newnativeclass(L, "Gadget", members, int(sizeof(members) / sizeof(members[0])), nullptr);
+    lua_setglobal(L, "Gadget");
+
+    const luaR_NativeMember plainMembers[] = {
+        {"label", nullptr, 0, nullptr},
+    };
+    luaR_newnativeclass(L, "Plain", plainMembers, 1, nullptr);
+    lua_setglobal(L, "Plain");
+
+    const char* source = R"(
+        local g = Gadget()
+        assert(tostring(Gadget) == "the Gadget class")
+        assert(tostring(g) == "a gadget" and #g == 3)
+        -- the value metamethod has no member slot, and isn't builtin printing
+        assert(g.label == nil)
+        assert(string.find(tostring(Plain), "^class: "))
+        return "OK"
+    )";
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    REQUIRE(luau_load(L, "=native", bytecode, bytecodeSize, 0) == 0);
+    free(bytecode);
+
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK(std::string(lua_tostring(L, -1)) == "OK");
+}
+
 TEST_CASE("ClassesFuzz")
 {
     const char* skipEnv = std::getenv("LUWU_SKIP_CLASSES_FUZZ");
