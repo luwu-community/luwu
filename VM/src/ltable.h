@@ -21,6 +21,8 @@ LUAI_FUNC TValue* luaH_setstr(lua_State* L, LuaTable* t, TString* key);
 LUAI_FUNC const TValue* luaH_getp(LuaTable* t, void* key, int tag);
 LUAI_FUNC TValue* luaH_setp(lua_State* L, LuaTable* t, void* key, int tag);
 LUAI_FUNC const TValue* luaH_get(LuaTable* t, const TValue* key);
+// Luwu bundles: luaH_get at the bundle key holding the `n` values at `values`, without building the bundle
+LUAI_FUNC const TValue* luaH_getbundle(LuaTable* t, const TValue* values, int n);
 LUAI_FUNC TValue* luaH_set(lua_State* L, LuaTable* t, const TValue* key);
 LUAI_FUNC TValue* luaH_newkey(lua_State* L, LuaTable* t, const TValue* key);
 LUAI_FUNC LuaTable* luaH_new(lua_State* L, int narray, int lnhash);
