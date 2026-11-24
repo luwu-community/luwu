@@ -679,9 +679,18 @@ print(bytes:at(1)) -- 104
 const text = bytes:tostring() -- "héllo!"
 ```
 
-`Vec.from(s)` gives a `Vec<integer.u8>` of the bytes of a string or a buffer, and `VecDeque.from(s)` gives a
-`VecDeque<integer.u8>` the same way. `v:tostring()` gives the bytes of a `Vec` of `u8` back as a string. Each is a
-single copy. `v:tostring()` raises on a `Vec` of anything else, while `tostring(v)` keeps showing the `Vec` itself, as
+`Vec.from` and `VecDeque.from` have two overloads:
+
+```luwu
+function Vec.from<T>(t: { T }): Vec<T>
+function Vec.from(bytes: string | buffer): Vec<integer.u8>
+```
+
+A table gives a `Vec` of its array part's values, which all need one type, like the values pushed one by one. A string
+or a buffer gives a `Vec<integer.u8>` of its bytes. `VecDeque.from` works the same way. `v:tostring()` gives the bytes
+of a `Vec` of `u8` back as a string. Converting either way is a single copy.
+
+`v:tostring()` raises on a `Vec` of anything else, while `tostring(v)` keeps showing the `Vec` itself, as
 `buffer.tostring(b)` and `tostring(b)` differ for buffers. `push`, `at` and `get` on these vectors are builtin fast
 methods with native code lowering, like the integer methods.
 
