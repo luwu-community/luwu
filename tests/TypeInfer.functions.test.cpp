@@ -4679,4 +4679,96 @@ TEST_CASE_FIXTURE(Fixture, "a_genuine_partial_return_still_reports_codepaths")
     CHECK_EQ(Location{{2, 12}, {2, 14}}, result.errors[1].location);
 }
 
+// Luwu never-returning calls: a call to a function declared to return `never` ends its code path like `error` does
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_call_that_never_returns_ends_a_code_path")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    loadDefinition(R"(
+        declare function exit(code: number): never
+        declare process: { exit: (code: number?) -> never }
+    )");
+
+    CheckResult result = check(R"(
+        local function die(message: string): never
+            error(message)
+        end
+
+        local function viaGlobal(flag: boolean): number
+            if flag then
+                return 1
+            end
+            exit(1)
+        end
+
+        local function viaField(flag: boolean): number
+            if flag then
+                return 1
+            end
+            process.exit(1)
+        end
+
+        local function viaLocal(flag: boolean): number
+            if flag then
+                return 1
+            end
+            die("no")
+        end
+
+        return { viaGlobal, viaField, viaLocal }
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_call_that_may_return_doesnt_end_a_code_path")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    loadDefinition(R"(
+        declare function maybe(code: number): number
+    )");
+
+    CheckResult result = check(R"(
+        local function f(flag: boolean): number
+            if flag then
+                return 1
+            end
+            maybe(1)
+        end
+
+        return f
+    )");
+
+    REQUIRE(!result.errors.empty());
+    CHECK(get<FunctionExitsWithoutReturning>(result.errors[0]));
+}
+
+// A local that the module assigns to again may hold anything by the time it's called, so its declaration doesn't decide
+TEST_CASE_FIXTURE(Fixture, "a_reassigned_local_doesnt_end_a_code_path")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    loadDefinition(R"(
+        declare function exit(code: number): never
+    )");
+
+    CheckResult result = check(R"(
+        local stop = exit
+        stop = exit
+
+        local function f(flag: boolean): number
+            if flag then
+                return 1
+            end
+            stop(1)
+        end
+
+        return f
+    )");
+
+    REQUIRE(!result.errors.empty());
+    CHECK(get<FunctionExitsWithoutReturning>(result.errors[0]));
+}
+
 TEST_SUITE_END();

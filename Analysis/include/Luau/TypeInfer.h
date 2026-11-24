@@ -41,7 +41,8 @@ struct OverloadErrorEntry
 
 bool doesCallError(const AstExprCall* call);
 bool hasBreak(AstStat* node);
-const AstStat* getFallthrough(const AstStat* node);
+// Luwu never-returning calls: a call in `neverReturningCalls` ends a code path like `error(...)` does.
+const AstStat* getFallthrough(const AstStat* node, const NeverReturningCalls* neverReturningCalls = nullptr);
 
 struct UnifierOptions;
 struct Unifier;

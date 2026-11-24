@@ -5,6 +5,7 @@
 #include "Luau/Common.h"
 #include "Luau/Instantiation.h"
 #include "Luau/ModuleResolver.h"
+#include "Luau/NeverReturns.h"
 #include "Luau/Normalize.h"
 #include "Luau/Quantify.h"
 #include "Luau/RecursionCounter.h"
@@ -115,7 +116,7 @@ bool hasBreak(AstStat* node)
 }
 
 // returns the last statement before the block exits, or nullptr if the block never exits
-const AstStat* getFallthrough(const AstStat* node)
+const AstStat* getFallthrough(const AstStat* node, const NeverReturningCalls* neverReturningCalls)
 {
     if (const AstStatBlock* stat = node->as<AstStatBlock>())
     {
@@ -124,20 +125,20 @@ const AstStat* getFallthrough(const AstStat* node)
 
         for (size_t i = 0; i < stat->body.size - 1; ++i)
         {
-            if (getFallthrough(stat->body.data[i]) == nullptr)
+            if (getFallthrough(stat->body.data[i], neverReturningCalls) == nullptr)
                 return nullptr;
         }
 
-        return getFallthrough(stat->body.data[stat->body.size - 1]);
+        return getFallthrough(stat->body.data[stat->body.size - 1], neverReturningCalls);
     }
     else if (const AstStatIf* stat = node->as<AstStatIf>())
     {
-        if (const AstStat* thenf = getFallthrough(stat->thenbody))
+        if (const AstStat* thenf = getFallthrough(stat->thenbody, neverReturningCalls))
             return thenf;
 
         if (stat->elsebody)
         {
-            if (const AstStat* elsef = getFallthrough(stat->elsebody))
+            if (const AstStat* elsef = getFallthrough(stat->elsebody, neverReturningCalls))
                 return elsef;
 
             return nullptr;
@@ -155,7 +156,7 @@ const AstStat* getFallthrough(const AstStat* node)
     {
         if (AstExprCall* call = stat->expr->as<AstExprCall>())
         {
-            if (doesCallError(call))
+            if (callNeverReturns(call, neverReturningCalls))
                 return nullptr;
         }
 
@@ -179,7 +180,7 @@ const AstStat* getFallthrough(const AstStat* node)
                 return nullptr;
         }
 
-        if (getFallthrough(stat->body) == nullptr)
+        if (getFallthrough(stat->body, neverReturningCalls) == nullptr)
             return nullptr;
 
         return node;

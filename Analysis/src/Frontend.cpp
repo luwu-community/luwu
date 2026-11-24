@@ -13,6 +13,7 @@
 #include "Luau/DcrLogger.h"
 #include "Luau/ExpectedTypeVisitor.h"
 #include "Luau/FileResolver.h"
+#include "Luau/NeverReturns.h"
 #include "Luau/NonStrictTypeChecker.h"
 #include "Luau/NotNull.h"
 #include "Luau/Parser.h"
@@ -1643,7 +1644,10 @@ ModulePtr check(
         }
     }
 
-    DataFlowGraph dfg = DataFlowGraphBuilder::build(sourceModule.root, NotNull{&module->defArena}, NotNull{&module->keyArena}, iceHandler);
+    module->neverReturningCalls = findNeverReturningCalls(sourceModule.root, parentScope, moduleResolver, module->name, requireCycles);
+    DataFlowGraph dfg = DataFlowGraphBuilder::build(
+        sourceModule.root, NotNull{&module->defArena}, NotNull{&module->keyArena}, iceHandler, &module->neverReturningCalls
+    );
 
     UnifierSharedState unifierState{iceHandler};
     unifierState.counters.recursionLimit = FInt::LuauTypeInferRecursionLimit;

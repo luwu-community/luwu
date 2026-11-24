@@ -165,6 +165,10 @@ struct Module
     // in the module scope, so this module can't name them unqualified.
     std::unordered_map<Name, TypeFun> forwardedTypeBindings;
 
+    // Luwu never-returning calls: the call statements whose callee is declared to return `never`. The data flow graph,
+    // the type checker and the linter read them, so they end the same code paths.
+    NeverReturningCalls neverReturningCalls;
+
     // Arenas related to the DFG must persist after the DFG no longer exists, as
     // Module objects maintain raw pointers to objects in these arenas.
     DefArena defArena;
