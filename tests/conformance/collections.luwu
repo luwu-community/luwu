@@ -672,6 +672,13 @@ do
     assert(queue:front() == "z" and queue:back() == "b")
     assert(tostring(queue) == `VecDeque("z", "a", "b")`)
 
+    -- a builtin class prints by name, and its objects through their own `__tostring`
+    assert(tostring(collections.VecDeque) == "builtin class VecDeque")
+    assert(tostring(collections.Vec) == "builtin class Vec")
+    assert(tostring(collections.OrderedMap) == "builtin class OrderedMap")
+    assert(tostring(class.of(bundle.pack(1, 2))) == "builtin class Bundle2")
+    assert(tostring(bundle.pack(1, 2)) ~= "builtin class Bundle2")
+
     -- one table is a value like any other
     const rows = collections.Vec({ 1, 2 })
     assert(#rows == 1 and type(rows:at(1)) == "table")

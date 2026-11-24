@@ -46,6 +46,13 @@ do
 
     const long = string.rep("\"quoted\"\n", 500)
     assert(#tostring(Some(long)) > #long)
+
+    -- the classes print by name, like the other builtin classes
+    assert(tostring(Some) == "builtin class Some")
+    assert(tostring(Ok) == "builtin class Ok")
+    assert(tostring(Err) == "builtin class Err")
+    assert(typeof(Some(1)) == "some" and typeof(Ok(1)) == "ok" and typeof(Err("x")) == "err")
+    assert(type(Some(1)) == "object")
 end
 
 -- a result is an `Ok` or an `Err` object

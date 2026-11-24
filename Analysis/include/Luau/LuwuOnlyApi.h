@@ -6,6 +6,21 @@
 namespace Luau
 {
 
+// Luwu Integers (rfcs/integers.md): the members of the `integer` library upstream Luau 0.730's didn't have
+inline bool isLuwuOnlyIntegerMember(std::string_view member)
+{
+    static const std::string_view kMembers[] = {
+        "Mode", "dynamic", "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "suffixes", "cast", "mode", "isbig", "signum", "sadd",
+        "ssub", "smul", "cadd", "csub", "cmul", "cdiv", "pow", "spow", "cpow", "sqrt", "log2", "log10", "popcount",
+    };
+    for (std::string_view name : kMembers)
+    {
+        if (member == name)
+            return true;
+    }
+    return false;
+}
+
 // Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): `buffer.pack*` and `buffer.unpack*` for each number format
 inline bool isBatchedBufferMember(std::string_view member)
 {
@@ -42,6 +57,9 @@ inline bool isLuwuOnlyMember(std::string_view library, std::string_view member)
     // Luwu try expressions
     if (library == "types")
         return member == "raises";
+    // Luwu Integers (rfcs/integers.md): the members upstream Luau 0.730's `integer` library didn't have
+    if (library == "integer")
+        return isLuwuOnlyIntegerMember(member);
     // Luwu object notation: a library of its own, which upstream doesn't have at all
     if (library == "luwon")
         return true;
@@ -54,6 +72,9 @@ inline bool isLuwuOnlyGlobal(std::string_view name)
 {
     // Luwu try expressions: options and results
     if (name == "Ok" || name == "Err" || name == "Some" || name == "None")
+        return true;
+    // Luwu error variants (rfcs/integers.md)
+    if (name == "Error")
         return true;
     return name == "collections" || name == "bundle";
 }

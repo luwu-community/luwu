@@ -7826,6 +7826,31 @@ std::pair<std::vector<TypeId>, std::vector<TypePackId>> ConstraintGenerator::res
     return {std::move(resolvedTypeArguments), std::move(resolvedTypePackArguments)};
 }
 
+// The global type `typeof` can name `name`, if any. We're only interested in a type that `typeof` can actually name.
+// For userdata that's a datatype root (a direct child of the `userdata` root, e.g. `Instance`); `typeof` returns those
+// by name. For classes `typeof` returns "object"/"class" uniformly, so the only nameable discriminants there are the
+// `object`/`class` roots themselves -- never an individual class (whose typeof is "object").
+static std::optional<TypeId> typeofNameableGlobalType(const Scope* globalScope, NotNull<BuiltinTypes> builtinTypes, const std::string& name)
+{
+    std::optional<TypeFun> typeFun = globalScope->lookupType(name);
+    if (!typeFun)
+        return std::nullopt;
+
+    bool nominal = FFlag::LuwuGenericNominals ? get<ExternType>(follow(typeFun->type)) != nullptr
+                                              : (typeFun->typeParams.empty() && typeFun->typePackParams.empty());
+    if (!nominal)
+        return std::nullopt;
+
+    TypeId ty = follow(typeFun->type);
+    const ExternType* etv = get<ExternType>(ty);
+    bool nameable = etv && (etv->parent == builtinTypes->externType || ty == builtinTypes->objectType || ty == builtinTypes->classType ||
+                            hasTag(ty, kTypeofRootTag));
+    if (!nameable)
+        return std::nullopt;
+
+    return ty;
+}
+
 std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
     const ScopePtr& scope,
     AstExprBinary::Op op,
@@ -7939,7 +7964,13 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         else if (FFlag::LuwuClasses && FFlag::LuwuTraits && typeguard->type == "trait")
             discriminantTy = builtinTypes->traitType;
         else if (builtinClass)
+        {
+            // Luwu builtin classes: a userdata can report the same `typeof` name. When the definitions declare an extern
+            // type by that name, the check narrows to either, and `type(v) == "object"` tells them apart.
             discriminantTy = *builtinClass;
+            if (std::optional<TypeId> sameName = typeofNameableGlobalType(globalScope.get(), builtinTypes, typeguard->type))
+                discriminantTy = arena->addType(UnionType{{*builtinClass, *sameName}});
+        }
         else if (typeguard->type == "vector" && !typeguard->isTypeof)
         {
             // `vector` is defined in EmbeddedBuiltinDefinitions, not as an actual built-in type
@@ -7949,23 +7980,8 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         }
         else if (!typeguard->isTypeof)
             discriminantTy = builtinTypes->neverType;
-        else if (auto typeFun = globalScope->lookupType(typeguard->type);
-                 typeFun && (FFlag::LuwuGenericNominals ? get<ExternType>(follow(typeFun->type)) != nullptr
-                                                         : (typeFun->typeParams.empty() && typeFun->typePackParams.empty())))
-        {
-            TypeId ty = follow(typeFun->type);
-
-            // We're only interested in a type that `typeof` can actually name.
-            // For userdata that's a datatype root (a direct child of the
-            // `userdata` root, e.g. `Instance`); `typeof` returns those by name.
-            // For classes `typeof` returns "object"/"class" uniformly, so the
-            // only nameable discriminants there are the `object`/`class` roots
-            // themselves -- never an individual class (whose typeof is "object").
-            if (auto etv = get<ExternType>(ty); etv &&
-                (etv->parent == builtinTypes->externType || ty == builtinTypes->objectType || ty == builtinTypes->classType ||
-                 hasTag(ty, kTypeofRootTag)))
-                discriminantTy = ty;
-        }
+        else if (std::optional<TypeId> nameable = typeofNameableGlobalType(globalScope.get(), builtinTypes, typeguard->type))
+            discriminantTy = *nameable;
 
         RefinementId proposition = refinementArena.proposition(key, discriminantTy);
         if (op == AstExprBinary::CompareEq)

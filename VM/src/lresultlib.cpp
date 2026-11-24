@@ -4,10 +4,12 @@
 #include "lapi.h"
 #include "lclass.h"
 #include "ldebug.h"
+#include "ldo.h"
 #include "lgc.h"
 #include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"
+#include "ltm.h"
 #include "lvm.h"
 
 #include <stdio.h>
@@ -301,20 +303,247 @@ static void setnonemetatable(lua_State* L)
     lua_pop(L, 1);
 }
 
+// Luwu error variants (rfcs/integers.md): the builtin error classes in the global `Error`, such as `Error.Overflow`.
+// `Error` is a frozen table until the builtin `Error` trait exists. Each variant's fields are its positions, so
+// `Error.Overflow(value, info)` matches `is Error.Overflow(got, mode)`. A library raises an
+// object of one with luaR_raisevariant. `__tostring` gives the variant's message, which is also what's raised as a
+// string when the result library isn't open.
 
-// Builds a class, records it as builtin `kind` and makes it the global `name`
-template<size_t N>
-static void addclass(lua_State* L, LuwuBuiltinClass kind, const char* name, const luaR_NativeMember (&members)[N], lua_CFunction init)
+// The position `index` of the `count` values at `fields`, or nil past them
+static const TValue* variantfield(const TValue* fields, int count, int index)
 {
-    L->global->builtinclasses[kind] = luaR_newnativeclass(L, name, members, int(N), init);
+    return index < count ? &fields[index] : luaO_nilobject;
+}
+
+// Adds `value` to `b` the way a constructor call in `__tostring` shows it
+static void addvariantvalue(luaL_Strbuf* b, const TValue* value)
+{
+    luaA_pushvalue(b->L, value);
+    luaR_addshowntop(b);
+}
+
+// Adds `value` to `b` as `tostring` gives it
+static void addvariantstring(luaL_Strbuf* b, const TValue* value)
+{
+    luaA_pushvalue(b->L, value);
+    luaL_tolstring(b->L, -1, NULL);
+    lua_remove(b->L, -2);
+    luaL_addvalue(b);
+}
+
+// Pushes the message of error variant `kind` whose positions are the `count` values at `fields`
+static void pushvariantmessage(lua_State* L, LuwuBuiltinClass kind, const TValue* fields, int count)
+{
+    const TValue* first = variantfield(fields, count, 0);
+    const TValue* second = variantfield(fields, count, 1);
+
+    luaL_Strbuf b;
+    luaL_buffinit(L, &b);
+
+    switch (kind)
+    {
+    case LUWU_BUILTIN_ERR_OVERFLOW:
+    case LUWU_BUILTIN_ERR_UNDERFLOW:
+    {
+        bool overflow = kind == LUWU_BUILTIN_ERR_OVERFLOW;
+        // a raiser that can't build the value, like a power too large to compute, leaves it nil
+        if (ttisnil(first))
+            luaL_addstring(&b, "the result");
+        else
+            addvariantvalue(&b, first);
+        if (ttisnil(second))
+        {
+            luaL_addstring(&b, overflow ? " overflowed" : " underflowed");
+            break;
+        }
+        luaL_addstring(&b, overflow ? " is too large for " : " is too small for ");
+        addvariantstring(&b, second);
+        break;
+    }
+    case LUWU_BUILTIN_ERR_CANNOTBEPARSED:
+        luaL_addstring(&b, "couldn't parse ");
+        addvariantvalue(&b, first);
+        if (!ttisnil(second))
+        {
+            luaL_addstring(&b, ": ");
+            addvariantstring(&b, second);
+        }
+        break;
+    case LUWU_BUILTIN_ERR_UNEXPECTEDFLOAT:
+        luaL_addstring(&b, "expected a whole number, got ");
+        addvariantvalue(&b, first);
+        break;
+    case LUWU_BUILTIN_ERR_INVALIDARGUMENT:
+        if (!ttisnil(second))
+        {
+            addvariantstring(&b, second);
+            break;
+        }
+        luaL_addstring(&b, "invalid argument");
+        if (!ttisnil(first))
+        {
+            luaL_addchar(&b, ' ');
+            addvariantvalue(&b, first);
+        }
+        break;
+    case LUWU_BUILTIN_ERR_DIVISIONBYZERO:
+        luaL_addstring(&b, "attempt to divide by zero");
+        break;
+    case LUWU_BUILTIN_ERR_INVALIDCOMPARISON:
+        luaL_addstring(&b, "attempt to compare ");
+        luaL_addstring(&b, luaT_objtypename(L, first));
+        luaL_addstring(&b, " with ");
+        luaL_addstring(&b, luaT_objtypename(L, second));
+        break;
+    case LUWU_BUILTIN_ERR_UNREACHABLE:
+        luaL_addstring(&b, "reached code that should be unreachable");
+        if (!ttisnil(first))
+        {
+            luaL_addstring(&b, ": ");
+            addvariantstring(&b, first);
+        }
+        break;
+    default:
+        LUAU_ASSERT(!"not an error variant");
+    }
+
+    luaL_pushresult(&b);
+}
+
+template<LuwuBuiltinClass Kind>
+static int varianttostring(lua_State* L)
+{
+    LuauObject* variant = luaR_checknativeself(L, builtinclass(L, Kind), "__tostring");
+    pushvariantmessage(L, Kind, luaR_members(variant), int(variant->numberofmembers));
+    return 1;
+}
+
+l_noret luaR_raisevariant(lua_State* L, LuwuBuiltinClass kind, int nargs)
+{
+    StkId first = L->top - nargs;
+    LuauClass* classdef = builtinclass(L, kind);
+    if (!classdef)
+    {
+        pushvariantmessage(L, kind, first, nargs);
+        luaG_runerror(L, "%s", svalue(L->top - 1));
+    }
+
+    // A new object is white, so storing into it needs no barrier
+    LuauObject* variant = luaR_newobjectuninit(L, classdef);
+    TValue* members = luaR_members(variant);
+    for (int i = 0; i < int(variant->numberofmembers); i++)
+        setobj(L, &members[i], variantfield(first, nargs, i));
+
+    setobjectvalue(L, first, variant);
+    L->top = first + 1;
+    luaD_throw(L, LUA_ERRRUN);
+}
+
+static const luaR_NativeMember kOverflowMembers[] = {
+    {"value", NULL, kPayloadField},
+    {"info", NULL, kPayloadField},
+    {"__tostring", varianttostring<LUWU_BUILTIN_ERR_OVERFLOW>, 0},
+};
+
+static const luaR_NativeMember kUnderflowMembers[] = {
+    {"value", NULL, kPayloadField},
+    {"info", NULL, kPayloadField},
+    {"__tostring", varianttostring<LUWU_BUILTIN_ERR_UNDERFLOW>, 0},
+};
+
+static const luaR_NativeMember kCannotBeParsedMembers[] = {
+    {"text", NULL, kPayloadField},
+    {"message", NULL, kPayloadField},
+    {"__tostring", varianttostring<LUWU_BUILTIN_ERR_CANNOTBEPARSED>, 0},
+};
+
+static const luaR_NativeMember kUnexpectedFloatMembers[] = {
+    {"value", NULL, kPayloadField},
+    {"__tostring", varianttostring<LUWU_BUILTIN_ERR_UNEXPECTEDFLOAT>, 0},
+};
+
+static const luaR_NativeMember kInvalidArgumentMembers[] = {
+    {"value", NULL, kPayloadField},
+    {"message", NULL, kPayloadField},
+    {"__tostring", varianttostring<LUWU_BUILTIN_ERR_INVALIDARGUMENT>, 0},
+};
+
+static const luaR_NativeMember kDivisionByZeroMembers[] = {
+    {"__tostring", varianttostring<LUWU_BUILTIN_ERR_DIVISIONBYZERO>, 0},
+};
+
+static const luaR_NativeMember kInvalidComparisonMembers[] = {
+    {"left", NULL, kPayloadField},
+    {"right", NULL, kPayloadField},
+    {"__tostring", varianttostring<LUWU_BUILTIN_ERR_INVALIDCOMPARISON>, 0},
+};
+
+static const luaR_NativeMember kUnreachableMembers[] = {
+    {"message", NULL, kPayloadField},
+    {"__tostring", varianttostring<LUWU_BUILTIN_ERR_UNREACHABLE>, 0},
+};
+
+struct ErrorVariant
+{
+    LuwuBuiltinClass kind;
+    // The variant's name in `Error`
+    const char* member;
+    // The class's name, which `typeof` gives its objects
+    const char* name;
+    const luaR_NativeMember* members;
+    int count;
+};
+
+#define LUWU_ERROR_VARIANT(kind, member, members) {kind, member, "Error." member, members, int(sizeof(members) / sizeof(members[0]))}
+
+static const ErrorVariant kErrorVariants[] = {
+    LUWU_ERROR_VARIANT(LUWU_BUILTIN_ERR_OVERFLOW, "Overflow", kOverflowMembers),
+    LUWU_ERROR_VARIANT(LUWU_BUILTIN_ERR_UNDERFLOW, "Underflow", kUnderflowMembers),
+    LUWU_ERROR_VARIANT(LUWU_BUILTIN_ERR_CANNOTBEPARSED, "CannotBeParsed", kCannotBeParsedMembers),
+    LUWU_ERROR_VARIANT(LUWU_BUILTIN_ERR_UNEXPECTEDFLOAT, "UnexpectedFloat", kUnexpectedFloatMembers),
+    LUWU_ERROR_VARIANT(LUWU_BUILTIN_ERR_INVALIDARGUMENT, "InvalidArgument", kInvalidArgumentMembers),
+    LUWU_ERROR_VARIANT(LUWU_BUILTIN_ERR_DIVISIONBYZERO, "DivisionByZero", kDivisionByZeroMembers),
+    LUWU_ERROR_VARIANT(LUWU_BUILTIN_ERR_INVALIDCOMPARISON, "InvalidComparison", kInvalidComparisonMembers),
+    LUWU_ERROR_VARIANT(LUWU_BUILTIN_ERR_UNREACHABLE, "Unreachable", kUnreachableMembers),
+};
+
+#undef LUWU_ERROR_VARIANT
+
+
+// Builds a class, records it as builtin `kind` and makes it the global `name`. `typeofname` is what `typeof` gives its
+// objects.
+template<size_t N>
+static void addclass(
+    lua_State* L,
+    LuwuBuiltinClass kind,
+    const char* name,
+    const char* typeofname,
+    const luaR_NativeMember (&members)[N],
+    lua_CFunction init
+)
+{
+    LuauClass* classdef = luaR_newnativeclass(L, name, members, int(N), init);
+    classdef->typeofname = luaS_new(L, typeofname);
+    L->global->builtinclasses[kind] = classdef;
     lua_setglobal(L, name);
 }
 
 int luaopen_result(lua_State* L)
 {
-    addclass(L, LUWU_BUILTIN_SOME, "Some", kSomeMembers, payloadinit);
-    addclass(L, LUWU_BUILTIN_OK, "Ok", kOkMembers, payloadinit);
-    addclass(L, LUWU_BUILTIN_ERR, "Err", kErrMembers, luaR_fieldsinit);
+    addclass(L, LUWU_BUILTIN_SOME, "Some", "some", kSomeMembers, payloadinit);
+    addclass(L, LUWU_BUILTIN_OK, "Ok", "ok", kOkMembers, payloadinit);
+    addclass(L, LUWU_BUILTIN_ERR, "Err", "err", kErrMembers, luaR_fieldsinit);
+
+    lua_createtable(L, 0, int(sizeof(kErrorVariants) / sizeof(kErrorVariants[0])));
+    for (const ErrorVariant& variant : kErrorVariants)
+    {
+        LuauClass* classdef = luaR_newnativeclass(L, variant.name, variant.members, variant.count, luaR_fieldsinit);
+        classdef->typeofname = luaS_new(L, variant.name);
+        L->global->builtinclasses[variant.kind] = classdef;
+        lua_setfield(L, -2, variant.member);
+    }
+    lua_setreadonly(L, -1, true);
+    lua_setglobal(L, "Error");
 
     lua_pushsymnone(L);
     lua_setglobal(L, "None");

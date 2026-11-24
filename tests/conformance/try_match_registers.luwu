@@ -72,6 +72,96 @@ do
     assert(first(3) == 3 and first(-3) == -1)
 end
 
+-- a result bound by `if const`, `elseif const` or `while const`, and one a `match` on the local tests, are kept in
+-- registers too
+do
+    local function chained(n: number): number
+        if const r = try value(n) when r is Ok(v) then
+            return v
+        end
+        return 0
+    end
+    assert(chained(2) == 2 and chained(-2) == 0)
+
+    local function nested(n: number): unknown
+        if const r = try value(n) then
+            if r is Ok(v) then
+                return v
+            elseif r is Err(e) then
+                return e
+            end
+        end
+        return nil
+    end
+    assert(nested(2) == 2 and string.find(nested(-2) :: string, "negative", 1, true) ~= nil)
+
+    local function after(n: number, first: boolean): unknown
+        if first then
+            return "first"
+        elseif const r = try value(n) when r is Err(e) then
+            return e
+        elseif const r = try value(n) when r is Ok(v) then
+            return v
+        end
+        return nil
+    end
+    assert(after(2, true) == "first" and after(2, false) == 2)
+    assert(string.find(after(-2, false) :: string, "negative", 1, true) ~= nil)
+
+    local function matched(n: number): number
+        const r = try value(n)
+        return match r
+            case is Ok(v) then v
+            case is Err(e) then -1
+            else 0
+    end
+    assert(matched(2) == 2 and matched(-2) == -1)
+
+    local function inbody(n: number): number
+        if const r = try value(n) then
+            return match r
+                case is Ok(v) then v
+                case is Err(e) then -1
+                else 0
+        end
+        return 0
+    end
+    assert(inbody(2) == 2 and inbody(-2) == -1)
+
+    local function statement(n: number): number
+        const r = try value(n)
+        local result = 0
+        match r
+        case is Ok(v) then
+            result = v
+        case is Err(e) then
+            result = -1
+        else
+            result = -2
+        end
+        return result
+    end
+    assert(statement(2) == 2 and statement(-2) == -1)
+
+    local values = { 1, 2, -1, 4 }
+    local i = 0
+    local sum = 0
+    while const r = try value(values[i + 1]) when r is Ok(v) do
+        sum += v
+        i += 1
+    end
+    assert(sum == 3 and i == 2)
+
+    -- a `case` arm that binds the subject needs the object
+    local function named(n: number): unknown
+        const r = try value(n)
+        return match r
+            case is Ok(v) then v
+            case other then other
+    end
+    assert(named(2) == 2 and class.isinstance(named(-2), Err))
+end
+
 -- `None` is `none` in a pattern, like `none` itself
 do
     const r = try value(-1)

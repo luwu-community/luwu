@@ -4695,6 +4695,7 @@ private:
         {
         case ConstantNumberParseResult::Ok:
         case ConstantNumberParseResult::Malformed:
+        case ConstantNumberParseResult::HeapInteger:
             break;
         case ConstantNumberParseResult::Imprecise:
             emitWarning(
@@ -4718,6 +4719,14 @@ private:
                 LintWarning::Code_IntegerParsing,
                 node->location,
                 "Hexadecimal number literal exceeded available precision and was truncated to 2^64"
+            );
+            break;
+        case ConstantNumberParseResult::OctOverflow:
+            emitWarning(
+                *context,
+                LintWarning::Code_IntegerParsing,
+                node->location,
+                "Octal number literal exceeded available precision and was truncated to 2^64"
             );
             break;
         case ConstantNumberParseResult::IntOverflow:

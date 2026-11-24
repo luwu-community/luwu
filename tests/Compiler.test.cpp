@@ -31,8 +31,7 @@ LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(DebugLuwuPoperators)
-LUAU_FASTFLAG(LuauIntegerType2)
-LUAU_FASTFLAG(LuauIntegerFastcalls)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(DebugLuwuEncourageInline)
@@ -14277,13 +14276,13 @@ TEST_CASE("ClassDeclHoistingForwardWriteProducesError")
 
 TEST_CASE("IntegerType")
 {
-    if (!FFlag::LuauIntegerType2)
+    if (!FFlag::DebugLuwuIntegers)
         return;
 
-    // i suffix
+    // int suffix
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 123i
+local a = 123int
 return a
 )"),
         R"(
@@ -14295,7 +14294,7 @@ RETURN R0 1
     // separators
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 1_000_000i
+local a = 1_000_000int
 return a
 )"),
         R"(
@@ -14307,7 +14306,7 @@ RETURN R0 1
     // hex
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 0xABABi
+local a = 0xABABint
 return a
 )"),
         R"(
@@ -14319,7 +14318,7 @@ RETURN R0 1
     // binary
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 0b100101i
+local a = 0b100101int
 return a
 )"),
         R"(
@@ -14330,8 +14329,8 @@ RETURN R0 1
 
     // Has to be exactly representable; overflow is a parse error
 
-    std::string source1 = "local a = 9999999999999999999999999i";
-    std::string source2 = "local a = 2.37i";
+    std::string source1 = "local a = 9999999999999999999999999u64";
+    std::string source2 = "local a = 2.37int";
 
     std::string bc1 = Luau::compile(source1);
     std::string bc2 = Luau::compile(source2);
@@ -14343,11 +14342,11 @@ RETURN R0 1
 
 TEST_CASE("IntegerBcb")
 {
-    ScopedFastFlag luauInteger{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
 
     const char* source = R"(
 function foo()
-local a = 123i
+local a = 123int
 return a
 end)";
 
@@ -15082,46 +15081,7 @@ RETURN R0 1
     );
 }
 
-TEST_CASE("BufferIntegerFastcall")
-{
-    ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag luauIntegerBufferFastcalls{FFlag::LuauIntegerBufferFastcalls, true};
 
-    CHECK_EQ(
-        "\n" + compileFunction0(R"(
-local b = buffer.create(16)
-return buffer.readinteger(b, 0)
-)"),
-        R"(
-GETIMPORT R0 2 [buffer.create]
-LOADN R1 16
-CALL R0 1 1
-FASTCALL2K 131 R0 K3 L0 [0]
-MOVE R2 R0
-LOADK R3 K3 [0]
-GETIMPORT R1 5 [buffer.readinteger]
-CALL R1 2 -1
-L0: RETURN R1 -1
-)"
-    );
-
-    CHECK_EQ(
-        "\n" + compileFunction0(R"(
-local b, v = ...
-buffer.writeinteger(b, 0, v)
-)"),
-        R"(
-GETVARARGS R0 2
-LOADN R4 0
-FASTCALL3 132 R0 R4 R1 L0
-MOVE R3 R0
-MOVE R5 R1
-GETIMPORT R2 2 [buffer.writeinteger]
-CALL R2 3 0
-L0: RETURN R0 0
-)"
-    );
-}
 
 // Luwu: exports are always const (`export x = 5`); upstream's `export local` is an error, so its reassignment case is gone
 TEST_CASE("ExportBytecode")
@@ -15222,8 +15182,9 @@ TEST_CASE("LBCConstantRegressionTest")
     CHECK_EQ(LBC_CONSTANT_INTEGER, 9);
     CHECK_EQ(LBC_CONSTANT_CLASS_SHAPE, 10);
     CHECK_EQ(LBC_CONSTANT_VECTORD, 11);
+    CHECK_EQ(LBC_CONSTANT_INTEGER_HEAP, 12);
 
-    CHECK_EQ(LBC_CONSTANT__COUNT, 12);
+    CHECK_EQ(LBC_CONSTANT__COUNT, 13);
 }
 
 TEST_CASE("ExportClass")
@@ -15858,6 +15819,66 @@ RETURN R7 1
 )");
 }
 
+// `is Ok(v)` in an `if const` chain, and a `match` on a local result, read the result's registers too
+TEST_CASE("TryResultPatternsInChainsAndMatchesStayInRegisters")
+{
+    ScopedFastFlag sff[]{
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CHECK_EQ("\n" + compileFunction(R"(
+if const r = try f() when r is Ok(v) then
+    return v
+end
+return nil
+)", 0, 2),
+        R"(
+try: pc 1 to 3, handler pc 5, R0
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+LOADB R4 1 +1
+LOADB R4 0
+L0: JUMPIFNOT R4 L1
+MOVE R5 R0
+RETURN R5 1
+L1: LOADNIL R0
+RETURN R0 1
+)");
+
+    CHECK_EQ("\n" + compileFunction(R"(
+const r = try f()
+return match r
+    case is Ok(v) then v
+    case is Err(e) then e
+    else nil
+)", 0, 2),
+        R"(
+try: pc 1 to 3, handler pc 5, R0
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+LOADB R4 1 +1
+LOADB R4 0
+L0: JUMPIFNOT R4 L1
+MOVE R6 R0
+MOVE R5 R6
+RETURN R5 1
+L1: JUMPIF R4 L2
+MOVE R6 R0
+MOVE R5 R6
+RETURN R5 1
+L2: LOADNIL R5
+RETURN R5 1
+)");
+
+    // a `case` arm that binds the subject needs the object
+    std::string named = compileFunction("const r = try f() return match r case is Ok(v) then v case other then other", 0, 2);
+    CHECK(named.find("WRAPRESULT") != std::string::npos);
+}
+
 // `class.isinstance(r, Ok)`, which `r is Ok(value)` desugars to, is answered by the result's flag at O2, the level that
 // assumes builtins. The class may be `Ok` or `Err` or an alias of either through any chain of locals.
 TEST_CASE("TryResultVariantTestsStayInRegisters")
@@ -15909,6 +15930,39 @@ RETURN R7 1
     std::string asserted = compileFunction("local r = try f() assert(class.isinstance(r, Ok)) return r.value", 0, 2);
     CHECK(asserted.find("WRAPRESULT R0 OK") == std::string::npos);
     CHECK(asserted.find("JUMPXISA") == std::string::npos);
+}
+
+// A result bound by `if const` is kept in registers like `local r = try e`: the binding always passes, and the test in
+// the chain reads the flag the range writes.
+TEST_CASE("TryResultBoundInAWhenChainStaysInRegisters")
+{
+    ScopedFastFlag sff[]{{FFlag::DebugLuwuTryExpressions, true}, {FFlag::LuwuClasses, true}, {FFlag::LuwuIfLocal, true}};
+
+    CHECK_EQ("\n" + compileFunction(R"(
+if const r = try f() when class.isinstance(r, Ok) then
+    return r.value
+end
+return r2
+)", 0, 2),
+        R"(
+try: pc 1 to 3, handler pc 5, R0
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+LOADB R4 1 +1
+LOADB R4 0
+L0: JUMPIFNOT R4 L2
+MOVE R5 R0
+JUMPIF R4 L1
+MOVE R6 R0
+MOVE R7 R1
+MOVE R8 R2
+MOVE R9 R3
+WRAPRESULT R6 ERR
+GETTABLEKS R5 R6 K2 ['value']
+L1: RETURN R5 1
+L2: GETIMPORT R0 4 [r2]
+RETURN R0 1
+)");
 }
 
 TEST_SUITE_END();

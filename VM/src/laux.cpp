@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lualib.h"
+#include "linteger.h"
 
 #include "lobject.h"
 #include "lstate.h"
@@ -246,6 +247,9 @@ int luaL_checkinteger(lua_State* L, int narg)
 
 int64_t luaL_checkinteger64(lua_State* L, int narg)
 {
+    // Luwu Integers (rfcs/integers.md): a bigint has no 64-bit value
+    if (lua_type(L, narg) == LUA_THEAPINTEGER)
+        luaL_argerrorL(L, narg, "integer doesn't fit in 64 bits");
     if (!lua_isinteger64(L, narg))
         tag_error(L, narg, LUA_TINTEGER);
     return lua_tointeger64(L, narg, nullptr);
@@ -697,6 +701,24 @@ void luaL_pushresultsize(luaL_Strbuf* B, size_t size)
 
 // }======================================================
 
+// Luwu builtin classes: the builtin class at `idx`, or NULL when the value there isn't one. Only class values count, since
+// builtin objects print through their own `__tostring`.
+static LuauClass* builtinclassat(lua_State* L, int idx)
+{
+    const TValue* o = luaA_toobject(L, idx);
+    if (!ttisclass(o))
+        return NULL;
+
+    LuauClass* classdef = classvalue(o);
+    for (int i = 0; i < LUWU_BUILTIN__COUNT; ++i)
+    {
+        if (L->global->builtinclasses[i] == classdef)
+            return classdef;
+    }
+
+    return NULL;
+}
+
 const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
 {
     if (luaL_callmeta(L, idx, "__tostring")) // is there a metafield?
@@ -747,16 +769,20 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
     case LUA_TSTRING:
         lua_pushvalue(L, idx);
         break;
+    // Luwu Integers (rfcs/integers.md): an integer in decimal, without its suffix
     case LUA_TINTEGER:
-    {
-        int64_t l = lua_tointeger64(L, idx, nullptr);
-        char s[LUAI_MAXINT2STR];
-        char* e = luai_int2str(s, l);
-        lua_pushlstring(L, s, e - s);
+    case LUA_THEAPINTEGER:
+        luaZ_pushstring(L, luaA_toobject(L, idx));
         break;
-    }
     default:
     {
+        // Luwu builtin classes: a builtin class prints like a primitive, by name and without an address
+        if (LuauClass* builtin = builtinclassat(L, idx))
+        {
+            lua_pushfstring(L, "builtin class %s", getstr(builtin->name));
+            break;
+        }
+
         const void* ptr = lua_topointer(L, idx);
         unsigned long long enc = lua_encodepointer(L, uintptr_t(ptr));
         lua_pushfstring(L, "%s: 0x%016llx", luaL_typename(L, idx), enc);

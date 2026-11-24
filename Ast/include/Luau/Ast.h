@@ -477,7 +477,10 @@ enum class ConstantNumberParseResult
     Malformed,
     BinOverflow,
     HexOverflow,
+    // Luwu Octal Literals (rfcs/octal-literals.md): an octal literal past 2^64
+    OctOverflow,
     IntOverflow,
+    HeapInteger,
 };
 
 class AstExprConstantNumber : public AstExpr
@@ -491,6 +494,7 @@ public:
 
     double value;
     ConstantNumberParseResult parseResult;
+    uint8_t mode = 0; // IntegerMode
 };
 
 class AstExprConstantInteger : public AstExpr
@@ -499,11 +503,14 @@ public:
     LUAU_RTTI(AstExprConstantInteger)
 
     AstExprConstantInteger(const Location& location, int64_t value, ConstantNumberParseResult parseResult = ConstantNumberParseResult::Ok);
+    AstExprConstantInteger(const Location& location, const char* stringValue, ConstantNumberParseResult parseResult = ConstantNumberParseResult::HeapInteger);
 
     void visit(AstVisitor* visitor) override;
 
     int64_t value;
+    const char* stringValue; // Set when parseResult == HeapInteger
     ConstantNumberParseResult parseResult;
+    uint8_t mode = 0; // IntegerMode
 };
 class AstExprConstantString : public AstExpr
 {

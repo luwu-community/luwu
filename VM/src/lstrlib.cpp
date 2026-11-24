@@ -2,6 +2,8 @@
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lualib.h"
 
+#include "lapi.h"
+#include "linteger.h"
 #include "lstring.h"
 #include "lnumutils.h"
 
@@ -978,6 +980,109 @@ static int plainFixedPrecision(const char* form, size_t formatItemSize)
     return plain ? form[2] - '0' : -1;
 }
 
+// Luwu Integers (rfcs/integers.md): an integer in `string.format`, formatted exactly at any size. `form` is the item's
+// format as scanformat wrote it (flags, width and precision after the '%'), and `conversion` is one of "diouxX".
+static void addformattedinteger(lua_State* L, luaL_Strbuf* b, int arg, const char* form, char conversion)
+{
+    const TValue* value = luaA_toobject(L, arg);
+    if (conversion == 'x' || conversion == 'X')
+        luaZ_pushpow2digits(L, value, 4, conversion == 'X');
+    else if (conversion == 'o')
+        luaZ_pushpow2digits(L, value, 3, false);
+    else
+        luaZ_pushstring(L, value);
+
+    size_t length = 0;
+    const char* digits = lua_tolstring(L, -1, &length);
+    bool negative = length > 0 && digits[0] == '-';
+    if (negative)
+    {
+        digits++;
+        length--;
+    }
+
+    const char* p = form + 1;
+    bool leftAlign = false;
+    bool zeroPad = false;
+    bool alternate = false;
+    char positive = 0;
+    for (; *p && strchr(FLAGS, *p); p++)
+    {
+        if (*p == '-')
+            leftAlign = true;
+        else if (*p == '0')
+            zeroPad = true;
+        else if (*p == '#')
+            alternate = true;
+        else if (*p == '+')
+            positive = '+';
+        else if (*p == ' ' && positive == 0)
+            positive = ' ';
+    }
+
+    size_t width = 0;
+    for (; isdigit(uchar(*p)); p++)
+        width = width * 10 + size_t(*p - '0');
+
+    // a precision is the smallest number of digits, and zero padding doesn't apply with one
+    size_t precision = 0;
+    if (*p == '.')
+    {
+        zeroPad = false;
+        for (p++; isdigit(uchar(*p)); p++)
+            precision = precision * 10 + size_t(*p - '0');
+    }
+
+    char sign[2] = {0, 0};
+    if (negative)
+        sign[0] = '-';
+    else if (conversion == 'd' || conversion == 'i')
+        sign[0] = positive;
+
+    const char* prefix = "";
+    if (alternate && conversion == 'x')
+        prefix = "0x";
+    else if (alternate && conversion == 'X')
+        prefix = "0X";
+    else if (alternate && conversion == 'o' && precision <= length)
+        prefix = "0";
+
+    size_t zeros = precision > length ? precision - length : 0;
+    size_t used = strlen(sign) + strlen(prefix) + zeros + length;
+    if (zeroPad && !leftAlign && width > used)
+    {
+        zeros += width - used;
+        used = width;
+    }
+    size_t padding = width > used ? width - used : 0;
+
+    // `b` grows only with its storage on top of the stack, so the item is built in a buffer above the digits
+    luaL_Strbuf item;
+    luaL_buffinit(L, &item);
+    for (size_t i = 0; !leftAlign && i < padding; i++)
+        luaL_addchar(&item, ' ');
+    luaL_addstring(&item, sign);
+    luaL_addstring(&item, prefix);
+    for (size_t i = 0; i < zeros; i++)
+        luaL_addchar(&item, '0');
+    luaL_addlstring(&item, digits, length);
+    for (size_t i = 0; leftAlign && i < padding; i++)
+        luaL_addchar(&item, ' ');
+    luaL_pushresult(&item);
+
+    lua_remove(L, -2);
+    luaL_addvalue(b);
+}
+
+// Luwu Integers (rfcs/integers.md): `%q` writes an integer as the literal that reads back as it, suffix included
+static void addquotedinteger(lua_State* L, luaL_Strbuf* b, int arg)
+{
+    const TValue* value = luaA_toobject(L, arg);
+    luaZ_pushstring(L, value);
+    luaL_addvalue(b);
+    luaL_addstring(b, luaZ_modename(integermode(value)));
+}
+
 static int str_format(lua_State* L)
 {
     int top = lua_gettop(L);
@@ -1010,6 +1115,27 @@ static int str_format(lua_State* L)
             size_t formatItemSize = 0;
             strfrmt = scanformat(L, strfrmt, form, &formatItemSize);
             char formatIndicator = *strfrmt++;
+
+            // Luwu Integers (rfcs/integers.md): integers of any mode and size, without going through a number
+            bool integerArgument = lua_isinteger64(L, arg) || lua_isheapinteger(L, arg);
+            bool integerConversion = formatIndicator != 0 && strchr("diouxX", formatIndicator) != NULL;
+            if (integerArgument && integerConversion)
+            {
+                addformattedinteger(L, &b, arg, form, formatIndicator);
+                continue;
+            }
+            if (integerArgument && formatIndicator == 'q')
+            {
+                addquotedinteger(L, &b, arg);
+                continue;
+            }
+            if (integerArgument && formatIndicator == 's')
+            {
+                // as `tostring` gives it
+                luaZ_pushstring(L, luaA_toobject(L, arg));
+                lua_replace(L, arg);
+            }
+
             switch (formatIndicator)
             {
             case 'c':

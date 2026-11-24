@@ -7525,6 +7525,33 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
 }
 
 // Luwu try expressions: `try` gives a Result, which isn't declared without `none`
+// Luwu builtin classes: `typeof` names options and results "some", "ok" and "err", and comparing with those narrows
+TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_of_options_and_results")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function isok(r: Result<number, string>): boolean
+            return typeof(r) == "ok"
+        end
+        local function narrowed(r: unknown)
+            if typeof(r) == "err" then
+                local wrong: string = r
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<TypeMismatch>(result.errors[0]));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "try_needs_the_result_types")
 {
     ScopedFastFlag sffs[] = {
@@ -8130,6 +8157,46 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_narrows_unknown_to_any_bundle")
     const TypeMismatch* mismatch = get<TypeMismatch>(result.errors[0]);
     REQUIRE(mismatch);
     CHECK_EQ(toString(mismatch->givenType), ".(...unknown)");
+}
+
+// Luwu builtin classes: a userdata may report a builtin class's `typeof` name. When the definitions declare an extern type
+// by that name, `typeof` alone narrows to either, and `type(b) == "object"` picks the bundle.
+TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_shared_with_an_extern_type_narrows_to_both")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    loadDefinition(R"(
+        declare extern type bundle with
+            handle: number
+        end
+    )");
+
+    CheckResult result = check(R"(
+        --!strict
+        local function size(b: unknown): number
+            if typeof(b) == "bundle" then
+                return #b
+            end
+            if type(b) == "object" and typeof(b) == "bundle" then
+                return #b
+            end
+            return 0
+        end
+    )");
+
+    // Only the first `#b`, which may be the extern type: `len<.(...unknown) | bundle>` is uninhabited, and the extern
+    // type isn't a table. The `#b` after `type(b) == "object"` has no errors.
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<UninhabitedTypeFunction>(result.errors[0]));
+    CHECK(get<NotATable>(result.errors[1]));
+    CHECK_EQ(result.errors[0].location.begin.line, 4);
+    CHECK_EQ(result.errors[1].location.begin.line, 4);
 }
 
 // Luwu bundles: `typeof` of a bundle gives "bundle", so comparing it with "bundle" isn't the always-false comparison

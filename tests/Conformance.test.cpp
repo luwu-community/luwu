@@ -80,7 +80,7 @@ LUAU_FASTFLAG(DebugLuauAbortingChecks)
 LUAU_FASTFLAG(LuauBytecodeFold)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
-LUAU_FASTFLAG(LuauIntegerLibrary)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauUdataDirectAccess6)
@@ -5028,7 +5028,8 @@ static std::optional<Luau::TypeId> declaredClassValue(const Luau::TableType* lib
 
 // Luwu collections, bundles and try expressions: the builtin definitions declare each class the VM builds, with exactly
 // its public members. The collections classes are in the `collections` table, and `Some`, `Ok` and `Err` are globals.
-// A bundle class is a type the `bundle` library exports, since the library's table holds only functions.
+// A bundle class is a type the `bundle` library exports, since the library's table holds only functions. The error
+// variants are in the `Error` table, and `integer.Mode` in the `integer` library.
 TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
 {
     ScopedFastFlag sffs[] = {
@@ -5041,6 +5042,8 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
         {FFlag::DebugLuwuTryExpressions, true},
         {FFlag::LuwuTraits, true},
         {FFlag::LuauAllowGlobalDeclarationToBeCalledClass, true},
+        {FFlag::LuauIntegerType2, true},
+        {FFlag::DebugLuwuIntegers, true},
     };
 
     Luau::NullFileResolver fileResolver;
@@ -5050,6 +5053,10 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
 
     const Luau::TableType* library = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "collections")));
     REQUIRE(library);
+    const Luau::TableType* errors = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "Error")));
+    REQUIRE(errors);
+    const Luau::TableType* integers = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "integer")));
+    REQUIRE(integers);
     const auto& bundleTypes = frontend.globals.globalScope->importedTypeBindings["bundle"];
 
     StateRef state(luaL_newstate(), lua_close);
@@ -5080,8 +5087,16 @@ TEST_CASE("BuiltinClassDeclarationsMatchTheVm")
         }
 
         bool isGlobal = kind == LUWU_BUILTIN_SOME || kind == LUWU_BUILTIN_OK || kind == LUWU_BUILTIN_ERR;
-        std::optional<Luau::TypeId> declared =
-            isGlobal ? std::optional<Luau::TypeId>(Luau::getGlobalBinding(frontend.globals, name.c_str())) : declaredClassValue(library, name);
+        bool isErrorVariant = kind >= LUWU_BUILTIN_ERR_OVERFLOW && kind <= LUWU_BUILTIN_ERR_UNREACHABLE;
+        std::optional<Luau::TypeId> declared;
+        if (isGlobal)
+            declared = Luau::getGlobalBinding(frontend.globals, name.c_str());
+        else if (isErrorVariant)
+            declared = declaredClassValue(errors, name.substr(strlen("Error.")));
+        else if (kind == LUWU_BUILTIN_INTEGERMODE)
+            declared = declaredClassValue(integers, name);
+        else
+            declared = declaredClassValue(library, name);
         REQUIRE(declared);
         CHECK_EQ(declaredClassMembers(*declared), vmClassMembers(classdef));
     }
@@ -5133,6 +5148,22 @@ TEST_CASE("TryExpressions")
     runConformance("try_inlined.luwu");
 }
 
+TEST_CASE("Integers")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::DebugLuwuIntegers, true},
+    };
+
+    runConformance("integers.luwu");
+    runConformance("integer_library.luwu");
+}
+
 // Luwu try expressions: ranges around `do` expressions, which can write locals before they raise and leave the range
 // early
 TEST_CASE("TryExpressionsWithDoExpressions")
@@ -5147,6 +5178,20 @@ TEST_CASE("TryExpressionsWithDoExpressions")
     };
 
     runConformance("try_do.luwu");
+}
+
+// Luwu try expressions: results bound by `if const` and the other `when` chains, which are kept in registers
+TEST_CASE("TryExpressionsInWhenChains")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    runConformance("try_when.luwu");
 }
 
 TEST_CASE("OptionAndResult")

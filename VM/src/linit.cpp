@@ -5,7 +5,7 @@
 
 #include <stdlib.h>
 
-LUAU_FASTFLAG(LuauIntegerLibrary)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(LuwuNonePrimitive)
@@ -24,33 +24,12 @@ static const luaL_Reg lualibs[] = {
     {LUA_BITLIBNAME, luaopen_bit32},
     {LUA_BUFFERLIBNAME, luaopen_buffer},
     {LUA_VECLIBNAME, luaopen_vector},
-    {LUA_INTLIBNAME, luaopen_integer},
-    {NULL, NULL},
-};
-
-static const luaL_Reg lualibs_NOINTEGER[] = {
-    {"", luaopen_base},
-    {LUA_COLIBNAME, luaopen_coroutine},
-    {LUA_TABLIBNAME, luaopen_table},
-    {LUA_OSLIBNAME, luaopen_os},
-    {LUA_STRLIBNAME, luaopen_string},
-    {LUA_MATHLIBNAME, luaopen_math},
-    {LUA_DBLIBNAME, luaopen_debug},
-    {LUA_UTF8LIBNAME, luaopen_utf8},
-    {LUA_BITLIBNAME, luaopen_bit32},
-    {LUA_BUFFERLIBNAME, luaopen_buffer},
-    {LUA_VECLIBNAME, luaopen_vector},
     {NULL, NULL},
 };
 
 void luaL_openlibs(lua_State* L)
 {
-    const luaL_Reg* lib;
-    if (FFlag::LuauIntegerLibrary)
-        lib = lualibs;
-    else
-        lib = lualibs_NOINTEGER;
-
+    const luaL_Reg* lib = lualibs;
     for (; lib->func; lib++)
     {
         lua_pushcfunction(L, lib->func, NULL);
@@ -85,6 +64,15 @@ void luaL_openlibs(lua_State* L)
     {
         lua_pushcfunction(L, luaopen_result, NULL);
         lua_call(L, 0, 0);
+    }
+
+    // Luwu Integers (rfcs/integers.md): `integer.Mode` is a builtin class. Opened last, since `integer.suffixes` is a
+    // bundle when the bundle library is open.
+    if (FFlag::LuwuClasses && FFlag::DebugLuwuIntegers)
+    {
+        lua_pushcfunction(L, luaopen_integer, NULL);
+        lua_pushstring(L, LUA_INTEGERLIBNAME);
+        lua_call(L, 1, 0);
     }
 }
 

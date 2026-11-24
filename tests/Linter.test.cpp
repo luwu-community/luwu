@@ -9,6 +9,8 @@
 #include "doctest.h"
 
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
@@ -27,6 +29,7 @@ LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuOctalLiterals)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
@@ -4557,6 +4560,23 @@ local _ = 0x10000000000000000
     CHECK_EQ(result.warnings[1].text, "Hexadecimal number literal exceeded available precision and was truncated to 2^64");
 }
 
+// Luwu Octal Literals (rfcs/octal-literals.md)
+TEST_CASE_FIXTURE(Fixture, "IntegerParsingOctal")
+{
+    ScopedFastFlag sff{FFlag::LuwuOctalLiterals, true};
+
+    LintResult result = lint(R"(
+local _ = 0o2000000000000000000000
+local _ = 0o400000000000000001
+)");
+
+    REQUIRE(2 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "Octal number literal exceeded available precision and was truncated to 2^64");
+    CHECK_EQ(result.warnings[0].location.begin.line, 1);
+    CHECK_EQ(result.warnings[1].text, "Number literal exceeded available precision and was truncated to closest representable number");
+    CHECK_EQ(result.warnings[1].location.begin.line, 2);
+}
+
 TEST_CASE_FIXTURE(Fixture, "IntegerParsingDecimalImprecise")
 {
     LintResult result = lint(R"(
@@ -5760,6 +5780,37 @@ return good, bad, hit, empty, shadowed
             names.push_back(warning.text.substr(0, warning.text.find(' ')));
 
     CHECK_EQ(names, std::vector<std::string>{"'Ok'", "'Err'", "'Some'", "'None'"});
+}
+
+// Luwu Integers (rfcs/integers.md): the `integer` members upstream Luau 0.730 didn't have, and `Error`
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsIntegerLibraryInLuauFiles")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuauIntegerType2, true},
+        {FFlag::DebugLuwuIntegers, true},
+    };
+
+    fileResolver.source["game/a"] = R"(
+local cast = integer.cast
+local mode = integer.u8
+local power = integer.pow
+local band = integer.band
+local overflow = Error.Overflow
+return cast, mode, power, band, overflow
+)";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    std::vector<std::string> names;
+    for (const LintWarning& warning : lintModule("game/a").warnings)
+        if (warning.code == LintWarning::Code_LuwuOnlyApi)
+            names.push_back(warning.text.substr(0, warning.text.find(' ')));
+
+    CHECK_EQ(names, std::vector<std::string>{"'integer.cast'", "'integer.u8'", "'integer.pow'", "'Error'"});
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsBatchedBufferInLuauFiles")

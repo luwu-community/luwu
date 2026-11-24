@@ -13,7 +13,7 @@ constexpr unsigned kLuaNodeSizeLog2 = 5;
 
 // TKey.tt and TKey.next are packed together in a bitfield
 constexpr unsigned kOffsetOfTKeyTagNext = 12; // offsetof cannot be used on a bit field
-constexpr unsigned kTKeyTagBits = 4;
+constexpr unsigned kTKeyTagBits = 5;
 constexpr unsigned kTKeyTagMask = (1 << kTKeyTagBits) - 1;
 
 constexpr unsigned kOffsetOfInstructionC = 3;
