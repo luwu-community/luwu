@@ -45,7 +45,7 @@ static const lua_ClassMember fileSizeMembers[] = {
 
 lua_pushcfunction(L, fileSizeKilobytes, "kilobytes");
 lua_pushcfunction(L, fileSizeToString, "__tostring");
-lua_newclass(L, "FileSize", fileSizeMembers, 3, 0);
+lua_newclass(L, "FileSize", "seal", NULL, fileSizeMembers, 3, 0);
 ```
 
 The methods are popped in member order. The class is a value like any other: the embedder stores it in a library table, returns it from `require`
@@ -53,6 +53,25 @@ or keeps a reference to it with `lua_ref`.
 
 A method without `self` is a static, called as `FileSize.fromKilobytes(4)`. Metamethods are members with their usual names, under the same rules as
 user classes: `__index` and `__newindex` aren't allowed.
+
+### `typeof` ids
+
+Every native class has a name, a namespace and an id, and `typeof` of its objects is the namespace and the id joined with a `.`. A `NULL` id is
+the class's name, so the class above gives `typeof(size) == "seal.FileSize"`. The id is only what `typeof` reports: `class.name` returns the name.
+
+- The name must be a valid Luwu identifier that isn't a keyword (`FileSize`, not `"cats. meow"`), the same as a class declared in Luwu.
+- The namespace and the id are each ASCII letters, digits, `.` and spaces. Neither may be empty or made up of only dots.
+- Only the joined id matters: `("seal.time", "Duration")` and `("seal", "time.Duration")` both give `seal.time.Duration`.
+- A joined id is unique within a VM. Registering one a second time raises.
+- An embedder can't set `__type` on a native class or its objects. The `typeof` id is the only name it reports.
+- An invalid name, namespace or id raises from `lua_newclass`.
+
+Builtin classes have no namespace. They act like primitives and choose their own `typeof` names (`"vecdeque"`, `"bundle"`). A native `typeof` id
+always contains a `.`, so a new builtin class can never take a name an embedder already uses. Anything Luwu itself builds through this API is an
+opt-in module rather than part of the language, and it gets a namespace like any embedder.
+
+`typeof` isn't how code tells classes apart. Use `x is FileSize`, or a pattern on wherever the embedder exposes the class value. seal's userdata are
+narrowed by `typeof` today only because userdata have nothing better.
 
 ### Construction
 
@@ -100,10 +119,13 @@ The checker learns a native class from the embedder's definition file, which dec
 
 ```luwu
 declare class FileSize
+    __type = "seal.FileSize"
     const bytes: number
     function kilobytes(self): number
 end
 ```
+
+`declare class type` takes the same `__type` line, for a class whose value the embedder doesn't expose.
 
 Definition files already read classes with `private` and `const` members. A declaration can drift from the class the embedder builds, so the
 Analysis C API gets a check that compares a declared class with a live one. It reports any member that's missing, added, or declared with other
@@ -114,6 +136,8 @@ flags. seal would run it in its own tests.
 mluau gets a `LuwuClass` builder next to `UserData`. A Rust type implements a trait that lists its fields and methods, and the builder stores the
 Rust value in the object's native data. It reuses mluau's method closures, its `TypeId` checks and its borrow tracking, and Rust's `Drop` runs from
 the destructor. A Rust field getter has no class equivalent: it becomes a stored field set at construction, or a method.
+`Lua::new_native_class(name, namespace)` builds a class whose id is its name, as in `lua.new_native_class("Duration", "seal")`.
+`Lua::new_native_class_with_id(name, namespace, id)` sets the id.
 
 ## C API
 
@@ -129,7 +153,16 @@ typedef struct lua_ClassMember
 #define LUA_CLASSMEMBER_CONST 2
 #define LUA_CLASSMEMBER_PRIVATE 4
 
-LUA_API void lua_newclass(lua_State* L, const char* name, const lua_ClassMember* members, int count, size_t nativesize);
+// Uses `name` if `typeofid` is `NULL`
+LUA_API void lua_newclass(
+    lua_State* L,
+    const char* name,
+    const char* typeofnamespace,
+    const char* typeofid,
+    const lua_ClassMember* members,
+    int count,
+    size_t nativesize
+);
 LUA_API void lua_setclasstag(lua_State* L, int idx, int tag);
 LUA_API void* lua_toobjectdata(lua_State* L, int idx, int tag);
 LUA_API void lua_setobjectdtor(lua_State* L, int tag, lua_Destructor dtor);
@@ -163,7 +196,6 @@ This only adds C API. Luau code can't tell a native class from a user class, and
 ## Unresolved questions
 
 - Whether the registered C `__init` may assign `const` fields, which the VM refuses for C code today.
-- Whether a native class's objects report the class name or `"object"` from `typeof`, since `typeofname` is internal today.
 - Static values, like `Duration.ZERO`: today a class's static members can only be functions.
 - How `implements` arguments are passed to `lua_newclass`.
 - Whether the member order (fields first) and the `__init` slot are part of the ABI, or hidden behind the builder.
