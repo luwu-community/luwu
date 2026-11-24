@@ -1006,9 +1006,10 @@ enum LuauBuiltinFunction
     LBF_MATH_ISINF,
     LBF_MATH_ISFINITE,
 
-
-
-    LBF_BUFFER_ISFROZEN,
+    // Luwu Integers (rfcs/integers.md): the 39 ids after LBF_MATH_ISFINITE were upstream Luau's `integer` library and
+    // `buffer.readinteger`/`writeinteger`. Luwu's integers are a different design, so the ids stay unused (legacy
+    // bytecode that names one calls the function instead), and the ids after them keep their numbers.
+    LBF_BUFFER_ISFROZEN = LBF_MATH_ISFINITE + 40,
 
     // Luwu Classes (rfcs/classes): class.isinstance(value, class) -> boolean
     LBF_CLASS_ISINSTANCE,

@@ -13,7 +13,7 @@ of a 64-bit signed integer.
 
 ```luwu
 const minimum_size = 2048u64
--- raises Err.Overflow if the size doesn't fit in a u64
+-- raises Error.Overflow if the size doesn't fit in a u64
 const length = integer.u64(fs.path("./content.flac"):expect_file():size())
 if length < minimum_size then
     error("music file is too small")
@@ -105,10 +105,10 @@ an integer of the exact same mode:
 ```luwu
 print(try 7int == 7u8) -- Ok(false)
 print(try 500u32 == 500u32) -- Ok(true)
-print(try 4int < 5u8) -- Err(Err.InvalidComparison)
+print(try 4int < 5u8) -- Err(Error.InvalidComparison)
 print(try 5int <= 5int) -- Ok(true)
-print(try 5int >= 7u8) -- Err(Err.InvalidComparison)
-print(try 5 >= 7u8) -- Err(Err.InvalidComparison)
+print(try 5int >= 7u8) -- Err(Error.InvalidComparison)
+print(try 5 >= 7u8) -- Err(Error.InvalidComparison)
 print(try 5int > -7u8) -- trick one, SyntaxError because code refuses to parse you can't have negative u8
 ```
 
@@ -163,7 +163,7 @@ print(7i8 / -2i8, 7i8 // -2i8, 7i8 % -2i8) -- -3 -4 -1
 Rust's `%` is the remainder of `/` instead and has the sign of the dividend. Luwu's `%` follows `//` so that integer
 code gives the same results as the same code written with numbers.
 
-`/`, `//` and `%` raise `Err.DivisionByZero` when the divisor is zero, in every mode, where Rust panics. Dividing the
+`/`, `//` and `%` raise `Error.DivisionByZero` when the divisor is zero, in every mode, where Rust panics. Dividing the
 smallest value of a signed mode by `-1` overflows and wraps like any other sized operation, the same as Rust's
 `wrapping_div` and `wrapping_rem`: `-128i8 / -1i8` is `-128i8` and `-128i8 % -1i8` is `0i8`. A dynamically-sized
 integer never overflows here.
@@ -253,9 +253,9 @@ function integer.tonumber(i: integer): Result<number, number>
 - If `from` is a string, parses `from` as an integer of mode `to`, raising one of `IntegerErrors` as needed.
   - If `from` ends with a suffix and `to` is `nil` or unspecified, casts into an integer of that suffix.
   - Raises underflow/overflow if `from` ends with a suffix (`"100u8"`) but the integer doesn't fit in that suffix.
-- If `from` is a number, casts it to mode `to`. If `from` has a fractional component, raises `Err.UnexpectedFloat(f)`.
-  A number above the mode's largest value raises `Err.Overflow` and one below its smallest value raises
-  `Err.Underflow`, which includes `math.huge` and `-math.huge`. A NaN raises `Err.InvalidArgument`.
+- If `from` is a number, casts it to mode `to`. If `from` has a fractional component, raises `Error.UnexpectedFloat(f)`.
+  A number above the mode's largest value raises `Error.Overflow` and one below its smallest value raises
+  `Error.Underflow`, which includes `math.huge` and `-math.huge`. A NaN raises `Error.InvalidArgument`.
 - If `from` is an integer but is not an integer of mode `to`, performs a checked cast of `from` into mode `to`.
 - If `from` is value with a `__tointeger` metamethod, returns the integer returned by `from:__tointeger(to)`.
   *See [`__tointeger` metamethod](#__tointeger-metamethod).*
@@ -270,7 +270,7 @@ if foo:endswith(bundle.unpack(integer.suffixes)) then
 end
 const c = integer.cast("100u8", integer.u64) -- treats input text as u8s and converts to u64
 const converted = integer.cast(7int, integer.i8)
-const oops = integer.cast("1412u8", integer.u64) -- raises error variant Err.Overflow(1412int, integer.u8)
+const oops = integer.cast("1412u8", integer.u64) -- raises error variant Error.Overflow(1412int, integer.u8)
 ```
 
 `integer.tonumber` converts an `integer` to a `number`. It returns `Ok(n)` when `n` is exactly the integer's
@@ -290,7 +290,7 @@ const res = match integer.tonumber(foo())
         give lossy
 ```
 
-We raise error variants (builtin classes), such as `Err.Overflow(got, mode)` instead of returning `nil` because there's
+We raise error variants (builtin classes), such as `Error.Overflow(got, mode)` instead of returning `nil` because there's
 multiple reasons *why* a cast could fail.
 
 We expect casts to be used with Luwu's [try operator](<link the rfc when ready>) and pattern matching syntax, which
@@ -307,17 +307,17 @@ const picked = do
         match try integer.cast(input.readline("Pick an integer"))
         case is Ok(int) then
             give int
-        case is Err(_ is Err.UnexpectedFloat(got)) then
+        case is Err(_ is Error.UnexpectedFloat(got)) then
             retries -= 1
             print(`Integers can't have decimal points (got {got})\n{try_again()}`)
-        case is Err(err is Err.CannotBeParsed) then
+        case is Err(err is Error.CannotBeParsed) then
             retries -= 1
             print(`That's not a valid integer: {err}\n{try_again()}`)
-        case is Err(err is Err.Overflow(got, mode) | Err.Underflow(got, mode)) then
+        case is Err(err is Error.Overflow(got, mode) | Error.Underflow(got, mode)) then
             retries -= 1
             print(`The integer you passed ({got}) is not valid for the chosen mode {mode}: {err}\n{try_again()}`)
         else
-            error(Err.Unreachable("all cases should be handled here"))
+            error(Error.Unreachable("all cases should be handled here"))
         end
     until retries == 0
     give 10int
@@ -354,11 +354,11 @@ integer.suffixes = bundle.pack("int", "u8", "u16", "u32", "u64", "i8", "i16", "i
 function integer.min<T>(first: integer<T>, ...: integer<T>): integer<T>
 function integer.max<T>(first: integer<T>, ...: integer<T>): integer<T>
 function integer.clamp<T>(i: integer<T>, min: integer<T>, max: integer<T>): integer<T>
-function integer.abs<T>(i: integer<T>): integer<T> ! Err.Overflow
+function integer.abs<T>(i: integer<T>): integer<T> ! Error.Overflow
 function integer.signum<T>(i: integer<T>): integer<T>
 ```
 
-These work like their `math` counterparts on integers of one mode. `integer.abs` raises `Err.Overflow` for the
+These work like their `math` counterparts on integers of one mode. `integer.abs` raises `Error.Overflow` for the
 smallest value of a signed sized mode if its absolute value doesn't fit (`integer.abs(-128i8)`). `integer.signum` gives
 `-1`, `0` or `1` in the mode of `i`, and an unsigned mode only ever gives `0` or `1`. Rust has the same function under
 the same name, and it's not called `sign` so it isn't mistaken for `math.sign`, which gives a number.
@@ -372,14 +372,14 @@ functions on the integer library and as methods on `integer`s.
 function integer.sadd<T>(a: integer<T>, b: integer<T>): integer<T>
 function integer.ssub<T>(a: integer<T>, b: integer<T>): integer<T>
 function integer.smul<T>(a: integer<T>, b: integer<T>): integer<T>
-function integer.cadd<T>(a: integer<T>, b: integer<T>): integer<T> ! Err.Overflow | Err.Underflow
-function integer.csub<T>(a: integer<T>, b: integer<T>): integer<T> ! Err.Overflow | Err.Underflow
-function integer.cmul<T>(a: integer<T>, b: integer<T>): integer<T> ! Err.Overflow | Err.Underflow
-function integer.cdiv<T>(a: integer<T>, b: integer<T>): integer<T> ! Err.Overflow | Err.DivisionByZero
+function integer.cadd<T>(a: integer<T>, b: integer<T>): integer<T> ! Error.Overflow | Error.Underflow
+function integer.csub<T>(a: integer<T>, b: integer<T>): integer<T> ! Error.Overflow | Error.Underflow
+function integer.cmul<T>(a: integer<T>, b: integer<T>): integer<T> ! Error.Overflow | Error.Underflow
+function integer.cdiv<T>(a: integer<T>, b: integer<T>): integer<T> ! Error.Overflow | Error.DivisionByZero
 ```
 
 `integer.cdiv` divides like `/`, rounding toward zero. Dividing the smallest value of a signed mode by `-1` is the one
-division that overflows, and `integer.cdiv` raises `Err.Overflow` there instead of wrapping.
+division that overflows, and `integer.cdiv` raises `Error.Overflow` there instead of wrapping.
 
 Saturating functions return an integer that does not exceed its mode's minimum or maximum value:
 
@@ -396,7 +396,7 @@ as regular arithmetic; we lint against using these functions on `ints` because `
 ```luwu
 function integer.pow<T>(i: integer<T>, exp: integer): integer<T>
 function integer.spow<T>(i: integer<T>, exp: integer): integer<T>
-function integer.cpow<T>(i: integer<T>, exp: integer): integer<T> ! Err.Overflow | Err.Underflow
+function integer.cpow<T>(i: integer<T>, exp: integer): integer<T> ! Error.Overflow | Error.Underflow
 function integer.sqrt<T>(i: integer<T>): integer<T>
 function integer.log2<T>(i: integer<T>): integer<T>
 function integer.log10<T>(i: integer<T>): integer<T>
@@ -530,22 +530,22 @@ Integers feature the following methods:
 function integer<T>:cast<U>(to: Mode<U>): integer<U> ! IntegerErrors
 function integer<T>:tonumber(): Result<number, number>
 function integer<T>:clamp(min: integer<T>, max: integer<T>): integer<T>
-function integer<T>:abs(): integer<T> ! Err.Overflow
+function integer<T>:abs(): integer<T> ! Error.Overflow
 function integer<T>:signum(): integer<T>
 
 -- saturating and checked arithmetic
 function integer<T>:sadd(other: integer<T>): integer<T>
 function integer<T>:ssub(other: integer<T>): integer<T>
 function integer<T>:smul(other: integer<T>): integer<T>
-function integer<T>:cadd(other: integer<T>): integer<T> ! Err.Overflow | Err.Underflow
-function integer<T>:csub(other: integer<T>): integer<T> ! Err.Overflow | Err.Underflow
-function integer<T>:cmul(other: integer<T>): integer<T> ! Err.Overflow | Err.Underflow
-function integer<T>:cdiv(other: integer<T>): integer<T> ! Err.Overflow | Err.DivisionByZero
+function integer<T>:cadd(other: integer<T>): integer<T> ! Error.Overflow | Error.Underflow
+function integer<T>:csub(other: integer<T>): integer<T> ! Error.Overflow | Error.Underflow
+function integer<T>:cmul(other: integer<T>): integer<T> ! Error.Overflow | Error.Underflow
+function integer<T>:cdiv(other: integer<T>): integer<T> ! Error.Overflow | Error.DivisionByZero
 
 -- powers, roots and logarithms
 function integer<T>:pow(exp: integer): integer<T>
 function integer<T>:spow(exp: integer): integer<T>
-function integer<T>:cpow(exp: integer): integer<T> ! Err.Overflow | Err.Underflow
+function integer<T>:cpow(exp: integer): integer<T> ! Error.Overflow | Error.Underflow
 function integer<T>:sqrt(): integer<T>
 function integer<T>:log2(): integer<T>
 function integer<T>:log10(): integer<T>
@@ -588,13 +588,13 @@ number or `__tointeger` value goes through `integer.cast` or a mode (`integer.u3
 
 ```luwu
 type IntegerErrors<E = Magic> = 
-    | Err.CannotBeParsed
-    | Err.Overflow
-    | Err.Underflow
-    | Err.UnexpectedFloat
-    | Err.InvalidArgument
+    | Error.CannotBeParsed
+    | Error.Overflow
+    | Error.Underflow
+    | Error.UnexpectedFloat
+    | Error.InvalidArgument
     | E -- inferred based on error variants of `__tointeger` on custom data structures
-    | Err.Runtime -- `__tointeger` hit a regular RuntimeError
+    | Error.Runtime -- `__tointeger` hit a regular RuntimeError
 
 declare class Mode(private mode: Repr, min, max)
     public min: integer<Repr>, -- depending on whatever the primitive mode is so u8, i8, etc.
@@ -625,20 +625,20 @@ type integer = {
     min: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
     max: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
     clamp: <T>(i: integer<T>, min: integer<T>, max: integer<T>) -> integer<T>,
-    abs: <T>(i: integer<T>) -> integer<T> ! Err.Overflow,
+    abs: <T>(i: integer<T>) -> integer<T> ! Error.Overflow,
     signum: <T>(i: integer<T>) -> integer<T>,
 
     sadd: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
     ssub: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
     smul: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
-    cadd: <T>(a: integer<T>, b: integer<T>) -> integer<T> ! Err.Overflow | Err.Underflow,
-    csub: <T>(a: integer<T>, b: integer<T>) -> integer<T> ! Err.Overflow | Err.Underflow,
-    cmul: <T>(a: integer<T>, b: integer<T>) -> integer<T> ! Err.Overflow | Err.Underflow,
-    cdiv: <T>(a: integer<T>, b: integer<T>) -> integer<T> ! Err.Overflow | Err.DivisionByZero,
+    cadd: <T>(a: integer<T>, b: integer<T>) -> integer<T> ! Error.Overflow | Error.Underflow,
+    csub: <T>(a: integer<T>, b: integer<T>) -> integer<T> ! Error.Overflow | Error.Underflow,
+    cmul: <T>(a: integer<T>, b: integer<T>) -> integer<T> ! Error.Overflow | Error.Underflow,
+    cdiv: <T>(a: integer<T>, b: integer<T>) -> integer<T> ! Error.Overflow | Error.DivisionByZero,
 
     pow: <T>(i: integer<T>, exp: integer) -> integer<T>,
     spow: <T>(i: integer<T>, exp: integer) -> integer<T>,
-    cpow: <T>(i: integer<T>, exp: integer) -> integer<T> ! Err.Overflow | Err.Underflow,
+    cpow: <T>(i: integer<T>, exp: integer) -> integer<T> ! Error.Overflow | Error.Underflow,
     sqrt: <T>(i: integer<T>) -> integer<T>,
     log2: <T>(i: integer<T>) -> integer<T>,
     log10: <T>(i: integer<T>) -> integer<T>,
@@ -751,7 +751,7 @@ end
 const percent = BoundedInteger(50u8, 0u8, 100u8)
 const wide = integer.cast(percent, integer.u64) -- 50u64
 const same = integer.u8(percent) -- 50u8
-const oops = integer.i8(BoundedInteger(200u8, 0u8, 255u8)) -- raises Err.Overflow
+const oops = integer.i8(BoundedInteger(200u8, 0u8, 255u8)) -- raises Error.Overflow
 ```
 
 ### Pattern matching

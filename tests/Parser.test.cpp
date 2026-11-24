@@ -22,7 +22,7 @@ LUAU_DYNAMIC_FASTFLAG(DebugLuauReportReturnTypeVariadicWithTypeSuffix)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauCstAttr)
-LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuDeclareStatements)
@@ -870,7 +870,7 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_decimal")
     CHECK_EQ(str->list.data[4]->as<AstExprConstantNumber>()->value, 1.5e-5);
     CHECK_EQ(str->list.data[5]->as<AstExprConstantNumber>()->value, 12345.125);
 
-    if (FFlag::LuauIntegerType2)
+    if (FFlag::DebugLuwuIntegers)
     {
         stat = parse("return 1int, 1_000_000int");
         REQUIRE(stat != nullptr);
@@ -896,7 +896,7 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_hexadecimal")
     CHECK_EQ(str->list.data[2]->as<AstExprConstantNumber>()->value, 0xFFFF);
     CHECK_EQ(str->list.data[3]->as<AstExprConstantNumber>()->value, double(ULLONG_MAX));
 
-    if (FFlag::LuauIntegerType2)
+    if (FFlag::DebugLuwuIntegers)
     {
         stat = parse("return 0xabint, 0XAB05int, 0xff_ffint, 0x7fffffffffffffffint, 0x8000000000000000u64, 0xffffffffffffffffu64");
         REQUIRE(stat != nullptr);
@@ -924,7 +924,7 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_binary")
     CHECK_EQ(str->list.data[2]->as<AstExprConstantNumber>()->value, 42);
     CHECK_EQ(str->list.data[3]->as<AstExprConstantNumber>()->value, double(ULLONG_MAX));
 
-    if (FFlag::LuauIntegerType2)
+    if (FFlag::DebugLuwuIntegers)
     {
         AstStat* stat = parse(
             "return 0b1int, 0b0int, 0b101010int, 0b111111111111111111111111111111111111111111111111111111111111111int, "
@@ -954,7 +954,7 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_error")
     matchParseError("return 0x0x123", "Malformed number");
     matchParseError("return 0xffffffffffffffffffffllllllg", "Malformed number");
     matchParseError("return 0x0xffffffffffffffffffffffffffff", "Malformed number");
-    if (FFlag::LuauIntegerType2)
+    if (FFlag::DebugLuwuIntegers)
     {
         matchParseError("return 0x0xABCint", "Malformed integer");
         matchParseError("return 0xABCMint", "Malformed integer");
@@ -969,7 +969,7 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_error")
 // Luwu Integers (rfcs/integers.md)
 TEST_CASE_FIXTURE(Fixture, "integer_literal_suffixes")
 {
-    ScopedFastFlag integers{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
 
     AstStat* stat = parse("return 7int, 7_int, 7u64, 7_u64, 255u8, 0x7fi8, 0b1_0000_0000u16, 0xffffffffffffffffu64, 7i64, 99999999999999999999int");
     REQUIRE(stat != nullptr);
@@ -1015,7 +1015,7 @@ TEST_CASE_FIXTURE(Fixture, "integer_literal_suffixes")
 // Luwu Integers (rfcs/integers.md): a negated literal can be the smallest value of its mode
 TEST_CASE_FIXTURE(Fixture, "integer_literal_smallest_values")
 {
-    ScopedFastFlag integers{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
 
     ParseResult result = tryParse("return -128i8, -9223372036854775808i64, -0x80_i8");
     CHECK(result.errors.empty());
@@ -1024,7 +1024,7 @@ TEST_CASE_FIXTURE(Fixture, "integer_literal_smallest_values")
 // Luwu Integers (rfcs/integers.md): an unsigned literal can't be negated, and the error suggests a signed mode that holds the value
 TEST_CASE_FIXTURE(Fixture, "integer_literal_negated_unsigned")
 {
-    ScopedFastFlag integers{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
 
     matchParseError("return -5u8", "Write '-5i8' instead of '-5u8': unsigned integers can't be negative", Location({0, 7}, {0, 11}));
     matchParseError("return -200u8", "Write '-200i16' instead of '-200u8': unsigned integers can't be negative");
@@ -1047,7 +1047,7 @@ TEST_CASE_FIXTURE(Fixture, "integer_literal_negated_unsigned")
 // Luwu Integers (rfcs/integers.md): a sized literal must fit its mode, and the literal still parses
 TEST_CASE_FIXTURE(Fixture, "integer_literal_out_of_range")
 {
-    ScopedFastFlag integers{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
 
     matchParseError("return 300u8", "'300u8' is out of range for u8 (0 to 255)");
     matchParseError("return 128i8", "'128i8' is out of range for i8 (-128 to 127)");
@@ -1066,7 +1066,7 @@ TEST_CASE_FIXTURE(Fixture, "integer_literal_out_of_range")
 // Luwu Integers (rfcs/integers.md): upstream Luau's `7i` is an error, recovered as `7int`
 TEST_CASE_FIXTURE(Fixture, "integer_literal_upstream_suffix")
 {
-    ScopedFastFlag integers{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
 
     matchParseError(
         "return 0xffi",
@@ -1085,13 +1085,13 @@ TEST_CASE_FIXTURE(Fixture, "integer_literal_upstream_suffix")
     CHECK_EQ(literal->mode, IntegerMode_Dynamic);
 }
 
-// Luwu Integers (rfcs/integers.md): with integers off, a suffix is part of the number and makes it malformed
+// Luwu Integers (rfcs/integers.md): with integers off, an integer literal says which flag enables them
 TEST_CASE_FIXTURE(Fixture, "integer_literal_suffixes_need_integers")
 {
-    ScopedFastFlag integers{FFlag::LuauIntegerType2, false};
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, false};
 
-    matchParseError("return 7u8", "Malformed number");
-    matchParseError("return 7int", "Malformed number");
+    matchParseError("return 7u8", "attempt to use disabled Luwu feature integers; enable via FFlag 'DebugLuwuIntegers'");
+    matchParseError("return 7int", "attempt to use disabled Luwu feature integers; enable via FFlag 'DebugLuwuIntegers'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "break_return_not_last_error")

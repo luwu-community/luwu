@@ -5,6 +5,7 @@
 #include "lobject.h"
 
 HeapInteger* luaZB_newheapinteger(lua_State* L, uint32_t capacity);
+void luaZB_freeheapinteger(lua_State* L, HeapInteger* h, struct lua_Page* page);
 
 HeapInteger* luaZB_heapinteger_add(lua_State* L, const HeapInteger* a, const HeapInteger* b);
 HeapInteger* luaZB_heapinteger_sub(lua_State* L, const HeapInteger* a, const HeapInteger* b);

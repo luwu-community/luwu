@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lclass.h"
+#include "linteger.h"
 #include "lvm.h"
 
 #include "lstate.h"
@@ -845,6 +846,7 @@ static int loadsafe(
                 uint8_t signAndMode = read<uint8_t>(data, size, offset);
                 bool isNegative = signAndMode & 1;
                 uint8_t mode = signAndMode >> 1;
+                LUAU_ASSERT(mode <= IntegerMode_U64);
                 uint64_t magnitude = readVarInt64(data, size, offset);
                 int64_t val = isNegative ? (int64_t)(~magnitude + 1) : (int64_t)magnitude;
                 setintegersmi(&p->k[j], val, (IntegerMode)mode);
@@ -853,15 +855,17 @@ static int loadsafe(
 
             case LBC_CONSTANT_INTEGER_HEAP:
             {
-                uint8_t mode = read<uint8_t>(data, size, offset);
+                // Luwu Integers (rfcs/integers.md): only a dynamically-sized integer can be a bigint, so the mode byte is
+                // always IntegerMode_Dynamic
+                if (read<uint8_t>(data, size, offset) != IntegerMode_Dynamic)
+                    LUAU_ASSERT(!"A bigint constant must be dynamically-sized");
+
                 uint32_t sid = readVarInt(data, size, offset);
                 if (sid == 0 || sid > strings.count)
                     LUAU_ASSERT(!"String ID is out of bounds");
 
-                TString* str = strings.data[sid - 1];
-
-                luaZ_integer_fromstring(L, getstr(str), &p->k[j]);
-                p->k[j].extra[0] = mode;
+                if (!luaZ_fromdecimal(L, &p->k[j], getstr(strings.data[sid - 1])))
+                    LUAU_ASSERT(!"A bigint constant must be written in decimal");
                 break;
             }
 

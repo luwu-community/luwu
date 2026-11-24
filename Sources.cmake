@@ -415,8 +415,7 @@ target_sources(Luwu.VM PRIVATE
     VM/src/bigint/ToString.cpp
     VM/src/bigint/ToString16.cpp
     VM/src/bigint/FromString.cpp
-    VM/src/lintegerimpl.cpp
-    VM/src/lintegerlib.cpp
+    VM/src/linteger.cpp
     VM/src/lbitlib.cpp
     VM/src/lbuffer.cpp
     VM/src/lbuflib.cpp
@@ -457,6 +456,7 @@ target_sources(Luwu.VM PRIVATE
     VM/src/lapi.h
     VM/src/lbuffer.h
     VM/src/lbigint.h
+    VM/src/linteger.h
     VM/src/bigint/Add.h
     VM/src/bigint/Sub.h
     VM/src/bigint/Mul.h

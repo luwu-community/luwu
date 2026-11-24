@@ -57,6 +57,12 @@ enum IntegerMode : unsigned char
     IntegerMode_U64
 };
 
+// Luwu Integers (rfcs/integers.md): whether `mode` holds no negative values
+inline bool isUnsignedIntegerMode(IntegerMode mode)
+{
+    return mode == IntegerMode_U8 || mode == IntegerMode_U16 || mode == IntegerMode_U32 || mode == IntegerMode_U64;
+}
+
 // Luwu Integers (rfcs/integers.md): `value` wrapped to the range of `mode`. A dynamic or 64-bit value is unchanged.
 inline int64_t wrapIntegerToMode(int64_t value, IntegerMode mode)
 {

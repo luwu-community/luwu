@@ -352,6 +352,8 @@ typedef struct LuauBuffer
     alignas(8) char inline_data[1];
 } Buffer;
 
+// Luwu Integers (rfcs/integers.md): a dynamically-sized integer that doesn't fit in 64 bits, as a sign and the 64-bit
+// digits of its absolute value, lowest first, without zero digits at the top
 typedef struct HeapInteger
 {
     CommonHeader;
@@ -361,36 +363,16 @@ typedef struct HeapInteger
     uint64_t* digits;
 } HeapInteger;
 
-
-void luaZ_integer_add(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_integer_sub(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_integer_mul(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_integer_div(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_integer_mod(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_integer_rem(lua_State* L, const TValue* a, const TValue* b, TValue* res);
-void luaZ_integer_neg(lua_State* L, const TValue* a, TValue* res);
-
-bool luaZ_integer_lt(lua_State* L, const TValue* a, const TValue* b);
-bool luaZ_integer_le(lua_State* L, const TValue* a, const TValue* b);
-bool luaZ_integer_eq(const TValue* a, const TValue* b);
-uint32_t luaZ_integer_hash(const TValue* b);
-LUAI_FUNC uint64_t luaZ_integer_get_bottom_64(const TValue* b);
-
-void luaZ_integer_fromstring(lua_State* L, const char* str, TValue* res);
-void luaZ_pushinteger_string(lua_State* L, const TValue* b);
-
-void luaZB_freeheapinteger(lua_State* L, HeapInteger* h, struct lua_Page* page);
-
-static const uint8_t luau_int_shifts[9] = { 0, 56, 56, 48, 48, 32, 32, 0, 0 };
-static const bool luau_int_signed[9] = { false, true, false, true, false, true, false, true, false };
-
-inline void setintegersmi(TValue* obj, int64_t smi, IntegerMode mode) {
-    obj->value.l = smi;
+// Luwu Integers (rfcs/integers.md): an inline integer, `value` already in the range of `mode`
+inline void setintegersmi(TValue* obj, int64_t value, IntegerMode mode)
+{
+    obj->value.l = value;
     obj->tt = LUA_TINTEGER;
     obj->extra[0] = mode;
 }
 
-inline void setintegerheap(TValue* obj, HeapInteger* heap, IntegerMode mode) {
+inline void setintegerheap(TValue* obj, HeapInteger* heap, IntegerMode mode)
+{
     obj->value.gc = (GCObject*)heap;
     obj->tt = LUA_THEAPINTEGER;
     obj->extra[0] = mode;
@@ -608,15 +590,11 @@ typedef struct TKey
     int next : 27; // for chaining
 } TKey;
 
-bool luaZ_integer_eq_key(const TKey* a, const TValue* b);
-
 typedef struct LuaNode
 {
     TValue val;
     TKey key;
 } LuaNode;
-
-
 
 // copy a value into a key
 #define setnodekey(L, node, obj) \

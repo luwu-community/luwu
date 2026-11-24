@@ -207,6 +207,13 @@ std::optional<TypeId> readBundlePosition(NotNull<BuiltinTypes> builtinTypes, Not
 bool bundleLibraryEnabled();
 // Luwu bundles: the `bundle` library's declarations, a definition file of its own (see registerBuiltinGlobals)
 std::string getBundleDefinitionSource();
+// Luwu Integers (rfcs/integers.md): whether Analysis has the `integer` library: the flags the VM opens it with
+// (luaL_openlibs), and the result library, which `integer.tonumber` gives
+bool integerLibraryEnabled();
+// Luwu Integers (rfcs/integers.md): the `integer` library's declarations, a definition file of its own
+std::string getIntegerDefinitionSource();
+// Luwu error variants (rfcs/integers.md): the declarations of `Error` and its classes, a definition file of its own
+std::string getErrorDefinitionSource();
 std::string getTypeFunctionDefinitionSource();
 
 void addGlobalBinding(GlobalTypes& globals, const std::string& name, TypeId ty, const std::string& packageName);

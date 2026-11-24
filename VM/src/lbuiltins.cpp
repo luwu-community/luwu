@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lbuiltins.h"
+#include "linteger.h"
 
 #include "lstate.h"
 #include "lstring.h"
@@ -1408,6 +1409,12 @@ static int luauF_tonumber(lua_State* L, StkId res, TValue* arg0, int nresults, S
             setnvalue(res, num);
             return 1;
         }
+        // Luwu Integers (rfcs/integers.md): an integer converts only when a number holds it exactly
+        else if (ttisinteger(arg0) && luaZ_tonumber(arg0, &num))
+        {
+            setnvalue(res, num);
+            return 1;
+        }
         else
         {
             setnilvalue(res);
@@ -1462,8 +1469,9 @@ static int luauF_tostring(lua_State* L, StkId res, TValue* arg0, int nresults, S
             if (luaC_needsGC(L))
                 return -1; // we can't call luaC_checkGC so fall back to C implementation
 
+            // Luwu Integers (rfcs/integers.md): an inline integer of any mode; a bigint takes the C implementation
             char s[LUAI_MAXINT2STR];
-            char* e = luai_int2str(s, lvalue(arg0));
+            char* e = luaZ_formatinline(arg0, s);
             setsvalue(L, res, luaS_newlstr(L, s, e - s));
             return 1;
         }
@@ -1925,174 +1933,6 @@ static int luauF_isfinite(lua_State* L, StkId res, TValue* arg0, int nresults, S
     return -1;
 }
 
-static int luauF_integeradd(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        int64_t a1 = lvalue(arg0);
-        int64_t a2 = lvalue(args);
-        setlvalue(res, (int64_t)((uint64_t)a1 + (uint64_t)a2));
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integersub(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        int64_t a1 = lvalue(arg0);
-        int64_t a2 = lvalue(args);
-        setlvalue(res, (int64_t)((uint64_t)a1 - (uint64_t)a2));
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integerdiv(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        int64_t a = lvalue(arg0);
-        int64_t b = lvalue(args);
-
-        if ((b == 0) || ((a == LLONG_MIN) && (b == -1)))
-            return -1;
-
-        setlvalue(res, a / b);
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integerlt(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        int64_t a = lvalue(arg0);
-        int64_t b = lvalue(args);
-
-        setbvalue(res, a < b);
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integerle(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        int64_t a = lvalue(arg0);
-        int64_t b = lvalue(args);
-
-        setbvalue(res, a <= b);
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integergt(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        int64_t a = lvalue(arg0);
-        int64_t b = lvalue(args);
-
-        setbvalue(res, a > b);
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integerge(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        int64_t a = lvalue(arg0);
-        int64_t b = lvalue(args);
-
-        setbvalue(res, a >= b);
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integerult(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        uint64_t a = (uint64_t)lvalue(arg0);
-        uint64_t b = (uint64_t)lvalue(args);
-
-        setbvalue(res, a < b);
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integerule(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        uint64_t a = (uint64_t)lvalue(arg0);
-        uint64_t b = (uint64_t)lvalue(args);
-
-        setbvalue(res, a <= b);
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integerugt(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        uint64_t a = (uint64_t)lvalue(arg0);
-        uint64_t b = (uint64_t)lvalue(args);
-
-        setbvalue(res, a > b);
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integeruge(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        uint64_t a = (uint64_t)lvalue(arg0);
-        uint64_t b = (uint64_t)lvalue(args);
-
-        setbvalue(res, a >= b);
-        return 1;
-    }
-
-    return -1;
-}
-
-static int luauF_integermul(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
-{
-    if (nparams >= 2 && nresults <= 1 && ttisinteger(arg0) && ttisinteger(args))
-    {
-        int64_t a1 = lvalue(arg0);
-        int64_t a2 = lvalue(args);
-        setlvalue(res, (int64_t)((uint64_t)a1 * (uint64_t)a2));
-        return 1;
-    }
-
-    return -1;
-}
-
 static int luauF_bufferisfrozen(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
     if (nparams >= 1 && nresults <= 1 && ttisbuffer(arg0))
@@ -2328,19 +2168,12 @@ const luau_FastFunction luauF_table[256] = {
     luauF_isinf,
     luauF_isfinite,
 
-    luauF_integeradd,
-    luauF_integersub,
-    luauF_integermul,
-    luauF_integerdiv,
-    luauF_integerlt,
-    luauF_integerle,
-    luauF_integerult,
-    luauF_integerule,
-    luauF_integergt,
-    luauF_integerge,
-    luauF_integerugt,
-    luauF_integeruge,
-
+    // Luwu Integers (rfcs/integers.md): upstream's integer builtins, never emitted (see LBF_BUFFER_ISFROZEN)
+    luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing,
+    luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing,
+    luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing,
+    luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing,
+    luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing, luauF_missing,
 
     luauF_bufferisfrozen,
 

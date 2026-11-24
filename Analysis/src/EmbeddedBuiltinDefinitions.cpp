@@ -1,7 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/BuiltinDefinitions.h"
 
-LUAU_FASTFLAG(LuauIntegerLibrary)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuClasses)
@@ -322,52 +322,132 @@ declare vector: {
 
 )BUILTIN_SRC";
 
+// Luwu Integers (rfcs/integers.md): the `integer` library (lintegerlib.cpp), a definition file of its own (see
+// registerBuiltinGlobals) whose types are `integer.Mode` and the modes' names. The modes don't have types of their own
+// yet, so `integer.u8` is any integer.
 static const char* const kBuiltinDefinitionIntegerSrc = R"BUILTIN_SRC(
+class type Mode
+    public const min: integer?
+    public const max: integer?
+    public function __call(self, from: unknown): integer
+    public function __tostring(self): string
+end
+
+export type dynamic = integer
+export type i8 = integer
+export type u8 = integer
+export type i16 = integer
+export type u16 = integer
+export type i32 = integer
+export type u32 = integer
+export type i64 = integer
+export type u64 = integer
 
 declare integer: {
-    create: @checked (x: number) -> integer,
-    tonumber: @checked (x: integer) -> number,
-    neg: @checked (value: integer) -> integer,
-    add: @checked (x: integer, y: integer) -> integer,
-    sub: @checked (x: integer, y: integer) -> integer,
-    mul: @checked (x: integer, y: integer) -> integer,
-    div: @checked (x: integer, y: integer) -> integer,
-    rem: @checked (x: integer, y: integer) -> integer,
-    idiv: @checked (x: integer, y: integer) -> integer,
-    mod: @checked (x: integer, y: integer) -> integer,
-    udiv: @checked (x: integer, y: integer) -> integer,
-    urem: @checked (x: integer, y: integer) -> integer,
-    min: @checked (integer, ...integer) -> integer,
-    max: @checked (integer, ...integer) -> integer,
-    band: @checked (...integer) -> integer,
-    bor: @checked (...integer) -> integer,
-    bnot: @checked (x: integer) -> integer,
-    bxor: @checked (...integer) -> integer,
-    lt: @checked (x: integer, y: integer) -> boolean,
-    le: @checked (x: integer, y: integer) -> boolean,
-    ult: @checked (x: integer, y: integer) -> boolean,
-    ule: @checked (x: integer, y: integer) -> boolean,
-    gt: @checked (x: integer, y: integer) -> boolean,
-    ge: @checked (x: integer, y: integer) -> boolean,
-    ugt: @checked (x: integer, y: integer) -> boolean,
-    uge: @checked (x: integer, y: integer) -> boolean,
-    lshift: @checked (x: integer, numBitPositions: integer) -> integer,
-    rshift: @checked (x: integer, numBitPositions: integer) -> integer,
-    arshift: @checked (x: integer, numBitPositions: integer) -> integer,
-    lrotate: @checked (x: integer, numBitPositions: integer) -> integer,
-    rrotate: @checked (x: integer, numBitPositions: integer) -> integer,
-    extract: @checked (value: integer, bitPosition: integer, numBits: integer?) -> integer,
-    replace: @checked (value: integer, replacement: integer, bitPosition: integer, numBits: integer?) -> integer,
-    clamp: @checked (value: integer, min: integer, max: integer) -> integer,
-    btest: @checked (...integer) -> boolean,
-    countrz: @checked (x: integer) -> integer,
-    countlz: @checked (x: integer) -> integer,
-    bswap: @checked (x: integer) -> integer,
-    fromstring: @checked (str: string, base: number?) -> integer,
-    minsigned: integer,
-    maxsigned: integer
-}
+    Mode: class<Mode>,
+    dynamic: Mode,
+    i8: Mode,
+    u8: Mode,
+    i16: Mode,
+    u16: Mode,
+    i32: Mode,
+    u32: Mode,
+    i64: Mode,
+    u64: Mode,
+    suffixes: unknown,
 
+    cast: @checked (from: unknown, to: Mode?) -> integer,
+    tonumber: @checked (i: integer) -> Result<number, number>,
+    mode: @checked (i: integer) -> Mode,
+    isbig: @checked (i: integer) -> boolean,
+
+    min: @checked (first: integer, ...integer) -> integer,
+    max: @checked (first: integer, ...integer) -> integer,
+    clamp: @checked (i: integer, min: integer, max: integer) -> integer,
+    abs: @checked (i: integer) -> integer,
+    signum: @checked (i: integer) -> integer,
+
+    sadd: @checked (a: integer, b: integer) -> integer,
+    ssub: @checked (a: integer, b: integer) -> integer,
+    smul: @checked (a: integer, b: integer) -> integer,
+    cadd: @checked (a: integer, b: integer) -> integer,
+    csub: @checked (a: integer, b: integer) -> integer,
+    cmul: @checked (a: integer, b: integer) -> integer,
+    cdiv: @checked (a: integer, b: integer) -> integer,
+
+    pow: @checked (i: integer, exp: integer) -> integer,
+    spow: @checked (i: integer, exp: integer) -> integer,
+    cpow: @checked (i: integer, exp: integer) -> integer,
+    sqrt: @checked (i: integer) -> integer,
+    log2: @checked (i: integer) -> integer,
+    log10: @checked (i: integer) -> integer,
+
+    band: @checked (first: integer, ...integer) -> integer,
+    bor: @checked (first: integer, ...integer) -> integer,
+    bxor: @checked (first: integer, ...integer) -> integer,
+    bnot: @checked (i: integer) -> integer,
+
+    lshift: @checked (i: integer, by: integer) -> integer,
+    rshift: @checked (i: integer, by: integer) -> integer,
+    lrotate: @checked (i: integer, by: integer) -> integer,
+    rrotate: @checked (i: integer, by: integer) -> integer,
+
+    countlz: @checked (i: integer) -> integer,
+    countrz: @checked (i: integer) -> integer,
+    popcount: @checked (i: integer) -> integer,
+
+    extract: @checked (i: integer, field: integer, width: integer?) -> integer,
+    replace: @checked (i: integer, value: integer, field: integer, width: integer?) -> integer,
+    btest: @checked (first: integer, ...integer) -> boolean,
+    bswap: @checked (i: integer) -> integer,
+}
+)BUILTIN_SRC";
+
+// Luwu error variants (rfcs/integers.md): the builtin error classes in the global `Error` (lresultlib.cpp), a definition
+// file of its own whose types are `Error.Overflow` and the others
+static const char* const kBuiltinDefinitionErrorSrc = R"BUILTIN_SRC(
+class type Overflow(public const value: unknown, public const info: unknown)
+    public function __tostring(self): string
+end
+
+class type Underflow(public const value: unknown, public const info: unknown)
+    public function __tostring(self): string
+end
+
+class type CannotBeParsed(public const text: unknown, public const message: unknown)
+    public function __tostring(self): string
+end
+
+class type UnexpectedFloat(public const value: unknown)
+    public function __tostring(self): string
+end
+
+class type InvalidArgument(public const value: unknown, public const message: unknown)
+    public function __tostring(self): string
+end
+
+class type DivisionByZero
+    public function __tostring(self): string
+end
+
+class type InvalidComparison(public const left: unknown, public const right: unknown)
+    public function __tostring(self): string
+end
+
+class type Unreachable(public const message: unknown)
+    public function __tostring(self): string
+end
+
+declare Error: {
+    read Overflow: class<Overflow>,
+    read Underflow: class<Underflow>,
+    read CannotBeParsed: class<CannotBeParsed>,
+    read UnexpectedFloat: class<UnexpectedFloat>,
+    read InvalidArgument: class<InvalidArgument>,
+    read DivisionByZero: class<DivisionByZero>,
+    read InvalidComparison: class<InvalidComparison>,
+    read Unreachable: class<Unreachable>,
+}
 )BUILTIN_SRC";
 
 static const char* kBuiltinDefinitionClassSrc = R"CLASS_SRC(
@@ -526,10 +606,6 @@ std::string getBuiltinDefinitionSource()
 
     result += kBuiltinDefinitionVectorSrc;
 
-    if (FFlag::LuauIntegerType2 && FFlag::LuauIntegerLibrary)
-    {
-        result += kBuiltinDefinitionIntegerSrc;
-    }
 
     if (FFlag::LuwuClasses && FFlag::LuauAllowGlobalDeclarationToBeCalledClass)
     {
@@ -649,6 +725,21 @@ declare bundle: {
     with: (b: unknown, position: number, value: unknown) -> unknown,
 }
 )BUILTIN_SRC";
+
+bool integerLibraryEnabled()
+{
+    return FFlag::LuauIntegerType2 && FFlag::DebugLuwuIntegers && resultLibraryEnabled();
+}
+
+std::string getIntegerDefinitionSource()
+{
+    return kBuiltinDefinitionIntegerSrc;
+}
+
+std::string getErrorDefinitionSource()
+{
+    return kBuiltinDefinitionErrorSrc;
+}
 
 std::string getBundleDefinitionSource()
 {

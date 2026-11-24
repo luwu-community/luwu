@@ -8,7 +8,6 @@
 #include <endian.h>
 #endif
 
-LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAGVARIABLE(LuwuBufferIsFrozen)
 
 #include <string.h>

@@ -3,6 +3,7 @@
 #include "ltm.h"
 
 #include "lfunc.h"
+#include "linteger.h"
 #include "lstate.h"
 #include "lstring.h"
 #include "lua.h"
@@ -90,6 +91,11 @@ void luaT_init(lua_State* L)
     }
     L->global->traittypename = luaS_new(L, "trait");
     luaS_fix(L->global->traittypename);
+    for (i = 0; i <= IntegerMode_U64; i++)
+    {
+        L->global->integermodename[i] = luaS_new(L, luaZ_modename(IntegerMode(i)));
+        luaS_fix(L->global->integermodename[i]);
+    }
     for (i = 0; i < TM_N; i++)
     {
         L->global->tmname[i] = luaS_new(L, luaT_eventname[i]);
@@ -175,12 +181,9 @@ const TString* luaT_objtypenamestr(lua_State* L, const TValue* o)
     // it's inline or a bigint
     if (ttisinteger(o))
     {
-        static const char* const kModeNames[] = {"int", "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"};
-        static_assert(sizeof(kModeNames) / sizeof(kModeNames[0]) == IntegerMode_U64 + 1, "one name per IntegerMode");
-
         uint8_t mode = o->extra[0];
         LUAU_ASSERT(mode <= IntegerMode_U64);
-        return luaS_new(L, kModeNames[mode]);
+        return L->global->integermodename[mode];
     }
 
     // Luwu Traits (rfcs/classes/traits.md): a trait is a class value, but its type is "trait"

@@ -97,8 +97,10 @@ static uint8_t tryGetTagForTypename(std::string_view name, bool forTypeof)
     if (name == "number")
         return LUA_TNUMBER;
 
+    // Luwu Integers (rfcs/integers.md): `type` gives "integer" for an inline integer and a bigint, which have different
+    // tags, and `typeof` gives the mode
     if (name == "integer")
-        return LUA_TINTEGER;
+        return 0xff;
 
     // typeof(vector) can be changed by environment
     // TODO: support the environment option
@@ -2115,11 +2117,13 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             else if (tag == LUA_TNUMBER &&
                      (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Double)))
                 canSplitTvalueStore = true;
-            else if (tag == LUA_TINTEGER &&
-                     (value.kind == IrOpKind::Inst || (value.kind == IrOpKind::Constant && function.constOp(value).kind == IrConstKind::Int64)))
-                canSplitTvalueStore = true;
             else if (tag != 0xff && isGCO(tag) && value.kind == IrOpKind::Inst)
                 canSplitTvalueStore = true;
+
+            // Luwu Integers (rfcs/integers.md): an integer's mode is in `extra`, which STORE_SPLIT_TVALUE doesn't write.
+            // Upstream splits integer stores: its integers have no mode.
+            if (tag == LUA_TINTEGER || tag == LUA_THEAPINTEGER)
+                canSplitTvalueStore = false;
 
             if (canSplitTvalueStore)
             {

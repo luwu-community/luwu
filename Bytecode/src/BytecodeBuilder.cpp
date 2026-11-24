@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
@@ -1544,8 +1544,8 @@ std::string BytecodeBuilder::getError(const std::string& message)
 
 uint8_t BytecodeBuilder::getVersion()
 {
-    // Luwu Classes (rfcs/classes) and Luwu try expressions: work-in-progress formats
-    if (FFlag::LuwuClasses || FFlag::DebugLuwuTryExpressions)
+    // Luwu Classes (rfcs/classes), Luwu try expressions and Luwu Integers (rfcs/integers.md): work-in-progress formats
+    if (FFlag::LuwuClasses || FFlag::DebugLuwuTryExpressions || FFlag::DebugLuwuIntegers)
         return LWBC_VERSION_WIP;
 
     return LWBC_VERSION_TARGET;

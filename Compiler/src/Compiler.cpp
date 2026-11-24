@@ -38,7 +38,7 @@ LUAU_FASTINTVARIABLE(LuauCompileInlineDepth, 5)
 LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
-LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
@@ -156,14 +156,25 @@ static BytecodeBuilder::StringRef sref(AstArray<const char> data)
 // on each construction (a `= {}` default must hand out a *fresh* table), and keeps the closure.
 // Deliberately syntactic: this runs in ClassInitDefaultsVisitor, before constant folding, and only
 // needs to be a subset of what folding will later recognize (see getConstantIndex).
+// Luwu Integers (rfcs/integers.md): whether an integer literal, negated or not, is a constant that fits inline. A
+// bigint literal is built at load time, and negating an unsigned one raises.
+static bool isInlineIntegerConstant(AstExprConstantInteger* literal, bool negated)
+{
+    bool negatedUnsigned = negated && isUnsignedIntegerMode(IntegerMode(literal->mode));
+    return literal->parseResult != ConstantNumberParseResult::HeapInteger && !negatedUnsigned;
+}
+
 static bool isConstantClassDefault(AstExpr* expr)
 {
     while (AstExprGroup* group = expr->as<AstExprGroup>())
         expr = group->expr;
 
     if (expr->is<AstExprConstantNil>() || expr->is<AstExprConstantBool>() || expr->is<AstExprConstantNumber>() ||
-        expr->is<AstExprConstantInteger>() || expr->is<AstExprConstantString>())
+        expr->is<AstExprConstantString>())
         return true;
+
+    if (AstExprConstantInteger* literal = expr->as<AstExprConstantInteger>())
+        return isInlineIntegerConstant(literal, /* negated= */ false);
 
     // `-1` parses as a unary op over a literal. Numeric literals only: `-"5"` is a runtime string
     // coercion, and `-true` is a runtime error -- neither is a constant we can bake into the class.
@@ -174,7 +185,8 @@ static bool isConstantClassDefault(AstExpr* expr)
         while (AstExprGroup* group = operand->as<AstExprGroup>())
             operand = group->expr;
 
-        return operand->is<AstExprConstantNumber>() || operand->is<AstExprConstantInteger>();
+        AstExprConstantInteger* literal = operand->as<AstExprConstantInteger>();
+        return operand->is<AstExprConstantNumber>() || (literal && isInlineIntegerConstant(literal, /* negated= */ true));
     }
 
     return false;
@@ -5665,7 +5677,7 @@ struct Compiler
         }
 
         // disable fast path for vectors and integers because supporting it would require a new opcode
-        if (operandIsConstant && (isConstantVector(right) || (FFlag::LuauIntegerType2 && isConstantInteger(right))))
+        if (operandIsConstant && (isConstantVector(right) || (FFlag::DebugLuwuIntegers && isConstantInteger(right))))
             operandIsConstant = false;
 
         uint8_t rl = compileExprAuto(left, rs);
@@ -5775,7 +5787,10 @@ struct Compiler
             return bytecode.addConstantNumber(negate ? -n->value : n->value);
 
         if (AstExprConstantInteger* i = expr->as<AstExprConstantInteger>())
-            return bytecode.addConstantInteger(negate ? int64_t(~uint64_t(i->value) + 1) : i->value);
+        {
+            IntegerMode mode = IntegerMode(i->mode);
+            return bytecode.addConstantInteger(negate ? wrapIntegerToMode(int64_t(0 - uint64_t(i->value)), mode) : i->value, mode);
+        }
 
         if (AstExprConstantString* str = expr->as<AstExprConstantString>())
             return bytecode.addConstantString(sref(str->value));
@@ -6058,11 +6073,14 @@ struct Compiler
     {
         RegScope rs(this);
 
-        // Special case for integer constants, like -1000000000i
+        // Special case for integer constants, like -1000000000int. Luwu Integers (rfcs/integers.md): a bigint literal and
+        // an unsigned one are negated at runtime, which grows or raises.
         AstExprConstantInteger* cint = expr->expr->as<AstExprConstantInteger>();
-        if (FFlag::LuauIntegerType2 && (expr->op == AstExprUnary::Op::Minus) && (cint != nullptr))
+        bool negatedInteger = expr->op == AstExprUnary::Op::Minus && cint && isInlineIntegerConstant(cint, /* negated= */ true);
+        if (negatedInteger)
         {
-            int32_t cid = bytecode.addConstantInteger((int64_t)(~(uint64_t)cint->value + 1), cint->mode);
+            IntegerMode mode = IntegerMode(cint->mode);
+            int32_t cid = bytecode.addConstantInteger(wrapIntegerToMode(int64_t(0 - uint64_t(cint->value)), mode), mode);
             if (cid < 0)
                 CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
 

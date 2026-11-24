@@ -9,7 +9,6 @@
 #include <vector>
 #include <math.h>
 
-LUAU_FASTFLAG(LuauIntegerType2)
 
 namespace Luau
 {
@@ -48,9 +47,7 @@ static bool constantsEqual(const Constant& la, const Constant& ra)
         return ra.type == Constant::Type_Table && la.valueTable == ra.valueTable;
 
     case Constant::Type_Integer:
-        if (FFlag::LuauIntegerType2)
-            return ra.type == Constant::Type_Integer && la.valueInteger64 == ra.valueInteger64 && la.mode == ra.mode;
-        [[fallthrough]];
+        return ra.type == Constant::Type_Integer && la.valueInteger64 == ra.valueInteger64 && la.mode == ra.mode;
 
     default:
         LUAU_ASSERT(!"Unexpected constant type in comparison");
@@ -79,10 +76,10 @@ static void foldUnary(Constant& result, AstExprUnary::Op op, const Constant& arg
         else if (arg.type == Constant::Type_Integer)
         {
             // Luwu Integers (rfcs/integers.md): negating the smallest 64-bit value grows a dynamic integer onto the heap,
-            // so only the runtime can do it
+            // and negating an unsigned one raises, so only the runtime can do them
             IntegerMode mode = IntegerMode(arg.mode);
             bool growsOntoHeap = mode == IntegerMode_Dynamic && arg.valueInteger64 == INT64_MIN;
-            if (!growsOntoHeap)
+            if (!growsOntoHeap && !isUnsignedIntegerMode(mode))
             {
                 result.type = Constant::Type_Integer;
                 result.valueInteger64 = wrapIntegerToMode(int64_t(~uint64_t(arg.valueInteger64) + 1), mode);

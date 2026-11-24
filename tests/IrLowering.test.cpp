@@ -19,7 +19,8 @@
 #include <regex>
 #include <sstream>
 #include <string_view>
-LUAU_FASTFLAG(LuauIntegerLibrary)
+
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauCodegenVmExitSyncMultiUse)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
@@ -1279,14 +1280,14 @@ bb_bytecode_1:
   JUMP bb_4
 bb_4:
   FALLBACK_GETTABLEKS 5u, R3, R0, K2 ('ZZ')
-  CHECK_TAG R2, tnumber, bb_fallback_6
-  CHECK_TAG R3, tnumber, bb_fallback_6
-  %45 = LOAD_DOUBLE R2
-  %47 = ADD_NUM %45, R3
-  STORE_DOUBLE R1, %47
+  CHECK_TAG R2, tnumber, bb_fallback_5
+  CHECK_TAG R3, tnumber, bb_fallback_5
+  %30 = LOAD_DOUBLE R2
+  %32 = ADD_NUM %30, R3
+  STORE_DOUBLE R1, %32
   STORE_TAG R1, tnumber
-  JUMP bb_7
-bb_7:
+  JUMP bb_6
+bb_6:
   INTERRUPT 8u
   RETURN R1, 1i
 )"
@@ -1755,24 +1756,24 @@ bb_bytecode_1:
   %7 = DIV_NUM %6, 100
   STORE_DOUBLE R2, %7
   STORE_TAG R2, tnumber
-  JUMP bb_linear_12
-bb_linear_12:
-  %75 = LOAD_POINTER R0
-  %77 = TRY_NUM_TO_INDEX %6, bb_fallback_5
-  %78 = SUB_INT %77, 1i
-  CHECK_ARRAY_SIZE %75, %78, bb_fallback_5
-  CHECK_NO_METATABLE %75, bb_fallback_5
-  %81 = GET_ARR_ADDR %75, %78
-  %82 = LOAD_TVALUE %81
-  STORE_TVALUE R4, %82
-  %88 = SUB_NUM 1, %7
-  CHECK_TAG R4, tvector, bb_exit_13
-   ; exit sync: R5, {%88}
-  %98 = NUM_TO_FLOAT %88
-  %99 = FLOAT_TO_VEC %98
-  %100 = MUL_VEC %82, %99
-  %101 = TAG_VECTOR %100
-  STORE_TVALUE R3, %101
+  JUMP bb_linear_11
+bb_linear_11:
+  %60 = LOAD_POINTER R0
+  %62 = TRY_NUM_TO_INDEX %6, bb_fallback_5
+  %63 = SUB_INT %62, 1i
+  CHECK_ARRAY_SIZE %60, %63, bb_fallback_5
+  CHECK_NO_METATABLE %60, bb_fallback_5
+  %66 = GET_ARR_ADDR %60, %63
+  %67 = LOAD_TVALUE %66
+  STORE_TVALUE R4, %67
+  %73 = SUB_NUM 1, %7
+  CHECK_TAG R4, tvector, bb_exit_12
+   ; exit sync: R5, {%73}
+  %83 = NUM_TO_FLOAT %73
+  %84 = FLOAT_TO_VEC %83
+  %85 = MUL_VEC %67, %84
+  %86 = TAG_VECTOR %85
+  STORE_TVALUE R3, %86
   INTERRUPT 4u
   RETURN R3, 1i
 )"
@@ -1825,20 +1826,6 @@ bb_fallback_3:
   DO_ARITH R5, K0 (1), R2, 9i
   JUMP bb_4
 bb_fallback_5:
-  CHECK_TAG R4, tinteger, bb_fallback_7
-  CHECK_TAG R5, tinteger, bb_fallback_7
-  %36 = LOAD_EXTRA R4
-  %37 = LOAD_EXTRA R5
-  CHECK_CMP_INT %36, %37, eq, bb_fallback_7
-  CHECK_CMP_INT %36, 0i, not_eq, bb_fallback_7
-  %40 = LOAD_INT64 R4
-  %41 = LOAD_INT64 R5
-  %42 = MUL_INT64 %40, %41, %36
-  STORE_INT64 R3, %42
-  STORE_TAG R3, tinteger
-  STORE_EXTRA R3, %36
-  JUMP bb_6
-bb_fallback_7:
   SET_SAVEDPC 3u
   DO_ARITH R3, R4, R5, 10i
   JUMP bb_6
@@ -2246,26 +2233,26 @@ bb_bytecode_1:
   %18 = GET_ARR_ADDR %12, %15
   %19 = LOAD_TVALUE %18
   STORE_TVALUE R5, %19
-  JUMP bb_linear_20
-bb_linear_20:
+  JUMP bb_linear_17
+bb_linear_17:
   STORE_TVALUE R6, %19
   CHECK_TAG R5, tnumber, bb_fallback_7
-  %176 = LOAD_DOUBLE R5
-  %178 = MUL_NUM %176, %176
-  STORE_DOUBLE R4, %178
+  %131 = LOAD_DOUBLE R5
+  %133 = MUL_NUM %131, %131
+  STORE_DOUBLE R4, %133
   STORE_TAG R4, tnumber
-  %182 = LOAD_POINTER R2
-  CHECK_ARRAY_SIZE %182, %15, bb_fallback_10
-  CHECK_NO_METATABLE %182, bb_fallback_10
-  %188 = GET_ARR_ADDR %182, %15
-  %189 = LOAD_TVALUE %188
-  STORE_TVALUE R6, %189
-  STORE_TVALUE R7, %189
-  CHECK_TAG R6, tnumber, bb_fallback_14
-  %206 = LOAD_DOUBLE R6
-  %208 = MUL_NUM %206, %206
-  %218 = ADD_NUM %178, %208
-  STORE_DOUBLE R3, %218
+  %137 = LOAD_POINTER R2
+  CHECK_ARRAY_SIZE %137, %15, bb_fallback_9
+  CHECK_NO_METATABLE %137, bb_fallback_9
+  %143 = GET_ARR_ADDR %137, %15
+  %144 = LOAD_TVALUE %143
+  STORE_TVALUE R6, %144
+  STORE_TVALUE R7, %144
+  CHECK_TAG R6, tnumber, bb_fallback_13
+  %161 = LOAD_DOUBLE R6
+  %163 = MUL_NUM %161, %161
+  %173 = ADD_NUM %133, %163
+  STORE_DOUBLE R3, %173
   STORE_TAG R3, tnumber
   INTERRUPT 7u
   RETURN R3, 1i
@@ -2310,43 +2297,43 @@ bb_bytecode_1:
   %16 = GET_ARR_ADDR %10, %13
   %17 = LOAD_TVALUE %16
   STORE_TVALUE R6, %17
-  JUMP bb_linear_27
-bb_linear_27:
+  JUMP bb_linear_25
+bb_linear_25:
   CHECK_TAG R6, ttable, bb_fallback_5
-  %198 = LOAD_POINTER R6
-  %199 = LOAD_DOUBLE R2
-  %200 = TRY_NUM_TO_INDEX %199, bb_fallback_5
-  %201 = SUB_INT %200, 1i
-  CHECK_ARRAY_SIZE %198, %201, bb_fallback_5
-  CHECK_NO_METATABLE %198, bb_fallback_5
-  %204 = GET_ARR_ADDR %198, %201
-  %205 = LOAD_TVALUE %204
-  STORE_TVALUE R5, %205
+  %168 = LOAD_POINTER R6
+  %169 = LOAD_DOUBLE R2
+  %170 = TRY_NUM_TO_INDEX %169, bb_fallback_5
+  %171 = SUB_INT %170, 1i
+  CHECK_ARRAY_SIZE %168, %171, bb_fallback_5
+  CHECK_NO_METATABLE %168, bb_fallback_5
+  %174 = GET_ARR_ADDR %168, %171
+  %175 = LOAD_TVALUE %174
+  STORE_TVALUE R5, %175
   CHECK_TAG R5, ttable, bb_fallback_7
-  %210 = LOAD_POINTER R5
-  %211 = GET_SLOT_NODE_ADDR %210, 2u, K0 ('x')
-  CHECK_SLOT_MATCH %211, K0 ('x'), bb_fallback_7
-  %213 = LOAD_TVALUE %211, 0i
-  STORE_TVALUE R5, %213
-  STORE_TVALUE R6, %205
-  %243 = GET_SLOT_NODE_ADDR %210, 6u, K1 ('y')
-  CHECK_SLOT_MATCH %243, K1 ('y'), bb_fallback_13
-  %245 = LOAD_TVALUE %243, 0i
-  STORE_TVALUE R6, %245
+  %180 = LOAD_POINTER R5
+  %181 = GET_SLOT_NODE_ADDR %180, 2u, K0 ('x')
+  CHECK_SLOT_MATCH %181, K0 ('x'), bb_fallback_7
+  %183 = LOAD_TVALUE %181, 0i
+  STORE_TVALUE R5, %183
+  STORE_TVALUE R6, %175
+  %213 = GET_SLOT_NODE_ADDR %180, 6u, K1 ('y')
+  CHECK_SLOT_MATCH %213, K1 ('y'), bb_fallback_13
+  %215 = LOAD_TVALUE %213, 0i
+  STORE_TVALUE R6, %215
   CHECK_TAG R5, tnumber, bb_fallback_15
   CHECK_TAG R6, tnumber, bb_fallback_15
-  %252 = LOAD_DOUBLE R5
-  %254 = ADD_NUM %252, R6
-  STORE_DOUBLE R4, %254
+  %222 = LOAD_DOUBLE R5
+  %224 = ADD_NUM %222, R6
+  STORE_DOUBLE R4, %224
   STORE_TAG R4, tnumber
-  STORE_TVALUE R5, %205
-  %285 = GET_SLOT_NODE_ADDR %210, 11u, K2 ('z')
-  CHECK_SLOT_MATCH %285, K2 ('z'), bb_fallback_22
-  %287 = LOAD_TVALUE %285, 0i
-  STORE_TVALUE R5, %287
-  CHECK_TAG R5, tnumber, bb_fallback_24
-  %296 = ADD_NUM %254, R5
-  STORE_DOUBLE R3, %296
+  STORE_TVALUE R5, %175
+  %255 = GET_SLOT_NODE_ADDR %180, 11u, K2 ('z')
+  CHECK_SLOT_MATCH %255, K2 ('z'), bb_fallback_21
+  %257 = LOAD_TVALUE %255, 0i
+  STORE_TVALUE R5, %257
+  CHECK_TAG R5, tnumber, bb_fallback_23
+  %266 = ADD_NUM %224, R5
+  STORE_DOUBLE R3, %266
   STORE_TAG R3, tnumber
   INTERRUPT 14u
   RETURN R3, 1i
@@ -2391,27 +2378,27 @@ bb_bytecode_1:
   %11 = GET_ARR_ADDR %8, 0i
   %12 = LOAD_TVALUE %11, 0i
   STORE_TVALUE R2, %12
-  JUMP bb_linear_26
-bb_linear_26:
+  JUMP bb_linear_23
+bb_linear_23:
   CHECK_TAG R2, tnumber, bb_fallback_5
-  %189 = LOAD_DOUBLE R2
-  %190 = LOAD_DOUBLE R1
-  %191 = ADD_NUM %189, %190
-  STORE_DOUBLE R2, %191
-  CHECK_READONLY %8, bb_fallback_8
-  STORE_SPLIT_TVALUE %11, tnumber, %191, 0i
-  CHECK_ARRAY_SIZE %8, 1i, bb_fallback_10
-  %207 = LOAD_TVALUE %11, 16i
-  STORE_TVALUE R2, %207
-  %211 = MUL_NUM %190, %190
-  STORE_DOUBLE R3, %211
+  %144 = LOAD_DOUBLE R2
+  %145 = LOAD_DOUBLE R1
+  %146 = ADD_NUM %144, %145
+  STORE_DOUBLE R2, %146
+  CHECK_READONLY %8, bb_fallback_7
+  STORE_SPLIT_TVALUE %11, tnumber, %146, 0i
+  CHECK_ARRAY_SIZE %8, 1i, bb_fallback_9
+  %162 = LOAD_TVALUE %11, 16i
+  STORE_TVALUE R2, %162
+  %166 = MUL_NUM %145, %145
+  STORE_DOUBLE R3, %166
   STORE_TAG R3, tnumber
-  CHECK_TAG R2, tnumber, bb_fallback_12
-  %216 = LOAD_DOUBLE R2
-  %217 = ADD_NUM %216, %211
-  STORE_SPLIT_TVALUE %11, tnumber, %217, 16i
-  %249 = SUB_NUM %191, %217
-  STORE_SPLIT_TVALUE %11, tnumber, %249, 0i
+  CHECK_TAG R2, tnumber, bb_fallback_11
+  %171 = LOAD_DOUBLE R2
+  %172 = ADD_NUM %171, %166
+  STORE_SPLIT_TVALUE %11, tnumber, %172, 16i
+  %204 = SUB_NUM %146, %172
+  STORE_SPLIT_TVALUE %11, tnumber, %204, 0i
   INTERRUPT 11u
   RETURN R0, 0i
 )"
@@ -2458,38 +2445,38 @@ bb_bytecode_1:
   %18 = GET_ARR_ADDR %12, %15
   %19 = LOAD_TVALUE %18
   STORE_TVALUE R3, %19
-  JUMP bb_linear_26
-bb_linear_26:
+  JUMP bb_linear_23
+bb_linear_23:
   CHECK_TAG R3, tnumber, bb_fallback_5
-  %238 = LOAD_DOUBLE R3
-  %239 = LOAD_DOUBLE R1
-  %240 = ADD_NUM %238, %239
-  STORE_DOUBLE R3, %240
-  CHECK_READONLY %12, bb_fallback_8
-  STORE_SPLIT_TVALUE %18, tnumber, %240
-  %256 = ADD_NUM %13, 1
-  STORE_DOUBLE R3, %256
-  %260 = TRY_NUM_TO_INDEX %256, bb_fallback_10
-  %261 = SUB_INT %260, 1i
-  CHECK_ARRAY_SIZE %12, %261, bb_fallback_10
-  %264 = GET_ARR_ADDR %12, %261
-  %265 = LOAD_TVALUE %264
-  STORE_TVALUE R4, %265
-  %269 = MUL_NUM %239, %239
-  STORE_DOUBLE R5, %269
+  %193 = LOAD_DOUBLE R3
+  %194 = LOAD_DOUBLE R1
+  %195 = ADD_NUM %193, %194
+  STORE_DOUBLE R3, %195
+  CHECK_READONLY %12, bb_fallback_7
+  STORE_SPLIT_TVALUE %18, tnumber, %195
+  %211 = ADD_NUM %13, 1
+  STORE_DOUBLE R3, %211
+  %215 = TRY_NUM_TO_INDEX %211, bb_fallback_9
+  %216 = SUB_INT %215, 1i
+  CHECK_ARRAY_SIZE %12, %216, bb_fallback_9
+  %219 = GET_ARR_ADDR %12, %216
+  %220 = LOAD_TVALUE %219
+  STORE_TVALUE R4, %220
+  %224 = MUL_NUM %194, %194
+  STORE_DOUBLE R5, %224
   STORE_TAG R5, tnumber
-  CHECK_TAG R4, tnumber, bb_fallback_12
+  CHECK_TAG R4, tnumber, bb_fallback_11
+  %229 = LOAD_DOUBLE R4
+  %230 = ADD_NUM %229, %224
+  STORE_SPLIT_TVALUE %219, tnumber, %230
+  %254 = LOAD_TVALUE %18
+  STORE_TVALUE R4, %254
+  %267 = LOAD_TVALUE %219
+  STORE_TVALUE R5, %267
+  CHECK_TAG R4, tnumber, bb_fallback_19
   %274 = LOAD_DOUBLE R4
-  %275 = ADD_NUM %274, %269
-  STORE_SPLIT_TVALUE %264, tnumber, %275
-  %299 = LOAD_TVALUE %18
-  STORE_TVALUE R4, %299
-  %312 = LOAD_TVALUE %264
-  STORE_TVALUE R5, %312
-  CHECK_TAG R4, tnumber, bb_fallback_21
-  %319 = LOAD_DOUBLE R4
-  %321 = SUB_NUM %319, %275
-  STORE_SPLIT_TVALUE %18, tnumber, %321
+  %276 = SUB_NUM %274, %230
+  STORE_SPLIT_TVALUE %18, tnumber, %276
   INTERRUPT 13u
   RETURN R0, 0i
 )"
@@ -2533,8 +2520,8 @@ bb_bytecode_1:
   CHECK_READONLY %8, bb_fallback_3
   %12 = GET_ARR_ADDR %8, 0i
   STORE_SPLIT_TVALUE %12, tnumber, 14, 0i
-  JUMP bb_linear_16
-bb_linear_16:
+  JUMP bb_linear_15
+bb_linear_15:
   STORE_DOUBLE R1, 28
   CHECK_ARRAY_SIZE %8, 1i, bb_fallback_5
   STORE_SPLIT_TVALUE %12, tnumber, 28, 16i
@@ -2634,39 +2621,39 @@ bb_bytecode_1:
   CHECK_SLOT_MATCH %7, K0 ('a'), bb_fallback_3
   %9 = LOAD_TVALUE %7, 0i
   STORE_TVALUE R3, %9
-  JUMP bb_linear_25
-bb_linear_25:
+  JUMP bb_linear_23
+bb_linear_23:
   CHECK_TAG R3, ttable, bb_fallback_5
-  %144 = LOAD_POINTER R3
-  %145 = GET_SLOT_NODE_ADDR %144, 2u, K1 ('b')
-  CHECK_SLOT_MATCH %145, K1 ('b'), bb_fallback_5
-  %147 = LOAD_TVALUE %145, 0i
-  STORE_TVALUE R3, %147
+  %114 = LOAD_POINTER R3
+  %115 = GET_SLOT_NODE_ADDR %114, 2u, K1 ('b')
+  CHECK_SLOT_MATCH %115, K1 ('b'), bb_fallback_5
+  %117 = LOAD_TVALUE %115, 0i
+  STORE_TVALUE R3, %117
   STORE_TVALUE R4, %9
-  %159 = GET_SLOT_NODE_ADDR %144, 6u, K2 ('c')
-  CHECK_SLOT_MATCH %159, K2 ('c'), bb_fallback_9
-  %161 = LOAD_TVALUE %159, 0i
-  STORE_TVALUE R4, %161
+  %129 = GET_SLOT_NODE_ADDR %114, 6u, K2 ('c')
+  CHECK_SLOT_MATCH %129, K2 ('c'), bb_fallback_9
+  %131 = LOAD_TVALUE %129, 0i
+  STORE_TVALUE R4, %131
   CHECK_TAG R4, ttable, bb_fallback_11
-  %166 = LOAD_POINTER R4
-  %167 = GET_SLOT_NODE_ADDR %166, 8u, K3 ('x')
-  CHECK_SLOT_MATCH %167, K3 ('x'), bb_fallback_11
-  %169 = LOAD_TVALUE %167, 0i
-  STORE_TVALUE R4, %169
+  %136 = LOAD_POINTER R4
+  %137 = GET_SLOT_NODE_ADDR %136, 8u, K3 ('x')
+  CHECK_SLOT_MATCH %137, K3 ('x'), bb_fallback_11
+  %139 = LOAD_TVALUE %137, 0i
+  STORE_TVALUE R4, %139
   CHECK_TAG R3, tnumber, bb_fallback_13
   CHECK_TAG R4, tnumber, bb_fallback_13
-  %176 = LOAD_DOUBLE R3
-  %178 = ADD_NUM %176, R4
-  STORE_DOUBLE R2, %178
+  %146 = LOAD_DOUBLE R3
+  %148 = ADD_NUM %146, R4
+  STORE_DOUBLE R2, %148
   STORE_TAG R2, tnumber
-  STORE_TVALUE R3, %161
-  %199 = GET_SLOT_NODE_ADDR %166, 15u, K4 ('y')
-  CHECK_SLOT_MATCH %199, K4 ('y'), bb_fallback_20
-  %201 = LOAD_TVALUE %199, 0i
-  STORE_TVALUE R3, %201
-  CHECK_TAG R3, tnumber, bb_fallback_22
-  %210 = ADD_NUM %178, R3
-  STORE_DOUBLE R1, %210
+  STORE_TVALUE R3, %131
+  %169 = GET_SLOT_NODE_ADDR %136, 15u, K4 ('y')
+  CHECK_SLOT_MATCH %169, K4 ('y'), bb_fallback_19
+  %171 = LOAD_TVALUE %169, 0i
+  STORE_TVALUE R3, %171
+  CHECK_TAG R3, tnumber, bb_fallback_21
+  %180 = ADD_NUM %148, R3
+  STORE_DOUBLE R1, %180
   STORE_TAG R1, tnumber
   INTERRUPT 18u
   RETURN R1, 1i
@@ -2709,28 +2696,28 @@ bb_bytecode_1:
   CHECK_SLOT_MATCH %9, K0 ('x'), bb_fallback_3
   %11 = LOAD_TVALUE %9, 0i
   STORE_TVALUE R2, %11
-  JUMP bb_linear_26
-bb_linear_26:
+  JUMP bb_linear_23
+bb_linear_23:
   CHECK_TAG R2, tnumber, bb_fallback_5
-  %175 = LOAD_DOUBLE R2
-  %176 = LOAD_DOUBLE R1
-  %177 = ADD_NUM %175, %176
-  STORE_DOUBLE R2, %177
-  CHECK_READONLY %8, bb_fallback_8
-  STORE_SPLIT_TVALUE %9, tnumber, %177, 0i
-  %189 = GET_SLOT_NODE_ADDR %8, 5u, K1 ('y')
-  CHECK_SLOT_MATCH %189, K1 ('y'), bb_fallback_10
-  %191 = LOAD_TVALUE %189, 0i
-  STORE_TVALUE R2, %191
-  %195 = MUL_NUM %176, %176
-  STORE_DOUBLE R3, %195
+  %130 = LOAD_DOUBLE R2
+  %131 = LOAD_DOUBLE R1
+  %132 = ADD_NUM %130, %131
+  STORE_DOUBLE R2, %132
+  CHECK_READONLY %8, bb_fallback_7
+  STORE_SPLIT_TVALUE %9, tnumber, %132, 0i
+  %144 = GET_SLOT_NODE_ADDR %8, 5u, K1 ('y')
+  CHECK_SLOT_MATCH %144, K1 ('y'), bb_fallback_9
+  %146 = LOAD_TVALUE %144, 0i
+  STORE_TVALUE R2, %146
+  %150 = MUL_NUM %131, %131
+  STORE_DOUBLE R3, %150
   STORE_TAG R3, tnumber
-  CHECK_TAG R2, tnumber, bb_fallback_12
-  %200 = LOAD_DOUBLE R2
-  %201 = ADD_NUM %200, %195
-  STORE_SPLIT_TVALUE %189, tnumber, %201, 0i
-  %230 = SUB_NUM %177, %201
-  STORE_SPLIT_TVALUE %9, tnumber, %230, 0i
+  CHECK_TAG R2, tnumber, bb_fallback_11
+  %155 = LOAD_DOUBLE R2
+  %156 = ADD_NUM %155, %150
+  STORE_SPLIT_TVALUE %144, tnumber, %156, 0i
+  %185 = SUB_NUM %132, %156
+  STORE_SPLIT_TVALUE %9, tnumber, %185, 0i
   INTERRUPT 18u
   RETURN R0, 0i
 )"
@@ -2881,58 +2868,58 @@ bb_bytecode_1:
   CHECK_SLOT_MATCH %9, K0 ('w'), bb_fallback_3
   %11 = LOAD_TVALUE %9, 0i
   STORE_TVALUE R3, %11
-  JUMP bb_linear_40
-bb_linear_40:
-  %342 = GET_SLOT_NODE_ADDR %8, 2u, K1 ('h')
-  CHECK_SLOT_MATCH %342, K1 ('h'), bb_fallback_5
-  %344 = LOAD_TVALUE %342, 0i
-  STORE_TVALUE R4, %344
+  JUMP bb_linear_34
+bb_linear_34:
+  %248 = GET_SLOT_NODE_ADDR %8, 2u, K1 ('h')
+  CHECK_SLOT_MATCH %248, K1 ('h'), bb_fallback_5
+  %250 = LOAD_TVALUE %248, 0i
+  STORE_TVALUE R4, %250
   CHECK_SAFE_ENV exit(4)
   CHECK_TAG R3, tnumber, exit(6)
   CHECK_TAG R4, tnumber, exit(6)
-  %352 = LOAD_DOUBLE R3
-  %353 = LOAD_DOUBLE R4
-  %354 = NUM_TO_FLOAT %352
-  %355 = NUM_TO_FLOAT %353
-  STORE_VECTOR R2, %354, %355, 0
+  %258 = LOAD_DOUBLE R3
+  %259 = LOAD_DOUBLE R4
+  %260 = NUM_TO_FLOAT %258
+  %261 = NUM_TO_FLOAT %259
+  STORE_VECTOR R2, %260, %261, 0
   STORE_TAG R2, tvector
-  %360 = LOAD_TVALUE R1, 0i, tvector
-  %361 = LOAD_TVALUE R2, 0i, tvector
-  %362 = MUL_VEC %360, %361
-  %365 = LOAD_TVALUE K5 (0.5, 0.5, 0), 0i, tvector
-  %367 = SUB_VEC %362, %365
-  %370 = FLOOR_VEC %367
-  %373 = CEIL_VEC %367
-  %376 = SUB_VEC %367, %370
-  %377 = TAG_VECTOR %376
-  STORE_TVALUE R4, %377
-  %379 = EXTRACT_VEC %370, 0i
-  %380 = FLOAT_TO_NUM %379
+  %266 = LOAD_TVALUE R1, 0i, tvector
+  %267 = LOAD_TVALUE R2, 0i, tvector
+  %268 = MUL_VEC %266, %267
+  %271 = LOAD_TVALUE K5 (0.5, 0.5, 0), 0i, tvector
+  %273 = SUB_VEC %268, %271
+  %276 = FLOOR_VEC %273
+  %279 = CEIL_VEC %273
+  %282 = SUB_VEC %273, %276
+  %283 = TAG_VECTOR %282
+  STORE_TVALUE R4, %283
+  %285 = EXTRACT_VEC %276, 0i
+  %286 = FLOAT_TO_NUM %285
   STORE_TVALUE R7, %11
-  %395 = MOD_NUM %380, %352
-  STORE_DOUBLE R5, %395
+  %301 = MOD_NUM %286, %258
+  STORE_DOUBLE R5, %301
   STORE_TAG R5, tnumber
-  %401 = EXTRACT_VEC %373, 0i
-  %402 = FLOAT_TO_NUM %401
-  STORE_DOUBLE R7, %402
+  %307 = EXTRACT_VEC %279, 0i
+  %308 = FLOAT_TO_NUM %307
+  STORE_DOUBLE R7, %308
   STORE_TVALUE R8, %11
-  %417 = MOD_NUM %402, %352
-  STORE_SPLIT_TVALUE R6, tnumber, %417
-  %423 = EXTRACT_VEC %370, 1i
-  %424 = FLOAT_TO_NUM %423
-  STORE_TVALUE R10, %344
-  %439 = MOD_NUM %424, %353
-  STORE_DOUBLE R8, %439
+  %323 = MOD_NUM %308, %258
+  STORE_SPLIT_TVALUE R6, tnumber, %323
+  %329 = EXTRACT_VEC %276, 1i
+  %330 = FLOAT_TO_NUM %329
+  STORE_TVALUE R10, %250
+  %345 = MOD_NUM %330, %259
+  STORE_DOUBLE R8, %345
   STORE_TVALUE R9, %11
-  %455 = MUL_NUM %439, %352
-  STORE_DOUBLE R7, %455
-  %461 = EXTRACT_VEC %373, 1i
-  %462 = FLOAT_TO_NUM %461
-  STORE_DOUBLE R10, %462
-  %477 = MOD_NUM %462, %353
-  STORE_DOUBLE R9, %477
-  %493 = MUL_NUM %477, %352
-  STORE_DOUBLE R8, %493
+  %361 = MUL_NUM %345, %258
+  STORE_DOUBLE R7, %361
+  %367 = EXTRACT_VEC %279, 1i
+  %368 = FLOAT_TO_NUM %367
+  STORE_DOUBLE R10, %368
+  %383 = MOD_NUM %368, %259
+  STORE_DOUBLE R9, %383
+  %399 = MUL_NUM %383, %258
+  STORE_DOUBLE R8, %399
   INTERRUPT 49u
   RETURN R4, 5i
 )"
@@ -2972,12 +2959,12 @@ bb_bytecode_1:
   CHECK_SLOT_MATCH %9, K0 ('x'), bb_fallback_3
   CHECK_READONLY %8, bb_fallback_3
   STORE_SPLIT_TVALUE %9, tnumber, 14, 0i
-  JUMP bb_linear_16
-bb_linear_16:
+  JUMP bb_linear_15
+bb_linear_15:
   STORE_DOUBLE R1, 28
-  %97 = GET_SLOT_NODE_ADDR %8, 4u, K1 ('y')
-  CHECK_SLOT_MATCH %97, K1 ('y'), bb_fallback_5
-  STORE_SPLIT_TVALUE %97, tnumber, 28, 0i
+  %82 = GET_SLOT_NODE_ADDR %8, 4u, K1 ('y')
+  CHECK_SLOT_MATCH %82, K1 ('y'), bb_fallback_5
+  STORE_SPLIT_TVALUE %82, tnumber, 28, 0i
   STORE_SPLIT_TVALUE %9, tnumber, -14, 0i
   INTERRUPT 13u
   RETURN R0, 0i
@@ -7122,7 +7109,7 @@ _()
 
 TEST_CASE_FIXTURE(LoweringFixture, "FuzzTest26")
 {
-    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
+    ScopedFastFlag debugLuwuIntegers{FFlag::DebugLuwuIntegers, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
     ScopedFastFlag luauCodegenA64ExitUseCheck{FFlag::LuauCodegenA64ExitUseCheck, true};
 
@@ -7325,8 +7312,8 @@ bb_bytecode_2:
   %44 = GET_ARR_ADDR %38, %41
   %45 = LOAD_TVALUE %44
   STORE_TVALUE R6, %45
-  JUMP bb_linear_19
-bb_linear_19:
+  JUMP bb_linear_17
+bb_linear_17:
   STORE_TVALUE R8, %45
   CHECK_TAG R8, tnumber, bb_fallback_11
   %142 = LOAD_DOUBLE R8
@@ -7364,14 +7351,14 @@ bb_10:
   STORE_TAG R7, tnumber
   JUMP bb_12
 bb_12:
-  CHECK_TAG R6, tnumber, bb_fallback_14
-  CHECK_TAG R7, tnumber, bb_fallback_14
-  %102 = LOAD_DOUBLE R6
-  %104 = ADD_NUM %102, R7
-  STORE_DOUBLE R5, %104
+  CHECK_TAG R6, tnumber, bb_fallback_13
+  CHECK_TAG R7, tnumber, bb_fallback_13
+  %87 = LOAD_DOUBLE R6
+  %89 = ADD_NUM %87, R7
+  STORE_DOUBLE R5, %89
   STORE_TAG R5, tnumber
-  JUMP bb_15
-bb_15:
+  JUMP bb_14
+bb_14:
   CHECK_TAG R4, ttable, exit(12)
   CHECK_TAG R3, tnumber, exit(12)
   %100 = LOAD_POINTER R4
@@ -8139,38 +8126,38 @@ bb_bytecode_1:
   CHECK_SLOT_MATCH %9, K0 ('map'), bb_fallback_3
   %11 = LOAD_TVALUE %9, 0i
   STORE_TVALUE R3, %11
-  JUMP bb_linear_20
-bb_linear_20:
-  %115 = LOAD_POINTER R1
-  %116 = GET_SLOT_NODE_ADDR %115, 2u, K1 ('id')
-  CHECK_SLOT_MATCH %116, K1 ('id'), bb_fallback_5
-  %118 = LOAD_TVALUE %116, 0i
-  STORE_TVALUE R4, %118
+  JUMP bb_linear_19
+bb_linear_19:
+  %100 = LOAD_POINTER R1
+  %101 = GET_SLOT_NODE_ADDR %100, 2u, K1 ('id')
+  CHECK_SLOT_MATCH %101, K1 ('id'), bb_fallback_5
+  %103 = LOAD_TVALUE %101, 0i
+  STORE_TVALUE R4, %103
   STORE_TVALUE R7, %11
-  STORE_TVALUE R8, %118
+  STORE_TVALUE R8, %103
   SET_SAVEDPC 9u
   GET_TABLE R6, R7, R8
   CHECK_TAG R6, tnumber, bb_fallback_11
-  %139 = LOAD_DOUBLE R6
-  %141 = ADD_NUM %139, R2
-  STORE_DOUBLE R5, %141
+  %124 = LOAD_DOUBLE R6
+  %126 = ADD_NUM %124, R2
+  STORE_DOUBLE R5, %126
   STORE_TAG R5, tnumber
   SET_SAVEDPC 11u
   SET_TABLE R5, R3, R4
-  %149 = LOAD_POINTER R0
-  %150 = GET_SLOT_NODE_ADDR %149, 11u, K2 ('foo')
-  CHECK_SLOT_MATCH %150, K2 ('foo'), bb_fallback_14
-  %152 = LOAD_TVALUE %150, 0i
-  STORE_TVALUE R3, %152
-  %158 = GET_SLOT_NODE_ADDR %149, 13u, K0 ('map')
-  CHECK_SLOT_MATCH %158, K0 ('map'), bb_fallback_16
-  %160 = LOAD_TVALUE %158, 0i
-  STORE_TVALUE R5, %160
-  %163 = LOAD_POINTER R1
-  %164 = GET_SLOT_NODE_ADDR %163, 15u, K1 ('id')
-  CHECK_SLOT_MATCH %164, K1 ('id'), bb_fallback_18
-  %166 = LOAD_TVALUE %164, 0i
-  STORE_TVALUE R6, %166
+  %134 = LOAD_POINTER R0
+  %135 = GET_SLOT_NODE_ADDR %134, 11u, K2 ('foo')
+  CHECK_SLOT_MATCH %135, K2 ('foo'), bb_fallback_13
+  %137 = LOAD_TVALUE %135, 0i
+  STORE_TVALUE R3, %137
+  %143 = GET_SLOT_NODE_ADDR %134, 13u, K0 ('map')
+  CHECK_SLOT_MATCH %143, K0 ('map'), bb_fallback_15
+  %145 = LOAD_TVALUE %143, 0i
+  STORE_TVALUE R5, %145
+  %148 = LOAD_POINTER R1
+  %149 = GET_SLOT_NODE_ADDR %148, 15u, K1 ('id')
+  CHECK_SLOT_MATCH %149, K1 ('id'), bb_fallback_17
+  %151 = LOAD_TVALUE %149, 0i
+  STORE_TVALUE R6, %151
   SET_SAVEDPC 18u
   GET_TABLE R4, R5, R6
   INTERRUPT 18u
@@ -8298,15 +8285,9 @@ bb_2:
     );
 }
 
-
-
-
-
-
-
 TEST_CASE_FIXTURE(LoweringFixture, "IntegerFastcallWrongConst")
 {
-    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
+    ScopedFastFlag debugLuwuIntegers{FFlag::DebugLuwuIntegers, true};
 
     // Check that this compiles with no assertions
     CHECK(
@@ -8354,7 +8335,7 @@ end
 
 TEST_CASE_FIXTURE(LoweringFixture, "NumberFastcallWrongConst")
 {
-    ScopedFastFlag LuauIntegerLibrary{FFlag::LuauIntegerLibrary, true};
+    ScopedFastFlag debugLuwuIntegers{FFlag::DebugLuwuIntegers, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
 
     // Check that this compiles with no assertions

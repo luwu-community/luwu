@@ -9,7 +9,6 @@
 
 #include <math.h>
 
-LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAGVARIABLE(LuauCodegenBufferInteger)
 
 // TODO: when nresults is less than our actual result count, we can skip computing/writing unused results
@@ -1567,7 +1566,7 @@ BuiltinImplResult translateBuiltin(
     if (nparams == LUA_MULTRET)
         return {BuiltinImplType::None, -1};
 
-    if (FFlag::LuauIntegerLibrary && (args.kind == IrOpKind::Constant || arg3.kind == IrOpKind::Constant))
+    if (args.kind == IrOpKind::Constant || arg3.kind == IrOpKind::Constant)
     {
         switch (bfid)
         {

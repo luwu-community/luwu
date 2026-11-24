@@ -15,7 +15,6 @@
 #include <string.h>
 
 LUAU_FASTFLAG(LuauDirectFieldGet)
-LUAU_FASTFLAGVARIABLE(LuauInteger)
 LUAU_FASTFLAG(LuauGcTraceUdata)
 
 /*

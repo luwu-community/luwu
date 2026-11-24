@@ -23,7 +23,7 @@ LUAU_FASTINT(LuauCompileInlineThresholdMaxBoost)
 LUAU_FASTINT(LuauCompileLoopUnrollThreshold)
 LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
 LUAU_FASTINT(LuauRecursionLimit)
-LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
@@ -13302,7 +13302,7 @@ TEST_CASE("ClassDeclHoistingForwardWriteProducesError")
 
 TEST_CASE("IntegerType")
 {
-    if (!FFlag::LuauIntegerType2)
+    if (!FFlag::DebugLuwuIntegers)
         return;
 
     // int suffix
@@ -13368,7 +13368,7 @@ RETURN R0 1
 
 TEST_CASE("IntegerBcb")
 {
-    ScopedFastFlag luauInteger{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
 
     const char* source = R"(
 function foo()
@@ -14166,8 +14166,9 @@ TEST_CASE("LBCConstantRegressionTest")
     CHECK_EQ(LBC_CONSTANT_INTEGER, 9);
     CHECK_EQ(LBC_CONSTANT_CLASS_SHAPE, 10);
     CHECK_EQ(LBC_CONSTANT_VECTORD, 11);
+    CHECK_EQ(LBC_CONSTANT_INTEGER_HEAP, 12);
 
-    CHECK_EQ(LBC_CONSTANT__COUNT, 12);
+    CHECK_EQ(LBC_CONSTANT__COUNT, 13);
 }
 
 TEST_CASE("ExportClass")

@@ -11,6 +11,7 @@
 #include "lmem.h"
 #include "ludata.h"
 #include "lbuffer.h"
+#include "lbigint.h"
 #include "lclass.h"
 #include "lvector.h"
 
@@ -689,6 +690,13 @@ static int isobjcleared(GCObject* o)
     if (o->gch.tt == LUA_TSTRING)
     {
         stringmark(&o->ts); // strings are `values', so are never weak
+        return 0;
+    }
+
+    // Luwu Integers (rfcs/integers.md): bigints are values too, marked the way strings are
+    if (o->gch.tt == LUA_THEAPINTEGER)
+    {
+        stringmark(&o->gch);
         return 0;
     }
 

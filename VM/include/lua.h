@@ -179,7 +179,6 @@ LUA_API unsigned lua_tounsignedx(lua_State* L, int idx, int* isnum);
 LUA_API const LUA_VECTOR_TYPE* lua_tovector(lua_State* L, int idx);
 LUA_API int lua_toboolean(lua_State* L, int idx);
 LUA_API int64_t lua_tointeger64(lua_State* L, int idx, int* isinteger);
-LUA_API void lua_pushinteger_string(lua_State* L, int idx);
 LUA_API const char* lua_tolstring(lua_State* L, int idx, size_t* len);
 LUA_API const char* lua_tostringatom(lua_State* L, int idx, int* atom);
 LUA_API const char* lua_tolstringatom(lua_State* L, int idx, size_t* len, int* atom);

@@ -601,8 +601,9 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
         classdef->podimplementsoffset = offsetint;
     }
 
-    // Only metamethods in the parser's allowlist are supported (see ALLOWED_METAMETHODS in Parser.cpp)
-    bool isMetamethod = (name == luaS_newlstr(L, "__tostring", 10));
+    // Only metamethods in the parser's allowlist are supported (see ALLOWED_METAMETHODS in Parser.cpp). Luwu Integers
+    // (rfcs/integers.md): `__tointeger` has no TM_ entry, since only the `integer` library reads it.
+    bool isMetamethod = name == luaS_newlstr(L, "__tostring", 10) || name == luaS_newlstr(L, "__tointeger", 11);
     for (int i = 0; i < TM_N && !isMetamethod; i++)
         isMetamethod = (name == L->global->tmname[i]);
 

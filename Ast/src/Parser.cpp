@@ -27,6 +27,7 @@ LUAU_DYNAMIC_FASTFLAGVARIABLE(DebugLuauReportReturnTypeVariadicWithTypeSuffix, f
 LUAU_FASTFLAGVARIABLE(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FLAGVERSION(LuauExportValueSyntax, 3)
 
 // Luwu @noinline (rfcs/noinline-attribute.md): gates parsing `@noinline`, and the compiler honoring it (no
@@ -114,6 +115,7 @@ const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ tr
 const LuwuFeature kExportsFeature{"exported values", /* plural= */ true, "LuauExportValueSyntax"};
 const LuwuFeature kTryExpressionsFeature{"'try' expressions", /* plural= */ true, "DebugLuwuTryExpressions"};
 const LuwuFeature kErrorHintsFeature{"error hints", /* plural= */ true, "DebugLuwuTryExpressions"};
+const LuwuFeature kIntegersFeature{"integers", /* plural= */ true, "DebugLuwuIntegers"};
 // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, `declare` is only allowed where it
 // visibly applies to the whole file.
 const char* const kDeclarationPlacementError =
@@ -2479,6 +2481,8 @@ const std::unordered_set<std::string> ALLOWED_METAMETHODS{
     "__iter",
     "__len",
     "__idiv",
+    // Luwu Integers (rfcs/integers.md): `integer.cast` and calling a mode convert a value through it
+    "__tointeger",
 };
 
 const std::unordered_set<std::string> EXPLICITLY_DISALLOWED_METAMETHODS{
@@ -8280,11 +8284,6 @@ uint64_t largestIntegerLiteral(IntegerMode mode, bool negated)
     return bits == 64 ? UINT64_MAX : (uint64_t(1) << bits) - 1;
 }
 
-bool isUnsignedIntegerMode(IntegerMode mode)
-{
-    return mode == IntegerMode_U8 || mode == IntegerMode_U16 || mode == IntegerMode_U32 || mode == IntegerMode_U64;
-}
-
 // The suffix written for `mode`: `u8`, `int`, ...
 const char* integerSuffixText(IntegerMode mode)
 {
@@ -8346,10 +8345,13 @@ AstExpr* Parser::parseNumber()
         scratchData.erase(std::remove(scratchData.begin(), scratchData.end(), '_'), scratchData.end());
     }
 
-    const IntegerSuffix* suffix = FFlag::LuauIntegerType2 ? findIntegerSuffix(scratchData) : nullptr;
+    const IntegerSuffix* suffix = findIntegerSuffix(scratchData);
 
     if (suffix)
     {
+        // Luwu Integers (rfcs/integers.md): the literal still parses when the feature is off, so nothing after it cascades
+        checkLuwuFeature(start, kIntegersFeature, FFlag::DebugLuwuIntegers);
+
         std::string written(lexer.current().data, lexer.current().getLength());
         scratchData.erase(scratchData.size() - strlen(suffix->text));
         IntegerMode mode = suffix->mode;

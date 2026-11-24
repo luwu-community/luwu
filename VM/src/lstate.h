@@ -209,6 +209,18 @@ enum LuwuBuiltinClass
     LUWU_BUILTIN_SOME,
     LUWU_BUILTIN_OK,
     LUWU_BUILTIN_ERR,
+    // Luwu error variants (rfcs/integers.md): the builtin error classes in the global `Error`, in the order of
+    // kErrorVariants in lresultlib.cpp
+    LUWU_BUILTIN_ERR_OVERFLOW,
+    LUWU_BUILTIN_ERR_UNDERFLOW,
+    LUWU_BUILTIN_ERR_CANNOTBEPARSED,
+    LUWU_BUILTIN_ERR_UNEXPECTEDFLOAT,
+    LUWU_BUILTIN_ERR_INVALIDARGUMENT,
+    LUWU_BUILTIN_ERR_DIVISIONBYZERO,
+    LUWU_BUILTIN_ERR_INVALIDCOMPARISON,
+    LUWU_BUILTIN_ERR_UNREACHABLE,
+    // Luwu Integers (rfcs/integers.md): `integer.Mode`
+    LUWU_BUILTIN_INTEGERMODE,
 
     LUWU_BUILTIN__COUNT
 };
@@ -246,6 +258,7 @@ typedef struct global_State
     TString* ttname[LUA_T_COUNT]; // names for basic types, as returned by tostring()/error messages (LUA_TSYMNONE reports as "none")
     TString* ttypename[LUA_T_COUNT]; // names for basic types, as returned by type() (matches luaT_typenames verbatim)
     TString* traittypename;          // Luwu Traits (rfcs/classes/traits.md): "trait", which type() and typeof() give for a trait
+    TString* integermodename[IntegerMode_U64 + 1]; // Luwu Integers (rfcs/integers.md): "int", "u8", ..., which typeof() gives
     // Luwu builtin classes: each builtin class once its library has built it, NULL until then. A GC root, so a class
     // lives as long as the state even when no library table holds it. Native methods check `self` against these.
     struct LuauClass* builtinclasses[LUWU_BUILTIN__COUNT];

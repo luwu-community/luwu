@@ -299,6 +299,11 @@ LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const
 // holding the error in `ra` and where it was raised in `ra + 1` to `ra + 3`. Doesn't run the collector.
 LUAI_FUNC void luaR_wrapresult(lua_State* L, StkId ra, bool caught);
 
+// Luwu error variants (rfcs/integers.md): raises an object of the error variant `kind` (`Error.Overflow`, ...) whose
+// positions are the `nargs` values on top of the stack. Missing positions are nil. When the result library isn't open,
+// raises the object's message as a string instead.
+LUAI_FUNC l_noret luaR_raisevariant(lua_State* L, LuwuBuiltinClass kind, int nargs);
+
 // Luwu try expressions: the value a `Some`, `Ok` or `Err` holds, or NULL for any other value
 LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
 
