@@ -1020,6 +1020,14 @@ enum class IrCmd : uint8_t
     // D: Rn (trait)
     FALLBACK_GETQUALIFIED,
 
+    // Luwu Traits (rfcs/classes/traits.md): LOP_SETQUALIFIED, a write to a trait's scoped field. Runs no Luau code, but
+    // raises when the field can't be written there.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (value)
+    // C: Rn (object or class)
+    // D: Rn (trait)
+    FALLBACK_SETQUALIFIED,
+
     // Instruction that passes value through, it is produced by constant folding and users substitute it with the value
     // A: operand of any type
     SUBSTITUTE,

@@ -1457,6 +1457,14 @@ DefId DataFlowGraphBuilder::visitLValue(AstExprGlobal* g, DefId incomingDef)
 
 DefId DataFlowGraphBuilder::visitLValue(AstExprIndexName* i, DefId incomingDef)
 {
+    // Luwu Traits (rfcs/classes/traits.md): `obj:Trait.name = value` writes the trait's scoped field, which nothing refines
+    if (i->qualifiedTrait)
+    {
+        visitExpr(i->expr);
+        visitExpr(i->qualifiedTrait);
+        return defArena->freshCell(Symbol{}, i->location);
+    }
+
     DefId parentDef = visitExpr(i->expr).def;
 
     DfgScope* scope = currentScope();

@@ -3261,6 +3261,9 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     case IrCmd::FALLBACK_GETQUALIFIED:
         emitFallback(regs, build, offsetof(NativeContext, executeGETQUALIFIED), uintOp(OP_A(inst)));
         break;
+    case IrCmd::FALLBACK_SETQUALIFIED:
+        emitFallback(regs, build, offsetof(NativeContext, executeSETQUALIFIED), uintOp(OP_A(inst)));
+        break;
     case IrCmd::FALLBACK_INITTRAITS:
         emitFallback(regs, build, offsetof(NativeContext, executeINITTRAITS), uintOp(OP_A(inst)));
         break;

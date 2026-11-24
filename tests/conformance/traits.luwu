@@ -1322,8 +1322,8 @@ class Breed(name: string)
         return "cat"
     end
 
-    static function describe(self)
-        return `{self.name} is a {self.species}`
+    function describe(cat)
+        return `{cat.name} is a {cat.species}`
     end
 
     function meow(self)
@@ -1410,7 +1410,7 @@ do
     fails("trait T static x = 1 end class C implements T shared x = 2 end", "'x' must be static for 'C' to implement 'T'")
     fails("trait T x = 1 end class C implements T shared x = 2 end", "'x' must be a field of each object for 'C' to implement 'T'")
     fails("trait T shared final x = 1 end class C implements T shared x = 2 end", "'x' is final in trait 'T' and can't be overridden")
-    fails("trait T function f(self) end end class C implements T static function f(self) end end", "'f' must be shared for 'C' to implement 'T'")
+    fails("trait T function f(self) end end class C implements T function f(other) end end", "'f' must be shared for 'C' to implement 'T'")
     fails("trait T expect shared x: number end class C implements T static x = 2 end", "'x' must be shared for 'C' to implement 'T'")
     fails(
         "trait T expect trait to override function f(self) end class C implements T function f(self) end end",
@@ -1460,7 +1460,7 @@ class Tallied
     public static __ok = false
     public __ok = true
 
-    public static function total()
+    public function total()
         return Tallied.count
     end
 
@@ -1515,7 +1515,7 @@ end
 -- a trait's static lands on the class next to a class field of the same name, and the other way around
 trait Tally
     static tally = "all"
-    static function make()
+    function make()
         return "made"
     end
 end
@@ -1559,7 +1559,7 @@ end
 -- a trait's scoped fields are read qualified, two traits' scoped fields of one name don't clash, and a class gives one its
 -- value qualified
 trait Creature
-    expect public scoped species: string
+    expect public scoped shared species: string
     public scoped legs = 4
     private scoped secret = "hidden"
 
@@ -1611,4 +1611,141 @@ do
     fails("trait T scoped x = 1 end class C implements T function T.x(self) end end", "'x' is a scoped field of trait 'T': write 'T.x = value'")
 end
 
+-- a scoped field has a value in each object unless it's `scoped shared` or `scoped static`, and is written qualified
+trait Keeper
+    public scoped count = 0
+    public scoped shared total = 0
+    public scoped static registry = "counted"
+    public scoped const id = "c"
+    private scoped hidden = 1
+
+    public function bump(self)
+        self:Keeper.count += 1
+        self:Keeper.hidden += 1
+        return self:Keeper.count
+    end
+
+    public function secret(self)
+        return self:Keeper.hidden
+    end
+end
+
+class Tick implements Keeper
+    Keeper.count = 10
+end
+
+class Tock implements Keeper
+end
+
+class Named implements Keeper
+    public function __init(self, id: string)
+        self:Keeper.id = id
+    end
+end
+
+do
+    -- each object starts with the class's value, or the trait's, and keeps its own
+    local a, b = Tick(), Tick()
+    assert(a:Keeper.count == 10 and b:Keeper.count == 10)
+    a:Keeper.count = 11
+    assert(a:Keeper.count == 11 and b:Keeper.count == 10)
+    a:Keeper.count += 1
+    assert(a:Keeper.count == 12)
+    assert(a:bump() == 13 and b:Keeper.count == 10 and a:secret() == 2 and b:secret() == 1)
+    assert(Tock():Keeper.count == 0)
+    assert(Named("n"):Keeper.id == "n" and a:Keeper.id == "c")
+
+    -- `scoped shared` is one value on the class, read through objects and written through the class
+    Tick:Keeper.total = 5
+    assert(a:Keeper.total == 5 and Tick:Keeper.total == 5 and Tock:Keeper.total == 0)
+    Tick:Keeper.total += 1
+    assert(b:Keeper.total == 6)
+
+    -- `scoped static` is on the class value only
+    assert(Tick:Keeper.registry == "counted")
+    Tock:Keeper.registry = "tock"
+    assert(Tock:Keeper.registry == "tock" and Tick:Keeper.registry == "counted")
+
+    -- `obj:[expr]` uses whatever trait the expression gives
+    local traits = { counted = Keeper }
+    assert(a:[traits.counted].count == 13)
+    a:[traits.counted].count = 1
+    a:[traits["counted"]].count += 1
+    assert(a:Keeper.count == 2 and a:[traits.counted]:bump() == 3)
+    assert(Tick:[Keeper].total == 6)
+
+    local function raises(f, message)
+        local ok, err = pcall(f)
+        assert(not ok and string.find(err, message, 1, true), err)
+    end
+
+    raises(function() a:Keeper.total = 1 end, "Tick:Keeper.total is shared between all objects of its class and cannot be mutated through this object; mutate it through class 'Tick' instead")
+    raises(function() return Tick:Keeper.count end, "Tick:Keeper.count is a field of each object; read it through an object of class 'Tick'")
+    raises(function() Tick:Keeper.count = 1 end, "Tick:Keeper.count is a field of each object; write it through an object of class 'Tick'")
+    raises(function() return a:Keeper.registry end, "Tick:Keeper.registry is static; read it through class 'Tick'")
+    raises(function() a:Keeper.id = "d" end, "'Keeper.id' is a const member of 'Tick'")
+    raises(function() a:Keeper.hidden = 2 end, "'Keeper.hidden' is private to 'Keeper' and the classes implementing it")
+    raises(function() a:Keeper.bump = 1 end, "trait 'Keeper' has no scoped field 'bump' to write")
+    raises(function() a:[1].count = 1 end, "attempt to write 'count' through a number; the name before it must be a trait")
+    raises(function() return a:[traits.missing]:bump() end, "attempt to read 'bump' through a nil; the name before it must be a trait")
+    raises(function() local n = 1; n:Keeper.count = 1 end, "attempt to write 'Keeper.count' of a number; it needs an object or a class")
+end
+
+-- a first parameter named `Self` makes a class method: `Self` is the class it's called on, checked on entry
+class Clicker
+    static clicks = 0
+    public_name = "clicker"
+
+    function click(Self)
+        Self.clicks += 1
+        return Self.clicks
+    end
+
+    function make(Self)
+        return Self()
+    end
+
+    static function plain(n)
+        return n
+    end
+
+    shared function both(n)
+        return n * 2
+    end
+end
+
+trait Catalog
+    static entries = 0
+
+    function register(Self)
+        Self.entries += 1
+        return `{class.name(Self)} {Self.entries}`
+    end
+end
+
+class Shelf implements Catalog
+end
+
+class Drawer implements Catalog
+end
+
+do
+    assert(Clicker:click() == 1 and Clicker:click() == 2)
+    assert(Clicker:make().public_name == "clicker")
+    assert(Clicker.plain(3) == 3 and Clicker.both(2) == 4 and Clicker().both(5) == 10)
+    assert(Shelf:register() == "Shelf 1" and Drawer:register() == "Drawer 1" and Shelf:register() == "Shelf 2")
+    assert(Catalog.register(Drawer) == "Drawer 2")
+
+    local function raises(f, message)
+        local ok, err = pcall(f)
+        assert(not ok and string.find(err, message, 1, true), err)
+    end
+
+    raises(function() return Clicker.click() end, "attempt to call class method 'Clicker.click' with 'Self' of type 'nil'; call it on the class: 'Clicker:click()'")
+    raises(function() return Clicker.click(Shelf) end, "attempt to call class method 'Clicker.click' with 'Self' of class 'Shelf'")
+    raises(function() return Clicker():click() end, "objects of class 'Clicker' do not have a field named 'click'")
+    raises(function() return Catalog:register() end, "'Catalog.register' expects a class implementing 'Catalog', got trait")
+    raises(function() return Catalog.register(Clicker) end, "'Catalog.register' expects a class implementing 'Catalog', got class")
+    raises(function() return Shelf.register(Drawer) end, "attempt to call class method 'Shelf.register' with 'Self' of class 'Drawer'")
+end
 return 'OK'
