@@ -534,7 +534,8 @@ LUAI_FUNC const TValue* luaR_traitcreate(lua_State* L, const LuauClass* trait);
  *  - raises when a member is provided twice, a final function is redefined, or an expectation isn't met by the
  *    finished class (presence, field or function, access specifier, `const`);
  *  - copies the traits' constant field defaults into the class's, and gives the class a copy of each trait's
- *    `__traitinit` for the fields that have to be computed per construction (luaR_nexttraitinit).
+ *    `__traitinit` for the fields that have to be computed per construction (luaR_nexttraitinit), followed by the
+ *    class's values of per-object scoped fields.
  * May call the traits' `__needs` functions.
  */
 LUAI_FUNC void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint32_t n);
@@ -552,17 +553,21 @@ LUAI_FUNC void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, cons
  * class's traits that don't have a constant default (those are already in place, see luaR_newobject). `state` holds how
  * many initializers have run, then the object and the class's `nargs` `implements` arguments. Lays out the call of the
  * class's copy of the next trait's `__traitinit` at `frame` and returns true, or, once every initializer has run, puts
- * back the overridden constant fields and returns false.
+ * back the overridden constant fields and returns false. The class's values of per-object scoped fields come after the
+ * traits' initializers: a call of one returns the field's value at `frame`, which the next run stores.
  */
 LUAI_FUNC bool luaR_nexttraitinit(lua_State* L, StkId state, StkId frame, int nargs);
 
 /**
  * Luwu Traits (rfcs/classes/traits.md): records `value` as `classdef`'s qualified implementation of the member `name` of
- * the trait `trait`: a function (`function Json.name`, LBC_NEWCLASSMEMBER_QUALIFIED), or the value of a scoped field when
- * `isfield` is set (`Animal.species = value`, LBC_NEWCLASSMEMBER_QUALIFIEDFIELD). Raises when the trait's member is the
- * other kind; luaR_implementtraits checks the rest. Ignored once the class has implemented its traits.
+ * the trait `trait`. `form` is the LOP_NEWCLASSMEMBER form that says what `value` is: a function (`function Json.name`,
+ * LBC_NEWCLASSMEMBER_QUALIFIED), the constant value of a scoped field (`Animal.species = 4`,
+ * LBC_NEWCLASSMEMBER_QUALIFIEDFIELD), or a function that computes a scoped field's value (`Animal.items = {}`,
+ * LBC_NEWCLASSMEMBER_QUALIFIEDFIELDFN). The function runs now for a field on the class, and for every new object when each
+ * object has its own. Raises when the trait's member is the other kind; luaR_implementtraits checks the rest. Ignored once
+ * the class has implemented its traits.
  */
-LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* value, bool isfield);
+LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* value, int form);
 
 /**
  * Luwu Traits (rfcs/classes/traits.md): sets `ra` to the class's version of the member `name` of `trait`, for
