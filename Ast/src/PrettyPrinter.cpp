@@ -1663,7 +1663,7 @@ struct Printer
             // With attributes the statement starts at them rather than at `class`, so advance to the
             // keyword instead of assuming we are already sitting on it.
             writer.advance(c->keywordLocation.begin);
-            writer.keyword("class");
+            writer.keyword(c->isTrait ? "trait" : "class");
             writer.advance(c->name->location.begin);
             writer.identifier(c->name->name.value);
 
@@ -1715,13 +1715,21 @@ struct Printer
                 writer.symbol(")");
             }
 
+            // Luwu Traits (rfcs/classes/traits.md): a class's `implements` list or a trait's `needs` list
+            if (c->implementsLocation)
+                visualizeClassTraitRefs(*c->implementsLocation, "implements", c->implements);
+            if (c->needsLocation)
+                visualizeClassTraitRefs(*c->needsLocation, "needs", c->needs);
+
             for (const auto& member : c->members)
             {
                 visit(
                     overloaded{
                         [&](const AstClassProperty& prop)
                         {
-                            visualizeQualifiersAndAttributes(prop.attributes, prop.qualifierLocation, prop.visibility, prop.constLocation);
+                            visualizeExpectModifiers(prop.expectLocation, prop.expectTarget, prop.expectTargetLocation);
+                            ClassMemberModifierLocations after{prop.placement, prop.placementLocation, prop.finalLocation};
+                            visualizeQualifiersAndAttributes(prop.attributes, prop.qualifierLocation, prop.visibility, prop.constLocation, &after);
                             writer.advance(prop.nameLocation.begin);
                             writer.identifier(prop.name.value);
                             if (writeTypes && prop.ty)
@@ -1760,6 +1768,8 @@ struct Printer
                             if (!method.qualifierLocation || attributesPrecedeQualifier)
                                 visualizeMethodAttributes();
 
+                            visualizeExpectModifiers(method.expectLocation, method.expectTarget, method.expectTargetLocation);
+
                             if (method.qualifierLocation)
                             {
                                 visualizeClassQualifiers(method.qualifierLocation, method.visibility, std::nullopt);
@@ -1767,22 +1777,20 @@ struct Printer
                                 if (!attributesPrecedeQualifier)
                                     visualizeMethodAttributes();
                             }
+
+                            visualizePlacementAndFinal({method.placement, method.placementLocation, method.finalLocation});
                             writer.advance(method.keywordLocation.begin);
                             writer.keyword("function");
-                            // Luwu Traits (rfcs/classes/traits.md): `function Self.name`, `function Json.name`
-                            if (method.scopeLocation)
-                            {
-                                writer.advance(method.scopeLocation->begin);
-                                writer.identifier("Self");
-                                writer.symbol(".");
-                            }
-                            else if (method.qualifiedTrait)
+                            // Luwu Traits (rfcs/classes/traits.md): `function Json.name`
+                            if (method.qualifiedTrait)
                             {
                                 visualize(*method.qualifiedTrait);
                                 writer.symbol(".");
                             }
                             writer.advance(method.nameLocation.begin);
                             writer.identifier(method.functionName.value);
+                            if (method.isOptional)
+                                writer.symbol("?");
                             visualizeFunctionBody(*method.function);
                         }
                     },
@@ -1805,6 +1813,14 @@ struct Printer
             writer.symbol(";");
         }
     }
+
+    // Luwu Traits (rfcs/classes/traits.md): the modifiers a member has between its access specifier and `const`
+    struct ClassMemberModifierLocations
+    {
+        AstClassMemberPlacement placement;
+        std::optional<Location> placementLocation;
+        std::optional<Location> finalLocation;
+    };
 
     // Luwu Classes (rfcs/classes): the access specifier and `const` modifier of a class member, a
     // primary constructor parameter or the primary constructor itself, each written only if the source had it.
@@ -1834,7 +1850,8 @@ struct Printer
         const AstArray<AstAttr*>& attributes,
         const std::optional<Location>& qualifierLocation,
         AstClassMemberVisibility visibility,
-        const std::optional<Location>& constLocation
+        const std::optional<Location>& constLocation,
+        const ClassMemberModifierLocations* modifiers = nullptr
     )
     {
         size_t next = 0;
@@ -1858,6 +1875,9 @@ struct Printer
             writer.keyword(visibility == AstClassMemberVisibility::Private ? "private" : "public");
         }
 
+        if (modifiers)
+            visualizePlacementAndFinal(*modifiers);
+
         if (constLocation)
         {
             visualizeAttributesBefore(constLocation->begin);
@@ -1866,6 +1886,85 @@ struct Printer
         }
 
         visualizeAttributesBefore(std::nullopt);
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): `expect` and `class to override` or `trait to override`
+    void visualizeExpectModifiers(
+        const std::optional<Location>& expectLocation,
+        AstClassExpectTarget target,
+        const std::optional<Location>& targetLocation
+    )
+    {
+        if (expectLocation)
+        {
+            writer.advance(expectLocation->begin);
+            writer.keyword("expect");
+        }
+
+        if (targetLocation)
+        {
+            writer.advance(targetLocation->begin);
+            writer.keyword(target == AstClassExpectTarget::Trait ? "trait" : "class");
+            writer.keyword("to");
+            writer.keyword("override");
+        }
+    }
+
+    void visualizePlacementAndFinal(const ClassMemberModifierLocations& modifiers)
+    {
+        if (modifiers.placementLocation)
+        {
+            writer.advance(modifiers.placementLocation->begin);
+            writer.keyword(toString(modifiers.placement));
+        }
+
+        if (modifiers.finalLocation)
+        {
+            writer.advance(modifiers.finalLocation->begin);
+            writer.keyword("final");
+        }
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): `implements A, m.B<X>, C(args)` or `needs A`
+    void visualizeClassTraitRefs(const Location& keywordLocation, const char* keyword, const AstArray<AstClassTraitRef>& refs)
+    {
+        writer.advance(keywordLocation.begin);
+        writer.keyword(keyword);
+
+        CommaSeparatorInserter comma(writer);
+        for (const AstClassTraitRef& ref : refs)
+        {
+            comma();
+            visualize(*ref.trait);
+
+            if (writeTypes && ref.typeArguments.size > 0)
+            {
+                CommaSeparatorInserter typeComma(writer);
+                writer.symbol("<");
+                for (const AstTypeOrPack& argument : ref.typeArguments)
+                {
+                    typeComma();
+                    if (argument.type)
+                        visualizeTypeAnnotation(*argument.type);
+                    else
+                        visualizeTypePackAnnotation(*argument.typePack, false);
+                }
+                writer.symbol(">");
+            }
+
+            if (ref.hasArgs)
+            {
+                writer.advance(ref.argsLocation.begin);
+                writer.symbol("(");
+                CommaSeparatorInserter argComma(writer);
+                for (AstExpr* arg : ref.args)
+                {
+                    argComma();
+                    visualize(*arg);
+                }
+                writer.symbol(")");
+            }
+        }
     }
 
     // Luwu Classes (rfcs/classes): `class Box<T, U = string, V...>`. Classes carry no CST node of

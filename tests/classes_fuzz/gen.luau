@@ -155,6 +155,8 @@ type Trait = {
     tostring: boolean,
     -- has a `__implemented` hook, which logs `<trait>:<class>` in `shared.hooks` for each class implementing it
     hooked: boolean,
+    -- has a `shared` field `t<i>_sh`, a `static` field `t<i>_st` and a `traitonly` field `t<i>_to`, with values from `i`
+    placed: boolean,
     implementors: { Cls },
 }
 
@@ -1219,6 +1221,7 @@ const function generate(seed: number): (string, string)
                 create = false,
                 tostring = rng.chance(0.2),
                 hooked = rng.chance(0.4),
+                placed = rng.chance(0.4),
                 implementors = {},
             }
 
@@ -1548,6 +1551,11 @@ const function generate(seed: number): (string, string)
         for _, f in t.fields do
             table.insert(out, `    {if f.private then "private" else "public"} {if f.const then "const " else ""}{f.name} = {f.default}`)
         end
+        if t.placed then
+            table.insert(out, `    public shared t{t.index}_sh = {t.index * 10}`)
+            table.insert(out, `    public static t{t.index}_st = {t.index}`)
+            table.insert(out, `    public traitonly t{t.index}_to = {t.index}`)
+        end
         for _, fn in t.fns do
             const params = table.clone(fn.params)
             if not fn.static then
@@ -1605,8 +1613,24 @@ const function generate(seed: number): (string, string)
             const kind = rng.pick({
                 "call", "dispatch", "dispatch_wrong", "implements", "refine", "type", "blocked", "ctor", "field",
                 "maybe", "isolated", "gc", "coroutine", "static", "tostring", "fields", "annotated", "private_fn", "overridden",
-                "settle", "hooks",
+                "settle", "hooks", "placed",
             })
+
+            -- a trait's shared field is read through the class and its objects, its static field through the class
+            -- only, and its trait-only field through the trait only
+            if kind == "placed" and t.placed and implements then
+                local i = t.index
+                op("t_placed", {
+                    `local o = {C}.make()`,
+                    `check({C}.t{i}_sh == {i * 10} and o.t{i}_sh == {i * 10}, "{t.name}'s shared field on {c.name}")`,
+                    `check({C}.t{i}_st == {i}, "{t.name}'s static field on {c.name}")`,
+                    `check(not pcall(function() return o.t{i}_st end), "{t.name}'s static field read through an object of {c.name}")`,
+                    `check(not pcall(function() o.t{i}_sh = 0 end), "{t.name}'s shared field written through an object of {c.name}")`,
+                    `check(not pcall(function() return {C}.t{i}_to end), "{t.name}'s trait-only field read through {c.name}")`,
+                    `check({T}.t{i}_to == {i}, "{t.name}'s trait-only field")`,
+                    "return true",
+                }, false, true)
+            end
 
             if kind == "hooks" and t.hooked then
                 -- each hooked trait logs each class implementing it exactly once, after the traits it needs
