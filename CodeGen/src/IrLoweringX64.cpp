@@ -2946,8 +2946,8 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         build.mov(lclass.reg, qword[regOp(OP_A(inst)) + offsetof(LuauObject, lclass)]);
 
-        // bounds check: slot must be a valid member offset (instance or static)
-        build.cmp(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofallmembers)]);
+        // bounds check: slot must be a member an object can read (instance, or static but not class-only)
+        build.cmp(dwordReg(slot.reg), dword[lclass.reg + offsetof(LuauClass, numberofobjectmembers)]);
         build.jcc(ConditionX64::AboveEqual, mismatch);
 
         // authorize private method access (or bail); method resolution is a read, so const doesn't

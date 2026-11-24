@@ -45,6 +45,7 @@ LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
+LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
 
 // May a file use the `--!trust` directive, which lets the compiler act on type annotations it cannot
@@ -186,6 +187,13 @@ static bool isConstantClassDefault(AstExpr* expr)
 static bool isTraitConstantField(const AstClassProperty& prop)
 {
     return !prop.expectLocation && prop.defaultValue && isConstantClassDefault(prop.defaultValue);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): whether a field is one of each object's, rather than one value on the class or
+// trait (`shared`, `static`, `traitonly`), which lives in a static slot like a function
+static bool isObjectField(const AstClassProperty& prop)
+{
+    return prop.placement == AstClassMemberPlacement::Default;
 }
 
 // Luwu Classes (rfcs/classes): whether the class or trait body declares a field `name`, which restates the primary
@@ -1370,6 +1378,13 @@ struct Compiler
             if (!prop)
                 continue;
 
+            if (!isObjectField(*prop))
+            {
+                if (prop->name == name)
+                    return -1;
+                continue;
+            }
+
             if (prop->name == name)
                 return forWrite && prop->isConst ? -1 : offset;
 
@@ -2509,7 +2524,9 @@ struct Compiler
         {
             if (const AstClassMethod* m = member.get_if<AstClassMethod>())
             {
-                if (m->functionName == name && classMethodOwner.contains(m->function) && !m->qualifiedTrait)
+                // Luwu Traits (rfcs/classes/traits.md): a static, trait-only or scoped method can't be read through an object
+                bool readableThroughObjects = m->placement == AstClassMemberPlacement::Default || m->placement == AstClassMemberPlacement::Shared;
+                if (m->functionName == name && classMethodOwner.contains(m->function) && !m->qualifiedTrait && readableThroughObjects)
                     return m->function;
             }
         }
@@ -2739,7 +2756,7 @@ struct Compiler
         std::vector<const AstClassProperty*> properties;
 
         for (const AstClassMember& member : decl->members)
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && isObjectField(*prop))
                 properties.push_back(prop);
 
         if (properties.empty() || properties.size() > kMaxNewObjectFields)
@@ -3011,7 +3028,7 @@ struct Compiler
         std::vector<const AstClassProperty*> properties;
 
         for (const AstClassMember& member : decl->members)
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && isObjectField(*prop))
                 properties.push_back(prop);
 
         std::vector<AstLocal*> parameterFields;
@@ -3528,7 +3545,7 @@ struct Compiler
 
         std::vector<const AstClassProperty*> properties;
         for (const AstClassMember& member : decl->members)
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && isObjectField(*prop))
                 properties.push_back(prop);
 
         DenseHashSet<AstLocal*> noParameters{nullptr};
@@ -4256,7 +4273,7 @@ struct Compiler
         std::vector<std::pair<AstName, const AstClassProperty*>> fields;
 
         for (const AstClassMember& member : trait->members)
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && !prop->expectLocation)
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && !prop->expectLocation && isObjectField(*prop))
                 fields.emplace_back(prop->name, prop);
 
         if (trait->primaryConstructor)
@@ -4369,8 +4386,10 @@ struct Compiler
 
         for (const AstClassMember& member : cls->members)
         {
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && isObjectField(*prop))
                 plan->fieldSlots[prop->name] = ownFields++;
+            else if (prop)
+                ownMethods.insert(prop->name);
             else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && !method->qualifiedTrait)
                 ownMethods.insert(method->functionName);
         }
@@ -4615,7 +4634,7 @@ struct Compiler
         for (const AstClassMember& member : cls->members)
         {
             const AstClassProperty* prop = member.get_if<AstClassProperty>();
-            if (prop && prop->defaultValue && plan.overridden.contains(prop->name))
+            if (prop && isObjectField(*prop) && prop->defaultValue && plan.overridden.contains(prop->name))
                 storeField(prop->name, prop->defaultValue);
         }
     }
@@ -4768,7 +4787,8 @@ struct Compiler
     //   name clashes behave exactly as they do for a trait from another module.
     // - Copies every function with a body, including defaults the class overrides: an override can still call the trait's
     //   version with `Trait.method(self)`, and that runs the trait's code through this copy. Skips `expect` functions
-    //   (no body), a factory's `__create` and the `__implemented` hook, which belong to the trait, not the class.
+    //   (no body), and `traitonly` functions (a factory's `__create` and the `__implemented` hook among them), which belong
+    //   to the trait, not the class.
     // - Also copies each trait's `__traitinit`, which construction runs for every object (LOP_INITTRAITS), so the trait's
     //   fields are computed natively too.
     void buildTraitFunctionCopies(AstStatBlock* root, Allocator& allocator, std::vector<AstExprFunction*>& functionsToCompile)
@@ -4797,7 +4817,7 @@ struct Compiler
                 {
                     const AstClassMethod* method = member.get_if<AstClassMethod>();
 
-                    bool traitOnly = method && (method->functionName == "__create" || method->functionName == "__implemented");
+                    bool traitOnly = method && (classFunctionPlacementFlags(trait, *method) & LBC_CLASSMEMBER_TRAITONLY) != 0;
                     if (!method || method->expectLocation || traitOnly)
                         continue;
 
@@ -4816,6 +4836,74 @@ struct Compiler
             if (!copies.empty())
                 classTraitCopies[decl] = std::move(copies);
         }
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): the placement bits of a class's or trait's function. A method is shared and a
+    // function without `self` static, unless it says otherwise. A metamethod is never static: the VM finds it by name.
+    // A trait's factory and hook belong to the trait alone.
+    static uint16_t classFunctionPlacementFlags(AstStatClass* decl, const AstClassMethod& method)
+    {
+        bool takesSelf = method.function->args.size > 0 && method.function->args.data[0]->name == "self";
+        bool reserved = strncmp(method.functionName.value, "__", 2) == 0;
+        bool hook = decl->isTrait && (method.functionName == "__create" || method.functionName == "__implemented");
+
+        switch (method.placement)
+        {
+        case AstClassMemberPlacement::Static:
+            return LBC_CLASSMEMBER_STATIC;
+        case AstClassMemberPlacement::TraitOnly:
+            return LBC_CLASSMEMBER_STATIC | LBC_CLASSMEMBER_TRAITONLY;
+        case AstClassMemberPlacement::Scoped:
+            return LBC_CLASSMEMBER_SCOPED;
+        case AstClassMemberPlacement::Shared:
+            return 0;
+        case AstClassMemberPlacement::Default:
+            break;
+        }
+
+        if (hook)
+            return LBC_CLASSMEMBER_STATIC | LBC_CLASSMEMBER_TRAITONLY;
+
+        // with the placement modifiers off, objects read a class's functions without `self` too
+        bool implicitlyStatic = FFlag::LuwuTraits && !takesSelf && !reserved;
+        return implicitlyStatic ? LBC_CLASSMEMBER_STATIC : 0;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): who may provide an expected member
+    static uint16_t expectTargetFlags(AstClassExpectTarget target)
+    {
+        switch (target)
+        {
+        case AstClassExpectTarget::Class:
+            return LBC_CLASSMEMBER_EXPECTCLASS;
+        case AstClassExpectTarget::Trait:
+            return LBC_CLASSMEMBER_EXPECTTRAIT;
+        case AstClassExpectTarget::Any:
+            break;
+        }
+
+        return 0;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): the bits of a field on the class value
+    static uint16_t classFieldFlags(AstStatClass* decl, const AstClassProperty& prop)
+    {
+        uint16_t flags = LBC_CLASSMEMBER_CLASSFIELD;
+        if (prop.placement != AstClassMemberPlacement::Shared)
+            flags |= LBC_CLASSMEMBER_STATIC;
+        if (prop.placement == AstClassMemberPlacement::TraitOnly)
+            flags |= LBC_CLASSMEMBER_TRAITONLY;
+        if (prop.visibility == AstClassMemberVisibility::Private)
+            flags |= LBC_CLASSMEMBER_PRIVATE;
+        if (prop.isConst)
+            flags |= LBC_CLASSMEMBER_CONST;
+        if (prop.defaultValue)
+            flags |= LBC_CLASSMEMBER_HASDEFAULT;
+        if (prop.expectLocation)
+            flags |= LBC_CLASSMEMBER_EXPECTED | expectTargetFlags(prop.expectTarget);
+        if (decl->isTrait && prop.finalLocation)
+            flags |= LBC_CLASSMEMBER_FINAL | LBC_CLASSMEMBER_CONST;
+        return flags;
     }
 
     void compileClassDeclaration(AstStatClass* decl)
@@ -4879,6 +4967,25 @@ struct Compiler
         // N registers.
         auto temp = allocReg(decl, 1u);
 
+        // Luwu Traits (rfcs/classes/traits.md): the members read through the class value only (LBC_CLASSMEMBER_STATIC) take
+        // the last static slots, so they are collected here and added to the shape after every other member
+        std::vector<int32_t> staticOnlyNames;
+        std::vector<uint16_t> staticOnlyFlags;
+
+        auto addStaticSlot = [&](int32_t nameCid, uint16_t flags)
+        {
+            if (flags & LBC_CLASSMEMBER_STATIC)
+            {
+                staticOnlyNames.push_back(nameCid);
+                staticOnlyFlags.push_back(flags);
+            }
+            else
+            {
+                shape.methodNames.push_back(nameCid);
+                shape.methodFlags.push_back(flags);
+            }
+        };
+
         for (const auto& member : decl->members)
         {
 
@@ -4886,12 +4993,27 @@ struct Compiler
                 overloaded{
                     [&](const AstClassProperty& prop)
                     {
-                        // Properties we only need to store the name, for now.
                         int propNameCid = bytecode.addConstantString(sref(prop.name));
                         checkConstant(propNameCid, prop.nameLocation);
+
+                        // Luwu Traits (rfcs/classes/traits.md): a field on the class value has a static slot, which
+                        // gets its value now, as the class statement runs
+                        if (!isObjectField(prop))
+                        {
+                            addStaticSlot(propNameCid, classFieldFlags(decl, prop));
+
+                            if (prop.defaultValue && !prop.expectLocation)
+                            {
+                                compileExprTemp(prop.defaultValue, temp);
+                                bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_FIELD, temp);
+                                bytecode.emitAux(propNameCid);
+                            }
+                            return;
+                        }
+
                         shape.propertyNames.emplace_back(propNameCid);
 
-                        uint8_t flags = 0;
+                        uint16_t flags = 0;
                         if (prop.visibility == AstClassMemberVisibility::Private)
                             flags |= LBC_CLASSMEMBER_PRIVATE;
                         if (prop.isConst)
@@ -4899,7 +5021,7 @@ struct Compiler
                         if (prop.defaultValue || primaryConstructorParam(decl, prop.name))
                             flags |= LBC_CLASSMEMBER_HASDEFAULT;
                         if (prop.expectLocation)
-                            flags |= LBC_CLASSMEMBER_EXPECTED;
+                            flags |= LBC_CLASSMEMBER_EXPECTED | expectTargetFlags(prop.expectTarget);
                         // Luwu Traits (rfcs/classes/traits.md): a final field is const, and only the trait's own initializer writes it
                         if (decl->isTrait && prop.finalLocation)
                             flags |= LBC_CLASSMEMBER_FINAL | LBC_CLASSMEMBER_CONST;
@@ -4934,16 +5056,13 @@ struct Compiler
                         {
                             int methodNameCid = bytecode.addConstantString(sref(method.functionName));
                             checkConstant(methodNameCid, method.nameLocation);
-                            shape.methodNames.emplace_back(methodNameCid);
 
-                            uint8_t flags = LBC_CLASSMEMBER_EXPECTED;
+                            uint16_t flags = LBC_CLASSMEMBER_EXPECTED | expectTargetFlags(method.expectTarget) | classFunctionPlacementFlags(decl, method);
                             if (method.visibility == AstClassMemberVisibility::Private)
                                 flags |= LBC_CLASSMEMBER_PRIVATE;
                             if (method.isOptional)
                                 flags |= LBC_CLASSMEMBER_OPTIONAL;
-                            if (method.scopeLocation)
-                                flags |= LBC_CLASSMEMBER_SCOPED;
-                            shape.methodFlags.emplace_back(flags);
+                            addStaticSlot(methodNameCid, flags);
                             return;
                         }
 
@@ -4959,9 +5078,8 @@ struct Compiler
                         compileExprFunction(method.function, temp);
                         int methodNameCid = bytecode.addConstantString(sref(method.functionName));
                         checkConstant(methodNameCid, method.function->location);
-                        shape.methodNames.emplace_back(methodNameCid);
 
-                        uint8_t flags = 0;
+                        uint16_t flags = classFunctionPlacementFlags(decl, method);
                         if (method.visibility == AstClassMemberVisibility::Private)
                             flags |= LBC_CLASSMEMBER_PRIVATE;
                         if (method.finalLocation)
@@ -4970,9 +5088,7 @@ struct Compiler
                         bool takesSelf = method.function->args.size > 0 && method.function->args.data[0]->name == "self";
                         if (decl->isTrait && takesSelf)
                             flags |= LBC_CLASSMEMBER_TAKESSELF;
-                        if (method.scopeLocation)
-                            flags |= LBC_CLASSMEMBER_SCOPED;
-                        shape.methodFlags.emplace_back(flags);
+                        addStaticSlot(methodNameCid, flags);
 
                         bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, 0, temp);
                         bytecode.emitAux(methodNameCid);
@@ -5012,7 +5128,7 @@ struct Compiler
 
                 // the parameter gives its field a value (LBC_CLASSMEMBER_HASDEFAULT), through the synthesized
                 // `__init` rather than a default in the class shape
-                uint8_t flags = LBC_CLASSMEMBER_HASDEFAULT;
+                uint16_t flags = LBC_CLASSMEMBER_HASDEFAULT;
                 if (qualifiers.visibility == AstClassMemberVisibility::Private)
                     flags |= LBC_CLASSMEMBER_PRIVATE;
                 if (qualifiers.isConst)
@@ -5033,7 +5149,7 @@ struct Compiler
             int initNameCid = bytecode.addConstantString(sref(initName));
             checkConstant(initNameCid, decl->location);
             shape.methodNames.emplace_back(initNameCid);
-            uint8_t initFlags = LBC_CLASSMEMBER_PRIMARYINIT;
+            uint16_t initFlags = LBC_CLASSMEMBER_PRIMARYINIT;
             if (decl->primaryConstructor->visibility == AstClassMemberVisibility::Private)
                 initFlags |= LBC_CLASSMEMBER_PRIVATE;
             shape.methodFlags.emplace_back(initFlags);
@@ -5155,6 +5271,9 @@ struct Compiler
             bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_IMPLEMENTS, traitRegs);
             bytecode.emitAux(uint32_t(count));
         }
+
+        shape.methodNames.insert(shape.methodNames.end(), staticOnlyNames.begin(), staticOnlyNames.end());
+        shape.methodFlags.insert(shape.methodFlags.end(), staticOnlyFlags.begin(), staticOnlyFlags.end());
 
         // Finally, we create the class constant and patch the AUX slot
         // from before.
@@ -9558,9 +9677,10 @@ struct Compiler
                         argDefault->visit(this);
             }
 
+            // a field on the class value gets its value in the enclosing function, not in the class's code
             for (const AstClassMember& member : node->members)
             {
-                if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->defaultValue)
+                if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->defaultValue && isObjectField(*prop))
                     prop->defaultValue->visit(this);
                 else if (const AstClassMethod* method = member.get_if<AstClassMethod>())
                     method->function->visit(this);
@@ -9806,7 +9926,7 @@ struct Compiler
             {
                 const AstClassProperty* prop = member.get_if<AstClassProperty>();
 
-                if (!prop)
+                if (!prop || !isObjectField(*prop))
                     continue;
 
                 AstLocal* param = findPrimaryConstructorParam(primaryConstructor, prop->name);
@@ -9968,7 +10088,7 @@ struct Compiler
 
             for (const AstClassMember& member : node->members)
             {
-                if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+                if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && isObjectField(*prop))
                 {
                     AstLocal* param = params ? findPrimaryConstructorParam(params, prop->name) : nullptr;
 
@@ -10154,6 +10274,10 @@ struct Compiler
                         {
                             if (prop.visibility == AstClassMemberVisibility::Private)
                                 classesWithPrivateMembers.insert(node);
+
+                            // Luwu Traits (rfcs/classes/traits.md): a field on the class value isn't part of an object
+                            if (!isObjectField(prop))
+                                return;
 
                             if (prop.defaultValue)
                             {

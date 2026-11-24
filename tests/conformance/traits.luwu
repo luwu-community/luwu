@@ -1086,20 +1086,20 @@ do
     assert(next(leaked) == nil, `leaked {next(leaked)}`)
 end
 
--- scoped functions (`function Self.name`) and qualified implementations (`function Trait.name`)
+-- scoped functions (`scoped function name`) and qualified implementations (`function Trait.name`)
 trait Encoder
-    public function Self.encode(value): string
+    public scoped function encode(value): string
         return `encoded {value}`
     end
 
-    public function Self.write(self): string
+    public scoped function write(self): string
         return `default {self.label}`
     end
 
-    expect public function Self.tag(self): string
-    expect public function Self.extra?(self)
+    expect public scoped function tag(self): string
+    expect public scoped function extra?(self)
 
-    private function Self.secret(self)
+    private scoped function secret(self)
         return "secret"
     end
 
@@ -1109,7 +1109,7 @@ trait Encoder
 end
 
 trait Printer
-    function Self.write(self): string
+    scoped function write(self): string
         return "printed"
     end
 end
@@ -1179,7 +1179,7 @@ end
 
 -- a class gets a copy of the scoped defaults of the traits it reaches through `needs`
 trait Pretty needs Encoder
-    function Self.tag(self): string
+    scoped function tag(self): string
         return "pretty"
     end
 end
@@ -1313,5 +1313,152 @@ do
     assert(other.kind == Other)
 end
 assert(string.find(select(2, loadstring("trait T(a = Self) end")), "'Self' can't be used in a trait's parameters", 1, true))
+
+-- placement modifiers: `shared` lives on the class and objects read it, `static` lives on the class value alone, and a
+-- trait's `traitonly` members stay on the trait
+class Breed(name: string)
+    shared species = "Felis catus"
+    static count = 0
+    static const MAX = 10
+
+    function make(name: string)
+        Breed.count += 1
+        return Breed(name)
+    end
+
+    shared function kind()
+        return "cat"
+    end
+
+    static function describe(self)
+        return `{self.name} is a {self.species}`
+    end
+
+    function meow(self)
+        return `{self.name} the {self.species}`
+    end
+end
+
+do
+    local taz = Breed.make("taz")
+    assert(taz:meow() == "taz the Felis catus")
+    assert(taz.species == "Felis catus" and Breed.species == "Felis catus")
+    assert(Breed.count == 1 and Breed.MAX == 10)
+    assert(taz.kind() == "cat" and Breed.kind() == "cat")
+    assert(Breed.describe(taz) == "taz is a Felis catus")
+
+    -- writing a shared field through the class changes it for every object
+    Breed.species = "cat"
+    assert(taz.species == "cat" and Breed.make("tom").species == "cat")
+    assert(Breed.count == 2)
+
+    local function raises(f, message)
+        local ok, err = pcall(f)
+        assert(not ok and string.find(err, message, 1, true), err)
+    end
+
+    raises(function() taz.species = "dog" end, "Breed.species is shared between all objects of its class and cannot be mutated through this object; mutate it through class 'Breed' instead")
+    raises(function() return taz.count end, "objects of class 'Breed' do not have a field named 'count'")
+    raises(function() return taz.make end, "objects of class 'Breed' do not have a field named 'make'")
+    raises(function() return taz:describe() end, "objects of class 'Breed' do not have a field named 'describe'")
+    raises(function() taz.count = 3 end, "objects of class 'Breed' do not have a field named 'count'")
+    raises(function() Breed.MAX = 3 end, "'MAX' is a const field of class 'Breed' and can't be assigned")
+    raises(function() Breed.meow = 3 end, "with 'meow'")
+end
+
+trait Enrolled
+    shared sound = "..."
+    static registry = {}
+    traitonly hooks = 0
+    traitonly function count()
+        return Enrolled.hooks
+    end
+    final function __implemented(cls)
+        Enrolled.hooks += 1
+        table.insert(Enrolled.registry, class.name(cls))
+    end
+    function speak(self)
+        return self.sound
+    end
+end
+
+class Hound implements Enrolled
+    shared sound = "woof"
+end
+class Goldfish implements Enrolled end
+
+do
+    assert(Hound():speak() == "woof" and Goldfish():speak() == "...")
+    assert(Hound.sound == "woof" and Goldfish.sound == "...")
+    assert(Enrolled.hooks == 2 and Enrolled.count() == 2)
+    -- each class starts with the trait's value of a static field
+    assert(Hound.registry == Enrolled.registry and #Enrolled.registry == 2)
+    assert(not pcall(function() return Hound.hooks end))
+    assert(not pcall(function() return Hound.count end))
+    assert(not pcall(function() return Hound().registry end))
+
+    -- a shared field belongs to each class: writing one class's leaves the other's alone
+    Hound.sound = "bark"
+    assert(Hound():speak() == "bark" and Goldfish():speak() == "...")
+end
+
+-- a class redeclares an inherited member where the trait put it
+do
+    local function fails(source, message)
+        local f, err = loadstring(source)
+        if f then
+            local ok, runerr = pcall(f)
+            assert(not ok, source)
+            err = runerr
+        end
+        assert(string.find(err, message, 1, true), err)
+    end
+
+    fails("trait T shared x = 1 end class C implements T static x = 2 end", "'x' must be shared for 'C' to implement 'T'")
+    fails("trait T static x = 1 end class C implements T shared x = 2 end", "'x' must be static for 'C' to implement 'T'")
+    fails("trait T x = 1 end class C implements T shared x = 2 end", "'x' must be a field of each object for 'C' to implement 'T'")
+    fails("trait T shared final x = 1 end class C implements T shared x = 2 end", "'x' is final in trait 'T' and can't be overridden")
+    fails("trait T function f(self) end end class C implements T static function f(self) end end", "'f' must be shared for 'C' to implement 'T'")
+    fails("trait T expect shared x: number end class C implements T static x = 2 end", "'x' must be shared for 'C' to implement 'T'")
+    fails(
+        "trait T expect trait to override function f(self) end class C implements T function f(self) end end",
+        "class 'C' can't provide 'f': trait 'T' expects a trait that needs it to provide it"
+    )
+    fails(
+        "trait T expect class to override function f(self) end trait U needs T function f(self) end end class C implements U end",
+        "trait 'U' can't provide 'f': trait 'T' expects an implementing class to provide it"
+    )
+
+    -- a bare `expect` takes any provider, and a matching redeclaration is fine
+    local f = assert(loadstring([[
+        trait T expect function f(self) end
+        trait U needs T function f(self) return 1 end end
+        class C implements U end
+        trait S shared x = 1 end
+        class D implements S shared x = 2 end
+        return C():f() + D.x
+    ]]))
+    assert(f() == 3)
+end
+
+-- a trait's scoped function is read qualified, and a class implements it qualified
+trait Jsonable
+    scoped function encode(self)
+        return "json"
+    end
+    expect scoped function tag(self): string
+end
+
+class Report implements Jsonable
+    function Jsonable.tag(self): string
+        return "doc"
+    end
+end
+
+do
+    local d = Report()
+    assert(d:Jsonable:encode() == "json" and d:Jsonable:tag() == "doc")
+    assert(not pcall(function() return d.encode end))
+end
 
 return 'OK'
