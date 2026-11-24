@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "lbigint.h"
-#include "Luau/StringUtils.h"
+#include "Luau/IntegerParsing.h"
 
 constexpr uint64_t kInt64MinAbs = 0x8000000000000000ull;
 constexpr uint32_t kHashNegativeFlag = 0x80000000;

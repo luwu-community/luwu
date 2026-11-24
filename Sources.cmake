@@ -10,6 +10,7 @@ target_sources(Luwu.Common PRIVATE
     Common/include/Luau/InsertionOrderedMap.h
     Common/include/Luau/SmallVector.h
     Common/include/Luau/StringUtils.h
+    Common/include/Luau/IntegerParsing.h
     Common/include/Luau/TimeTrace.h
     Common/include/Luau/Variant.h
     Common/include/Luau/VecDeque.h

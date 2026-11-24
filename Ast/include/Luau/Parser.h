@@ -656,6 +656,10 @@ private:
     std::vector<CstAttrList*> scratchCstAttrList;
     std::string scratchData;
 
+    // Luwu Integers (rfcs/integers.md): where a unary minus right before a number literal starts. `-128i8` fits in an
+    // i8, and `-5u8` is an error that points at the minus too.
+    std::optional<Position> negatedNumberStart;
+
     CstNodeMap cstNodeMap;
 };
 

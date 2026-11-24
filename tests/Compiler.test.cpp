@@ -13019,10 +13019,10 @@ TEST_CASE("IntegerType")
     if (!FFlag::LuauIntegerType2)
         return;
 
-    // i suffix
+    // int suffix
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 123i
+local a = 123int
 return a
 )"),
         R"(
@@ -13034,7 +13034,7 @@ RETURN R0 1
     // separators
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 1_000_000i
+local a = 1_000_000int
 return a
 )"),
         R"(
@@ -13046,7 +13046,7 @@ RETURN R0 1
     // hex
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 0xABABi
+local a = 0xABABint
 return a
 )"),
         R"(
@@ -13058,7 +13058,7 @@ RETURN R0 1
     // binary
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 0b100101i
+local a = 0b100101int
 return a
 )"),
         R"(
@@ -13069,8 +13069,8 @@ RETURN R0 1
 
     // Has to be exactly representable; overflow is a parse error
 
-    std::string source1 = "local a = 9999999999999999999999999i";
-    std::string source2 = "local a = 2.37i";
+    std::string source1 = "local a = 9999999999999999999999999u64";
+    std::string source2 = "local a = 2.37int";
 
     std::string bc1 = Luau::compile(source1);
     std::string bc2 = Luau::compile(source2);
@@ -13086,7 +13086,7 @@ TEST_CASE("IntegerBcb")
 
     const char* source = R"(
 function foo()
-local a = 123i
+local a = 123int
 return a
 end)";
 

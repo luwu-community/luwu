@@ -7129,7 +7129,7 @@ TEST_CASE_FIXTURE(LoweringFixture, "FuzzTest26")
             R"(
 local function foo(...)
     local _ = ...
-    buffer.readu32(_,_,_,nil,integer.max(0i,_,_,_,_,_,_,_,_,_,_,_,_,_,nil,- _,_,_),_)
+    buffer.readu32(_,_,_,nil,integer.max(0i64,_,_,_,_,_,_,_,_,_,_,_,_,_,nil,- _,_,_),_)
 end
 )"
         )
@@ -8360,41 +8360,41 @@ TEST_CASE_FIXTURE(LoweringFixture, "NumberFastcallWrongConst")
         getCodegenAssembly(R"(
 local function f(...)
     -- 2-arg math
-    math.pow(..., 5i)
-    math.fmod(..., 5i)
-    math.atan2(..., 5i)
-    math.ldexp(..., 5i)
-    math.min(..., 5i)
-    math.max(..., 5i)
+    math.pow(..., 5i64)
+    math.fmod(..., 5i64)
+    math.atan2(..., 5i64)
+    math.ldexp(..., 5i64)
+    math.min(..., 5i64)
+    math.max(..., 5i64)
 
     -- bit32 multiarg
-    bit32.band(..., 5i)
-    bit32.bor(..., 5i)
-    bit32.bxor(..., 5i)
-    bit32.btest(..., 5i)
+    bit32.band(..., 5i64)
+    bit32.bor(..., 5i64)
+    bit32.bxor(..., 5i64)
+    bit32.btest(..., 5i64)
 
     -- bit32 shift/rotate
-    bit32.lshift(..., 5i)
-    bit32.rshift(..., 5i)
-    bit32.arshift(..., 5i)
-    bit32.lrotate(..., 5i)
-    bit32.rrotate(..., 5i)
+    bit32.lshift(..., 5i64)
+    bit32.rshift(..., 5i64)
+    bit32.arshift(..., 5i64)
+    bit32.lrotate(..., 5i64)
+    bit32.rrotate(..., 5i64)
 
     -- bit32 extract (2-arg)
-    bit32.extract(..., 5i)
+    bit32.extract(..., 5i64)
 
     -- vector constructor (2-arg)
-    vector.create(..., 5i)
+    vector.create(..., 5i64)
 
     -- buffer reads (offset is checked as double)
-    buffer.readi8(..., 5i)
-    buffer.readu8(..., 5i)
-    buffer.readi16(..., 5i)
-    buffer.readu16(..., 5i)
-    buffer.readi32(..., 5i)
-    buffer.readu32(..., 5i)
-    buffer.readf32(..., 5i)
-    buffer.readf64(..., 5i)
+    buffer.readi8(..., 5i64)
+    buffer.readu8(..., 5i64)
+    buffer.readi16(..., 5i64)
+    buffer.readu16(..., 5i64)
+    buffer.readi32(..., 5i64)
+    buffer.readu32(..., 5i64)
+    buffer.readf32(..., 5i64)
+    buffer.readf64(..., 5i64)
 end
 )")
             .size() > 0

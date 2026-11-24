@@ -1537,35 +1537,6 @@ static BuiltinImplResult translateBuiltinVectorMinMax(
     return {BuiltinImplType::Full, 1};
 }
 
-static BuiltinImplResult translateBuiltinInt64Create(
-    IrBuilder& build,
-    int nparams,
-    int ra,
-    int arg, // arg contains the LUA_TNUMBER representing the int64 to create
-    int nresults,
-    int pcpos
-)
-{
-    if (nparams < 1 || nresults > 1)
-        return {BuiltinImplType::None, -1};
-
-    IrOp argReg = build.vmReg(arg);
-    builtinCheckDouble(build, argReg, pcpos);
-
-    IrOp argValue = builtinLoadDouble(build, build.vmReg(arg));
-
-    IrOp integerValue = build.inst(IrCmd::NUM_TO_INT64, argValue);
-    // roundtrip check: ((double)l) == x
-    IrOp backToDouble = build.inst(IrCmd::INT64_TO_NUM, integerValue);
-
-    build.inst(IrCmd::CHECK_CMP_NUM, backToDouble, argValue, build.cond(IrCondition::Equal), build.vmExit(pcpos));
-
-    build.inst(IrCmd::STORE_INT64, build.vmReg(ra), integerValue);
-    build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
-
-    return {BuiltinImplType::Full, 1};
-}
-
 enum class Int64Binary
 {
     Add,
@@ -1765,10 +1736,6 @@ BuiltinImplResult translateBuiltin(
         return translateBuiltinBufferIsFrozen(build, nparams, ra, arg, args, nresults, pcpos);
     case LBF_CLASS_ISINSTANCE:
         return translateBuiltinClassIsinstance(build, nparams, ra, arg, args, nresults, pcpos);
-    case LBF_BUFFER_WRITEINTEGER:
-        if (FFlag::LuauCodegenBufferInteger)
-            return translateBuiltinBufferWrite(build, nparams, ra, arg, args, arg3, nresults, pcpos, IrCmd::BUFFER_WRITEI64, 8, IrCmd::NOP, true);
-        return {BuiltinImplType::None, -1};
     case LBF_VECTOR_MAGNITUDE:
         return translateBuiltinVectorMagnitude(build, nparams, ra, arg, args, arg3, nresults, pcpos);
     case LBF_VECTOR_NORMALIZE:

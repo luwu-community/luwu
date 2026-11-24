@@ -2184,7 +2184,7 @@ void BytecodeBuilder::dumpConstant(std::string& result, int k, bool detailed) co
     case Constant::Type_IntegerHeap:
     {
         const StringRef& str = debugStrings[data.valueString - 1];
-        formatAppend(result, "%.*si", int(str.length), str.data);
+        formatAppend(result, "%.*sint", int(str.length), str.data);
         break;
     }
     case Constant::Type_Vectorf:
