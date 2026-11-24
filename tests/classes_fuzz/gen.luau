@@ -156,7 +156,7 @@ type Trait = {
     -- has a `__implemented` hook, which logs `<trait>:<class>` in `shared.hooks` for each class implementing it
     hooked: boolean,
     -- has a `shared` field `t<i>_sh`, a `static` field `t<i>_st` next to an object field of the same name, a `traitonly`
-    -- field `t<i>_to` and a `scoped` field `t<i>_sc`, with values from `i`
+    -- field `t<i>_to`, and `scoped` fields `t<i>_sc` and `t<i>_sb` (a table each object computes), with values from `i`
     placed: boolean,
     implementors: { Cls },
 }
@@ -1295,6 +1295,7 @@ local function generate(seed: number): (string, string)
             table.insert(out, `    public traitonly t{t.index}_to = {t.index}`)
             table.insert(out, `    public scoped t{t.index}_sc = {t.index * 100}`)
             table.insert(out, `    public scoped shared t{t.index}_ss = {t.index * 1000}`)
+            table.insert(out, `    public scoped t{t.index}_sb = \{ {t.index} }`)
             table.insert(out, `    public function t{t.index}_cm(Self) return class.name(Self) end`)
         end
         for _, fn in t.fns do
@@ -1382,6 +1383,8 @@ local function generate(seed: number): (string, string)
                     `o:[{T}].t{i}_sc = 7`,
                     `o:[{T}].t{i}_sc += 1`,
                     `check(o:[{T}].t{i}_sc == 8 and other:[{T}].t{i}_sc == {i * 100}, "{t.name}'s scoped field written on one object of {c.name}")`,
+                    -- a default that isn't a constant is computed for each object
+                    `check(o:[{T}].t{i}_sb[1] == {i} and not rawequal(o:[{T}].t{i}_sb, other:[{T}].t{i}_sb), "{t.name}'s computed scoped field shared by objects of {c.name}")`,
                     `check(not pcall(function() return {C}:[{T}].t{i}_sc end), "{t.name}'s per-object scoped field read through {c.name}")`,
                     `check(not pcall(function() o:[{T}].t{i}_ss = 0 end), "{t.name}'s scoped shared field written through an object of {c.name}")`,
                     `{C}:[{T}].t{i}_ss += 1`,
