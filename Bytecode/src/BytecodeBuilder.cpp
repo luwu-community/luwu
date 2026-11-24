@@ -1988,7 +1988,8 @@ void BytecodeBuilder::validateInstructions() const
             {
                 VREGRANGE(LUAU_INSN_C(insn), int(insns[i + 1]) * 2);
             }
-            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED ||
+                     LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
             {
                 VREGRANGE(LUAU_INSN_C(insn), 2);
                 VCONST(insns[i + 1], String);
@@ -2857,9 +2858,14 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         {
             formatAppend(result, "NEWCLASSMEMBER R%d IMPLEMENTS R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_C(insn), int(*code));
         }
-        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED ||
+                 LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
         {
-            const char* form = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY ? "TRAITCOPY" : "QUALIFIED";
+            const char* form = "QUALIFIED";
+            if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+                form = "TRAITCOPY";
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
+                form = "QUALIFIEDFIELD";
             formatAppend(result, "NEWCLASSMEMBER R%d %s R%d R%d [", LUAU_INSN_A(insn), form, LUAU_INSN_C(insn), LUAU_INSN_C(insn) + 1);
             dumpConstant(result, *code, false);
             result.append("]\n");

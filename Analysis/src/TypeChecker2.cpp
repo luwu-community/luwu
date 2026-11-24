@@ -1761,7 +1761,7 @@ static std::optional<Location> classMemberLocation(AstStatClass* stat, const Nam
 {
     for (const AstClassMember& member : stat->members)
     {
-        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && name == prop->name.value)
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && name == prop->name.value && !prop->qualifiedTrait)
             return prop->nameLocation;
         if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && name == method->functionName.value && !method->qualifiedTrait)
             return method->nameLocation;
@@ -1967,6 +1967,15 @@ std::optional<TypeId> TypeChecker2::selfFieldFor(const ExternType* traitType, Ty
     return replacer.substitute(fieldTemplate->second);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): the member `name` of the value of the class or trait whose object type is
+// `objectType`, where its statics are
+static const Property* classValueMember(const ExternType* objectType, const Name& name)
+{
+    const Klass* klass = objectType->relation ? get_if<Klass>(&*objectType->relation) : nullptr;
+    const ExternType* classValue = klass ? get<ExternType>(follow(klass->ty)) : nullptr;
+    return classValue ? findNominalMember(classValue, name) : nullptr;
+}
+
 void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
 {
     NotNull<Scope> scope{findInnermostScope(stat->location)};
@@ -2038,18 +2047,26 @@ void TypeChecker2::checkTraitFieldExpectations(AstStatClass* stat)
 
         for (const auto& [name, optional] : traitType->traitInfo->expectations)
         {
-            // an expected constructor is checked by checkTraitConstructorExpectation
-            if (name != "__init" && !findNominalMember(classType, name))
-                addMissingTraitMember(missing, stat, traitType, name, traitFields->fieldNames.count(name) > 0);
-
+            // A static member is on the class value only: objects don't read it
             const Property* expected = findNominalMember(traitType, name);
-            const Property* found = findNominalMember(classType, name);
+            bool isStatic = !expected && name != "__init";
+            if (isStatic)
+                expected = classValueMember(traitType, name);
+            const Property* found = isStatic ? classValueMember(classType, name) : findNominalMember(classType, name);
+            // a static field's type is the only thing that tells it from a static function
+            bool isStaticField = isStatic && expected && expected->readTy && !get<FunctionType>(follow(*expected->readTy));
+            bool isField = traitFields->fieldNames.count(name) > 0 || isStaticField;
+
+            // an expected constructor is checked by checkTraitConstructorExpectation
+            if (name != "__init" && !found)
+                addMissingTraitMember(missing, stat, traitType, name, isField);
+
             if (name == "__init" || !expected || !found || !expected->readTy || !found->readTy)
                 continue;
 
             Location location = classMemberLocation(stat, name).value_or(traitRefLocation(scope, stat, traitType));
 
-            if (traitFields->fieldNames.count(name))
+            if (isField)
             {
                 testIsSubtype(*found->readTy, *expected->readTy, location);
                 continue;
@@ -2446,7 +2463,7 @@ void TypeChecker2::checkTraitOverrides(AstStatClass* stat)
     std::vector<Declared> declared;
     for (const AstClassMember& member : stat->members)
     {
-        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && !prop->expectLocation)
+        if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && !prop->expectLocation && !prop->qualifiedTrait)
             declared.push_back({prop->name.value, prop->nameLocation, /* isField */ true});
         else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && !method->expectLocation && !method->qualifiedTrait)
             declared.push_back({method->functionName.value, method->nameLocation, /* isField */ false});
@@ -2565,8 +2582,12 @@ void TypeChecker2::addMissingTraitMember(
         group = missing.end() - 1;
     }
 
-    // the member as the trait declares it: `name: type` for a field, a signature for a function
+    // the member as the trait declares it: `name: type` for a field, a signature for a function, on the trait's value for
+    // a static one
     const Property* expected = findNominalMember(traitType, name);
+    bool isStatic = !expected && classValueMember(traitType, name);
+    if (isStatic)
+        expected = classValueMember(traitType, name);
     std::optional<TypeId> expectedTy = expected ? expected->readTy : std::nullopt;
     const FunctionType* expectedFn = expectedTy ? get<FunctionType>(follow(*expectedTy)) : nullptr;
 
@@ -2579,6 +2600,8 @@ void TypeChecker2::addMissingTraitMember(
     // written as the class has to write it
     if (expected && isField && expected->isConst)
         member = "const " + member;
+    if (isStatic)
+        member = "static " + member;
     if (expected && traitType->traitInfo->hasAccessSpecifiers)
         member = (expected->isPrivate ? "private " : "public ") + member;
 
@@ -2605,6 +2628,23 @@ void TypeChecker2::reportMissingTraitMembers(const ExternType* classType, const 
         message += "\n  • " + member;
 
     reportError(GenericError{message}, group.location);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the type of the function or field `name` scoped to the trait whose value has type
+// `traitValue` (`scoped function name`, `scoped name = value`)
+static std::optional<TypeId> scopedMemberOf(TypeId traitValue, const std::string& name)
+{
+    const ExternType* value = get<ExternType>(follow(traitValue));
+    const Obj* object = value && value->relation ? get_if<Obj>(&*value->relation) : nullptr;
+    const ExternType* trait = object ? get<ExternType>(follow(object->ty)) : nullptr;
+    if (!trait || !trait->traitInfo)
+        return std::nullopt;
+
+    auto scoped = trait->traitInfo->scopedMembers.find(name);
+    if (scoped == trait->traitInfo->scopedMembers.end())
+        return std::nullopt;
+
+    return scoped->second;
 }
 
 void TypeChecker2::visit(AstStatClass* stat)
@@ -2695,12 +2735,13 @@ void TypeChecker2::visit(AstStatClass* stat)
 
     for (const AstClassMember& member : stat->members)
     {
-        if (const AstClassProperty* prop = member.get_if<AstClassProperty>())
+        const AstClassProperty* prop = member.get_if<AstClassProperty>();
+        if (prop && !prop->qualifiedTrait)
         {
             ++fieldCount;
             hasPublicField |= prop->visibility == AstClassMemberVisibility::Public;
         }
-        else
+        else if (!prop)
             hasFunction = true;
     }
 
@@ -2716,7 +2757,7 @@ void TypeChecker2::visit(AstStatClass* stat)
             for (const AstClassMember& member : stat->members)
             {
                 const AstClassProperty* prop = member.get_if<AstClassProperty>();
-                if (prop && prop->name == paramName)
+                if (prop && prop->name == paramName && prop->placement == AstClassMemberPlacement::Default)
                     restated = true;
             }
 
@@ -2892,6 +2933,14 @@ void TypeChecker2::visit(AstStatClass* stat)
             // value itself (see ConstraintGenerator), so there's nothing to compare against here.
             if (prop->ty && prop->defaultValue)
                 testIsSubtype(lookupType(prop->defaultValue), lookupAnnotation(prop->ty), prop->defaultValue->location);
+
+            // Luwu Traits (rfcs/classes/traits.md): `Animal.species = value` gives the trait's scoped field a value of its type
+            std::optional<TypeId> scopedType =
+                prop->qualifiedTrait ? scopedMemberOf(lookupType(prop->qualifiedTrait), prop->name.value) : std::nullopt;
+            if (scopedType && prop->ty)
+                testIsSubtype(lookupAnnotation(prop->ty), *scopedType, prop->ty->location);
+            else if (scopedType && prop->defaultValue)
+                testIsSubtype(lookupType(prop->defaultValue), *scopedType, prop->defaultValue->location);
         }
         else if (const auto* method = member.get_if<AstClassMethod>())
         {
@@ -4359,23 +4408,6 @@ void TypeChecker2::visitExprName(
     checkConstPropertyAssignment(leftType, expr, propName, context, location);
 }
 
-// Luwu Traits (rfcs/classes/traits.md): the type of the function `name` scoped to the trait whose value has type
-// `traitValue` (`scoped function name`)
-static std::optional<TypeId> scopedFunctionOf(TypeId traitValue, const std::string& name)
-{
-    const ExternType* value = get<ExternType>(follow(traitValue));
-    const Obj* object = value && value->relation ? get_if<Obj>(&*value->relation) : nullptr;
-    const ExternType* trait = object ? get<ExternType>(follow(object->ty)) : nullptr;
-    if (!trait || !trait->traitInfo)
-        return std::nullopt;
-
-    auto scoped = trait->traitInfo->scopedFunctions.find(name);
-    if (scoped == trait->traitInfo->scopedFunctions.end())
-        return std::nullopt;
-
-    return scoped->second;
-}
-
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
 {
     // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name` reads `Trait.name`, or the trait's scoped function `name`, which
@@ -4384,7 +4416,7 @@ void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
     {
         visit(indexName->expr, ValueContext::RValue);
 
-        if (scopedFunctionOf(lookupType(indexName->qualifiedTrait), indexName->index.value))
+        if (scopedMemberOf(lookupType(indexName->qualifiedTrait), indexName->index.value))
             visit(indexName->qualifiedTrait, ValueContext::RValue);
         else
             visitExprName(indexName->qualifiedTrait, indexName->location, indexName->index.value, context, builtinTypes->stringType, '.');

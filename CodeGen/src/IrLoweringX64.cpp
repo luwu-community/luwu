@@ -85,9 +85,9 @@ static void emitClassMemberAuthX64(
     ScopedRegX64 flag{regs, SizeX64::qword};
     ScopedRegX64 owner{regs, SizeX64::qword};
 
-    // flag = classReg->memberflags[slot]
+    // flag = the low byte of classReg->memberflags[slot], whose entries are 16 bits
     build.mov(owner.reg, qword[classReg + offsetof(LuauClass, memberflags)]);
-    build.movzx(dwordReg(flag.reg), byte[owner.reg + slotReg]);
+    build.movzx(dwordReg(flag.reg), byte[owner.reg + slotReg * 2]);
 
     build.test(byteReg(flag.reg), restrictBits);
     build.jcc(ConditionX64::Zero, authorized); // unrestricted member: no check needed
@@ -2852,9 +2852,10 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cmp(byte[classReg + offsetof(LuauClass, hascustominit)], 0);
         build.jcc(ConditionX64::Equal, constructible);
 
+        // the low byte of memberflags[initoffset], whose entries are 16 bits
         build.mov(flags.reg, qword[classReg + offsetof(LuauClass, memberflags)]);
         build.mov(dwordReg(offset.reg), dword[classReg + offsetof(LuauClass, initoffset)]);
-        build.test(byte[flags.reg + offset.reg], int8_t(LBC_CLASSMEMBER_PRIVATE));
+        build.test(byte[flags.reg + offset.reg * 2], int8_t(LBC_CLASSMEMBER_PRIVATE));
         build.jcc(ConditionX64::Zero, constructible);
 
         // private: only from one of the class's own methods (or a closure nested in one)

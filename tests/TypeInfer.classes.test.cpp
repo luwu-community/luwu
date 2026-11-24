@@ -6028,6 +6028,116 @@ TEST_CASE_FIXTURE(ClassesFixture, "trait_member_placements_reach_implementing_cl
     CHECK_EQ(result.errors[2].location.begin.line, 21);
 }
 
+// Luwu Traits (rfcs/classes/traits.md): a static member and an object field may share a name: the class value reads the
+// static and objects the field, `__ok` included
+TEST_CASE_FIXTURE(ClassesFixture, "static_members_and_object_fields_share_names")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        class Counter
+            public static count = "total"
+            public count = 5
+            private static __ok = false
+            public __ok = true
+
+            public function bump(self): number
+                self.count += 1
+                return self.count
+            end
+        end
+
+        trait Tally
+            static tally = "all"
+        end
+
+        class Box implements Tally
+            tally = 1
+        end
+
+        local c = Counter()
+        local a = Counter.count
+        local b = c.count
+        local d = c.__ok
+        local e = Box.tally
+        local f = Box().tally
+        Counter.count = "more"
+        c.count = 6
+        local g = Counter.__ok
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ("string", toString(requireType("a")));
+    CHECK_EQ("number", toString(requireType("b")));
+    CHECK_EQ("boolean", toString(requireType("d")));
+    CHECK_EQ("string", toString(requireType("e")));
+    CHECK_EQ("number", toString(requireType("f")));
+    // the static `__ok` is private
+    CHECK_EQ(result.errors[0].location.begin.line, 29);
+
+    const char* typed = "class Counter\n"
+                        "    static count = \"total\"\n"
+                        "    count = 5\n"
+                        "    __ok = true\n"
+                        "end";
+    checkTypewriting(*this, "local a = 1\n", typed, kTraitTypewriterAfter);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait's scoped fields are read through the trait, and a class gives one its value
+// qualified with the trait's name
+TEST_CASE_FIXTURE(ClassesFixture, "scoped_fields_are_read_through_their_trait")
+{
+    ScopedFastFlag _{FFlag::LuwuTraits, true};
+
+    CheckResult result = check(R"(
+        trait Animal
+            expect scoped species: string
+            scoped legs = 4
+        end
+
+        trait Plant
+            scoped species = 0
+        end
+
+        class Cat implements Animal, Plant
+            Animal.species = "Felis Catus"
+        end
+
+        class Bird implements Animal
+            Animal.species = 5
+            Animal.wings = 2
+        end
+
+        class Fish implements Animal
+        end
+
+        local cat = Cat()
+        local a = cat:Animal.species
+        local b = Cat:Plant.species
+        local c = cat:Animal.legs
+        local d = cat.species
+    )");
+
+    CHECK_EQ("string", toString(requireType("a")));
+    CHECK_EQ("number", toString(requireType("b")));
+    CHECK_EQ("number", toString(requireType("c")));
+
+    // Bird's value has the wrong type and sets no scoped field, Fish gives `species` none, and objects don't read it
+    LUAU_REQUIRE_ERROR_COUNT(4, result);
+    std::set<unsigned> lines;
+    for (const TypeError& error : result.errors)
+        lines.insert(error.location.begin.line);
+    CHECK_EQ(lines, std::set<unsigned>{15, 16, 19, 26});
+
+    const char* typed = "trait Animal\n"
+                        "    expect scoped species: string\n"
+                        "end\n"
+                        "class Cat implements Animal\n"
+                        "    Animal.species = \"Felis Catus\"\n"
+                        "end";
+    checkTypewriting(*this, "local a = 1\n", typed, kTraitTypewriterAfter);
+}
+
 // Luwu Traits (rfcs/classes/traits.md): `expect class to override` and `expect trait to override` say who provides a member
 TEST_CASE_FIXTURE(ClassesFixture, "trait_expectation_targets_are_checked")
 {
