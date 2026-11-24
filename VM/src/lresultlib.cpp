@@ -301,19 +301,29 @@ static void setnonemetatable(lua_State* L)
 }
 
 
-// Builds a class, records it as builtin `kind` and makes it the global `name`
+// Builds a class, records it as builtin `kind` and makes it the global `name`. `typeofname` is what `typeof` gives its
+// objects.
 template<size_t N>
-static void addclass(lua_State* L, LuwuBuiltinClass kind, const char* name, const luaR_NativeMember (&members)[N], lua_CFunction init)
+static void addclass(
+    lua_State* L,
+    LuwuBuiltinClass kind,
+    const char* name,
+    const char* typeofname,
+    const luaR_NativeMember (&members)[N],
+    lua_CFunction init
+)
 {
-    L->global->builtinclasses[kind] = luaR_newnativeclass(L, name, members, int(N), init);
+    LuauClass* classdef = luaR_newnativeclass(L, name, members, int(N), init);
+    classdef->typeofname = luaS_new(L, typeofname);
+    L->global->builtinclasses[kind] = classdef;
     lua_setglobal(L, name);
 }
 
 int luaopen_result(lua_State* L)
 {
-    addclass(L, LUWU_BUILTIN_SOME, "Some", kSomeMembers, payloadinit);
-    addclass(L, LUWU_BUILTIN_OK, "Ok", kOkMembers, payloadinit);
-    addclass(L, LUWU_BUILTIN_ERR, "Err", kErrMembers, luaR_fieldsinit);
+    addclass(L, LUWU_BUILTIN_SOME, "Some", "some", kSomeMembers, payloadinit);
+    addclass(L, LUWU_BUILTIN_OK, "Ok", "ok", kOkMembers, payloadinit);
+    addclass(L, LUWU_BUILTIN_ERR, "Err", "err", kErrMembers, luaR_fieldsinit);
 
     lua_pushsymnone(L);
     lua_setglobal(L, "None");

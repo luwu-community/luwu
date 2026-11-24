@@ -686,6 +686,13 @@ static const std::pair<const char*, const char*> kCollectionsTypeofNames[] = {
     {"vecdeque", "VecDeque"},
 };
 
+// Luwu builtin classes: what `typeof` gives an object of each global result class (luaopen_result)
+static const std::pair<const char*, const char*> kResultTypeofNames[] = {
+    {"some", "Some"},
+    {"ok", "Ok"},
+    {"err", "Err"},
+};
+
 bool isBuiltinClassTypeofName(const std::string& name)
 {
     if (name == "bundle")
@@ -695,10 +702,15 @@ bool isBuiltinClassTypeofName(const std::string& name)
         if (name == typeofName)
             return collectionsLibraryEnabled();
     }
+    for (const auto& [typeofName, className] : kResultTypeofNames)
+    {
+        if (name == typeofName)
+            return resultLibraryEnabled();
+    }
     return false;
 }
 
-// Luwu builtin classes: the class type of the `collections` class whose objects `typeof` names `name`
+// Luwu builtin classes: the class type of the `collections` or result class whose objects `typeof` names `name`
 static std::optional<TypeId> collectionsTypeofType(const Scope* globalScope, const std::string& name)
 {
     for (const auto& [typeofName, className] : kCollectionsTypeofNames)
@@ -706,6 +718,13 @@ static std::optional<TypeId> collectionsTypeofType(const Scope* globalScope, con
         if (name != typeofName)
             continue;
         if (std::optional<TypeFun> declared = globalScope->lookupImportedType("collections", className))
+            return follow(declared->type);
+    }
+    for (const auto& [typeofName, className] : kResultTypeofNames)
+    {
+        if (name != typeofName)
+            continue;
+        if (std::optional<TypeFun> declared = globalScope->lookupType(className))
             return follow(declared->type);
     }
     return std::nullopt;

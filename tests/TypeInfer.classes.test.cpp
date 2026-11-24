@@ -6829,6 +6829,33 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
 }
 
 // Luwu try expressions: `try` gives a Result, which isn't declared without `none`
+// Luwu builtin classes: `typeof` names options and results "some", "ok" and "err", and comparing with those narrows
+TEST_CASE_FIXTURE(BuiltinsFixture, "typeof_of_options_and_results")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function isok(r: Result<number, string>): boolean
+            return typeof(r) == "ok"
+        end
+        local function narrowed(r: unknown)
+            if typeof(r) == "err" then
+                local wrong: string = r
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    REQUIRE(get<TypeMismatch>(result.errors[0]));
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "try_needs_the_result_types")
 {
     ScopedFastFlag sffs[] = {
