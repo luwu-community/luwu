@@ -2,7 +2,7 @@
 
 Status: Proposed
 
-FFlag: LuauIntegerType2, LuauIntegerLibrary (to be replaced by a Luwu flag)
+FFlag: DebugLuwuIntegers
 
 ## Summary
 
