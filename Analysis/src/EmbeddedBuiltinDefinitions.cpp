@@ -329,83 +329,83 @@ declare vector: {
 )BUILTIN_SRC";
 
 // Luwu Integers (rfcs/integers.md): the `integer` library (lintegerlib.cpp), a definition file of its own (see
-// registerBuiltinGlobals) whose types are `integer.Mode` and the modes' names. The modes don't have types of their own
-// yet, so `integer.u8` is any integer.
+// registerBuiltinGlobals) whose types are `integer.Mode` and each mode's type, `integer.u8` for `integer<"u8">`. `Mode`'s
+// parameter is the mode's name. Bare `integer.Mode` is any mode, since its parameter is covariant (isIntegerModeClass).
 static const char* const kBuiltinDefinitionIntegerSrc = R"BUILTIN_SRC(
-class type Mode
-    public const min: integer?
-    public const max: integer?
-    public function __call(self, from: unknown): integer
+class type Mode<T = "int" | "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64">
+    public const min: integer<T>?
+    public const max: integer<T>?
+    public function __call(self, from: unknown): integer<T>
     public function __tostring(self): string
 end
 
-export type dynamic = integer
-export type i8 = integer
-export type u8 = integer
-export type i16 = integer
-export type u16 = integer
-export type i32 = integer
-export type u32 = integer
-export type i64 = integer
-export type u64 = integer
+export type dynamic = integer<"int">
+export type i8 = integer<"i8">
+export type u8 = integer<"u8">
+export type i16 = integer<"i16">
+export type u16 = integer<"u16">
+export type i32 = integer<"i32">
+export type u32 = integer<"u32">
+export type i64 = integer<"i64">
+export type u64 = integer<"u64">
 
 declare integer: {
     Mode: class<Mode>,
-    dynamic: Mode,
-    i8: Mode,
-    u8: Mode,
-    i16: Mode,
-    u16: Mode,
-    i32: Mode,
-    u32: Mode,
-    i64: Mode,
-    u64: Mode,
+    dynamic: Mode<"int">,
+    i8: Mode<"i8">,
+    u8: Mode<"u8">,
+    i16: Mode<"i16">,
+    u16: Mode<"u16">,
+    i32: Mode<"i32">,
+    u32: Mode<"u32">,
+    i64: Mode<"i64">,
+    u64: Mode<"u64">,
     suffixes: unknown,
 
-    cast: @checked (from: unknown, to: Mode?) -> integer,
+    cast: <T>(from: unknown, to: Mode<T>?) -> integer<T>,
     tonumber: @checked (i: integer) -> Result<number, number>,
-    mode: @checked (i: integer) -> Mode,
-    isbig: @checked (i: integer) -> boolean,
+    mode: <T>(i: integer<T>) -> Mode<T>,
+    isbig: @checked (i: int) -> boolean,
 
-    min: @checked (first: integer, ...integer) -> integer,
-    max: @checked (first: integer, ...integer) -> integer,
-    clamp: @checked (i: integer, min: integer, max: integer) -> integer,
-    abs: @checked (i: integer) -> integer,
-    signum: @checked (i: integer) -> integer,
+    min: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
+    max: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
+    clamp: <T>(i: integer<T>, min: integer<T>, max: integer<T>) -> integer<T>,
+    abs: <T>(i: integer<T>) -> integer<T>,
+    signum: <T>(i: integer<T>) -> integer<T>,
 
-    sadd: @checked (a: integer, b: integer) -> integer,
-    ssub: @checked (a: integer, b: integer) -> integer,
-    smul: @checked (a: integer, b: integer) -> integer,
-    cadd: @checked (a: integer, b: integer) -> integer,
-    csub: @checked (a: integer, b: integer) -> integer,
-    cmul: @checked (a: integer, b: integer) -> integer,
-    cdiv: @checked (a: integer, b: integer) -> integer,
+    sadd: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    ssub: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    smul: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    cadd: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    csub: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    cmul: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    cdiv: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
 
-    pow: @checked (i: integer, exp: integer) -> integer,
-    spow: @checked (i: integer, exp: integer) -> integer,
-    cpow: @checked (i: integer, exp: integer) -> integer,
-    sqrt: @checked (i: integer) -> integer,
-    log2: @checked (i: integer) -> integer,
-    log10: @checked (i: integer) -> integer,
+    pow: <T>(i: integer<T>, exp: integer) -> integer<T>,
+    spow: <T>(i: integer<T>, exp: integer) -> integer<T>,
+    cpow: <T>(i: integer<T>, exp: integer) -> integer<T>,
+    sqrt: <T>(i: integer<T>) -> integer<T>,
+    log2: <T>(i: integer<T>) -> integer<T>,
+    log10: <T>(i: integer<T>) -> integer<T>,
 
-    band: @checked (first: integer, ...integer) -> integer,
-    bor: @checked (first: integer, ...integer) -> integer,
-    bxor: @checked (first: integer, ...integer) -> integer,
-    bnot: @checked (i: integer) -> integer,
+    band: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
+    bor: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
+    bxor: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
+    bnot: <T>(i: integer<T>) -> integer<T>,
 
-    lshift: @checked (i: integer, by: integer) -> integer,
-    rshift: @checked (i: integer, by: integer) -> integer,
-    lrotate: @checked (i: integer, by: integer) -> integer,
-    rrotate: @checked (i: integer, by: integer) -> integer,
+    lshift: <T>(i: integer<T>, by: integer) -> integer<T>,
+    rshift: <T>(i: integer<T>, by: integer) -> integer<T>,
+    lrotate: <T>(i: integer<T>, by: integer) -> integer<T>,
+    rrotate: <T>(i: integer<T>, by: integer) -> integer<T>,
 
-    countlz: @checked (i: integer) -> integer,
-    countrz: @checked (i: integer) -> integer,
-    popcount: @checked (i: integer) -> integer,
+    countlz: <T>(i: integer<T>) -> integer<T>,
+    countrz: <T>(i: integer<T>) -> integer<T>,
+    popcount: <T>(i: integer<T>) -> integer<T>,
 
-    extract: @checked (i: integer, field: integer, width: integer?) -> integer,
-    replace: @checked (i: integer, value: integer, field: integer, width: integer?) -> integer,
-    btest: @checked (first: integer, ...integer) -> boolean,
-    bswap: @checked (i: integer) -> integer,
+    extract: <T>(i: integer<T>, field: integer, width: integer?) -> integer<T>,
+    replace: <T>(i: integer<T>, value: integer<T>, field: integer, width: integer?) -> integer<T>,
+    btest: <T>(first: integer<T>, ...integer<T>) -> boolean,
+    bswap: <T>(i: integer<T>) -> integer<T>,
 }
 )BUILTIN_SRC";
 
@@ -838,12 +838,22 @@ declare bundle: {
 
 bool integerLibraryEnabled()
 {
-    return FFlag::LuauIntegerType2 && FFlag::DebugLuwuIntegers && resultLibraryEnabled();
+    return FFlag::LuauIntegerType2 && FFlag::DebugLuwuIntegers && FFlag::LuwuClasses && FFlag::LuwuGenericNominals &&
+           FFlag::LuwuDeclareStatements;
 }
 
 std::string getIntegerDefinitionSource()
 {
-    return kBuiltinDefinitionIntegerSrc;
+    // `integer.tonumber` gives a `Result`, which only the try expressions' result library declares
+    std::string source = kBuiltinDefinitionIntegerSrc;
+    if (!resultLibraryEnabled())
+    {
+        const std::string result = "Result<number, number>";
+        size_t at = source.find(result);
+        LUAU_ASSERT(at != std::string::npos);
+        source.replace(at, result.size(), "unknown");
+    }
+    return source;
 }
 
 std::string getErrorDefinitionSource()

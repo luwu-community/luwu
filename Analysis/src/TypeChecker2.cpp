@@ -13,6 +13,7 @@
 #include "Luau/Error.h"
 #include "Luau/Instantiation.h"
 #include "Luau/Instantiation2.h"
+#include "Luau/IntegerModes.h"
 #include "Luau/MismatchExplanation.h"
 #include "Luau/MismatchWording.h"
 #include "Luau/RepeatedTypeNames.h"
@@ -3119,7 +3120,8 @@ void TypeChecker2::visit(AstExprConstantNumber* expr)
 void TypeChecker2::visit(AstExprConstantInteger* expr)
 {
 #if defined(LUAU_ENABLE_ASSERT)
-    const TypeId bestType = builtinTypes->integerType;
+    bool knownMode = FFlag::DebugLuwuIntegers && expr->mode < kIntegerModeCount;
+    const TypeId bestType = knownMode ? builtinTypes->integerModeTypes[expr->mode] : builtinTypes->integerType;
     const TypeId inferredType = lookupType(expr);
     NotNull<Scope> scope{findInnermostScope(expr->location)};
 
@@ -4790,10 +4792,13 @@ void TypeChecker2::visit(AstExprUnary* expr)
     }
     else if (expr->op == AstExprUnary::Op::Minus)
     {
-        // Luwu Integers (rfcs/integers.md): an integer can be negated too. Upstream's integers have no operators.
-        bool integerOperand = FFlag::DebugLuwuIntegers && isInteger(operandType);
+        // Luwu Integers (rfcs/integers.md): a signed integer can be negated too. Upstream's integers have no operators.
+        TypeId integerType = collapseIntegerUnion(builtinTypes, *module->internalTypes, operandType);
+        bool integerOperand = FFlag::DebugLuwuIntegers && isInteger(integerType);
         if (!integerOperand)
             testIsSubtype(operandType, builtinTypes->numberType, expr->location);
+        else if (std::optional<std::string> error = integerNegationError(integerType, getIdentifierOfBaseVar(expr->expr)))
+            reportError(GenericError{std::move(*error)}, expr->location);
     }
     else if (expr->op == AstExprUnary::Op::Not)
     {
@@ -5225,11 +5230,16 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
     case AstExprBinary::Op::Pow:
     case AstExprBinary::Op::Mod:
     {
-        // Luwu Integers (rfcs/integers.md): arithmetic on two integers gives an integer, except `^`. Upstream's integers
-        // have no operators.
-        bool integerArithmetic = FFlag::DebugLuwuIntegers && expr->op != AstExprBinary::Op::Pow && isInteger(leftType) && isInteger(rightType);
-        if (integerArithmetic)
-            return builtinTypes->integerType;
+        // Luwu Integers (rfcs/integers.md): arithmetic on integers of one mode gives that mode. Upstream's integers have no
+        // operators.
+        TypeId leftInteger = collapseIntegerUnion(builtinTypes, *module->internalTypes, leftType);
+        TypeId rightInteger = collapseIntegerUnion(builtinTypes, *module->internalTypes, rightType);
+        if (FFlag::DebugLuwuIntegers && isIntegerArithmetic(leftInteger, rightInteger))
+        {
+            if (std::optional<std::string> error = integerOperandsError(expr->op, leftInteger, rightInteger))
+                reportError(GenericError{std::move(*error)}, expr->location);
+            return integerArithmeticResult(builtinTypes, *module->internalTypes, leftInteger, rightInteger);
+        }
 
         testIsSubtype(leftType, builtinTypes->numberType, expr->left->location);
         testIsSubtype(rightType, builtinTypes->numberType, expr->right->location);
@@ -5508,8 +5518,12 @@ void TypeChecker2::visit(AstTypeReference* ty)
     }
 
     // Luwu Traits (rfcs/classes/traits.md): `trait<T>` is resolved by ConstraintGenerator (resolveReferenceType), which
-    // reports a misuse; there is no `trait` alias to check it against
-    if (FFlag::LuwuTraits && !ty->prefix.has_value() && ty->name == "trait" && ty->hasParameterList)
+    // reports a misuse; there is no `trait` alias to check it against. Luwu Integers (rfcs/integers.md): neither is there
+    // for `integer<T>`, whose `integer` alias has no parameters.
+    bool namesTrait = FFlag::LuwuTraits && !ty->prefix.has_value() && ty->name == "trait" && ty->hasParameterList;
+    Scope* referenceScope = findInnermostScope(ty->location);
+    bool namesIntegerWithMode = referenceScope && isIntegerWithMode(builtinTypes, *referenceScope, ty);
+    if (namesTrait || namesIntegerWithMode)
     {
         for (const AstTypeOrPack& param : ty->parameters)
         {

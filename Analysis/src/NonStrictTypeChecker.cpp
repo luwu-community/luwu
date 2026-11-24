@@ -6,6 +6,7 @@
 #include "Luau/Common.h"
 #include "Luau/Def.h"
 #include "Luau/Error.h"
+#include "Luau/IntegerModes.h"
 #include "Luau/Normalize.h"
 #include "Luau/RecursionCounter.h"
 #include "Luau/Simplify.h"
@@ -966,6 +967,10 @@ struct NonStrictTypeChecker
 
         Scope* scope = findInnermostScope(ty->location);
         LUAU_ASSERT(scope);
+
+        // Luwu Integers (rfcs/integers.md): `integer<T>` has no alias with a parameter to check it against
+        if (isIntegerWithMode(builtinTypes, *scope, ty))
+            return;
 
         std::optional<TypeFun> alias = ty->prefix ? scope->lookupImportedType(ty->prefix->value, ty->name.value) : scope->lookupType(ty->name.value);
 

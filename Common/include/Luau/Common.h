@@ -57,6 +57,9 @@ enum IntegerMode : unsigned char
     IntegerMode_U64
 };
 
+// Luwu Integers (rfcs/integers.md): the number of modes
+constexpr int kIntegerModeCount = IntegerMode_U64 + 1;
+
 // Luwu Integers (rfcs/integers.md): whether `mode` holds no negative values
 inline bool isUnsignedIntegerMode(IntegerMode mode)
 {

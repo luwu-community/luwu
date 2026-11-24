@@ -241,6 +241,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/GlobalTypes.h
     Analysis/include/Luau/Instantiation.h
     Analysis/include/Luau/Instantiation2.h
+    Analysis/include/Luau/IntegerModes.h
     Analysis/include/Luau/IostreamHelpers.h
     Analysis/include/Luau/IterativeTypeVisitor.h
     Analysis/include/Luau/JsonEmitter.h
@@ -340,6 +341,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/GlobalTypes.cpp
     Analysis/src/Instantiation.cpp
     Analysis/src/Instantiation2.cpp
+    Analysis/src/IntegerModes.cpp
     Analysis/src/IostreamHelpers.cpp
     Analysis/src/IterativeTypeVisitor.cpp
     Analysis/src/IterativeTypeFunctionTypeVisitor.cpp

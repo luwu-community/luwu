@@ -272,7 +272,11 @@ struct GenericTypeVisitor
         else if (auto etv = get<ErrorType>(ty))
             visit(ty, *etv);
         else if (auto ptv = get<PrimitiveType>(ty))
-            visit(ty, *ptv);
+        {
+            // Luwu Integers (rfcs/integers.md): the mode of `integer<T>`
+            if (visit(ty, *ptv) && ptv->mode)
+                traverse(*ptv->mode);
+        }
         else if (auto ftv = get<FunctionType>(ty))
         {
             if (visit(ty, *ftv))

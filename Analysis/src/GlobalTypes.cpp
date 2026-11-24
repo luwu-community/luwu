@@ -25,9 +25,9 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     globalScope->addBuiltinTypeBinding("number", TypeFun{{}, builtinTypes->numberType});
     if (FFlag::LuauIntegerType2)
         globalScope->addBuiltinTypeBinding("integer", TypeFun{{}, builtinTypes->integerType});
-    // Luwu Integers (rfcs/integers.md): `int` is the dynamically-sized mode, which has no type of its own yet
+    // Luwu Integers (rfcs/integers.md): `int` is the dynamically-sized mode's type, `integer<"int">`
     if (FFlag::LuauIntegerType2 && FFlag::DebugLuwuIntegers)
-        globalScope->addBuiltinTypeBinding("int", TypeFun{{}, builtinTypes->integerType});
+        globalScope->addBuiltinTypeBinding("int", TypeFun{{}, builtinTypes->integerModeTypes[IntegerMode_Dynamic]});
     globalScope->addBuiltinTypeBinding("string", TypeFun{{}, builtinTypes->stringType});
     globalScope->addBuiltinTypeBinding("boolean", TypeFun{{}, builtinTypes->booleanType});
     globalScope->addBuiltinTypeBinding("thread", TypeFun{{}, builtinTypes->threadType});

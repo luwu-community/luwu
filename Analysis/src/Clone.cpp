@@ -317,7 +317,9 @@ private:
 
     void cloneChildren(PrimitiveType* t)
     {
-        // noop.
+        // Luwu Integers (rfcs/integers.md): the mode of `integer<T>`
+        if (t->mode)
+            t->mode = shallowClone(*t->mode);
     }
 
     void cloneChildren(BlockedType* t)
