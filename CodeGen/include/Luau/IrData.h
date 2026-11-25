@@ -740,6 +740,47 @@ enum class IrCmd : uint8_t
     // B: unsigned int (member offset)
     OBJECT_MEMBER_ADDR,
 
+    // Luwu collections: guard against an object not being a `Vec` or `VecDeque` with a storage block (LuauStorage)
+    // A: pointer (LuauObject)
+    // B: int (LuwuStorageKind, or LUAR_STORAGE_CONTAINER for either)
+    // C: block/vmexit/undef
+    // When undef is specified instead of a block, execution is aborted on check failure
+    CHECK_STORAGE,
+
+    // Luwu collections: load the storage block of an object CHECK_STORAGE accepted
+    // A: pointer (LuauObject)
+    LOAD_STORAGE,
+
+    // Luwu collections: load or store a uint32 field of a storage block
+    // A: pointer (LuauStorage)
+    // B: int (offset of the field)
+    // C: int (STORE_STORAGE_INT: the value)
+    LOAD_STORAGE_INT,
+    STORE_STORAGE_INT,
+
+    // Luwu collections: the address of the slot `B` places from the front of a storage block,
+    // items[(head + B) & (capacity - 1)]
+    // A: pointer (LuauStorage)
+    // B: int
+    GET_STORAGE_ENTRY_ADDR,
+
+    // Luwu collections: run a builtin class's fast method for a NAMECALL and its CALL (invokeFastMethod). Gives the number of
+    // results, or -1 when there is none to run and the call has to be made.
+    // A: pointer (LuauObject, the receiver)
+    // B: unsigned int (pcpos of the NAMECALL)
+    // C: Rn (result start; the arguments start two registers later)
+    // D: int (argument count, `self` not included)
+    // E: int (result count or -1 to leave the stack top to ADJUST_STACK_TO_REG)
+    INVOKE_FAST_METHOD,
+
+    // Luwu collections: guard against a value not having the element type of a storage block
+    // A: pointer (LuauStorage)
+    // B: tag (the value's)
+    // C: pointer (the value's GC object, read when the tag is LUA_TOBJECT)
+    // D: block/vmexit/undef
+    // When undef is specified instead of a block, execution is aborted on check failure
+    CHECK_STORAGE_ELEMENT,
+
     // Luwu Classes (rfcs/classes): guard that NEWOBJECT's FIELDS form can construct this class
     // natively, as a plain member-by-member copy. The compiler guarantees the class's shape (see
     // VM_CASE(LOP_NEWOBJECT)). Two things are left to check at runtime:
@@ -1005,11 +1046,12 @@ enum class IrCmd : uint8_t
     //    LBC_NEWCLASSMEMBER_IMPLEMENTS)
     FALLBACK_NEWCLASSMEMBER,
 
-    // Luwu Traits (rfcs/classes/traits.md): LOP_INITTRAITS's test: writes the trait initializer runner to B, or nil when
-    // the object's class has no trait initializers (a jump on B's tag follows). Runs no Luau code.
+    // Luwu Traits (rfcs/classes/traits.md): LOP_INITTRAITS: lays out the next trait initializer's call frame at C, or
+    // writes nil there once every initializer has run (a jump on C's tag follows). Runs no Luau code.
     // A: unsigned int (bytecode instruction index)
-    // B: Rn (the runner's register, written)
-    // C: Rn (object)
+    // B: Rn (how many initializers have run, read and written; the object and the arguments follow it)
+    // C: Rn (the call frame: read for the previous call's result, then written)
+    // D: int (how many `implements` arguments there are)
     FALLBACK_INITTRAITS,
 
     // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): LOP_PRESIZETABLE, through the same C implementation the
@@ -1019,6 +1061,16 @@ enum class IrCmd : uint8_t
     // C: Rn (the first register the form reads)
     // D: int (form, LBC_PRESIZE_*)
     FALLBACK_PRESIZETABLE,
+
+    // Luwu bundles: LOP_GETTABLEBUNDLE or LOP_SETTABLEBUNDLE, a table read or write at a bundle key given by its values.
+    // May run `__index` or `__newindex`.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (target, written, or source)
+    // C: Rn (table)
+    // D: Rn (first of E registers holding the bundle's values)
+    // E: int (how many values)
+    // F: int (1 for a write)
+    FALLBACK_TABLEBUNDLE,
 
     // Luwu Traits (rfcs/classes/traits.md): LOP_GETQUALIFIED, the class's version of a trait's member. Runs no Luau code,
     // but raises when the class doesn't implement the trait.
