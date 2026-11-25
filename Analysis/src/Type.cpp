@@ -7,6 +7,7 @@
 #include "Luau/StructuralTypeEquality.h"
 #include "Luau/DenseHash.h"
 #include "Luau/Error.h"
+#include "Luau/IntegerModes.h"
 #include "Luau/RecursionCounter.h"
 #include "Luau/StringUtils.h"
 #include "Luau/ToString.h"
@@ -921,6 +922,17 @@ BuiltinTypes::BuiltinTypes()
     , uninhabitableTypePack(arena->addTypePack(TypePackVar{TypePack{{neverType}, neverTypePack}, /*persistent*/ true}))
     , errorTypePack(arena->addTypePack(TypePackVar{ErrorTypePack{}, /*persistent*/ true}))
 {
+    std::vector<TypeId> modeNames;
+    for (int mode = 0; mode < kIntegerModeCount; ++mode)
+    {
+        integerModeNames[mode] = arena->addType(Type{SingletonType{StringSingleton{integerModeName(IntegerMode(mode))}}, /*persistent*/ true});
+        PrimitiveType modeType{PrimitiveType::Integer};
+        modeType.mode = integerModeNames[mode];
+        integerModeTypes[mode] = arena->addType(Type{std::move(modeType), /*persistent*/ true});
+        modeNames.push_back(integerModeNames[mode]);
+    }
+    everyIntegerModeName = arena->addType(Type{UnionType{std::move(modeNames)}, /*persistent*/ true});
+
     freeze(*arena);
 }
 

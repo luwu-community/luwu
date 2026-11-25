@@ -12,6 +12,7 @@ target_sources(Luwu.Common PRIVATE
     Common/include/Luau/InsertionOrderedMap.h
     Common/include/Luau/SmallVector.h
     Common/include/Luau/StringUtils.h
+    Common/include/Luau/IntegerParsing.h
     Common/include/Luau/TimeTrace.h
     Common/include/Luau/Variant.h
     Common/include/Luau/VecDeque.h
@@ -252,6 +253,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/GlobalTypes.h
     Analysis/include/Luau/Instantiation.h
     Analysis/include/Luau/Instantiation2.h
+    Analysis/include/Luau/IntegerModes.h
     Analysis/include/Luau/IostreamHelpers.h
     Analysis/include/Luau/IterativeTypeVisitor.h
     Analysis/include/Luau/JsonEmitter.h
@@ -353,6 +355,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/GlobalTypes.cpp
     Analysis/src/Instantiation.cpp
     Analysis/src/Instantiation2.cpp
+    Analysis/src/IntegerModes.cpp
     Analysis/src/IostreamHelpers.cpp
     Analysis/src/IterativeTypeVisitor.cpp
     Analysis/src/IterativeTypeFunctionTypeVisitor.cpp
@@ -420,6 +423,16 @@ target_sources(Luwu.VM PRIVATE
     VM/src/lapix.cpp
     VM/src/laux.cpp
     VM/src/lbaselib.cpp
+    VM/src/lbigint.cpp
+    VM/src/bigint/Add.cpp
+    VM/src/bigint/Sub.cpp
+    VM/src/bigint/Mul.cpp
+    VM/src/bigint/DivMod.cpp
+    VM/src/bigint/Cmp.cpp
+    VM/src/bigint/ToString.cpp
+    VM/src/bigint/ToString16.cpp
+    VM/src/bigint/FromString.cpp
+    VM/src/linteger.cpp
     VM/src/lbitlib.cpp
     VM/src/lbuffer.cpp
     VM/src/lbuflib.cpp
@@ -447,7 +460,7 @@ target_sources(Luwu.VM PRIVATE
     VM/src/ludata.cpp
     VM/src/lutf8lib.cpp
     VM/src/lveclib.cpp
-    VM/src/lintlib.cpp
+    VM/src/lintegerlib.cpp
     VM/src/lvmexecute.cpp
     VM/src/lclass.cpp
     VM/src/lclasslib.cpp
@@ -459,6 +472,16 @@ target_sources(Luwu.VM PRIVATE
 
     VM/src/lapi.h
     VM/src/lbuffer.h
+    VM/src/lbigint.h
+    VM/src/linteger.h
+    VM/src/bigint/Add.h
+    VM/src/bigint/Sub.h
+    VM/src/bigint/Mul.h
+    VM/src/bigint/DivMod.h
+    VM/src/bigint/Cmp.h
+    VM/src/bigint/ToString.h
+    VM/src/bigint/FromString.h
+    VM/src/bigint/Digits.h
     VM/src/lbuiltins.h
     VM/src/lbytecode.h
     VM/src/lclass.h
@@ -609,6 +632,7 @@ if(TARGET Luwu.UnitTest)
         tests/TypeInfer.builtins.test.cpp
         tests/TypeInfer.cfa.test.cpp
         tests/TypeInfer.classes.test.cpp
+        tests/TypeInfer.integers.test.cpp
         tests/TypeInfer.const.test.cpp
         tests/TypeInfer.definitions.test.cpp
         tests/TypeInfer.typeInstantiations.test.cpp

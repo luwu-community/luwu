@@ -9,7 +9,6 @@
 #include <vector>
 #include <math.h>
 
-LUAU_FASTFLAG(LuauIntegerType2)
 
 namespace Luau
 {
@@ -48,9 +47,7 @@ static bool constantsEqual(const Constant& la, const Constant& ra)
         return ra.type == Constant::Type_Table && la.valueTable == ra.valueTable;
 
     case Constant::Type_Integer:
-        if (FFlag::LuauIntegerType2)
-            return ra.type == Constant::Type_Integer && la.valueInteger64 == ra.valueInteger64;
-        [[fallthrough]];
+        return ra.type == Constant::Type_Integer && la.valueInteger64 == ra.valueInteger64 && la.mode == ra.mode;
 
     default:
         LUAU_ASSERT(!"Unexpected constant type in comparison");
@@ -75,6 +72,19 @@ static void foldUnary(Constant& result, AstExprUnary::Op op, const Constant& arg
         {
             result.type = Constant::Type_Number;
             result.valueNumber = -arg.valueNumber;
+        }
+        else if (arg.type == Constant::Type_Integer)
+        {
+            // Luwu Integers (rfcs/integers.md): negating the smallest 64-bit value grows a dynamic integer onto the heap,
+            // and negating an unsigned one raises, so only the runtime can do them
+            IntegerMode mode = IntegerMode(arg.mode);
+            bool growsOntoHeap = mode == IntegerMode_Dynamic && arg.valueInteger64 == INT64_MIN;
+            if (!growsOntoHeap && !isUnsignedIntegerMode(mode))
+            {
+                result.type = Constant::Type_Integer;
+                result.valueInteger64 = wrapIntegerToMode(int64_t(~uint64_t(arg.valueInteger64) + 1), mode);
+                result.mode = arg.mode;
+            }
         }
         else if (arg.type == Constant::Type_Vectorf)
         {
@@ -861,8 +871,11 @@ struct ConstantVisitor : AstVisitor
         }
         else if (AstExprConstantInteger* expr = node->as<AstExprConstantInteger>())
         {
-            result.type = Constant::Type_Integer;
-            result.valueInteger64 = expr->value;
+            if (expr->parseResult != ConstantNumberParseResult::HeapInteger) {
+                result.type = Constant::Type_Integer;
+                result.valueInteger64 = expr->value;
+                result.mode = expr->mode;
+            }
         }
         else if (AstExprConstantString* expr = node->as<AstExprConstantString>())
         {

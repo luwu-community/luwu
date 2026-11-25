@@ -240,6 +240,8 @@ enum LuwuBuiltinClass
     LUWU_BUILTIN_ERR_OUTOFRANGE,
     LUWU_BUILTIN_ERR_INVALIDSTATE,
     LUWU_BUILTIN_ERR_TIMEDOUT,
+    // Luwu Integers (rfcs/integers.md): `integer.Mode`
+    LUWU_BUILTIN_INTEGERMODE,
 
     LUWU_BUILTIN__COUNT
 };
@@ -335,6 +337,7 @@ typedef struct global_State
     TString* ttname[LUA_T_COUNT]; // names for basic types, as returned by tostring()/error messages (LUA_TSYMNONE reports as "none")
     TString* ttypename[LUA_T_COUNT]; // names for basic types, as returned by type() (matches luaT_typenames verbatim)
     TString* traittypename;          // Luwu Traits (rfcs/classes/traits.md): "trait", which type() and typeof() give for a trait
+    TString* integermodename[IntegerMode_U64 + 1]; // Luwu Integers (rfcs/integers.md): "int", "u8", ..., which typeof() gives
     // Luwu builtin classes: each builtin class once its library has built it, NULL until then. A GC root, so a class
     // lives as long as the state even when no library table holds it. Native methods check `self` against these.
     struct LuauClass* builtinclasses[LUWU_BUILTIN__COUNT];
@@ -455,6 +458,7 @@ union GCObject
     struct LuauBuffer buf;
     struct LuauClass lclass;
     struct LuauObject lobject;
+    struct HeapInteger integer;
     struct LuauVector vec;
 };
 
@@ -469,6 +473,7 @@ union GCObject
 #define gco2buf(o) check_exp((o)->gch.tt == LUA_TBUFFER, &((o)->buf))
 #define gco2class(o) check_exp((o)->gch.tt == LUA_TCLASS, &((o)->lclass))
 #define gco2object(o) check_exp((o)->gch.tt == LUA_TOBJECT, &((o)->lobject))
+#define gco2integer(o) check_exp((o)->gch.tt == LUA_THEAPINTEGER, &((o)->integer))
 #define gco2vec(o) check_exp((o)->gch.tt == LUA_TVECTOR, &((o)->vec))
 
 // macro to convert any Lua object into a GCObject

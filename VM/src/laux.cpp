@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lualib.h"
+#include "linteger.h"
 
 #include "lobject.h"
 #include "lstate.h"
@@ -224,6 +225,9 @@ int luaL_checkinteger(lua_State* L, int narg)
 
 int64_t luaL_checkinteger64(lua_State* L, int narg)
 {
+    // Luwu Integers (rfcs/integers.md): a bigint has no 64-bit value
+    if (lua_type(L, narg) == LUA_THEAPINTEGER)
+        luaL_argerrorL(L, narg, "integer doesn't fit in 64 bits");
     if (!lua_isinteger64(L, narg))
         tag_error(L, narg, LUA_TINTEGER);
     return lua_tointeger64(L, narg, nullptr);
@@ -627,9 +631,10 @@ void luaL_addvalueany(luaL_Strbuf* B, int idx)
     }
     case LUA_TINTEGER:
     {
-        int64_t n = lua_tointeger64(L, idx, nullptr);
+        // Luwu Integers (rfcs/integers.md): upstream writes every integer as a signed int64, which prints a u64 past
+        // INT64_MAX as negative. A bigint goes through luaL_tolstring below.
         char s[LUAI_MAXINT2STR];
-        char* e = luai_int2str(s, n);
+        char* e = luaZ_formatinline(luaA_toobject(L, idx), s);
         luaL_addlstring(B, s, e - s);
         break;
     }
@@ -727,14 +732,11 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
     case LUA_TSTRING:
         lua_pushvalue(L, idx);
         break;
+    // Luwu Integers (rfcs/integers.md): an integer in decimal, without its suffix
     case LUA_TINTEGER:
-    {
-        int64_t l = lua_tointeger64(L, idx, nullptr);
-        char s[LUAI_MAXINT2STR];
-        char* e = luai_int2str(s, l);
-        lua_pushlstring(L, s, e - s);
+    case LUA_THEAPINTEGER:
+        luaZ_pushstring(L, luaA_toobject(L, idx));
         break;
-    }
     default:
     {
         const void* ptr = lua_topointer(L, idx);

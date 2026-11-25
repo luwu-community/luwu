@@ -1,0 +1,376 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing the integer library")
+
+-- Luwu Integers (rfcs/integers.md): `integer.cast`, the modes, and the functions that are methods of integers too
+
+local function id<T>(value: T): T
+    return value
+end
+
+-- the error a call raises, or nil when it doesn't. `try` gets the library's and the VM's errors as `Error` variants.
+local function raised(f: () -> ()): unknown
+    local r = try f()
+    return if class.isinstance(r, Err) then r.error else nil
+end
+
+local function raisesvariant(f: () -> (), variant: unknown): boolean
+    return class.isinstance(raised(f), variant :: any)
+end
+
+-- the modes
+do
+    assert(integer.u8.min == 0u8 and integer.u8.max == 255u8)
+    assert(integer.i8.min == -128i8 and integer.i8.max == 127i8)
+    assert(integer.u64.max == 18446744073709551615u64 and integer.i64.min == -9223372036854775808i64)
+    assert(integer.dynamic.min == nil and integer.dynamic.max == nil)
+    assert(tostring(integer.u16) == "IntegerMode<u16>" and tostring(integer.dynamic) == "IntegerMode<int>")
+    assert(typeof(integer.u8) == "integermode" and class.isinstance(integer.u8, integer.Mode))
+    assert(integer.mode(5u8) == integer.u8 and integer.mode(100000000000000000000int) == integer.dynamic)
+    assert(integer.isbig(100000000000000000000int) and not integer.isbig(5int) and not integer.isbig(5u8))
+    local suffixes = { bundle.unpack(integer.suffixes) }
+    assert(#suffixes == 9 and suffixes[1] == "int" and suffixes[2] == "u8" and suffixes[9] == "i64")
+end
+
+-- casting integers between modes is checked
+do
+    assert(integer.cast(7int, integer.i8) == 7i8 and integer.cast(255u8, integer.i64) == 255i64)
+    assert(integer.cast(18446744073709551615u64) == 18446744073709551615int)
+    assert(integer.cast(-1i8, integer.dynamic) == -1int and integer.cast(5u8, integer.u8) == 5u8)
+    assert(integer.cast(100000000000000000000int - 99999999999999999999int, integer.u8) == 1u8)
+    assert(integer.u16(300int) == 300u16 and integer.dynamic(5u8) == 5int)
+
+    local err = raised(function()
+        integer.cast(300int, integer.u8)
+    end)
+    assert(class.isinstance(err, Error.Overflow) and err.value == 300int and err.info == integer.u8)
+    assert(tostring(err) == "300 is too large for u8")
+    -- `pcall` gets the message, with the position of the code that called the library
+    local ok, message = pcall(function()
+        integer.cast(300int, integer.u8)
+    end)
+    assert(not ok and string.find(message, "^[^:]*:%d+: 300 is too large for u8$"))
+    err = raised(function()
+        integer.cast(-1int, integer.u64)
+    end)
+    assert(class.isinstance(err, Error.Underflow) and tostring(err) == "-1 is too small for u64")
+    assert(raisesvariant(function()
+        integer.i64(18446744073709551615u64)
+    end, Error.Overflow))
+    assert(raisesvariant(function()
+        integer.u64(100000000000000000000int)
+    end, Error.Overflow))
+end
+
+-- casting numbers
+do
+    assert(integer.cast(14, integer.u8) == 14u8 and integer.cast(-5) == -5int and integer.i32(-2147483648) == -2147483648i32)
+    assert(integer.cast(2 ^ 70) == 1180591620717411303424int and integer.cast(-(2 ^ 64)) == -18446744073709551616int)
+    assert(integer.u64(2 ^ 63) == 9223372036854775808u64)
+
+    local err = raised(function()
+        integer.cast(1.5, integer.u8)
+    end)
+    assert(class.isinstance(err, Error.UnexpectedFloat) and err.value == 1.5)
+    assert(tostring(err) == "expected a whole number, got 1.5")
+    assert(raisesvariant(function()
+        integer.u8(256)
+    end, Error.Overflow))
+    assert(raisesvariant(function()
+        integer.u8(-1)
+    end, Error.Underflow))
+    assert(raisesvariant(function()
+        integer.i64(math.huge)
+    end, Error.Overflow))
+    assert(raisesvariant(function()
+        integer.cast(-math.huge)
+    end, Error.Underflow))
+    assert(raisesvariant(function()
+        integer.cast(0 / 0)
+    end, Error.InvalidArgument))
+end
+
+-- casting strings
+do
+    assert(integer.cast("100", integer.u64) == 100u64 and integer.cast("-42") == -42int)
+    assert(integer.cast("0xff", integer.u8) == 255u8 and integer.cast("0b1010") == 10int and integer.cast("0o17") == 15int)
+    assert(integer.cast("1_000_000") == 1000000int and integer.cast("255u8") == 255u8)
+    assert(integer.cast("100u8", integer.u64) == 100u64 and integer.cast("-5i16") == -5i16)
+    assert(integer.cast("340282366920938463463374607431768211456") == 340282366920938463463374607431768211456int)
+    assert(integer.cast("-340282366920938463463374607431768211456") == -340282366920938463463374607431768211456int)
+
+    -- the suffix's mode is checked first, so the error names it
+    local err = raised(function()
+        integer.cast("1412u8", integer.u64)
+    end)
+    assert(class.isinstance(err, Error.Overflow) and err.value == 1412int and err.info == integer.u8)
+
+    for _, text in { "", "abc", "12abc", "1.5", "- 5", "_1", "1_", "0x", "u8", "0xfffffffffffffffff" } do
+        local failed = raised(function()
+            integer.cast(text)
+        end)
+        assert(class.isinstance(failed, Error.CannotBeParsed) and failed.text == text, text)
+    end
+    assert(tostring(raised(function()
+        integer.cast("abc")
+    end)) == `couldn't parse "abc": expected an integer such as 42, -7, 0xff or 255u8`)
+end
+
+-- __tointeger converts a value, and its integer is converted to the mode
+class BoundedInteger(private inner: integer)
+    public function __tointeger(self, mode: integer.Mode): integer
+        return self.inner
+    end
+end
+
+do
+    assert(integer.cast(BoundedInteger(50u8), integer.u64) == 50u64 and integer.u8(BoundedInteger(50u8)) == 50u8)
+    assert(raisesvariant(function()
+        integer.i8(BoundedInteger(200u8))
+    end, Error.Overflow))
+
+    local seen = nil
+    local snowflake = setmetatable({}, {
+        __tointeger = function(_, mode)
+            seen = mode
+            return 1148720829839826944int
+        end,
+    })
+    assert(integer.u64(snowflake) == 1148720829839826944u64 and seen == integer.u64)
+    assert(raisesvariant(function()
+        integer.cast(setmetatable({}, {
+            __tointeger = function()
+                return 5
+            end,
+        }))
+    end, Error.InvalidArgument))
+    assert(not pcall(integer.cast, {}) and not pcall(integer.cast, true))
+end
+
+-- `try` gives the variant
+do
+    const res = try integer.cast("1412u8", integer.u64)
+    assert(class.isinstance(res, Err) and class.isinstance(res.error, Error.Overflow) and res.error.value == 1412int)
+    const parsed = try integer.u8("nope")
+    assert(class.isinstance(parsed.error, Error.CannotBeParsed) and parsed.error.text == "nope")
+end
+
+-- integer.tonumber is exact or gives the nearest number
+do
+    assert(integer.tonumber(5int) == Ok(5) and (5u8):tonumber() == Ok(5))
+    assert(integer.tonumber(9007199254740993int) == Err(9007199254740992))
+    assert(integer.tonumber(18446744073709551615u64) == Err(18446744073709551616))
+    local huge = integer.pow(2int, 2000int)
+    assert(integer.tonumber(huge) == Err(math.huge) and integer.tonumber(-huge) == Err(-math.huge))
+end
+
+-- min, max, clamp, abs and signum
+do
+    assert(integer.min(5u8, 3u8, 9u8) == 3u8 and integer.max(5u8, 3u8, 9u8) == 9u8)
+    assert(integer.max(-100000000000000000000int, 7int) == 7int)
+    assert(not pcall(integer.min, 5u8, 3i8))
+    assert((300u16):clamp(0u16, 255u16) == 255u16 and integer.clamp(-5int, 0int, 10int) == 0int)
+    assert(integer.abs(-5i8) == 5i8 and (-100000000000000000000int):abs() == 100000000000000000000int)
+    assert(raisesvariant(function()
+        integer.abs(-128i8)
+    end, Error.Overflow))
+    assert(integer.signum(-5i8) == -1i8 and integer.signum(0u8) == 0u8 and (7u64):signum() == 1u64)
+end
+
+-- saturating and checked arithmetic
+do
+    const added = integer.sadd(100u8, 250u8)
+    assert(added == 255u8 and added:ssub(250u8):ssub(100u8) == 0u8)
+    assert(integer.smul(100i8, -100i8) == -128i8 and integer.ssub(-100i8, 100i8) == -128i8)
+    assert(integer.smul(9223372036854775807i64, 2i64) == 9223372036854775807i64)
+    assert(integer.sadd(18446744073709551615u64, 1u64) == 18446744073709551615u64)
+    assert(integer.cadd(1u8, 2u8) == 3u8 and integer.cmul(-3i8, 40i8) == -120i8)
+
+    local err = raised(function()
+        integer.cadd(250u8, 10u8)
+    end)
+    assert(class.isinstance(err, Error.Overflow) and err.value == 260int and err.info == integer.u8)
+    err = raised(function()
+        integer.csub(1u8, 2u8)
+    end)
+    assert(class.isinstance(err, Error.Underflow) and err.value == -1int)
+    assert(raisesvariant(function()
+        integer.cmul(9223372036854775807i64, -2i64)
+    end, Error.Underflow))
+
+    assert(integer.cdiv(7i8, -2i8) == -3i8 and integer.cdiv(7int, 2int) == 3int)
+    err = raised(function()
+        integer.cdiv(-128i8, -1i8)
+    end)
+    assert(class.isinstance(err, Error.Overflow) and err.value == 128int)
+    assert(raisesvariant(function()
+        integer.cdiv(1u8, 0u8)
+    end, Error.DivisionByZero))
+
+    -- on `int` they're the plain operators, which never overflow
+    assert(integer.sadd(9223372036854775807int, 1int) == 9223372036854775808int)
+end
+
+-- powers, roots and logarithms
+do
+    assert(integer.pow(2int, 100int) == 1267650600228229401496703205376int)
+    assert(integer.pow(4u8, 4u8) == 0u8 and integer.pow(3u8, 5int) == 243u8 and integer.pow(0u8, 0u8) == 1u8)
+    assert(integer.pow(-2i8, 7u8) == -128i8 and integer.pow(-3int, 3int) == -27int)
+    assert(integer.spow(4u8, 4u8) == 255u8 and integer.spow(-2i8, 9int) == -128i8 and integer.spow(-2i8, 8int) == 127i8)
+    assert(integer.cpow(2u8, 7u8) == 128u8 and integer.cpow(-1i64, 100000000000000000000int) == 1i64)
+    local err = raised(function()
+        integer.cpow(2u8, 8u8)
+    end)
+    assert(class.isinstance(err, Error.Overflow) and err.value == nil and tostring(err) == "the result is too large for u8")
+    assert(raisesvariant(function()
+        integer.cpow(-2i8, 9u8)
+    end, Error.Underflow))
+    assert(raisesvariant(function()
+        integer.pow(2int, -1int)
+    end, Error.InvalidArgument))
+
+    assert(integer.sqrt(1000000int) == 1000int and (1000001u32):sqrt() == 1000u32 and integer.sqrt(0u8) == 0u8)
+    assert(integer.sqrt(18446744073709551615u64) == 4294967295u64)
+    assert(integer.sqrt(integer.pow(10int, 40int)) == integer.pow(10int, 20int))
+    assert(integer.sqrt(integer.pow(10int, 40int) - 1int) == integer.pow(10int, 20int) - 1int)
+    assert(raisesvariant(function()
+        integer.sqrt(-1int)
+    end, Error.InvalidArgument))
+
+    assert((12345u32):log10() + 1u32 == 5u32 and integer.log10(1i8) == 0i8 and integer.log10(integer.pow(10int, 30int)) == 30int)
+    assert(integer.log2(1u8) == 0u8 and integer.log2(255u8) == 7u8 and integer.log2(1267650600228229401496703205376int) == 100int)
+    assert(raisesvariant(function()
+        integer.log2(0u8)
+    end, Error.InvalidArgument))
+end
+
+-- bitwise operations
+do
+    const flags = integer.bor(0b0001_u8, 0b0100_u8)
+    assert(flags == 0b0101_u8 and integer.band(flags, integer.bnot(0b0001_u8)) == 0b0100_u8)
+    assert(integer.bxor(0xff_u8, 0x0f_u8, 0x01_u8) == 0xf1_u8 and integer.bnot(0i8) == -1i8 and integer.bnot(5int) == -6int)
+    assert(integer.band(-1i16, 0x7fff_i16) == 0x7fff_i16)
+
+    -- a dynamically-sized integer acts as if it had infinitely many sign bits
+    const big = integer.pow(2int, 100int)
+    assert(integer.band(big + 5int, 7int) == 5int and integer.bor(big, 1int) == big + 1int)
+    assert(integer.band(-1int, big) == big and integer.bxor(-1int, big) == -big - 1int)
+    assert(integer.band(-big, -1int) == -big and integer.bor(-big, big - 1int) == -1int)
+    assert(integer.bnot(big) == -big - 1int)
+    assert((0b1100_u8):btest(0b0100_u8) and not integer.btest(0b1100_u8, 0b0011_u8))
+end
+
+-- shifts and rotations
+do
+    assert(integer.lshift(1u8, 7u8) == 128u8 and integer.lshift(1u8, 8u8) == 0u8 and integer.lshift(255u8, 4int) == 240u8)
+    assert(integer.rshift(-128i8, 1u8) == -64i8 and integer.rshift(128u8, 7u8) == 1u8 and integer.rshift(-1i8, 100int) == -1i8)
+    assert(integer.rshift(5u64, 64int) == 0u64)
+    assert(integer.lshift(1int, 100int) == integer.pow(2int, 100int) and integer.rshift(-5int, 1int) == -3int)
+    assert(integer.rshift(integer.pow(2int, 100int), 98int) == 4int and integer.rshift(-integer.pow(2int, 100int), 200int) == -1int)
+    assert(raisesvariant(function()
+        integer.lshift(1u8, -1i8)
+    end, Error.InvalidArgument))
+
+    assert(integer.lrotate(0b1000_0001_u8, 9int) == 0b0000_0011_u8 and integer.rrotate(0b0000_0011_u8, 1u8) == 0b1000_0001_u8)
+    assert(integer.lrotate(-128i8, 1u8) == 1i8 and integer.rrotate(1u64, 1u64) == 9223372036854775808u64)
+    assert(integer.lrotate(1u8, 100000000000000000001int) == 2u8)
+    assert(raisesvariant(function()
+        integer.lrotate(1int, 1int)
+    end, Error.InvalidArgument))
+end
+
+-- counting bits
+do
+    assert(integer.popcount(-1i8) == 8i8 and integer.countlz(-1i8) == 0i8 and integer.countlz(1u32) == 31u32)
+    assert(integer.countlz(0u8) == 8u8 and integer.countrz(0u8) == 8u8 and integer.countrz(8u16) == 3u16)
+    assert(integer.countrz(-8int) == 3int and integer.countrz(integer.pow(2int, 100int)) == 100int)
+    assert(integer.popcount(255int) == 8int and integer.popcount(integer.pow(2int, 100int) - 1int) == 100int)
+    assert(raisesvariant(function()
+        integer.countlz(5int)
+    end, Error.InvalidArgument))
+    assert(raisesvariant(function()
+        integer.countrz(0int)
+    end, Error.InvalidArgument))
+    assert(raisesvariant(function()
+        integer.popcount(-1int)
+    end, Error.InvalidArgument))
+end
+
+-- bit fields and byte order
+do
+    const rgba = 0xffa500ff_u32
+    assert(rgba:extract(16int, 8int) == 0xa5_u32 and rgba:extract(0u8) == 1u32)
+    assert(rgba:replace(0x80_u32, 0int, 8int) == 0xffa50080_u32)
+    assert(rgba:btest(0xff_u32) and rgba:bswap() == 0xff00a5ff_u32)
+    assert(integer.bswap(0x1234_u16) == 0x3412_u16 and integer.bswap(5u8) == 5u8 and integer.bswap(1i32) == 16777216i32)
+    assert(integer.extract(-1int, 100int, 8int) == 255int and integer.extract(integer.pow(2int, 100int), 100int) == 1int)
+    assert(integer.replace(0int, 0xff_int, 100int, 4int) == integer.lshift(15int, 100int))
+    assert(integer.replace(-1int, 0int, 0int, 8int) == -256int)
+    assert(raisesvariant(function()
+        integer.extract(1u8, 4int, 5int)
+    end, Error.InvalidArgument))
+    assert(raisesvariant(function()
+        integer.extract(1u8, 0int, 0int)
+    end, Error.InvalidArgument))
+    assert(raisesvariant(function()
+        integer.bswap(1int)
+    end, Error.InvalidArgument))
+end
+
+-- buffers read and write integers little-endian at their width
+do
+    const data = buffer.create(16)
+    buffer.writeinteger(data, 0, 0x0102030405060708_u64)
+    assert(buffer.readu8(data, 0) == 8 and buffer.readu8(data, 7) == 1)
+    assert(buffer.readinteger(data, 0, integer.u64) == 0x0102030405060708_u64)
+    buffer.writeinteger(data, 8, -2i16)
+    assert(buffer.readinteger(data, 8, integer.i16) == -2i16 and buffer.readinteger(data, 8, integer.u16) == 65534u16)
+    buffer.writeinteger(data, 8, 18446744073709551615u64 // 2u64 + 1u64)
+    assert(buffer.readinteger(data, 8, integer.i64) == -9223372036854775808i64)
+    assert(not pcall(buffer.writeinteger, data, 0, 5int))
+    assert(not pcall(buffer.readinteger, data, 0, integer.dynamic))
+    assert(not pcall(buffer.readinteger, data, 12, integer.u64))
+    assert(not pcall(buffer.writeinteger, data, 15, 1u16))
+end
+
+-- Vec and VecDeque hold integers of one mode, and convert bytes to and from strings
+do
+    const Vec = collections.Vec
+    const bytes = Vec.from("héllo")
+    assert(#bytes == 6 and bytes:at(1) == 104u8 and typeof(bytes:at(2)) == "u8")
+    bytes:push(0x21_u8)
+    assert(bytes:tostring() == "héllo!" and Vec.from(""):tostring() == "")
+    assert(Vec.from(buffer.fromstring("ab")):tostring() == "ab")
+    assert(collections.VecDeque.from("bc"):tostring() == "bc")
+
+    -- pushing another mode raises, in a loop native code compiles too
+    local function pushall(v, values)
+        for _, value in values do
+            v:push(value)
+        end
+    end
+    for _ = 1, 3 do
+        assert(not pcall(pushall, Vec.from("x"), { 1u8, 2i8 }))
+    end
+    assert(not pcall(function()
+        return Vec.from({ 1, 2 }):tostring()
+    end))
+
+    -- an int Vec holds inline integers and bigints alike
+    const ints = Vec.from({ 1int, 100000000000000000000int })
+    ints:push(5int)
+    assert(#ints == 3 and ints:at(2) == 100000000000000000000int)
+end
+
+-- methods are the library functions with the integer first
+do
+    const size = 4096u64
+    assert(size:cast(integer.u32) == 4096u32 and size:cast(integer.dynamic) == 4096int)
+    assert(not pcall(function()
+        return (size :: any):cast()
+    end))
+    assert((0b0001_u8):bor(0b0100_u8) == 0b0101_u8 and (1int):lshift(3int) == 8int)
+    assert((100000000000000000000int):sqrt() == 10000000000int)
+    assert((5u8).min == nil and (5u8).mode == nil)
+end
+
+return "OK"
