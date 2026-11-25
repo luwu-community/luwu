@@ -10,7 +10,6 @@
 #include <regex>
 
 LUAU_FASTFLAG(LuauCodegenDseRestoreHints)
-LUAU_FASTFLAG(LuauCodegenSharedLog)
 
 using namespace Luau::CodeGen;
 
@@ -507,7 +506,6 @@ bb_0:
 TEST_CASE_FIXTURE(IrAssemblyFixture, "IntStackSpillIgnoresConvertedRestoreLocation")
 {
     ScopedFastFlag luauCodegenDseRestoreHints{FFlag::LuauCodegenDseRestoreHints, true};
-    ScopedFastFlag luauCodegenSharedLog{FFlag::LuauCodegenSharedLog, true};
 
     options.includeRegSpills = true;
 
@@ -590,7 +588,6 @@ bb_2:
 TEST_CASE_FIXTURE(IrAssemblyFixture, "ExitSyncRestoreConflictedRegisters")
 {
     ScopedFastFlag luauCodegenDseRestoreHints{FFlag::LuauCodegenDseRestoreHints, true};
-    ScopedFastFlag luauCodegenSharedLog{FFlag::LuauCodegenSharedLog, true};
 
     options.includeOutlinedCode = true;
     options.includeRegSpills = true;
@@ -664,7 +661,6 @@ bb_exit_1:
 TEST_CASE_FIXTURE(IrAssemblyFixture, "LazyHintNotMaterializedInsideScopedSpills")
 {
     ScopedFastFlag luauCodegenDseRestoreHints{FFlag::LuauCodegenDseRestoreHints, true};
-    ScopedFastFlag luauCodegenSharedLog{FFlag::LuauCodegenSharedLog, true};
 
     options.includeRegSpills = true;
 

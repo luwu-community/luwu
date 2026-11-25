@@ -26,7 +26,6 @@
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauCyclicRequireShortCircuit)
-LUAU_DYNAMIC_FASTFLAG(LuauSelfIsSelfAndAlwaysSelf)
 
 #if __APPLE__
 #include <TargetConditionals.h>
@@ -675,7 +674,6 @@ TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireUnprefixedPath")
 
 TEST_CASE_FIXTURE(ReplWithPathFixture, "RequireSubmoduleUsingSelfWithOverrideAttempt")
 {
-    ScopedFastFlag sffs[] = {{DFFlag::LuauSelfIsSelfAndAlwaysSelf, true}};
     {
         std::string path = getLuauDirectory(PathType::Relative) + "/tests/require/config_tests/with_config/nested_override";
         runProtectedRequire(path);

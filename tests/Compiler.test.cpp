@@ -25,7 +25,6 @@ LUAU_FASTINT(LuauCompileLoopUnrollThresholdMaxBoost)
 LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
-LUAU_FASTFLAG(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -7728,8 +7727,6 @@ L0: MOVE R3 R2
 RETURN R3 1
 )"
     );
-
-    ScopedFastFlag luauCompileIifeInline{FFlag::LuauCompileIifeInline, true};
 
     // IIFE with a function exceeding regular inline complexity
     CHECK_EQ(

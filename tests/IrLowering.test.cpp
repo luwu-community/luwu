@@ -23,11 +23,8 @@
 LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauCodegenInteger3)
 LUAU_FASTFLAG(LuauIntegerType2)
-LUAU_FASTFLAG(LuauCodegenVmExitSyncMultiUse)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuauCallFeedback)
-LUAU_FASTFLAG(LuauCodegenA64ExitUseCheck)
-LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 
@@ -5617,14 +5614,10 @@ local function foo(zero: number, b1: buffer, b2: buffer)
 end
 )";
 
-    // With LuauCodegenVmExitSyncMultiUse, the dead store optimizer recognizes that the
-    // redundant `zero + 0` (%11) can be dropped in favor of reusing %10 directly at every
-    // exit sync site, instead of keeping the extra ADD_NUM alive.
-    if (FFlag::LuauCodegenVmExitSyncMultiUse)
-    {
-        CHECK_EQ(
-            "\n" + getCodegenAssembly(source),
-            R"(
+    // The dead store optimizer drops the redundant `zero + 0` (%11) and reuses %10 directly at every exit sync site.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(source),
+        R"(
 ; function foo($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
@@ -5668,59 +5661,7 @@ bb_bytecode_1:
   INTERRUPT 112u
   RETURN R0, 0i
 )"
-        );
-    }
-    else
-    {
-        CHECK_EQ(
-            "\n" + getCodegenAssembly(source),
-            R"(
-; function foo($arg0, $arg1, $arg2) line 2
-bb_0:
-  CHECK_TAG R0, tnumber, exit(entry)
-  CHECK_TAG R1, tbuffer, exit(entry)
-  CHECK_TAG R2, tbuffer, exit(entry)
-  JUMP bb_2
-bb_2:
-  JUMP bb_bytecode_1
-bb_bytecode_1:
-  implicit CHECK_SAFE_ENV exit(0)
-  %10 = LOAD_DOUBLE R0
-  %11 = ADD_NUM %10, 0
-  %25 = LOAD_POINTER R1
-  %27 = NUM_TO_INT %10
-  CHECK_BUFFER_LEN %25, %27, 0i, 1i, undef, bb_exit_19
-   ; exit sync: R8, R5, {%11}
-  %29 = LOAD_BUFFER_DATA %25
-  %30 = BUFFER_READI8 %29, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %25, bb_exit_20
-   ; exit sync: R6, R5, {%11, %30}
-  BUFFER_WRITEI8 %29, %27, %30, tbuffer
-  %74 = BUFFER_READU8 %29, %27, tbuffer
-  BUFFER_WRITEI8 %29, %27, %74, tbuffer
-  %113 = LOAD_POINTER R2
-  CHECK_BUFFER_LEN %113, %27, 0i, 2i, %10, exit(32)
-  %117 = LOAD_BUFFER_DATA %113
-  %118 = BUFFER_READI8 %117, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %113, bb_exit_21
-   ; exit sync: R6, {%118}
-  BUFFER_WRITEI8 %117, %27, %118, tbuffer
-  %162 = BUFFER_READU8 %117, %27, tbuffer
-  BUFFER_WRITEI8 %117, %27, %162, tbuffer
-  %203 = ADD_INT %27, 1i
-  %206 = BUFFER_READI8 %117, %203, tbuffer
-  BUFFER_WRITEI8 %117, %203, %206, tbuffer
-  %250 = BUFFER_READU8 %117, %203, tbuffer
-  BUFFER_WRITEI8 %117, %203, %250, tbuffer
-  %294 = BUFFER_READI16 %117, %27, tbuffer
-  BUFFER_WRITEI16 %117, %27, %294, tbuffer
-  %338 = BUFFER_READU16 %117, %27, tbuffer
-  BUFFER_WRITEI16 %117, %27, %338, tbuffer
-  INTERRUPT 112u
-  RETURN R0, 0i
-)"
-        );
-    }
+    );
 }
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferSanityNegative")
@@ -6046,8 +5987,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferVmExitSyncMultiUseSink")
 {
-    ScopedFastFlag luauCodegenVmExitSyncMultiUse{FFlag::LuauCodegenVmExitSyncMultiUse, true};
-
     // This test captures that 'a * b' is only needed for the VM exit to display the 'expected' value of 's' if buffer read throws an exception
     // If the compiler output makes this test outdated, it can be removed as we have IR builder tests covering this as well
     CHECK_EQ(
@@ -7105,7 +7044,6 @@ TEST_CASE_FIXTURE(LoweringFixture, "FuzzTest26")
     ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
     ScopedFastFlag LuauCodegenInteger3{FFlag::LuauCodegenInteger3, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
-    ScopedFastFlag luauCodegenA64ExitUseCheck{FFlag::LuauCodegenA64ExitUseCheck, true};
 
     CHECK(
         getCodegenAssembly(

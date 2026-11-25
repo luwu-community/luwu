@@ -25,7 +25,6 @@ LUAU_FLAGVERSION(LuauDirectFieldGet, 3)
 
 LUAU_FASTFLAGVARIABLE(LuauCIProto)
 LUAU_FASTFLAGVARIABLE(LuauCallFeedback)
-LUAU_FASTFLAGVARIABLE(LuauYieldIter2)
 LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
 
 // Disable c99-designator to avoid the warning in computed goto dispatch table
@@ -2877,18 +2876,11 @@ reentry:
                     L->top = ra + 3 + 3; // func + 2 args (state and index)
                     LUAU_ASSERT(L->top <= L->stack_last);
 
-                    if (FFlag::LuauYieldIter2)
-                    {
-                        bool yielded;
-                        VM_PROTECT(yielded = luaD_performcally(L, ra + 3, uint8_t(aux)));
+                    bool yielded;
+                    VM_PROTECT(yielded = luaD_performcally(L, ra + 3, uint8_t(aux)));
 
-                        if (yielded)
-                            goto exit;
-                    }
-                    else
-                    {
-                        VM_PROTECT(luaD_call(L, ra + 3, uint8_t(aux)));
-                    }
+                    if (yielded)
+                        goto exit;
 
                     L->top = L->ci->top;
 

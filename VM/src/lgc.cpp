@@ -16,13 +16,10 @@
 
 #include <string.h>
 
-LUAU_FASTFLAG(LuauUdataDirectAccess6)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAGVARIABLE(LuauUdataMetatablePinned)
-LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcTableStepFix, false)
 LUAU_FASTFLAGVARIABLE(LuauGcTraceUdata)
 LUAU_FLAGVERSION(LuauGcTraceUdata, 2)
-LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcMarkUdataAccess, false)
 
 /*
  * Luau uses an incremental non-generational non-moving mark&sweep garbage collector.
@@ -551,10 +548,7 @@ static size_t propagatemark(global_State* g)
         if (traversetable(g, h)) // table is weak?
             black2gray(o);       // keep it gray
 
-        if (DFFlag::LuauGcTableStepFix)
-            return sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * (h->node == &luaH_dummynode ? 0 : sizenode(h));
-        else
-            return sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * sizenode(h);
+        return sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * (h->node == &luaH_dummynode ? 0 : sizenode(h));
     }
     case LUA_TFUNCTION:
     {
@@ -693,10 +687,7 @@ static size_t cleartable(lua_State* L, GCObject* l)
     {
         LuaTable* h = gco2h(l);
 
-        if (DFFlag::LuauGcTableStepFix)
-            work += sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * (h->node == &luaH_dummynode ? 0 : sizenode(h));
-        else
-            work += sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * sizenode(h);
+        work += sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * (h->node == &luaH_dummynode ? 0 : sizenode(h));
 
         int i = h->sizearray;
         while (i--)
@@ -847,7 +838,6 @@ void luaC_freeall(lua_State* L)
 
 static void markudatadirectaccess(global_State* g)
 {
-    LUAU_ASSERT(DFFlag::LuauGcMarkUdataAccess);
     for (int i = 0; i < UTAG_INTERNAL_LIMIT; i++)
     {
         lua_UdataDirectAccessData& udatadirect = g->udatadirect[i];
@@ -907,24 +897,7 @@ static void markroot(lua_State* L)
             g->embeddergc(g->mainthread, nullptr);
     }
 
-    if (FFlag::LuauUdataDirectAccess6)
-    {
-        if (DFFlag::LuauGcMarkUdataAccess)
-        {
-            markudatadirectaccess(g);
-        }
-        else
-        {
-            for (int i = 0; i < UTAG_INTERNAL_LIMIT; i++)
-            {
-                lua_UdataDirectAccessData& udatadirect = L->global->udatadirect[i];
-
-                markvalue(g, &udatadirect.indextm);
-                markvalue(g, &udatadirect.newindextm);
-                markvalue(g, &udatadirect.namecalltm);
-            }
-        }
-    }
+    markudatadirectaccess(g);
 
     if (FFlag::LuauDirectFieldGet)
         markudatadirectfields(g);
@@ -1021,8 +994,7 @@ static size_t atomic(lua_State* L)
     if (FFlag::LuauUdataMetatablePinned)
         marktaggetmt(g); // mark tagged userdata metatables (again)
 
-    if (DFFlag::LuauGcMarkUdataAccess)
-        markudatadirectaccess(g); // mark tagged userdata direct access functions (again)
+    markudatadirectaccess(g); // mark tagged userdata direct access functions (again)
 
     if (FFlag::LuauDirectFieldGet)
         markudatadirectfields(g); // mark direct field dispatch tables (again)
