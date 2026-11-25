@@ -111,9 +111,9 @@ void initFunctions(NativeContext& context)
     context.executeINITTRAITS = executeINITTRAITS;
     context.executePRESIZETABLE = executePRESIZETABLE;
     context.executeGETQUALIFIED = executeGETQUALIFIED;
+    context.executeGETPOSITIONAL = executeGETPOSITIONAL;
     context.executeTABLEBUNDLE = executeTABLEBUNDLE;
     context.executeSETQUALIFIED = executeSETQUALIFIED;
-    context.executeGETPOSITIONAL = executeGETPOSITIONAL;
     context.executePUSH = executePUSH;
     context.executePOP = executePOP;
     context.executeWRAPRESULT = executeWRAPRESULT;

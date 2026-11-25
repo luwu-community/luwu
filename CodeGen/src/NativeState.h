@@ -115,9 +115,9 @@ struct NativeContext
     const Instruction* (*executeINITTRAITS)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executePRESIZETABLE)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeGETQUALIFIED)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
+    const Instruction* (*executeGETPOSITIONAL)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeTABLEBUNDLE)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeSETQUALIFIED)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
-    const Instruction* (*executeGETPOSITIONAL)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executePUSH)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executePOP)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeWRAPRESULT)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;

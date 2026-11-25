@@ -141,8 +141,8 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), VM_DISPATCH_OP(LOP_PRESIZETABLE), \
         VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_WRAPRESULT), VM_DISPATCH_OP(LOP_RESULTGET), VM_DISPATCH_OP(LOP_GETQUALIFIED), \
-        VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE), VM_DISPATCH_OP(LOP_JUMPXTYPE), VM_DISPATCH_OP(LOP_JUMPXMATCH), \
-        VM_DISPATCH_OP(LOP_SETQUALIFIED), VM_DISPATCH_OP(LOP_GETPOSITIONAL), VM_DISPATCH_OP(LOP_PUSH), VM_DISPATCH_OP(LOP_POP),
+        VM_DISPATCH_OP(LOP_GETPOSITIONAL), VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE), VM_DISPATCH_OP(LOP_JUMPXTYPE), \
+        VM_DISPATCH_OP(LOP_JUMPXMATCH), VM_DISPATCH_OP(LOP_SETQUALIFIED), VM_DISPATCH_OP(LOP_PUSH), VM_DISPATCH_OP(LOP_POP),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -4348,6 +4348,18 @@ reentry:
                 VM_NEXT();
             }
 
+            VM_CASE(LOP_GETPOSITIONAL)
+            {
+                // Luwu Destructuring (rfcs/destructuring.md): a read of a position, `x.1` or an element of `.(a, b)`
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+                int c = LUAU_INSN_C(insn);
+
+                VM_PROTECT(luaV_getpositional(L, rb, c, ra));
+                VM_NEXT();
+            }
+
             VM_CASE(LOP_SETQUALIFIED)
             {
                 // Luwu Traits (rfcs/classes/traits.md): `obj:Trait.name = value`, `Class:Trait.name = value`
@@ -4362,14 +4374,6 @@ reentry:
                 VM_PROTECT(luaR_setqualified(L, rb, rc, tsvalue(name), ra));
                 VM_NEXT();
             }
-
-            VM_CASE(LOP_GETPOSITIONAL)
-            {
-                // Luwu Destructuring (rfcs/destructuring.md): a read of a position, `x.1` or an element of `.(a, b)`
-                Instruction insn = *pc++;
-                StkId ra = VM_REG(LUAU_INSN_A(insn));
-                StkId rb = VM_REG(LUAU_INSN_B(insn));
-                int c = LUAU_INSN_C(insn);
 
                 VM_PROTECT(luaV_getpositional(L, rb, c, ra));
                 VM_NEXT();
