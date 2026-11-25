@@ -250,6 +250,12 @@ static bool isMatchingGlobalMember(
 
 struct TypeMapVisitor : AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the clauses a pattern makes are compiled like any other
+    bool visitsPatternClauses() const override
+    {
+        return true;
+    }
+
     DenseHashMap<AstExprFunction*, std::string>& functionTypes;
     DenseHashMap<AstLocal*, LuauBytecodeType>& localTypes;
     DenseHashMap<AstExpr*, LuauBytecodeType>& exprTypes;
@@ -881,7 +887,21 @@ struct TypeMapVisitor : AstVisitor
 
     bool visit(AstExprIfElse* node) override
     {
-        node->condition->visit(this);
+        // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain's declarations are typed like any `local`
+        if (node->clauses.size != 0)
+        {
+            for (const AstIfClause& clause : node->clauses)
+            {
+                if (clause.declaration)
+                    clause.declaration->visit(this);
+                else
+                    clause.expr->visit(this);
+            }
+        }
+        else
+        {
+            node->condition->visit(this);
+        }
         node->trueExpr->visit(this);
         node->falseExpr->visit(this);
 

@@ -26,6 +26,12 @@ static AstExprTable* getTableHint(AstExpr* expr)
 
 struct ShapeVisitor : AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the clauses a pattern makes are compiled like any other
+    bool visitsPatternClauses() const override
+    {
+        return true;
+    }
+
     struct Hasher
     {
         size_t operator()(const std::pair<AstExprTable*, AstName>& p) const

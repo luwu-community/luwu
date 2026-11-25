@@ -382,6 +382,12 @@ void ExpectedTypeVisitor::applyExpectedType(TypeId expectedType, const AstExpr* 
         applyExpectedType(expectedType, ternary->trueExpr);
         applyExpectedType(expectedType, ternary->falseExpr);
     }
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): each arm's value, like an if-else expression's branches
+    else if (auto match = expr->as<AstExprMatch>())
+    {
+        for (const AstMatchArm& arm : match->arms)
+            applyExpectedType(expectedType, arm.value);
+    }
 }
 
 } // namespace Luau
