@@ -2099,6 +2099,8 @@ struct ErrorConverter
 
     std::string operator()(const PositionalDestructuring& e) const
     {
+        if (e.bundleSize)
+            return "'" + e.className + "' has no position " + std::to_string(e.position + 1) + "; it holds " + MismatchWording::countValues(*e.bundleSize);
         if (e.notObject && e.inPattern)
             return "'" + e.className + "' has no positions; destructure it by index with '.[...]' instead";
         if (e.notObject)
@@ -2594,7 +2596,7 @@ bool ConstructorReadByName::operator==(const ConstructorReadByName& rhs) const
 bool PositionalDestructuring::operator==(const PositionalDestructuring& rhs) const
 {
     return className == rhs.className && position == rhs.position && parameters == rhs.parameters && notObject == rhs.notObject &&
-           inPattern == rhs.inPattern;
+           inPattern == rhs.inPattern && bundleSize == rhs.bundleSize;
 }
 
 bool PrivateConstructorAccess::operator==(const PrivateConstructorAccess& rhs) const

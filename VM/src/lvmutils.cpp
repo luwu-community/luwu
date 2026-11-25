@@ -200,6 +200,15 @@ void luaV_getpositional(lua_State* L, const TValue* t, int position, StkId val)
         LuauObject* inst = objectvalue(t);
         LuauClass* lco = inst->lclass;
 
+        // Luwu bundles: a bundle's positions are its values
+        if (luaR_isbundle(inst))
+        {
+            TValue key;
+            setnvalue(&key, double(position + 1));
+            luaR_getbundleposition(L, inst, &key, val);
+            return;
+        }
+
         // a class without a primary constructor has -1 positions
         if (position >= lco->numberofpositional)
             luaG_positionalerror(L, lco, position);

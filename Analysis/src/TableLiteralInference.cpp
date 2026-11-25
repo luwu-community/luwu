@@ -101,7 +101,13 @@ struct FindFunctionTypeIn : IterativeTypeVisitor
  */
 bool isCheckableExpr(const AstExpr* expr)
 {
-    return isLiteral(expr) || expr->is<AstExprGroup>() || expr->is<AstExprIfElse>();
+    // Luwu bundles: a bundle literal `.(a, b)` is a `bundle.pack` call, and its positions take expected types
+    const AstExprCall* call = expr->as<AstExprCall>();
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a `match`'s arms take the expected type, like an if-else
+    // expression's branches
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): so do the values a `do` expression gives
+    bool checkableLuwuExpr = expr->is<AstExprMatch>() || expr->is<AstExprDo>();
+    return isLiteral(expr) || expr->is<AstExprGroup>() || expr->is<AstExprIfElse>() || (call && isBundlePackCall(call)) || checkableLuwuExpr;
 }
 
 struct BidirectionalTypePusher
