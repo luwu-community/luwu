@@ -1303,8 +1303,10 @@ TEST_CASE_FIXTURE(Fixture, "we_cannot_infer_functions_that_return_inconsistently
 
     if (!FFlag::DebugLuauForceOldSolver)
     {
-        LUAU_CHECK_ERROR_COUNT(1, result);
-        CHECK("<T>({T}, unknown) -> number" == toString(requireType("find_first")));
+        // Luwu: joining the returns (ConstraintSolver::dispatchInferredReturn) gives what the block above describes.
+        // Upstream takes the first `return` as the function's type: `-> number`, and an error on `return nil`.
+        LUAU_CHECK_NO_ERRORS(result);
+        CHECK("<T>({T}, unknown) -> number?" == toString(requireType("find_first")));
     }
     else
     {
