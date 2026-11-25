@@ -196,6 +196,8 @@ public:
     AstArray<Position> argsCommaPositions;
     Position varargAnnotationColonPosition = Position::missing();
     Position returnSpecifierPosition = Position::missing();
+    // Luwu try expressions: the `!` of an error hint
+    Position errorHintPosition = Position::missing();
 };
 
 class CstExprTable : public CstNode
@@ -451,6 +453,7 @@ public:
     AstArray<Position> genericsCommaPositions;
     Position genericsClosePosition;
     Position equalsPosition;
+    Position errorHintPosition = Position::missing();
 };
 
 class CstStatTypeFunction : public CstNode
@@ -537,6 +540,8 @@ public:
     AstArray<Position> argumentsCommaPositions;
     Position closeArgsPosition;
     Position returnArrowPosition;
+    // Luwu try expressions: the `!` of an error hint
+    Position errorHintPosition = Position::missing();
 };
 
 class CstTypeTypeof : public CstNode

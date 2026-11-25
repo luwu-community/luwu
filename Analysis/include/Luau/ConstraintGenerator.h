@@ -174,6 +174,18 @@ struct ConstraintGenerator
     // by its definition (applyRefinements)
     DenseHashMap<const Def*, TypeId> positionReadTypes{nullptr};
 
+    // Luwu try expressions: what the functions being checked raise with `error` and `assert`, innermost last.
+    // checkFunctionBody joins a function's onto its error hint.
+    struct RaisedErrors
+    {
+        // `error(...)` as the body's last statement: reaching it is a bug, not an error the function raises
+        AstExprCall* unreachableError = nullptr;
+        // the function's `! E` hint: its body's errors are checked against it instead of joining it
+        std::optional<TypeId> declared;
+        std::vector<TypeId> types;
+    };
+    std::vector<RaisedErrors> raisedErrors;
+
     // The private scope of type aliases for which the type parameters belong to.
     DenseHashMap<const AstStatTypeAlias*, ScopePtr> astTypeAliasDefiningScopes{nullptr};
 
@@ -621,6 +633,7 @@ private:
     Inference check(const ScopePtr& scope, AstExprTypeAssertion* typeAssert);
     Inference check(const ScopePtr& scope, AstExprInterpString* interpString);
     Inference check(const ScopePtr& scope, AstExprInstantiate* explicitTypeInstantiation);
+    Inference check(const ScopePtr& scope, AstExprTry* tryExpr);
     Inference check(const ScopePtr& scope, AstExprTable* expr, std::optional<TypeId> expectedType);
     std::tuple<TypeId, TypeId, RefinementId> checkBinary(
         const ScopePtr& scope,
@@ -668,6 +681,20 @@ private:
      * @param fn the function expression to check.
      */
     void checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn);
+    void recordRaisedError(
+        const ScopePtr& scope,
+        AstExprCall* call,
+        const std::vector<TypeId>& args,
+        std::optional<TypePackId> argTail
+    );
+    TypeId raisedErrorType(
+        const ScopePtr& scope,
+        AstExprCall* call,
+        const std::vector<TypeId>& args,
+        std::optional<TypePackId> argTail
+    );
+    std::optional<TypeId> annotatedHintFor(AstExprCall* call, size_t index);
+    void weakenUnknownMembers(AstTypeUnion* annotation, std::vector<TypeId>& members);
     std::optional<FunctionType::TruthyRefinement> resolveTruthyRefinement(const ScopePtr& signatureScope, AstExprFunction* fn);
 
     // Luwu literal types: a parameter's, local's or table field's annotation, resolved. For `literal<B>`, `V<literal<B>>`,
@@ -738,6 +765,17 @@ private:
 
     // Specializations of 'resolveType' below
     TypeId resolveReferenceType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref, bool inTypeArguments, bool replaceErrorWithFresh);
+    // Luwu try expressions: the return annotation being resolved, when it's exactly one alias reference: the one place an
+    // alias with an error hint may go
+    AstTypeReference* hintedAliasReturn = nullptr;
+    TypePackId resolveReturnTypePack(
+        const ScopePtr& scope,
+        AstTypePack* returns,
+        bool inTypeArguments,
+        bool replaceErrorWithFresh,
+        std::optional<Polarity> initialPolarity = std::nullopt
+    );
+    std::optional<TypeId> returnErrorHint(const ScopePtr& scope, AstTypePack* returns, std::optional<TypeId> declared, bool inTypeArguments);
     TypeId resolveTableType(const ScopePtr& scope, AstType* ty, AstTypeTable* tab, bool inTypeArguments, bool replaceErrorWithFresh);
     TypeId resolveFunctionType(const ScopePtr& scope, AstType* ty, AstTypeFunction* fn, bool inTypeArguments, bool replaceErrorWithFresh);
 

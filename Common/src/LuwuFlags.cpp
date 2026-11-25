@@ -58,6 +58,12 @@ LUAU_FASTFLAGVARIABLE(LuwuStringExtensions)
 // LuwuClasses.
 LUAU_FASTFLAGVARIABLE(DebugLuwuBuiltinClasses)
 
+// Luwu try expressions: `try expr` gives an `Ok` or an `Err`, and the `Ok`, `Err`, `Some` and `None` globals exist. A
+// Debug flag while it's in progress: a function containing `try` doesn't compile to native code yet. Needs LuwuClasses
+// and LuwuNonePrimitive. The parser gates the syntax, and while it is on the compiler emits WIP bytecode (version 200),
+// which holds the protected ranges.
+LUAU_FASTFLAGVARIABLE(DebugLuwuTryExpressions)
+
 // Luwu bundles: the `bundle` library, its classes, and the compiler's fastcalls and unfolding for it. A prototype whose
 // API can still change. Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(DebugLuwuBundles)
