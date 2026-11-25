@@ -6,6 +6,7 @@
 #include "ldebug.h"
 #include "ldo.h"
 #include "lgc.h"
+#include "linteger.h"
 #include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"
@@ -355,6 +356,18 @@ static void addvariantstring(luaL_Strbuf* b, const TValue* value)
     luaL_tolstring(b->L, -1, NULL);
     lua_remove(b->L, -2);
     luaL_addvalue(b);
+}
+
+// Adds the name of the `integer.Mode` object `value` (`u8`), or `value` as `tostring` gives it when it isn't one
+static void addmodename(luaL_Strbuf* b, const TValue* value)
+{
+    luaA_pushvalue(b->L, value);
+    int mode = luaZ_tomode(b->L, -1);
+    lua_pop(b->L, 1);
+    if (mode >= 0)
+        luaL_addstring(b, luaZ_modename(IntegerMode(mode)));
+    else
+        addvariantstring(b, value);
 }
 
 // Adds ": " and `value` as `tostring` gives it, unless it's nil
@@ -715,7 +728,7 @@ static void addvariantmessage(luaL_Strbuf* b, LuwuBuiltinClass kind, const Varia
             break;
         }
         luaL_addstring(b, overflow ? " is too large for " : " is too small for ");
-        addvariantstring(b, second);
+        addmodename(b, second);
         break;
     }
     case LUWU_BUILTIN_ERR_CANNOTBEPARSED:
