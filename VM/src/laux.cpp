@@ -12,8 +12,6 @@
 
 #include <string.h>
 
-LUAU_FASTFLAGVARIABLE(LuauCustomYieldablePcalls)
-
 // convert a stack index to positive
 #define abs_index(L, i) ((i) > 0 || (i) <= LUA_REGISTRYINDEX ? (i) : lua_gettop(L) + (i) + 1)
 
@@ -421,7 +419,6 @@ int luaL_callyieldable(lua_State* L, int nargs, int nresults)
 
 int luaL_pcallyieldable(lua_State* L, int nargs, int nresults, int errfunc)
 {
-    LUAU_ASSERT(FFlag::LuauCustomYieldablePcalls);
     api_check(L, iscfunction(L->ci->func));
     Closure* cl = clvalue(L->ci->func);
     api_check(L, cl->c.cont);

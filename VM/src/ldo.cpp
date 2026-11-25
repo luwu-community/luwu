@@ -17,10 +17,7 @@
 
 #include <string.h>
 
-LUAU_FASTFLAG(LuauYieldIter2)
-LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuPcallMulti)
-LUAU_FASTFLAGVARIABLE(LuauXpcallFixMessageYieldPath)
 
 // keep max stack allocation request under 1GB
 #define MAX_STACK_SIZE (int(1024 / sizeof(TValue)) * 1024 * 1024)
@@ -449,8 +446,7 @@ static void resume_continue(lua_State* L)
             LUAU_ASSERT(cl->c.cont);
 
             // continuation can use non-protected calls again
-            if (FFlag::LuauCustomYieldablePcalls)
-                L->ci->flags &= ~LUA_CALLINFO_HANDLE;
+            L->ci->flags &= ~LUA_CALLINFO_HANDLE;
 
             // C continuation; we expect this to be followed by Lua continuations
             int n = cl->c.cont(L, 0);
@@ -459,14 +455,14 @@ static void resume_continue(lua_State* L)
             if (L->status == LUA_BREAK || L->status == LUA_YIELD)
                 break;
 
-            if (FFlag::LuauCustomYieldablePcalls && L->status == SCHEDULED_REENTRY)
+            if (L->status == SCHEDULED_REENTRY)
                 continue;
 
             luau_poscall(L, L->top - n);
         }
         else
         {
-            if (FFlag::LuauYieldIter2 && L->ci->flags & LUA_CALLINFO_OPYIELD)
+            if (L->ci->flags & LUA_CALLINFO_OPYIELD)
                 luau_finishop(L);
 
             // Luau continuation; it terminates at the end of the stack or at another C continuation
@@ -614,19 +610,13 @@ static void resume_handle(lua_State* L, void* ud)
         luaD_seterrorobj(L, status, L->top);
 
     // call user-defined error function
-    if (FFlag::LuauCustomYieldablePcalls && ci->errfunc != 0)
+    if (ci->errfunc != 0)
     {
         // save ci pointer - it will be invalidated by callerrfunc call
         ptrdiff_t old_ci = saveci(L, ci);
 
         // if errfunc fails, we fail with "error in error handling" or "not enough memory"
         int err = luaD_rawrunprotected(L, callerrfunc, ci->base + (ci->errfunc - 1));
-
-        if (!FFlag::LuauXpcallFixMessageYieldPath)
-        {
-            // restore nCcalls to base if errfunc itself errored
-            L->nCcalls = L->baseCcalls;
-        }
 
         // in general we preserve the status, except for cases when the error handler fails
         // out of memory is treated specially because it's common for it to be cascading, in which case we preserve the code
@@ -643,57 +633,28 @@ static void resume_handle(lua_State* L, void* ud)
         ci->errfunc = 0;
     }
 
-    if (FFlag::LuauCustomYieldablePcalls)
-    {
-        if (FFlag::LuauXpcallFixMessageYieldPath)
-        {
-            // restore nCcalls to base for the continuation
-            L->nCcalls = L->baseCcalls;
-        }
+    // restore nCcalls to base for the continuation
+    L->nCcalls = L->baseCcalls;
 
-        // restore the stack frame to the frame with continuation
-        L->ci = ci;
+    // restore the stack frame to the frame with continuation
+    L->ci = ci;
 
-        // close eventual pending closures; this means it's now safe to restore stack
-        luaF_close(L, L->ci->base);
+    // close eventual pending closures; this means it's now safe to restore stack
+    luaF_close(L, L->ci->base);
 
-        // adjust the stack frame for ci to prepare for cont call
-        L->base = ci->base;
-        ci->top = L->top;
+    // adjust the stack frame for ci to prepare for cont call
+    L->base = ci->base;
+    ci->top = L->top;
 
-        restore_stack_limit(L);
+    restore_stack_limit(L);
 
-        int n = cl->c.cont(L, status);
+    int n = cl->c.cont(L, status);
 
-        if (L->status != LUA_OK)
-            return;
+    if (L->status != LUA_OK)
+        return;
 
-        // finish cont call and restore stack to previous ci top
-        luau_poscall(L, L->top - n);
-    }
-    else
-    {
-        // adjust the stack frame for ci to prepare for cont call
-        L->base = ci->base;
-        ci->top = L->top;
-
-        // save ci pointer - it will be invalidated by cont call!
-        ptrdiff_t old_ci = saveci(L, ci);
-
-        // handle the error in continuation; note that this executes on top of original stack!
-        int n = cl->c.cont(L, status);
-
-        // restore the stack frame to the frame with continuation
-        L->ci = restoreci(L, old_ci);
-
-        // close eventual pending closures; this means it's now safe to restore stack
-        luaF_close(L, L->ci->base);
-
-        restore_stack_limit(L);
-
-        // finish cont call and restore stack to previous ci top
-        luau_poscall(L, L->top - n);
-    }
+    // finish cont call and restore stack to previous ci top
+    luau_poscall(L, L->top - n);
 
     // run remaining continuations from the stack; typically resumes pcalls
     resume_continue(L);
@@ -744,17 +705,8 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
             }
         }
 
-        if (FFlag::LuauCustomYieldablePcalls && FFlag::LuauXpcallFixMessageYieldPath)
-        {
-            // restore the baseline we established in resume_start
-            L->baseCcalls = oldnCcalls;
-        }
-        else
-        {
-            // restore the baseline we established in resume_start
-            L->nCcalls = oldnCcalls;
-            L->baseCcalls = L->nCcalls;
-        }
+        // restore the baseline we established in resume_start
+        L->baseCcalls = oldnCcalls;
 
         L->status = cast_byte(status);
         status = luaD_rawrunprotected(L, resume_handle, ch);

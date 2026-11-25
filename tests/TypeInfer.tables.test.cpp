@@ -33,12 +33,9 @@ LUAU_FASTFLAG(LuauFixIndexerSubtypingOrdering)
 LUAU_FASTFLAG(DebugLuauAssertOnForcedConstraint)
 LUAU_FASTINT(LuauPrimitiveInferenceInTableLimit)
 LUAU_FASTFLAG(LuauSubtypingMissingPropertiesAsNil)
-LUAU_FASTFLAG(LuauPropertyModifierMismatchErrors)
-LUAU_FASTFLAG(LuauRemoveConstraintSolverEmplace)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
 LUAU_FASTFLAG(LuauIndexerModifierMismatchErrors)
-LUAU_FASTFLAG(LuauAlwaysIntersectTablesWithTables)
 LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 TEST_SUITE_BEGIN("TableTests");
@@ -4661,7 +4658,6 @@ TEST_CASE_FIXTURE(Fixture, "read_only_property_with_type_mismatch_reports_both_e
     CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag sff[] = {
-        {FFlag::LuauPropertyModifierMismatchErrors, true},
         {FFlag::LuauIndexerModifierMismatchErrors, true},
     };
 
@@ -4685,7 +4681,6 @@ TEST_CASE_FIXTURE(Fixture, "read_only_property_subtype_mismatch_error_message")
     CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag sff[] = {
-        {FFlag::LuauPropertyModifierMismatchErrors, true},
         {FFlag::LuauIndexerModifierMismatchErrors, true},
     };
 
@@ -4711,7 +4706,6 @@ TEST_CASE_FIXTURE(Fixture, "write_only_property_subtype_mismatch_error_message")
     CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag sff[] = {
-        {FFlag::LuauPropertyModifierMismatchErrors, true},
         {FFlag::LuauIndexerModifierMismatchErrors, true},
     };
 
@@ -5350,8 +5344,6 @@ end
 
 TEST_CASE_FIXTURE(Fixture, "indexing_branching_table")
 {
-    ScopedFastFlag _{FFlag::LuauRemoveConstraintSolverEmplace, true};
-
     CheckResult result = check(R"(
         local test = if true then { "meow", "woof" } else { 4, 81 }
         local test2 = test[1]
@@ -7391,7 +7383,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "intersection_of_indexers_1")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauRemoveConstraintSolverEmplace, true},
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -7407,7 +7398,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "intersection_of_indexers_2")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauRemoveConstraintSolverEmplace, true},
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -7423,7 +7413,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "intersection_of_indexers_3")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauRemoveConstraintSolverEmplace, true},
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -7439,7 +7428,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "union_of_indexers_1")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauRemoveConstraintSolverEmplace, true},
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -7455,7 +7443,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "union_of_indexers_2")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauRemoveConstraintSolverEmplace, true},
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -7471,7 +7458,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "union_of_indexers_3")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauRemoveConstraintSolverEmplace, true},
     };
 
     LUAU_REQUIRE_NO_ERRORS(check(R"(
@@ -7487,7 +7473,6 @@ TEST_CASE_FIXTURE(Fixture, "test_indexing_into_unsealed_table")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauRemoveConstraintSolverEmplace, true},
     };
 
     CheckResult results = check(R"(
@@ -7527,7 +7512,6 @@ TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_mismatch_error")
     CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS();
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag _[] = {
-        {FFlag::LuauPropertyModifierMismatchErrors, true},
         {FFlag::LuauIndexerModifierMismatchErrors, true},
     };
 
@@ -7549,7 +7533,6 @@ TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_and_type_mismatch_error")
     CHECKS_WORDING_WITHOUT_HELPFUL_SUBTYPING_ERRORS()
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
     ScopedFastFlag _[] = {
-        {FFlag::LuauPropertyModifierMismatchErrors, true},
         {FFlag::LuauIndexerModifierMismatchErrors, true},
     };
 
@@ -7570,8 +7553,6 @@ TEST_CASE_FIXTURE(Fixture, "readonly_indexer_access_and_type_mismatch_error")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "normalization_always_intersects_table")
 {
-    ScopedFastFlag _{FFlag::LuauAlwaysIntersectTablesWithTables, true};
-
     LUAU_REQUIRE_NO_ERRORS(check(R"(
         local tbl = {}
 

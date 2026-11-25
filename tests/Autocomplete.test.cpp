@@ -33,13 +33,6 @@ LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
-LUAU_FASTFLAG(LuauAutocompleteFunctionArglistSuggestion)
-LUAU_FASTFLAG(LuauAutocompleteMetatableInheritance)
-LUAU_FASTFLAG(LuauCheckTypeForDeprecated)
-LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
-LUAU_FASTFLAG(LuauAutocompleteSkipErrorTypeInUnion)
-LUAU_FASTFLAG(LuauCheckTypeForDeprecated)
-LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuwuTableDiscard)
 
 using namespace Luau;
@@ -5005,7 +4998,6 @@ TEST_CASE_FIXTURE(ACFixture, "anonymous_autofilled_cursor_after_function_keyword
     // Cursor is right after the "function" keyword but before any "(" — the arg list has not been
     // opened yet. The suggestion must expand the full "function(...) end" expression, not just the
     // parameter list (which would replace the word "function" with bare argument names).
-    ScopedFastFlag sff{FFlag::LuauAutocompleteFunctionArglistSuggestion, true};
 
     check(R"(
 local function foo(a: (number, string) -> ())
@@ -5026,8 +5018,6 @@ foo(function@1)
 
 TEST_CASE_FIXTURE(ACFixture, "anonymous_autofilled_cursor_in_arglist_empty")
 {
-    ScopedFastFlag sff{FFlag::LuauAutocompleteFunctionArglistSuggestion, true};
-
     check(R"(
 local function foo(a: () -> ())
     a()
@@ -5047,8 +5037,6 @@ foo(function(@1))
 
 TEST_CASE_FIXTURE(ACFixture, "anonymous_autofilled_cursor_in_arglist_args")
 {
-    ScopedFastFlag sff{FFlag::LuauAutocompleteFunctionArglistSuggestion, true};
-
     check(R"(
 local function foo(a: (number, string) -> ())
     a()
@@ -5068,8 +5056,6 @@ foo(function(@1))
 
 TEST_CASE_FIXTURE(ACFixture, "anonymous_autofilled_cursor_in_arglist_with_return")
 {
-    ScopedFastFlag sff{FFlag::LuauAutocompleteFunctionArglistSuggestion, true};
-
     check(R"(
 local function foo(a: (number, string) -> string)
     return a(1, "x")
@@ -5089,8 +5075,6 @@ foo(function(@1))
 
 TEST_CASE_FIXTURE(ACFixture, "anonymous_autofilled_cursor_in_arglist_named_args")
 {
-    ScopedFastFlag sff{FFlag::LuauAutocompleteFunctionArglistSuggestion, true};
-
     check(R"(
 local function foo(a: (foo: number, bar: string) -> ())
     a()
@@ -5110,8 +5094,6 @@ foo(function(@1))
 
 TEST_CASE_FIXTURE(ACFixture, "anonymous_autofilled_cursor_in_arglist_varargs")
 {
-    ScopedFastFlag sff{FFlag::LuauAutocompleteFunctionArglistSuggestion, true};
-
     check(R"(
 local function foo(a: (...number) -> ())
     a()
@@ -6013,7 +5995,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_using_indexer_with_singleton_keys")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_function")
 {
-    ScopedFastFlag _{FFlag::LuauCheckTypeForDeprecated, true};
     check(R"(
         \@deprecated
         function foo()
@@ -6031,7 +6012,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_function")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_local_function")
 {
-    ScopedFastFlag _{FFlag::LuauCheckTypeForDeprecated, true};
     check(R"(
         \@deprecated
         local function foo()
@@ -6049,11 +6029,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_local_function")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_anonymous_function")
 {
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuauCheckTypeForDeprecated, true},
-        {FFlag::LuauDeprecatedAttributeOnAnonymousFunctions, true}
-    };
-
     check(R"(
         local foo = \@deprecated function()
         end
@@ -6070,7 +6045,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_anonymous_function")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_function_in_table")
 {
-    ScopedFastFlag _{FFlag::LuauCheckTypeForDeprecated, true};
     check(R"(
         local t = {}
 
@@ -6090,8 +6064,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_function_in_table")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_global_function")
 {
-    ScopedFastFlag _{FFlag::LuauCheckTypeForDeprecated, true};
-
     loadDefinition(R"(
         @deprecated
         declare function foo(): ()
@@ -6110,8 +6082,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_global_function")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_extern_member_function")
 {
-    ScopedFastFlag _{FFlag::LuauCheckTypeForDeprecated, true};
-
     loadDefinition(R"(
         declare extern type MyClass with
             @deprecated
@@ -6133,8 +6103,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_extern_member_function"
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_overloaded_extern_member_function")
 {
-    ScopedFastFlag _{FFlag::LuauCheckTypeForDeprecated, true};
-
     loadDefinition(R"(
         declare extern type MyClass with
             @deprecated
@@ -6158,8 +6126,6 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_deprecated_on_overloaded_extern_membe
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_not_deprecated_on_overloaded_extern_member_function")
 {
-    ScopedFastFlag _{FFlag::LuauCheckTypeForDeprecated, true};
-
     loadDefinition(R"(
         declare extern type MyClass with
             function foo(self, val: string): ()
@@ -6358,8 +6324,6 @@ x.@1
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_props_through_metatable_typed_metatable")
 {
-    ScopedFastFlag sff{FFlag::LuauAutocompleteMetatableInheritance, true};
-
     check(R"(
         local Base = { baseProp = 5 }
         local Meta = setmetatable({ __index = Base }, {})
@@ -6533,8 +6497,6 @@ TEST_CASE_FIXTURE(ACFixture, "class_autocomplete_classname_inside_method")
 
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_on_nonexistent_table")
 {
-    ScopedFastFlag _{FFlag::LuauAutocompleteSkipErrorTypeInUnion, true};
-
     check(R"(
         local mygame = {}
 
