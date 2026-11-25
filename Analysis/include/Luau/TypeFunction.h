@@ -10,6 +10,7 @@
 #include "Luau/TypeFwd.h"
 
 #include <functional>
+#include <set>
 #include <string>
 #include <optional>
 
@@ -44,6 +45,13 @@ struct TypeFunctionContext
     const Constraint* constraint;
 
     std::optional<AstName> userFuncName; // Name of the user-defined type function; only available for UDTFs
+
+    // Luwu: the erroneous applications of user type functions in a class instantiation's type arguments already
+    // reported (`Box<Reject<"x">>`). Set by the type checker, so one is reported where it is first seen
+    // (`Box():retag("x")`), not again at each use of a value whose type holds it. Copies of an instance (a generic class's
+    // members are rebuilt on each read) are the same application. Every other instance is reported at each use, as
+    // upstream does (its FIXME CLI-95289).
+    std::set<std::string>* reportedApplications = nullptr;
 
     // Some type functions will create fresh instances as part of
     // being solved, for example:
