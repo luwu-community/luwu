@@ -79,6 +79,7 @@
 //   then per range the varints start pc, end pc (exclusive) and handler pc, and a byte for the target register.
 //   Luwu bundles: LBF_BUNDLE_PACK and LBF_BUNDLE_UNPACK.
 //   Luwu Destructuring: GETPOSITIONAL, and LBC_CLASSMEMBER_POSITIONAL with its position in LBC_CONSTANT_CLASS_SHAPE.
+//   Luwu string.format fastcall: LBF_STRING_FORMAT, including after the format string of an interpolated string.
 
 // # Bytecode type information history
 // Version 1: (from bytecode version 4) Type information for function signature. Currently supported.
@@ -1207,6 +1208,11 @@ enum LuauBuiltinFunction
     // Luwu Traits (rfcs/classes/traits.md): class.of(value) -> class?, which `Self` in a trait method calls
     LBF_CLASS_OF,
 
+    // Luwu String Extensions (rfcs/string-extensions.md): string.startswith/endswith/contains(s, needle, ...) -> boolean
+    LBF_STRING_STARTSWITH,
+    LBF_STRING_ENDSWITH,
+    LBF_STRING_CONTAINS,
+
     // Luwu try expressions: constructing a `Some`, `Ok` or `Err` without a call frame
     LBF_OPTION_SOME,
     LBF_RESULT_OK,
@@ -1216,10 +1222,8 @@ enum LuauBuiltinFunction
     LBF_BUNDLE_PACK,
     LBF_BUNDLE_UNPACK,
 
-    // Luwu String Extensions (rfcs/string-extensions.md): string.startswith/endswith/contains(s, needle, ...) -> boolean
-    LBF_STRING_STARTSWITH,
-    LBF_STRING_ENDSWITH,
-    LBF_STRING_CONTAINS,
+    // Luwu: string.format(format, ...) -> string, which interpolated strings compile to
+    LBF_STRING_FORMAT,
 };
 
 // Capture type, used in LOP_CAPTURE

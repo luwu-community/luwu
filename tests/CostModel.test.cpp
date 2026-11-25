@@ -5,6 +5,8 @@
 
 #include "doctest.h"
 
+LUAU_FASTFLAG(LuwuStringFormatFastcall)
+
 using namespace Luau;
 
 namespace Luau
@@ -198,6 +200,8 @@ end
 
 TEST_CASE("InterpString")
 {
+    ScopedFastFlag fastcall{FFlag::LuwuStringFormatFastcall, false};
+
     uint64_t model = modelFunction(R"(
 function test(a)
     return `hello, {a}!`
@@ -209,6 +213,23 @@ end
 
     CHECK_EQ(3, Luau::Compile::computeCost(model, args1, 1));
     CHECK_EQ(3, Luau::Compile::computeCost(model, args2, 1));
+}
+
+TEST_CASE("InterpStringCostsABuiltinCallWithTheFormatFastcall")
+{
+    ScopedFastFlag fastcall{FFlag::LuwuStringFormatFastcall, true};
+
+    uint64_t model = modelFunction(R"(
+function test(a)
+    return `hello, {a}!`
+end
+)");
+
+    const bool args1[] = {false};
+    const bool args2[] = {true};
+
+    CHECK_EQ(2, Luau::Compile::computeCost(model, args1, 1));
+    CHECK_EQ(2, Luau::Compile::computeCost(model, args2, 1));
 }
 
 TEST_CASE("MultipleAssignments")
