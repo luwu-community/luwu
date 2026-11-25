@@ -436,7 +436,14 @@ static bool addargumentposition(luaL_Strbuf* b, const VariantFields& fields, int
 // The message of an arithmetic, comparison, concatenation or length error (InvalidOperation), by the operator's name
 static void addoperationmessage(luaL_Strbuf* b, lua_State* L, const VariantFields& fields)
 {
-    const char* op = ttisstring(fields.at(0)) ? svalue(fields.at(0)) : "";
+    // a variant built without its operator
+    if (!ttisstring(fields.at(0)))
+    {
+        luaL_addstring(b, "invalid operation");
+        return;
+    }
+
+    const char* op = svalue(fields.at(0));
     const char* left = fields.type(L, 1);
     const char* right = fields.type(L, 2);
     char text[LUA_BUFFERSIZE];
@@ -459,8 +466,15 @@ static void addoperationmessage(luaL_Strbuf* b, lua_State* L, const VariantField
 // its objects, which is how an opaque class's private field reads as missing.
 static void addmissingmembermessage(luaL_Strbuf* b, lua_State* L, const VariantFields& fields)
 {
+    // a variant built without the member's name
+    if (!ttisstring(fields.at(1)))
+    {
+        luaL_addstring(b, "missing member");
+        return;
+    }
+
     const TValue* object = fields.at(0);
-    const char* name = ttisstring(fields.at(1)) ? svalue(fields.at(1)) : "?";
+    const char* name = svalue(fields.at(1));
     char text[LUA_BUFFERSIZE];
 
     const LuauClass* classdef = NULL;
@@ -597,7 +611,10 @@ static void addvariantmessage(luaL_Strbuf* b, LuwuBuiltinClass kind, const Varia
     switch (kind)
     {
     case LUWU_BUILTIN_ERR_RUNTIME:
-        addvariantstring(b, second);
+        if (ttisnil(second))
+            luaL_addstring(b, "runtime error");
+        else
+            addvariantstring(b, second);
         break;
     case LUWU_BUILTIN_ERR_NOTINDEXABLE:
     {
@@ -680,6 +697,14 @@ static void addvariantmessage(luaL_Strbuf* b, LuwuBuiltinClass kind, const Varia
         bool positioned = addargumentposition(b, fields, 2, missing);
         if (positioned)
             luaL_addstring(b, " (");
+        // a variant built without the type it expected
+        if (ttisnil(first))
+        {
+            luaL_addstring(b, "unexpected type");
+            if (positioned)
+                luaL_addchar(b, ')');
+            break;
+        }
         addvariantstring(b, first);
         luaL_addstring(b, " expected");
         if (!missing)
@@ -716,13 +741,21 @@ static void addvariantmessage(luaL_Strbuf* b, LuwuBuiltinClass kind, const Varia
         break;
     }
     case LUWU_BUILTIN_ERR_CANNOTBEPARSED:
-        luaL_addstring(b, "couldn't parse ");
-        addvariantvalue(b, first);
+        luaL_addstring(b, "couldn't parse");
+        if (!ttisnil(first))
+        {
+            luaL_addchar(b, ' ');
+            addvariantvalue(b, first);
+        }
         addvariantdetail(b, second);
         break;
     case LUWU_BUILTIN_ERR_UNEXPECTEDFLOAT:
-        luaL_addstring(b, "expected a whole number, got ");
-        addvariantvalue(b, first);
+        luaL_addstring(b, "expected a whole number");
+        if (!ttisnil(first))
+        {
+            luaL_addstring(b, ", got ");
+            addvariantvalue(b, first);
+        }
         break;
     case LUWU_BUILTIN_ERR_UNREACHABLE:
         luaL_addstring(b, "reached code that should be unreachable");
@@ -756,8 +789,15 @@ static void addvariantmessage(luaL_Strbuf* b, LuwuBuiltinClass kind, const Varia
     {
         const TValue* low = fields.at(1);
         const TValue* high = fields.at(2);
-        addvariantvalue(b, first);
-        luaL_addstring(b, " is out of range");
+        if (ttisnil(first))
+        {
+            luaL_addstring(b, "out of range");
+        }
+        else
+        {
+            addvariantvalue(b, first);
+            luaL_addstring(b, " is out of range");
+        }
         if (!ttisnil(low) && !ttisnil(high))
         {
             luaL_addstring(b, " (expected ");
