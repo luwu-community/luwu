@@ -16,7 +16,6 @@ using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauExportValueSyntax)
-LUAU_FASTFLAG(LuauFixPropReadsOnMetatableTypes)
 LUAU_FASTFLAG(LuwuClasses)
 
 TEST_SUITE_BEGIN("TypeInferOOP");
@@ -787,7 +786,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "metatable_field_precedence_for_subtyping")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "assign_to_prop_of_intersection_of_metatables")
 {
-    ScopedFastFlag sff{FFlag::LuauFixPropReadsOnMetatableTypes, true};
     if (FFlag::DebugLuauForceOldSolver)
         return;
 

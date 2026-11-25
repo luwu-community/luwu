@@ -34,7 +34,6 @@ LUAU_FASTINTVARIABLE(LuauCompileInlineThreshold, 25)
 LUAU_FASTINTVARIABLE(LuauCompileInlineThresholdMaxBoost, 300)
 LUAU_FASTINTVARIABLE(LuauCompileInlineDepth, 5)
 
-LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
@@ -1130,23 +1129,12 @@ struct Compiler
 
         int threshold = thresholdBase * inlineProfit / 100;
 
-        if (FFlag::LuauCompileIifeInline)
-        {
-            bool isIife = unwrapExprOfType<AstExprFunction>(expr->func) != nullptr;
+        bool isIife = unwrapExprOfType<AstExprFunction>(expr->func) != nullptr;
 
-            if (inlinedCost > threshold && !isIife)
-            {
-                reportInlineTooExpensive(func, inlinedCost, inlineProfit);
-                return false;
-            }
-        }
-        else
+        if (inlinedCost > threshold && !isIife)
         {
-            if (inlinedCost > threshold)
-            {
-                reportInlineTooExpensive(func, inlinedCost, inlineProfit);
-                return false;
-            }
+            reportInlineTooExpensive(func, inlinedCost, inlineProfit);
+            return false;
         }
 
         const char* inlinedOwner = nullptr;

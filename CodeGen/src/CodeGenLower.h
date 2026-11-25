@@ -25,7 +25,6 @@
 #include <vector>
 
 LUAU_FASTFLAG(DebugCodegenOptSize)
-LUAU_FASTFLAG(LuauCodegenSharedLog)
 LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_FASTINT(CodegenHeuristicsBlockLimit)
 LUAU_FASTINT(CodegenHeuristicsBlockInstructionLimit)
@@ -107,10 +106,10 @@ inline bool lowerImpl(
     // Luwu codegen logging: upstream checks `logger` for null only here. Before each
     // `logger->formatAppend` below it tests only the output flag. That relies on callers that pass a
     // null logger (CodeGenContext) never asking for IR or assembly output. Luwu also checks `logger` at
-    // each of those appends, and uses `build.logAppend` when it is null.
+    // each of those appends.
     std::string emptyLog;
     IrToStringContext ctx{
-        FFlag::LuauCodegenSharedLog ? (logger ? logger->text : emptyLog) : build.text,
+        logger ? logger->text : emptyLog,
         function.blocks,
         function.constants,
         function.cfg,
@@ -119,7 +118,7 @@ inline bool lowerImpl(
     };
 
     // We use this to skip outlined fallback blocks from IR/asm text output
-    size_t textSize = (FFlag::LuauCodegenSharedLog ? ctx.result : build.text).length();
+    size_t textSize = ctx.result.length();
     uint32_t codeSize = build.getCodeSize();
     bool seenFallback = false;
 
@@ -145,20 +144,15 @@ inline bool lowerImpl(
         // If we want to skip fallback/exit code IR/asm, we'll record when those blocks start once we see them
         if ((block.kind == IrBlockKind::Fallback || block.kind == IrBlockKind::ExitSync) && !seenFallback)
         {
-            textSize = (FFlag::LuauCodegenSharedLog ? ctx.result : build.text).length();
+            textSize = ctx.result.length();
             codeSize = build.getCodeSize();
             seenFallback = true;
         }
 
         if (options.includeIr)
         {
-            if (options.includeIrPrefix == IncludeIrPrefix::Yes)
-            {
-                if (FFlag::LuauCodegenSharedLog && logger)
-                    logger->formatAppend("# ");
-                else
-                    build.logAppend("# ");
-            }
+            if (options.includeIrPrefix == IncludeIrPrefix::Yes && logger)
+                logger->formatAppend("# ");
 
             toStringDetailed(ctx, block, blockIndex, options.includeUseInfo, options.includeCfgInfo, options.includeRegFlowInfo);
         }
@@ -187,19 +181,12 @@ inline bool lowerImpl(
         {
             if (options.includeIr)
             {
-                if (FFlag::LuauCodegenSharedLog && logger)
+                if (logger)
                 {
                     if (options.includeIrPrefix == IncludeIrPrefix::Yes)
                         logger->formatAppend("# ");
 
                     logger->formatAppend("  implicit CHECK_SAFE_ENV exit(%u)\n", block.startpc);
-                }
-                else
-                {
-                    if (options.includeIrPrefix == IncludeIrPrefix::Yes)
-                        build.logAppend("# ");
-
-                    build.logAppend("  implicit CHECK_SAFE_ENV exit(%u)\n", block.startpc);
                 }
             }
 
@@ -216,7 +203,7 @@ inline bool lowerImpl(
             // If IR instruction is the first one for the original bytecode, we can annotate it with source code text
             if (outputEnabled && options.annotator && bcLocation != ~0u)
             {
-                options.annotator(options.annotatorContext, (FFlag::LuauCodegenSharedLog ? ctx.result : build.text), bytecodeid, bcLocation);
+                options.annotator(options.annotatorContext, ctx.result, bytecodeid, bcLocation);
 
                 // If available, report inferred register tags
                 BytecodeTypes bcTypes = function.getBytecodeTypesAt(bcLocation);
@@ -225,10 +212,8 @@ inline bool lowerImpl(
                 {
                     toString(ctx.result, bcTypes, options.compilationOptions.userdataTypes);
 
-                    if (FFlag::LuauCodegenSharedLog && logger)
+                    if (logger)
                         logger->formatAppend("\n");
-                    else
-                        build.logAppend("\n");
                 }
             }
 
@@ -262,13 +247,8 @@ inline bool lowerImpl(
 
             if (options.includeIr)
             {
-                if (options.includeIrPrefix == IncludeIrPrefix::Yes)
-                {
-                    if (FFlag::LuauCodegenSharedLog && logger)
-                        logger->formatAppend("# ");
-                    else
-                        build.logAppend("# ");
-                }
+                if (options.includeIrPrefix == IncludeIrPrefix::Yes && logger)
+                    logger->formatAppend("# ");
 
                 toStringDetailed(ctx, block, blockIndex, inst, index, options.includeUseInfo);
             }
@@ -320,10 +300,8 @@ inline bool lowerImpl(
 
         if (options.includeIr && options.includeIrPrefix == IncludeIrPrefix::Yes)
         {
-            if (FFlag::LuauCodegenSharedLog && logger)
+            if (logger)
                 logger->formatAppend("#\n");
-            else
-                build.logAppend("#\n");
         }
 
         if (block.expectedNextBlock == ~0u)
@@ -332,23 +310,18 @@ inline bool lowerImpl(
 
     if (!seenFallback)
     {
-        textSize = (FFlag::LuauCodegenSharedLog ? ctx.result : build.text).length();
+        textSize = ctx.result.length();
         codeSize = build.getCodeSize();
     }
 
     lowering.finishFunction();
 
-    if (outputEnabled && !options.includeOutlinedCode && textSize < (FFlag::LuauCodegenSharedLog ? ctx.result : build.text).size())
+    if (outputEnabled && !options.includeOutlinedCode && textSize < ctx.result.size())
     {
-        (FFlag::LuauCodegenSharedLog ? ctx.result : build.text).resize(textSize);
+        ctx.result.resize(textSize);
 
-        if (options.includeAssembly)
-        {
-            if (FFlag::LuauCodegenSharedLog && logger)
-                logger->formatAppend("; skipping %u bytes of outlined code\n", unsigned((build.getCodeSize() - codeSize) * sizeof(build.code[0])));
-            else
-                build.logAppend("; skipping %u bytes of outlined code\n", unsigned((build.getCodeSize() - codeSize) * sizeof(build.code[0])));
-        }
+        if (options.includeAssembly && logger)
+            logger->formatAppend("; skipping %u bytes of outlined code\n", unsigned((build.getCodeSize() - codeSize) * sizeof(build.code[0])));
     }
 
     return true;

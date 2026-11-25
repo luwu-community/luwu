@@ -10,7 +10,6 @@
 
 #include "lobject.h"
 
-LUAU_FASTFLAGVARIABLE(LuauCodegenVmExitSyncMultiUse)
 LUAU_FASTFLAGVARIABLE(LuauCodegenDseRestoreHints)
 LUAU_FLAGVERSION(LuauCodegenDseRestoreHints, 2)
 
@@ -1544,53 +1543,50 @@ static void generateVmExitBlocks(IrBuilder& build, const std::vector<uint32_t>& 
     // Values that are only used inside exit sync blocks store instructions or sunk operations
     DenseHashSet<uint32_t> exitSyncPrivateInst{~0u};
 
-    if (FFlag::LuauCodegenVmExitSyncMultiUse)
+    // Tracking the use count from exit blocks, if instruction exit use count equals overall use count, it's only used in the exit
+    DenseHashMap<uint32_t, uint32_t> exitInstUseCounts{~0u};
+    SmallVector<uint32_t, 8> worklist;
+
+    auto recordExitUse = [&](IrOp op)
     {
-        // Tracking the use count from exit blocks, if instruction exit use count equals overall use count, it's only used in the exit
-        DenseHashMap<uint32_t, uint32_t> exitInstUseCounts{~0u};
-        SmallVector<uint32_t, 8> worklist;
-
-        auto recordExitUse = [&](IrOp op)
+        if (op.kind == IrOpKind::Inst)
         {
-            if (op.kind == IrOpKind::Inst)
-            {
-                exitInstUseCounts[op.index]++;
+            exitInstUseCounts[op.index]++;
 
-                // Put the value into a worklist (duplicates are possible, but that's safe)
-                worklist.push_back(op.index);
-            }
-        };
-
-        // Recording use counts of the original inputs (exit store instruction arguments)
-        for (uint32_t vmExitSyncLocation : recordedVmExitSyncs)
-        {
-            VmExitSyncInfo& syncInfo = function.vmExitInfo[vmExitSyncLocation];
-
-            for (auto& regStore : syncInfo.regStores)
-            {
-                for (auto& record : regStore.stores)
-                    visitArguments(record.backup, recordExitUse);
-            }
+            // Put the value into a worklist (duplicates are possible, but that's safe)
+            worklist.push_back(op.index);
         }
+    };
 
-        // Looping though recorded inputs
-        // If the use count of the instruction all come from sync exits, the instruction can be marked private to exits and its inputs are checked
-        while (!worklist.empty())
+    // Recording use counts of the original inputs (exit store instruction arguments)
+    for (uint32_t vmExitSyncLocation : recordedVmExitSyncs)
+    {
+        VmExitSyncInfo& syncInfo = function.vmExitInfo[vmExitSyncLocation];
+
+        for (auto& regStore : syncInfo.regStores)
         {
-            uint32_t instIdx = worklist.back();
-            worklist.pop_back();
+            for (auto& record : regStore.stores)
+                visitArguments(record.backup, recordExitUse);
+        }
+    }
 
-            if (exitSyncPrivateInst.find(instIdx))
-                continue;
+    // Looping though recorded inputs
+    // If the use count of the instruction all come from sync exits, the instruction can be marked private to exits and its inputs are checked
+    while (!worklist.empty())
+    {
+        uint32_t instIdx = worklist.back();
+        worklist.pop_back();
 
-            IrInst& inst = function.instructions[instIdx];
-            uint32_t* exitInstUseCount = exitInstUseCounts.find(instIdx);
+        if (exitSyncPrivateInst.find(instIdx))
+            continue;
 
-            if (exitInstUseCount && inst.useCount == *exitInstUseCount && !hasSideEffects(inst.cmd) && !isUnsafeToSink(inst.cmd))
-            {
-                exitSyncPrivateInst.insert(instIdx);
-                visitArguments(inst, recordExitUse);
-            }
+        IrInst& inst = function.instructions[instIdx];
+        uint32_t* exitInstUseCount = exitInstUseCounts.find(instIdx);
+
+        if (exitInstUseCount && inst.useCount == *exitInstUseCount && !hasSideEffects(inst.cmd) && !isUnsafeToSink(inst.cmd))
+        {
+            exitSyncPrivateInst.insert(instIdx);
+            visitArguments(inst, recordExitUse);
         }
     }
 
@@ -1645,16 +1641,14 @@ static void generateVmExitBlocks(IrBuilder& build, const std::vector<uint32_t>& 
         {
             IrInst& inst = function.instOp(inputs[i].first);
 
-            bool canSink = FFlag::LuauCodegenVmExitSyncMultiUse
-                               ? exitSyncPrivateInst.contains(inputs[i].first.index)
-                               : (inst.useCount == inputs[i].second && !hasSideEffects(inst.cmd) && !isUnsafeToSink(inst.cmd));
+            bool canSink = exitSyncPrivateInst.contains(inputs[i].first.index);
 
             if (canSink)
             {
                 uint32_t instIdx = function.getInstIndex(inst);
 
                 // Check if some other sunk instruction has already placed this input to the list before
-                if (FFlag::LuauCodegenVmExitSyncMultiUse && sunkInstructions.contains(instIdx))
+                if (sunkInstructions.contains(instIdx))
                 {
                     // Move the input to the back of the list so that it is cloned first
                     auto it = std::remove(argInstructions.begin(), argInstructions.end(), instIdx);
@@ -1665,9 +1659,7 @@ static void generateVmExitBlocks(IrBuilder& build, const std::vector<uint32_t>& 
                 else
                 {
                     argInstructions.push_back(instIdx);
-
-                    if (FFlag::LuauCodegenVmExitSyncMultiUse)
-                        sunkInstructions.insert(instIdx);
+                    sunkInstructions.insert(instIdx);
                 }
 
                 inputs.erase(inputs.begin() + i); // Delete this input

@@ -13,7 +13,6 @@
 #include "ltm.h"
 
 LUAU_FASTFLAG(LuauCodegenInteger3)
-LUAU_FASTFLAGVARIABLE(LuauCodegenBuilinDeadRange)
 LUAU_FASTFLAG(LuwuClasses)
 
 namespace Luau
@@ -1194,7 +1193,7 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
         if (nresults == LUA_MULTRET)
             build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(ra), build.constInt(br.actualResultCount));
         else
-            build.inst(IrCmd::MARK_DEAD, build.vmReg(ra + (FFlag::LuauCodegenBuilinDeadRange ? br.actualResultCount : 1)), build.constInt(-1));
+            build.inst(IrCmd::MARK_DEAD, build.vmReg(ra + br.actualResultCount), build.constInt(-1));
 
         if (br.type != BuiltinImplType::UsesFallback)
         {

@@ -20,10 +20,8 @@
 LUAU_DYNAMIC_FASTINT(LuauTypeFamilyApplicationCartesianProductLimit)
 LUAU_DYNAMIC_FASTINTVARIABLE(LuauStepRefineRecursionLimit, 64)
 
-LUAU_FASTFLAGVARIABLE(LuauConcatDoesntAlwaysReturnString)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
-LUAU_FASTFLAG(LuauRemoveExtraSubtypingInstances)
 
 namespace Luau
 {
@@ -162,14 +160,13 @@ static std::optional<TypePackId> solveFunctionCall(NotNull<TypeFunctionContext> 
 
     if (!unifier.genericSubstitutions.empty() || !unifier.genericPackSubstitutions.empty())
     {
-        Subtyping subtyping_DEPRECATED{ctx->builtins, ctx->arena, ctx->normalizer, ctx->typeFunctionRuntime, ctx->ice};
         auto newRetTp = getApproximateReturnTypeForFunctionCall(*selected.overload).value_or(ctx->builtins->errorTypePack);
 
         std::optional<TypePackId> subst = instantiate2(
             ctx->arena,
             std::move(unifier.genericSubstitutions),
             std::move(unifier.genericPackSubstitutions),
-            FFlag::LuauRemoveExtraSubtypingInstances ? ctx->subtyping : NotNull{&subtyping_DEPRECATED},
+            ctx->subtyping,
             ctx->scope,
             newRetTp
         );
@@ -669,29 +666,17 @@ TypeFunctionReductionResult<TypeId> concatTypeFunction(
     else
         inferredArgs = {rhsTy, lhsTy};
 
-    if (FFlag::LuauConcatDoesntAlwaysReturnString)
-    {
-        std::optional<TypePackId> retPack = solveFunctionCall(
-            ctx, ctx->constraint ? ctx->constraint->location : Location{}, *mmType, ctx->arena->addTypePack(std::move(inferredArgs))
-        );
-        if (!retPack)
-            return {std::nullopt, Reduction::Erroneous, {}, {}};
+    std::optional<TypePackId> retPack = solveFunctionCall(
+        ctx, ctx->constraint ? ctx->constraint->location : Location{}, *mmType, ctx->arena->addTypePack(std::move(inferredArgs))
+    );
+    if (!retPack)
+        return {std::nullopt, Reduction::Erroneous, {}, {}};
 
-        TypePack extracted = extendTypePack(*ctx->arena, ctx->builtins, *retPack, 1);
-        if (extracted.head.empty())
-            return {std::nullopt, Reduction::Erroneous, {}, {}};
+    TypePack extracted = extendTypePack(*ctx->arena, ctx->builtins, *retPack, 1);
+    if (extracted.head.empty())
+        return {std::nullopt, Reduction::Erroneous, {}, {}};
 
-        return {extracted.head.front(), Reduction::MaybeOk, {}, {}};
-    }
-    else
-    {
-        if (!solveFunctionCall(
-                ctx, ctx->constraint ? ctx->constraint->location : Location{}, *mmType, ctx->arena->addTypePack(std::move(inferredArgs))
-            ))
-            return {std::nullopt, Reduction::Erroneous, {}, {}};
-
-        return {ctx->builtins->stringType, Reduction::MaybeOk, {}, {}};
-    }
+    return {extracted.head.front(), Reduction::MaybeOk, {}, {}};
 }
 
 namespace
