@@ -31,6 +31,9 @@ LUAU_FASTINT(LuauTypeInferIterationLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAGVARIABLE(DebugLuauMagicVariableNames)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteConst)
 LUAU_FASTFLAGVARIABLE(LuauAutocompleteExport)
@@ -1735,6 +1738,22 @@ static bool isValidBreakContinueContext(const std::vector<AstNode*>& ancestry, P
     return false;
 }
 
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): is the position a statement in a `do` expression's block, where `give`
+// can go? A function boundary in between means no.
+static bool isInDoExprBody(const std::vector<AstNode*>& ancestry)
+{
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        if ((*it)->is<AstStatFunction>() || (*it)->is<AstStatLocalFunction>() || (*it)->is<AstExprFunction>() || (*it)->is<AstStatTypeFunction>())
+            return false;
+
+        if (AstExprDo* doExpr = (*it)->as<AstExprDo>())
+            return !doExpr->shorthand;
+    }
+
+    return false;
+}
+
 // Luwu Classes (rfcs/classes/classes.md): checks if we're in top level because
 // we want to only only offer class/trait keywords at top level of module.
 static bool isTopLevelStatementPosition(const std::vector<AstNode*>& ancestry)
@@ -1822,6 +1841,9 @@ static AutocompleteEntryMap autocompleteStatement(
         }
     }
 
+    if (FFlag::LuwuDoExpr && isInDoExprBody(ancestry))
+        result.emplace("give", AutocompleteEntry{AutocompleteEntryKind::Keyword});
+
     // classes and traits can only exist in top level code of a module so only
     // suggest the class and trait keywords there
     if (FFlag::LuwuClasses && isTopLevelStatementPosition(ancestry))
@@ -1855,6 +1877,9 @@ static AutocompleteEntryMap autocompleteStatement(
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
         else if (AstStatClass* statClass = (*it)->as<AstStatClass>(); statClass && !statClass->hasEnd)
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md)
+        else if (AstStatMatch* statMatch = (*it)->as<AstStatMatch>(); statMatch && !statMatch->hasEnd)
+            result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
         if (AstStatBlock* exprBlock = (*it)->as<AstStatBlock>(); exprBlock && !exprBlock->hasEnd)
             result.emplace("end", AutocompleteEntry{AutocompleteEntryKind::Keyword});
     }
@@ -1862,7 +1887,7 @@ static AutocompleteEntryMap autocompleteStatement(
     if (ancestry.size() >= 2)
     {
         AstNode* parent = ancestry.rbegin()[1];
-        if (AstStatIf* statIf = parent->as<AstStatIf>())
+        if (AstStatIf* statIf = parent->as<AstStatIf>(); statIf && !statIf->isWhenGuard)
         {
             if (!statIf->elsebody || (statIf->elseLocation && statIf->elseLocation->containsClosed(position)))
             {
@@ -1912,7 +1937,7 @@ static bool autocompleteIfElseExpression(
     }
 
     AstExprIfElse* ifElseExpr = parent->as<AstExprIfElse>();
-    if (!ifElseExpr || ifElseExpr->condition->location.containsClosed(position))
+    if (!ifElseExpr || ifElseExpr->conditionLocation().containsClosed(position))
     {
         return false;
     }
@@ -2020,6 +2045,11 @@ static AutocompleteContext autocompleteExpression(
         result["not"] = {AutocompleteEntryKind::Keyword};
         result["function"] = {AutocompleteEntryKind::Keyword, std::nullopt, false, false, correctForFunction};
 
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `do` starts a value too. Without it, typing `do` here fuzzy-matches
+        // names like `DirectoryPath` and the editor completes to them.
+        if (FFlag::LuwuDoExpr)
+            result["do"] = {AutocompleteEntryKind::Keyword, std::nullopt, false, false};
+
         if (auto ty = findExpectedTypeAt(module, node, position))
             autocompleteStringSingleton(*ty, true, node, position, result);
     }
@@ -2095,6 +2125,44 @@ static bool stringPartOfInterpString(const AstNode* node, Position position)
     }
 
     return true;
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the type of the value a pattern tests, when the last
+// node of `ancestry` is one of its alternatives: the value in `x is ...`, or the match's subject for a `case` arm. A
+// fragment's type check records types only for what the pattern stands for, so a tested name is looked up in `scope`.
+static std::optional<TypeId> patternTestedType(const Module& module, const std::vector<AstNode*>& ancestry, const ScopePtr& scope)
+{
+    if (ancestry.size() < 2)
+        return std::nullopt;
+
+    const AstExprMatchPattern* pattern = ancestry[ancestry.size() - 2]->as<AstExprMatchPattern>();
+    if (!pattern)
+        return std::nullopt;
+
+    const AstExpr* tested = pattern->value;
+    const AstLocal* testedLocal = pattern->subject;
+    for (auto it = ancestry.rbegin() + 2; !tested && it != ancestry.rend(); ++it)
+    {
+        if (const AstStatMatch* statMatch = (*it)->as<AstStatMatch>())
+            tested = statMatch->subject.value;
+        else if (const AstExprMatch* exprMatch = (*it)->as<AstExprMatch>())
+            tested = exprMatch->subject.value;
+    }
+
+    if (const TypeId* ty = tested ? module.astTypes.find(tested) : nullptr)
+        return *ty;
+
+    const char* name = testedLocal ? testedLocal->name.value : nullptr;
+    if (const AstExprLocal* local = tested ? tested->as<AstExprLocal>() : nullptr)
+        name = local->local->name.value;
+    else if (const AstExprGlobal* global = tested ? tested->as<AstExprGlobal>() : nullptr)
+        name = global->name.value;
+
+    if (!name || !scope)
+        return std::nullopt;
+    if (std::optional<Binding> binding = scope->linearSearchForBinding(name, /* traverseScopeChain= */ true))
+        return binding->typeId;
+    return std::nullopt;
 }
 
 static bool isSimpleInterpolatedString(const AstNode* node)
@@ -2455,7 +2523,115 @@ static AutocompleteResult autocompleteWhileLoopKeywords(std::vector<AstNode*> an
     ret["do"] = {AutocompleteEntryKind::Keyword};
     ret["and"] = {AutocompleteEntryKind::Keyword};
     ret["or"] = {AutocompleteEntryKind::Keyword};
+
+    // Luwu If Local (rfcs/control-flow/if-local.md)
+    if (FFlag::LuwuIfLocal)
+        ret["when"] = {AutocompleteEntryKind::Keyword};
     return {std::move(ret), std::move(ancestry), AutocompleteContext::Keyword};
+}
+
+// Luwu If Local (rfcs/control-flow/if-local.md): the keywords after a loop's header, when the cursor is past its last part (the
+// bounds, the values, the condition or the last clause of its `when` chain) and before its `do`: `do` and `when`, plus
+// `give` and `for` for a table comprehension's clause. Nothing when the cursor isn't there, or the part before it
+// is unfinished.
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the arm of the innermost match whose `then` is at
+// `position`, or whose `then` is missing after a finished test, where the keyword is being typed
+static const AstMatchArm* matchArmHeadAt(const std::vector<AstNode*>& ancestry, Position position)
+{
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        AstArray<AstMatchArm> arms{nullptr, 0};
+        if (const AstStatMatch* statMatch = (*it)->as<AstStatMatch>())
+            arms = statMatch->arms;
+        else if (const AstExprMatch* exprMatch = (*it)->as<AstExprMatch>())
+            arms = exprMatch->arms;
+        else
+            continue;
+
+        for (const AstMatchArm& arm : arms)
+        {
+            bool onThen = arm.thenLocation && arm.thenLocation->containsClosed(position);
+            bool thenMissing = !arm.thenLocation && arm.condition && !arm.condition->is<AstExprError>() && position > arm.condition->location.end;
+            if (onThen || thenMissing)
+                return &arm;
+        }
+        return nullptr;
+    }
+    return nullptr;
+}
+
+static std::optional<AutocompleteResult> autocompleteLoopHeaderKeywords(const std::vector<AstNode*>& ancestry, Position position)
+{
+    for (auto it = ancestry.rbegin(); it != ancestry.rend(); ++it)
+    {
+        AstNode* node = *it;
+        if (node->is<AstExprFunction>())
+            return std::nullopt;
+
+        AstExpr* last = nullptr;
+        AstStatIf* guard = nullptr;
+        bool hasDo = false;
+        Location doLocation;
+
+        if (AstStatFor* loop = node->as<AstStatFor>())
+        {
+            last = loop->step ? loop->step : loop->to;
+            guard = loop->whenGuard;
+            hasDo = loop->hasDo;
+            doLocation = loop->doLocation;
+        }
+        else if (AstStatForIn* loop = node->as<AstStatForIn>(); loop && loop->values.size != 0)
+        {
+            last = loop->values.data[loop->values.size - 1];
+            guard = loop->whenGuard;
+            hasDo = loop->hasDo;
+            doLocation = loop->doLocation;
+        }
+        else if (AstStatWhile* loop = node->as<AstStatWhile>(); loop && loop->clauses.size != 0)
+        {
+            // an ordinary `while` condition has its own completions below; this only covers a `when` chain
+            last = loop->clauses.data[loop->clauses.size - 1].expr;
+            hasDo = loop->hasDo;
+            doLocation = loop->doLocation;
+        }
+        else
+        {
+            continue;
+        }
+
+        Position end = guard ? guard->conditionLocation().end : last->location.end;
+        if (guard && guard->clauses.size != 0)
+            last = guard->clauses.data[guard->clauses.size - 1].expr;
+        else if (guard)
+            last = guard->condition;
+
+        bool inHeaderTail = position > end && (!hasDo || position <= doLocation.begin);
+        if (!inHeaderTail || last->is<AstExprError>())
+            return std::nullopt;
+
+        bool inComprehension = std::any_of(
+            ancestry.begin(),
+            ancestry.end(),
+            [](AstNode* n)
+            {
+                return n->is<AstExprTableComprehension>();
+            }
+        );
+
+        AutocompleteEntryMap ret;
+        ret["when"] = {AutocompleteEntryKind::Keyword};
+        ret["do"] = {AutocompleteEntryKind::Keyword};
+
+        if (inComprehension && !node->is<AstStatWhile>())
+        {
+            ret["give"] = {AutocompleteEntryKind::Keyword};
+            ret["for"] = {AutocompleteEntryKind::Keyword};
+        }
+
+        return AutocompleteResult{std::move(ret), ancestry, AutocompleteContext::Keyword};
+    }
+
+    return std::nullopt;
 }
 
 // Builds the argument parameter list string (what goes between the parentheses of a function expression).
@@ -2962,6 +3138,24 @@ AutocompleteResult autocomplete_(
         return {std::move(props), ancestry, AutocompleteContext::Property};
     }
 
+    // Luwu If Local (rfcs/control-flow/if-local.md): `for ... when ... do`, `while local ... when ... do` and comprehension clauses
+    if (FFlag::LuwuIfLocal || FFlag::LuwuTableComprehensions)
+    {
+        if (std::optional<AutocompleteResult> loopKeywords = autocompleteLoopHeaderKeywords(ancestry, position))
+            return std::move(*loopKeywords);
+    }
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a match arm's `then`, as for an `if`. Completing a
+    // name there would replace the keyword being typed.
+    if (const AstMatchArm* arm = matchArmHeadAt(ancestry, position))
+    {
+        AutocompleteEntryMap keywords;
+        keywords["then"] = {AutocompleteEntryKind::Keyword};
+        if (!arm->thenLocation)
+            keywords["when"] = {AutocompleteEntryKind::Keyword};
+        return {std::move(keywords), ancestry, AutocompleteContext::Keyword};
+    }
+
     AstNode* node = ancestry.back();
 
     // Luwu Destructuring (rfcs/destructuring.md): a `.` alone where an expression goes is a `.{...}` table with its `{`
@@ -3093,13 +3287,24 @@ AutocompleteResult autocomplete_(
 
     else if (AstStatWhile* statWhile = parent->as<AstStatWhile>(); node->is<AstStatBlock>() && statWhile)
     {
-        if (!statWhile->hasDo && !statWhile->condition->is<AstStatError>() && position > statWhile->condition->location.end)
+        if (!statWhile->hasDo && !statWhile->condition->is<AstStatError>() && position > statWhile->conditionLocation().end)
         {
             return autocompleteWhileLoopKeywords(ancestry);
         }
 
         if (!statWhile->hasDo || position < statWhile->doLocation.begin)
-            return autocompleteExpression(*module, builtinTypes, typeArena, ancestry, scopeAtPosition, position);
+        {
+            AutocompleteResult result = autocompleteExpression(*module, builtinTypes, typeArena, ancestry, scopeAtPosition, position);
+
+            // Luwu If Local (rfcs/control-flow/if-local.md): a condition can start with a binding
+            if (FFlag::LuwuIfLocal && statWhile->clauses.size == 0 && statWhile->condition->is<AstExprError>())
+            {
+                result.entryMap["local"] = {AutocompleteEntryKind::Keyword};
+                result.entryMap["const"] = {AutocompleteEntryKind::Keyword};
+            }
+
+            return result;
+        }
 
         if (statWhile->hasDo && position > statWhile->doLocation.end)
             return {autocompleteStatement(*module, ancestry, scopeAtPosition, position), ancestry, AutocompleteContext::Statement};
@@ -3107,7 +3312,7 @@ AutocompleteResult autocomplete_(
 
     else if (AstStatWhile* statWhile = extractStat<AstStatWhile>(ancestry);
              (statWhile && (!statWhile->hasDo || statWhile->doLocation.containsClosed(position)) && statWhile->condition &&
-              !statWhile->condition->location.containsClosed(position)))
+              !statWhile->conditionLocation().containsClosed(position)))
     {
         return autocompleteWhileLoopKeywords(ancestry);
     }
@@ -3122,18 +3327,33 @@ AutocompleteResult autocomplete_(
     else if (AstStatIf* statIf = parent->as<AstStatIf>(); statIf && node->is<AstStatBlock>())
     {
         if (statIf->condition->is<AstExprError>())
-            return autocompleteExpression(*module, builtinTypes, typeArena, ancestry, scopeAtPosition, position);
+        {
+            AutocompleteResult result = autocompleteExpression(*module, builtinTypes, typeArena, ancestry, scopeAtPosition, position);
+
+            // Luwu If Local (rfcs/control-flow/if-local.md): a condition can start with a binding
+            if (FFlag::LuwuIfLocal && statIf->clauses.size == 0)
+            {
+                result.entryMap["local"] = {AutocompleteEntryKind::Keyword};
+                result.entryMap["const"] = {AutocompleteEntryKind::Keyword};
+            }
+
+            return result;
+        }
         else if (!statIf->thenLocation || statIf->thenLocation->containsClosed(position))
             return {{{"then", AutocompleteEntry{AutocompleteEntryKind::Keyword}}}, ancestry, AutocompleteContext::Keyword};
     }
     else if (AstStatIf* statIf = extractStat<AstStatIf>(ancestry); statIf &&
                                                                    (!statIf->thenLocation || statIf->thenLocation->containsClosed(position)) &&
-                                                                   (statIf->condition && !statIf->condition->location.containsClosed(position)))
+                                                                   (statIf->condition && !statIf->conditionLocation().containsClosed(position)))
     {
         AutocompleteEntryMap ret;
         ret["then"] = {AutocompleteEntryKind::Keyword};
         ret["and"] = {AutocompleteEntryKind::Keyword};
         ret["or"] = {AutocompleteEntryKind::Keyword};
+
+        // Luwu If Local (rfcs/control-flow/if-local.md)
+        if (FFlag::LuwuIfLocal)
+            ret["when"] = {AutocompleteEntryKind::Keyword};
         return {std::move(ret), ancestry, AutocompleteContext::Keyword};
     }
     else if (AstStatRepeat* statRepeat = node->as<AstStatRepeat>(); statRepeat && statRepeat->condition->is<AstExprError>())
@@ -3254,6 +3474,9 @@ AutocompleteResult autocomplete_(
 
         if (auto it = module->astExpectedTypes.find(node->asExpr()))
             autocompleteStringSingleton(*it, false, node, position, result);
+
+        if (std::optional<TypeId> tested = patternTestedType(*module, ancestry, scopeAtPosition))
+            autocompleteStringSingleton(*tested, false, node, position, result);
 
         return {std::move(result), ancestry, AutocompleteContext::String};
     }

@@ -9,6 +9,7 @@
 
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
+LUAU_FASTFLAG(LuwuTableFunctionFields)
 
 using namespace Luau;
 
@@ -64,6 +65,27 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_tables_and_calls")
     checkTypewriting(*this, before, "local w = wrap({ a, b })", kAfter);
     checkTypewriting(*this, before, "print(string.format(\"%d\", a))", kAfter);
     checkTypewriting(*this, before, "local s = (\"abc\"):upper()", kAfter);
+}
+
+// Luwu: a function in a table or a call, typed before its `end`, stops at the closing bracket instead of taking it
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_functions_in_tables_and_calls")
+{
+    ScopedFastFlag tableFunctionFields{FFlag::LuwuTableFunctionFields, true};
+
+    const char* before = "local function wrap<T>(t: T, mt: {}): T return t end\n";
+    checkTypewriting(
+        *this,
+        before,
+        "local t = wrap({\n    join = function(s: string): string\n        if s == \"\" then\n            return s\n        end\n        return s\n    end,\n}, {})",
+        kAfter
+    );
+    checkTypewriting(
+        *this,
+        before,
+        "local t = wrap({\n    function join(s: string): string\n        if s == \"\" then\n            return s\n        end\n        return s\n    end,\n}, {})",
+        kAfter
+    );
+    checkTypewriting(*this, before, "local w = wrap(function(s: string)\n    if s == \"\" then\n        print(s)\n    end\nend, {})", kAfter);
 }
 
 // Luwu: the DiscardedValues lint, on a call in an if-else branch
