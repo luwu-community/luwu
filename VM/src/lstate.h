@@ -191,6 +191,25 @@ struct lua_UdataDirectAccessData
 ** `global state', shared by all threads of this state
 */
 // clang-format off
+// Luwu bundles: the largest bundle with a class of its own size; larger ones are `BigBundle`s
+#define LUWU_BUNDLE_FIXED_MAX 6
+// Luwu bundles: the most values a bundle holds. Comparing and hashing a bundle walks its values.
+#define LUWU_BUNDLE_LIMIT 1024
+
+// Luwu builtin classes: the classes the VM builds in C++ (luaR_newnativeclass), one slot each in global_State
+enum LuwuBuiltinClass
+{
+    // Luwu bundles: one class per size up to LUWU_BUNDLE_FIXED_MAX, LUWU_BUILTIN_BUNDLE0 + n holding n values, then
+    // `BigBundle` for every larger size
+    LUWU_BUILTIN_BUNDLE0,
+    LUWU_BUILTIN_BIGBUNDLE = LUWU_BUILTIN_BUNDLE0 + LUWU_BUNDLE_FIXED_MAX + 1,
+    LUWU_BUILTIN_ORDEREDMAP,
+    LUWU_BUILTIN_VEC,
+    LUWU_BUILTIN_VECDEQUE,
+
+    LUWU_BUILTIN__COUNT
+};
+
 typedef struct global_State
 {
     stringtable strt; // hash table for strings
@@ -224,9 +243,9 @@ typedef struct global_State
     TString* ttname[LUA_T_COUNT]; // names for basic types, as returned by tostring()/error messages (LUA_TSYMNONE reports as "none")
     TString* ttypename[LUA_T_COUNT]; // names for basic types, as returned by type() (matches luaT_typenames verbatim)
     TString* traittypename;          // Luwu Traits (rfcs/classes/traits.md): "trait", which type() and typeof() give for a trait
-    // Luwu Traits (rfcs/classes/traits.md): the C function LOP_INITTRAITS calls to run an object's trait initializers. One per
-    // state, made with it and marked as a root, so construction never allocates it.
-    Closure* traitinitrunner;
+    // Luwu builtin classes: each builtin class once its library has built it, NULL until then. A GC root, so a class
+    // lives as long as the state even when no library table holds it. Native methods check `self` against these.
+    struct LuauClass* builtinclasses[LUWU_BUILTIN__COUNT];
     TString* tmname[TM_N]; // array with tag-method names
 
     TValue pseudotemp; // storage for temporary values used in pseudo2addr
@@ -260,6 +279,10 @@ typedef struct global_State
     void (*udatagc[LUA_UTAG_LIMIT])(lua_State*, void*); // for each userdata tag, a gc callback to be called immediately before freeing memory
     lua_UserdataMark udatamark[LUA_UTAG_LIMIT]; // gc callbacks allowing the embedder to mark underlying native objects for the given userdata
     LuaTable* udatamt[LUA_UTAG_LIMIT]; // metatables for tagged userdata
+
+    // Luwu Native Classes (rfcs/native-classes.md): for each native data tag, the function that runs when an object
+    // carrying such data is freed
+    lua_Destructor objectdtors[LUA_OTAG_LIMIT];
 
     TValue weakregistry; // backing table for lua_weakref/lua_weakunref/lua_getweakref
     int weakregistryfree; // next free slot in weakregistry

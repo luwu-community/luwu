@@ -177,6 +177,16 @@ do
   assert(not ok and err:match("attempt to call a nil value"))
 end
 
+-- Luwu collections: an `__iter` that returns a boolean raises the same way, since FORGLOOP takes a boolean for a
+-- builtin container's loop
+do
+    for _, marker in { true, false } do
+        local obj = setmetatable({}, { __iter = function() return marker end })
+        local ok, err = pcall(function() for x in obj do end end)
+        assert(not ok and err:match("attempt to call a boolean value"))
+    end
+end
+
 -- it's okay to iterate through a table with a single variable
 do
   local x = 0

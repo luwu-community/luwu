@@ -66,6 +66,8 @@ int getOpLength(LuauOpcode op)
     case LOP_GETOBJECTMEMBER:
     case LOP_SETOBJECTMEMBER:
     case LOP_GETQUALIFIED:
+    case LOP_GETTABLEBUNDLE:
+    case LOP_SETTABLEBUNDLE:
     case LOP_SETQUALIFIED:
         return 2;
 
@@ -169,6 +171,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::LOAD_DOUBLE:
         return IrValueKind::Double;
     case IrCmd::LOAD_INT:
+    case IrCmd::LOAD_STORAGE_INT:
         return IrValueKind::Int;
     case IrCmd::LOAD_FLOAT:
         return IrValueKind::Float;
@@ -182,6 +185,8 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::LOAD_OWNER_CLASS:
     case IrCmd::TRY_OBJECT_MEMBER_ADDR:
     case IrCmd::OBJECT_MEMBER_ADDR:
+    case IrCmd::LOAD_STORAGE:
+    case IrCmd::GET_STORAGE_ENTRY_ADDR:
     case IrCmd::TRY_CLASS_MEMBER_ADDR:
     case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
         return IrValueKind::Pointer;
@@ -337,6 +342,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FASTCALL:
         return IrValueKind::None;
     case IrCmd::INVOKE_FASTCALL:
+    case IrCmd::INVOKE_FAST_METHOD:
         return IrValueKind::Int;
     case IrCmd::CHECK_FASTCALL_RES:
     case IrCmd::DO_ARITH:
@@ -359,6 +365,9 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
     case IrCmd::CHECK_OBJECT_CLASS:
+    case IrCmd::CHECK_STORAGE:
+    case IrCmd::CHECK_STORAGE_ELEMENT:
+    case IrCmd::STORE_STORAGE_INT:
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
     case IrCmd::CHECK_CLASS_ALLOCATABLE:
     case IrCmd::CHECK_BUFFER_LEN:
@@ -399,6 +408,7 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FALLBACK_INITTRAITS:
     case IrCmd::FALLBACK_PRESIZETABLE:
     case IrCmd::FALLBACK_GETQUALIFIED:
+    case IrCmd::FALLBACK_TABLEBUNDLE:
     case IrCmd::FALLBACK_SETQUALIFIED:
     case IrCmd::FALLBACK_GETPOSITIONAL:
     case IrCmd::FALLBACK_PUSH:

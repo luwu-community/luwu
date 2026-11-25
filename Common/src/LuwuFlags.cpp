@@ -52,3 +52,12 @@ bool luauClassCompat()
 }
 
 } // namespace Luau
+
+// Luwu builtin classes: standard library classes written in C++, in the VM and in Analysis's builtin definitions. So far
+// that's the `collections` library (`OrderedMap`, `Vec`, `VecDeque`). A prototype whose API can still change. Needs
+// LuwuClasses.
+LUAU_FASTFLAGVARIABLE(DebugLuwuBuiltinClasses)
+
+// Luwu bundles: the `bundle` library, its classes, and the compiler's fastcalls and unfolding for it. A prototype whose
+// API can still change. Needs LuwuClasses.
+LUAU_FASTFLAGVARIABLE(DebugLuwuBundles)

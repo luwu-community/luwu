@@ -45,6 +45,8 @@ LUAU_FASTFLAGVARIABLE(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAGVARIABLE(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
+LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuStringExtensions)
@@ -311,6 +313,8 @@ struct Compiler
         , traitInitFn(nullptr)
         , traitNeedsFn(nullptr)
         , classImplementsFn(nullptr)
+        , classConstructors(nullptr)
+        , constructorClass(nullptr)
         , traitInitHosts(nullptr)
         , classPrimaryInitCost(nullptr)
         , classPodConstDefaults(nullptr)
@@ -727,6 +731,13 @@ struct Compiler
 
         if (traitInitClass && traitInitAfterArgDefaults)
             compileTraitInit(*traitInitClass, args);
+
+        // Luwu Classes (rfcs/classes): a class's constructor has an empty body in the tree; its construction is emitted here
+        if (FFlag::LuwuClasses)
+        {
+            if (AstStatClass* const* constructed = constructorClass.find(func))
+                compileClassConstructor(*constructed);
+        }
 
         AstStatBlock* stat = func->body;
 
@@ -2682,7 +2693,7 @@ struct Compiler
     // module holds an instance of that class, with no annotation needed -- `local cat = Cat(name)` is
     // enough to inline `cat:meow()`. `Cat(...)` evaluates to a fresh instance of `Cat` and nothing
     // else: a class binding is const and cannot be reassigned (the parser rejects it), and a custom
-    // `__init`'s own result is discarded, with luaR_createobject returning the object it built. So the
+    // `__init`'s own result is discarded, with the constructor returning the object it built. So the
     // only way the local could hold something other than a `Cat` is an assignment -- and
     // `Variable::written` records those from anywhere in the module, nested closures included, so an
     // unwritten local's class holds for its whole lifetime.
@@ -3133,9 +3144,16 @@ struct Compiler
             return inlinable && !podReadChangesAccess;
         }
 
+        // The class's constructor is in the class's scope, where `__init` and `__defaults` are too: a local the
+        // initializer reads is an upvalue there as well, and a function literal becomes the constructor's child.
+        bool inClassConstructor() const
+        {
+            return self->constructorBeingCompiled == decl;
+        }
+
         bool visit(AstExprLocal* node) override
         {
-            if (!params.contains(node->local))
+            if (!params.contains(node->local) && !inClassConstructor())
                 inlinable = false;
 
             return false;
@@ -3143,7 +3161,9 @@ struct Compiler
 
         bool visit(AstExprFunction* node) override
         {
-            inlinable = false;
+            if (!inClassConstructor())
+                inlinable = false;
+
             return false;
         }
 
@@ -3621,10 +3641,10 @@ struct Compiler
     // Luwu Classes (rfcs/classes): try to compile `ClassName(...)` into a NEWOBJECT. Only a class
     // declared in this module can be resolved statically at all (isKnownClassExpr), and only those
     // reach here; where its binding may still be nil, compileClassOperand checks it before NEWOBJECT
-    // runs. The opcode allocates the instance itself, skipping the class's `__call` metamethod
-    // and the luaR_createobject C frame a generic CALL goes through.
+    // runs. The opcode allocates the instance itself, skipping the call of the class's constructor
+    // (LuauClass::constructor) a generic CALL makes.
     //
-    // This picks which of NEWOBJECT's three forms fits, and emits the last two itself:
+    // This picks which of NEWOBJECT's forms fits, and emits the last two below itself:
     //
     //   - FIELDS (operand C = 2): the fast path, taken by `Cat(name, age)` on a class field parameter
     //     list (tryCompileNewObjectFieldParameters), and by `Cat { name = name, age = age }` on a POD
@@ -3635,15 +3655,16 @@ struct Compiler
     //     CALL follows. A primary constructor lands here when FIELDS declined.
     //   - DEFAULT (C = 0): the POD constructor's generic form -- `Cat()`, or a `Cat(t)` whose argument
     //     FIELDS couldn't take apart. AUX is the argument count, and the table in A + 1, when there
-    //     is one, is actually allocated and read by name at runtime (luaR_applyobjectfields).
+    //     is one, is actually allocated and read by name at runtime (luaR_applyobjectfields). A class
+    //     with traits or computed defaults takes ALLOC and APPLY instead (tryCompileNewObjectPod).
     //
     // Returns false without emitting anything when no form fits, and compileExprCall compiles an
-    // ordinary call instead.
+    // ordinary call instead, which runs the class's constructor.
     //
     // Reasons why this may need to fall back:
     //
-    //   - the class has non-constant field defaults, which live in a `__defaults` closure that has to
-    //     be called (classPodDefaultsFn)
+    //   - a field default or `implements` argument reads something this site can't, like a local of
+    //     the class's scope (PrimaryInitInlineVisitor)
     //   - an argument is multret, which needs the call-style argument setup the generic path does
     //   - a default constructor was passed more than one argument
     bool tryCompileNewObject(AstExprCall* expr, uint8_t target)
@@ -3662,10 +3683,6 @@ struct Compiler
 
         AstStatClass** decl = classByName.find(global->name);
         if (!decl)
-            return false;
-
-        // a class with non-constant field defaults needs its `__defaults` closure called
-        if (classPodDefaultsFn.contains(*decl))
             return false;
 
         const AstClassMethod* init = findClassInit(*decl);
@@ -3695,83 +3712,295 @@ struct Compiler
         if (!hasCustomInit)
         {
             // `ClassName { field = value }` whose keys all name declared fields doesn't need the table
-            // at all: hand the values to NEWOBJECT positionally, in member declaration order.
-            if (expr->args.size == 1)
+            // at all: hand the values to NEWOBJECT positionally, in member declaration order. Computed
+            // defaults aren't part of the class shape, so FIELDS can't keep them for the fields left out.
+            if (expr->args.size == 1 && !classPodDefaultsFn.contains(*decl))
             {
                 if (AstExprTable* fields = expr->args.data[0]->as<AstExprTable>();
                     fields && tryCompileNewObjectTableConstructor(expr, *decl, fields, target))
                     return true;
             }
 
-            // Luwu Traits (rfcs/classes/traits.md): a class that implements traits gets its trait fields between
-            // allocation and its own (NEWOBJECT's ALLOC form, then compileTraitInit). An argument table that isn't a
-            // literal, applied after the traits by the generic constructor, takes the generic path.
-            if ((*decl)->implements.size > 0)
-            {
-                DenseHashSet<AstLocal*> noParameters{nullptr};
-                bool movable = implementsArgsMovable(*decl, noParameters, lexicalClassOf(currentFunction));
-
-                if (expr->args.size != 0 || !movable)
-                    return false;
-
-                // the object reaches `target` only once it is complete: initializing its trait fields can raise or
-                // yield, and `target` may be a variable other code reads
-                uint8_t object = allocReg(expr, 1u);
-                uint8_t classReg = compileClassOperand(callee, rs);
-
-                bytecode.emitABC(LOP_NEWOBJECT, object, classReg, LBC_NEWOBJECT_ALLOC);
-                bytecode.emitAux(0);
-
-                compileTraitInit(*decl, object);
-
-                bytecode.emitABC(LOP_MOVE, target, object, 0);
-                return true;
-            }
-
-            // NEWOBJECT writes the instance to its first operand and reads the single argument, when
-            // there is one, from the register above it. With no argument that can be the destination
-            // itself; otherwise the pair has to be allocated together and copied out.
-            uint8_t base;
-
-            if (expr->args.size == 0)
-            {
-                base = target;
-            }
-            else
-            {
-                base = allocReg(expr, 2u);
-                compileExprTemp(expr->args.data[0], uint8_t(base + 1));
-            }
-
-            uint8_t classReg = compileClassOperand(callee, rs);
-
-            bytecode.emitABC(LOP_NEWOBJECT, base, classReg, LBC_NEWOBJECT_DEFAULT);
-            bytecode.emitAux(uint32_t(expr->args.size));
-
-            if (base != target)
-                bytecode.emitABC(LOP_MOVE, target, base, 0);
-
-            return true;
+            return tryCompileNewObjectPod(expr, *decl, target);
         }
+
+        compileNewObjectInit(expr, target);
+        return true;
+    }
+
+    // Luwu Classes (rfcs/classes): `Class(args)` through NEWOBJECT's INIT form. NEWOBJECT lays out `__init`'s frame above
+    // the instance, and the CALL after it runs `__init` and drops its results. A multret last argument, which only a
+    // constructor's `...` passes here, is evaluated after NEWOBJECT so that nothing comes between it and the CALL.
+    void compileNewObjectInit(AstExprCall* expr, uint8_t target)
+    {
+        RegScope rs(this);
+
+        size_t argCount = expr->args.size;
+        bool multRetLast = argCount > 0 && isExprMultRet(expr->args.data[argCount - 1]);
+        size_t fixedCount = multRetLast ? argCount - 1 : argCount;
 
         // base holds the instance and survives the call; `__init` and `self` sit above it, followed by
         // the arguments, which is exactly the frame CALL expects at base + 1
-        uint8_t base = allocReg(expr, unsigned(3 + expr->args.size));
+        uint8_t base = allocReg(expr, unsigned(3 + argCount));
 
-        for (size_t i = 0; i < expr->args.size; ++i)
+        for (size_t i = 0; i < fixedCount; ++i)
             compileExprTemp(expr->args.data[i], uint8_t(base + 3 + i));
 
-        uint8_t classReg = compileClassOperand(callee, rs);
+        uint8_t classReg = compileClassOperand(unwrapGroups(expr->func), rs);
 
+        setDebugLine(expr);
         bytecode.emitABC(LOP_NEWOBJECT, base, classReg, LBC_NEWOBJECT_INIT);
-        bytecode.emitAux(uint32_t(expr->args.size));
+        bytecode.emitAux(uint32_t(fixedCount));
+
+        bool multCall = multRetLast && compileExprTempMultRet(expr->args.data[argCount - 1], uint8_t(base + 3 + fixedCount));
 
         // `__init` takes no results; the instance is already in base
-        bytecode.emitABC(LOP_CALL, uint8_t(base + 1), uint8_t(expr->args.size + 2), 1);
+        setDebugLine(expr);
+        bytecode.emitABC(LOP_CALL, uint8_t(base + 1), multCall ? 0 : uint8_t(argCount + 2), 1);
 
         if (base != target)
             bytecode.emitABC(LOP_MOVE, target, base, 0);
+    }
 
+    static AstExpr* unwrapGroups(AstExpr* expr)
+    {
+        while (AstExprGroup* group = expr->as<AstExprGroup>())
+            expr = group->expr;
+
+        return expr;
+    }
+
+    // Luwu Classes (rfcs/classes): whether `expr`, an initializer, field default or `implements` argument of `decl`, can
+    // be evaluated by construction code in the current function (see PrimaryInitInlineVisitor), whose parameters
+    // `parameters` are bound to the construction's arguments
+    bool constructionCanEvaluate(AstStatClass* decl, AstExpr* expr, const DenseHashSet<AstLocal*>& parameters)
+    {
+        PrimaryInitInlineVisitor visitor{this, parameters, decl, lexicalClassOf(currentFunction)};
+        expr->visit(&visitor);
+        return visitor.movable();
+    }
+
+    // Luwu Classes (rfcs/classes): `Class()` or `Class(fields)` for a class without `__init`. With no traits and only
+    // constant defaults, NEWOBJECT's DEFAULT form does all of it. Otherwise the construction does the POD constructor's
+    // steps itself, in its order: allocate (ALLOC), initialize the trait fields, store every field default, then apply
+    // the argument's fields (APPLY). Returns false without emitting anything when an `implements` argument or a default
+    // can't be evaluated here.
+    bool tryCompileNewObjectPod(AstExprCall* expr, AstStatClass* decl, uint8_t target)
+    {
+        LUAU_ASSERT(expr->args.size <= 1);
+
+        AstExpr* callee = unwrapGroups(expr->func);
+        bool computedDefaults = classPodDefaultsFn.contains(decl);
+        bool hasTraits = decl->implements.size > 0;
+
+        // the class's own fields with their slots, in declaration order: its named fields come first in its layout, and its
+        // per-object scoped values (Luwu Traits, rfcs/classes/traits.md) have the slots after them
+        std::vector<std::pair<const AstClassProperty*, uint32_t>> fields;
+        uint32_t namedSlot = 0;
+        for (const AstClassMember& member : decl->members)
+        {
+            const AstClassProperty* prop = member.get_if<AstClassProperty>();
+            if (prop && isObjectField(*prop))
+                fields.emplace_back(prop, namedSlot++);
+            else if (prop && isScopedObjectValue(*prop))
+                fields.emplace_back(prop, classScopedValueSlot(decl, prop));
+        }
+
+        DenseHashSet<AstLocal*> noParameters{nullptr};
+
+        if (hasTraits && !implementsArgsMovable(decl, noParameters, lexicalClassOf(currentFunction)))
+            return false;
+
+        if (computedDefaults)
+        {
+            for (const auto& [prop, slot] : fields)
+                if (prop->defaultValue && !constructionCanEvaluate(decl, prop->defaultValue, noParameters))
+                    return false;
+        }
+
+        RegScope rs(this);
+
+        bool hasArgument = expr->args.size == 1;
+        bool defaultForm = !computedDefaults && !hasTraits;
+
+        // DEFAULT and APPLY read the argument from the register above the instance. DEFAULT without an argument can
+        // write straight to `target`; otherwise the instance reaches `target` only once it is complete, since
+        // initializing it can raise or yield and `target` may be a variable other code reads.
+        uint8_t object = defaultForm && !hasArgument ? target : allocReg(expr, 2u);
+
+        if (hasArgument)
+            compileExprTemp(expr->args.data[0], uint8_t(object + 1));
+
+        uint8_t classReg = compileClassOperand(callee, rs);
+
+        setDebugLine(expr);
+
+        if (defaultForm)
+        {
+            bytecode.emitABC(LOP_NEWOBJECT, object, classReg, LBC_NEWOBJECT_DEFAULT);
+            bytecode.emitAux(uint32_t(hasArgument));
+        }
+        else
+        {
+            bytecode.emitABC(LOP_NEWOBJECT, object, classReg, LBC_NEWOBJECT_ALLOC);
+            bytecode.emitAux(0);
+
+            compileTraitInit(decl, object);
+
+            if (computedDefaults)
+            {
+                for (const auto& [prop, slot] : fields)
+                {
+                    AstExpr* value = prop->defaultValue;
+                    if (!value)
+                        continue;
+
+                    RegScope rsValue(this);
+                    setDebugLine(value);
+                    uint8_t valueReg = compileExprAuto(value, rsValue);
+
+                    bytecode.emitABC(LOP_SETOBJECTMEMBER, valueReg, object, 0);
+                    bytecode.emitAux(slot);
+                }
+            }
+
+            if (hasArgument)
+            {
+                setDebugLine(expr);
+                bytecode.emitABC(LOP_NEWOBJECT, object, classReg, LBC_NEWOBJECT_APPLY);
+                bytecode.emitAux(1);
+            }
+        }
+
+        if (object != target)
+            bytecode.emitABC(LOP_MOVE, target, object, 0);
+
+        return true;
+    }
+
+    // Luwu Classes (rfcs/classes): sets the class whose constructor is being compiled, for the rest of the scope
+    struct ConstructorScope
+    {
+        Compiler* self;
+        AstStatClass* previous;
+
+        ConstructorScope(Compiler* self, AstStatClass* decl)
+            : self(self)
+            , previous(self->constructorBeingCompiled)
+        {
+            self->constructorBeingCompiled = decl;
+        }
+
+        ~ConstructorScope()
+        {
+            self->constructorBeingCompiled = previous;
+        }
+    };
+
+    // Luwu Classes (rfcs/classes): the body of `decl`'s constructor (see LuauClass::constructor). It constructs the class
+    // the way a call site in the class's module does, and never by calling the class, which would run the constructor
+    // again. The constructor is in the class's scope, so initializers and defaults that read other locals can be
+    // evaluated in it, which a call site elsewhere can't do (constructorBeingCompiled).
+    // - A primary constructor stores its fields directly (FIELDS, or ALLOC for a class with traits), or calls the
+    //   `__init` synthesized from it when an initializer can't move (a function literal).
+    // - An explicit `__init` is called with the constructor's arguments (INIT).
+    // - A class without `__init` takes the POD constructor's steps (tryCompileNewObjectPod).
+    void compileClassConstructor(AstStatClass* decl)
+    {
+        const ClassConstructor* constructor = classConstructors.find(decl);
+        LUAU_ASSERT(constructor);
+        AstExprCall* construction = constructor->construction;
+
+        ConstructorScope scope(this, decl);
+        RegScope rs(this);
+        uint8_t object = allocReg(construction, 1u);
+
+        bool hasInit = decl->primaryConstructor || findClassInit(decl);
+        bool expanded = decl->primaryConstructor && tryCompileNewObjectFieldParameters(construction, decl, object);
+
+        if (!expanded && hasInit)
+        {
+            compileNewObjectInit(construction, object);
+        }
+        else if (!expanded)
+        {
+            [[maybe_unused]] bool compiled = tryCompileNewObjectPod(construction, decl, object);
+            LUAU_ASSERT(compiled);
+        }
+
+        setDebugLine(construction);
+        bytecode.emitABC(LOP_RETURN, object, 2, 0);
+    }
+
+    // Luwu collections: the `.(key, value)` bundles an `OrderedMap(...)` call builds for its entries, passed as its
+    // arguments or as the items of a list literal. Empty when the call passes anything else.
+    std::vector<AstExprCall*> orderedMapEntryBundles(AstExprCall* expr)
+    {
+        if (!FFlag::DebugLuwuBuiltinClasses || expr->self)
+            return {};
+
+        Builtin builtin = getBuiltin(expr->func, globals, variables);
+        if (!builtin.isMethod("collections", "OrderedMap"))
+            return {};
+
+        std::vector<AstExpr*> entries(expr->args.begin(), expr->args.end());
+        AstExprTable* list = expr->args.size == 1 ? expr->args.data[0]->as<AstExprTable>() : nullptr;
+        if (list)
+        {
+            entries.clear();
+            for (const AstExprTable::Item& item : list->items)
+            {
+                if (item.kind != AstExprTable::Item::Kind::List)
+                    return {};
+                entries.push_back(item.value);
+            }
+        }
+
+        std::vector<AstExprCall*> bundles;
+        for (AstExpr* entry : entries)
+        {
+            if (bundleConstructionSize(entry) != 2)
+                return {};
+            bundles.push_back(entry->as<AstExprCall>());
+        }
+        return bundles;
+    }
+
+    // Luwu collections: `OrderedMap(.(k, v), ...)` and `OrderedMap({ .(k, v), ... })` compile to `OrderedMap()` and a
+    // `set` call per entry, so neither the bundles nor the list are built
+    bool tryCompileOrderedMapFromBundles(AstExprCall* expr, uint8_t target)
+    {
+        if (options.optimizationLevel < 1)
+            return false;
+
+        std::vector<AstExprCall*> bundles = orderedMapEntryBundles(expr);
+        if (bundles.empty())
+            return false;
+
+        RegScope rs(this);
+        uint8_t map = allocReg(expr, 1u);
+        compileExprTemp(expr->func, map);
+        bytecode.emitABC(LOP_CALL, map, 1, 2);
+
+        BytecodeBuilder::StringRef setName = sref(AstName("set"));
+        int32_t setId = bytecode.addConstantString(setName);
+        if (setId < 0)
+            CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
+
+        for (AstExprCall* bundle : bundles)
+        {
+            RegScope entryScope(this);
+            uint8_t regs = allocReg(bundle, 4u);
+            compileExprTempTop(bundle->args.data[0], uint8_t(regs + 2));
+            compileExprTempTop(bundle->args.data[1], uint8_t(regs + 3));
+
+            setDebugLine(bundle);
+            bytecode.emitABC(LOP_NAMECALL, regs, map, uint8_t(BytecodeBuilder::getStringHash(setName)));
+            bytecode.emitAux(setId);
+            bytecode.emitABC(LOP_CALL, regs, 4, 1);
+        }
+
+        bytecode.emitABC(LOP_MOVE, target, map, 0);
         return true;
     }
 
@@ -4076,6 +4305,9 @@ struct Compiler
             if (tryCompileNewObject(expr, target))
                 return;
         }
+
+        if (!expr->self && !multRet && targetCount == 1 && tryCompileOrderedMapFromBundles(expr, target))
+            return;
 
         // Luwu Classes (rfcs/classes): inline `obj:method()` calls whose receiver class is
         // statically known and whose body can be inlined here (see tryResolveMethodCall).
@@ -5031,9 +5263,9 @@ struct Compiler
 
     // Luwu Traits (rfcs/classes/traits.md): initializes the trait fields of the object in `objectReg`, an instance of
     // `cls` under construction. Evaluates every `implements` argument, one value each and in list order, then runs the
-    // traits' initializers with them: inline when the compiler knows them (compileInlinedTraitInit), otherwise through
-    // INITTRAITS and the CALL of its runner. Construction code calls this between allocating the object and initializing
-    // the class's own fields, which come later so they can override the traits'.
+    // traits' initializers with them: inline when the compiler knows them (compileInlinedTraitInit), otherwise in a loop
+    // that calls each one (INITTRAITS). Construction code calls this between allocating the object and initializing the
+    // class's own fields, which come later so they can override the traits'.
     void compileTraitInit(AstStatClass* cls, uint8_t objectReg)
     {
         if (traitInitDoesNothing(cls))
@@ -5045,9 +5277,9 @@ struct Compiler
 
         RegScope rs(this);
 
-        // the runner's call frame: the runner, the object, then the arguments
-        uint8_t frame = inlined ? 0 : allocReg(cls, unsigned(2 + argCount));
-        uint8_t argBase = inlined ? 0 : uint8_t(frame + 2);
+        // the loop's state: how many initializers have run, the object, then the arguments (see LOP_INITTRAITS)
+        uint8_t state = inlined ? 0 : allocReg(cls, unsigned(2 + argCount));
+        uint8_t argBase = inlined ? 0 : uint8_t(state + 2);
 
         if (inlined && argCount > 0)
             argBase = allocReg(cls, unsigned(argCount));
@@ -5063,13 +5295,23 @@ struct Compiler
             return;
         }
 
-        bytecode.emitABC(LOP_MOVE, uint8_t(frame + 1), objectReg, 0);
+        // each initializer's call frame: the initializer, the object, then its arguments
+        uint8_t frame = allocReg(cls, unsigned(2 + argCount));
+
+        bytecode.emitABC(LOP_MOVE, uint8_t(state + 1), objectReg, 0);
+        bytecode.emitAD(LOP_LOADN, state, 0);
 
         setDebugLine(cls);
-        size_t skipLabel = bytecode.emitLabel();
-        bytecode.emitAD(LOP_INITTRAITS, frame, 0);
+        size_t loopLabel = bytecode.emitLabel();
+        bytecode.emitAD(LOP_INITTRAITS, state, 0);
         bytecode.emitABC(LOP_CALL, frame, uint8_t(argCount + 2), 1);
-        patchJump(cls, skipLabel, bytecode.emitLabel());
+
+        size_t backLabel = bytecode.emitLabel();
+        bytecode.emitAD(LOP_JUMPBACK, 0, 0);
+
+        size_t exitLabel = bytecode.emitLabel();
+        patchJump(cls, loopLabel, exitLabel);
+        patchJump(cls, backLabel, loopLabel);
     }
 
     // Luwu Traits (rfcs/classes/traits.md): `cls`'s copy of the trait function `function`, whose name is at `nameLocation`.
@@ -5565,6 +5807,15 @@ struct Compiler
 
             bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, 0, temp);
             bytecode.emitAux(defaultsNameCid);
+        }
+
+        // Luwu Classes (rfcs/classes): the function a call on the class runs, which isn't a member
+        if (const ClassConstructor* constructor = classConstructors.find(decl))
+        {
+            compileExprFunction(constructor->function, temp);
+
+            bytecode.emitABC(LOP_NEWCLASSMEMBER, dest, LBC_NEWCLASSMEMBER_CONSTRUCTOR, temp);
+            bytecode.emitAux(0);
         }
 
         // Luwu Traits (rfcs/classes/traits.md): the synthesized functions the VM calls by name, private like `__defaults`
@@ -8465,6 +8716,17 @@ struct Compiler
 
             hintTemporaryExprRegType(expr->expr, rt, LBC_TYPE_TABLE, /* instLength */ 2);
         }
+        else if (AstExprCall* key = bundleKeyLiteral(expr->index))
+        {
+            uint8_t rt = compileExprAuto(expr->expr, rs);
+            uint8_t values = compileBundleKeyValues(key);
+
+            setDebugLine(expr->index);
+            bytecode.emitABC(LOP_GETTABLEBUNDLE, target, rt, values);
+            bytecode.emitAux(uint32_t(key->args.size));
+
+            hintTemporaryExprRegType(expr->expr, rt, LBC_TYPE_TABLE, /* instLength */ 2);
+        }
         else
         {
             uint8_t rt = compileExprAuto(expr->expr, rs);
@@ -8934,6 +9196,8 @@ struct Compiler
             Kind_IndexName,
             Kind_IndexNumber,
             Kind_IndexExpr,
+            // Luwu bundles: a table indexed by a bundle literal, whose values are in `index` onwards, `number` of them
+            Kind_IndexBundle,
             // Luwu Traits (rfcs/classes/traits.md): `obj:Trait.name`, a trait's scoped field
             Kind_Qualified,
         };
@@ -8973,6 +9237,16 @@ struct Compiler
 
             return result;
         }
+        else if (AstExprCall* key = bundleKeyLiteral(index))
+        {
+            LValue result = {LValue::Kind_IndexBundle};
+            result.reg = reg;
+            result.index = compileBundleKeyValues(key);
+            result.number = uint8_t(key->args.size);
+            result.location = index->location;
+
+            return result;
+        }
         else
         {
             LValue result = {LValue::Kind_IndexExpr};
@@ -8983,6 +9257,35 @@ struct Compiler
             return result;
         }
     }
+
+    // Luwu bundles: a bundle literal used as a table key, `t[.(a, b)]`, which the lookup reads from its values in
+    // registers (GETTABLEBUNDLE, SETTABLEBUNDLE) instead of building it. Like a fastcall, this assumes `bundle` is the
+    // builtin library when the module never assigns it. Null for any other key.
+    AstExprCall* bundleKeyLiteral(AstExpr* index)
+    {
+        if (options.optimizationLevel < 1)
+            return nullptr;
+
+        unsigned size = bundleConstructionSize(index);
+        if (size == 0 || size > kMaxBundleKeyValues)
+            return nullptr;
+
+        return index->as<AstExprCall>();
+    }
+
+    // Luwu bundles: the values of the bundle literal `key`, in order, in new consecutive registers. Returns the first.
+    uint8_t compileBundleKeyValues(AstExprCall* key)
+    {
+        uint8_t values = allocReg(key, unsigned(key->args.size));
+
+        for (size_t i = 0; i < key->args.size; ++i)
+            compileExprTemp(key->args.data[i], uint8_t(values + i));
+
+        return values;
+    }
+
+    // Luwu bundles: the most values a bundle key read from registers has, which is the largest fixed-size bundle
+    static constexpr size_t kMaxBundleKeyValues = 6;
 
     LValue compileLValue(AstExpr* node, RegScope& rs)
     {
@@ -9159,6 +9462,11 @@ struct Compiler
                 if (AstExprIndexExpr* targetExprIndexExpr = targetExpr->as<AstExprIndexExpr>())
                     hintTemporaryExprRegType(targetExprIndexExpr->expr, lv.reg, LBC_TYPE_TABLE, /* instLength */ 1);
             }
+            break;
+
+        case LValue::Kind_IndexBundle:
+            bytecode.emitABC(set ? LOP_SETTABLEBUNDLE : LOP_GETTABLEBUNDLE, reg, lv.reg, lv.index);
+            bytecode.emitAux(lv.number);
             break;
 
         case LValue::Kind_IndexExpr:
@@ -9964,8 +10272,196 @@ struct Compiler
         loops.pop_back();
     }
 
+    // Luwu bundles: the most values a bundle holds (LUWU_BUNDLE_LIMIT in the VM). A larger construction raises.
+    static constexpr unsigned kMaxBundleValues = 1024;
+
+    // Luwu bundles: the size of the bundle `expr` constructs, a `bundle.pack` call (which `.(a, b)` is) whose last argument
+    // isn't a multiret. 0 for anything else.
+    unsigned bundleConstructionSize(AstExpr* expr)
+    {
+        AstExprCall* call = expr->as<AstExprCall>();
+        if (!FFlag::DebugLuwuBundles || !call || call->self || call->args.size > kMaxBundleValues)
+            return 0;
+
+        Builtin builtin = getBuiltin(call->func, globals, variables);
+        if (!builtin.isMethod("bundle", "pack"))
+            return 0;
+
+        bool spreads = call->args.size > 0 && isExprMultRet(call->args.data[call->args.size - 1]);
+        return spreads ? 0 : unsigned(call->args.size);
+    }
+
+    // Luwu collections: the most elements a loop header unfolds, from a table literal (`for _, v in { a, b }`) or a
+    // bundle's construction
+    static constexpr size_t kMaxUnfoldedLoopItems = 4;
+
+    // Luwu collections: the elements of the value a `for ... in` loop unfolds instead of building it (see
+    // tryCompileUnfoldedForIn). Empty when it can't be unfolded.
+    struct UnfoldedLoopValue
+    {
+        std::vector<AstExpr*> elements;
+        // A table skips its `nil` items when iterated; a bundle yields every slot
+        bool skipsNil = false;
+    };
+
+    UnfoldedLoopValue unfoldedLoopValue(AstExpr* value)
+    {
+        UnfoldedLoopValue unfolded;
+        unsigned bundleSize = bundleConstructionSize(value);
+        if (bundleSize > 0 && bundleSize <= kMaxUnfoldedLoopItems)
+        {
+            AstExprCall* call = value->as<AstExprCall>();
+            unfolded.elements.assign(call->args.begin(), call->args.end());
+            return unfolded;
+        }
+
+        AstExprTable* table = value->as<AstExprTable>();
+        if (!table || table->items.size == 0 || table->items.size > kMaxUnfoldedLoopItems)
+            return unfolded;
+
+        for (const AstExprTable::Item& item : table->items)
+        {
+            if (item.kind != AstExprTable::Item::Kind::List)
+                return {};
+        }
+
+        // a call or `...` as the last item adds as many items as it returns; a bundle's construction returns one
+        AstExpr* last = table->items.data[table->items.size - 1].value;
+        if (isExprMultRet(last) && bundleConstructionSize(last) == 0)
+            return unfolded;
+
+        for (const AstExprTable::Item& item : table->items)
+            unfolded.elements.push_back(item.value);
+        unfolded.skipsNil = true;
+        return unfolded;
+    }
+
+    // Luwu collections: whether `body` reads or writes `local`
+    static bool mentionsLocal(AstStat* body, AstLocal* local)
+    {
+        struct Visitor : AstVisitor
+        {
+            AstLocal* local = nullptr;
+            bool found = false;
+
+            bool visit(AstExprLocal* node) override
+            {
+                found = found || node->local == local;
+                return !found;
+            }
+        };
+
+        Visitor visitor;
+        visitor.local = local;
+        body->visit(&visitor);
+        return visitor.found;
+    }
+
+    // Luwu collections: `for i, v in bundle.Pair(a, b)`, and `for i, v in { a, b }` with up to four plain items,
+    // build no bundle or table. Each element goes into a register and the body is compiled once per element. Each copy
+    // binds `v` to its element's register and `i` to its position, and a closure in one copy captures that copy's `v`.
+    // A table literal's `nil` items are skipped the way iterating the table skips them. Like a fastcall, this assumes
+    // `collections` is the builtin library when the module never assigns it.
+    bool tryCompileUnfoldedForIn(AstStatForIn* stat)
+    {
+        if (stat->values.size != 1 || stat->vars.size == 0)
+            return false;
+
+        UnfoldedLoopValue unfolded = unfoldedLoopValue(stat->values.data[0]);
+        if (unfolded.elements.empty())
+            return false;
+
+        RegScope rs(this);
+        uint8_t elements = allocReg(stat, unsigned(unfolded.elements.size()));
+        for (size_t i = 0; i < unfolded.elements.size(); i++)
+        {
+            RegScope rsElement(this);
+            compileExpr(unfolded.elements[i], uint8_t(elements + i), /* targetTemp= */ true);
+        }
+
+        // the position and any extra variables only get a register when the body uses them
+        std::vector<uint8_t> extraRegs(stat->vars.size, kInvalidReg);
+        for (size_t v = 0; v < stat->vars.size; v++)
+        {
+            if (v != 1 && mentionsLocal(stat->body, stat->vars.data[v]))
+                extraRegs[v] = allocReg(stat, 1u);
+        }
+
+        size_t oldLocals = localStack.size();
+        size_t oldJumps = loopJumps.size();
+        loops.push_back({oldLocals, oldLocals, nullptr});
+
+        for (size_t i = 0; i < unfolded.elements.size(); i++)
+        {
+            uint8_t element = uint8_t(elements + i);
+
+            Constant constant = getConstant(unfolded.elements[i]);
+            if (unfolded.skipsNil && constant.type == Constant::Type_Nil)
+                continue;
+
+            std::optional<size_t> skipLabel;
+            if (unfolded.skipsNil && constant.type == Constant::Type_Unknown)
+            {
+                skipLabel = bytecode.emitLabel();
+                bytecode.emitAD(LOP_JUMPXEQKNIL, element, 0);
+                bytecode.emitAux(0);
+            }
+
+            for (size_t v = 0; v < stat->vars.size; v++)
+            {
+                if (v == 1)
+                {
+                    pushLocal(stat->vars.data[v], element, kDefaultAllocPc);
+                    continue;
+                }
+
+                if (extraRegs[v] == kInvalidReg)
+                    continue;
+
+                if (v == 0)
+                    bytecode.emitAD(LOP_LOADN, extraRegs[v], int16_t(i + 1));
+                else
+                    bytecode.emitABC(LOP_LOADNIL, extraRegs[v], 0, 0);
+                pushLocal(stat->vars.data[v], extraRegs[v], kDefaultAllocPc);
+            }
+
+            size_t iterJumps = loopJumps.size();
+
+            compileStat(stat->body);
+
+            closeLocals(oldLocals);
+            popLocals(oldLocals);
+
+            // a `continue` and a skipped `nil` item go to the next element
+            size_t contLabel = bytecode.emitLabel();
+            for (size_t j = iterJumps; j < loopJumps.size(); ++j)
+            {
+                if (loopJumps[j].type == LoopJump::Continue)
+                    patchJump(stat, loopJumps[j].label, contLabel);
+            }
+            if (skipLabel)
+                patchJump(stat, *skipLabel, contLabel);
+        }
+
+        // a `break` goes past the last element
+        size_t endLabel = bytecode.emitLabel();
+        for (size_t j = oldJumps; j < loopJumps.size(); ++j)
+        {
+            if (loopJumps[j].type == LoopJump::Break)
+                patchJump(stat, loopJumps[j].label, endLabel);
+        }
+
+        loopJumps.resize(oldJumps);
+        loops.pop_back();
+        return true;
+    }
+
     void compileStatForIn(AstStatForIn* stat)
     {
+        // Luwu collections: a bundle or small table literal in the loop header is never built (tryCompileUnfoldedForIn)
+        if (options.optimizationLevel >= 1 && tryCompileUnfoldedForIn(stat))
+            return;
+
         RegScope rs(this);
 
         size_t oldLocals = localStack.size();
@@ -10132,9 +10628,10 @@ struct Compiler
         {
             const LValue& li = var.lvalue;
 
-            bool indexed = li.kind == LValue::Kind_IndexName || li.kind == LValue::Kind_IndexNumber || li.kind == LValue::Kind_IndexExpr ||
-                           li.kind == LValue::Kind_Qualified;
-            if (indexed && visitor.assigned[li.reg])
+            bool indexes = li.kind == LValue::Kind_IndexName || li.kind == LValue::Kind_IndexNumber || li.kind == LValue::Kind_IndexExpr ||
+                           li.kind == LValue::Kind_IndexBundle || li.kind == LValue::Kind_Qualified;
+
+            if (indexes && visitor.assigned[li.reg])
                 visitor.conflict[li.reg] = true;
 
             bool usesIndexReg = li.kind == LValue::Kind_IndexExpr || li.kind == LValue::Kind_Qualified;
@@ -11102,6 +11599,14 @@ struct Compiler
         }
     };
 
+    // Luwu Classes (rfcs/classes): a class's constructor, the function a call on the class runs, and the call to the
+    // class its body compiles: `Class(params...)` for a primary constructor, `Class(...)` for an explicit `__init`, and
+    // `Class(fields)` for a class without one
+    struct ClassConstructor
+    {
+        AstExprFunction* function = nullptr;
+        AstExprCall* construction = nullptr;
+    };
 
     // A single `field = defaultExpr` to inline into a class's `__init` prologue.
     struct ClassFieldDefault
@@ -11135,6 +11640,7 @@ struct Compiler
         DenseHashMap<AstStatClass*, AstExprFunction*>& traitInitFn;
         DenseHashMap<AstStatClass*, AstExprFunction*>& traitNeedsFn;
         DenseHashMap<AstStatClass*, AstExprFunction*>& classImplementsFn;
+        DenseHashMap<AstStatClass*, ClassConstructor>& classConstructors;
         DenseHashMap<AstStatClass*, std::vector<AstExpr*>>& podConstDefaults;
         DenseHashMap<AstExprFunction*, SelfClassCheck>& methodSelfChecks;
         DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner;
@@ -11152,6 +11658,7 @@ struct Compiler
             DenseHashMap<AstStatClass*, AstExprFunction*>& traitInitFn,
             DenseHashMap<AstStatClass*, AstExprFunction*>& traitNeedsFn,
             DenseHashMap<AstStatClass*, AstExprFunction*>& classImplementsFn,
+            DenseHashMap<AstStatClass*, ClassConstructor>& classConstructors,
             DenseHashMap<AstStatClass*, std::vector<AstExpr*>>& podConstDefaults,
             DenseHashMap<AstExprFunction*, SelfClassCheck>& methodSelfChecks,
             DenseHashMap<AstExprFunction*, AstStatClass*>& methodOwner,
@@ -11168,6 +11675,7 @@ struct Compiler
             , traitInitFn(traitInitFn)
             , traitNeedsFn(traitNeedsFn)
             , classImplementsFn(classImplementsFn)
+            , classConstructors(classConstructors)
             , podConstDefaults(podConstDefaults)
             , methodSelfChecks(methodSelfChecks)
             , methodOwner(methodOwner)
@@ -11538,6 +12046,56 @@ struct Compiler
             functionsToCompile.push_back(fn);
         }
 
+        // Luwu Classes (rfcs/classes): the constructor of the class `node`, the function a call on the class runs. Its
+        // parameters are the primary constructor's, an explicit `__init`'s (`...` when `__init` takes `...`), or the POD
+        // constructor's argument table. Its body is empty here: compileClassConstructor compiles `construction`, a call
+        // of the class with those parameters, the way a call site in the class's module would.
+        void buildConstructor(AstStatClass* node, AstExprFunction* init)
+        {
+            size_t functionDepth = node->name->functionDepth + 1;
+            const Location& loc = node->location;
+
+            std::vector<AstLocal*> params;
+            bool vararg = false;
+
+            // The construction binds the primary constructor's parameters to the arguments, so the constructor's are
+            // separate locals with the same names. A fixed `__init` gets its parameters (after `self`) the same way:
+            // `__init` drops extra arguments and reads missing ones as nil either way.
+            auto addParams = [&](const AstArray<AstLocal*>& source, size_t skip)
+            {
+                for (size_t i = skip; i < source.size; ++i)
+                    params.push_back(buildSynthesizedLocal(source.data[i]->name.value, source.data[i]->location, functionDepth));
+            };
+
+            if (node->primaryConstructor)
+                addParams(node->primaryConstructor->args, 0);
+            else if (init && init->vararg)
+                vararg = true;
+            else if (init)
+                addParams(init->args, init->self ? 0 : 1);
+            else
+                params.push_back(buildSynthesizedLocal("fields", loc, functionDepth));
+
+            std::vector<AstExpr*> args;
+            for (AstLocal* param : params)
+                args.push_back(allocator.alloc<AstExprLocal>(loc, param, /* upvalue= */ false));
+
+            if (vararg)
+                args.push_back(allocator.alloc<AstExprVarargs>(loc));
+
+            // parameter defaults are the construction's to apply (tryCompileNewObjectFieldParameters), not a prologue's
+            std::vector<AstExpr*> argsDefaults(params.size(), nullptr);
+
+            AstExprFunction* fn = buildSynthesizedFunction(node, loc, copyToAst(params), copyToAst(argsDefaults), {}, node->name->name.value);
+            fn->vararg = vararg;
+
+            AstExpr* callee = allocator.alloc<AstExprGlobal>(loc, node->name->name);
+            AstExprCall* construction = allocator.alloc<AstExprCall>(loc, callee, copyToAst(args), /* self= */ false, AstArray<AstTypeOrPack>{}, loc);
+
+            classConstructors[node] = ClassConstructor{fn, construction};
+            functionsToCompile.push_back(fn);
+        }
+
         bool visit(AstStatClass* node) override
         {
             // Luwu Traits (rfcs/classes/traits.md): a trait is never constructed and its members are copied into classes at
@@ -11704,6 +12262,8 @@ struct Compiler
                 podDefaultsFn[node] = fn;
                 functionsToCompile.push_back(fn);
             }
+
+            buildConstructor(node, init);
 
             return true;
         }
@@ -12004,6 +12564,13 @@ struct Compiler
     DenseHashMap<AstStatClass*, AstExprFunction*> traitInitFn;
     DenseHashMap<AstStatClass*, AstExprFunction*> traitNeedsFn;
     DenseHashMap<AstStatClass*, AstExprFunction*> classImplementsFn;
+    // Luwu Classes (rfcs/classes): populated by ClassInitDefaultsVisitor. Each class's constructor, the function a call
+    // on the class runs (LuauClass::constructor), and the construction its body compiles (compileClassConstructor).
+    // constructorClass maps the function back to its class.
+    DenseHashMap<AstStatClass*, ClassConstructor> classConstructors;
+    DenseHashMap<AstExprFunction*, AstStatClass*> constructorClass;
+    // The class whose constructor is being compiled, whose initializers can read any local (see PrimaryInitInlineVisitor)
+    AstStatClass* constructorBeingCompiled = nullptr;
     // Luwu Traits (rfcs/classes/traits.md): the function that initializes each implementing class's trait fields
     // (compileTraitInit): its `__init`, explicit or synthesized from a primary constructor, or its `__implements`.
     // Maps the function to its class.
@@ -12245,6 +12812,7 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
             compiler.traitInitFn,
             compiler.traitNeedsFn,
             compiler.classImplementsFn,
+            compiler.classConstructors,
             compiler.classPodConstDefaults,
             compiler.classMethodSelfChecks,
             compiler.classMethodOwner,
@@ -12273,6 +12841,12 @@ void compileOrThrow(BytecodeBuilder& bytecode, const ParseResult& parseResult, A
 
         for (auto [decl, fn] : compiler.classImplementsFn)
             compiler.classLexicalOwner[fn] = decl;
+
+        for (auto [decl, constructor] : compiler.classConstructors)
+        {
+            compiler.classLexicalOwner[constructor.function] = decl;
+            compiler.constructorClass[constructor.function] = decl;
+        }
 
         for (auto [name, decl] : compiler.classByName)
         {

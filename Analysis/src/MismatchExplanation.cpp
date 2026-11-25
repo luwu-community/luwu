@@ -97,6 +97,8 @@ enum class Shape
     Function,
     Union,
     Intersection,
+    // Luwu bundles: `.(A, B)`, whose positions a diff walks into like a table's properties
+    Bundle,
     Other,
 };
 
@@ -115,13 +117,15 @@ Shape shapeOf(TypeId ty)
         return Shape::Union;
     if (get<IntersectionType>(ty))
         return Shape::Intersection;
+    if (const ExternType* etv = get<ExternType>(ty); etv && isBundle(etv))
+        return Shape::Bundle;
     return Shape::Other;
 }
 
-// A table or a function: something a diff can walk into and find a place in.
+// A table, a function or a bundle: something a diff can walk into and find a place in.
 bool isStructured(Shape shape)
 {
-    return shape == Shape::Table || shape == Shape::Function;
+    return shape == Shape::Table || shape == Shape::Function || shape == Shape::Bundle;
 }
 
 bool anyStructured(const std::vector<TypeId>& types)
@@ -269,6 +273,10 @@ struct Differ
 
     std::vector<std::string> helps;
     Helpifier helpifier;
+
+    // Luwu bundles: the given and expected sizes when the whole value is a bundle of the wrong size, which no path
+    // points into
+    std::optional<std::pair<size_t, size_t>> rootBundleSizes;
 
     // Types the message prints by a name rather than spelled out (`where type Animal = ...`).
     const DenseHashMap<TypeId, std::string>* names = nullptr;
@@ -751,6 +759,9 @@ struct Differ
             return;
         }
 
+        if (diffBundles(sub, super, path, depth))
+            return;
+
         if (const UnionType* superUnion = get<UnionType>(super))
         {
             std::vector<TypeId> members = numberedMembers(superUnion->options);
@@ -813,6 +824,37 @@ struct Differ
         }
 
         differ(Difference::Kind::Mismatch, path, sub, super);
+    }
+
+    // Luwu bundles: two bundles compare position by position, so a difference names its position (`p.2`), the way a
+    // table's names its property. Bundles of different sizes never fit each other, which a help says. False unless
+    // both are bundles.
+    bool diffBundles(TypeId sub, TypeId super, const DiffPath& path, int depth)
+    {
+        const ExternType* subExtern = get<ExternType>(sub);
+        const ExternType* superExtern = get<ExternType>(super);
+        std::optional<BundleShape> given = subExtern ? bundleShape(subExtern) : std::nullopt;
+        std::optional<BundleShape> expected = superExtern ? bundleShape(superExtern) : std::nullopt;
+        if (!given || !expected)
+            return false;
+
+        bool sizesDiffer = !given->rest && !expected->rest && given->head.size() != expected->head.size();
+        if (sizesDiffer)
+        {
+            differ(Difference::Kind::Mismatch, path, sub, super);
+            helps.push_back(bundleSizeHelp(given->head.size(), expected->head.size(), helpifier));
+            if (path.empty())
+                rootBundleSizes = std::make_pair(given->head.size(), expected->head.size());
+            return true;
+        }
+
+        size_t before = differences.size();
+        size_t known = std::min(given->head.size(), expected->head.size());
+        for (size_t i = 0; i < known && canDescend(); ++i)
+            diff(given->head[i], expected->head[i], with(path, Segment{Segment::Kind::Property, std::to_string(i + 1)}), depth + 1);
+        if (differences.size() == before)
+            differ(Difference::Kind::Mismatch, path, sub, super);
+        return true;
     }
 
     void diffGivenUnion(TypeId sub, const UnionType* subUnion, TypeId super, const DiffPath& path, int depth)
@@ -2214,6 +2256,8 @@ std::optional<MismatchExplanation> explainOnce(
             if (rootNotAMap->givenEmpty && variable)
                 declarationHelp = emptyTableHelp(*variable, rootNotAMap->super);
         }
+        else if (located.empty() && differ.rootBundleSizes)
+            header = bundleSizeSentence(differ.rootBundleSizes->first, differ.rootBundleSizes->second);
         else if (located.empty() && involvesStructure && !suppressedAny)
             return std::nullopt;
         else if (inGivenFunction)
