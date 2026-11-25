@@ -1998,6 +1998,22 @@ static BuiltinImplResult translateBuiltinInt64Clamp(IrBuilder& build, int nparam
     return {BuiltinImplType::Full, 1};
 }
 
+int builtinFirstArgumentTag(int bfid)
+{
+    switch (bfid)
+    {
+    case LBF_STRING_BYTE:
+    case LBF_STRING_LEN:
+    case LBF_STRING_SUB:
+    case LBF_STRING_STARTSWITH:
+    case LBF_STRING_ENDSWITH:
+    case LBF_STRING_CONTAINS:
+        return LUA_TSTRING;
+    default:
+        return -1;
+    }
+}
+
 BuiltinImplResult translateBuiltin(
     IrBuilder& build,
     int bfid,

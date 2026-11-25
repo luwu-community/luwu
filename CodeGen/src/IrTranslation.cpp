@@ -1201,6 +1201,15 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
     // In unsafe environment, instead of retrying fastcall at 'pcpos' we side-exit directly to fallback sequence
     build.checkSafeEnv(pcpos + getOpLength(opcode));
 
+    // Luwu String Extensions (rfcs/string-extensions.md): a method call like `obj:startswith(x)` tries the builtin
+    // first, and its receiver is often a table or an object with a method of that name. A receiver of another type goes
+    // straight to the method call instead of calling into the builtin or exiting to the VM.
+    // A method call has a NAMECALL right before its CALL. A false match only adds the check.
+    bool methodCall = skip >= 2 && LUAU_INSN_OP(pc[skip - 1]) == LOP_NAMECALL;
+    int receiverTag = methodCall ? builtinFirstArgumentTag(bfid) : -1;
+    if (receiverTag >= 0)
+        build.loadAndCheckTag(build.vmReg(arg), uint8_t(receiverTag), fallback);
+
     BuiltinImplResult br = translateBuiltin(
         build, LuauBuiltinFunction(bfid), ra, arg, builtinArgs, builtinArg3, nparams, nresults, fallback, pcpos + getOpLength(opcode)
     );
@@ -1214,7 +1223,8 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
         else
             build.inst(IrCmd::MARK_DEAD, build.vmReg(ra + br.actualResultCount), build.constInt(-1));
 
-        if (br.type != BuiltinImplType::UsesFallback)
+        bool fallbackUsed = br.type == BuiltinImplType::UsesFallback || receiverTag >= 0;
+        if (!fallbackUsed)
         {
             // We ended up not using the fallback block, kill it
             build.function.blockOp(fallback).kind = IrBlockKind::Dead;

@@ -35,5 +35,8 @@ BuiltinImplResult translateBuiltin(
     int pcpos
 );
 
+// The tag a builtin's first argument must have for its fast path to run, or -1 when it takes any first argument
+int builtinFirstArgumentTag(int bfid);
+
 } // namespace CodeGen
 } // namespace Luau
