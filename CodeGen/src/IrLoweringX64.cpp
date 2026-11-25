@@ -2627,7 +2627,9 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             int endOffset = FFlag::LuauCodegenFixBufferLenCheck ? maxOffset : accessSize;
 
             // Constant folding can take care of it, but for safety we avoid overflow/underflow cases here
-            if (offset < 0 || unsigned(offset) + unsigned(endOffset) >= unsigned(INT_MAX))
+            // Luwu: from upstream's LuauCodegenConstPropMinOffset (0.741). A merged check's access can start before the offset
+            // (`minOffset < 0`), and that start must not fall before the buffer.
+            if (offset < 0 || offset + minOffset < 0 || unsigned(offset) + unsigned(endOffset) >= unsigned(INT_MAX))
                 jumpOrAbortOnUndefNoFinalize(ConditionX64::Count, OP_F(inst), index, next, fresh);
             else
                 build.cmp(dword[regA + offsetof(Buffer, len)], offset + endOffset);
@@ -4098,6 +4100,13 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     regs.currInstIdx = kInvalidInstIdx;
 
     regs.freeLastUseRegs(inst, index);
+
+    // Luwu: from upstream's LuauCodegenCmpAnySideEffecting (0.745), the register of a result nothing uses is freed
+    if (inst.lastUse == 0 && hasResult(inst.cmd))
+    {
+        regs.freeReg(inst.regX64);
+        inst.regX64 = noreg;
+    }
 }
 
 void IrLoweringX64::startBlock(const IrBlock& curr)

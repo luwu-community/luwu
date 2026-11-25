@@ -1346,7 +1346,7 @@ void BytecodeBuilder::foldJumps()
     }
 }
 
-std::vector<uint32_t> BytecodeBuilder::expandJumps()
+std::vector<uint32_t> BytecodeBuilder::expandJumps(bool& hasLongJumpError)
 {
     if (!hasLongJumps)
         return {};
@@ -1399,7 +1399,9 @@ std::vector<uint32_t> BytecodeBuilder::expandJumps()
         {
             int offset = int(jumps[currentJump].target) - int(jumps[currentJump].source) - 1;
 
-            if (abs(offset) > kMaxJumpDistanceConservative)
+            // Luwu: from upstream's LuauCompileExpandShortLimit (0.738), a jump of exactly the conservative distance gets a
+            // trampoline too
+            if (abs(offset) >= kMaxJumpDistanceConservative)
             {
                 // insert jump trampoline as described above; we keep JUMPX offset uninitialized in this pass
                 newinsns.push_back(LOP_JUMP | (1 << 16));
@@ -1438,7 +1440,14 @@ std::vector<uint32_t> BytecodeBuilder::expandJumps()
         int offset = int(jump.target) - int(jump.source) - 1;
         int newoffset = int(remap[jump.target]) - int(remap[jump.source]) - 1;
 
-        if (abs(offset) > kMaxJumpDistanceConservative)
+        // Luwu: from upstream's LuauCompileExpandLimit (0.737). A jump still too long after its trampoline is an error: its offset
+        // would be truncated, and the VM would jump somewhere else.
+        if (abs(newoffset) + 1 >= kMaxJumpDistance)
+        {
+            hasLongJumpError = true;
+            return {};
+        }
+        else if (abs(offset) >= kMaxJumpDistanceConservative)
         {
             // fix up jump trampoline
             uint32_t& insnt = newinsns[remap[jump.source] - 1];

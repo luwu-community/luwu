@@ -468,7 +468,8 @@ static void removeInstUse(IrFunction& function, uint32_t instIdx)
     CODEGEN_ASSERT(inst.useCount);
     inst.useCount--;
 
-    if (inst.useCount == 0)
+    // Luwu: from upstream's LuauCodegenCmpAnySideEffecting (0.745), an instruction with side effects stays without users
+    if (inst.useCount == 0 && !hasSideEffects(inst.cmd))
         kill(function, inst);
 }
 

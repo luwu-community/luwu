@@ -2781,7 +2781,9 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             ConditionA64 failCond = FFlag::LuauCodegenFixBufferLenCheck ? ConditionA64::UnsignedLess : ConditionA64::UnsignedLessEqual;
 
             // Constant folding can take care of it, but for safety we avoid overflow/underflow cases here
-            if (offset < 0 || unsigned(offset) + unsigned(endOffset) >= unsigned(INT_MAX))
+            // Luwu: from upstream's LuauCodegenConstPropMinOffset (0.741). A merged check's access can start before the offset
+            // (`minOffset < 0`), and that start must not fall before the buffer.
+            if (offset < 0 || offset + minOffset < 0 || unsigned(offset) + unsigned(endOffset) >= unsigned(INT_MAX))
             {
                 build.b(target);
             }
@@ -4168,6 +4170,13 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
     regs.freeLastUseRegs(inst, index);
     regs.freeTempRegs();
+
+    // Luwu: from upstream's LuauCodegenCmpAnySideEffecting (0.745), the register of a result nothing uses is freed
+    if (inst.lastUse == 0 && hasResult(inst.cmd))
+    {
+        regs.freeReg(inst.regA64);
+        inst.regA64 = noreg;
+    }
 }
 
 void IrLoweringA64::startBlock(const IrBlock& curr)

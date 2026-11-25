@@ -130,6 +130,11 @@ inline bool hasSideEffects(IrCmd cmd)
     if (cmd == IrCmd::INVOKE_FASTCALL)
         return true;
 
+    // Luwu: from upstream's LuauCodegenCmpAnySideEffecting (0.745). A comparison can call `__eq` or `__lt`, or raise for
+    // values that can't be compared, so it runs even when nothing uses its result.
+    if (cmd == IrCmd::CMP_ANY)
+        return true;
+
     if (isPseudo(cmd))
         return false;
 

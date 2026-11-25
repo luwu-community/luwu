@@ -256,6 +256,30 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         // Does not affect VM def/use info
         break;
 
+        // Luwu: from upstream's LuauCodegenX64ConflictCheck (0.746). These read a VmReg only after optimizeMemoryOperandsX64 folds a
+        // load into them.
+    case IrCmd::CHECK_TAG:
+    case IrCmd::FLOOR_NUM:
+    case IrCmd::CEIL_NUM:
+    case IrCmd::ROUND_NUM:
+    case IrCmd::SQRT_NUM:
+    case IrCmd::ABS_NUM:
+        visitor.maybeUse(OP_A(inst));
+        break;
+    case IrCmd::CHECK_TRUTHY:
+    case IrCmd::ADD_NUM:
+    case IrCmd::SUB_NUM:
+    case IrCmd::MUL_NUM:
+    case IrCmd::DIV_NUM:
+    case IrCmd::IDIV_NUM:
+    case IrCmd::MOD_NUM:
+    case IrCmd::MIN_NUM:
+    case IrCmd::MAX_NUM:
+    case IrCmd::JUMP_CMP_NUM:
+        visitor.maybeUse(OP_A(inst));
+        visitor.maybeUse(OP_B(inst));
+        break;
+
     default:
         // All instructions which reference registers have to be handled explicitly
         for (auto& op : inst.ops)

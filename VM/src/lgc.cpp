@@ -1267,6 +1267,14 @@ static int64_t getheaptriggererroroffset(global_State* g)
     return int64_t(totalTerm * 1024);
 }
 
+// Luwu: from upstream's LuauGcHeapShrinkFix (0.741). The heap can shrink between measurements (after a full collection, or when
+// thread stacks shrink during marking), which counts as no growth. Subtracting would wrap around and give an int64_t conversion
+// with undefined behavior.
+static size_t getheapgrowth(size_t current, size_t previous)
+{
+    return current > previous ? current - previous : 0;
+}
+
 static size_t getheaptrigger(global_State* g, size_t heapgoal)
 {
     // adjust threshold based on a guess of how many bytes will be allocated between the cycle start and sweep phase
@@ -1278,7 +1286,7 @@ static size_t getheaptrigger(global_State* g, size_t heapgoal)
     if (allocationduration < durationthreshold)
         return heapgoal;
 
-    double allocationrate = (g->gcstats.atomicstarttotalsizebytes - g->gcstats.endtotalsizebytes) / allocationduration;
+    double allocationrate = getheapgrowth(g->gcstats.atomicstarttotalsizebytes, g->gcstats.endtotalsizebytes) / allocationduration;
     double markduration = g->gcstats.atomicstarttimestamp - g->gcstats.starttimestamp;
 
     int64_t expectedgrowth = int64_t(markduration * allocationrate);
@@ -1423,6 +1431,10 @@ void luaC_fullgc(lua_State* L)
 
     g->gcstats.heapgoalsizebytes = heapgoalsizebytes;
 
+    // Luwu: from upstream's LuauGcHeapShrinkFix (0.741), a full collection ends a cycle, so heap growth is measured from here
+    g->gcstats.endtimestamp = lua_clock();
+    g->gcstats.endtotalsizebytes = g->totalbytes;
+
 #ifdef LUAI_GCMETRICS
     finishGcCycleMetrics(g);
 #endif
@@ -1507,7 +1519,7 @@ int64_t luaC_allocationrate(lua_State* L)
         if (duration < durationthreshold)
             return -1;
 
-        return int64_t((g->totalbytes - g->gcstats.endtotalsizebytes) / duration);
+        return int64_t(getheapgrowth(g->totalbytes, g->gcstats.endtotalsizebytes) / duration);
     }
 
     // totalbytes is unstable during the sweep, use the rate measured at the end of mark phase
@@ -1516,7 +1528,7 @@ int64_t luaC_allocationrate(lua_State* L)
     if (duration < durationthreshold)
         return -1;
 
-    return int64_t((g->gcstats.atomicstarttotalsizebytes - g->gcstats.endtotalsizebytes) / duration);
+    return int64_t(getheapgrowth(g->gcstats.atomicstarttotalsizebytes, g->gcstats.endtotalsizebytes) / duration);
 }
 
 const char* luaC_statename(int state)

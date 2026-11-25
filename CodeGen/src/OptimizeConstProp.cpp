@@ -10,6 +10,8 @@
 #include "lobject.h"
 #include "lstate.h"
 
+#include <bitset>
+
 #include <limits.h>
 #include <math.h>
 
@@ -205,6 +207,21 @@ struct ConstPropState
                 info->value = value;
                 info->version++;
             }
+        }
+    }
+
+    // Luwu: from upstream's LuauCodegenMarkUsed (0.745). A store that repeats the register's value is redundant, except
+    // after MARK_DEAD: dead store elimination has removed the earlier store by then, so the register is marked used instead.
+    void killStore(IrBlock& block, IrInst& inst)
+    {
+        if (OP_A(inst).kind == IrOpKind::VmReg && markedDead[vmRegOp(OP_A(inst))])
+        {
+            markedDead.reset(vmRegOp(OP_A(inst)));
+            replace(function, block, function.getInstIndex(inst), {IrCmd::MARK_USED, {OP_A(inst), build.constInt(1)}});
+        }
+        else
+        {
+            kill(function, inst);
         }
     }
 
@@ -616,14 +633,18 @@ struct ConstPropState
             if (tvalueLoad.cmd != IrCmd::LOAD_TVALUE || OP_A(tvalueLoad).kind != IrOpKind::VmReg)
                 return false;
 
-            if (vmRegOp(OP_A(tvalueLoad)) == vmRegOp(OP_A(loadInst)))
+            uint8_t prevLoadReg = vmRegOp(OP_A(tvalueLoad));
+
+            if (prevLoadReg == vmRegOp(OP_A(loadInst)))
                 return false;
 
-            if (tryGetRegLink(IrOp{IrOpKind::Inst, *prevIdx}) == nullptr)
-                return false;
-
-            replace(function, OP_A(loadInst), OP_A(tvalueLoad));
-            return true;
+            // Luwu: from upstream's LuauCodegenOriginVerifyMatch (0.732). The previous load must still be linked to the register it
+            // read: a link to any other register reads a value that has changed since.
+            if (RegisterLink* link = tryGetRegLink(IrOp{IrOpKind::Inst, *prevIdx}); link && link->reg == prevLoadReg)
+            {
+                replace(function, OP_A(loadInst), OP_A(tvalueLoad));
+                return true;
+            }
         }
 
         return false;
@@ -755,12 +776,14 @@ struct ConstPropState
                 base.offset -= int(*rhsNum) * base.scale;
                 base.op = OP_A(inst);
             }
-            else if (inst.cmd == IrCmd::MUL_NUM && lhsNum && isValidDoubleForImmediate(*lhsNum))
+            // Luwu: from upstream's LuauCodegenNoZeroScale (0.742). A scale of 0 is never folded. When `x * 4` overflows to infinity,
+            // `x * 4 * 0` is NaN but `x * 0` is 0, and the two indices can't share a bounds check.
+            else if (inst.cmd == IrCmd::MUL_NUM && lhsNum && isValidDoubleForImmediate(*lhsNum) && int(*lhsNum) != 0)
             {
                 base.scale *= int(*lhsNum);
                 base.op = OP_B(inst);
             }
-            else if (inst.cmd == IrCmd::MUL_NUM && rhsNum && isValidDoubleForImmediate(*rhsNum))
+            else if (inst.cmd == IrCmd::MUL_NUM && rhsNum && isValidDoubleForImmediate(*rhsNum) && int(*rhsNum) != 0)
             {
                 base.scale *= int(*rhsNum);
                 base.op = OP_A(inst);
@@ -1406,6 +1429,8 @@ struct ConstPropState
         instArraySize.clear();
         instBufferMutable.clear();
 
+        markedDead.reset();
+
         invalidateValuePropagation();
         invalidateHeapTableData();
         invalidateHeapBufferData();
@@ -1483,6 +1508,9 @@ struct ConstPropState
 
     // Mutable buffer tracking
     DenseHashSet<uint32_t> instBufferMutable{kInvalidInstIdx};
+
+    // Luwu: from upstream's LuauCodegenMarkUsed (0.745), the registers MARK_DEAD declared dead
+    std::bitset<256> markedDead;
 
     std::vector<uint32_t> rangeEndTemp;
 };
@@ -1938,7 +1966,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
 
                 if (state.tryGetTag(source) == value)
                 {
-                    kill(function, inst);
+                    state.killStore(block, inst);
                 }
                 else
                 {
@@ -1972,7 +2000,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 {
                     if (*prevIdx == OP_B(inst).index)
                     {
-                        kill(function, inst);
+                        state.killStore(block, inst);
                         break;
                     }
                 }
@@ -1990,7 +2018,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (OP_B(inst).kind == IrOpKind::Constant)
             {
                 if (state.tryGetValue(OP_A(inst)) == OP_B(inst))
-                    kill(function, inst);
+                    state.killStore(block, inst);
                 else
                     state.saveValue(OP_A(inst), OP_B(inst));
             }
@@ -2000,7 +2028,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 {
                     if (*prevIdx == OP_B(inst).index)
                     {
-                        kill(function, inst);
+                        state.killStore(block, inst);
                         break;
                     }
                 }
@@ -2020,7 +2048,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (OP_B(inst).kind == IrOpKind::Constant)
             {
                 if (state.tryGetValue(OP_A(inst)) == OP_B(inst))
-                    kill(function, inst);
+                    state.killStore(block, inst);
                 else
                     state.saveValue(OP_A(inst), OP_B(inst));
             }
@@ -2030,7 +2058,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 {
                     if (*prevIdx == OP_B(inst).index)
                     {
-                        kill(function, inst);
+                        state.killStore(block, inst);
                         break;
                     }
                 }
@@ -2049,7 +2077,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
             if (OP_B(inst).kind == IrOpKind::Constant)
             {
                 if (state.tryGetValue(OP_A(inst)) == OP_B(inst))
-                    kill(function, inst);
+                    state.killStore(block, inst);
                 else
                     state.saveValue(OP_A(inst), OP_B(inst));
             }
@@ -2059,7 +2087,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                 {
                     if (*prevIdx == OP_B(inst).index)
                     {
-                        kill(function, inst);
+                        state.killStore(block, inst);
                         break;
                     }
                 }
@@ -2094,7 +2122,7 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
                     {
                         if (*prevIdx == OP_B(inst).index)
                         {
-                            kill(function, inst);
+                            state.killStore(block, inst);
                             break;
                         }
                     }
@@ -2461,7 +2489,9 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         if (bufferOffset)
         {
             // Negative offsets and offsets overflowing signed integer will jump to fallback, no need to keep the check
-            if (*bufferOffset < 0 || unsigned(*bufferOffset) + unsigned(accessSize) >= unsigned(INT_MAX))
+            // Luwu: from upstream's LuauCodegenConstPropMinOffset (0.741). The access's start (`*bufferOffset + minOffset`) must not
+            // fall before the buffer either.
+            if (*bufferOffset < 0 || *bufferOffset + minOffset < 0 || unsigned(*bufferOffset) + unsigned(accessSize) >= unsigned(INT_MAX))
             {
                 replace(function, block, index, {IrCmd::JUMP, {OP_F(inst)}});
                 break;
@@ -3515,6 +3545,19 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
         state.substituteOrRecord(inst, index);
         break;
 
+    // Luwu: from upstream's LuauCodegenMarkUsed (0.745), see killStore
+    case IrCmd::MARK_USED:
+    case IrCmd::MARK_DEAD:
+    {
+        int startReg = vmRegOp(OP_A(inst));
+        int count = function.intOp(OP_B(inst));
+        int end = count == -1 ? state.maxReg : std::min(startReg + count - 1, state.maxReg);
+
+        for (int i = startReg; i <= end; i++)
+            state.markedDead.set(i, inst.cmd == IrCmd::MARK_DEAD);
+        break;
+    }
+
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
     case IrCmd::BARRIER_TABLE_BACK:
@@ -3524,8 +3567,6 @@ static void constPropInInst(ConstPropState& state, IrBuilder& build, IrFunction&
     case IrCmd::CLOSE_UPVALS: // Doesn't change memory that we track
     case IrCmd::CAPTURE:
     case IrCmd::SUBSTITUTE:
-    case IrCmd::MARK_USED:
-    case IrCmd::MARK_DEAD:
     case IrCmd::ADJUST_STACK_TO_REG: // Changes stack top, but not the values
     case IrCmd::ADJUST_STACK_TO_TOP: // Changes stack top, but not the values
     case IrCmd::CHECK_FASTCALL_RES:  // Changes stack top, but not the values

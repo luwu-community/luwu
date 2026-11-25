@@ -93,6 +93,8 @@ struct StoreRegInfo
 
     // Knowing the last stored tag can help safely remove additional unused partial stores
     uint8_t knownTag = kUnknownTag;
+    // Luwu: from upstream's LuauCodegenDseTrackTagInvalidation (0.744), the LOAD_TAG the known tag came from, or ~0u
+    uint32_t tagSourceInstIdx = ~0u;
 };
 
 struct RemoveDeadStoreState
@@ -245,6 +247,7 @@ struct RemoveDeadStoreState
 
         // Opaque register definition removes the knowledge of the actual tag value
         regInfo.knownTag = kUnknownTag;
+        regInfo.tagSourceInstIdx = ~0u;
 
         // New value defined, before MARK_DEAD is used again, it might be used in a VM exit
         regInfo.ignoreAtExit = false;
@@ -521,6 +524,18 @@ struct RemoveDeadStoreState
         }
     }
 
+    // Luwu: from upstream's LuauCodegenMarkUsed (0.745). MARK_USED undoes MARK_DEAD: the register's value is needed at a VM
+    // exit again.
+    void markUsedAtExit(int start, int count)
+    {
+        CODEGEN_ASSERT(count != 0);
+
+        int e = count == -1 ? maxReg : start + count - 1;
+
+        for (int i = start; i <= e; i++)
+            info[i].ignoreAtExit = false;
+    }
+
     // Common instruction visitor handling
     void defVarargs(uint8_t varargStart)
     {
@@ -712,6 +727,7 @@ static bool tryReplaceTagWithFullStore(
         regInfo.tvalueInstIdx = instIndex;
         regInfo.maybeGco = isGCO(tag);
         regInfo.knownTag = tag;
+        regInfo.tagSourceInstIdx = ~0u;
         state.hasGcoToClear |= regInfo.maybeGco;
         return true;
     }
@@ -738,6 +754,7 @@ static bool tryReplaceTagWithFullStore(
             regInfo.tvalueInstIdx = instIndex;
             regInfo.maybeGco = isGCO(tag);
             regInfo.knownTag = tag;
+            regInfo.tagSourceInstIdx = ~0u;
             state.hasGcoToClear |= regInfo.maybeGco;
             return true;
         }
@@ -758,6 +775,7 @@ static bool tryReplaceTagWithFullStore(
             regInfo.tvalueInstIdx = instIndex;
             regInfo.maybeGco = isGCO(tag);
             regInfo.knownTag = tag;
+            regInfo.tagSourceInstIdx = ~0u;
             state.hasGcoToClear |= regInfo.maybeGco;
             return true;
         }
@@ -967,6 +985,14 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
 
     switch (inst.cmd)
     {
+    case IrCmd::LOAD_TAG:
+        visitVmRegDefsUses(state, function, inst);
+
+        // Luwu: from upstream's LuauCodegenDseTrackTagInvalidation (0.744). This load is the register's tag source until the
+        // register changes. Earlier passes merge duplicate loads, so one source is active at a time.
+        if (OP_A(inst).kind == IrOpKind::VmReg && !function.cfg.captured.regs.test(vmRegOp(OP_A(inst))))
+            state.info[vmRegOp(OP_A(inst))].tagSourceInstIdx = index;
+        break;
     case IrCmd::STORE_TAG:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
@@ -996,6 +1022,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
 
             regInfo.maybeGco = isGCO(tag);
             regInfo.knownTag = tag;
+            regInfo.tagSourceInstIdx = ~0u;
             state.hasGcoToClear |= regInfo.maybeGco;
         }
         break;
@@ -1125,6 +1152,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             regInfo.tvalueInstIdx = index;
 
             regInfo.knownTag = tryGetOperandTag(function, OP_B(inst)).value_or(kUnknownTag);
+            regInfo.tagSourceInstIdx = ~0u;
             regInfo.maybeGco = regInfo.knownTag == kUnknownTag || isGCO(regInfo.knownTag);
 
             state.hasGcoToClear |= regInfo.maybeGco;
@@ -1151,6 +1179,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             regInfo.tvalueInstIdx = index;
             regInfo.maybeGco = isGCO(function.tagOp(OP_B(inst)));
             regInfo.knownTag = function.tagOp(OP_B(inst));
+            regInfo.tagSourceInstIdx = ~0u;
             state.hasGcoToClear |= regInfo.maybeGco;
         }
         break;
@@ -1166,7 +1195,10 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
 
             StoreRegInfo& regInfo = state.info[reg];
 
-            regInfo.knownTag = function.tagOp(OP_B(inst));
+            // Luwu: from upstream's LuauCodegenDseTrackTagInvalidation (0.744). The guard only tells the tag while its load is still
+            // the register's tag source: after a store, the register may hold another tag.
+            if (regInfo.tagSourceInstIdx == function.getInstIndex(*load))
+                regInfo.knownTag = function.tagOp(OP_B(inst));
         }
         break;
     case IrCmd::TRY_NUM_TO_INDEX:
@@ -1297,6 +1329,9 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::MARK_DEAD:
         state.markUnusedAtExit(vmRegOp(OP_A(inst)), function.intOp(OP_B(inst)));
         break;
+    case IrCmd::MARK_USED:
+        state.markUsedAtExit(vmRegOp(OP_A(inst)), function.intOp(OP_B(inst)));
+        break;
 
     default:
         // Guards have to be covered explicitly
@@ -1369,6 +1404,7 @@ static void setupBlockEntryState(const IrFunction& function, const IrBlock& bloc
         [&](size_t i, uint8_t tag)
         {
             state.info[i].knownTag = tag;
+            state.info[i].tagSourceInstIdx = ~0u;
         }
     );
 }
