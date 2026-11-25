@@ -50,6 +50,9 @@ static void normalizeStateOffsets(std::string& text)
 
         std::string line = text.substr(pos, eol - pos);
 
+        // Luwu: r13 holds the NativeContext, whose layout differs between branches that add helpers to it
+        line = std::regex_replace(line, std::regex(R"(\[r13\+[^\]]+\])"), "[r13+<offset>]");
+
         std::smatch match;
         if (std::regex_search(line, match, std::regex(R"((\w+),.*\[r15\+[^\]]+\])")))
         {
@@ -724,7 +727,7 @@ bb_0:
  vmovsd      qword ptr [r14+040h],xmm0
  mov         dword ptr [r14+04Ch],0
   ; evict %5 (double xmm0) into R4 [lazy]
- call        qword ptr [r13+0D0h]
+ call        qword ptr [r13+<offset>]
  mov         r14,qword ptr [r15+<offset>]
  vmovsd      xmm0,qword ptr [r14+040h]
   ; restore %5 (double xmm0) from R4
