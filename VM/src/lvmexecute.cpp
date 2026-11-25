@@ -4417,10 +4417,6 @@ reentry:
                 VM_NEXT();
             }
 
-                VM_PROTECT(luaV_getpositional(L, rb, c, ra));
-                VM_NEXT();
-            }
-
             VM_CASE(LOP_PUSH)
             {
                 // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `A <+ values`

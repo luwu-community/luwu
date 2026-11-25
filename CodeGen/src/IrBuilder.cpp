@@ -858,27 +858,6 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         translateInstResultGet(*this, pc, i);
         break;
 
-    case LOP_GETTABLEBUNDLE:
-    case LOP_SETTABLEBUNDLE:
-        inst(
-            IrCmd::FALLBACK_TABLEBUNDLE,
-            constUint(i),
-            vmReg(LUAU_INSN_A(*pc)),
-            vmReg(LUAU_INSN_B(*pc)),
-            vmReg(LUAU_INSN_C(*pc)),
-            constInt(int(pc[1])),
-            constInt(LUAU_INSN_OP(*pc) == LOP_SETTABLEBUNDLE)
-        );
-        break;
-
-    case LOP_GETQUALIFIED:
-        inst(IrCmd::FALLBACK_GETQUALIFIED, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_B(*pc)), vmReg(LUAU_INSN_C(*pc)));
-        break;
-
-    case LOP_SETQUALIFIED:
-        inst(IrCmd::FALLBACK_SETQUALIFIED, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_B(*pc)), vmReg(LUAU_INSN_C(*pc)));
-        break;
-
     case LOP_GETOBJECTMEMBER:
         translateInstGetObjectMember(*this, pc, i);
         break;

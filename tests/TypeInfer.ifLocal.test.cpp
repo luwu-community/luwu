@@ -7,6 +7,7 @@
 #include "ScopedFlags.h"
 
 LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 
 using namespace Luau;
@@ -191,6 +192,26 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_chain_refinements_hold_after_the_if
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_destructuring_names_are_narrowed")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local t: { a: number?, b: string? } = { a = 1, b = nil }
+
+        if const .{a, b} = t then
+            local x: number = a
+            local y: string = b
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "if_local_in_the_old_solver")
 {
     ScopedFastFlag sffs[] = {
@@ -259,10 +280,38 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "while_local_binding_is_not_visible_after_the
     CHECK_EQ(result.errors[0].location.begin.line, 8);
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_loop_bindings_are_typed_from_the_element")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type Person = { name: string, age: number? }
+        local people: { Person } = {}
+
+        for _, .{name, age} in people when age do
+            local s: string = name
+            local n: number = age
+        end
+
+        for _, p.{name} in people do
+            local q: Person = p
+            local wrong: number = name
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 12);
+}
+
 TEST_CASE_FIXTURE(BuiltinsFixture, "loop_when_chains_in_the_old_solver")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
         {FFlag::DebugLuauForceOldSolver, true},
     };
 
@@ -275,7 +324,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "loop_when_chains_in_the_old_solver")
             print(n)
         end
 
-        for _, x in {1} when x do
+        for _, .{x} in {{x = 1}} when x do
             print(x)
         end
     )");
