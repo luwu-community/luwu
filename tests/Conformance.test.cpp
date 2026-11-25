@@ -4749,11 +4749,11 @@ static std::string joinNames(const std::set<std::string>& names)
     return joined;
 }
 
-// The public members a builtin class's objects have in the VM, metamethods included
+// The public members a builtin class's objects have in the VM, metamethods included. Static members come after them.
 static std::string vmClassMembers(const LuauClass* classdef)
 {
     std::set<std::string> names;
-    for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+    for (uint32_t i = 0; i < classdef->numberofobjectmembers; i++)
     {
         const TString* name = classdef->offsettomember[i];
         if (name && !(classdef->memberflags[i] & LBC_CLASSMEMBER_PRIVATE))
