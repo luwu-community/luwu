@@ -1522,7 +1522,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // We have reserved the result register, so we can free it now so it is not recorded in the spill sequence
         regs.freeReg(inst.regA64);
 
-        size_t spills = regs.spill(index);
+        size_t spills = regs.spill(index, {}, /* keepLazyLocations */ true);
 
         build.mov(x0, rState);
         build.add(x1, rBase, uint16_t(vmRegOp(OP_A(inst)) * sizeof(TValue)));
@@ -2490,7 +2490,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             Label skip;
             checkObjectBarrierConditions(temp1, temp2, value, OP_B(inst), OP_C(inst).kind == IrOpKind::Undef ? -1 : tagOp(OP_C(inst)), skip);
 
-            size_t spills = regs.spill(index, {temp1, value});
+            size_t spills = regs.spill(index, {temp1, value}, /* keepLazyLocations */ true);
 
             build.mov(x1, temp1);
             build.mov(x0, rState);
@@ -3167,7 +3167,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cmp(temp1, temp2);
         build.b(ConditionA64::UnsignedGreater, skip);
 
-        size_t spills = regs.spill(index);
+        size_t spills = regs.spill(index, {}, /* keepLazyLocations */ true);
 
         build.mov(x0, rState);
         build.mov(w1, 1);
@@ -3189,7 +3189,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         checkObjectBarrierConditions(regOp(OP_A(inst)), temp, noreg, OP_B(inst), OP_C(inst).kind == IrOpKind::Undef ? -1 : tagOp(OP_C(inst)), skip);
 
         RegisterA64 reg = regOp(OP_A(inst)); // note: we need to call regOp before spill so that we don't do redundant reloads
-        size_t spills = regs.spill(index, {reg});
+        size_t spills = regs.spill(index, {reg}, /* keepLazyLocations */ true);
         build.mov(x1, reg);
         build.mov(x0, rState);
         build.ldr(x2, mem(rBase, vmRegOp(OP_B(inst)) * sizeof(TValue) + offsetof(TValue, value)));
@@ -3212,7 +3212,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.tbz(temp, BLACKBIT, skip);
 
         RegisterA64 reg = regOp(OP_A(inst)); // note: we need to call regOp before spill so that we don't do redundant reloads
-        size_t spills = regs.spill(index, {reg});
+        size_t spills = regs.spill(index, {reg}, /* keepLazyLocations */ true);
         build.mov(x1, reg);
         build.mov(x0, rState);
         build.add(x2, x1, uint16_t(offsetof(LuaTable, gclist)));
@@ -3234,7 +3234,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         RegisterA64 reg = regOp(OP_A(inst)); // note: we need to call regOp before spill so that we don't do redundant reloads
         AddressA64 addr = tempAddr(OP_B(inst), offsetof(TValue, value));
-        size_t spills = regs.spill(index, {reg});
+        size_t spills = regs.spill(index, {reg}, /* keepLazyLocations */ true);
         build.mov(x1, reg);
         build.mov(x0, rState);
         build.ldr(x2, addr);
@@ -3273,7 +3273,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cmp(temp2, temp1);
         build.b(ConditionA64::UnsignedGreater, skip);
 
-        size_t spills = regs.spill(index, {temp2});
+        size_t spills = regs.spill(index, {temp2}, /* keepLazyLocations */ true);
         build.mov(x1, temp2);
         build.mov(x0, rState);
         build.ldr(x2, mem(rNativeContext, offsetof(NativeContext, luaF_close)));

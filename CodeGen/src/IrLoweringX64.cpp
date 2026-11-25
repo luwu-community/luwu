@@ -4189,6 +4189,10 @@ void IrLoweringX64::finishFunction()
 
 bool IrLoweringX64::hasError() const
 {
+    // Luwu: from upstream's LuauCodegenExitSyncUpdate (0.742)
+    if (regs.error)
+        return true;
+
     // If register allocator had to use more stack slots than we have available, this function can't run natively
     if (FFlag::LuauCodegenNoEcbData)
     {

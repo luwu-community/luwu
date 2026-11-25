@@ -286,5 +286,9 @@ void propagateTagsFromPredecessors(
 // If optional part is not ignored, types like 'number?' will fail to convert
 std::optional<uint8_t> tryGetLuauTagForBcType(uint8_t bcType, bool ignoreOptionalPart);
 
+// Luwu: from upstream's LuauCodegenExitSyncUpdate (0.742). Whether a VM exit's stores write register `reg` with a value other than
+// instruction `instIdx`, which would overwrite that instruction's value if it is restored from `reg`
+bool exitStoreClobbers(const VmExitSyncInfo& sync, uint8_t reg, uint32_t instIdx);
+
 } // namespace CodeGen
 } // namespace Luau

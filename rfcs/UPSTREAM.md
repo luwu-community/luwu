@@ -143,7 +143,7 @@ Rows without notes are marked `**Status**: Implemented` in luau-lang/rfcs as of 
 | [Type ascriptions](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-type-ascription.md) | 2021-05-03 | |
 | [Typed variadics](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-typed-variadics.md) | 2021-05-03 | |
 
-## Backported from upstream (6)
+## Backported from upstream (9)
 
 Upstream changes from after 0.730 that Luwu ported ahead of a sync, mostly performance fixes with no RFC. "Luwu FFlag" is
 the flag that gates the port here: upstream's name where it was kept, or none where the port is always on. Ports Luwu
@@ -157,3 +157,6 @@ runs without a flag still name upstream's flag, so a later sync can find what it
 | Tag propagation through fallback blocks | 0.734, fixed in 0.742 | `LuauCodegenPropagateFallbackTags` | none | Native code forgot every register's tag where a fallback block rejoined the fast path and checked them again. Guards that exit to the VM in a loop-heavy benchmark went from 61 to 31. 0.742's fix is for constant propagation limits, which Luwu doesn't have yet. |
 | Move elision around inlined calls | 0.736, fixed in 0.742 | `LuauCompileMoveElision`, `LuauCompileMoveElisionFix` | none | An inlined call copied its result into the call's target, and copied a reassigned argument into a fresh register. Interpreted color math ran 35% slower than upstream. Under native code, each copy's 16-byte load can't be forwarded from the two smaller stores before it, which costs about 9 cycles per copy on Zen 3. |
 | GC check on loop back-edges made permanent | 0.731, flag removed in 0.743 | `LuauBackedgeHeapCheck` | none | Upstream checks for a GC step on every loop back-edge and dropped the flag in 0.743. Luwu still tested the flag in the interpreter on every back-edge, which made a loop-heavy benchmark run 1.2% more instructions than upstream for identical bytecode. |
+| Lazy restore locations stay lazy in conditional spills | 0.742 | `LuauCodegenScopedSpillKeepLazy` | none | Native code wrote a value to its lazy VM register only inside a write barrier's slow path, then reloaded it from that register on the path that skipped the barrier. Two inlined class constructions stored a class pointer tagged as an object, which corrupted the heap. The classes fuzzer found it at O2 with native code. |
+| Exit sync restores arguments before overwriting their registers | 0.742 | `LuauCodegenExitSyncUpdate` | none | A VM exit's stores could overwrite the register a pending value was restored from, so the exit wrote the new value in place of the old one. The same change makes running out of registers fall back to the interpreter instead of emitting code with no register. |
+| Ints spilled to the stack are reloaded from the stack | 0.740 ([#2987](https://github.com/luau-lang/luau/pull/2987)) | `LuauCodegenX64IntSpillRestore` | none | An int spilled to a stack slot was reloaded by converting the double in its VM register, which may hold a different value by then. A buffer index reloaded that way after its range check could read or write out of bounds. |

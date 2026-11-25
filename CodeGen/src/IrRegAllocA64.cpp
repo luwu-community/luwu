@@ -171,7 +171,7 @@ RegisterA64 IrRegAllocA64::allocReg(KindA64 kind, uint32_t index)
         // Try to find and spill a register that is not used in the current instruction and has the furthest next use
         if (uint32_t furthestUseTarget = findInstructionWithFurthestNextUse(set); furthestUseTarget != kInvalidInstIdx)
         {
-            spill(set, index, furthestUseTarget);
+            spill(set, index, furthestUseTarget, /* keepLazyLocations */ false);
             CODEGEN_ASSERT(set.free != 0);
         }
         else
@@ -203,7 +203,7 @@ RegisterA64 IrRegAllocA64::allocTemp(KindA64 kind)
         // Try to find and spill a register that is not used in the current instruction and has the furthest next use
         if (uint32_t furthestUseTarget = findInstructionWithFurthestNextUse(set); furthestUseTarget != kInvalidInstIdx)
         {
-            spill(set, currInstIdx, furthestUseTarget);
+            spill(set, currInstIdx, furthestUseTarget, /* keepLazyLocations */ false);
             CODEGEN_ASSERT(set.free != 0);
         }
         else
@@ -389,6 +389,14 @@ void IrRegAllocA64::setupExitSyncEntry(uint32_t blockIdx)
     if (!args)
         return;
 
+    // Luwu: from upstream's LuauCodegenExitSyncUpdate (0.742). The exit's stores can overwrite a VM register that an argument is
+    // restored from, so such an argument is restored into a register first.
+    const VmExitSyncInfo* syncInfo = nullptr;
+    if (const uint32_t* guardInstIdx = function.blockToVmExitMap.find(blockIdx))
+        syncInfo = function.vmExitInfo.find(*guardInstIdx);
+
+    SmallVector<uint32_t, 8> argumentsToRestore;
+
     for (const ExitSyncArgA64& arg : *args)
     {
         IrInst& inst = function.instructions[arg.instIdx];
@@ -425,11 +433,17 @@ void IrRegAllocA64::setupExitSyncEntry(uint32_t blockIdx)
             function.recordRestoreLocation(arg.instIdx, arg.restoreLocation);
 
             spills.push_back({arg.instIdx, arg.originalReg, arg.slot});
+
+            if (syncInfo && arg.restoreLocation.op.kind == IrOpKind::VmReg && exitStoreClobbers(*syncInfo, vmRegOp(arg.restoreLocation.op), arg.instIdx))
+                argumentsToRestore.push_back(arg.instIdx);
         }
     }
+
+    for (uint32_t instIdx : argumentsToRestore)
+        restoreReg(function.instructions[instIdx]);
 }
 
-size_t IrRegAllocA64::spill(uint32_t index, std::initializer_list<RegisterA64> live)
+size_t IrRegAllocA64::spill(uint32_t index, std::initializer_list<RegisterA64> live, bool keepLazyLocations)
 {
     static const KindA64 sets[] = {KindA64::x, KindA64::q};
 
@@ -475,7 +489,7 @@ size_t IrRegAllocA64::spill(uint32_t index, std::initializer_list<RegisterA64> l
             CODEGEN_ASSERT(targetInstIdx != kInvalidInstIdx);
             CODEGEN_ASSERT(function.instructions[targetInstIdx].regA64.index == reg);
 
-            spill(set, index, targetInstIdx);
+            spill(set, index, targetInstIdx, keepLazyLocations);
 
             regs &= ~(1u << reg);
         }
@@ -630,7 +644,7 @@ void IrRegAllocA64::restore(const IrRegAllocA64::Spill& s, RegisterA64 reg)
     inst.regA64 = reg;
 }
 
-void IrRegAllocA64::spill(Set& set, uint32_t index, uint32_t targetInstIdx)
+void IrRegAllocA64::spill(Set& set, uint32_t index, uint32_t targetInstIdx, bool keepLazyLocations)
 {
     IrInst& def = function.instructions[targetInstIdx];
     int reg = def.regA64.index;
@@ -662,7 +676,10 @@ void IrRegAllocA64::spill(Set& set, uint32_t index, uint32_t targetInstIdx)
             if (loc.kind != IrValueKind::Tvalue)
                 build.str(wzr, mem(rBase, storeReg * sizeof(TValue) + offsetof(TValue, tt)));
 
-            function.materializeRestoreLocation(targetInstIdx);
+            // Luwu: from upstream's LuauCodegenScopedSpillKeepLazy (0.742). A spill whose registers are restored afterwards
+            // runs on one path only, so the store above didn't happen on the other: the location stays lazy.
+            if (!keepLazyLocations)
+                function.materializeRestoreLocation(targetInstIdx);
         }
 
         // when checking if value has a restore operation to spill it, we only allow it in the same block

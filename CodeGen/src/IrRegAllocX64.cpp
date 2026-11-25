@@ -95,6 +95,11 @@ RegisterX64 IrRegAllocX64::allocReg(SizeX64 size, uint32_t instIdx)
     }
 
     CODEGEN_ASSERT(!"Out of registers to allocate");
+
+    // Luwu: from upstream's LuauCodegenExitSyncUpdate (0.742). Lowering fails, and the function runs in the interpreter, instead
+    // of emitting code with no register
+    error = true;
+
     return noreg;
 }
 
@@ -283,6 +288,14 @@ void IrRegAllocX64::setupExitSyncEntry(uint32_t blockIdx)
     if (!args)
         return;
 
+    // Luwu: from upstream's LuauCodegenExitSyncUpdate (0.742). The exit's stores can overwrite a VM register that an argument is
+    // restored from, so such an argument is restored into a register first.
+    const VmExitSyncInfo* syncInfo = nullptr;
+    if (const uint32_t* guardInstIdx = function.blockToVmExitMap.find(blockIdx))
+        syncInfo = function.vmExitInfo.find(*guardInstIdx);
+
+    SmallVector<uint32_t, 8> argumentsToRestore;
+
     for (const ExitSyncArgX64& arg : *args)
     {
         IrInst& inst = function.instructions[arg.instIdx];
@@ -335,8 +348,14 @@ void IrRegAllocX64::setupExitSyncEntry(uint32_t blockIdx)
             spill.originalLoc = arg.originalReg;
 
             spills.push_back(spill);
+
+            if (syncInfo && arg.restoreLocation.op.kind == IrOpKind::VmReg && exitStoreClobbers(*syncInfo, vmRegOp(arg.restoreLocation.op), arg.instIdx))
+                argumentsToRestore.push_back(arg.instIdx);
         }
     }
+
+    for (uint32_t instIdx : argumentsToRestore)
+        restore(function.instructions[instIdx], /*intoOriginalLocation*/ false);
 }
 
 void IrRegAllocX64::preserve(IrInst& inst)
@@ -449,7 +468,11 @@ void IrRegAllocX64::preserve(IrInst& inst)
             if (spill.valueKind != IrValueKind::Tvalue)
                 build.mov(luauRegTag(storeReg), 0);
 
-            function.materializeRestoreLocation(spill.instIdx);
+            // Luwu: from upstream's LuauCodegenScopedSpillKeepLazy (0.742). Code a ScopedSpills scope emits runs on one
+            // path only, so the store above didn't happen on the other: the location stays lazy, and the next eviction
+            // writes it again.
+            if (!keepLazyLocations)
+                function.materializeRestoreLocation(spill.instIdx);
         }
 
         inst.needsReload = true;
@@ -550,7 +573,7 @@ void IrRegAllocX64::restore(IrInst& inst, bool intoOriginalLocation)
             {
                 build.vmovsd(reg, restoreAddr);
             }
-            else if (spill.valueKind == IrValueKind::Int && restoreLocation.kind == IrValueKind::Double)
+            else if (spill.valueKind == IrValueKind::Int && restoreLocation.kind == IrValueKind::Double && spill.stackSlot == kNoStackSlot)
             {
                 // Handle restore of an int/uint value from a location storing a double number
                 if (restoreLocation.conversionCmd == IrCmd::INT_TO_NUM)
@@ -847,6 +870,9 @@ RegisterX64 ScopedRegX64::release()
 ScopedSpills::ScopedSpills(IrRegAllocX64& owner)
     : owner(owner)
 {
+    outerKeepLazyLocations = owner.keepLazyLocations;
+    owner.keepLazyLocations = true;
+
     startSpillId = owner.nextSpillId;
 }
 
@@ -875,6 +901,8 @@ ScopedSpills::~ScopedSpills()
             i++;
         }
     }
+
+    owner.keepLazyLocations = outerKeepLazyLocations;
 }
 
 } // namespace X64
