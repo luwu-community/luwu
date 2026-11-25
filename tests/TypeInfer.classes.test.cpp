@@ -7674,6 +7674,443 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "unreachable_and_todo_return_never")
     LUAU_REQUIRE_ERROR_COUNT(1, needsMessage);
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): `.(a, b)` builds a bundle, which destructures by position and reads `b.1`
+TEST_CASE_FIXTURE(BuiltinsFixture, "collections_destructure_by_position")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        const .(name, age, alive) = .("Taz", 12, true)
+        const .(first, second) = bundle.pack(1, "x")
+        const record = .("AX1230", 1, 2, 3, 4, 5, true)
+        const flight = record.1
+        const seventh = record.7
+        const .{2 as count} = .(1, 2)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("flight")), "string");
+    CHECK_EQ(toString(requireType("seventh")), "boolean");
+    CHECK_EQ(toString(requireType("count")), "number");
+    CHECK_EQ(toString(requireType("name")), "string");
+    CHECK_EQ(toString(requireType("age")), "number");
+    CHECK_EQ(toString(requireType("alive")), "boolean");
+    CHECK_EQ(toString(requireType("first")), "number");
+    CHECK_EQ(toString(requireType("second")), "string");
+}
+
+// Luwu bundles: `.(A, B)` is the bundle type of those positions, and `.(...)` spreading a call takes that call's values
+TEST_CASE_FIXTURE(BuiltinsFixture, "dot_positional_types_and_spread_values")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function two(): (number, string)
+            return 1, "x"
+        end
+        local pair: .(number, string) = .(1, "x")
+        local row: .(string, number, boolean, string, number, boolean) = .("a", 1, true, "b", 2, false)
+        local big: .(string, number, boolean, string, number, boolean, number) = .("a", 1, true, "b", 2, false, 3)
+        local spread: .(boolean, number, string) = .(true, two())
+        local empty: .() = bundle.pack()
+        local wrong: .(string, string) = pair
+        return pair, row, big, spread, empty, wrong
+    )");
+
+    // only `wrong` is: the pair's first position is a number
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 10);
+}
+
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
+LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(LuwuIfLocal)
+
+// Luwu bundles: a position past a bundle's last value is an error, and `is bundle` narrows to a bundle
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_positions_and_tags")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        const pair = .(1, "x")
+        const third = pair.3
+        local function f(x: .(number, string) | string)
+            if x is bundle then
+                local b: .(number, string) = x
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const PositionalDestructuring* error = get<PositionalDestructuring>(result.errors[0]);
+    REQUIRE(error);
+    REQUIRE(error->bundleSize);
+    CHECK_EQ(*error->bundleSize, 2);
+    CHECK_EQ(result.errors[0].location.begin.line, 3);
+}
+
+// The elements' annotations are the `.(...)` value's expected type, so a literal element keeps its singleton type
+TEST_CASE_FIXTURE(BuiltinsFixture, "annotated_positional_pattern_checks_dot_positional_elements")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        type Format = "TarGz" | "Zip"
+        local is_unix = math.random() > 0.5
+        const .(format: Format, extension: string) = if is_unix then .("TarGz", "tar.gz") else .("Zip", "zip")
+        const .(level: Format, count: number, ok: boolean) = .("Zip", 1, true)
+        const .(wrong: Format, other: string) = .("Rar", "rar")
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 6);
+    CHECK_EQ(toString(requireType("format")), "\"TarGz\" | \"Zip\"");
+    CHECK_EQ(toString(requireType("extension")), "string");
+    CHECK_EQ(toString(requireType("level")), "\"TarGz\" | \"Zip\"");
+}
+
+// An element without an annotation expects nothing, and the expected types reach a `.(...)` given by a `do` expression
+// and the `match` inside it
+TEST_CASE_FIXTURE(BuiltinsFixture, "positional_pattern_annotations_reach_bundles_in_do_and_match")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function arg(): string? return nil end
+        const .(mode: "Patch" | "Unpatch", path) = do
+            const first = arg()
+            give .(
+                match first
+                    case is "p" | "patch" then "Patch"
+                    case is "u" | "unpatch" then "Unpatch"
+                    case other then error(`expected patch or unpatch, got {other}`),
+                "file.txt"
+            )
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("mode")), "\"Patch\" | \"Unpatch\"");
+    CHECK_EQ(toString(requireType("path")), "string");
+}
+
+// A bundle literal's expected positions reach the values a `do` expression in it gives and a `match`'s arms in it
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_positions_push_into_do_and_match")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local x = math.random(1, 3)
+        const given: .("A" | "B", string) = .(do give "A", "x")
+        const matched: .("A" | "B", string) = .(match x
+            case is 1 then "A"
+            else "B", "x")
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_dot_positional_values")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+    const char* before = "local a, b = 1, \"x\"\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+
+    checkTypewriting(*this, before, "local t = .(a, b)", after);
+    checkTypewriting(*this, before, "const .(x, y) = .(a + 1, b)", after);
+    checkTypewriting(*this, before, "const .(x: number, y: \"x\" | \"y\") = .(a, \"y\")", after);
+    checkTypewriting(*this, before, "local p: .(number, string) = .(a, b)", after);
+    checkTypewriting(*this, before, "type Row = .(number, string, boolean)", after);
+    checkTypewriting(*this, before, "local s = .(table.unpack({ a }))", after);
+}
+
+// Luwu bundles: the flags every `.(...)` bundle test needs
+#define BUNDLE_SYNTAX_FLAGS \
+    {FFlag::LuwuClasses, true}, {FFlag::LuwuGenericNominals, true}, {FFlag::DebugLuwuBundles, true}, {FFlag::LuwuNonePrimitive, true}, \
+        {FFlag::LuwuDeclareStatements, true}, {FFlag::LuwuDestructuring, true}
+
+// Luwu bundles: testing a position narrows a union of bundles to the ones it can be, and the position itself
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_position_tests_narrow_unions_of_bundles")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_SYNTAX_FLAGS};
+
+    CheckResult result = check(R"(
+        --!strict
+        type Outcome = .(true, number) | .(false, string)
+        local function outcome(): Outcome
+            return .(true, 1)
+        end
+        local o = outcome()
+        if o.1 then
+            local n: number = o.2
+        else
+            local s: string = o.2
+        end
+        if not o.1 then
+            local s: string = o.2
+        end
+
+        type Status = "ok" | "err"
+        local function status(): (Status, number)
+            return "ok", 1
+        end
+        local r = .(status())
+        if r.1 == "ok" then
+            local ok: "ok" = r.1
+            local narrowed: .("ok", number) = r
+        end
+        local label: "bad" | "good" = if r.1 == "err" then "bad" else "good"
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu bundles: a class's position reads one of its fields, so writing a field forgets what tests of its positions found
+TEST_CASE_FIXTURE(BuiltinsFixture, "position_tests_on_objects_end_at_a_field_write")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_SYNTAX_FLAGS};
+
+    CheckResult result = check(R"(
+        --!strict
+        class Cat(public name: string?)
+        end
+        local function rename(c: Cat)
+            if c.1 then
+                local before: string = c.1
+                c.name = nil
+                local after: string = c.1
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    CHECK_EQ(result.errors[0].location.begin.line, 8);
+}
+
+// Luwu bundles: a pack in a bundle type is the rest of its positions, which generics solve from the bundles passed in
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_types_take_type_packs")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_SYNTAX_FLAGS};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function wrap<T...>(...: T...): .(T...)
+            return .(...)
+        end
+        local wrapped = wrap(1, "x", true)
+
+        local function head<H, T...>(b: .(H, T...)): H
+            return b.1
+        end
+        local first = head(.(1, "a", true))
+        local only = head(.("a"))
+
+        local function rest<T...>(b: .(number, T...)): .(T...)
+            return b:sub(2)
+        end
+        local tail = rest(.(1, "a", true))
+
+        local function swap<A, B>(b: .(A, B)): .(B, A)
+            return .(b.2, b.1)
+        end
+        local swapped = swap(.(1, "a"))
+
+        local function size(b: .(...unknown)): number
+            return #b
+        end
+        local sizes = size(.(1, 2)) + size(.()) + size(.(1, 2, 3, 4, 5, 6, 7, 8))
+        local anything: .(...unknown) = .(1, "a")
+        local position = anything.1
+        local resized = anything :: .(number)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("wrapped")), ".(number, string, boolean)");
+    CHECK_EQ(toString(requireType("first")), "number");
+    CHECK_EQ(toString(requireType("only")), "string");
+    CHECK_EQ(toString(requireType("tail")), ".(string, boolean)");
+    CHECK_EQ(toString(requireType("swapped")), ".(string, number)");
+    CHECK_EQ(toString(requireType("position")), "unknown");
+}
+
+// Luwu bundles: `.(R...)` captures what a function returns, which positions, destructuring and `bundle.unpack` give back
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_capture_generic_returns")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_SYNTAX_FLAGS};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function capture<A..., R...>(f: (A...) -> R..., ...: A...): .(R...)
+            return .(f(...))
+        end
+        local function divmod(a: number, b: number): (number, string)
+            return a // b, tostring(a % b)
+        end
+        local captured = capture(divmod, 7, 2)
+        const .(quotient, remainder) = captured
+        local first: number = captured.1
+
+        local function replay<R...>(b: .(R...)): R...
+            return bundle.unpack(b)
+        end
+        local again, rest = replay(captured)
+
+        local function enumerate<T>(list: { T }): { .(number, T) }
+            local out = {}
+            for i, v in list do
+                table.insert(out, .(i, v))
+            end
+            return out
+        end
+        for _, .(i, name) in enumerate({ "a", "b" }) do
+            local index: number = i
+            local text: string = name
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    CHECK_EQ(toString(requireType("captured")), ".(number, string)");
+    CHECK_EQ(toString(requireType("remainder")), "string");
+    CHECK_EQ(toString(requireType("rest")), "string");
+}
+
+// Luwu bundles: an inferred bundle type is written back the way `.(A, B)` writes it
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_types_annotate_as_dot_positional")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_SYNTAX_FLAGS};
+
+    std::string decorated = decorateWithTypes(R"(
+        local pair = .(1, "x")
+        local big = .(1, 2, 3, 4, 5, 6, 7)
+    )");
+
+    CHECK(decorated.find("local pair:.(number,string)=") != std::string::npos);
+    CHECK(decorated.find("local big:.(number,number,number,number,number,number,number)=") != std::string::npos);
+}
+
+// Luwu bundles: `#` and positions work on a generic narrowed to a bundle, on unions of bundles and on intersections
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundles_mixed_with_generics_unions_and_intersections")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_SYNTAX_FLAGS};
+
+    CheckResult result = check(R"(
+        --!strict
+        local function size<T>(x: T): number
+            if typeof(x) == "bundle" then
+                return #x
+            end
+            return 0
+        end
+        local function either<T>(x: T | .(number, string)): number
+            if typeof(x) == "bundle" then
+                return #x
+            end
+            return 0
+        end
+        local function sizes(x: .(number) | .(number, string)): number
+            return #x
+        end
+        local function both(x: .(number, string) & .(number, "a"))
+            local n: number = x.1
+            local a: "a" = x.2
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// Luwu bundles: a pack is the rest of a bundle type, so a type after one is one error at the pack
+TEST_CASE_FIXTURE(BuiltinsFixture, "bundle_type_packs_go_last")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_SYNTAX_FLAGS};
+
+    CheckResult result = check(R"(
+        --!strict
+        type Backwards<T...> = .(T..., number)
+        local unknown: .(Nope, number) = .(1, 2)
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    CHECK(get<SyntaxError>(result.errors[0]));
+    CHECK_EQ(result.errors[0].location.begin.line, 2);
+    CHECK(get<UnknownSymbol>(result.errors[1]));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_bundle_types_and_position_tests")
+{
+    ScopedFastFlag sffs[] = {BUNDLE_SYNTAX_FLAGS};
+    const char* before = "type Outcome = .(true, number) | .(false, string)\nlocal o: Outcome = .(true, 1)\n";
+    const char* after = "\nlocal unrelated = 1\nprint(unrelated + 1)\n";
+
+    checkTypewriting(*this, before, "type Rest<T...> = .(number, T...)", after);
+    checkTypewriting(*this, before, "type Any = .(...unknown)", after);
+    checkTypewriting(*this, before, "local function head<H, T...>(b: .(H, T...)): H\nreturn b.1\nend", after);
+    checkTypewriting(*this, before, "if o.1 then\nlocal n: number = o.2\nend", after);
+    checkTypewriting(*this, before, "local size = #o", after);
+    checkTypewriting(*this, before, "local first = o:sub(1, 1)", after);
+}
+
 // Luwu try expressions: `try expr` is a Result of expr's type, with an unknown error
 TEST_CASE_FIXTURE(BuiltinsFixture, "try_expression_is_a_result")
 {

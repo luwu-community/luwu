@@ -1539,7 +1539,6 @@ static void analyzeBytecodeTypesPass(
             case LOP_SETQUALIFIED:
             case LOP_PUSH:
             case LOP_SETTABLEBUNDLE:
-            case LOP_SETQUALIFIED:
                 break;
             case LOP_APPENDTABLE:
             {
