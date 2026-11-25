@@ -120,6 +120,9 @@ struct RuntimeBytecodeBuilder : public BytecodeBuilder
         case LUA_TINTEGER:
             formatAppend(result, "%lld", (long long)(int64_t)lvalue(c));
             break;
+        case LUA_THEAPINTEGER:
+            formatAppend(result, "heapinteger");
+            break;
         case LUA_TVECTOR:
         {
             const LUA_VECTOR_TYPE* vec = vvalue(c);

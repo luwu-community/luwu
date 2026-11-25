@@ -189,6 +189,11 @@ struct PrimitiveType
     Type type;
     std::optional<TypeId> metatable; // string has a metatable
 
+    // Luwu Integers (rfcs/integers.md): an integer type's modes, written `integer<T>`. It's a string singleton (`"u8"`), a
+    // union of them, or a generic: `<T>(a: integer<T>) -> integer<T>` keeps one mode. Plain `integer` has none and
+    // accepts every mode.
+    std::optional<TypeId> mode;
+
     explicit PrimitiveType(Type type)
         : type(type)
     {
@@ -1477,6 +1482,7 @@ struct BuiltinTypes
     friend TypeId makeStringMetatable(NotNull<BuiltinTypes> builtinTypes, SolverMode mode);
     friend void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes);
     friend void makeNoneMetatable(NotNull<BuiltinTypes> builtinTypes);
+    friend void makeIntegerMetatable(NotNull<BuiltinTypes> builtinTypes);
     friend struct GlobalTypes;
 
 private:
@@ -1529,6 +1535,12 @@ public:
     const TypePackId neverTypePack;
     const TypePackId uninhabitableTypePack;
     const TypePackId errorTypePack;
+
+    // Luwu Integers (rfcs/integers.md): each mode's type, indexed by IntegerMode (`u8` is `integer<"u8">`); the string
+    // singleton naming each mode; and the union of those names, the modes plain `integer` accepts
+    std::array<TypeId, kIntegerModeCount> integerModeTypes;
+    std::array<TypeId, kIntegerModeCount> integerModeNames;
+    TypeId everyIntegerModeName = nullptr;
 };
 
 void persist(TypeId ty);
