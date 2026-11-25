@@ -144,10 +144,56 @@ bool forgLoopNodeIter(lua_State* L, LuaTable* h, int index, TValue* ra)
     return false;
 }
 
+// One step of a loop over a builtin container: 1 to repeat, 0 at the end
+static int forgLoopCollection(lua_State* L, TValue* ra, int aux)
+{
+    if (!luaR_collectionnext(L, ra))
+        return 0;
+
+    for (int i = 2; i < aux; ++i)
+        setnilvalue(ra + 3 + i);
+    return 1;
+}
+
+/*
+ * Luwu collections: runs the fast method (luaR_FastMethod) of the NAMECALL at `pcpos` on `object`, for INVOKE_FAST_METHOD.
+ * The arguments start at `ra + 2` and the results go to `ra`; missing ones up to `nresults` become nil. Returns how many
+ * the method gave, or -1 when the NAMECALL's cached member has no fast method or the method bails. Then native code
+ * makes the call, and the fallback it misses into caches the member for the next time.
+ */
+int invokeFastMethod(lua_State* L, LuauObject* object, uint32_t pcpos, int ra, int nargs, int nresults)
+{
+    const LuauClass* classdef = object->lclass;
+    if (!classdef->fastmethods)
+        return -1;
+
+    const Proto* proto = clvalue(L->ci->func)->l.p;
+    const Instruction* pc = proto->code + pcpos;
+    LUAU_ASSERT(LUAU_INSN_OP(*pc) == LOP_NAMECALL);
+    uint8_t slot = LUAU_INSN_C(*pc);
+    uint32_t nameconstant = pc[1];
+    bool cached = slot < classdef->numberofallmembers && classdef->offsettomember[slot] == tsvalue(&proto->k[nameconstant]);
+    if (!cached || !classdef->fastmethods[slot])
+        return -1;
+
+    StkId res = L->base + ra;
+    int n = classdef->fastmethods[slot](L, object, res, res + 2, nargs);
+    if (n < 0)
+        return -1;
+
+    for (int i = n; i < nresults; i++)
+        setnilvalue(res + i);
+    return n;
+}
+
 int forgLoopNonTableFallback(lua_State* L, int insnA, int aux)
 {
     TValue* base = L->base;
     TValue* ra = VM_REG(insnA);
+
+    // Luwu collections: a builtin container's loop (luaR_collectionprep), stepped without a call
+    if (LUAU_UNLIKELY(ttisboolean(ra)))
+        return forgLoopCollection(L, ra, aux);
 
     // note: it's safe to push arguments past top for complicated reasons (see lvmexecute.cpp)
     setobj2s(L, ra + 3 + 2, ra + 2);
@@ -176,6 +222,10 @@ bool forgLoopNonTableFallback_DEPRECATED(lua_State* L, int insnA, int aux)
 {
     TValue* base = L->base;
     TValue* ra = VM_REG(insnA);
+
+    // Luwu collections: a builtin container's loop (luaR_collectionprep), stepped without a call
+    if (LUAU_UNLIKELY(ttisboolean(ra)))
+        return forgLoopCollection(L, ra, aux);
 
     // note: it's safe to push arguments past top for complicated reasons (see lvmexecute.cpp)
     setobj2s(L, ra + 3 + 2, ra + 2);
@@ -219,8 +269,7 @@ Closure* callProlog(lua_State* L, TValue* ra, StkId argtop, int nresults)
     // slow-path: not a function call
     if (LUAU_UNLIKELY(!ttisfunction(ra)))
     {
-        luaV_tryfuncTM(L, ra);
-        argtop++; // __call adds an extra self
+        argtop += luaV_tryfuncTM(L, ra, argtop); // __call adds an extra self
     }
 
     Closure* ccl = clvalue(ra);
@@ -314,8 +363,7 @@ Closure* callFallback(lua_State* L, StkId ra, StkId argtop, int nresults)
     // slow-path: not a function call
     if (LUAU_UNLIKELY(!ttisfunction(ra)))
     {
-        luaV_tryfuncTM(L, ra);
-        argtop++; // __call adds an extra self
+        argtop += luaV_tryfuncTM(L, ra, argtop); // __call adds an extra self
     }
 
     Closure* ccl = clvalue(ra);
@@ -726,7 +774,7 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                 luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
                 if (LUAU_UNLIKELY(inst->lclass->hasconstmembers))
                     luaR_checkconstassignfast(L, kv, inst, cl, slot);
-                setobj2class(L, &inst->members[slot], ra);
+                setobj2class(L, &luaR_members(inst)[slot], ra);
                 luaC_barrier(L, inst, ra);
                 return pc;
             }
@@ -743,7 +791,7 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
                 luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
                 if (LUAU_UNLIKELY(inst->lclass->hasconstmembers))
                     luaR_checkconstassignfast(L, kv, inst, cl, offsetnum);
-                setobj2class(L, &inst->members[offsetnum], ra);
+                setobj2class(L, &luaR_members(inst)[offsetnum], ra);
                 luaC_barrier(L, inst, ra);
                 patchCachedMemberSlot(pc - 2, offsetnum);
                 return pc;
@@ -926,18 +974,25 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
         // Luwu Classes (rfcs/classes): an object's __iter lives on its class's instance metatable. Native code
         // runs every generic for loop's prep through here, so this has to match VM_CASE(LOP_FORGPREP) in
         // lvmexecute.cpp.
+        // Luwu collections: a builtin container's loop needs no `__iter` (luaR_collectionprep)
+        bool collection = false;
         if (FFlag::LuwuClasses && LUAU_UNLIKELY(fn == NULL && ttisobject(ra)))
         {
-            fn = luaT_gettmbyobj(L, ra, TM_ITER);
+            collection = luaR_collectionprep(L, ra);
+            fn = collection ? NULL : luaT_gettmbyobj(L, ra, TM_ITER);
             // if the metamethod is not present, error.
-            if (ttisnil(fn))
+            if (!collection && ttisnil(fn))
             {
                 VM_PROTECT_PC();
                 luaG_typeerror(L, ra, "iterate over");
             }
         }
 
-        if (fn)
+        if (collection)
+        {
+            // luaR_collectionprep set up the registers
+        }
+        else if (fn)
         {
             setobj2s(L, ra + 1, ra);
             setobj2s(L, ra, fn);
@@ -952,7 +1007,9 @@ const Instruction* executeFORGPREP(lua_State* L, const Instruction* pc, StkId ba
             ra = VM_REG(LUAU_INSN_A(insn));
 
             // protect against __iter returning nil, since nil is used as a marker for builtin iteration in FORGLOOP
-            if (ttisnil(ra))
+            // Luwu collections: booleans too, which mark a builtin container's loop (luaR_collectionprep). It raises the
+            // same error before the first step that calling it in FORGLOOP would.
+            if (ttisnil(ra) || ttisboolean(ra))
             {
                 VM_PROTECT_PC(); // next call always errors
                 luaG_typeerror(L, ra, "call");
@@ -1001,14 +1058,27 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
     bool custominit = form == LBC_NEWOBJECT_INIT;
     bool fieldsform = form == LBC_NEWOBJECT_FIELDS;
     bool allocform = form == LBC_NEWOBJECT_ALLOC;
+    bool applyform = form == LBC_NEWOBJECT_APPLY;
 
     // The compiler picked the form from the class's own declaration; asserted, as in the interpreter.
     LUAU_ASSERT(ttisclass(classReg));
 
     LuauClass* classdef = classvalue(classReg);
+
+    // See VM_CASE(LOP_NEWOBJECT): the APPLY form finishes a POD object the ALLOC form started
+    if (applyform)
+    {
+        LUAU_ASSERT(ttisobject(ra) && objectvalue(ra)->lclass == classdef && !classdef->hascustominit && aux <= 1);
+
+        if (aux == 1)
+            VM_PROTECT(luaR_applyobjectargument(L, classdef, objectvalue(ra), ra + 1));
+
+        return pc;
+    }
+
     bool onlyprimaryinit = !(classdef->hascustominit && !classdef->hasprimaryinit);
     LUAU_ASSERT((fieldsform || allocform) ? onlyprimaryinit : classdef->hascustominit == custominit);
-    LUAU_ASSERT(custominit || !classdef->haspoddefaultsfn);
+    LUAU_ASSERT(custominit || allocform || !classdef->haspoddefaultsfn);
     LUAU_ASSERT(!classdef->istrait);
     LUAU_ASSERT(custominit || allocform || classdef->numtraits == 0);
     LUAU_ASSERT(!fieldsform || classdef->numberofinstancemembers == aux);
@@ -1024,8 +1094,8 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
     }
 
     // See VM_CASE(LOP_NEWOBJECT): a private constructor is only callable from inside its own class,
-    // and NEWOBJECT skips the C constructor frame where luaR_createobject would enforce that. `cl` is
-    // the executing closure, which is the code doing the constructing.
+    // and NEWOBJECT skips the call on the class that would check it. `cl` is the executing closure,
+    // which is the code doing the constructing.
     if (LUAU_UNLIKELY(luaR_hasprivateconstructor(classdef)))
     {
         VM_PROTECT_PC();
@@ -1042,7 +1112,7 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
         LuauObject* object = luaR_newobjectuninit(L, classdef);
 
         for (uint32_t idx = 0; idx < aux; idx++)
-            setobj(L, &object->members[idx], ra + 1 + idx);
+            setobj(L, &luaR_members(object)[idx], ra + 1 + idx);
 
         setobjectvalue(L, ra, object);
 
@@ -1073,18 +1143,12 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
             StkId value = ra + 1 + idx;
 
             if (!ttisnil(value))
-                setobj(L, &object->members[idx], value);
+                setobj(L, &luaR_members(object)[idx], value);
         }
     }
     else if (aux == 1)
     {
-        StkId arg = ra + 1;
-
-        // a table carrying a metatable needs the generic, __index-aware path
-        if (LUAU_LIKELY(ttistable(arg) && hvalue(arg)->metatable == NULL))
-            luaR_applyobjectfields(L, classdef, object, hvalue(arg));
-        else
-            VM_PROTECT(luaR_applyobjectfieldsslow(L, classdef, object, arg));
+        VM_PROTECT(luaR_applyobjectargument(L, classdef, object, ra + 1));
     }
 
     luaC_barrierfast(L, object);
@@ -1119,6 +1183,14 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
         TValue* name = VM_KV(aux);
         LUAU_ASSERT(ttisstring(name));
         VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc, LUAU_INSN_B(insn)));
+        return pc;
+    }
+
+    // Luwu Classes (rfcs/classes): the function a call on the class runs
+    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_CONSTRUCTOR)
+    {
+        VM_PROTECT_PC();
+        luaR_setconstructor(L, classvalue(ra), rc);
         return pc;
     }
 
@@ -1202,16 +1274,35 @@ const Instruction* executeINITTRAITS(lua_State* L, const Instruction* pc, StkId 
     Instruction insn = *pc++;
     StkId ra = VM_REG(LUAU_INSN_A(insn));
 
-    LUAU_ASSERT(ttisobject(ra + 1));
+    Instruction call = *pc;
+    LUAU_ASSERT(LUAU_INSN_OP(call) == LOP_CALL);
+    StkId frame = VM_REG(LUAU_INSN_A(call));
 
-    // the jump after this skips the CALL on nil
-    if (objectvalue(ra + 1)->lclass->traitinits)
+    // the jump after this leaves the loop on nil
+    if (!luaR_nexttraitinit(L, ra, frame, LUAU_INSN_B(call) - 2))
+        setnilvalue(frame);
+
+    return pc;
+}
+
+// Luwu bundles: LOP_GETTABLEBUNDLE and LOP_SETTABLEBUNDLE for native code (see FALLBACK_TABLEBUNDLE). Kept in step with
+// their VM_CASEs in lvmexecute.cpp, whose slow paths these are.
+const Instruction* executeTABLEBUNDLE(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    uint32_t aux = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = VM_REG(LUAU_INSN_B(insn));
+    StkId rc = VM_REG(LUAU_INSN_C(insn));
+
+    if (LUAU_INSN_OP(insn) == LOP_SETTABLEBUNDLE)
     {
-        setclvalue(L, ra, L->global->traitinitrunner);
+        VM_PROTECT(luaV_settablebundle(L, rb, rc, int(aux), ra));
     }
     else
     {
-        setnilvalue(ra);
+        VM_PROTECT(luaV_gettablebundle(L, rb, rc, int(aux), ra));
     }
 
     return pc;

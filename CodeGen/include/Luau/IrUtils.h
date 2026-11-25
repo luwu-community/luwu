@@ -68,6 +68,8 @@ inline bool isNonTerminatingJump(IrCmd cmd)
     case IrCmd::CHECK_NODE_NO_NEXT:
     case IrCmd::CHECK_NODE_VALUE:
     case IrCmd::CHECK_OBJECT_CLASS:
+    case IrCmd::CHECK_STORAGE:
+    case IrCmd::CHECK_STORAGE_ELEMENT:
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
     case IrCmd::CHECK_CLASS_ALLOCATABLE:
     case IrCmd::TRY_OBJECT_MEMBER_ADDR:
@@ -115,6 +117,7 @@ inline bool canInvalidateSafeEnv(IrCmd cmd)
     case IrCmd::FALLBACK_INITTRAITS:
     case IrCmd::FALLBACK_PRESIZETABLE:
     case IrCmd::FALLBACK_GETQUALIFIED:
+    case IrCmd::FALLBACK_TABLEBUNDLE:
     case IrCmd::FALLBACK_SETQUALIFIED:
     case IrCmd::FALLBACK_GETPOSITIONAL:
     case IrCmd::FALLBACK_PUSH:
@@ -135,7 +138,7 @@ inline bool isPseudo(IrCmd cmd)
 
 inline bool hasSideEffects(IrCmd cmd)
 {
-    if (cmd == IrCmd::INVOKE_FASTCALL)
+    if (cmd == IrCmd::INVOKE_FASTCALL || cmd == IrCmd::INVOKE_FAST_METHOD)
         return true;
 
     if (isPseudo(cmd))
@@ -148,7 +151,7 @@ inline bool hasSideEffects(IrCmd cmd)
 
 inline bool producesDirtyHighRegisterBits(IrCmd cmd)
 {
-    return cmd == IrCmd::NUM_TO_UINT || cmd == IrCmd::INVOKE_FASTCALL || cmd == IrCmd::CMP_ANY;
+    return cmd == IrCmd::NUM_TO_UINT || cmd == IrCmd::INVOKE_FASTCALL || cmd == IrCmd::INVOKE_FAST_METHOD || cmd == IrCmd::CMP_ANY;
 }
 
 // Returns a condition that for 'a op b' will result in '!(a op b)'
