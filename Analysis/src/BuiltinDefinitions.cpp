@@ -422,6 +422,32 @@ static void finalizeGlobalBindings(ScopePtr scope)
 // `vector` is a language primitive (its own nominal root) that reuses the ExternType
 // representation for its x/y/z fields and operator metatable. Like the string metatable, this is
 // built directly on the shared `builtinTypes` arena so there is a single canonical `vector` type.
+// Luwu try expressions: `none` is the empty option, so it has `get` (giving `none`) and `expect` (which raises), which
+// the result library gives it at runtime through its type's metatable
+void makeNoneMetatable(NotNull<BuiltinTypes> builtinTypes)
+{
+    PrimitiveType* none = getMutable<PrimitiveType>(builtinTypes->noneType);
+    LUAU_ASSERT(none);
+
+    // Every GlobalTypes (the checker's and autocomplete's) calls this on the same shared `none`
+    if (none->metatable)
+        return;
+
+    NotNull<TypeArena> arena{builtinTypes->arena.get()};
+    TypeId noneTy = builtinTypes->noneType;
+    TypeId message = makeOption(builtinTypes, *arena, builtinTypes->stringType);
+
+    TableType methods{{}, std::nullopt, TypeLevel{}, TableState::Sealed};
+    methods.props["get"] = {makeFunction(*arena, noneTy, {}, {noneTy})};
+    methods.props["expect"] = {makeFunction(*arena, noneTy, {message}, {builtinTypes->neverType})};
+
+    TableType metatable{{}, std::nullopt, TypeLevel{}, TableState::Sealed};
+    metatable.props["__index"] = {arena->addType(std::move(methods))};
+    none->metatable = arena->addType(std::move(metatable));
+    persist(*none->metatable);
+}
+
+
 void makeVectorMetatable(NotNull<BuiltinTypes> builtinTypes)
 {
     NotNull<TypeArena> arena{builtinTypes->arena.get()};
@@ -707,6 +733,13 @@ static const std::pair<const char*, const char*> kCollectionsTypeofNames[] = {
     {"vecdeque", "VecDeque"},
 };
 
+// Luwu builtin classes: what `typeof` gives an object of each global result class (luaopen_result)
+static const std::pair<const char*, const char*> kResultTypeofNames[] = {
+    {"some", "Some"},
+    {"ok", "Ok"},
+    {"err", "Err"},
+};
+
 bool isBuiltinClassTypeofName(const std::string& name)
 {
     if (name == "bundle")
@@ -716,10 +749,15 @@ bool isBuiltinClassTypeofName(const std::string& name)
         if (name == typeofName)
             return collectionsLibraryEnabled();
     }
+    for (const auto& [typeofName, className] : kResultTypeofNames)
+    {
+        if (name == typeofName)
+            return resultLibraryEnabled();
+    }
     return false;
 }
 
-// Luwu builtin classes: the class type of the `collections` class whose objects `typeof` names `name`
+// Luwu builtin classes: the class type of the `collections` or result class whose objects `typeof` names `name`
 static std::optional<TypeId> collectionsTypeofType(const Scope* globalScope, const std::string& name)
 {
     for (const auto& [typeofName, className] : kCollectionsTypeofNames)
@@ -727,6 +765,13 @@ static std::optional<TypeId> collectionsTypeofType(const Scope* globalScope, con
         if (name != typeofName)
             continue;
         if (std::optional<TypeFun> declared = globalScope->lookupImportedType("collections", className))
+            return follow(declared->type);
+    }
+    for (const auto& [typeofName, className] : kResultTypeofNames)
+    {
+        if (name != typeofName)
+            continue;
+        if (std::optional<TypeFun> declared = globalScope->lookupType(className))
             return follow(declared->type);
     }
     return std::nullopt;
@@ -770,6 +815,27 @@ std::optional<std::string> fixedElementContainerName(TypeArena* arena, const Sco
         std::optional<TypeId> declared = collectionsTypeofType(globalScope, typeofName);
         if (declared && follow(*declared) == objectTemplate)
             return std::string(name);
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> builtinEnumPlural(const Scope* scope, TypeId ty)
+{
+    const ExternType* object = get<ExternType>(follow(ty));
+    if (!object)
+        return std::nullopt;
+    TypeId objectTemplate = follow(object->genericTemplate.value_or(follow(ty)));
+
+    const Scope* globalScope = scope;
+    while (globalScope->parent)
+        globalScope = globalScope->parent.get();
+
+    const std::pair<const char*, const char*> variants[] = {{"Some", "options"}, {"Ok", "results"}, {"Err", "results"}};
+    for (const auto& [name, plural] : variants)
+    {
+        std::optional<TypeFun> declared = globalScope->lookupType(name);
+        if (declared && follow(declared->type) == objectTemplate)
+            return std::string(plural);
     }
     return std::nullopt;
 }
@@ -1271,6 +1337,9 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
     }
     if (collectionsLibraryEnabled())
         registerBuiltinModule(frontend, globals, "collections", getCollectionsDefinitionSource(), typeCheckForAutocomplete);
+    // Luwu structured runtime errors: `Error.NotIndexable` and the other variants are types too
+    if (resultLibraryEnabled())
+        registerBuiltinModule(frontend, globals, "Error", getErrorDefinitionSource(), typeCheckForAutocomplete);
 
     // Global scope cannot be the parent of the type checking environment because it can be changed by the embedder
     globals.globalTypeFunctionScope->exportedTypeBindings = globals.globalScope->exportedTypeBindings;

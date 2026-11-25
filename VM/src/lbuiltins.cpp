@@ -1020,6 +1020,40 @@ static int luauF_class_of(lua_State* L, StkId res, TValue* arg0, int nresults, S
     return -1;
 }
 
+// Luwu try expressions: a new object of the builtin class `classdef` in `res`, its members set from the arguments in
+// order and nil past them. The caller has checked that the collector doesn't need a step.
+static void buildnative(lua_State* L, StkId res, LuauClass* classdef, TValue* arg0, StkId args, int nparams)
+{
+    // A new object is white, so storing into it needs no barrier
+    LuauObject* object = luaR_newobjectuninit(L, classdef);
+    TValue* members = luaR_members(object);
+    int count = int(object->numberofmembers);
+    if (count >= 1 && nparams >= 1)
+        setobj(L, &members[0], arg0);
+    for (int i = 1; i < count && i < nparams; i++)
+        setobj(L, &members[i], &args[i - 1]);
+    for (int i = nparams; i < count; i++)
+        setnilvalue(&members[i]);
+
+    setobjectvalue(L, res, object);
+}
+
+// Luwu try expressions: builds a `Some`, `Ok` or `Err` the way its `__init` would, without a call frame. A member with
+// no argument for it is nil. A call without arguments falls back to the constructor.
+template<LuwuBuiltinClass Kind>
+static int luauF_payloadconstruct(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    LuauClass* classdef = L->global->builtinclasses[Kind];
+    if (!classdef || nresults > 1 || nparams < 1)
+        return -1;
+
+    if (luaC_needsGC(L))
+        return -1; // we can't call luaC_checkGC so fall back to C implementation
+
+    buildnative(L, res, classdef, arg0, args, nparams);
+    return 1;
+}
+
 // Luwu bundles: `bundle.pack(...)` without a call frame. Past the bundle limit, or without the library, it falls back to
 // the function, which raises.
 static int luauF_bundlepack(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
@@ -2918,6 +2952,10 @@ const luau_FastFunction luauF_table[256] = {
     luauF_startswith,
     luauF_endswith,
     luauF_contains,
+
+    luauF_payloadconstruct<LUWU_BUILTIN_SOME>,
+    luauF_payloadconstruct<LUWU_BUILTIN_OK>,
+    luauF_payloadconstruct<LUWU_BUILTIN_ERR>,
 
     luauF_bundlepack,
     luauF_bundleunpack,

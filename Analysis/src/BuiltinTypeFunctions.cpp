@@ -22,6 +22,7 @@ LUAU_DYNAMIC_FASTINTVARIABLE(LuauStepRefineRecursionLimit, 64)
 
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 
 namespace Luau
 {
@@ -3021,6 +3022,85 @@ TypeFunctionReductionResult<TypeId> unlessneverTypeFunction(
     return {refined, Reduction::MaybeOk, {}, {}};
 }
 
+// Luwu try expressions: the error hints of each function `fnTy` can be (an overload set's, a union's), or nullopt while
+// `fnTy` is still pending. `closed` says whether every one of them has a closed hint (FunctionType::errorHintClosed).
+static std::optional<std::vector<TypeId>> errorHintsOf(TypeId fnTy, NotNull<TypeFunctionContext> ctx, bool& closed)
+{
+    closed = true;
+    std::vector<TypeId> parts;
+    if (const IntersectionType* overloads = get<IntersectionType>(fnTy))
+        parts.assign(overloads->parts.begin(), overloads->parts.end());
+    else if (const UnionType* options = get<UnionType>(fnTy))
+        parts.assign(options->options.begin(), options->options.end());
+    else
+        parts.push_back(fnTy);
+
+    std::vector<TypeId> hints;
+    for (TypeId part : parts)
+    {
+        part = follow(part);
+        if (isPending(part, ctx->solver))
+            return std::nullopt;
+
+        const FunctionType* function = get<FunctionType>(part);
+        bool partClosed = function && function->errorHint && function->errorHintClosed;
+        closed = closed && partClosed;
+        if (!function || !function->errorHint)
+            continue;
+
+        // the `never` that closes a hint isn't an error it raises
+        TypeId hint = follow(*function->errorHint);
+        const UnionType* members = get<UnionType>(hint);
+        if (partClosed && members)
+        {
+            for (TypeId member : members->options)
+            {
+                if (!get<NeverType>(follow(member)))
+                    hints.push_back(member);
+            }
+        }
+        else if (!partClosed || !get<NeverType>(hint))
+        {
+            hints.push_back(hint);
+        }
+    }
+    return hints;
+}
+
+TypeFunctionReductionResult<TypeId> raisesTypeFunction(
+    TypeId instance,
+    const std::vector<TypeId>& typeParams,
+    const std::vector<TypePackId>& packParams,
+    NotNull<TypeFunctionContext> ctx
+)
+{
+    if (typeParams.size() != 1 || !packParams.empty())
+    {
+        ctx->ice->ice("raises type function: encountered a type function instance without the required argument structure");
+        LUAU_ASSERT(false);
+    }
+
+    TypeId fnTy = follow(typeParams[0]);
+    if (isPending(fnTy, ctx->solver))
+        return {std::nullopt, Reduction::MaybeOk, {fnTy}, {}};
+
+    bool closed = false;
+    std::optional<std::vector<TypeId>> hints = errorHintsOf(fnTy, ctx, closed);
+    if (!hints)
+        return {std::nullopt, Reduction::MaybeOk, {fnTy}, {}};
+
+    // A union built directly: simplifying it would let an `unknown` in a hint absorb the other members. A closed hint
+    // raises nothing it doesn't name, so it gets no weakunknown.
+    std::vector<TypeId> options = std::move(*hints);
+    if (!closed)
+        options.push_back(ctx->builtins->weakUnknownType);
+    if (options.empty())
+        return {ctx->builtins->neverType, Reduction::MaybeOk, {}, {}};
+    if (options.size() == 1)
+        return {options[0], Reduction::MaybeOk, {}, {}};
+    return {ctx->arena->addType(UnionType{std::move(options)}), Reduction::MaybeOk, {}, {}};
+}
+
 BuiltinTypeFunctions::BuiltinTypeFunctions()
     : userFunc{"user", userDefinedTypeFunction}
     , notFunc{"not", notTypeFunction}
@@ -3055,6 +3135,8 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , unlessneverFunc{"unlessnever", unlessneverTypeFunction}
     , qualifiedFunc{"qualified", qualifiedTypeFunction}
     , oneofFunc{"oneof", oneofTypeFunction}
+    , raisesFunc{"raises", raisesTypeFunction}
+    , qualifiedFunc{"qualified", qualifiedTypeFunction}
 {
 }
 
@@ -3118,6 +3200,9 @@ void BuiltinTypeFunctions::addToScope(NotNull<TypeArena> arena, NotNull<Scope> s
     TypePackId members = arena->addTypePack(GenericTypePack{"T"});
     scope->exportedTypeBindings[oneofFunc.name] =
         TypeFun{{}, {GenericTypePackDefinition{members}}, arena->addType(TypeFunctionInstanceType{NotNull{&oneofFunc}, {}, {members}})};
+
+    if (FFlag::DebugLuwuTryExpressions)
+        scope->exportedTypeBindings[raisesFunc.name] = mkUnaryTypeFunction(&raisesFunc);
 }
 
 } // namespace Luau

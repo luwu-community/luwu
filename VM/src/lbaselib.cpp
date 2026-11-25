@@ -3,6 +3,7 @@
 #include "lualib.h"
 
 #include "lstate.h"
+#include "ldebug.h"
 #include "lapi.h"
 #include "ldo.h"
 #include "ludata.h"
@@ -264,7 +265,12 @@ static int luaB_assert(lua_State* L)
 {
     luaL_checkany(L, 1);
     if (!lua_toboolean(L, 1))
-        luaL_error(L, "%s", luaL_optstring(L, 2, "assertion failed!"));
+    {
+        // Luwu structured runtime errors: raised as an `Error.AssertionFailed`, whose message `pcall` gets
+        luaL_optstring(L, 2, NULL);
+        lua_settop(L, 2);
+        luaG_assertionerror(L, L->base + 1);
+    }
     return lua_gettop(L);
 }
 

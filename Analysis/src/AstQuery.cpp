@@ -746,4 +746,22 @@ std::optional<DocumentationSymbol> getDocumentationSymbolAtPosition(const Source
     return std::nullopt;
 }
 
+bool isErrorCall(const AstExprCall* call)
+{
+    const AstExprGlobal* callee = call->func->as<AstExprGlobal>();
+    return callee && callee->name == "error";
+}
+
+AstExprCall* finalErrorCall(const AstExprFunction* fn)
+{
+    if (fn->body->body.size == 0)
+        return nullptr;
+
+    AstStatExpr* expr = fn->body->body.data[fn->body->body.size - 1]->as<AstStatExpr>();
+    AstExprCall* call = expr ? expr->expr->as<AstExprCall>() : nullptr;
+    if (!call || !isErrorCall(call))
+        return nullptr;
+    return call;
+}
+
 } // namespace Luau

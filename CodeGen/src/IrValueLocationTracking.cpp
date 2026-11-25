@@ -163,6 +163,9 @@ void IrValueLocationTracking::beforeInstLowering(IrInst& inst)
     case IrCmd::FALLBACK_GETQUALIFIED:
         invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
         break;
+    case IrCmd::FALLBACK_WRAPRESULT:
+        invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
+        break;
     case IrCmd::FALLBACK_TABLEBUNDLE:
         if (function.intOp(OP_F(inst)) == 0)
             invalidateRestoreVmRegs(vmRegOp(OP_B(inst)), 1);
