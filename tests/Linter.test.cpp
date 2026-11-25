@@ -4283,12 +4283,12 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsLuwuFunctionsInLuauFiles")
 {
     const std::string source = R"(
 local t = { 1, 2, 2 }
-local removed = table.drop(t, 2)
+local removed = table.discard(t, 2)
 local frozen = buffer.isfrozen(buffer.create(1))
 local owner = class.of
 local check = class.isinstance
-local function shadowed(table: { drop: () -> () })
-    table.drop()
+local function shadowed(table: { discard: () -> () })
+    table.discard()
 end
 return removed, frozen, shadowed, owner, check
 )";
@@ -4308,7 +4308,7 @@ return removed, frozen, shadowed, owner, check
     // A local named `table` isn't the library, and upstream's `class` library has `isinstance` too
     std::vector<LintWarning> inLuau = luwuOnly("game/a", Language::Luau);
     REQUIRE_EQ(inLuau.size(), 3);
-    CHECK_EQ(inLuau[0].text, "'table.drop' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
+    CHECK_EQ(inLuau[0].text, "'table.discard' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
     CHECK_EQ(inLuau[1].location, Location({3, 15}, {3, 30}));
     CHECK_EQ(inLuau[2].text, "'class.of' only exists in Luwu, but this is a Luau file; rename it to '.luwu' if it's Luwu code");
 
@@ -4316,7 +4316,7 @@ return removed, frozen, shadowed, owner, check
 
     std::vector<LintWarning> inLua = luwuOnly("game/c", Language::Lua);
     REQUIRE_EQ(inLua.size(), 3);
-    CHECK_EQ(inLua[0].text, "'table.drop' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
+    CHECK_EQ(inLua[0].text, "'table.discard' only exists in Luwu, but this is a Lua file; rename it to '.luwu' if it's Luwu code");
 }
 
 // Luwu try expressions: `types.raises` in a type function
