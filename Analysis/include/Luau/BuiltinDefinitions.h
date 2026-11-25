@@ -158,6 +158,13 @@ void assignPropDocumentationSymbols(TableType::Props& props, const std::string& 
 
 std::string getBuiltinDefinitionSource();
 
+// Luwu try expressions: whether Analysis has the `Ok`, `Err`, `Some` and `None` globals: the flags the VM opens them
+// with (luaL_openlibs), LuwuDeclareStatements, which parses their declarations, and LuwuGenericNominals, which types
+// their generic classes
+bool resultLibraryEnabled();
+// Luwu structured runtime errors: the declarations of `Error` and its variant classes, a builtin module of their own.
+// Analysis has them with the result library.
+std::string getErrorDefinitionSource();
 // Luwu collections: whether Analysis has the `collections` library: the flags the VM opens it with
 // (luaL_openlibs), and LuwuDeclareStatements, which parses its declarations
 bool collectionsLibraryEnabled();
@@ -179,6 +186,11 @@ std::optional<TypeId> builtinClassTypeofType(
 // Luwu collections: "Vec" or "VecDeque" when `classValue` is that class's value, whose objects fix their element type to
 // their first value's at runtime. nullopt for any other type. `scope` is any scope of the module.
 std::optional<std::string> fixedElementContainerName(TypeArena* arena, const Scope* scope, TypeId classValue);
+
+// Luwu try expressions: the builtin enum an object of type `ty` belongs to at runtime, named the way the VM's errors name
+// its values: "options" for `Some`, "results" for `Ok` and `Err`. A Vec or VecDeque of an enum takes all of its variants.
+// nullopt for any other type. `scope` is any scope of the module.
+std::optional<std::string> builtinEnumPlural(const Scope* scope, TypeId ty);
 
 // Luwu bundles: the most values a bundle with a class of its size holds (LUWU_BUNDLE_FIXED_MAX in the VM). Larger
 // bundles share the class `BigBundle`.

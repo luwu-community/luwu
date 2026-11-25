@@ -7,6 +7,8 @@
 #include "lgc.h"
 #include "lmem.h"
 #include "lvm.h"
+#include "ldebug.h"
+#include "lclass.h"
 
 #if LUA_USE_LONGJMP
 #include <setjmp.h>
@@ -43,7 +45,7 @@ struct lua_jmpbuf
 #define LUAU_LONGJMP(buf, code) longjmp(buf, code)
 #endif
 
-int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+int luaD_rawrunprotectedrecorded(lua_State* L, Pfunc f, void* ud)
 {
     lua_jmpbuf jb;
     jb.prev = L->global->errorjmp;
@@ -117,7 +119,7 @@ private:
     int status;
 };
 
-int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+int luaD_rawrunprotectedrecorded(lua_State* L, Pfunc f, void* ud)
 {
     int status = 0;
 
@@ -160,6 +162,22 @@ l_noret luaD_throw(lua_State* L, int errcode)
     throw lua_exception(L, errcode);
 }
 #endif
+
+int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+{
+    int status = luaD_rawrunprotectedrecorded(L, f, ud);
+    return status == LUA_OK ? status : luaD_finisherror(L, status);
+}
+
+int luaD_finisherror(lua_State* L, int status)
+{
+    if (status == LUA_ERRRUN && luaG_iserrorrecord(L, L->top - 1))
+        return luaG_replaceerrorrecord(L, L->top - 1);
+
+    // an error that isn't the recorded one ends it: running out of memory while raising it, for one
+    luaG_clearerrorrecord(L->global);
+    return status;
+}
 
 
 static void correctstack(lua_State* L, TValue* oldstack)
@@ -232,7 +250,7 @@ CallInfo* luaD_growCI(lua_State* L)
     luaD_reallocCI(L, L->size_ci >= LUAI_MAXCALLS ? hardlimit : request < LUAI_MAXCALLS ? request : LUAI_MAXCALLS);
 
     if (L->size_ci > LUAI_MAXCALLS)
-        luaG_runerror(L, "stack overflow");
+        luaG_stackoverflowerror(L, false);
 
     return ++L->ci;
 }
@@ -243,7 +261,7 @@ void luaD_checkCstack(lua_State* L)
     const int hardlimit = LUAI_MAXCCALLS + (LUAI_MAXCCALLS >> 3);
 
     if (L->nCcalls == LUAI_MAXCCALLS)
-        luaG_runerror(L, "C stack overflow");
+        luaG_stackoverflowerror(L, true);
     else if (L->nCcalls >= hardlimit)
         luaD_throw(L, LUA_ERRERR); // error while handling stack error
 }
@@ -688,11 +706,19 @@ static int resume_start(lua_State* L, lua_State* from, int nargs)
     return LUA_OK;
 }
 
-static int resume_finish(lua_State* L, int status, int oldnCcalls)
+// Finishes a resume. With `keeprecord`, an error that leaves the coroutine stays recorded (coroutine.wrap raises it
+// again); otherwise it's formatted, like every error a pcall in the coroutine catches.
+static int resume_finish(lua_State* L, int status, int oldnCcalls, bool keeprecord)
 {
     CallInfo* ch = NULL;
     while (status != LUA_OK && (ch = resume_findhandler(L)) != NULL)
     {
+        // Luwu structured runtime errors: formatting the error can reallocate the CallInfo array. The handler is found
+        // again by its offset.
+        ptrdiff_t handler = saveci(L, ch);
+        status = luaD_finisherror(L, status);
+        ch = restoreci(L, handler);
+
         if (lua_isyieldable(L) != 0 && L->global->cb.debugprotectederror)
         {
             L->global->cb.debugprotectederror(L);
@@ -709,7 +735,7 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
         L->baseCcalls = oldnCcalls;
 
         L->status = cast_byte(status);
-        status = luaD_rawrunprotected(L, resume_handle, ch);
+        status = luaD_rawrunprotectedrecorded(L, resume_handle, ch);
     }
 
     // C call count base was set to an incremented value of C call count in resume, so we decrement here
@@ -722,6 +748,9 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
 
     if (status != LUA_OK)
     {
+        if (!keeprecord || !luaG_iserrorrecord(L, L->top - 1))
+            status = luaD_finisherror(L, status);
+
         L->status = cast_byte(status);
         luaD_seterrorobj(L, status, L->top);
         L->ci->top = L->top;
@@ -737,16 +766,26 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls)
     return L->status;
 }
 
-int lua_resume(lua_State* L, lua_State* from, int nargs)
+static int resumewith(lua_State* L, lua_State* from, int nargs, bool keeprecord)
 {
     if (int starterror = resume_start(L, from, nargs))
         return starterror;
 
     int oldnCcalls = L->nCcalls;
 
-    int status = luaD_rawrunprotected(L, resume, L->top - nargs);
+    int status = luaD_rawrunprotectedrecorded(L, resume, L->top - nargs);
 
-    return resume_finish(L, status, oldnCcalls);
+    return resume_finish(L, status, oldnCcalls, keeprecord);
+}
+
+int lua_resume(lua_State* L, lua_State* from, int nargs)
+{
+    return resumewith(L, from, nargs, false);
+}
+
+int luaD_resumerecorded(lua_State* L, lua_State* from, int nargs)
+{
+    return resumewith(L, from, nargs, true);
 }
 
 int lua_resumeerror(lua_State* L, lua_State* from)
@@ -761,10 +800,10 @@ int lua_resumeerror(lua_State* L, lua_State* from)
     if (CallInfo* ci = resume_findhandler(L))
     {
         L->status = cast_byte(status);
-        status = luaD_rawrunprotected(L, resume_handle, ci);
+        status = luaD_rawrunprotectedrecorded(L, resume_handle, ci);
     }
 
-    return resume_finish(L, status, oldnCcalls);
+    return resume_finish(L, status, oldnCcalls, false);
 }
 
 int lua_yield(lua_State* L, int nresults)
@@ -773,7 +812,7 @@ int lua_yield(lua_State* L, int nresults)
     api_check(L, nresults <= L->top - L->base);
 
     if (L->nCcalls > L->baseCcalls)
-        luaG_runerror(L, "attempt to yield across metamethod/C-call boundary");
+        luaG_notyieldableerror(L);
     L->base = L->top - nresults; // protect stack slots below
     L->status = LUA_YIELD;
     return -1;
@@ -790,6 +829,183 @@ int lua_break(lua_State* L)
 int lua_isyieldable(lua_State* L)
 {
     return (L->nCcalls <= L->baseCcalls);
+}
+
+/*
+** Luwu try expressions: an error raised in a function's protected range resumes the function at the range's handler.
+** Errors unwind the C stack to a catch, so the catch has to be where execution can continue: each luau_execute run.
+** A `pcall` deeper on the C stack catches its callee's errors first, and a run with no range around the error rethrows
+** to the catch below it.
+*/
+
+// What a run restores when it resumes at a handler
+struct TryRun
+{
+    // the first frame the run owns (saveci)
+    ptrdiff_t start;
+    unsigned short nCcalls;
+    unsigned short baseCcalls;
+    bool isactive;
+};
+
+// The first frame of the run starting at L->ci: the frame a C caller entered (flagged LUA_CALLINFO_RETURN), or, when
+// the run resumes a coroutine's frames, the lowest Lua frame above a C one
+static CallInfo* runstart(lua_State* L)
+{
+    CallInfo* ci = L->ci;
+    while (!(ci->flags & LUA_CALLINFO_RETURN) && ci - 1 > L->base_ci && isLua(ci - 1))
+        ci--;
+    return ci;
+}
+
+// The innermost protected range around pc
+static const LuauTryRange* findtryrange(Proto* p, int pc)
+{
+    for (int i = 0; i < p->sizetryranges; i++)
+    {
+        const LuauTryRange& range = p->tryranges[i];
+        if (uint32_t(pc) >= range.startpc && uint32_t(pc) < range.endpc)
+            return &range;
+    }
+    return NULL;
+}
+
+// Resumes ci at the range's handler, with the error and where it was raised in the handler's registers. A native frame
+// stays native: the run's next luau_execute enters its code at the handler.
+static void resumeintry(lua_State* L, CallInfo* ci, const LuauTryRange& range, const TryRun& run)
+{
+    // Luwu structured runtime errors: a recorded error becomes an object of its variant, or its message when the result
+    // library that has the variants isn't open
+    if (luaG_iserrorrecord(L, L->top - 1))
+    {
+        if (LuauObject* variant = luaR_newerrorvariant(L))
+        {
+            setobjectvalue(L, L->top - 1, variant);
+            luaG_clearerrorrecord(L->global);
+        }
+        else
+        {
+            luaG_replaceerrorrecord(L, L->top - 1);
+        }
+    }
+
+    // where the error was raised, read while the frames that raised it are still there
+    TString* module = NULL;
+    int line = 0;
+    lua_Debug ar;
+    for (int level = 0; lua_getinfo(L, level, "sl", &ar); ++level)
+    {
+        if (strcmp(ar.what, "C") != 0)
+        {
+            module = luaS_new(L, ar.short_src);
+            line = ar.currentline;
+            break;
+        }
+    }
+    TString* traceback = luaG_traceback(L, int(L->ci - ci) + 1);
+
+    TValue error;
+    setobj(L, &error, L->top - 1);
+
+    StkId target = ci->base + range.target;
+    luaF_close(L, target);
+    L->ci = ci;
+    L->base = ci->base;
+    L->top = ci->top;
+
+    // the rest of the range's registers can be half written, and the GC is about to traverse them
+    for (StkId reg = target + 4; reg < L->top; reg++)
+        setnilvalue(reg);
+
+    setobj2s(L, target, &error);
+    setnilvalue(target + 1);
+    setnilvalue(target + 2);
+    if (module)
+    {
+        setsvalue(L, target + 1, module);
+    }
+    if (line > 0)
+    {
+        setnvalue(target + 2, line);
+    }
+    setsvalue(L, target + 3, traceback);
+
+    ci->savedpc = clvalue(ci->func)->l.p->code + range.handlerpc;
+
+    L->nCcalls = run.nCcalls;
+    L->baseCcalls = run.baseCcalls;
+    L->isactive = run.isactive;
+    restore_stack_limit(L);
+}
+
+// Resumes at the handler of the innermost range around the error, when one of the run's frames has one
+static bool catchintry(lua_State* L, const TryRun& run, int status)
+{
+    // runtime errors only: running out of memory, or an error while handling one, isn't something to recover from here
+    if (status != LUA_ERRRUN)
+        return false;
+
+    CallInfo* start = restoreci(L, run.start);
+    if (start > L->ci)
+        return false;
+
+    // the run owns the frames up to the first one another run or a C function owns
+    CallInfo* last = start;
+    while (last < L->ci && isLua(last + 1) && !((last + 1)->flags & LUA_CALLINFO_RETURN))
+        last++;
+
+    for (CallInfo* ci = last; ci >= start; ci--)
+    {
+        Proto* p = clvalue(ci->func)->l.p;
+        const LuauTryRange* range = p->tryranges ? findtryrange(p, pcRel(ci->savedpc, p)) : NULL;
+        if (range)
+        {
+            resumeintry(L, ci, *range, run);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+#if LUA_USE_LONGJMP
+struct TryExecute
+{
+    void (*execute)(lua_State* L);
+};
+
+static void runexecute(lua_State* L, void* ud)
+{
+    static_cast<TryExecute*>(ud)->execute(L);
+}
+#endif
+
+void luaD_executetry(lua_State* L, void (*execute)(lua_State* L))
+{
+    TryRun run = {saveci(L, runstart(L)), L->nCcalls, L->baseCcalls, L->isactive};
+
+    for (;;)
+    {
+#if LUA_USE_LONGJMP
+        TryExecute ud = {execute};
+        int status = luaD_rawrunprotectedrecorded(L, runexecute, &ud);
+        if (status == 0)
+            return;
+        if (!catchintry(L, run, status))
+            luaD_throw(L, status);
+#else
+        try
+        {
+            execute(L);
+            return;
+        }
+        catch (lua_exception& e)
+        {
+            if (e.getThread() != L || !catchintry(L, run, e.getStatus()))
+                throw;
+        }
+#endif
+    }
 }
 
 int luaD_pcall(lua_State* L, Pfunc func, void* u, ptrdiff_t old_top, ptrdiff_t ef)

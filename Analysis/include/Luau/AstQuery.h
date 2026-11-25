@@ -100,4 +100,11 @@ std::optional<TypeId> findExpectedTypeAtPosition(const Module& module, const Sou
 
 std::optional<DocumentationSymbol> getDocumentationSymbolAtPosition(const SourceModule& source, const Module& module, Position position);
 
+// Luwu try expressions: whether `call` calls the global `error`
+bool isErrorCall(const AstExprCall* call);
+
+// Luwu try expressions: the `error(...)` call that is `fn`'s last statement, if there is one. Reaching it is a bug, not an
+// error the function raises.
+AstExprCall* finalErrorCall(const AstExprFunction* fn);
+
 } // namespace Luau
