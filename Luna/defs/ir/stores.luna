@@ -1,0 +1,87 @@
+~ Store a tag into TValue
+~ A: Rn or pointer (TValue)
+~ B: tag
+(define-ircmd STORE_TAG
+  (operands [a :Rn|:inst-pointer] [tag :tag])
+  (class :effect)
+  (facts (writes (tvalue a :tag) tag))
+  (lowering (lower-store-tag a tag)))
+
+~ Store an integer into the extra field of the TValue
+~ A: Rn
+~ B: int
+(define-ircmd STORE_EXTRA
+  (operands [a :Rn] [extra :int])
+  (class :effect)
+  (facts (writes (tvalue a :extra) extra))
+  (lowering (lower-store-extra a extra)))
+
+~ Store a pointer (*) into TValue
+~ A: Rn or pointer (TValue)
+~ B: pointer, or int 0 for a null pointer
+(define-ircmd STORE_POINTER
+  (operands [a :Rn|:inst-pointer] [val :pointer|:const-int])
+  (class :effect)
+  (facts (writes (tvalue a :value :pointer) val))
+  (lowering (lower-store-pointer a val)))
+
+~ Store a double number into TValue
+~ A: Rn or pointer (TValue)
+~ B: double
+(define-ircmd STORE_DOUBLE
+  (operands [a :Rn|:inst-pointer] [val :double])
+  (class :effect)
+  (facts (writes (tvalue a :value :double) val))
+  (lowering (lower-store-double a val)))
+
+~ Store an int into TValue
+~ A: Rn
+~ B: int
+(define-ircmd STORE_INT
+  (operands [a :Rn] [val :int])
+  (class :effect)
+  (facts (writes (tvalue a :value :int) val))
+  (lowering (lower-store-int a val)))
+
+~ Store an int64 into TValue
+~ A: Rn
+~ B: int64
+(define-ircmd STORE_INT64
+  (operands [a :Rn] [val :int64])
+  (class :effect)
+  (facts (writes (tvalue a :value :int64) val))
+  (lowering (lower-store-int64 a val)))
+
+~ Store a vector into TValue
+~ When optional 'E' tag is present, it is written out to the TValue as well
+~ A: Rn
+~ B: float (x)
+~ C: float (y)
+~ D: float (z)
+~ E: tag (optional)
+(define-ircmd STORE_VECTOR
+  (operands [a :Rn] [x :float] [y :float] [z :float] [tag :tag])
+  (class :effect)
+  (facts (writes (tvalue a :vector) x y z))
+  (lowering (lower-store-vector a x y z tag)))
+
+~ Store a TValue into memory
+~ A: Rn or pointer (TValue)
+~ B: TValue
+~ C: int (optional 'A' pointer offset)
+(define-ircmd STORE_TVALUE
+  (operands [a :Rn|:pointer] [val :tvalue] [offset :const-int])
+  (class :effect)
+  (facts (writes (tvalue a offset :tvalue) val))
+  (lowering (lower-store-tvalue a val offset)))
+
+~ Store a pair of tag and value into memory
+~ A: Rn or pointer (TValue)
+~ B: tag (must be a constant)
+~ C: int/int64/double/pointer
+~ D: int (optional 'A' pointer offset)
+(define-ircmd STORE_SPLIT_TVALUE
+  (operands [a :Rn|:pointer] [tag :tag] [val :int|:int64|:double|:pointer] [offset :const-int])
+  (class :effect)
+  (facts (writes (tvalue a offset :split) tag val))
+  (lowering (lower-store-split-tvalue a tag val offset)))

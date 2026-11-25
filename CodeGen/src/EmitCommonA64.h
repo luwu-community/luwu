@@ -8,6 +8,9 @@
 #include "lobject.h"
 #include "ltm.h"
 #include "lstate.h"
+#include "Luau/IrData.h"
+#include "Luau/IrUtils.h"
+#include <climits>
 
 // AArch64 ABI reminder:
 // Arguments: x0-x7, v0-v7
@@ -24,6 +27,209 @@ namespace CodeGen
 
 namespace A64
 {
+
+struct IrRegAllocA64;
+
+// After spilling, move three double arguments into d0-d2. Once only cycles
+// remain, every source outside d0-d2 has been consumed, so d31 is safe scratch.
+inline void emitMoveDoubleArguments3(AssemblyBuilderA64& build, RegisterA64 x, RegisterA64 y, RegisterA64 z)
+{
+    CODEGEN_ASSERT(x.kind == KindA64::d && y.kind == KindA64::d && z.kind == KindA64::d);
+    RegisterA64 dsts[] = {d0, d1, d2};
+    RegisterA64 srcs[] = {x, y, z};
+    unsigned remaining = 3;
+    while (remaining)
+    {
+        bool moved = false;
+        for (unsigned i = 0; i < remaining; ++i)
+        {
+            bool needed = false;
+            for (unsigned j = 0; j < remaining; ++j)
+                needed |= i != j && dsts[i] == srcs[j];
+            if (dsts[i] != srcs[i] && needed)
+                continue;
+            if (dsts[i] != srcs[i])
+                build.fmov(dsts[i], srcs[i]);
+            --remaining;
+            dsts[i] = dsts[remaining];
+            srcs[i] = srcs[remaining];
+            moved = true;
+            break;
+        }
+        if (!moved) // only cycles remain
+        {
+            build.fmov(d31, srcs[0]);
+            srcs[0] = d31;
+        }
+    }
+}
+
+// Lowering helpers shared by IrLoweringA64.cpp and the generated lowering rules
+void emitAbort(AssemblyBuilderA64& build, Label& abort);
+void emitFallback(AssemblyBuilderA64& build, int offset, int pcpos);
+void emitInvokeLibm1P(AssemblyBuilderA64& build, size_t func, int arg);
+bool emitBuiltin(AssemblyBuilderA64& build, IrFunction& function, IrRegAllocA64& regs, int bfid, int res, int arg, int nresults);
+void emitClassMemberAuthA64(
+    AssemblyBuilderA64& build,
+    RegisterA64 classReg,
+    RegisterA64 slotReg,
+    RegisterA64 writtenObject,
+    Label& mismatch,
+    RegisterA64 owner,
+    RegisterA64 flagw,
+    RegisterA64 maskw
+);
+
+inline ConditionA64 getConditionFP(IrCondition cond)
+{
+    switch (cond)
+    {
+    case IrCondition::Equal:
+        return ConditionA64::Equal;
+
+    case IrCondition::NotEqual:
+        return ConditionA64::NotEqual;
+
+    case IrCondition::Less:
+        return ConditionA64::Minus;
+
+    case IrCondition::NotLess:
+        return ConditionA64::Plus;
+
+    case IrCondition::LessEqual:
+        return ConditionA64::UnsignedLessEqual;
+
+    case IrCondition::NotLessEqual:
+        return ConditionA64::UnsignedGreater;
+
+    case IrCondition::Greater:
+        return ConditionA64::Greater;
+
+    case IrCondition::NotGreater:
+        return ConditionA64::LessEqual;
+
+    case IrCondition::GreaterEqual:
+        return ConditionA64::GreaterEqual;
+
+    case IrCondition::NotGreaterEqual:
+        return ConditionA64::Less;
+
+    default:
+        CODEGEN_ASSERT(!"Unexpected condition code");
+        return ConditionA64::Always;
+    }
+}
+
+inline ConditionA64 getConditionInt(IrCondition cond)
+{
+    switch (cond)
+    {
+    case IrCondition::Equal:
+        return ConditionA64::Equal;
+
+    case IrCondition::NotEqual:
+        return ConditionA64::NotEqual;
+
+    // Minus/Plus (MI/PL) check the N flag only, which is correct for small
+    // integer comparisons where overflow cannot occur.
+    case IrCondition::Less:
+        return ConditionA64::Minus;
+
+    case IrCondition::NotLess:
+        return ConditionA64::Plus;
+
+    case IrCondition::LessEqual:
+        return ConditionA64::LessEqual;
+
+    case IrCondition::NotLessEqual:
+        return ConditionA64::Greater;
+
+    case IrCondition::Greater:
+        return ConditionA64::Greater;
+
+    case IrCondition::NotGreater:
+        return ConditionA64::LessEqual;
+
+    case IrCondition::GreaterEqual:
+        return ConditionA64::GreaterEqual;
+
+    case IrCondition::NotGreaterEqual:
+        return ConditionA64::Less;
+
+    case IrCondition::UnsignedLess:
+        return ConditionA64::CarryClear;
+
+    case IrCondition::UnsignedLessEqual:
+        return ConditionA64::UnsignedLessEqual;
+
+    case IrCondition::UnsignedGreater:
+        return ConditionA64::UnsignedGreater;
+
+    case IrCondition::UnsignedGreaterEqual:
+        return ConditionA64::CarrySet;
+
+    default:
+        CODEGEN_ASSERT(!"Unexpected condition code");
+        return ConditionA64::Always;
+    }
+}
+
+// Full-range signed integer condition mapping for int64 comparisons.
+// Unlike getConditionInt which uses MI/PL (N flag only) for Less/NotLess,
+// this uses LT/GE (N!=V / N==V) which correctly handles overflow.
+// Example: CMP INT64_MAX, -1 sets N=1,V=1 so MI fires but LT does not.
+// Helpful cheatsheet: https://gist.github.com/ryo/31017f265cc2f9ade124aea64543df22
+inline ConditionA64 getConditionInt64(IrCondition cond)
+{
+    switch (cond)
+    {
+    case IrCondition::Equal:
+        return ConditionA64::Equal;
+
+    case IrCondition::NotEqual:
+        return ConditionA64::NotEqual;
+
+    case IrCondition::Less:
+        return ConditionA64::Less;
+
+    case IrCondition::NotLess:
+        return ConditionA64::GreaterEqual;
+
+    case IrCondition::LessEqual:
+        return ConditionA64::LessEqual;
+
+    case IrCondition::NotLessEqual:
+        return ConditionA64::Greater;
+
+    case IrCondition::Greater:
+        return ConditionA64::Greater;
+
+    case IrCondition::NotGreater:
+        return ConditionA64::LessEqual;
+
+    case IrCondition::GreaterEqual:
+        return ConditionA64::GreaterEqual;
+
+    case IrCondition::NotGreaterEqual:
+        return ConditionA64::Less;
+
+    case IrCondition::UnsignedLess:
+        return ConditionA64::CarryClear;
+
+    case IrCondition::UnsignedLessEqual:
+        return ConditionA64::UnsignedLessEqual;
+
+    case IrCondition::UnsignedGreater:
+        return ConditionA64::UnsignedGreater;
+
+    case IrCondition::UnsignedGreaterEqual:
+        return ConditionA64::CarrySet;
+
+    default:
+        CODEGEN_ASSERT(!"Unexpected condition code");
+        return ConditionA64::Always;
+    }
+}
 
 // Data that is very common to access is placed in non-volatile registers:
 // 1. Constant registers (only loaded during codegen entry)
@@ -53,6 +259,63 @@ inline constexpr AddressA64 sTemporary = mem(sp, kStashSlots * 8);
 inline void emitUpdateBase(AssemblyBuilderA64& build)
 {
     build.ldr(rBase, mem(rState, offsetof(lua_State, base)));
+}
+
+inline void emitAddOffset(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 src, size_t offset)
+{
+    CODEGEN_ASSERT(dst != src);
+    CODEGEN_ASSERT(offset <= INT_MAX);
+
+    if (offset <= AssemblyBuilderA64::kMaxImmediate)
+    {
+        build.add(dst, src, uint16_t(offset));
+    }
+    else
+    {
+        build.mov(dst, int(offset));
+        build.add(dst, dst, src);
+    }
+}
+
+// Loads a double constant that cannot be encoded by fmov; scratch must be a 64-bit general-purpose register
+inline void emitLoadDoubleBits(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 scratch, double val)
+{
+    uint64_t vali = getDoubleBits(val);
+
+    if ((vali << 16) == 0)
+    {
+        build.movz(scratch, uint16_t(vali >> 48), 48);
+        build.fmov(dst, scratch);
+    }
+    else if ((vali << 32) == 0)
+    {
+        build.movz(scratch, uint16_t(vali >> 48), 48);
+        build.movk(scratch, uint16_t(vali >> 32), 32);
+        build.fmov(dst, scratch);
+    }
+    else
+    {
+        build.adr(scratch, val);
+        build.ldr(dst, scratch);
+    }
+}
+
+// Loads a float constant that cannot be encoded by fmov; scratch must be a 64-bit general-purpose register
+inline void emitLoadFloatBits(AssemblyBuilderA64& build, RegisterA64 dst, RegisterA64 scratch, float val)
+{
+    uint32_t vali = getFloatBits(val);
+
+    if ((vali & 0xffff) == 0)
+    {
+        RegisterA64 scratchw = castReg(KindA64::w, scratch);
+        build.movz(scratchw, uint16_t(vali >> 16), 16);
+        build.fmov(dst, scratchw);
+    }
+    else
+    {
+        build.adr(scratch, val);
+        build.ldr(dst, scratch);
+    }
 }
 
 } // namespace A64

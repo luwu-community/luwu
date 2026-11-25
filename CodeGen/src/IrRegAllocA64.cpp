@@ -431,6 +431,11 @@ void IrRegAllocA64::setupExitSyncEntry(uint32_t blockIdx)
 
 size_t IrRegAllocA64::spill(uint32_t index, std::initializer_list<RegisterA64> live)
 {
+    return spill(index, live.begin(), live.size());
+}
+
+size_t IrRegAllocA64::spill(uint32_t index, const RegisterA64* live, size_t liveCount)
+{
     static const KindA64 sets[] = {KindA64::x, KindA64::q};
 
     size_t start = spills.size();
@@ -443,8 +448,9 @@ size_t IrRegAllocA64::spill(uint32_t index, std::initializer_list<RegisterA64> l
         poisongpr = gpr.base & ~gpr.free;
         poisonsimd = simd.base & ~simd.free;
 
-        for (RegisterA64 reg : live)
+        for (const RegisterA64* it = live; it != live + liveCount; ++it)
         {
+            RegisterA64 reg = *it;
             Set& set = getSet(reg.kind);
             (&set == &simd ? poisonsimd : poisongpr) &= ~(1u << reg.index);
         }

@@ -95,6 +95,36 @@ void jumpOnNumberCmp(AssemblyBuilderX64& build, RegisterX64 tmp, OperandX64 lhs,
     }
 }
 
+uint8_t getCmpPredicateFP(IrCondition cond)
+{
+    switch (cond)
+    {
+    case IrCondition::Equal:
+        return 0x00; // EQ_OQ
+    case IrCondition::NotEqual:
+        return 0x04; // NEQ_UQ
+    case IrCondition::Less:
+        return 0x01; // LT_OS
+    case IrCondition::LessEqual:
+        return 0x02; // LE_OS
+    case IrCondition::Greater:
+        return 0x0e; // GT_OS
+    case IrCondition::GreaterEqual:
+        return 0x0d; // GE_OS
+    case IrCondition::NotLess:
+        return 0x05; // NLT_US
+    case IrCondition::NotLessEqual:
+        return 0x06; // NLE_US
+    case IrCondition::NotGreater:
+        return 0x0a; // NGT_US
+    case IrCondition::NotGreaterEqual:
+        return 0x09; // NGE_US
+    default:
+        CODEGEN_ASSERT(!"Unsupported float condition");
+        return 0;
+    }
+}
+
 ConditionX64 getConditionInt(IrCondition cond)
 {
     switch (cond)

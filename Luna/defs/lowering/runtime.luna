@@ -1,0 +1,199 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-do-arith ra rb rc tm)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :add (a64:reg :x1) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+        (gen:if (gen:== (gen:field rb :kind) (gen:enum :IrOpKind :VmConst))
+          (gen:block
+            (gen:call :emitAddOffset cpp:build (a64:reg :x2) (a64:reg :rConstants) (gen:* (gen:call :vmConstOp rb) (gen:sizeof "TValue"))))
+          (gen:block
+            (gen:build :add (a64:reg :x2) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp rb) (gen:sizeof "TValue"))))))
+        (gen:if (gen:== (gen:field rc :kind) (gen:enum :IrOpKind :VmConst))
+          (gen:block
+            (gen:call :emitAddOffset cpp:build (a64:reg :x3) (a64:reg :rConstants) (gen:* (gen:call :vmConstOp rc) (gen:sizeof "TValue"))))
+          (gen:block
+            (gen:build :add (a64:reg :x3) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp rc) (gen:sizeof "TValue"))))))
+        (gen:if (gen:== (int-val tm) (gen:name :TM_ADD))
+          (gen:block
+            (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_doarithadd))))
+          (gen:if (gen:== (int-val tm) (gen:name :TM_SUB))
+            (gen:block
+              (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_doarithsub))))
+            (gen:if (gen:== (int-val tm) (gen:name :TM_MUL))
+              (gen:block
+                (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_doarithmul))))
+              (gen:if (gen:== (int-val tm) (gen:name :TM_DIV))
+                (gen:block
+                  (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_doarithdiv))))
+                (gen:if (gen:== (int-val tm) (gen:name :TM_IDIV))
+                  (gen:block
+                    (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_doarithidiv))))
+                  (gen:if (gen:== (int-val tm) (gen:name :TM_MOD))
+                    (gen:block
+                      (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_doarithmod))))
+                    (gen:if (gen:== (int-val tm) (gen:name :TM_POW))
+                      (gen:block
+                        (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_doarithpow))))
+                      (gen:if (gen:== (int-val tm) (gen:name :TM_UNM))
+                        (gen:block
+                          (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_doarithunm))))
+                        (gen:block
+                          (gen:assert (gen:! (gen:string "Unsupported instruction form"))))))))))))
+        (gen:build :blr (a64:reg :x4))
+        (gen:call :emitUpdateBase cpp:build))]
+    [:x64
+      (gen:seq
+        (gen:let ([opb (gen:? (gen:== (gen:field rb :kind) (gen:enum :IrOpKind :VmReg)) (gen:call :OperandX64 (gen:call :luauRegAddress (gen:call :vmRegOp rb))) (gen:call :OperandX64 (gen:call :luauConstantAddress (gen:call :vmConstOp rb))))]
+                  [opc (gen:? (gen:== (gen:field rc :kind) (gen:enum :IrOpKind :VmReg)) (gen:call :OperandX64 (gen:call :luauRegAddress (gen:call :vmRegOp rc))) (gen:call :OperandX64 (gen:call :luauConstantAddress (gen:call :vmConstOp rc))))])
+          (gen:call :callArithHelper cpp:regs cpp:build (gen:call :vmRegOp ra) opb opc (gen:cast "TMS" (int-val tm)))))]))
+
+(define (lower-do-len ra rb)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :add (a64:reg :x1) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+        (gen:build :add (a64:reg :x2) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp rb) (gen:sizeof "TValue"))))
+        (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_dolen)))
+        (gen:build :blr (a64:reg :x3))
+        (gen:call :emitUpdateBase cpp:build))]
+    [:x64
+      (gen:seq
+        (gen:call :callLengthHelper cpp:regs cpp:build (gen:call :vmRegOp ra) (gen:call :vmRegOp rb)))]))
+
+(define (lower-get-table ra rb key)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :add (a64:reg :x1) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp rb) (gen:sizeof "TValue"))))
+        (gen:if (gen:== (gen:field key :kind) (gen:enum :IrOpKind :VmReg))
+          (gen:block
+            (gen:build :add (a64:reg :x2) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp key) (gen:sizeof "TValue")))))
+          (gen:if (gen:== (gen:field key :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:block
+                (gen:let ([n (:type "TValue") (gen:init-list)])
+                  (gen:call :setnvalue (gen:address-of n) (uint-val key))
+                  (gen:build :adr (a64:reg :x2) (gen:address-of n) (gen:call :sizeof n)))))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form"))))))
+        (gen:build :add (a64:reg :x3) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+        (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_gettable)))
+        (gen:build :blr (a64:reg :x4))
+        (gen:call :emitUpdateBase cpp:build))]
+    [:x64
+      (gen:seq
+        (gen:if (gen:== (gen:field key :kind) (gen:enum :IrOpKind :VmReg))
+          (gen:block
+            (gen:call :callGetTable cpp:regs cpp:build (gen:call :vmRegOp rb) (gen:call :luauRegAddress (gen:call :vmRegOp key)) (gen:call :vmRegOp ra)))
+          (gen:if (gen:== (gen:field key :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:call :callGetTable cpp:regs cpp:build (gen:call :vmRegOp rb) (number-tvalue-operand (uint-val key)) (gen:call :vmRegOp ra)))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]))
+
+(define (lower-set-table ra rb key)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :add (a64:reg :x1) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp rb) (gen:sizeof "TValue"))))
+        (gen:if (gen:== (gen:field key :kind) (gen:enum :IrOpKind :VmReg))
+          (gen:block
+            (gen:build :add (a64:reg :x2) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp key) (gen:sizeof "TValue")))))
+          (gen:if (gen:== (gen:field key :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:block
+                (gen:let ([n (:type "TValue") (gen:init-list)])
+                  (gen:call :setnvalue (gen:address-of n) (uint-val key))
+                  (gen:build :adr (a64:reg :x2) (gen:address-of n) (gen:call :sizeof n)))))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form"))))))
+        (gen:build :add (a64:reg :x3) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+        (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_settable)))
+        (gen:build :blr (a64:reg :x4))
+        (gen:call :emitUpdateBase cpp:build))]
+    [:x64
+      (gen:seq
+        (gen:if (gen:== (gen:field key :kind) (gen:enum :IrOpKind :VmReg))
+          (gen:block
+            (gen:call :callSetTable cpp:regs cpp:build (gen:call :vmRegOp rb) (gen:call :luauRegAddress (gen:call :vmRegOp key)) (gen:call :vmRegOp ra)))
+          (gen:if (gen:== (gen:field key :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:call :callSetTable cpp:regs cpp:build (gen:call :vmRegOp rb) (number-tvalue-operand (uint-val key)) (gen:call :vmRegOp ra)))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]))
+
+(define (lower-concat ra count)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :mov (a64:reg :w1) (uint-val count))
+        (gen:build :mov (a64:reg :w2) (gen:- (gen:+ (gen:call :vmRegOp ra) (uint-val count)) 1))
+        (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_concat)))
+        (gen:build :blr (a64:reg :x3))
+        (gen:call :emitUpdateBase cpp:build))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (gen:cast "int32_t" (uint-val count)))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (gen:cast "int32_t" (gen:- (gen:+ (gen:call :vmRegOp ra) (uint-val count)) 1)))
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.luaV_concat))))
+          (gen:call :emitUpdateBase cpp:build)))]))
+
+(define (lower-get-type tag)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :KindA64 :x) cpp:index))
+        (gen:assert (gen:== (gen:sizeof "TString*") 8))
+        (gen:if (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Inst))
+          (gen:block
+            (gen:build :add (result-reg) (a64:reg :rGlobalState) (reg-op tag) 3))
+          (gen:if (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :add (result-reg) (a64:reg :rGlobalState) (gen:cast "uint16_t" (gen:* (tag-val tag) 8))))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form"))))))
+        (gen:build :ldr (result-reg) (a64:mem (result-reg) (gen:offsetof :global_State.ttypename))))]
+    [:x64
+      (gen:seq
+        (gen:set! (result-reg) (gen:method cpp:regs :allocReg (gen:enum :SizeX64 :qword) cpp:index))
+        (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (x64:reg :rState) (gen:offsetof :lua_State.global))))
+        (gen:if (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Inst))
+          (gen:block
+            (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (gen:+ (result-reg) (gen:* (gen:call :qwordReg (reg-op tag)) (gen:sizeof "TString*"))) (gen:offsetof :global_State.ttypename)))))
+          (gen:if (gen:== (gen:field tag :kind) (gen:enum :IrOpKind :Constant))
+            (gen:block
+              (gen:build :mov (result-reg) (gen:index (gen:name :qword) (gen:+ (gen:+ (result-reg) (gen:* (tag-val tag) (gen:sizeof "TString*"))) (gen:offsetof :global_State.ttypename)))))
+            (gen:block
+              (gen:assert (gen:! (gen:string "Unsupported instruction form")))))))]))
+
+(define (lower-get-typeof ra)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :add (a64:reg :x1) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+        (gen:build :ldr (a64:reg :x2) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaT_objtypenamestr)))
+        (gen:build :blr (a64:reg :x2))
+        (gen:set! (result-reg) (gen:method cpp:regs :takeReg (a64:reg :x0) cpp:index)))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (gen:call :luauRegAddress (gen:call :vmRegOp ra)))
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.luaT_objtypenamestr))))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (x64:reg :rax) cpp:index))))]))

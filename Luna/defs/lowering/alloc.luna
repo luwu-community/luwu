@@ -1,0 +1,151 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-table-len table)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([reg (reg-op table)])
+          (gen:method cpp:regs :spill cpp:index (gen:init-list reg))
+          (gen:build :mov (a64:reg :x0) reg)
+          (gen:build :ldr (a64:reg :x1) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaH_getn)))
+          (gen:build :blr (a64:reg :x1))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (a64:reg :w0) cpp:index))
+          (gen:build :ubfx (result-reg) (result-reg) 0 32)))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (reg-op table) table)
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.luaH_getn))))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (x64:reg :eax) cpp:index))
+          (gen:build :mov (result-reg) (result-reg))))]))
+
+(define (lower-new-table narray nhash)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :mov (a64:reg :x1) (uint-val narray))
+        (gen:build :mov (a64:reg :x2) (uint-val nhash))
+        (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaH_new)))
+        (gen:build :blr (a64:reg :x3))
+        (gen:set! (result-reg) (gen:method cpp:regs :takeReg (a64:reg :x0) cpp:index)))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (gen:cast "int32_t" (uint-val narray)))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (gen:cast "int32_t" (uint-val nhash)))
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.luaH_new))))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (x64:reg :rax) cpp:index))))]))
+
+(define (lower-dup-table table)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([reg (reg-op table)])
+          (gen:method cpp:regs :spill cpp:index (gen:init-list reg))
+          (gen:build :mov (a64:reg :x1) reg)
+          (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+          (gen:build :ldr (a64:reg :x2) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaH_clone)))
+          (gen:build :blr (a64:reg :x2))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (a64:reg :x0) cpp:index))))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (reg-op table) table)
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.luaH_clone))))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (x64:reg :rax) cpp:index))))]))
+
+(define (lower-table-setnum table key)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([table-reg (reg-op table)]
+                  [key-reg (reg-op key)]
+                  [temp (gen:method cpp:regs :allocTemp (gen:enum :KindA64 :w))])
+          (gen:method cpp:regs :spill cpp:index (gen:init-list table-reg key-reg))
+          (gen:if (gen:!= (a64:reg :w1) key-reg)
+            (gen:block
+              (gen:build :mov (a64:reg :x1) table-reg)
+              (gen:build :mov (a64:reg :w2) key-reg))
+            (gen:block
+              (gen:build :mov temp (a64:reg :w1))
+              (gen:build :mov (a64:reg :x1) table-reg)
+              (gen:build :mov (a64:reg :w2) temp)))
+          (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+          (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaH_setnum)))
+          (gen:build :blr (a64:reg :x3))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (a64:reg :x0) cpp:index))))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (reg-op table) table)
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (reg-op key) key)
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.luaH_setnum))))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (x64:reg :rax) cpp:index))))]))
+
+(define (lower-new-userdata size utag)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :mov (a64:reg :x1) (int-val size))
+        (gen:build :mov (a64:reg :x2) (int-val utag))
+        (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.newUserdata)))
+        (gen:build :blr (a64:reg :x3))
+        (gen:set! (result-reg) (gen:method cpp:regs :takeReg (a64:reg :x0) cpp:index)))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (int-val size))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (int-val utag))
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.newUserdata))))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (x64:reg :rax) cpp:index))))]))
+
+(define (lower-new-vector x y z)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([tempx (gen:method cpp:lowering :tempDouble x)])
+          (gen:let ([tempy (gen:method cpp:lowering :tempDouble y)])
+            (gen:let ([tempz (gen:method cpp:lowering :tempDouble z)])
+              (gen:method cpp:regs :spill cpp:index (gen:init-list tempx tempy tempz))
+              (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+              ;; Sources can overlap any ABI register, including cycles and fanout.
+              (gen:call :emitMoveDoubleArguments3 cpp:build tempx tempy tempz)
+              (gen:build :ldr (a64:reg :x1) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.newVector)))
+              (gen:build :blr (a64:reg :x1))
+              (gen:set! (result-reg) (gen:method cpp:regs :takeReg (a64:reg :x0) cpp:index))))))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :xmmword) (gen:method cpp:lowering :memRegDoubleOp x) x)
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :xmmword) (gen:method cpp:lowering :memRegDoubleOp y) y)
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :xmmword) (gen:method cpp:lowering :memRegDoubleOp z) z)
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.newVector))))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (x64:reg :rax) cpp:index))))]))
+
+(define (lower-new-object cls)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:let ([reg (reg-op cls)])
+          (gen:method cpp:regs :spill cpp:index (gen:init-list reg))
+          (gen:build :mov (a64:reg :x1) reg)
+          (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+          (gen:build :ldr (a64:reg :x2) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.luaR_newobjectuninit)))
+          (gen:build :blr (a64:reg :x2))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (a64:reg :x0) cpp:index))))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (reg-op cls) cls)
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.luaR_newobjectuninit))))
+          (gen:set! (result-reg) (gen:method cpp:regs :takeReg (x64:reg :rax) cpp:index))))]))

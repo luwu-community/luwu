@@ -1,0 +1,42 @@
+~ Perform a conditional jump based on cached table node slot matching the actual table node slot for a key
+~ A: pointer (LuaNode)
+~ B: Kn
+~ C: block (if matches)
+~ D: block (if it doesn't)
+(define-ircmd JUMP_SLOT_MATCH
+  (operands [node :pointer] [key :Kn] [match :block] [mismatch-op :block])
+  (class :terminator)
+  (lowering (lower-jump-slot-match node key match mismatch-op)))
+
+~ Try to get pointer to tag method TValue inside the table's metatable or jump if there is no such value or metatable
+~ A: table
+~ B: int (TMS enum)
+~ C: block
+(define-ircmd TRY_CALL_FASTGETTM
+  (operands [table :pointer] [tm :int] [fail :block])
+  (result :pointer)
+  (class :guard)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: emit:branch-both operand targets a fallback block: can't appear in an exit sync sequence
+  (lowering (lower-try-call-fastgettm table tm fail)))
+
+~ Store an import from constant or the import path
+~ A: Rn (where to store the result)
+~ B: Kn
+~ C: import (import path)
+~ D: unsigned int (pcpos)
+(define-ircmd GET_CACHED_IMPORT
+  (operands [ra :Rn] [k :Kn] [import-id :import] [pc :const-uint])
+  (class :effect)
+  (facts (writes (vm-slot ra)))
+  (heap-effects :may-gc :reenters-vm)
+  (lowering (lower-get-cached-import ra k import-id pc)))
+
+~ Guard against cached table node slot not matching the actual table node slot for a key
+~ A: pointer (LuaNode)
+~ B: Kn
+~ C: block/undef
+~ When undef is specified instead of a block, execution is aborted on check failure
+(define-ircmd CHECK_SLOT_MATCH
+  (operands [node :pointer] [key :Kn] [fail :block|:undef])
+  (class :guard)
+  (lowering (lower-check-slot-match node key fail)))

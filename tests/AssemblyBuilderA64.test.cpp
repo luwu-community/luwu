@@ -402,6 +402,8 @@ TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "FPBasic")
     SINGLE_COMPARE(fmov(d0, d1), 0x1E604020);
     SINGLE_COMPARE(fmov(d0, x1), 0x9E670020);
     SINGLE_COMPARE(fmov(x3, d2), 0x9E660043);
+    SINGLE_COMPARE(fmov(s0, w1), 0x1E270020);
+    SINGLE_COMPARE(fmov(w3, s2), 0x1E260043);
 }
 
 TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "FPMath")
@@ -432,14 +434,17 @@ TEST_CASE_FIXTURE(AssemblyBuilderA64Fixture, "FPMath")
     SINGLE_COMPARE(frinta(d1, d2), 0x1E664041);
     SINGLE_COMPARE(frintm(d1, d2), 0x1E654041);
     SINGLE_COMPARE(frintp(d1, d2), 0x1E64C041);
+    SINGLE_COMPARE(frintz(d1, d2), 0x1E65C041);
 
     SINGLE_COMPARE(frinta(s1, s2), 0x1E264041);
     SINGLE_COMPARE(frintm(s1, s2), 0x1E254041);
     SINGLE_COMPARE(frintp(s1, s2), 0x1E24C041);
+    SINGLE_COMPARE(frintz(s1, s2), 0x1E25C041);
 
     SINGLE_COMPARE(frinta(q1, q2), 0x6E218841);
     SINGLE_COMPARE(frintm(q1, q2), 0x4E219841);
     SINGLE_COMPARE(frintp(q1, q2), 0x4EA18841);
+    SINGLE_COMPARE(frintz(q1, q2), 0x4EA19841);
 
     SINGLE_COMPARE(fcvt(s1, d2), 0x1E624041);
     SINGLE_COMPARE(fcvt(d1, s2), 0x1E22C041);

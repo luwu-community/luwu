@@ -35,3 +35,4 @@ __pycache__
 
 # scratch/working notes: anything *ignore.* stays out of version control
 *ignore.*
+/upstream/

@@ -1211,6 +1211,10 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
     {
         IrOp arg3 = customParams ? customArg3 : build.undef();
 
+        // Without a third argument operand, three or more arguments are read as consecutive registers from arg
+        // (INVOKE_FASTCALL's facts)
+        CODEGEN_ASSERT(nparams < 3 || arg3.kind != IrOpKind::Undef || (args.kind == IrOpKind::VmReg && vmRegOp(args) == arg + 1));
+
         // TODO: we can skip saving pc for some well-behaved builtins which we didn't inline
         build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + getOpLength(opcode)));
 

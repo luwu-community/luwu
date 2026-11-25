@@ -3,6 +3,7 @@
 
 #include "Luau/IrBuilder.h"
 #include "Luau/IrVisitUseDef.h"
+#include "Luau/generated/IrCmdEffects.h"
 #include "Luau/IrUtils.h"
 
 #include <algorithm>
@@ -20,57 +21,6 @@ namespace Luau
 {
 namespace CodeGen
 {
-
-// Result-producing instructions that pass !hasSideEffects but are still unsafe to sink into ExitSync blocks
-static bool isUnsafeToSink(IrCmd cmd)
-{
-    switch (cmd)
-    {
-    // VM register reads: STORE_TAG/STORE_DOUBLE/STORE_TVALUE/etc. to the same VM register
-    case IrCmd::LOAD_TAG:
-    case IrCmd::LOAD_POINTER:
-    case IrCmd::LOAD_DOUBLE:
-    case IrCmd::LOAD_INT:
-    case IrCmd::LOAD_INT64:
-    case IrCmd::LOAD_FLOAT:
-    case IrCmd::LOAD_TVALUE:
-
-    // Buffer reads: BUFFER_WRITE* to the same buffer at the same offset
-    case IrCmd::BUFFER_READI8:
-    case IrCmd::BUFFER_READU8:
-    case IrCmd::BUFFER_READI16:
-    case IrCmd::BUFFER_READU16:
-    case IrCmd::BUFFER_READI32:
-    case IrCmd::BUFFER_READI64:
-    case IrCmd::BUFFER_READF32:
-    case IrCmd::BUFFER_READF64:
-
-    // Upvalue read: SET_UPVALUE to the same upvalue slot
-    case IrCmd::GET_UPVALUE:
-
-    // Reads table array metadata: TABLE_SETNUM can grow the array and change the length
-    case IrCmd::TABLE_LEN:
-
-    // Reads VM register: STORE_TAG/STORE_TVALUE/etc. to the same VM register
-    case IrCmd::GET_TYPEOF:
-
-    // Mutates table array part, invalidating reads
-    case IrCmd::TABLE_SETNUM:
-
-    // Can execute user metamethods via luaV_equalval/luaV_lessthan/luaV_lessequal
-    case IrCmd::CMP_ANY:
-
-    // Branch operand targets a fallback block: can't appear in an exit sync sequence
-    case IrCmd::TRY_NUM_TO_INDEX:
-    case IrCmd::TRY_CALL_FASTGETTM:
-    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
-    case IrCmd::TRY_CLASS_MEMBER_ADDR:
-    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
-        return true;
-    default:
-        return false;
-    }
-}
 
 // Luau value structure reminder:
 // [              TValue             ]
@@ -113,42 +63,21 @@ struct RemoveDeadStoreState
         if (dest.kind != IrOpKind::VmReg)
             return;
 
-        IrOp value;
-        IrValueKind kind = IrValueKind::Unknown;
 
-        switch (storeInst.cmd)
+        const IrCmdEffects& effects = getInstEffects(function, storeInst);
+        if (effects.storeHintValue < 0)
+            return;
+
+        IrOp value = getOp(storeInst, effects.storeHintValue);
+        IrValueKind kind = effects.storeHintKind;
+
+        // The stored value's own kind (STORE_SPLIT_TVALUE)
+        if (kind == IrValueKind::Unknown)
         {
-        case IrCmd::STORE_DOUBLE:
-            value = OP_B(storeInst);
-            kind = IrValueKind::Double;
-            break;
-        case IrCmd::STORE_INT:
-            value = OP_B(storeInst);
-            kind = IrValueKind::Int;
-            break;
-        case IrCmd::STORE_INT64:
-            value = OP_B(storeInst);
-            kind = IrValueKind::Int64;
-            break;
-        case IrCmd::STORE_POINTER:
-            value = OP_B(storeInst);
-            kind = IrValueKind::Pointer;
-            break;
-        case IrCmd::STORE_TVALUE:
-            value = OP_B(storeInst);
-            kind = IrValueKind::Tvalue;
-            break;
-        case IrCmd::STORE_SPLIT_TVALUE:
-            value = OP_C(storeInst);
             if (value.kind == IrOpKind::Inst)
                 kind = getCmdValueKind(function.instOp(value).cmd);
             if (kind == IrValueKind::Unknown)
                 return;
-            break;
-        case IrCmd::STORE_VECTOR:
-            return; // multi-component, not useful as a single-value restore hint
-        default:
-            return;
         }
 
         if (value.kind != IrOpKind::Inst)
@@ -961,13 +890,23 @@ static void updateRemainingUses(RemoveDeadStoreState& state, IrInst& inst, uint3
     );
 }
 
-static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, IrFunction& function, IrBlock& block, IrInst& inst, uint32_t index)
+// The hand-written dead-store engines: one per written TValue field (picked by a define-ircmd's (writes (tvalue ... <field>))),
+// and CHECK_TAG's known tag (its (establishes ...) fact)
+static void markDeadStoresEngine(
+    RemoveDeadStoreState& state,
+    IrBuilder& build,
+    IrFunction& function,
+    IrBlock& block,
+    IrInst& inst,
+    uint32_t index,
+    IrDeadStoreEngine engine
+)
 {
-    updateRemainingUses(state, inst, index);
-
-    switch (inst.cmd)
+    switch (engine)
     {
-    case IrCmd::STORE_TAG:
+    case IrDeadStoreEngine::None:
+        break;
+    case IrDeadStoreEngine::StoreTag:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -999,7 +938,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             state.hasGcoToClear |= regInfo.maybeGco;
         }
         break;
-    case IrCmd::STORE_EXTRA:
+    case IrDeadStoreEngine::StoreExtra:
         // To simplify, extra field store is preserved along with all other stores made so far
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
@@ -1012,7 +951,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             regInfo.ignoreAtExit = false;
         }
         break;
-    case IrCmd::STORE_POINTER:
+    case IrDeadStoreEngine::StorePointer:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -1048,9 +987,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             state.hasGcoToClear |= maybeGco;
         }
         break;
-    case IrCmd::STORE_DOUBLE:
-    case IrCmd::STORE_INT64:
-    case IrCmd::STORE_INT:
+    case IrDeadStoreEngine::StoreValue:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -1077,7 +1014,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             regInfo.maybeGco = false;
         }
         break;
-    case IrCmd::STORE_VECTOR:
+    case IrDeadStoreEngine::StoreVector:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -1104,7 +1041,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             regInfo.maybeGco = false;
         }
         break;
-    case IrCmd::STORE_TVALUE:
+    case IrDeadStoreEngine::StoreTvalue:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -1130,7 +1067,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             state.hasGcoToClear |= regInfo.maybeGco;
         }
         break;
-    case IrCmd::STORE_SPLIT_TVALUE:
+    case IrDeadStoreEngine::StoreSplitTvalue:
         if (OP_A(inst).kind == IrOpKind::VmReg)
         {
             int reg = vmRegOp(OP_A(inst));
@@ -1154,9 +1091,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             state.hasGcoToClear |= regInfo.maybeGco;
         }
         break;
-
-        // Guard checks can jump to a block which might be using some or all the values we stored
-    case IrCmd::CHECK_TAG:
+    case IrDeadStoreEngine::CheckTag:
         state.checkLiveIns(OP_C(inst), index, true);
 
         // Tag guard establishes the tag value of the register in the current block
@@ -1169,175 +1104,76 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
             regInfo.knownTag = function.tagOp(OP_B(inst));
         }
         break;
-    case IrCmd::TRY_NUM_TO_INDEX:
-        state.checkLiveIns(OP_B(inst), index, true);
-        break;
-    case IrCmd::TRY_CALL_FASTGETTM:
-        state.checkLiveIns(OP_C(inst), index, true);
-        break;
-    case IrCmd::TRY_OBJECT_MEMBER_ADDR:
-    case IrCmd::TRY_CLASS_MEMBER_ADDR:
-    case IrCmd::TRY_OBJECT_NAMECALL_ADDR:
-        state.checkLiveIns(OP_D(inst), index, true);
-        break;
-    case IrCmd::CHECK_FASTCALL_RES:
-        state.checkLiveIns(OP_B(inst), index, true);
-        break;
-    case IrCmd::CHECK_TRUTHY:
-        // This instruction has two jumps to the exit in the lowering and that prevents exit sync record from being generated
-        state.checkLiveIns(OP_C(inst), index, false);
-        break;
-    case IrCmd::CHECK_READONLY:
-        state.checkLiveIns(OP_B(inst), index, true);
-        break;
-    case IrCmd::CHECK_NO_METATABLE:
-        state.checkLiveIns(OP_B(inst), index, true);
-        break;
-    case IrCmd::CHECK_SAFE_ENV:
-        state.checkLiveIns(OP_A(inst), index, true);
-        break;
-    case IrCmd::CHECK_ARRAY_SIZE:
-        state.checkLiveIns(OP_C(inst), index, true);
-        break;
-    case IrCmd::CHECK_DIV_INT64:
-        // This instruction has two jumps to the exit in the lowering and that prevents exit sync record from being generated
-        state.checkLiveIns(OP_C(inst), index, false);
-        break;
-    case IrCmd::CHECK_SLOT_MATCH:
-        state.checkLiveIns(OP_C(inst), index, true);
-        break;
-    case IrCmd::CHECK_NODE_NO_NEXT:
-        state.checkLiveIns(OP_B(inst), index, true);
-        break;
-    case IrCmd::CHECK_NODE_VALUE:
-    case IrCmd::CHECK_BUFFER_MUTABLE:
-        state.checkLiveIns(OP_B(inst), index, true);
-        break;
-    case IrCmd::CHECK_OBJECT_CLASS:
-        state.checkLiveIns(OP_C(inst), index, true);
-        break;
-    case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
-        // This instruction has several jumps to the exit in the lowering and that prevents exit sync record from being generated
-        state.checkLiveIns(OP_B(inst), index, false);
-        break;
-    case IrCmd::CHECK_BUFFER_LEN:
-        state.checkLiveIns(OP_F(inst), index, true);
-        break;
-    case IrCmd::CHECK_USERDATA_TAG:
-        state.checkLiveIns(OP_C(inst), index, true);
-        break;
-    case IrCmd::CHECK_CMP_NUM:
-    case IrCmd::CHECK_CMP_INT:
-    case IrCmd::CHECK_CMP_INT64:
-        state.checkLiveIns(OP_D(inst), index, true);
-        break;
+    }
+}
 
-    case IrCmd::JUMP_IF_TRUTHY:
-    case IrCmd::JUMP_IF_FALSY:
-    case IrCmd::JUMP_EQ_TAG:
-    case IrCmd::JUMP_CMP_INT:
-    case IrCmd::JUMP_EQ_POINTER:
-    case IrCmd::JUMP_CMP_NUM:
-    case IrCmd::JUMP_CMP_FLOAT:
-    case IrCmd::JUMP_FORN_LOOP_COND:
-    case IrCmd::JUMP_SLOT_MATCH:
-    case IrCmd::JUMP_CMP_PROTOID:
+static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, IrFunction& function, IrBlock& block, IrInst& inst, uint32_t index)
+{
+    updateRemainingUses(state, inst, index);
+
+    // From the facts, class and dead-store overrides, and heap-effects in Luna/defs/ir
+    const IrCmdEffects& effects = getInstEffects(function, inst);
+
+    switch (effects.deadStore)
+    {
+    case IrDeadStoreKind::Visit:
+        if (effects.mayGc)
+        {
+            // Can trigger GC assist internally: for GC to work correctly, all values containing a GCO have to be stored on stack,
+            // otherwise a live reference might be missed
+            if (state.hasGcoToClear)
+                state.flushGcoRegs();
+        }
+        else
+        {
+            // Guards have to be covered explicitly
+            CODEGEN_ASSERT(!isNonTerminatingJump(inst.cmd));
+        }
+
         visitVmRegDefsUses(state, function, inst);
-
-        state.checkLiveOuts(block);
         break;
-
-    case IrCmd::JUMP:
-        // Ideally, we would be able to remove stores to registers that are not live out from a block
-        // But during chain optimizations, we rely on data stored in the predecessor even when it's not an explicit live out
+    case IrDeadStoreKind::None:
+        // JUMP: ideally, we would be able to remove stores to registers that are not live out from a block, but during chain
+        // optimizations, we rely on data stored in the predecessor even when it's not an explicit live out.
+        // ADJUST_STACK_TO_REG: visitVmRegDefsUses considers adjustment as the fast call register definition point, but for dead
+        // store removal, we count the actual writes
         break;
-    case IrCmd::RETURN:
+    case IrDeadStoreKind::LiveIns:
+        // Guard checks can jump to a block which might be using some or all the values we stored
+        state.checkLiveIns(getOp(inst, effects.deadStoreTarget), index, true);
+        break;
+    case IrDeadStoreKind::LiveInsNoExitSync:
+        // The lowering has several jumps to the exit, and that prevents an exit sync record from being generated
+        state.checkLiveIns(getOp(inst, effects.deadStoreTarget), index, false);
+        break;
+    case IrDeadStoreKind::LiveOuts:
         visitVmRegDefsUses(state, function, inst);
 
         // At the end of a function, we can kill stores to registers that are not live out
         state.checkLiveOuts(block);
         break;
-    case IrCmd::ADJUST_STACK_TO_REG:
-        // visitVmRegDefsUses considers adjustment as the fast call register definition point, but for dead store removal, we count the actual writes
-        break;
-
-        // This group of instructions can trigger GC assist internally
-        // For GC to work correctly, all values containing a GCO have to be stored on stack - otherwise a live reference might be missed
-    case IrCmd::CMP_ANY:
-    case IrCmd::DO_ARITH:
-    case IrCmd::DO_LEN:
-    case IrCmd::GET_TABLE:
-    case IrCmd::SET_TABLE:
-    case IrCmd::GET_CACHED_IMPORT:
-    case IrCmd::CONCAT:
-    case IrCmd::INTERRUPT:
-    case IrCmd::CHECK_GC:
-    case IrCmd::CALL:
-    case IrCmd::FORGLOOP_FALLBACK:
-    case IrCmd::FALLBACK_GETGLOBAL:
-    case IrCmd::FALLBACK_SETGLOBAL:
-    case IrCmd::FALLBACK_GETTABLEKS:
-    case IrCmd::FALLBACK_SETTABLEKS:
-    case IrCmd::FALLBACK_NAMECALL:
-    case IrCmd::FALLBACK_DUPCLOSURE:
-    case IrCmd::FALLBACK_FORGPREP:
-    case IrCmd::FALLBACK_NEWOBJECT:
-    case IrCmd::FALLBACK_NEWCLASSMEMBER:
-        if (state.hasGcoToClear)
-            state.flushGcoRegs();
-
-        visitVmRegDefsUses(state, function, inst);
-        break;
-
-    case IrCmd::NEW_USERDATA:
-    case IrCmd::NEW_VECTOR:
+    case IrDeadStoreKind::Allocation:
         state.hasAllocations = true;
         break;
-
-    case IrCmd::MARK_DEAD:
-        state.markUnusedAtExit(vmRegOp(OP_A(inst)), function.intOp(OP_B(inst)));
+    case IrDeadStoreKind::Engine:
+        markDeadStoresEngine(state, build, function, block, inst, index, effects.deadStoreEngine);
         break;
-
-    default:
-        // Guards have to be covered explicitly
-        CODEGEN_ASSERT(!isNonTerminatingJump(inst.cmd));
-
-        visitVmRegDefsUses(state, function, inst);
-        break;
-    }
-
-    // Pending stores with SSA operands must not be deferred to ExitSync blocks past instructions that can invalidate operand physical location
-    switch (inst.cmd)
+    case IrDeadStoreKind::Kills:
     {
-        // These instructions can perform an indirect Luau function call through metamethods
-        // Creating new native execution frames can invalidate shared extended spill area
-    case IrCmd::CMP_ANY:
-    case IrCmd::DO_ARITH:
-    case IrCmd::DO_LEN:
-    case IrCmd::GET_TABLE:
-    case IrCmd::SET_TABLE:
-    case IrCmd::CONCAT:
-    case IrCmd::GET_CACHED_IMPORT:
-    case IrCmd::FORGLOOP_FALLBACK:
-    case IrCmd::FALLBACK_GETGLOBAL:
-    case IrCmd::FALLBACK_SETGLOBAL:
-    case IrCmd::FALLBACK_GETTABLEKS:
-    case IrCmd::FALLBACK_SETTABLEKS:
-    case IrCmd::FALLBACK_NAMECALL:
-    case IrCmd::FALLBACK_DUPCLOSURE:
-    case IrCmd::FALLBACK_FORGPREP:
-    case IrCmd::FALLBACK_NEWOBJECT:
-    case IrCmd::FALLBACK_NEWCLASSMEMBER:
-        // CALL directly executes a Luau function on the same native stack frame
-    case IrCmd::CALL:
-        // These instructions use lowering that is not aware of register allocator and demand no active values to exist
-    case IrCmd::SETLIST:
-    case IrCmd::FORGLOOP:
-        state.invalidateValuePropagation();
-        break;
-    default:
+        // (kills ...): the registers' contents don't matter at exits from here on
+        const IrVmEffect& range = effects.kills;
+        int count = range.kind == IrVmEffectKind::DefRange ? getVmEffectCount(function, inst, range.count) : 1;
+        state.markUnusedAtExit(vmRegOp(getOp(inst, range.op)) + range.offset, count);
         break;
     }
+    }
+
+    // Pending stores with SSA operands must not be deferred to ExitSync blocks past instructions that can invalidate operand physical
+    // location: they can perform an indirect Luau function call through metamethods (creating new native execution frames can
+    // invalidate the shared extended spill area), CALL directly executes a Luau function on the same native stack frame, and some
+    // lowerings aren't aware of the register allocator and demand no active values to exist
+    if (effects.reentersVm)
+        state.invalidateValuePropagation();
 }
 
 static void markDeadStoresInBlock(IrBuilder& build, IrBlock& block, RemoveDeadStoreState& state)
@@ -1446,21 +1282,13 @@ static void markDeadStoresInBlockChain(
 
                 state.remainingUses[index] = inst.useCount;
 
-                switch (inst.cmd)
+                // Writes into an allocation (a (writes (buffer ...)) fact)
+                if (int8_t op = getInstEffects(function, inst).allocationWriteOp; op >= 0)
                 {
-                case IrCmd::BUFFER_WRITEI8:
-                case IrCmd::BUFFER_WRITEI16:
-                case IrCmd::BUFFER_WRITEI32:
-                case IrCmd::BUFFER_WRITEI64:
-                case IrCmd::BUFFER_WRITEF32:
-                case IrCmd::BUFFER_WRITEF64:
-                    state.remainingUses[OP_A(inst).index]--;
+                    state.remainingUses[getOp(inst, op).index]--;
 
-                    if (state.remainingUses[OP_A(inst).index] == 0)
+                    if (state.remainingUses[getOp(inst, op).index] == 0)
                         foundUnused = true;
-                    break;
-                default:
-                    break;
                 }
             }
         }
@@ -1476,24 +1304,12 @@ static void markDeadStoresInBlockChain(
                 {
                     IrInst& inst = function.instructions[index];
 
-                    switch (inst.cmd)
+                    if (int8_t op = getInstEffects(function, inst).allocationWriteOp; op >= 0 && state.remainingUses[getOp(inst, op).index] == 0)
                     {
-                    case IrCmd::BUFFER_WRITEI8:
-                    case IrCmd::BUFFER_WRITEI16:
-                    case IrCmd::BUFFER_WRITEI32:
-                    case IrCmd::BUFFER_WRITEI64:
-                    case IrCmd::BUFFER_WRITEF32:
-                    case IrCmd::BUFFER_WRITEF64:
-                        if (state.remainingUses[OP_A(inst).index] == 0)
-                        {
-                            IrInst& pointer = function.instOp(OP_A(inst));
+                        IrInst& pointer = function.instOp(getOp(inst, op));
 
-                            if (pointer.cmd == IrCmd::NEW_USERDATA || pointer.cmd == IrCmd::NEW_VECTOR)
-                                kill(function, inst);
-                        }
-                        break;
-                    default:
-                        break;
+                        if (getInstEffects(function, pointer).deadStore == IrDeadStoreKind::Allocation)
+                            kill(function, inst);
                     }
                 }
             }

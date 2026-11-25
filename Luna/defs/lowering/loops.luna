@@ -1,0 +1,147 @@
+;; Explicit target assembly. Register allocation and instruction order are authored here.
+
+(define (lower-return ra count)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:if (gen:field (gen:field cpp:lowering :function) :variadic)
+          (gen:block
+            (gen:build :ldr (a64:reg :x1) (a64:mem (a64:reg :rState) (gen:offsetof :lua_State.ci)))
+            (gen:build :ldr (a64:reg :x1) (a64:mem (a64:reg :x1) (gen:offsetof :CallInfo.func))))
+          (gen:if (gen:!= (int-val count) 1)
+            (gen:block
+              (gen:build :sub (a64:reg :x1) (a64:reg :rBase) (gen:cast "uint16_t" (gen:sizeof "TValue"))))))
+        (gen:if (gen:== (int-val count) 0)
+          (gen:block
+            (gen:build :mov (a64:reg :w2) 0)
+            (gen:build :b (gen:field (gen:field cpp:lowering :helpers) :return_)))
+          (gen:if (gen:&& (gen:== (int-val count) 1) (gen:! (gen:field (gen:field cpp:lowering :function) :variadic)))
+            (gen:block
+              (gen:build :ldr (a64:reg :q0) (a64:mem (a64:reg :rBase) (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+              (gen:build :str (a64:reg :q0) (a64:mem (a64:reg :rBase) (gen:- 0 (gen:cast "int" (gen:sizeof "TValue")))))
+              (gen:build :mov (a64:reg :x1) (a64:reg :rBase))
+              (gen:build :mov (a64:reg :w2) 1)
+              (gen:build :b (gen:field (gen:field cpp:lowering :helpers) :return_)))
+            (gen:if (gen:&& (gen:>= (int-val count) 1) (gen:<= (int-val count) 3))
+              (gen:block
+                (gen:for (r 0 (int-val count))
+                  (gen:block
+                    (gen:build :ldr (a64:reg :q0) (a64:mem (a64:reg :rBase) (gen:* (gen:+ (gen:call :vmRegOp ra) r) (gen:sizeof "TValue"))))
+                    (gen:build :str (a64:reg :q0) (a64:mem (a64:reg :x1) (gen:sizeof "TValue") (gen:enum :AddressKindA64 :post)))))
+                (gen:build :mov (a64:reg :w2) (int-val count))
+                (gen:build :b (gen:field (gen:field cpp:lowering :helpers) :return_)))
+              (gen:block
+                (gen:build :mov (a64:reg :w2) 0)
+                (gen:build :add (a64:reg :x3) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+                (gen:if (gen:== (int-val count) (gen:name :LUA_MULTRET))
+                  (gen:block
+                    (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rState) (gen:offsetof :lua_State.top))))
+                  (gen:block
+                    (gen:build :add (a64:reg :x4) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:+ (gen:call :vmRegOp ra) (int-val count)) (gen:sizeof "TValue"))))))
+                (gen:let ([repeat-value-loop (:type "Label")]
+                          [exit-value-loop (:type "Label")])
+                  (gen:if (gen:== (int-val count) (gen:name :LUA_MULTRET))
+                    (gen:block
+                      (gen:build :cmp (a64:reg :x3) (a64:reg :x4))
+                      (gen:build :b (gen:enum :ConditionA64 :CarrySet) exit-value-loop)))
+                  (gen:build :setLabel repeat-value-loop)
+                  (gen:build :ldr (a64:reg :q0) (a64:mem (a64:reg :x3) (gen:sizeof "TValue") (gen:enum :AddressKindA64 :post)))
+                  (gen:build :str (a64:reg :q0) (a64:mem (a64:reg :x1) (gen:sizeof "TValue") (gen:enum :AddressKindA64 :post)))
+                  (gen:build :add (a64:reg :w2) (a64:reg :w2) (gen:cast "uint16_t" 1))
+                  (gen:build :cmp (a64:reg :x3) (a64:reg :x4))
+                  (gen:build :b (gen:enum :ConditionA64 :CarryClear) repeat-value-loop)
+                  (gen:build :setLabel exit-value-loop)
+                  (gen:build :b (gen:field (gen:field cpp:lowering :helpers) :return_))))))))]
+    [:x64
+      (gen:seq
+        (gen:method cpp:regs :assertAllFree)
+        (gen:method cpp:regs :assertNoSpills)
+        (gen:call :emitInstReturn cpp:build (gen:field cpp:lowering :helpers) (gen:call :vmRegOp ra) (int-val count) (gen:field (gen:field cpp:lowering :function) :variadic)))]))
+
+(define (lower-forgloop ra nvars loop exit)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:if (gen:> (int-val nvars) 2)
+          (gen:block
+            (gen:assert (gen:== (gen:name :LUA_TNIL) 0))
+            (gen:for (i 2 (int-val nvars))
+              (gen:block
+                (gen:build :str (a64:reg :wzr) (a64:mem (a64:reg :rBase) (gen:+ (gen:* (gen:+ (gen:+ (gen:call :vmRegOp ra) 3) i) (gen:sizeof "TValue")) (gen:offsetof :TValue.tt))))))))
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :ldr (a64:reg :x1) (a64:mem (a64:reg :rBase) (gen:+ (gen:* (gen:+ (gen:call :vmRegOp ra) 1) (gen:sizeof "TValue")) (gen:offsetof :TValue.value.gc))))
+        (gen:build :ldr (a64:reg :w2) (a64:mem (a64:reg :rBase) (gen:+ (gen:* (gen:+ (gen:call :vmRegOp ra) 2) (gen:sizeof "TValue")) (gen:offsetof :TValue.value.p))))
+        (gen:build :add (a64:reg :x3) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+        (gen:build :ldr (a64:reg :x4) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.forgLoopTableIter)))
+        (gen:build :blr (a64:reg :x4))
+        (gen:build :cbnz (a64:reg :w0) (label-of loop))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of exit) cpp:next))]
+    [:x64
+      (gen:seq
+        (gen:method cpp:regs :assertAllFree)
+        (gen:call :emitInstForGLoop cpp:regs cpp:build (gen:call :vmRegOp ra) (int-val nvars) (label-of loop))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of exit) cpp:next))]))
+
+(define (lower-forgloop-fallback ra nvars loop exit)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :mov (a64:reg :w1) (gen:call :vmRegOp ra))
+        (gen:build :mov (a64:reg :w2) (int-val nvars))
+        (gen:if (gen:name :FFlag::LuauYieldIter2)
+          (gen:block
+            (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.forgLoopNonTableFallback)))
+            (gen:build :blr (a64:reg :x3))
+            (gen:call :emitUpdateBase cpp:build)
+            (gen:build :cmp (a64:reg :w0) (gen:cast "uint16_t" 0))
+            (gen:build :b (gen:enum :ConditionA64 :Less) (gen:field (gen:field cpp:lowering :helpers) :exitNoContinueVm))
+            (gen:build :b (gen:enum :ConditionA64 :Greater) (label-of loop)))
+          (gen:block
+            (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.forgLoopNonTableFallback_DEPRECATED)))
+            (gen:build :blr (a64:reg :x3))
+            (gen:call :emitUpdateBase cpp:build)
+            (gen:build :cbnz (a64:reg :w0) (label-of loop))))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of exit) cpp:next))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (gen:call :vmRegOp ra))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (int-val nvars))
+          (gen:if (gen:name :FFlag::LuauYieldIter2)
+            (gen:block
+              (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.forgLoopNonTableFallback))))
+              (gen:call :emitUpdateBase cpp:build)
+              (gen:build :test (x64:reg :eax) (x64:reg :eax))
+              (gen:build :jcc (gen:enum :ConditionX64 :Less) (gen:field (gen:field cpp:lowering :helpers) :exitNoContinueVm))
+              (gen:build :jcc (gen:enum :ConditionX64 :Greater) (label-of loop)))
+            (gen:block
+              (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.forgLoopNonTableFallback_DEPRECATED))))
+              (gen:call :emitUpdateBase cpp:build)
+              (gen:build :test (x64:reg :al) (x64:reg :al))
+              (gen:build :jcc (gen:enum :ConditionX64 :NotZero) (label-of loop))))
+          (gen:method cpp:lowering :jumpOrFallthrough (block-of exit) cpp:next)))]))
+
+(define (lower-forgprep-xnext-fallback pc ra target)
+  (case (current-target)
+    [:a64
+      (gen:seq
+        (gen:method cpp:regs :spill cpp:index)
+        (gen:build :mov (a64:reg :x0) (a64:reg :rState))
+        (gen:build :add (a64:reg :x1) (a64:reg :rBase) (gen:cast "uint16_t" (gen:* (gen:call :vmRegOp ra) (gen:sizeof "TValue"))))
+        (gen:build :mov (a64:reg :w2) (gen:+ (uint-val pc) 1))
+        (gen:build :ldr (a64:reg :x3) (a64:mem (a64:reg :rNativeContext) (gen:offsetof :NativeContext.forgPrepXnextFallback)))
+        (gen:build :blr (a64:reg :x3))
+        (gen:method cpp:lowering :jumpOrFallthrough (block-of target) cpp:next))]
+    [:x64
+      (gen:seq
+        (gen:let ([call-wrap (gen:call "IrCallWrapperX64" cpp:regs cpp:build cpp:index)])
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (x64:reg :rState))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :qword) (gen:call :luauRegAddress (gen:call :vmRegOp ra)))
+          (gen:method call-wrap :addArgument (gen:enum :SizeX64 :dword) (gen:+ (uint-val pc) 1))
+          (gen:method call-wrap :call (gen:index (gen:name :qword) (gen:+ (x64:reg :rNativeContext) (gen:offsetof :NativeContext.forgPrepXnextFallback))))
+          (gen:method cpp:lowering :jumpOrFallthrough (block-of target) cpp:next)))]))

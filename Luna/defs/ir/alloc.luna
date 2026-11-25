@@ -1,0 +1,65 @@
+~ Get table length
+~ A: pointer (LuaTable)
+(define-ircmd TABLE_LEN
+  (operands [table :pointer])
+  (result :int)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Reads table array metadata: TABLE_SETNUM can grow the array and change the length
+  (lowering (lower-table-len table)))
+
+~ Allocate new table
+~ A: unsigned int (array element count)
+~ B: unsigned int (node element count)
+(define-ircmd NEW_TABLE
+  (operands [narray :const-uint] [nhash :const-uint])
+  (result :pointer)
+  (class :value)
+  (lowering (lower-new-table narray nhash)))
+
+~ Duplicate a table
+~ A: pointer (LuaTable)
+(define-ircmd DUP_TABLE
+  (operands [table :pointer])
+  (result :pointer)
+  (class :value)
+  (lowering (lower-dup-table table)))
+
+~ Insert an integer key into a table and return the pointer to inserted value (TValue)
+~ A: pointer (LuaTable)
+~ B: int (key)
+(define-ircmd TABLE_SETNUM
+  (operands [table :pointer] [key :int])
+  (result :pointer)
+  (class :value)
+  (flags :deprecated/is-unsafe-to-sink) ; unsafe to sink: Mutates table array part, invalidating reads
+  (lowering (lower-table-setnum table key)))
+
+~ Create new tagged userdata
+~ A: int (size)
+~ B: int (tag)
+(define-ircmd NEW_USERDATA
+  (operands [size :int] [utag :int])
+  (result :pointer)
+  (class :value)
+  (facts (allocates :buffer-data))
+  (lowering (lower-new-userdata size utag)))
+
+~ Create new heap-allocated vector
+~ A: double (x)
+~ B: double (y)
+~ C: double (z)
+(define-ircmd NEW_VECTOR
+  (operands [x :double] [y :double] [z :double])
+  (result :pointer)
+  (class :value)
+  (facts (allocates :buffer-data))
+  (lowering (lower-new-vector x y z)))
+
+~ Luwu Classes (rfcs/classes): allocate an object of a class with its members uninitialized
+~ (luaR_newobjectuninit). Every member must be stored before anything can collect or observe it.
+~ A: pointer (LuauClass)
+(define-ircmd NEW_OBJECT
+  (operands [cls :pointer])
+  (result :pointer)
+  (class :value)
+  (lowering (lower-new-object cls)))
