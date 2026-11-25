@@ -1217,6 +1217,14 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::CHECK_OBJECT_CLASS:
         state.checkLiveIns(OP_C(inst), index, true);
         break;
+    case IrCmd::CHECK_STORAGE:
+        // This instruction has two jumps to the exit in the lowering and that prevents exit sync record from being generated
+        state.checkLiveIns(OP_C(inst), index, false);
+        break;
+    case IrCmd::CHECK_STORAGE_ELEMENT:
+        // This instruction has two jumps to the exit in the lowering and that prevents exit sync record from being generated
+        state.checkLiveIns(OP_D(inst), index, false);
+        break;
     case IrCmd::CHECK_CLASS_FIELDS_CONSTRUCTIBLE:
     case IrCmd::CHECK_CLASS_ALLOCATABLE:
         // This instruction has several jumps to the exit in the lowering and that prevents exit sync record from being generated
@@ -1288,6 +1296,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_INITTRAITS:
     case IrCmd::FALLBACK_PRESIZETABLE:
     case IrCmd::FALLBACK_GETQUALIFIED:
+    case IrCmd::FALLBACK_TABLEBUNDLE:
     case IrCmd::FALLBACK_SETQUALIFIED:
     case IrCmd::FALLBACK_GETPOSITIONAL:
     case IrCmd::FALLBACK_PUSH:
@@ -1340,6 +1349,7 @@ static void markDeadStoresInInst(RemoveDeadStoreState& state, IrBuilder& build, 
     case IrCmd::FALLBACK_INITTRAITS:
     case IrCmd::FALLBACK_PRESIZETABLE:
     case IrCmd::FALLBACK_GETQUALIFIED:
+    case IrCmd::FALLBACK_TABLEBUNDLE:
     case IrCmd::FALLBACK_SETQUALIFIED:
     case IrCmd::FALLBACK_GETPOSITIONAL:
     case IrCmd::FALLBACK_PUSH:

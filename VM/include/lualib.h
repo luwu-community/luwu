@@ -143,6 +143,12 @@ LUALIB_API int luaopen_utf8(lua_State* L);
 #define LUA_CLASSLIBNAME "class"
 LUALIB_API int luaopen_class(lua_State* L);
 
+#define LUA_COLLECTIONSLIBNAME "collections"
+LUALIB_API int luaopen_collections(lua_State* L);
+
+#define LUA_BUNDLELIBNAME "bundle"
+LUALIB_API int luaopen_bundle(lua_State* L);
+
 #define LUA_MATHLIBNAME "math"
 LUALIB_API int luaopen_math(lua_State* L);
 
