@@ -80,10 +80,28 @@ bool sameWithoutDigits(const std::string& a, const std::string& b)
     }
 }
 
+// Whether `a` and `b` are the same apart from the case of their letters
+bool sameIgnoringCase(const std::string& a, const std::string& b)
+{
+    if (a.size() != b.size())
+        return false;
+
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
+            return false;
+    }
+    return true;
+}
+
 std::optional<size_t> typoDistanceWithin(const std::string& written, const std::string& meant, size_t limit)
 {
     if (written.size() <= kMaxUncheckedLength || written == meant || sameWithoutDigits(written, meant))
         return std::nullopt;
+
+    // letter case alone is one typo at any length: `"nan"` for `"NaN"`
+    if (sameIgnoringCase(written, meant))
+        return 1;
     return editDistanceWithin(written, meant, std::min(limit, typoEditLimit(written)));
 }
 
