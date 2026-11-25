@@ -48,6 +48,13 @@ LUAI_FUNC LuauClass* luaR_newclass(
  */
 LUAI_FUNC void luaR_sealclassshape(lua_State* L, LuauClass* classdef);
 
+/**
+ * Luwu Destructuring (rfcs/destructuring.md): makes objects of `classdef` destructurable positionally with `count`
+ * positions, for a builder to fill in `positionalmembers` before luaR_sealclassshape. Called once, for a class with a
+ * primary constructor.
+ */
+LUAI_FUNC void luaR_newpositionalmembers(lua_State* L, LuauClass* classdef, int count);
+
 // The number of bytes `classdef` owns outside its members-to-offset table, for GC accounting.
 LUAI_FUNC size_t luaR_classsize(const LuauClass* classdef);
 
