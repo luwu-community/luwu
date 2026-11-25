@@ -496,6 +496,8 @@ static void traverseclass(global_State* g, LuauClass* classdef)
         markobject(g, classdef->compiledtraitcopies);
     if (classdef->qualified)
         markobject(g, classdef->qualified);
+    if (classdef->reflection)
+        markobject(g, classdef->reflection);
     if (classdef->typeofname)
         markobject(g, classdef->typeofname);
 }
