@@ -204,6 +204,7 @@ private:
     DefId visitLValue(AstExprLocal* l, DefId incomingDef);
     DefId visitLValue(AstExprGlobal* g, DefId incomingDef);
     DefId visitLValue(AstExprIndexName* i, DefId incomingDef);
+    void forgetPositions(DefId parentDef, const Location& location);
     DefId visitLValue(AstExprIndexExpr* i, DefId incomingDef);
     DefId visitLValue(AstExprError* e, DefId incomingDef);
 
