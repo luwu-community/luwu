@@ -12,7 +12,6 @@
 using namespace Luau;
 
 
-LUAU_FASTFLAG(LuauDisallowExternClassInTypeDefinitions)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
 
@@ -20,7 +19,6 @@ struct JsonEncoderFixture
 {
     Allocator allocator;
     AstNameTable names{allocator};
-    ScopedFastFlag sff{FFlag::LuauDisallowExternClassInTypeDefinitions, true};
     ScopedFastFlag sffDefaultArguments{FFlag::LuwuDefaultArguments, true};
 
     ParseResult parse(std::string_view src)

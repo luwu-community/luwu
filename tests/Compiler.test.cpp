@@ -32,7 +32,6 @@ LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(DebugLuwuIntegers)
-LUAU_FASTFLAG(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
@@ -5615,26 +5614,26 @@ TEST_CASE("JumpTrampoline")
         head += insns[i] + "\n";
 
     CHECK_EQ("\n" + head, R"(
-local 0: reg 3, start pc 8 line 3, end pc 54545 line 20002
-local 1: reg 0, start pc 2 line 2, end pc 54549 line 20004
-R3: number from 2 to 54546
-R0: number from 1 to 54550
+local 0: reg 3, start pc 8 line 3, end pc 54547 line 20002
+local 1: reg 0, start pc 2 line 2, end pc 54551 line 20004
+R3: number from 2 to 54548
+R0: number from 1 to 54552
 LOADN R0 0
 LOADN R3 1
 LOADN R1 3
 LOADN R2 1
 JUMP L1
-L0: JUMPX L14543
+L0: JUMPX L14545
 L1: FORNPREP R1 L0
 L2: ADD R0 R0 R3
 LOADK R4 K0 [150000]
 JUMP L4
-L3: JUMPX L14543
+L3: JUMPX L14545
 L4: JUMPIFLT R4 R0 L3
 ADD R0 R0 R3
 LOADK R4 K0 [150000]
 JUMP L6
-L5: JUMPX L14543
+L5: JUMPX L14545
 )");
 
     // FORNLOOP has to go through a trampoline since the jump is back to the beginning of the function
@@ -5644,16 +5643,18 @@ L5: JUMPX L14543
         tail += insns[i] + "\n";
 
     CHECK_EQ("\n" + tail, R"(
+LOADK R4 K0 [150000]
+JUMPIFLT R4 R0 L14545
 ADD R0 R0 R3
 LOADK R4 K0 [150000]
-JUMPIFLT R4 R0 L14543
+JUMPIFLT R4 R0 L14545
 ADD R0 R0 R3
 LOADK R4 K0 [150000]
-JUMPIFLT R4 R0 L14543
-JUMP L14542
-L14541: JUMPX L2
-L14542: FORNLOOP R1 L14541
-L14543: RETURN R0 1
+JUMPIFLT R4 R0 L14545
+JUMP L14544
+L14543: JUMPX L2
+L14544: FORNLOOP R1 L14543
+L14545: RETURN R0 1
 )");
 }
 
@@ -8380,8 +8381,6 @@ L0: MOVE R3 R2
 RETURN R3 1
 )"
     );
-
-    ScopedFastFlag luauCompileIifeInline{FFlag::LuauCompileIifeInline, true};
 
     // IIFE with a function exceeding regular inline complexity
     CHECK_EQ(

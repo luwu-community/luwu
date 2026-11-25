@@ -13,7 +13,7 @@
 #endif
 
 LUAU_FASTFLAGVARIABLE(LuwuBufferIsFrozen)
-LUAU_FASTFLAGVARIABLE(LuwuBufferBatched)
+LUAU_FASTFLAGVARIABLE(DebugLuwuBufferBatched)
 LUAU_FASTFLAGVARIABLE(DebugLuwuBufferComparison)
 LUAU_FASTFLAG(DebugLuwuIntegers)
 
@@ -620,7 +620,7 @@ static const luaL_Reg bufferlib[] = {
 };
 
 // Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): registered separately because the whole feature lives
-// behind LuwuBufferBatched; the suffix says how many bytes each value occupies (u8/i8=1, u16/i16=2, u32/i32/f32=4,
+// behind DebugLuwuBufferBatched; the suffix says how many bytes each value occupies (u8/i8=1, u16/i16=2, u32/i32/f32=4,
 // f64=8), which is also the step taken between consecutive values of the batch
 static const luaL_Reg bufferlib_batched[] = {
     {"unpacki8", buffer_unpackinteger<int8_t>},
@@ -698,7 +698,7 @@ int luaopen_buffer(lua_State* L)
 {
     luaL_register(L, LUA_BUFFERLIBNAME, bufferlib);
 
-    if (FFlag::LuwuBufferBatched)
+    if (FFlag::DebugLuwuBufferBatched)
         luaL_register(L, NULL, bufferlib_batched);
 
     if (FFlag::LuwuBufferIsFrozen)

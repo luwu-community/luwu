@@ -7,9 +7,8 @@ LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
-LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
-LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(DebugLuwuBufferBatched)
 LUAU_FASTFLAG(LuwuTableDiscard)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
@@ -806,7 +805,7 @@ std::string getBuiltinDefinitionSource()
         result += kBuiltinDefinitionBufferSrcIsFrozen;
     if (FFlag::DebugLuwuBufferComparison)
         result += kBuiltinDefinitionBufferSrcComparison;
-    if (FFlag::LuwuBufferBatched)
+    if (FFlag::DebugLuwuBufferBatched)
         result += kBuiltinDefinitionBufferSrcBatched;
     if (integerLibraryEnabled())
         result += kBuiltinDefinitionBufferSrcIntegers;
@@ -1037,10 +1036,7 @@ std::string getTypeFunctionDefinitionSource()
 {
     std::string common = R"(
     is: (self: type, tag: Tag) -> boolean,
-)";
-    if (FFlag::LuauUdtfTypeIsSubtypeOf)
-        common += "    issubtypeof: (self: type, arg: type) -> boolean,\n";
-    common += R"(
+    issubtypeof: (self: type, arg: type) -> boolean,
     metadata: (self: type) -> Metadata,
     setmetadata: (self: type, metadata: Metadata?) -> (),
 )";

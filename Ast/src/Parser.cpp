@@ -67,15 +67,11 @@ LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAGVARIABLE(LuauAllowGlobalDeclarationToBeCalledClass)
-LUAU_FASTFLAGVARIABLE(LuauDisallowExternClassInTypeDefinitions)
-LUAU_FASTFLAGVARIABLE(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAGVARIABLE(LuauCstAttr)
-LUAU_FASTFLAGVARIABLE(LuauStoreConstKeywordBegin)
 LUAU_FASTFLAGVARIABLE(LuauTrackPrefixLocal)
 LUAU_FASTFLAGVARIABLE(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExternTypeGenericMethods)
 LUAU_FASTFLAGVARIABLE(LuwuGenericNominals)
-LUAU_FASTFLAGVARIABLE(LuauNoDuplicateBinaryPrefix)
 // Luwu Octal Literals (rfcs/octal-literals.md): `0o755` number literals. With the flag off they're a "Malformed number" parse error like in upstream.
 LUAU_FASTFLAGVARIABLE(LuwuOctalLiterals)
 
@@ -3148,7 +3144,7 @@ AstStat* Parser::parseLocal(
             var,
             body,
             isConst,
-            isConst && FFlag::LuauStoreConstKeywordBegin ? keywordPosition : Position::missing(),
+            isConst ? keywordPosition : Position::missing(),
             start,
             functionKeywordLocation
         );
@@ -6369,9 +6365,9 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
     // us to support a global table like string/math/bit32 called `class`. CLI-203833 tracks the work to actually
     // remove support for `declare class X [extends Y]` syntax.
     //
-    // Luwu: `declare class X` never declares an extern type, whatever LuauDisallowExternClassInTypeDefinitions says. With
-    // Luwu Declare Statements (rfcs/declare-statements.md) it declares a Luwu class (see declaresClass above). Otherwise
-    // it is an error naming `declare extern type`, and it is parsed as the extern type it meant so nothing cascades.
+    // Luwu: `declare class X` never declares an extern type. With Luwu Declare Statements (rfcs/declare-statements.md) it
+    // declares a Luwu class (see declaresClass above). Otherwise it is an error naming `declare extern type`, and it is
+    // parsed as the extern type it meant so nothing cascades.
     // `declare class: T` is always a global named `class`.
     else if (AstName(lexer.current().name) == "extern" || legacyDeclareClass())
     {
@@ -9560,13 +9556,10 @@ static ConstantNumberParseResult parseInteger(double& result, const char* data, 
 {
     LUAU_ASSERT(base == 2 || base == 8 || base == 16);
 
-    if (FFlag::LuauNoDuplicateBinaryPrefix)
-    {
-        // Some libc implementations accept an optional 0b prefix for base-2 parsing.
-        // Binary literals have already had their leading 0b stripped by us.
-        if (base == 2 && data[0] == '0' && (data[1] == 'b' || data[1] == 'B'))
-            return ConstantNumberParseResult::Malformed;
-    }
+    // Some libc implementations accept an optional 0b prefix for base-2 parsing.
+    // Binary literals have already had their leading 0b stripped by us.
+    if (base == 2 && data[0] == '0' && (data[1] == 'b' || data[1] == 'B'))
+        return ConstantNumberParseResult::Malformed;
 
     char* end = nullptr;
     unsigned long long value = strtoull(data, &end, base);
@@ -10073,8 +10066,6 @@ AstExpr* Parser::parseTableConstructor()
     MatchLexeme matchBrace = lexer.current();
     expectAndConsume('{', "table literal");
     OpenBracket openBracket{openBracketDepth};
-    // Clip with LuauTableEntriesDontNeedToMatchIndent
-    unsigned lastElementIndent_DEPRECATED = 0;
 
     // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): `for` can't start an expression, so a table that
     // starts with it is a comprehension.
@@ -10083,9 +10074,6 @@ AstExpr* Parser::parseTableConstructor()
 
     while (lexer.current().type != '}')
     {
-        if (!FFlag::LuauTableEntriesDontNeedToMatchIndent)
-            lastElementIndent_DEPRECATED = lexer.current().location.begin.column;
-
         if (lexer.current().type == Lexeme::ReservedFor)
         {
             report(lexer.current().location, "A table comprehension must be the only item in its table");
@@ -10093,13 +10081,11 @@ AstExpr* Parser::parseTableConstructor()
             items.push_back({AstExprTable::Item::Kind::List, nullptr, comprehension});
             break;
         }
-
         AstArray<AstAttr*> attributes{nullptr, 0};
         TempVector<CstAttrList*> cstAttrLists(scratchCstAttrList);
         if (FFlag::LuwuAttributesEverywhere && attributesFollow())
         {
             attributes = parseAttributes(AstAttr::Context::TableEntry, FFlag::LuauCstAttr ? &cstAttrLists : nullptr);
-
             // In a list entry, attributes directly in front of `function` belong to the function, as
             // they do wherever else a function expression is written.
             if (lexer.current().type == Lexeme::ReservedFunction)
@@ -10111,7 +10097,6 @@ AstExpr* Parser::parseTableConstructor()
             else
                 validateAttributeContexts(attributes, AstAttr::Context::TableField);
         }
-
         if (lexer.current().type == '[')
         {
             Position indexerOpenPosition = lexer.current().location.begin;
@@ -10237,9 +10222,8 @@ AstExpr* Parser::parseTableConstructor()
         // declaration. Read as the next element, it would loop forever: parseExpr reports it without consuming it.
         // Upstream has no such recovery and reads `const` as a global.
         bool declarationFollows = startsConstDeclaration() || startsTypeAliasDeclaration();
-        bool elementFollows = (lexer.current().type == '[' || lexer.current().type == Lexeme::Name ||
-                               (lexer.current().type == Lexeme::ReservedFunction && lexer.lookahead().type == Lexeme::Name)) &&
-                              (FFlag::LuauTableEntriesDontNeedToMatchIndent ? true : lexer.current().location.begin.column == lastElementIndent_DEPRECATED);
+        bool elementFollows = lexer.current().type == '[' || lexer.current().type == Lexeme::Name ||
+                              (lexer.current().type == Lexeme::ReservedFunction && lexer.lookahead().type == Lexeme::Name);
 
         if (lexer.current().type == ',' || lexer.current().type == ';')
         {

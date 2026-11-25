@@ -83,12 +83,7 @@ LUAU_FASTINT(CodegenHeuristicsInstructionLimit)
 LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
-LUAU_FASTFLAG(LuauUdataDirectAccess6)
 LUAU_FASTFLAG(LuauCodegenBufferInteger)
-LUAU_FASTFLAG(LuauXpcallFixMessageYieldPath)
-LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
-LUAU_FASTFLAG(LuauYieldIter2)
-LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
@@ -104,14 +99,10 @@ LUAU_FASTFLAG(LuwuStringFormatFastcall)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
-LUAU_FASTFLAG(LuauAutoStack)
 LUAU_FASTFLAG(LuwuTableDiscard)
 LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauUdataMetatablePinned)
 LUAU_FASTFLAG(LuauGcTraceUdata)
-LUAU_DYNAMIC_FASTFLAG(LuauGcTableStepFix)
-LUAU_FASTFLAG(LuauCodegenFixTwoResA64Builtin)
-LUAU_FASTFLAG(LuauMathRoundNegZero)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
@@ -120,7 +111,7 @@ LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(DebugLuwuBufferComparison)
-LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(DebugLuwuBufferBatched)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
 
@@ -1307,7 +1298,7 @@ TEST_CASE("Buffers")
 // Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md)
 TEST_CASE("BufferBatched")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     runConformance(
         "buffer_batched.luwu",
@@ -1321,7 +1312,7 @@ TEST_CASE("BufferBatched")
 // the whole library addition disappears with the flag off, so an embedder that turns it off gets upstream shapes
 TEST_CASE("BufferBatchedFlagDisabled")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, false};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, false};
 
     StateRef globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -1358,9 +1349,6 @@ TEST_CASE("BufferBatchedFlagDisabled")
 
 TEST_CASE("Math")
 {
-    ScopedFastFlag luauCodegenFixTwoResA64Builtin{FFlag::LuauCodegenFixTwoResA64Builtin, true};
-    ScopedFastFlag luauMathRoundNegZero{FFlag::LuauMathRoundNegZero, true};
-
     runConformance("math.luau");
 }
 
@@ -1587,9 +1575,6 @@ TEST_CASE("Literals")
 
 TEST_CASE("Errors")
 {
-    ScopedFastFlag luauCustomYieldablePcalls{FFlag::LuauCustomYieldablePcalls, true};
-    ScopedFastFlag luauXpcallFixMessageYieldPath{FFlag::LuauXpcallFixMessageYieldPath, true};
-
     runConformance("errors.luau");
 }
 
@@ -1647,8 +1632,6 @@ static void* blockableRealloc(void* ud, void* ptr, size_t osize, size_t nsize)
 
 TEST_CASE("GC")
 {
-    ScopedFastFlag luauGcTableStepFix{DFFlag::LuauGcTableStepFix, true};
-
     runConformance(
         "gc.luau",
         [](lua_State* L)
@@ -1874,9 +1857,6 @@ int multipleYields(lua_State* L)
     lua_settop(L, 1); // Only 1 argument expected
     int base = luaL_checkinteger(L, 1);
 
-    if (!FFlag::LuauAutoStack)
-        luaL_checkstack(L, 2, "cmultiyield");
-
     // current state
     int pos = 1;
     lua_pushinteger(L, pos);
@@ -1893,13 +1873,8 @@ int multipleYieldsContinuation(lua_State* L, int status)
 
     // function state is still alive
     int pos = luaL_checkinteger(L, 2) + 1;
-    if (!FFlag::LuauAutoStack)
-        luaL_checkstack(L, 1, "cmultiyieldcont");
     lua_pushinteger(L, pos);
     lua_replace(L, 2);
-
-    if (!FFlag::LuauAutoStack)
-        luaL_checkstack(L, 1, "cmultiyieldcont");
 
     if (pos < 4)
     {
@@ -1954,8 +1929,6 @@ int multipleYieldsWithNestedCall(lua_State* L)
 int multipleYieldsWithNestedCallContinuation(lua_State* L, int status)
 {
     int state = luaL_checkinteger(L, 3);
-    if (!FFlag::LuauAutoStack)
-        luaL_checkstack(L, 1, "cnestedmultiyieldcont");
     lua_pushinteger(L, state + 1);
     lua_replace(L, 3);
 
@@ -1977,8 +1950,6 @@ int multipleYieldsWithNestedCallContinuation(lua_State* L, int status)
 
 int passthroughCall(lua_State* L)
 {
-    if (!FFlag::LuauAutoStack)
-        luaL_checkstack(L, 3, "cpass");
     lua_pushvalue(L, 1);
     lua_pushvalue(L, 2);
     lua_pushvalue(L, 3);
@@ -1994,8 +1965,6 @@ int passthroughCallContinuation(lua_State* L, int status)
 
 int passthroughCallMoreResults(lua_State* L)
 {
-    if (!FFlag::LuauAutoStack)
-        luaL_checkstack(L, 3, "cpass");
     lua_pushvalue(L, 1);
     lua_pushvalue(L, 2);
     lua_pushvalue(L, 3);
@@ -2110,8 +2079,6 @@ int pcallThenXCallContinuation(lua_State* L, int status)
 
 TEST_CASE("CYield")
 {
-    ScopedFastFlag luauCustomYieldablePcalls{FFlag::LuauCustomYieldablePcalls, true};
-
     runConformance(
         "cyield.luau",
         [](lua_State* L)
@@ -2444,9 +2411,6 @@ TEST_CASE("Debugger")
         {
             CHECK(breakhits % 2 == 1);
 
-            if (!FFlag::LuauAutoStack)
-                lua_checkstack(L, LUA_MINSTACK);
-
             if (breakhits == 1)
             {
                 // test lua_getargument
@@ -2676,9 +2640,6 @@ TEST_CASE("NDebugGetUpValue")
         nullptr,
         [](lua_State* L) -> bool
         {
-            if (!FFlag::LuauAutoStack)
-                lua_checkstack(L, LUA_MINSTACK);
-
             // push the second frame's closure to the stack
             lua_Debug ar = {};
             REQUIRE(lua_getinfo(L, 1, "f", &ar));
@@ -2931,8 +2892,6 @@ TEST_CASE("ApiIter")
     lua_pushvalue(L, 1);
 
     CHECK(lua_gettop(L) == 19);
-    if (!FFlag::LuauAutoStack)
-        CHECK(lua_checkstack(L, 2));
 
     // Luau iteration interface: lua_rawiter (faster and preferable to lua_next)
     double sum3 = 0;
@@ -4371,8 +4330,6 @@ static int cYieldingIterator(lua_State* L)
 
 TEST_CASE("Iter")
 {
-    ScopedFastFlag luauYieldIter{FFlag::LuauYieldIter2, true};
-
     runConformance(
         "iter.luau",
         [](lua_State* L)
@@ -4640,8 +4597,6 @@ TEST_CASE("SafeEnv")
 
 TEST_CASE("Native")
 {
-    ScopedFastFlag luauCodegenFixBufferLenCheck{FFlag::LuauCodegenFixBufferLenCheck, true};
-
     // This tests requires code to run natively, otherwise all 'is_native' checks will fail
     if (!codegen || !luau_codegen_supported())
         return;
@@ -4825,8 +4780,6 @@ TEST_CASE("NativeUserdata")
 
 TEST_CASE("UserdataDirectAccess")
 {
-    ScopedFastFlag sff{FFlag::LuauUdataDirectAccess6, true};
-
     // Reset global state
     nameToAtom.clear();
     nextAtomId = 1;
@@ -8133,6 +8086,20 @@ TEST_CASE("ClassesInterpreterMemberSlotCacheSkipsWideOffsets")
 
     run("farcall", 301);
     CHECK(LUAU_INSN_C(*farCallInsn) == farCallHint);
+}
+
+// Luwu: luau_setfflagpreset names presets by string; FlagPresets.test.cpp tests what each one turns on
+TEST_CASE("FlagPresetsByName")
+{
+    std::vector<std::pair<Luau::FValue<bool>*, bool>> saved;
+    for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next)
+        saved.push_back({flag, flag->value});
+
+    CHECK(luau_setfflagpreset("fixes") > 0);
+    CHECK_EQ(luau_setfflagpreset("everything"), -1);
+
+    for (const auto& [flag, value] : saved)
+        flag->value = value;
 }
 
 TEST_SUITE_END();

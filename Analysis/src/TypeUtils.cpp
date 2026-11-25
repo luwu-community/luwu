@@ -1151,42 +1151,6 @@ TypeId addUnion(NotNull<TypeArena> arena, NotNull<BuiltinTypes> builtinTypes, st
     return ub.build();
 }
 
-ContainsAnyGeneric_DEPRECATED::ContainsAnyGeneric_DEPRECATED()
-    : TypeOnceVisitor("ContainsAnyGeneric", /* skipBoundTypes */ true)
-{
-}
-
-bool ContainsAnyGeneric_DEPRECATED::visit(TypeId ty, const ExternType&)
-{
-    return false;
-}
-
-bool ContainsAnyGeneric_DEPRECATED::visit(TypeId ty)
-{
-    found = found || is<GenericType>(ty);
-    return !found;
-}
-
-bool ContainsAnyGeneric_DEPRECATED::visit(TypePackId ty)
-{
-    found = found || is<GenericTypePack>(follow(ty));
-    return !found;
-}
-
-bool ContainsAnyGeneric_DEPRECATED::hasAnyGeneric(TypeId ty)
-{
-    ContainsAnyGeneric_DEPRECATED cg;
-    cg.traverse(ty);
-    return cg.found;
-}
-
-bool ContainsAnyGeneric_DEPRECATED::hasAnyGeneric(TypePackId tp)
-{
-    ContainsAnyGeneric_DEPRECATED cg;
-    cg.traverse(tp);
-    return cg.found;
-}
-
 struct ContainsGenerics : public IterativeTypeVisitor
 {
     NotNull<DenseHashSet<const void*>> generics;

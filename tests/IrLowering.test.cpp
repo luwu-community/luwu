@@ -22,11 +22,8 @@
 
 LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauIntegerType2)
-LUAU_FASTFLAG(LuauCodegenVmExitSyncMultiUse)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuauCallFeedback)
-LUAU_FASTFLAG(LuauCodegenA64ExitUseCheck)
-LUAU_FASTFLAG(LuauCodegenConstVectorBufferRead)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
@@ -2881,43 +2878,43 @@ bb_linear_34:
   %261 = NUM_TO_FLOAT %259
   STORE_VECTOR R2, %260, %261, 0
   STORE_TAG R2, tvector
-  %264 = LOAD_TVALUE R1, 0i, tvector
-  %265 = LOAD_TVALUE R2, 0i, tvector
-  %266 = MUL_VEC %264, %265
-  %269 = LOAD_TVALUE K5 (0.5, 0.5, 0), 0i, tvector
-  %271 = SUB_VEC %266, %269
-  %274 = FLOOR_VEC %271
-  %277 = CEIL_VEC %271
-  %280 = SUB_VEC %271, %274
-  %281 = TAG_VECTOR %280
-  STORE_TVALUE R4, %281
-  %283 = EXTRACT_VEC %274, 0i
-  %284 = FLOAT_TO_NUM %283
+  %265 = LOAD_TVALUE R1, 0i, tvector
+  %266 = LOAD_TVALUE R2, 0i, tvector
+  %267 = MUL_VEC %265, %266
+  %270 = LOAD_TVALUE K5 (0.5, 0.5, 0), 0i, tvector
+  %272 = SUB_VEC %267, %270
+  %275 = FLOOR_VEC %272
+  %279 = CEIL_VEC %272
+  %283 = SUB_VEC %272, %275
+  %284 = TAG_VECTOR %283
+  STORE_TVALUE R4, %284
+  %286 = EXTRACT_VEC %275, 0i
+  %287 = FLOAT_TO_NUM %286
   STORE_TVALUE R7, %11
-  %297 = MOD_NUM %284, %258
-  STORE_DOUBLE R5, %297
+  %300 = MOD_NUM %287, %258
+  STORE_DOUBLE R5, %300
   STORE_TAG R5, tnumber
-  %301 = EXTRACT_VEC %277, 0i
-  %302 = FLOAT_TO_NUM %301
-  STORE_DOUBLE R7, %302
+  %304 = EXTRACT_VEC %279, 0i
+  %305 = FLOAT_TO_NUM %304
+  STORE_DOUBLE R7, %305
   STORE_TVALUE R8, %11
-  %315 = MOD_NUM %302, %258
-  STORE_SPLIT_TVALUE R6, tnumber, %315
-  %319 = EXTRACT_VEC %274, 1i
-  %320 = FLOAT_TO_NUM %319
+  %318 = MOD_NUM %305, %258
+  STORE_SPLIT_TVALUE R6, tnumber, %318
+  %322 = EXTRACT_VEC %275, 1i
+  %323 = FLOAT_TO_NUM %322
   STORE_TVALUE R10, %250
-  %333 = MOD_NUM %320, %259
-  STORE_DOUBLE R8, %333
+  %336 = MOD_NUM %323, %259
+  STORE_DOUBLE R8, %336
   STORE_TVALUE R9, %11
-  %349 = MUL_NUM %333, %258
-  STORE_DOUBLE R7, %349
-  %353 = EXTRACT_VEC %277, 1i
-  %354 = FLOAT_TO_NUM %353
-  STORE_DOUBLE R10, %354
-  %367 = MOD_NUM %354, %259
-  STORE_DOUBLE R9, %367
-  %383 = MUL_NUM %367, %258
-  STORE_DOUBLE R8, %383
+  %352 = MUL_NUM %336, %258
+  STORE_DOUBLE R7, %352
+  %356 = EXTRACT_VEC %279, 1i
+  %357 = FLOAT_TO_NUM %356
+  STORE_DOUBLE R10, %357
+  %370 = MOD_NUM %357, %259
+  STORE_DOUBLE R9, %370
+  %386 = MUL_NUM %370, %258
+  STORE_DOUBLE R8, %386
   INTERRUPT 49u
   RETURN R4, 5i
 )"
@@ -5620,15 +5617,11 @@ local function foo(zero: number, b1: buffer, b2: buffer)
 end
 )";
 
-    // With LuauCodegenVmExitSyncMultiUse, the dead store optimizer recognizes that the
-    // redundant `zero + 0` (%11) can be dropped in favor of reusing %10 directly at every
-    // exit sync site, instead of keeping the extra ADD_NUM alive.
-    if (FFlag::LuauCodegenVmExitSyncMultiUse)
-    {
-        CHECK_EQ(
-            "\n" + getCodegenAssembly(source),
-            R"(
-; function foo(zero, b1, b2) line 2
+    // The dead store optimizer drops the redundant `zero + 0` (%11) and reuses %10 directly at every exit sync site.
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(source),
+        R"(
+; function foo($arg0, $arg1, $arg2) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tbuffer, exit(entry)
@@ -5651,11 +5644,12 @@ bb_bytecode_1:
   %74 = BUFFER_READU8 %29, %27, tbuffer
   BUFFER_WRITEI8 %29, %27, %74, tbuffer
   %113 = LOAD_POINTER R2
-  CHECK_BUFFER_LEN %113, %27, 0i, 2i, %10, exit(32)
+  CHECK_BUFFER_LEN %113, %27, 0i, 2i, %10, bb_exit_21
+   ; exit sync: R8, R5, {%10}
   %117 = LOAD_BUFFER_DATA %113
   %118 = BUFFER_READI8 %117, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %113, bb_exit_21
-   ; exit sync: R6, {%118}
+  CHECK_BUFFER_MUTABLE %113, bb_exit_22
+   ; exit sync: R6, R5, {%118, %10}
   BUFFER_WRITEI8 %117, %27, %118, tbuffer
   %162 = BUFFER_READU8 %117, %27, tbuffer
   BUFFER_WRITEI8 %117, %27, %162, tbuffer
@@ -5671,59 +5665,7 @@ bb_bytecode_1:
   INTERRUPT 112u
   RETURN R0, 0i
 )"
-        );
-    }
-    else
-    {
-        CHECK_EQ(
-            "\n" + getCodegenAssembly(source),
-            R"(
-; function foo(zero, b1, b2) line 2
-bb_0:
-  CHECK_TAG R0, tnumber, exit(entry)
-  CHECK_TAG R1, tbuffer, exit(entry)
-  CHECK_TAG R2, tbuffer, exit(entry)
-  JUMP bb_2
-bb_2:
-  JUMP bb_bytecode_1
-bb_bytecode_1:
-  implicit CHECK_SAFE_ENV exit(0)
-  %10 = LOAD_DOUBLE R0
-  %11 = ADD_NUM %10, 0
-  %25 = LOAD_POINTER R1
-  %27 = NUM_TO_INT %10
-  CHECK_BUFFER_LEN %25, %27, 0i, 1i, undef, bb_exit_19
-   ; exit sync: R8, R5, {%11}
-  %29 = LOAD_BUFFER_DATA %25
-  %30 = BUFFER_READI8 %29, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %25, bb_exit_20
-   ; exit sync: R6, R5, {%11, %30}
-  BUFFER_WRITEI8 %29, %27, %30, tbuffer
-  %74 = BUFFER_READU8 %29, %27, tbuffer
-  BUFFER_WRITEI8 %29, %27, %74, tbuffer
-  %113 = LOAD_POINTER R2
-  CHECK_BUFFER_LEN %113, %27, 0i, 2i, %10, exit(32)
-  %117 = LOAD_BUFFER_DATA %113
-  %118 = BUFFER_READI8 %117, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %113, bb_exit_21
-   ; exit sync: R6, {%118}
-  BUFFER_WRITEI8 %117, %27, %118, tbuffer
-  %162 = BUFFER_READU8 %117, %27, tbuffer
-  BUFFER_WRITEI8 %117, %27, %162, tbuffer
-  %203 = ADD_INT %27, 1i
-  %206 = BUFFER_READI8 %117, %203, tbuffer
-  BUFFER_WRITEI8 %117, %203, %206, tbuffer
-  %250 = BUFFER_READU8 %117, %203, tbuffer
-  BUFFER_WRITEI8 %117, %203, %250, tbuffer
-  %294 = BUFFER_READI16 %117, %27, tbuffer
-  BUFFER_WRITEI16 %117, %27, %294, tbuffer
-  %338 = BUFFER_READU16 %117, %27, tbuffer
-  BUFFER_WRITEI16 %117, %27, %338, tbuffer
-  INTERRUPT 112u
-  RETURN R0, 0i
-)"
-        );
-    }
+    );
 }
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferSanityNegative")
@@ -5767,11 +5709,12 @@ bb_bytecode_1:
   %74 = BUFFER_READU8 %29, %27, tbuffer
   BUFFER_WRITEI8 %29, %27, %74, tbuffer
   %113 = LOAD_POINTER R2
-  CHECK_BUFFER_LEN %113, %27, 0i, 2i, %11, exit(32)
+  CHECK_BUFFER_LEN %113, %27, 0i, 2i, %11, bb_exit_21
+   ; exit sync: R8, R5, {%11}
   %117 = LOAD_BUFFER_DATA %113
   %118 = BUFFER_READI8 %117, %27, tbuffer
-  CHECK_BUFFER_MUTABLE %113, bb_exit_21
-   ; exit sync: R6, {%118}
+  CHECK_BUFFER_MUTABLE %113, bb_exit_22
+   ; exit sync: R6, R5, {%11, %118}
   BUFFER_WRITEI8 %117, %27, %118, tbuffer
   %162 = BUFFER_READU8 %117, %27, tbuffer
   BUFFER_WRITEI8 %117, %27, %162, tbuffer
@@ -6049,8 +5992,6 @@ bb_bytecode_1:
 
 TEST_CASE_FIXTURE(LoweringFixture, "BufferVmExitSyncMultiUseSink")
 {
-    ScopedFastFlag luauCodegenVmExitSyncMultiUse{FFlag::LuauCodegenVmExitSyncMultiUse, true};
-
     // This test captures that 'a * b' is only needed for the VM exit to display the 'expected' value of 's' if buffer read throws an exception
     // If the compiler output makes this test outdated, it can be removed as we have IR builder tests covering this as well
     CHECK_EQ(
@@ -6159,12 +6100,12 @@ bb_linear_11:
   %116 = BUFFER_READF64 %20, 0i, tbuffer
   STORE_DOUBLE R4, %116
   STORE_TAG R4, tnumber
-  %119 = LOAD_TVALUE R1
-  STORE_TVALUE R5, %119
-  %121 = LOAD_TVALUE R2
-  STORE_TVALUE R6, %121
-  %123 = LOAD_TVALUE R3
-  STORE_TVALUE R7, %123
+  %120 = LOAD_TVALUE R1
+  STORE_TVALUE R5, %120
+  %122 = LOAD_TVALUE R2
+  STORE_TVALUE R6, %122
+  %124 = LOAD_TVALUE R3
+  STORE_TVALUE R7, %124
   INTERRUPT 42u
   RETURN R4, 4i
 )"
@@ -7111,7 +7052,6 @@ TEST_CASE_FIXTURE(LoweringFixture, "FuzzTest26")
 {
     ScopedFastFlag debugLuwuIntegers{FFlag::DebugLuwuIntegers, true};
     ScopedFastFlag luauIntegerType{FFlag::LuauIntegerType2, true};
-    ScopedFastFlag luauCodegenA64ExitUseCheck{FFlag::LuauCodegenA64ExitUseCheck, true};
 
     CHECK(
         getCodegenAssembly(

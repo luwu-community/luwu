@@ -52,11 +52,8 @@ LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuDeclareStatements)
-LUAU_FASTFLAGVARIABLE(LuauTidyTypePrototyping)
-LUAU_FASTFLAGVARIABLE(LuauDoNotEmplaceAnnotatedType)
 LUAU_FASTFLAGVARIABLE(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FLAGVERSION(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier, 2)
-LUAU_FASTFLAGVARIABLE(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAGVARIABLE(DebugLuauCFG)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExternTypeUseDefinitionScope)
@@ -4258,15 +4255,8 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatLocal* stat
             localDomain->insert(annotatedTypes[i]);
             if (i >= head.size() && tail)
             {
-                if (FFlag::LuauDoNotEmplaceAnnotatedType)
-                {
-                    deferredTypes.push_back(arena->addType(BlockedType{}));
-                    freshBlockedTypes.insert(getMutable<BlockedType>(deferredTypes.back()));
-                }
-                else
-                {
-                    deferredTypes.emplace_back(annotatedTypes[i]);
-                }
+                deferredTypes.push_back(arena->addType(BlockedType{}));
+                freshBlockedTypes.insert(getMutable<BlockedType>(deferredTypes.back()));
             }
         }
         else
@@ -7561,8 +7551,7 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprFunction* fun
         }
     );
 
-    if (FFlag::LuauDeprecatedAttributeOnAnonymousFunctions)
-        propagateDeprecatedAttributeToConstraint(gc->c, func);
+    propagateDeprecatedAttributeToConstraint(gc->c, func);
 
     sig.signatureScope->interiorFreeTypes = std::move(interiorFreeTypes.back().types);
     sig.signatureScope->interiorFreeTypePacks = std::move(interiorFreeTypes.back().typePacks);

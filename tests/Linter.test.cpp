@@ -16,7 +16,7 @@ LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
-LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(DebugLuwuBufferBatched)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
@@ -31,7 +31,6 @@ LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuOctalLiterals)
 LUAU_FASTFLAG(LuwuNonePrimitive)
-LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
 LUAU_FASTFLAG(LuwuTableDiscard)
@@ -2567,8 +2566,6 @@ end
 
     // @deprecated works on anonymous functions assigned to locals
     {
-        ScopedFastFlag sflag{FFlag::LuauDeprecatedAttributeOnAnonymousFunctions, true};
-
         LintResult result = lint(R"(
 local foo = @deprecated function()
 end
@@ -5941,7 +5938,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "typing_unreachable_and_todo")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsBatchedBufferInLuauFiles")
 {
-    ScopedFastFlag sff{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag sff{FFlag::DebugLuwuBufferBatched, true};
 
     fileResolver.source["game/a"] = R"(
 local b = buffer.create(8)

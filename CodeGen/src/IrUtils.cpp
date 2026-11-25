@@ -479,7 +479,8 @@ static void removeInstUse(IrFunction& function, uint32_t instIdx)
     CODEGEN_ASSERT(inst.useCount);
     inst.useCount--;
 
-    if (inst.useCount == 0)
+    // Luwu: from upstream's LuauCodegenCmpAnySideEffecting (0.745), an instruction with side effects stays without users
+    if (inst.useCount == 0 && !hasSideEffects(inst.cmd))
         kill(function, inst);
 }
 
@@ -1808,6 +1809,29 @@ std::optional<uint8_t> tryGetLuauTagForBcType(uint8_t bcType, bool ignoreOptiona
     }
 
     return std::nullopt;
+}
+
+bool exitStoreClobbers(const VmExitSyncInfo& sync, uint8_t reg, uint32_t instIdx)
+{
+    for (const VmExitStoreInfo& regStore : sync.regStores)
+    {
+        if (regStore.reg != reg)
+            continue;
+
+        // A store of the instruction's own value leaves it in place
+        for (const VmExitStoreRecord& record : regStore.stores)
+        {
+            for (const IrOp& op : record.backup.ops)
+            {
+                if (op.kind == IrOpKind::Inst && op.index == instIdx)
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 } // namespace CodeGen

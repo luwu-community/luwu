@@ -38,7 +38,7 @@
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
-LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(DebugLuwuBufferBatched)
 
 namespace Luau
 {
@@ -1318,7 +1318,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
 
     // Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): every `unpack*` shares one magic, since the batch
     // size is read off the call site rather than off the element type being unpacked
-    if (FFlag::LuwuBufferBatched)
+    if (FFlag::DebugLuwuBufferBatched)
     {
         if (TableType* btv = getMutable<TableType>(getGlobalBinding(globals, "buffer")))
         {

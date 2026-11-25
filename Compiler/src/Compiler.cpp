@@ -56,7 +56,6 @@ LUAU_FASTINTVARIABLE(LuwuCompileInlineBudget, 4096)
 // encouragedInlineSize). It replaces the cost model's threshold for such a function.
 LUAU_FASTINTVARIABLE(LuwuCompileEncouragedInlineLimit, 256)
 
-LUAU_FASTFLAGVARIABLE(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
@@ -581,8 +580,9 @@ struct Compiler
         }
 
         AstExprFunction* locNode = currentFunction;
-        int8_t tableReg = getLocalReg(&exportTableLocal);
-        LUAU_ASSERT(tableReg >= 0);
+        int exportReg = getLocalReg(&exportTableLocal);
+        LUAU_ASSERT(exportReg >= 0);
+        uint8_t tableReg = uint8_t(exportReg);
 
         if (FFlag::LuwuClasses)
         {
@@ -871,7 +871,11 @@ struct Compiler
         if (options.optimizationLevel >= 1)
             bytecode.foldJumps();
 
-        bytecode.expandJumps();
+        bool hasLongJumpError = false;
+        bytecode.expandJumps(hasLongJumpError);
+
+        if (hasLongJumpError)
+            CompileError::raise(func->location, "Exceeded jump distance limit; simplify the code to compile");
 
         popLocals(0);
 
@@ -1534,25 +1538,13 @@ struct Compiler
         bool overLimit = encouraged ? encouragedInlineSize(fi->instructionCount, encouragedSites) > FInt::LuwuCompileEncouragedInlineLimit
                                     : inlinedCost > threshold;
 
-        if (FFlag::LuauCompileIifeInline)
-        {
-            bool isIife = unwrapExprOfType<AstExprFunction>(expr->func) != nullptr;
+        bool isIife = unwrapExprOfType<AstExprFunction>(expr->func) != nullptr;
 
-            if (overLimit && !isIife && !onlyCallSite)
-            {
-                reportInlineTooExpensive(func, inlinedCost, inlineProfit);
-                refuseEncouragedInlineTooBig(expr, func, fi->instructionCount, encouragedSites);
-                return false;
-            }
-        }
-        else
+        if (overLimit && !isIife && !onlyCallSite)
         {
-            if (overLimit && !onlyCallSite)
-            {
-                reportInlineTooExpensive(func, inlinedCost, inlineProfit);
-                refuseEncouragedInlineTooBig(expr, func, fi->instructionCount, encouragedSites);
-                return false;
-            }
+            reportInlineTooExpensive(func, inlinedCost, inlineProfit);
+            refuseEncouragedInlineTooBig(expr, func, fi->instructionCount, encouragedSites);
+            return false;
         }
 
         const char* inlinedOwner = nullptr;
@@ -2717,15 +2709,27 @@ struct Compiler
     {
         Function* fi = functions.find(func);
 
+        RegScope rs(this);
+        InlinedCallDumpScope dumpScope(bytecode, func);
+
+        // Luwu: from upstream's LuauCompileCapturedCallTarget (0.748). Inlined code might write a captured target register
+        // before the closure that captured it reads it. The result then goes to fresh registers and is moved to the target afterwards.
+        uint8_t originalTarget = target;
+        for (size_t i = 0; i < targetCount; i++)
+        {
+            if (regCaptured[target + i])
+            {
+                target = allocReg(expr, unsigned(targetCount));
+                break;
+            }
+        }
+
         // We try to write result directly to the target register when possible, but there are a few blockers
         // - function captures a reference to the local that is being returned and might close it
         // - there might not be a target register (return value is unused)
         // - target register is captured and might be read before inlined function completes
         // Luwu: also when the callee has no function info
         bool noTargetMoveElision = !fi || fi->returnLocalCaptured || targetCount == 0 || regCaptured[target];
-
-        RegScope rs(this);
-        InlinedCallDumpScope dumpScope(bytecode, func);
 
         size_t oldLocals = localStack.size();
 
@@ -3064,6 +3068,9 @@ struct Compiler
         patchJumps(expr, inlineFrames.back().returnJumps, returnLabel);
 
         inlineFrames.pop_back();
+
+        for (size_t i = 0; target != originalTarget && i < targetCount; ++i)
+            bytecode.emitABC(LOP_MOVE, uint8_t(originalTarget + i), uint8_t(target + i), 0);
 
         // clean up constant state for future inlining attempts
         for (size_t i = 0; i < func->args.size; ++i)
@@ -6504,8 +6511,9 @@ struct Compiler
             LUAU_ASSERT(currentFunction);
 
             LUAU_ASSERT(locals.contains(&exportTableLocal));
-            int8_t tableReg = getLocalReg(&exportTableLocal);
-            LUAU_ASSERT(tableReg >= 0);
+            int exportReg = getLocalReg(&exportTableLocal);
+            LUAU_ASSERT(exportReg >= 0);
+            uint8_t tableReg = uint8_t(exportReg);
 
             bytecode.emitAD(LOP_LOADK, dest, classConst);
             bytecode.emitABC(LOP_SETTABLEKS, dest, tableReg, uint8_t(BytecodeBuilder::getStringHash(sref(decl->name->name))));
@@ -8636,7 +8644,8 @@ struct Compiler
         for (int iv = 0; iv < tripCount && foldable; ++iv)
         {
             locstants[var].type = Constant::Type_Number;
-            locstants[var].valueNumber = from + iv * step;
+            // the first item keeps `from` exactly: `-0 + 0 * step` would be +0
+            locstants[var].valueNumber = iv == 0 ? from : from + iv * step;
 
             // the first fold records what it changes, so the state before the comprehension can be restored
             foldConstants(
@@ -9679,8 +9688,8 @@ struct Compiler
 
         if (int localReg = getExprLocalReg(object); localReg >= 0) // Locals can be indexed directly
             reg = uint8_t(localReg);
-        else if (targetTemp) // If target is a temp register, we can compute the result directly into it
-            reg = compileExprAutoTemp(object, target);
+        else if (targetTemp) // If target is a temp register, we can clobber it which allows us to compute the result directly into it
+            compileExprTemp(object, target);
         else
             reg = compileExprAuto(object, rs);
 
@@ -10934,11 +10943,13 @@ struct Compiler
             compileStat(body->body.data[i]);
             noteAssertProof(body->body.data[i], body->body, i, assertProofs);
 
-            // continue statement inside the repeat..until loop should not close upvalues defined directly in the loop body
-            // (but it must still close upvalues defined in more nested blocks)
+            // continue statement inside the repeat..until loop should not close upvalues defined directly in the loop body before it
             // this is because the upvalues defined inside the loop body may be captured by a closure defined in the until
             // expression that continue will jump to.
-            loops.back().localOffsetContinue = localStack.size();
+            // but any locals defined in nested blocks or after first continue (which performs validateContinueUntil) do have to be closed
+            // Luwu: from upstream's LuauCompileContinueEagerClose (0.737)
+            if (!loops.back().continueUsed)
+                loops.back().localOffsetContinue = localStack.size();
 
             // if continue was called from this statement, any local defined after this in the loop body should not be accessed by until condition
             // it is sufficient to check this condition once, as if this holds for the first continue, it must hold for all subsequent continues.
@@ -11410,7 +11421,9 @@ struct Compiler
         {
             // we need to re-fold constants in the loop body with the new value; this reuses computed constant values elsewhere in the tree
             locstants[var].type = Constant::Type_Number;
-            locstants[var].valueNumber = from + iv * step;
+            // Luwu: from upstream's LuauCompileLoopUnrollNegativeZero (0.747). The first iteration keeps `from` exactly: `-0 + 0 * step`
+            // would be +0.
+            locstants[var].valueNumber = iv == 0 ? from : from + iv * step;
 
             if (iv == 0)
                 foldConstants(

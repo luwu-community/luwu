@@ -45,7 +45,6 @@ LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuExternTypeGenericMethods)
 LUAU_FASTFLAG(LuwuGenericNominals)
 
-LUAU_FASTFLAG(LuauNoDuplicateBinaryPrefix)
 LUAU_FASTFLAG(LuwuOctalLiterals)
 
 // Clip with DebugLuauReportReturnTypeVariadicWithTypeSuffix
@@ -957,8 +956,6 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_binary")
 
 TEST_CASE_FIXTURE(Fixture, "parse_numbers_error")
 {
-    ScopedFastFlag sff{FFlag::LuauNoDuplicateBinaryPrefix, true};
-
     matchParseError("return 0b123", "Malformed number");
     matchParseError("return 0b0b1", "Malformed number");
     matchParseError("return 123x", "Malformed number");
@@ -3267,20 +3264,14 @@ TEST_CASE_FIXTURE(Fixture, "deprecated_declare_class_syntax_is_rejected")
         end
         )";
 
-    // Luwu: upstream reports "Expected ':' when parsing global variable declaration, got 'Foo'" here, or with
-    // LuauDisallowExternClassInTypeDefinitions off declares an extern type. Luwu names the fix, either way.
-    for (bool disallowExternClass : {true, false})
-    {
-        ScopedFastFlag sff{FFlag::LuauDisallowExternClassInTypeDefinitions, disallowExternClass};
-
-        ParseResult result = tryParse(source);
-        REQUIRE_EQ(result.errors.size(), 1);
-        CHECK_EQ(result.errors[0].getMessage(), "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead");
-        REQUIRE_EQ(result.root->body.size, 1);
-        AstStatDeclareExternType* declaration = result.root->body.data[0]->as<AstStatDeclareExternType>();
-        REQUIRE(declaration);
-        CHECK_EQ(declaration->props.size, 1);
-    }
+    // Luwu: upstream reports "Expected ':' when parsing global variable declaration, got 'Foo'" here. Luwu names the fix.
+    ParseResult result = tryParse(source);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "In Luwu, 'declare class' does not declare an extern type; write 'declare extern type' instead");
+    REQUIRE_EQ(result.root->body.size, 1);
+    AstStatDeclareExternType* declaration = result.root->body.data[0]->as<AstStatDeclareExternType>();
+    REQUIRE(declaration);
+    CHECK_EQ(declaration->props.size, 1);
 }
 
 TEST_CASE_FIXTURE(Fixture, "class_method_properties")

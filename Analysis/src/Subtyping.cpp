@@ -25,13 +25,9 @@ LUAU_FASTFLAGVARIABLE(DebugLuauSubtypingCheckPathValidity)
 LUAU_FASTINTVARIABLE(LuauSubtypingReasoningLimit, 100)
 LUAU_FASTFLAGVARIABLE(LuauSubtypingMissingPropertiesAsNil)
 LUAU_FASTINTVARIABLE(LuauSubtypingIterationLimit, 20000)
-LUAU_FASTFLAG(LuauPropertyModifierMismatchErrors)
-LUAU_FASTFLAGVARIABLE(LuauSubtypeUnionsTogether)
 LUAU_FASTFLAGVARIABLE(LuauDropUnionSubtypeReasoning)
-LUAU_FASTFLAGVARIABLE(LuauDontBindOptionalGenericToNil)
 LUAU_FASTFLAGVARIABLE(LuauImproveUniqueTableWidthSubtyping)
 LUAU_FASTFLAGVARIABLE(LuauSubtypingSkipUnreadReasoning)
-LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAG(LuauIndexerModifierMismatchErrors)
 LUAU_FASTFLAG(LuwuGenericNominals)
 
@@ -903,7 +899,7 @@ SubtypingResult Subtyping::isCovariantWith(SubtypingEnvironment& env, TypeId sub
             result.isCacheable = false;
         }
     }
-    else if (auto p = get2<UnionType, UnionType>(subTy, superTy); FFlag::LuauSubtypeUnionsTogether && p)
+    else if (auto p = get2<UnionType, UnionType>(subTy, superTy))
     {
         result = isCovariantWith(env, p.first, p.second, scope);
         if (!result.isSubtype && !result.normalizationTooComplex)
@@ -958,8 +954,7 @@ SubtypingResult Subtyping::isCovariantWith(SubtypingEnvironment& env, TypeId sub
         result = isCovariantWith(env, p, scope);
     else if (auto p = get2<TableType, TableType>(subTy, superTy))
     {
-        const bool forceCovariantTest =
-            FFlag::LuauBidirectionalInferenceSimplifyTables ? false : uniqueTypes != nullptr && uniqueTypes->contains(subTy);
+        const bool forceCovariantTest = false;
         result = isCovariantWith(env, p.first, p.second, forceCovariantTest, scope);
         if (result.isSubtype && !p.first->indexer && p.second->indexer && p.first->state != TableState::Sealed)
         {
@@ -1645,15 +1640,12 @@ SubtypingResult Subtyping::isCovariantWith(SubtypingEnvironment& env, TypeId sub
 
     SubtypingResult result{false};
 
-    if (FFlag::LuauDontBindOptionalGenericToNil)
+    // First pass: If the union already includes subTy, stop.  Do not
+    // attempt to bind any generics.
+    for (TypeId ty : superUnion)
     {
-        // First pass: If the union already includes subTy, stop.  Do not
-        // attempt to bind any generics.
-        for (TypeId ty : superUnion)
-        {
-            if (follow(ty) == subTy)
-                return {true};
-        }
+        if (follow(ty) == subTy)
+            return {true};
     }
 
     size_t index = 0;
@@ -1692,7 +1684,6 @@ SubtypingResult Subtyping::isCovariantWith(SubtypingEnvironment& env, TypeId sub
 LUAU_NOINLINE
 SubtypingResult Subtyping::isCovariantWith(SubtypingEnvironment& env, const UnionType* subUnion, const UnionType* superUnion, NotNull<Scope> scope)
 {
-    LUAU_ASSERT(FFlag::LuauSubtypeUnionsTogether);
     // A | B | C <: D | E | F
     //
     // ... when all of A, B and C are subtypes of D | E | F. However, we can
@@ -2043,8 +2034,7 @@ SubtypingResult Subtyping::isCovariantWith(
 {
     SubtypingResult result{true};
 
-    // Either this flag is off or `forceCovariantTest` is false.
-    LUAU_ASSERT(!FFlag::LuauBidirectionalInferenceSimplifyTables || !forceCovariantTest);
+    LUAU_ASSERT(!forceCovariantTest);
 
     if (subTable->props.empty() && !subTable->indexer && subTable->state == TableState::Sealed && superTable->indexer)
     {
@@ -2722,17 +2712,11 @@ SubtypingResult Subtyping::isCovariantWith(
         {
             if (subProp.isReadOnly())
             {
-                if (FFlag::LuauPropertyModifierMismatchErrors)
-                    res.andAlso(SubtypingResult{false}.withBothComponent(TypePath::Property::read(name)).withAccessModifierViolation());
-                else
-                    res.andAlso(SubtypingResult{false}.withBothComponent(TypePath::Property::read(name)));
+                res.andAlso(SubtypingResult{false}.withBothComponent(TypePath::Property::read(name)).withAccessModifierViolation());
             }
             else if (subProp.isWriteOnly())
             {
-                if (FFlag::LuauPropertyModifierMismatchErrors)
-                    res.andAlso(SubtypingResult{false}.withBothComponent(TypePath::Property::write(name)).withAccessModifierViolation());
-                else
-                    res.andAlso(SubtypingResult{false}.withBothComponent(TypePath::Property::write(name)));
+                res.andAlso(SubtypingResult{false}.withBothComponent(TypePath::Property::write(name)).withAccessModifierViolation());
             }
         }
     }

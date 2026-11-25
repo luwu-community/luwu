@@ -5,6 +5,7 @@
 #include "lstate.h"
 #include "lstring.h"
 #include "Luau/Common.h"
+#include "Luau/FlagPresets.h"
 
 #include <stdexcept>
 #include <string.h>
@@ -53,6 +54,15 @@ LUA_API int luau_setfflag(const char* name, int value)
         }
     }
     return 0;
+}
+
+LUA_API int luau_setfflagpreset(const char* preset)
+{
+    Luau::FlagPreset parsed;
+    if (!Luau::flagPresetFromName(preset, parsed))
+        return -1;
+
+    return Luau::setFlagPreset(parsed);
 }
 
 LUA_API int luau_getfflag(const char* name)
