@@ -3517,28 +3517,46 @@ LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_Native
     setclassvalue(L, L->top, classdef);
     incr_top(L);
 
+    // Luwu Traits (rfcs/classes/traits.md): the slots only the class value reads (LBC_CLASSMEMBER_STATIC) come last, so
+    // `__init` goes in front of them
+    uint32_t initslot = numslots;
     uint32_t slot = 0;
     for (int idx = 0; idx < count; idx++)
     {
         if (luaR_isnativevaluemetamethod(members[idx]))
             continue;
 
+        bool isstatic = (members[idx].flags & LBC_CLASSMEMBER_STATIC) != 0;
+        if (isstatic && initslot == numslots)
+            initslot = slot++;
+
         LUAU_ASSERT((slot < numfields) == !members[idx].method);
+        LUAU_ASSERT(isstatic == (initslot < slot));
         TString* membername = luaS_new(L, members[idx].name);
         classdef->offsettomember[slot] = membername;
         classdef->memberflags[slot] = members[idx].flags;
         setnvalue(luaH_setstr(L, classdef->memberstooffset, membername), double(slot));
+
+        if (members[idx].fast)
+        {
+            if (!classdef->fastmethods)
+            {
+                classdef->fastmethods = luaM_newarray(L, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
+                for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+                    classdef->fastmethods[i] = NULL;
+            }
+            classdef->fastmethods[slot] = members[idx].fast;
+        }
         slot++;
     }
 
     TString* initname = luaS_newliteral(L, "__init");
-    classdef->offsettomember[numslots] = initname;
-    classdef->memberflags[numslots] = 0;
-    setnvalue(luaH_setstr(L, classdef->memberstooffset, initname), double(numslots));
+    classdef->offsettomember[initslot] = initname;
+    classdef->memberflags[initslot] = 0;
+    setnvalue(luaH_setstr(L, classdef->memberstooffset, initname), double(initslot));
 
     luaR_sealclassshape(L, classdef);
 
-    slot = numfields;
     for (int idx = int(numfields); idx < count; idx++)
     {
         if (luaR_isnativevaluemetamethod(members[idx]))
@@ -3552,18 +3570,6 @@ LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_Native
         }
 
         luaR_addnativemethod(L, classdef, members[idx].name, members[idx].method);
-
-        if (members[idx].fast)
-        {
-            if (!classdef->fastmethods)
-            {
-                classdef->fastmethods = luaM_newarray(L, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
-                for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
-                    classdef->fastmethods[i] = NULL;
-            }
-            classdef->fastmethods[slot] = members[idx].fast;
-        }
-        slot++;
     }
 
     if (init)
