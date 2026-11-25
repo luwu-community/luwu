@@ -3,6 +3,7 @@
 #include "Luau/BuiltinDefinitions.h"
 
 #include "Fixture.h"
+#include "Typewriter.h"
 #include "ScopedFlags.h"
 
 #include "doctest.h"
@@ -3255,6 +3256,14 @@ return f
     CHECK_EQ(warnings[0].text, "This line continues the expression above it as 'y - x'; to start a new statement here, end line 4 with ';'");
     CHECK_EQ(warnings[0].location, Location(Position(4, 9), Position(4, 10)));
     CHECK_EQ(warnings[1].text, "This line continues the expression above it as a call to 'n'; to start a new statement here, end line 6 with ';'");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "AmbiguousContinuationWaitsForTheOperand")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    // `local b = a -` has no right operand while it's typed, and the next line's `local` isn't one
+    checkTypewriting(*this, "local a = 1\n", "local b = a - a", "\nlocal after = 2\nprint(after)\n");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "AmbiguousContinuationIsOnlyForLuwuFiles")
