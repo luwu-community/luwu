@@ -70,6 +70,8 @@ LUAU_FASTFLAGVARIABLE(LuauTrackPrefixLocal)
 LUAU_FASTFLAGVARIABLE(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExternTypeGenericMethods)
 LUAU_FASTFLAGVARIABLE(LuwuGenericNominals)
+// Luwu Octal Literals (rfcs/octal-literals.md): `0o755` number literals. With the flag off they're a "Malformed number" parse error like in upstream.
+LUAU_FASTFLAGVARIABLE(LuwuOctalLiterals)
 
 // Clip with DebugLuauReportReturnTypeVariadicWithTypeSuffix
 bool luau_telemetry_parsed_return_type_variadic_with_type_suffix = false;
@@ -176,6 +178,7 @@ const LuwuFeature kDestructuringFeature{"destructuring", /* plural= */ false, "L
 const LuwuFeature kDotTableFeature{"'.{...}' table constructors", /* plural= */ true, "LuwuDestructuring"};
 const char* const kDotTableMissingBraceError = "Expected '{' after '.': '.{x, y}' builds a table from the locals 'x' and 'y'";
 const char* const kDotTableFieldError = "Fields in '.{...}' are names or 'key = value'; use '{...}' for list items and '[key]' fields";
+const LuwuFeature kOctalLiteralsFeature{"octal number literals", /* plural= */ true, "LuwuOctalLiterals"};
 
 // Luwu Classes (rfcs/classes): class members may not be named after the keywords that appear in the
 // class header or in front of a member. This keeps those positions unambiguous, and leaves room to give
@@ -9362,9 +9365,29 @@ AstExpr* Parser::parseAssertionExpr()
         return expr;
 }
 
+// Luwu Octal Literals (rfcs/octal-literals.md): `0o` or `0O` followed by at least one more character
+static bool hasOctalPrefix(const char* data)
+{
+    return data[0] == '0' && (data[1] == 'o' || data[1] == 'O') && data[2];
+}
+
+// Luwu Octal Literals (rfcs/octal-literals.md): the result for a literal in `base` past 2^64
+static ConstantNumberParseResult integerOverflow(int base)
+{
+    switch (base)
+    {
+    case 2:
+        return ConstantNumberParseResult::BinOverflow;
+    case 8:
+        return ConstantNumberParseResult::OctOverflow;
+    default:
+        return ConstantNumberParseResult::HexOverflow;
+    }
+}
+
 static ConstantNumberParseResult parseInteger(double& result, const char* data, int base)
 {
-    LUAU_ASSERT(base == 2 || base == 16);
+    LUAU_ASSERT(base == 2 || base == 8 || base == 16);
 
     // Some libc implementations accept an optional 0b prefix for base-2 parsing.
     // Binary literals have already had their leading 0b stripped by us.
@@ -9387,7 +9410,7 @@ static ConstantNumberParseResult parseInteger(double& result, const char* data, 
         value = strtoull(data, &end, base);
 
         if (errno == ERANGE)
-            return base == 2 ? ConstantNumberParseResult::BinOverflow : ConstantNumberParseResult::HexOverflow;
+            return integerOverflow(base);
     }
 
     if (value >= (1ull << 53) && static_cast<unsigned long long>(result) != value)
@@ -9401,6 +9424,10 @@ static ConstantNumberParseResult parseDouble(double& result, const char* data)
     // binary literal
     if (data[0] == '0' && (data[1] == 'b' || data[1] == 'B') && data[2])
         return parseInteger(result, data + 2, 2);
+
+    // Luwu Octal Literals (rfcs/octal-literals.md): octal literal
+    if (FFlag::LuwuOctalLiterals && hasOctalPrefix(data))
+        return parseInteger(result, data + 2, 8);
 
     // hexadecimal literal
     if (data[0] == '0' && (data[1] == 'x' || data[1] == 'X') && data[2])
@@ -13061,6 +13088,9 @@ AstExpr* Parser::parseNumber()
 
         if (result == ConstantNumberParseResult::Malformed)
             return reportExprError(start, {}, "Malformed number");
+
+        if (FFlag::LuwuOctalLiterals && hasOctalPrefix(scratchData.c_str()))
+            checkLuwuFeature(start, kOctalLiteralsFeature, /* enabled= */ true);
 
         AstExprConstantNumber* node = allocator.alloc<AstExprConstantNumber>(start, value, result);
         if (options.storeCstData)
