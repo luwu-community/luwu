@@ -104,6 +104,10 @@ public:
 
     void patchAux(size_t targetAux, int32_t newValue);
 
+    // Luwu: replaces a finished function with one that only returns, for a function whose closures are never called.
+    // Its id stays, so closure instructions and child lists don't change.
+    void stubFunction(uint32_t fid);
+
     void foldJumps();
     std::vector<uint32_t> expandJumps();
 
@@ -126,6 +130,11 @@ public:
 
     void addDebugRemark(const char* format, ...) LUAU_PRINTF_ATTR(2, 3);
 
+    // Luwu pretty bytecode dumps: the instructions emitted until popInlinedDumpScope are an inlined call of the function
+    // on source lines firstLine to lastLine. A pretty dump (Dump_Pretty) indents them under the call.
+    void pushInlinedDumpScope(int firstLine, int lastLine);
+    void popInlinedDumpScope();
+
     void finalize();
 
     enum DumpFlags
@@ -137,6 +146,9 @@ public:
         Dump_Remarks = 1 << 4,
         Dump_Types = 1 << 5,
         Dump_Constants = 1 << 6,
+        // Luwu pretty bytecode dumps: indents a function's lines under its header, and an inlined call's lines under the
+        // call. Source lines are indented relative to the function they're in instead of the file.
+        Dump_Pretty = 1 << 7,
     };
 
     void setDumpFlags(uint32_t flags)
@@ -352,6 +364,24 @@ protected:
     std::vector<std::pair<uint32_t, uint32_t>> debugRemarks;
     std::string debugRemarkBuffer;
 
+    // Luwu pretty bytecode dumps: an inlined call in the function being built. Scope 0 is the function itself.
+    struct InlinedDumpScope
+    {
+        uint32_t parent = 0;
+        uint32_t depth = 0;
+        // the lines of the inlined function, or 0 for the function being built
+        int firstLine = 0;
+        int lastLine = 0;
+    };
+
+    // Luwu pretty bytecode dumps: only recorded for a pretty dump
+    std::vector<InlinedDumpScope> inlinedDumpScopes = {InlinedDumpScope{}};
+    uint32_t currentInlinedDumpScope = 0;
+    // the instruction each scope starts or ends at, and the scope the instructions from there on are in
+    std::vector<std::pair<uint32_t, uint32_t>> inlinedDumpScopeChanges;
+    // the scope each of debugRemarks was added in
+    std::vector<uint32_t> debugRemarkScopes;
+
     BytecodeEncoder* encoder = nullptr;
     std::string bytecode;
 
@@ -372,6 +402,8 @@ protected:
     virtual uint8_t validateClosure(int32_t cid) const;
 
     std::string dumpCurrentFunction(std::vector<int>& dumpinstoffs) const;
+    void appendDumpIndent(std::string& result, uint32_t scope) const;
+    void appendDumpSourceLine(std::string& result, int line, uint32_t scope) const;
     virtual void dumpConstant(std::string& result, int k, bool detailed) const;
     void dumpInstruction(const uint32_t* opcode, std::string& result, int targetLabel) const;
 

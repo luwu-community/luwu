@@ -18,3 +18,7 @@ LUAU_FASTFLAGVARIABLE(LuwuTableComprehensions)
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` and the `is` and `implements` patterns (in
 // progress). While it is on, the compiler emits WIP bytecode (version 200), which has LOP_JUMPXTYPE and LOP_JUMPXMATCH.
 LUAU_FASTFLAGVARIABLE(DebugLuwuMatchExpressions)
+
+// Luwu: the `@[inline(reason)]` attribute. The compiler weighs a marked function by a third of its size at its call sites,
+// and a call it still can't inline is a compile error at the call. In progress, so a Debug flag.
+LUAU_FASTFLAGVARIABLE(DebugLuwuEncourageInline)

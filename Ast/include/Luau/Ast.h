@@ -248,6 +248,8 @@ public:
         Lint,
         // Luwu: `@nodiscard` or `@[nodiscard("reason")]` on a function: calling it without using its result is a mistake
         Nodiscard,
+        // Luwu: `@[inline(reason)]`, which asks the compiler to inline every call it can (DebugLuwuEncourageInline)
+        Inline,
         Unknown
     };
 
