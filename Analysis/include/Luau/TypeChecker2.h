@@ -478,6 +478,14 @@ private:
         const Location& location
     );
     bool isInitWritingItsSelf(const ExternType* cls, const AstExpr* objectExpr) const;
+    void reportSharedFieldWrite(
+        const ExternType* cls,
+        const AstExpr* objectExpr,
+        const std::string& prop,
+        const Location& location,
+        const char* separator = "."
+    );
+    void checkScopedMemberAccess(AstExprIndexName* indexName, const ExternType* trait, ValueContext context);
     // If classTy's `__init` is `private`, and `location` falls outside of that class's own
     // definition block, report an error.
     void checkPrivateConstructorAccess(TypeId classTy, const Location& location);

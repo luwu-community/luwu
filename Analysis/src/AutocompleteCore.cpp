@@ -4,6 +4,7 @@
 
 #include "Luau/Ast.h"
 #include "Luau/AstQuery.h"
+#include "Luau/ClassMemberNames.h"
 #include "Luau/AutocompleteTypes.h"
 
 #include "Luau/BuiltinDefinitions.h"
@@ -773,7 +774,8 @@ static void autocompleteProps(
     {
         for (const auto& [name, prop] : props)
         {
-            if (onObject && (name == "__create" || name == "__implemented"))
+            const ClassMemberName* special = onObject ? findClassMemberName(name.c_str()) : nullptr;
+            if (special && special->kind == ClassMemberNameKind::TraitHook)
                 continue;
 
             // We are walking up the class hierarchy, so if we encounter a property that we have
@@ -2439,27 +2441,6 @@ static void autocompleteMissingTraitMembers(const ScopePtr& scope, AstStatClass*
     }
 }
 
-// Luwu Classes (rfcs/classes): the metamethods a class or trait may define, with the parameters and returns they're
-// usually written with
-static const char* const kMetamethodSignatures[][2] = {
-    {"__tostring", "(self): string"},
-    {"__eq", "(self, other): boolean"},
-    {"__lt", "(self, other): boolean"},
-    {"__le", "(self, other): boolean"},
-    {"__len", "(self): number"},
-    {"__add", "(self, other)"},
-    {"__sub", "(self, other)"},
-    {"__mul", "(self, other)"},
-    {"__div", "(self, other)"},
-    {"__idiv", "(self, other)"},
-    {"__mod", "(self, other)"},
-    {"__pow", "(self, other)"},
-    {"__unm", "(self)"},
-    {"__concat", "(self, other)"},
-    {"__call", "(self, ...)"},
-    {"__iter", "(self)"},
-};
-
 // Luwu Classes (rfcs/classes): whether a member or primary constructor parameter is written with `public` or `private`, which
 // means every one needs one
 static bool usesAccessSpecifiers(const AstStatClass* classStat)
@@ -2544,14 +2525,18 @@ static void autocompleteMissingFunctions(
         return;
 
     bool final = typing && typing->finalLocation;
-    if (!final)
+    // Luwu Classes (rfcs/classes): the metamethods a class or trait may define (ClassMemberNames.h)
+    size_t count = 0;
+    const ClassMemberName* specials = classMemberNames(&count);
+    for (size_t i = 0; i < count && !final; i++)
     {
-        for (const auto& [metamethod, signature] : kMetamethodSignatures)
-            add(metamethod, signature, nullptr, "function ");
+        if (specials[i].kind == ClassMemberNameKind::Metamethod && specials[i].signature)
+            add(specials[i].name, specials[i].signature, nullptr, "function ");
     }
 
+    const ClassMemberName* init = findClassMemberName("__init");
     if (!classStat->isTrait && !classStat->primaryConstructor)
-        add("__init", "(self)", nullptr, "function ");
+        add(init->name, init->signature, nullptr, "function ");
 
     // Luwu object notation: how a data file holds a class that implements `luwon.data`
     if (!classStat->isTrait && !final && implementsLuwonData(classStat->implements))
@@ -2561,10 +2546,12 @@ static void autocompleteMissingFunctions(
     }
 
     // Luwu Traits (rfcs/classes/traits.md): a trait's factory, and its hook for each implementing class, which is always final
+    const ClassMemberName* create = findClassMemberName("__create");
+    const ClassMemberName* implemented = findClassMemberName("__implemented");
     if (classStat->isTrait && !classStat->primaryConstructor && !final)
-        add("__create", "(...)", nullptr, "function ");
+        add(create->name, create->signature, nullptr, "function ");
     if (classStat->isTrait && (!typing || final))
-        add("__implemented", "(cls)", nullptr, "final function ");
+        add(implemented->name, implemented->signature, nullptr, "final function ");
 }
 
 // Luwu Classes (rfcs/classes): the class (or trait) and the method being named, when the cursor is after a member's
@@ -3704,11 +3691,20 @@ AutocompleteResult autocomplete_(
         ret["private"] = {AutocompleteEntryKind::Keyword};
         ret["function"] = {AutocompleteEntryKind::Keyword};
 
-        // Luwu Traits (rfcs/classes/traits.md): a trait's members may be expected or final
+        // Luwu Traits (rfcs/classes/traits.md): a member's placement, and in a trait, whether it's expected or final and the
+        // placements only a trait has
+        if (FFlag::LuwuTraits)
+        {
+            ret["shared"] = {AutocompleteEntryKind::Keyword};
+            ret["static"] = {AutocompleteEntryKind::Keyword};
+        }
+
         if (classStat->isTrait)
         {
             ret["expect"] = {AutocompleteEntryKind::Keyword};
             ret["final"] = {AutocompleteEntryKind::Keyword};
+            ret["traitonly"] = {AutocompleteEntryKind::Keyword};
+            ret["scoped"] = {AutocompleteEntryKind::Keyword};
         }
 
         // Luwu Traits (rfcs/classes/traits.md): on the declaration's own line, before its first member, the next word may

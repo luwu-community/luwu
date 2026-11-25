@@ -585,6 +585,7 @@ static void addbundleclass(lua_State* L)
         {"__len", bundlelen<Class>, 0, NULL},
         {"__iter", bundleiter<Class>, 0, NULL},
         {"__tostring", bundletostring<Class>, 0, NULL},
+        {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC, NULL},
     };
 
     LuauClass* classdef = luaR_newnativeclass(L, kBundleClassNames[Class], members, int(sizeof(members) / sizeof(members[0])), bundleinit);
@@ -678,7 +679,7 @@ static const luaL_Reg kBundleFunctions[] = {
     {NULL, NULL},
 };
 
-static const uint8_t kPrivateField = LBC_CLASSMEMBER_PRIVATE;
+static const uint16_t kPrivateField = LBC_CLASSMEMBER_PRIVATE;
 
 // OrderedMap: a map in an order the user decides. Every entry has an id that stays the same while it exists, the
 // index of its key and value. Lookups go key, id, value. The order is an array of ids and each id's position is kept
@@ -1250,6 +1251,7 @@ static const luaR_NativeMember kOrderedMapMembers[] = {
     {"at", orderedmapat, 0},
     {"__len", orderedmaplen, 0},
     {"__iter", orderedmapiter, 0},
+    {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC},
 };
 
 // Vec and VecDeque store their entries in a storage block (LuauStorage) from the first value on. Its capacity is a power
@@ -1841,6 +1843,7 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     // Luwu Integers (rfcs/integers.md)
     {"from", containerfrom<LUWU_BUILTIN_VECDEQUE>, 0},
     {"tostring", vecdequebytes, 0},
+    {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC},
 };
 
 // Vec: a growable array. Its head stays 0, so position `p` is slot `p - 1`.
@@ -1993,6 +1996,7 @@ static const luaR_NativeMember kVecMembers[] = {
     // Luwu Integers (rfcs/integers.md)
     {"from", containerfrom<LUWU_BUILTIN_VEC>, 0},
     {"tostring", vecbytes, 0},
+    {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC},
 };
 
 bool luaR_collectionprep(lua_State* L, StkId ra)

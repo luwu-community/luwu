@@ -3,7 +3,10 @@
 
 #include "Luau/Common.h"
 
+#include <cstring>
+
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuTraits)
 
 namespace Luau
 {
@@ -1757,6 +1760,8 @@ void AstStatClass::visit(AstVisitor* visitor)
                     {
                         visitAttributes(prop.attributes, visitor);
 
+                        if (prop.qualifiedTrait)
+                            prop.qualifiedTrait->visit(visitor);
                         if (prop.ty)
                             prop.ty->visit(visitor);
                         if (prop.defaultValue)
@@ -1787,6 +1792,81 @@ std::string toString(AstClassMemberVisibility visibility)
     default:
         return "unknown";
     }
+}
+
+const char* toString(AstClassMemberPlacement placement)
+{
+    switch (placement)
+    {
+    case AstClassMemberPlacement::Shared:
+        return "shared";
+    case AstClassMemberPlacement::Static:
+        return "static";
+    case AstClassMemberPlacement::TraitOnly:
+        return "traitonly";
+    case AstClassMemberPlacement::Default:
+        break;
+    }
+
+    return nullptr;
+}
+
+ClassMemberNamePlacement toClassMemberNamePlacement(AstClassMemberPlacement placement)
+{
+    switch (placement)
+    {
+    case AstClassMemberPlacement::Static:
+        return ClassMemberNamePlacement::Static;
+    case AstClassMemberPlacement::TraitOnly:
+        return ClassMemberNamePlacement::TraitOnly;
+    case AstClassMemberPlacement::Shared:
+    case AstClassMemberPlacement::Default:
+        break;
+    }
+
+    return ClassMemberNamePlacement::Shared;
+}
+
+AstClassMemberPlacement effectivePlacement(const AstClassMethod& method)
+{
+    if (method.placement != AstClassMemberPlacement::Default)
+        return method.placement;
+
+    // with the placement modifiers off, objects read every function of a class
+    if (!FFlag::LuwuTraits)
+        return AstClassMemberPlacement::Shared;
+
+    bool takesClass = method.function->args.size > 0 && method.function->args.data[0]->name == "Self";
+
+    if (const ClassMemberName* special = findClassMemberName(method.functionName.value))
+    {
+        // the class value's own metamethod takes the class as `Self`
+        if (special->onValues && takesClass)
+            return AstClassMemberPlacement::Static;
+
+        switch (special->placement)
+        {
+        case ClassMemberNamePlacement::Static:
+            return AstClassMemberPlacement::Static;
+        case ClassMemberNamePlacement::TraitOnly:
+            return AstClassMemberPlacement::TraitOnly;
+        case ClassMemberNamePlacement::Shared:
+            return AstClassMemberPlacement::Shared;
+        }
+    }
+
+    bool takesSelf = method.function->args.size > 0 && method.function->args.data[0]->name == "self";
+    return takesSelf ? AstClassMemberPlacement::Shared : AstClassMemberPlacement::Static;
+}
+
+bool isValueMetamethod(const AstClassMethod& method)
+{
+    const ClassMemberName* special = findClassMemberName(method.functionName.value);
+    if (!special || !special->onValues || method.qualifiedTrait || method.scopedLocation)
+        return false;
+
+    AstClassMemberPlacement placement = effectivePlacement(method);
+    return placement == AstClassMemberPlacement::Static || placement == AstClassMemberPlacement::TraitOnly;
 }
 
 template<>

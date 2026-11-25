@@ -188,7 +188,7 @@ std::optional<CompTimeBcFunction> fromFunctionBytecode(std::string bytecode, std
             for (uint32_t j = 0; j < propertyCount; ++j)
             {
                 shape.propertyNames.push_back(readVarInt(data, offset));
-                shape.propertyFlags.push_back(uint8_t(readVarInt(data, offset)));
+                shape.propertyFlags.push_back(uint16_t(readVarInt(data, offset)));
                 shape.propertyDefaults.push_back(
                     (shape.propertyFlags.back() & LBC_CLASSMEMBER_CONSTDEFAULT) ? int32_t(readVarInt(data, offset)) : -1
                 );
@@ -200,7 +200,7 @@ std::optional<CompTimeBcFunction> fromFunctionBytecode(std::string bytecode, std
             for (uint32_t j = 0; j < methodCount; ++j)
             {
                 shape.methodNames.push_back(readVarInt(data, offset));
-                shape.methodFlags.push_back(uint8_t(readVarInt(data, offset)));
+                shape.methodFlags.push_back(uint16_t(readVarInt(data, offset)));
             }
 
             fn.classShapes.push_back(std::move(shape));

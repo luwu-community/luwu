@@ -81,11 +81,19 @@ static int class_fields(lua_State* L)
         luaL_argerror(L, 1, "class or object expected");
     }
 
+    // Luwu opaque values: an opaque class doesn't list its members
+    if (lclass->isopaque)
+        luaL_error(L, "can't list the fields of class '%s': it's opaque", getstr(lclass->name));
+
     lua_createtable(L, 0, lclass->numberofinstancemembers);
 
     bool complete = true;
     for (uint32_t offset = 0; offset < lclass->numberofinstancemembers; offset++)
     {
+        // Luwu Traits (rfcs/classes/traits.md): a trait's per-object scoped field has no name, and is no field of the class
+        if (!lclass->offsettomember[offset])
+            continue;
+
         if (lclass->memberflags[offset] & LBC_CLASSMEMBER_PRIVATE)
         {
             complete = false;
@@ -337,12 +345,14 @@ static void pushnewmember(lua_State* L, LuauClass* cls, const MemberInfo& info)
 // read through the class has none.
 static void pushnewclassmember(lua_State* L, LuauClass* cls, uint32_t offset, const LuauObject* object)
 {
-    uint8_t flags = cls->memberflags[offset];
+    uint16_t flags = cls->memberflags[offset];
     bool isfield = offset < cls->numberofinstancemembers;
+    // Luwu Traits (rfcs/classes/traits.md): a `shared` or `static` field is const only when it says so, like an object's
+    bool isclassfield = (flags & LBC_CLASSMEMBER_CLASSFIELD) != 0;
 
     MemberInfo info;
     info.name = cls->offsettomember[offset];
-    info.isconst = isfield && (flags & LBC_CLASSMEMBER_CONST) != 0;
+    info.isconst = (isfield || isclassfield) && (flags & LBC_CLASSMEMBER_CONST) != 0;
     info.isfinal = (flags & LBC_CLASSMEMBER_FINAL) != 0;
     info.isprivate = (flags & LBC_CLASSMEMBER_PRIVATE) != 0;
     info.position = isfield ? positionof(cls, offset) : 0;

@@ -2169,7 +2169,7 @@ void BytecodeBuilder::validateInstructions() const
             {
                 VREGRANGE(LUAU_INSN_C(insn), int(insns[i + 1]) * 2);
             }
-            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LBC_NEWCLASSMEMBER_ISQUALIFIED(LUAU_INSN_B(insn)))
             {
                 VREGRANGE(LUAU_INSN_C(insn), 2);
                 VCONST(insns[i + 1], String);
@@ -2180,7 +2180,9 @@ void BytecodeBuilder::validateInstructions() const
             }
             else
             {
-                LUAU_ASSERT(LUAU_INSN_B(insn) == 0);
+                LUAU_ASSERT(
+                    LUAU_INSN_B(insn) == 0 || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_VALUEMETAMETHOD
+                );
                 VREG(LUAU_INSN_C(insn));
                 VCONST(insns[i + 1], String);
             }
@@ -2290,6 +2292,7 @@ void BytecodeBuilder::validateInstructions() const
             break;
 
         case LOP_GETQUALIFIED:
+        case LOP_SETQUALIFIED:
             VREG(LUAU_INSN_A(insn));
             VREG(LUAU_INSN_B(insn));
             VREG(LUAU_INSN_C(insn));
@@ -3097,9 +3100,17 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         {
             formatAppend(result, "NEWCLASSMEMBER R%d IMPLEMENTS R%d %d\n", LUAU_INSN_A(insn), LUAU_INSN_C(insn), int(*code));
         }
-        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY || LBC_NEWCLASSMEMBER_ISQUALIFIED(LUAU_INSN_B(insn)))
         {
-            const char* form = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY ? "TRAITCOPY" : "QUALIFIED";
+            const char* form = "QUALIFIED";
+            if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_TRAITCOPY)
+                form = "TRAITCOPY";
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDFIELD)
+                form = "QUALIFIEDFIELD";
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDSHARED)
+                form = "QUALIFIEDSHARED";
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIEDSTATIC)
+                form = "QUALIFIEDSTATIC";
             formatAppend(result, "NEWCLASSMEMBER R%d %s R%d R%d [", LUAU_INSN_A(insn), form, LUAU_INSN_C(insn), LUAU_INSN_C(insn) + 1);
             dumpConstant(result, *code, false);
             result.append("]\n");
@@ -3107,6 +3118,13 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_CONSTRUCTOR)
         {
             formatAppend(result, "NEWCLASSMEMBER R%d CONSTRUCTOR R%d\n", LUAU_INSN_A(insn), LUAU_INSN_C(insn));
+        }
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_VALUEMETAMETHOD)
+        {
+            const char* form = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD ? "FIELD" : "VALUEMETAMETHOD";
+            formatAppend(result, "NEWCLASSMEMBER R%d %s R%d [", LUAU_INSN_A(insn), form, LUAU_INSN_C(insn));
+            dumpConstant(result, *code, false);
+            result.append("]\n");
         }
         else
         {
@@ -3122,13 +3140,23 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         break;
 
     case LOP_CHECKSELFCLASS:
+    {
         if (LUAU_INSN_B(insn) == LBC_SELFCLASS_OWNER)
             formatAppend(result, "CHECKSELFCLASS R%d OWNER K%d [", LUAU_INSN_A(insn), *code);
         else
             formatAppend(result, "CHECKSELFCLASS R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code);
         dumpConstant(result, int(*code++), false);
-        formatAppend(result, "]%s\n", LUAU_INSN_C(insn) ? " SELF" : "");
+
+        // Luwu Traits (rfcs/classes/traits.md): a class method's check is marked CLASS
+        const char* form = "";
+        if (LUAU_INSN_C(insn) == LBC_SELFCLASS_CLASSMETHOD)
+            form = " CLASS";
+        else if (LUAU_INSN_C(insn) != 0)
+            form = " SELF";
+
+        formatAppend(result, "]%s\n", form);
         break;
+    }
 
     case LOP_JUMPXTYPE:
         formatAppend(result, "JUMPXTYPE R%d L%d%s ['%s']\n", LUAU_INSN_A(insn), targetLabel, LUAU_INSN_AUX_NOT(*code) ? " NOT" : "", getJumpxTypeName(*code & 0xff));
@@ -3209,6 +3237,13 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_GETQUALIFIED:
         formatAppend(result, "GETQUALIFIED R%d R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), *code);
+        dumpConstant(result, *code, false);
+        result.append("]\n");
+        code++;
+        break;
+
+    case LOP_SETQUALIFIED:
+        formatAppend(result, "SETQUALIFIED R%d R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), *code);
         dumpConstant(result, *code, false);
         result.append("]\n");
         code++;

@@ -73,8 +73,8 @@ inline bool isLuwuOnlyGlobal(std::string_view name)
     // Luwu try expressions: options and results
     if (name == "Ok" || name == "Err" || name == "Some" || name == "None")
         return true;
-    // Luwu error variants (rfcs/integers.md)
-    if (name == "Error")
+    // Luwu structured runtime errors: the error variants and the globals that raise them
+    if (name == "Error" || name == "unreachable" || name == "todo")
         return true;
     return name == "collections" || name == "bundle";
 }

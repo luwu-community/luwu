@@ -4,6 +4,7 @@
 #include "Luau/ApplyTypeFunction.h"
 #include "Luau/Ast.h"
 #include "Luau/AstQuery.h"
+#include "Luau/ClassMemberNames.h"
 #include "Luau/AstUtils.h"
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/BuiltinTypeFunctions.h"
@@ -15,6 +16,7 @@
 #include "Luau/Def.h"
 #include "Luau/DenseHash.h"
 #include "Luau/Instantiation2.h"
+#include "Luau/IntegerModes.h"
 #include "Luau/IterativeTypeVisitor.h"
 #include "Luau/ModuleResolver.h"
 #include "Luau/Normalize.h"
@@ -48,6 +50,7 @@ LUAU_FASTINTVARIABLE(LuauPrimitiveInferenceInTableLimit, 500)
 LUAU_FASTFLAGVARIABLE(LuauDisallowRedefiningBuiltinTypes)
 LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAGVARIABLE(LuauTidyTypePrototyping)
 LUAU_FASTFLAGVARIABLE(LuauDoNotEmplaceAnnotatedType)
@@ -68,7 +71,6 @@ LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 namespace Luau
 {
 
-bool doesCallError(const AstExprCall* call);        // TypeInfer.cpp
 const AstStat* getFallthrough(const AstStat* node); // TypeInfer.cpp
 
 // Luwu Traits (rfcs/classes/traits.md): whether `record` is a trait's
@@ -165,11 +167,60 @@ static std::optional<TypePackId> variadicTailOf(const FunctionType* function)
     return std::nullopt;
 }
 
-// Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get: its expected constructor,
-// its factory and its `__implemented` hook
+// Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get by their name: its expected
+// constructor, its factory and its `__implemented` hook (ClassMemberName::traitAlone)
 static bool belongsToTraitAlone(const std::string& name)
 {
-    return name == "__init" || name == "__create" || name == "__implemented";
+    const ClassMemberName* special = findClassMemberName(name.c_str());
+    return special && special->traitAlone;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait's members that implementing classes don't get, with its `traitonly` ones
+static bool belongsToTraitAlone(const ExternType::TraitInfo& info, const std::string& name)
+{
+    return belongsToTraitAlone(name) || info.traitOnly.count(name) > 0;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): whether a field is each object's, rather than one value on the class or trait
+// (`shared`, `static`, `traitonly`) or one scoped to a trait
+static bool isObjectField(const AstClassProperty& prop)
+{
+    return prop.placement == AstClassMemberPlacement::Default && !prop.scopedLocation && !prop.qualifiedTrait;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the map of a class's member types that has the members of this placement. A static
+// member may share its name with an object field, so the static ones have a separate map.
+static DenseHashMap<AstName, TypeId>& memberTypesFor(
+    AstClassMemberPlacement placement,
+    DenseHashMap<AstName, TypeId>& memberTypes,
+    DenseHashMap<AstName, TypeId>& staticMemberTypes
+)
+{
+    return placement == AstClassMemberPlacement::Static ? staticMemberTypes : memberTypes;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): where a class or trait declares a member `name` it provides, rather than expects
+static std::optional<Location> providedMemberLocation(const AstStatClass* decl, const std::string& name)
+{
+    for (const AstClassMember& member : decl->members)
+    {
+        const AstClassProperty* prop = member.get_if<AstClassProperty>();
+        if (prop && !prop->expectLocation && !prop->qualifiedTrait && name == prop->name.value)
+            return prop->nameLocation;
+
+        const AstClassMethod* method = member.get_if<AstClassMethod>();
+        if (method && !method->expectLocation && !method->qualifiedTrait && name == method->functionName.value)
+            return method->nameLocation;
+    }
+
+    return std::nullopt;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): whether objects can read a class's or trait's function. A method is shared and a
+// function without `self` static, unless it says otherwise; a metamethod is found on its own.
+static bool isClassFunctionReadableThroughObjects(const AstClassMethod& method)
+{
+    return !method.scopedLocation && effectivePlacement(method) == AstClassMemberPlacement::Shared;
 }
 
 // Luwu Traits (rfcs/classes/traits.md): whether a method leaves out a parameter or return annotation, which an overridden
@@ -309,9 +360,8 @@ static AstType* variadicParameterAnnotation(AstTypePack* tail)
 
 static bool isValidClassMetamethod(const Name& name)
 {
-    return name == "__call" || name == "__concat" || name == "__unm" || name == "__add" || name == "__sub" || name == "__mul" || name == "__div" ||
-           name == "__mod" || name == "__pow" || name == "__tostring" || name == "__eq" || name == "__lt" || name == "__le" || name == "__iter" ||
-           name == "__len" || name == "__idiv" || isPushOrPopMetamethod(name);
+    const ClassMemberName* special = findClassMemberName(name.c_str());
+    return (special && special->kind == ClassMemberNameKind::Metamethod) || isPushOrPopMetamethod(name);
 }
 
 static std::optional<AstExpr*> matchRequire(const AstExprCall& call)
@@ -1470,7 +1520,9 @@ void ConstraintGenerator::prototypeClass(
     ExternType::Props props;
     TableType::Props instanceMetatableProps;
     DenseHashMap<AstName, TypeId> memberTypes{AstName{""}};
+    DenseHashMap<AstName, TypeId> staticMemberTypes{AstName{""}};
     DenseHashMap<AstName, TypeId> classValueMethodTypes{AstName{""}};
+    DenseHashMap<AstName, TypeId> valueMetamethodTypes{AstName{""}};
     const bool isGenericClass = FFlag::LuwuGenericNominals &&
                                 (classDecl->generics.size != 0 || classDecl->genericPacks.size != 0);
     // Names of `props` entries that are actual fields (AstClassProperty), not methods.
@@ -1493,7 +1545,8 @@ void ConstraintGenerator::prototypeClass(
     auto restatedInBody = [&](const AstName& name)
     {
         for (const AstClassMember& member : classDecl->members)
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->name == name)
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>();
+                prop && prop->name == name && isObjectField(*prop))
                 return true;
 
         return false;
@@ -1505,10 +1558,39 @@ void ConstraintGenerator::prototypeClass(
             overloaded{
                 [&](const AstClassProperty& classProp)
                 {
-                    if (memberTypes.contains(classProp.name))
+                    // Luwu Traits (rfcs/classes/traits.md): `Animal.species = value` isn't a member of the class
+                    // (checkQualifiedField)
+                    if (classProp.qualifiedTrait)
                         return;
 
-                    auto [propertyType, _] = memberTypes.try_insert(classProp.name, arena->addType(BlockedType{}));
+                    DenseHashMap<AstName, TypeId>& types = memberTypesFor(classProp.placement, memberTypes, staticMemberTypes);
+                    if (types.contains(classProp.name))
+                        return;
+
+                    auto [propertyType, _] = types.try_insert(classProp.name, arena->addType(BlockedType{}));
+
+                    // Luwu Traits (rfcs/classes/traits.md): a `shared`, `static` or `traitonly` field is one value on the class
+                    // value, written through it unless it's const. A shared one is read through objects too, but not written.
+                    // The trait's value has its scoped fields' values too, which objects only reach qualified.
+                    if (!isObjectField(classProp))
+                    {
+                        Property classValueProp = Property::rw(propertyType);
+                        classValueProp.location = classProp.nameLocation;
+                        applyDeprecatedAttribute(classValueProp, classProp.attributes);
+                        classValueProp.isPrivate = classProp.visibility == AstClassMemberVisibility::Private;
+                        classValueProp.isFinal = classDecl->isTrait && classProp.finalLocation.has_value();
+                        classValueProp.isConst = classProp.isConst || classValueProp.isFinal;
+                        staticProps[classProp.name.value] = classValueProp;
+
+                        if (classProp.placement == AstClassMemberPlacement::Shared && !classProp.scopedLocation)
+                        {
+                            Property objectProp = classValueProp;
+                            objectProp.isSharedField = true;
+                            props[classProp.name.value] = objectProp;
+                        }
+                        return;
+                    }
+
                     auto& p = props[classProp.name.value];
                     instanceFieldNames.insert(classProp.name.value);
 
@@ -1546,12 +1628,21 @@ void ConstraintGenerator::prototypeClass(
                 },
                 [&](const AstClassMethod& method)
                 {
+                    // Luwu Traits (rfcs/classes/traits.md): the value's own metamethod is in the class value's metatable
+                    if (isValueMetamethod(method))
+                    {
+                        if (!method.qualifiedTrait)
+                            valueMetamethodTypes.try_insert(method.functionName, arena->addType(BlockedType{}));
+                        return;
+                    }
+
                     // Luwu Traits (rfcs/classes/traits.md): a qualified implementation isn't a member of the class
                     // (checkQualifiedImplementation)
-                    if (method.qualifiedTrait || memberTypes.contains(method.functionName))
+                    DenseHashMap<AstName, TypeId>& types = memberTypesFor(method.placement, memberTypes, staticMemberTypes);
+                    if (method.qualifiedTrait || types.contains(method.functionName))
                         return;
 
-                    auto [propertyType, _] = memberTypes.try_insert(method.functionName, arena->addType(BlockedType{}));
+                    auto [propertyType, _] = types.try_insert(method.functionName, arena->addType(BlockedType{}));
 
                     auto prop = Property::readonly(propertyType);
                     prop.location = method.nameLocation;
@@ -1569,6 +1660,9 @@ void ConstraintGenerator::prototypeClass(
                     const bool isMetamethod = isValidClassMetamethod(method.functionName.value);
                     // Luwu Traits (rfcs/classes/traits.md): a trait's expected function only exists in implementing classes
                     const bool readableThroughClass = (!takesSelf || method.functionName == "__init" || !isMetamethod) && !method.expectLocation;
+                    // Luwu Traits (rfcs/classes/traits.md): a method is shared, and a function without `self` static, unless
+                    // it says otherwise. Objects can't read a static, trait-only or scoped one.
+                    const bool readableThroughObjects = isClassFunctionReadableThroughObjects(method);
                     // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): nothing instantiates a generic class's generics
                     // when a method is read through the class value, so it gets a type of its own that is generic over them
                     // (quantifyOverClassGenerics). A static (`function make(v: T): Box<T>`) needs it as much as a method does.
@@ -1589,7 +1683,7 @@ void ConstraintGenerator::prototypeClass(
                     // Luwu Traits (rfcs/classes/traits.md): a scoped function is on the trait's value only
                     if (isMetamethod)
                         instanceMetatableProps[method.functionName.value] = prop;
-                    else if (!method.scopeLocation)
+                    else if (readableThroughObjects)
                         props[method.functionName.value] = prop;
                 }
             },
@@ -1672,17 +1766,51 @@ void ConstraintGenerator::prototypeClass(
             if ((written && written->qualifierLocation) || (writtenMethod && writtenMethod->qualifierLocation))
                 info.hasAccessSpecifiers = true;
 
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->expectLocation)
+            AstClassMemberPlacement placement = written ? written->placement : writtenMethod->placement;
+            AstName memberName = written ? written->name : writtenMethod->functionName;
+            if (placement == AstClassMemberPlacement::TraitOnly)
+                info.traitOnly.insert(memberName.value);
+
+            AstClassExpectTarget target = written ? written->expectTarget : writtenMethod->expectTarget;
+            if (target != AstClassExpectTarget::Any)
+                info.expectTargets[memberName.value] = target == AstClassExpectTarget::Class ? ExternType::TraitInfo::Provider::Class
+                                                                                               : ExternType::TraitInfo::Provider::Trait;
+
+            const AstClassProperty* scopedField = written && written->scopedLocation ? written : nullptr;
+            if (scopedField)
+            {
+                const char* fieldName = scopedField->name.value;
+                if (TypeId* type = memberTypesFor(scopedField->placement, memberTypes, staticMemberTypes).find(scopedField->name))
+                    info.scopedMembers[fieldName] = *type;
+                info.scopedFields.insert(fieldName);
+
+                if (scopedField->placement == AstClassMemberPlacement::Default)
+                    info.scopedObjectFields.insert(fieldName);
+                else if (scopedField->placement == AstClassMemberPlacement::Static)
+                    info.scopedStatics.insert(fieldName);
+
+                if (scopedField->isConst || scopedField->finalLocation)
+                    info.scopedConsts.insert(fieldName);
+
+                if (scopedField->expectLocation)
+                    info.scopedExpectations[scopedField->name.value] = false;
+                else if (scopedField->finalLocation)
+                    info.finals.insert(scopedField->name.value);
+            }
+            else if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && prop->expectLocation)
                 info.expectations[prop->name.value] = false;
             else if (prop && prop->finalLocation)
                 info.finals.insert(prop->name.value);
-            else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method->scopeLocation)
+            else if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && method->scopedLocation)
             {
-                TypeId* type = memberTypes.find(method->functionName);
+                if (effectivePlacement(*method) == AstClassMemberPlacement::Static)
+                    info.scopedStatics.insert(method->functionName.value);
+
+                TypeId* type = memberTypesFor(method->placement, memberTypes, staticMemberTypes).find(method->functionName);
                 if (type && method->isOptional)
-                    info.scopedFunctions[method->functionName.value] = makeOption(builtinTypes, *arena, *type);
+                    info.scopedMembers[method->functionName.value] = makeOption(builtinTypes, *arena, *type);
                 else if (type)
-                    info.scopedFunctions[method->functionName.value] = *type;
+                    info.scopedMembers[method->functionName.value] = *type;
 
                 if (method->expectLocation)
                     info.scopedExpectations[method->functionName.value] = method->isOptional;
@@ -1832,6 +1960,8 @@ void ConstraintGenerator::prototypeClass(
     TableType::Props classValueMetatableProps;
     if (ctorTy)
         classValueMetatableProps["__call"] = Property::readonly(ctorTy);
+    for (auto [name, ty] : valueMetamethodTypes)
+        classValueMetatableProps[name.value] = Property::readonly(ty);
 
     TypeId metatableTy =
         arena->addType(TableType{std::move(classValueMetatableProps), std::nullopt, TypeLevel{}, scope.get(), TableState::Sealed});
@@ -1854,10 +1984,11 @@ void ConstraintGenerator::prototypeClass(
     // which is also a class-rooted extern type declared at the same place, so the two are never the same nominal type.
     if (classDecl->isTrait)
     {
+        const ExternType::TraitInfo& traitInfo = *get<ExternType>(classInstanceTy)->traitInfo;
         ExternType::Props implementorProps;
         for (const auto& [name, prop] : staticProps)
         {
-            if (!belongsToTraitAlone(name))
+            if (!belongsToTraitAlone(traitInfo, name))
                 implementorProps[name] = prop;
         }
 
@@ -1874,7 +2005,7 @@ void ConstraintGenerator::prototypeClass(
                 continue;
             }
 
-            if (TypeId* methodTy = memberTypes.find(method->functionName))
+            if (TypeId* methodTy = memberTypesFor(method->placement, memberTypes, staticMemberTypes).find(method->functionName))
             {
                 Property prop = Property::readonly(*methodTy);
                 prop.location = method->nameLocation;
@@ -1933,7 +2064,9 @@ void ConstraintGenerator::prototypeClass(
             primaryInitTy,
             std::move(classTypeParams),
             std::move(classTypePackParams),
-            std::move(classValueMethodTypes)
+            std::move(classValueMethodTypes),
+            std::move(staticMemberTypes),
+            std::move(valueMetamethodTypes)
         }
     );
 }
@@ -2269,9 +2402,31 @@ void ConstraintGenerator::linkTraitNeeds(const ScopePtr& scope, const AstArray<A
                 return instantiation ? instantiateTraitProperty(scope, location, needed.ty, *instantiation, prop) : prop;
             };
 
+            // `expect class to override`: only an implementing class may provide the member, not this trait
+            if (neededType->traitInfo)
+            {
+                for (const auto& [name, provider] : neededType->traitInfo->expectTargets)
+                {
+                    std::optional<Location> declared = providedMemberLocation(trait, name);
+                    if (provider != ExternType::TraitInfo::Provider::Class || !declared)
+                        continue;
+
+                    reportError(
+                        *declared,
+                        GenericError{format(
+                            "Trait '%s' can't provide '%s': trait '%s' expects an implementing class to provide it",
+                            trait->name->name.value,
+                            name.c_str(),
+                            neededType->name.c_str()
+                        )}
+                    );
+                }
+            }
+
             for (const auto& [name, prop] : neededType->props())
             {
-                bool copyable = !belongsToTraitAlone(name) && !traitType->props().count(name);
+                bool alone = neededType->traitInfo ? belongsToTraitAlone(*neededType->traitInfo, name) : belongsToTraitAlone(name);
+                bool copyable = !alone && !traitType->props().count(name);
                 if (copyable)
                 {
                     traitType->props()[name] = asSeenHere(prop);
@@ -2425,18 +2580,18 @@ static const ExternType* classValueOf(const ExternType* objectType)
     return klass ? get<ExternType>(follow(klass->ty)) : nullptr;
 }
 
-void ConstraintGenerator::checkQualifiedImplementation(
+TypeId ConstraintGenerator::qualifiedMemberTrait(
     const ScopePtr& scope,
     AstStatClass* cls,
     ClassDeclRecord* record,
-    const AstClassMethod& method,
-    bool declared
+    AstExpr* qualifiedTrait,
+    const char* name,
+    const char* what
 )
 {
-    TypeId trait = resolveTraitRef(scope, qualifierTraitRef(method.qualifiedTrait));
+    TypeId trait = resolveTraitRef(scope, qualifierTraitRef(qualifiedTrait));
     const ExternType* traitType = trait ? get<ExternType>(trait) : nullptr;
     const ExternType* classType = get<ExternType>(follow(record->ty));
-    const char* name = method.functionName.value;
 
     bool implemented = false;
     if (classType && traitType)
@@ -2445,9 +2600,109 @@ void ConstraintGenerator::checkQualifiedImplementation(
             implemented |= follow(implementedTrait) == trait;
     }
 
+    if (!traitType)
+    {
+        reportError(qualifiedTrait->location, GenericError{format("Qualify '%s' with a trait '%s' implements", name, cls->name->name.value)});
+        return nullptr;
+    }
+
+    if (!implemented)
+    {
+        const char* traitName = traitType->name.c_str();
+        reportError(
+            qualifiedTrait->location,
+            GenericError{format("'%s' %s of '%s', so it has to implement '%s'", cls->name->name.value, what, traitName, traitName)}
+        );
+        return nullptr;
+    }
+
+    return trait;
+}
+
+void ConstraintGenerator::checkQualifiedField(const ScopePtr& scope, AstStatClass* cls, ClassDeclRecord* record, const AstClassProperty& prop)
+{
+    const char* name = prop.name.value;
+    // TypeChecker2 finds the scoped field's type through the trait's type
+    check(scope, prop.qualifiedTrait);
+    TypeId trait = qualifiedMemberTrait(scope, cls, record, prop.qualifiedTrait, name, "sets a scoped field");
+    const ExternType* traitType = trait ? get<ExternType>(trait) : nullptr;
+    const ExternType::TraitInfo* info = traitType && traitType->traitInfo ? &*traitType->traitInfo : nullptr;
+
+    std::optional<TypeId> expected;
+    if (info && info->scopedFields.count(name))
+    {
+        if (auto it = info->scopedMembers.find(name); it != info->scopedMembers.end())
+            expected = it->second;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): the class spells the field's placement: `Animal.x = v` for one in each object,
+    // `shared Animal.x = v` and `static Animal.x = v` for one on the class
+    AstClassMemberPlacement placement = AstClassMemberPlacement::Shared;
+    const char* requirement = "shared";
+    if (info && info->scopedObjectFields.count(name))
+    {
+        placement = AstClassMemberPlacement::Default;
+        requirement = "a field of each object";
+    }
+    else if (info && info->scopedStatics.count(name))
+    {
+        placement = AstClassMemberPlacement::Static;
+        requirement = "static";
+    }
+
+    if (info && !info->scopedFields.count(name))
+    {
+        reportError(prop.nameLocation, GenericError{format("Trait '%s' has no scoped field '%s' to set", traitType->name.c_str(), name)});
+    }
+    else if (info && info->finals.count(name))
+    {
+        reportError(prop.nameLocation, GenericError{format("'%s' is final in trait '%s' and can't be overridden", name, traitType->name.c_str())});
+    }
+    else if (info && prop.placement != placement)
+    {
+        const char* traitName = traitType->name.c_str();
+        const char* modifier = toString(placement);
+        std::string message = format(
+            "'%s.%s' must be %s for '%s' to implement '%s': write '%s%s%s.%s = value'",
+            traitName,
+            name,
+            requirement,
+            cls->name->name.value,
+            traitName,
+            modifier ? modifier : "",
+            modifier ? " " : "",
+            traitName,
+            name
+        );
+        reportError(prop.placementLocation ? *prop.placementLocation : prop.nameLocation, GenericError{message});
+    }
+
+    std::optional<TypeId> annotated = prop.ty ? std::optional<TypeId>{resolveType(scope, prop.ty, false)} : std::nullopt;
+    std::optional<TypeId> target = annotated ? annotated : expected;
+    if (!prop.defaultValue)
+        return;
+
+    // TypeChecker2 reports a value that doesn't fit
+    Inference found = check(scope, prop.defaultValue, target);
+    if (target)
+        addConstraint(scope, prop.defaultValue->location, SubtypeConstraint{found.ty, *target});
+}
+
+void ConstraintGenerator::checkQualifiedImplementation(
+    const ScopePtr& scope,
+    AstStatClass* cls,
+    ClassDeclRecord* record,
+    const AstClassMethod& method,
+    bool declared
+)
+{
+    const char* name = method.functionName.value;
+    TypeId trait = qualifiedMemberTrait(scope, cls, record, method.qualifiedTrait, name, "implements a function");
+    const ExternType* traitType = trait ? get<ExternType>(trait) : nullptr;
+
     // the trait's function, as its own code has it
     std::optional<TypeId> expected;
-    if (traitType && implemented)
+    if (traitType)
     {
         const std::map<Name, TypeId>* local = traitFunctionSignatures.find(trait);
         if (auto it = local ? local->find(name) : std::map<Name, TypeId>::const_iterator{}; local && it != local->end())
@@ -2460,18 +2715,9 @@ void ConstraintGenerator::checkQualifiedImplementation(
         }
     }
 
-    if (!traitType)
-        reportError(method.qualifiedTrait->location, GenericError{format("Qualify '%s' with a trait '%s' implements", name, cls->name->name.value)});
-    else if (!implemented)
-        reportError(
-            method.qualifiedTrait->location,
-            GenericError{format(
-                "'%s' implements a function of '%s', so it has to implement '%s'", cls->name->name.value, traitType->name.c_str(), traitType->name.c_str()
-            )}
-        );
-    else if (!expected)
+    if (traitType && !expected)
         reportError(method.nameLocation, GenericError{format("Trait '%s' has no function '%s' to implement", traitType->name.c_str(), name)});
-    else if (traitType->traitInfo && traitType->traitInfo->finals.count(name))
+    else if (traitType && traitType->traitInfo && traitType->traitInfo->finals.count(name))
         reportError(method.nameLocation, GenericError{format("'%s' is final in trait '%s' and can't be overridden", name, traitType->name.c_str())});
 
     // an unannotated implementation takes its types from the trait's function, like an override
@@ -2500,19 +2746,23 @@ void ConstraintGenerator::checkQualifiedImplementation(
 
 void ConstraintGenerator::checkScopedExpectations(const ScopePtr& scope, AstStatClass* cls)
 {
-    // whether `cls` declares the scoped function `name` for `trait`: `function Self.name` in a trait, `function Trait.name`
-    // in a class
+    // whether `cls` declares the scoped member `name` for `trait`: `scoped function name` or `scoped name` in a trait,
+    // `function Trait.name` or `Trait.name = value` in a class
     auto declares = [&](TypeId trait, const Name& name)
     {
         for (const AstClassMember& member : cls->members)
         {
             const AstClassMethod* method = member.get_if<AstClassMethod>();
-            if (!method || method->functionName != name.c_str())
+            const AstClassProperty* prop = member.get_if<AstClassProperty>();
+            AstName memberName = method ? method->functionName : prop->name;
+            if (memberName != name.c_str())
                 continue;
 
-            if (cls->isTrait && method->scopeLocation)
+            bool scoped = method ? method->scopedLocation.has_value() : prop->scopedLocation.has_value();
+            AstExpr* qualifiedTrait = method ? method->qualifiedTrait : prop->qualifiedTrait;
+            if (cls->isTrait && scoped)
                 return true;
-            if (!cls->isTrait && method->qualifiedTrait && resolveTraitRef(scope, qualifierTraitRef(method->qualifiedTrait)) == trait)
+            if (!cls->isTrait && qualifiedTrait && resolveTraitRef(scope, qualifierTraitRef(qualifiedTrait)) == trait)
                 return true;
         }
 
@@ -2534,14 +2784,20 @@ void ConstraintGenerator::checkScopedExpectations(const ScopePtr& scope, AstStat
 
             const char* traitName = traitType->name.c_str();
             const char* className = cls->name->name.value;
+            bool isField = traitType->traitInfo->scopedFields.count(name) > 0;
             if (cls->isTrait)
                 reportError(
-                    ref.location, GenericError{format("'%s' needs '%s', so it has to declare 'function Self.%s'", className, traitName, name.c_str())}
+                    ref.location,
+                    GenericError{format(
+                        "'%s' needs '%s', so it has to declare 'scoped %s%s'", className, traitName, isField ? "" : "function ", name.c_str()
+                    )}
                 );
             else
                 reportError(
                     ref.location,
-                    GenericError{format("Missing function '%s.%s' required for '%s' to implement '%s'", traitName, name.c_str(), className, traitName)}
+                    GenericError{format(
+                        "Missing %s '%s.%s' required for '%s' to implement '%s'", isField ? "field" : "function", traitName, name.c_str(), className, traitName
+                    )}
                 );
         }
     }
@@ -2821,7 +3077,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
     {
         for (const AstClassMember& member : cls->members)
         {
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && name == prop->name.value)
+            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && name == prop->name.value && !prop->qualifiedTrait)
                 return prop->nameLocation;
             if (const AstClassMethod* method = member.get_if<AstClassMethod>(); method && name == method->functionName.value)
                 return method->nameLocation;
@@ -2874,7 +3130,8 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
     {
         for (const AstClassMember& member : cls->members)
         {
-            if (const AstClassProperty* prop = member.get_if<AstClassProperty>(); prop && name == prop->name.value && prop->defaultValue)
+            const AstClassProperty* prop = member.get_if<AstClassProperty>();
+            if (prop && name == prop->name.value && prop->defaultValue && !prop->qualifiedTrait)
                 return true;
         }
 
@@ -2936,7 +3193,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         // A static (on the trait's value) is overridden by the class's own static, an instance member by its own member
         auto addProvider = [&](const Name& name, bool isStatic)
         {
-            bool provided = !belongsToTraitAlone(name) && !info.expectations.count(name) && !info.fromNeeds.count(name);
+            bool provided = !belongsToTraitAlone(info, name) && !info.expectations.count(name) && !info.fromNeeds.count(name);
             bool classDefines = isStatic ? ownStatics.count(name) > 0 : own.count(name) > 0;
             if (!provided || classDefines)
                 return;
@@ -3033,7 +3290,7 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         auto provide = [&](const Name& name, const Property& traitProp)
         {
             // a trait's constructor and hooks belong to the trait alone, and a needed trait's members to that trait
-            if (belongsToTraitAlone(name) || info.expectations.count(name) || info.fromNeeds.count(name))
+            if (belongsToTraitAlone(info, name) || info.expectations.count(name) || info.fromNeeds.count(name))
                 return false;
 
             // The class's own member overrides the trait's, a field as well as a function, unless the trait's is final
@@ -3097,11 +3354,18 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
         {
             for (const auto& [name, prop] : traitValueType->props())
             {
-                bool provided = !belongsToTraitAlone(name) && info.expectations.count(name) == 0 && info.scopedFunctions.count(name) == 0;
+                bool provided = !belongsToTraitAlone(info, name) && info.expectations.count(name) == 0 && info.scopedMembers.count(name) == 0;
                 if (provided && ownStatics.count(name))
                 {
+                    // provide() met the members objects read, and reported a final one there
+                    bool staticOnly = traitType->props().count(name) == 0;
                     auto own = classValueType->props().find(name);
-                    checkOverrideAccess(name, prop, own != classValueType->props().end() ? &own->second : nullptr, traitType, location);
+                    if (staticOnly && info.finals.count(name))
+                        reportOnMember(
+                            name, location, format("'%s' is final in trait '%s' and can't be overridden", name.c_str(), traitType->name.c_str())
+                        );
+                    else
+                        checkOverrideAccess(name, prop, own != classValueType->props().end() ? &own->second : nullptr, traitType, location);
                     continue;
                 }
 
@@ -3131,6 +3395,25 @@ std::map<Name, TypeId> ConstraintGenerator::implementTraits(const ScopePtr& scop
 
         for (const auto& [name, optional] : traitType->traitInfo->expectations)
         {
+            // `expect trait to override`: only a trait that needs this one may provide the member
+            auto target = traitType->traitInfo->expectTargets.find(name);
+            bool onlyTraitsProvide = target != traitType->traitInfo->expectTargets.end() &&
+                                     target->second == ExternType::TraitInfo::Provider::Trait;
+            if (onlyTraitsProvide && (own.count(name) || ownStatics.count(name)))
+            {
+                reportOnMember(
+                    name,
+                    location,
+                    format(
+                        "Class '%s' can't provide '%s': trait '%s' expects a trait that needs it to provide it",
+                        className.c_str(),
+                        name.c_str(),
+                        traitType->name.c_str()
+                    )
+                );
+                continue;
+            }
+
             // An expected `__init` asks for a constructor, of any access (the trait may call a private one). Its
             // parameters are compared with the constructor's by TypeChecker2.
             if (name == "__init")
@@ -3674,7 +3957,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
         checkPack(scope, e->expr);
         applyOrLeaveRefinements(scope, AstArray<AstExpr*>{&e->expr, 1});
 
-        if (auto call = e->expr->as<AstExprCall>(); call && doesCallError(call))
+        if (auto call = e->expr->as<AstExprCall>(); call && dfg->callNeverReturns(call))
             return ControlFlow::Throws;
 
         return ControlFlow::None;
@@ -5630,6 +5913,22 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
     return ControlFlow::None;
 }
 
+// Luwu try expressions: whether a written error hint is closed, `! never` or a union whose last member is `never`
+// (`! NotFound | never`). A closed hint says the function raises nothing else, so `try` gets no weakunknown. It's read
+// from what was written: an alias that holds `never` doesn't close a hint.
+static bool closesErrorHint(AstType* hint)
+{
+    auto isNever = [](AstType* type)
+    {
+        AstTypeReference* reference = type ? type->as<AstTypeReference>() : nullptr;
+        return reference && !reference->prefix && !reference->hasParameterList && reference->name == "never";
+    };
+
+    if (AstTypeUnion* options = hint ? hint->as<AstTypeUnion>() : nullptr)
+        return options->types.size > 0 && isNever(options->types.data[options->types.size - 1]);
+    return isNever(hint);
+}
+
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunction* global)
 {
     std::vector<std::pair<Name, GenericTypeDefinition>> generics = createGenerics(scope, global->generics);
@@ -5694,6 +5993,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunc
     if (global->errorHint)
         declaredHint = resolveType(funScope, global->errorHint, /* inTypeArguments */ false);
     ftv->errorHint = returnErrorHint(funScope, global->retTypes, declaredHint, /* inTypeArguments */ false);
+    ftv->errorHintClosed = closesErrorHint(global->errorHint);
 
     Name fnName(global->name.value);
 
@@ -5956,7 +6256,13 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
             overloaded{
                 [&](const AstClassProperty& classProp)
                 {
-                    auto entry = classDeclRecord->memberTypes.find(classProp.name);
+                    if (classProp.qualifiedTrait)
+                    {
+                        checkQualifiedField(bodyScope, statClass, classDeclRecord, classProp);
+                        return;
+                    }
+
+                    auto entry = memberTypesFor(classProp.placement, classDeclRecord->memberTypes, classDeclRecord->staticMemberTypes).find(classProp.name);
                     if (entry == nullptr)
                     {
                         LUAU_ASSERT(!"Unexpected missing class property type");
@@ -5966,6 +6272,11 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                     auto blockedTy = follow(*entry);
                     if (!is<BlockedType>(blockedTy))
                         return;
+
+                    // Luwu Traits (rfcs/classes/traits.md): a field on the class value gets its value as the class statement
+                    // runs, where no constructor parameter is in scope
+                    bool onClassValue = !isObjectField(classProp);
+                    const ScopePtr& fieldScope = onClassValue ? bodyScope : initializerScope;
 
                     // With no explicit type annotation, infer the property's type from its default
                     // value expression (if any) rather than falling back to `any`. When there IS
@@ -5981,8 +6292,8 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                         target = resolveType(bodyScope, classProp.ty, false);
                         if (classProp.defaultValue)
                         {
-                            Inference found = check(initializerScope, classProp.defaultValue, target);
-                            addConstraint(initializerScope, classProp.defaultValue->location, SubtypeConstraint{found.ty, target});
+                            Inference found = check(fieldScope, classProp.defaultValue, target);
+                            addConstraint(fieldScope, classProp.defaultValue->location, SubtypeConstraint{found.ty, target});
                         }
                         else if (std::optional<size_t> paramIndex = primaryCtorParamIndex(classProp.name))
                         {
@@ -5997,12 +6308,13 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                     else if (classProp.defaultValue)
                     {
                         // Luwu Traits (rfcs/classes/traits.md): a field a trait expects is inferred against the trait's type
+                        // a static field is never one of a trait's object fields, even when it shares a name with one
                         auto traitFieldType = traitFieldTypes.find(classProp.name.value);
                         std::optional<TypeId> expectedType;
-                        if (traitFieldType != traitFieldTypes.end())
+                        if (traitFieldType != traitFieldTypes.end() && classProp.placement != AstClassMemberPlacement::Static)
                             expectedType = traitFieldType->second;
 
-                        target = check(initializerScope, classProp.defaultValue, expectedType).ty;
+                        target = check(fieldScope, classProp.defaultValue, expectedType).ty;
                     }
                     else if (std::optional<size_t> paramIndex = primaryCtorParamIndex(classProp.name))
                         // a bare restatement (`private const hash`) is initialized from the parameter
@@ -6020,7 +6332,10 @@ void ConstraintGenerator::visitClass(const ScopePtr& scope, AstStatClass* statCl
                         return;
                     }
 
-                    auto entry = classDeclRecord->memberTypes.find(method.functionName);
+                    DenseHashMap<AstName, TypeId>* types = &classDeclRecord->valueMetamethodTypes;
+                    if (!isValueMetamethod(method))
+                        types = &memberTypesFor(method.placement, classDeclRecord->memberTypes, classDeclRecord->staticMemberTypes);
+                    auto entry = types->find(method.functionName);
                     if (entry == nullptr)
                     {
                         LUAU_ASSERT(!"Unexpected missing class method type");
@@ -6876,8 +7191,8 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
         result = check(scope, stringExpr, expectedType, forceSingleton);
     else if (expr->is<AstExprConstantNumber>())
         result = Inference{builtinTypes->numberType};
-    else if (expr->is<AstExprConstantInteger>())
-        result = Inference{builtinTypes->integerType};
+    else if (auto integer = expr->as<AstExprConstantInteger>())
+        result = Inference{integerLiteralType(integer)};
     else if (auto boolExpr = expr->as<AstExprConstantBool>())
         result = check(scope, boolExpr, expectedType, forceSingleton);
     else if (expr->is<AstExprConstantNil>())
@@ -7152,12 +7467,21 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprIndexName* in
     {
         check(scope, indexName->expr);
 
+        // `obj:[expr].name` is typed through `expr`'s type once it's known
+        if (indexName->dynamicTrait)
+        {
+            TypeId traitValue = check(scope, indexName->qualifiedTrait).ty;
+            TypeId name = arena->addType(SingletonType{StringSingleton{indexName->index.value}});
+            TypeId member = createTypeFunctionInstance(builtinTypes->typeFunctions->qualifiedFunc, {traitValue, name}, {}, scope, indexName->location);
+            return Inference{member};
+        }
+
         TypeId trait = resolveTraitRef(scope, qualifierTraitRef(indexName->qualifiedTrait));
         const ExternType* traitType = trait ? get<ExternType>(trait) : nullptr;
         if (traitType && traitType->traitInfo)
         {
-            auto scoped = traitType->traitInfo->scopedFunctions.find(indexName->index.value);
-            if (scoped != traitType->traitInfo->scopedFunctions.end())
+            auto scoped = traitType->traitInfo->scopedMembers.find(indexName->index.value);
+            if (scoped != traitType->traitInfo->scopedMembers.end())
             {
                 check(scope, indexName->qualifiedTrait);
                 return Inference{scoped->second};
@@ -7939,6 +8263,9 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
             discriminantTy = builtinTypes->numberType;
         else if (typeguard->type == "integer")
             discriminantTy = builtinTypes->integerType;
+        // Luwu Integers (rfcs/integers.md): `typeof` gives an integer's mode
+        else if (std::optional<IntegerMode> mode = integerModeNamed(typeguard->type); mode && typeguard->isTypeof && FFlag::DebugLuwuIntegers)
+            discriminantTy = builtinTypes->integerModeTypes[*mode];
         else if (typeguard->type == "boolean")
             discriminantTy = builtinTypes->booleanType;
         else if (typeguard->type == "thread")
@@ -8124,6 +8451,14 @@ void ConstraintGenerator::visitLValue(const ScopePtr& scope, AstExprGlobal* glob
 
 void ConstraintGenerator::visitLValue(const ScopePtr& scope, AstExprIndexName* expr, TypeId rhsType)
 {
+    // Luwu Traits (rfcs/classes/traits.md): `obj:Trait.name = value` has the scoped field's type, which TypeChecker2 checks
+    // the value against
+    if (expr->qualifiedTrait)
+    {
+        module->astTypes[expr] = check(scope, expr).ty;
+        return;
+    }
+
     TypeId lhsTy = check(scope, expr->expr).ty;
     TypeId propTy = arena->addType(BlockedType{});
     module->astTypes[expr] = propTy;
@@ -8516,6 +8851,19 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     }
 
 
+    // Luwu Traits (rfcs/classes/traits.md): a class method's `Self` (`function f(Self)`) is the class value: the class's own,
+    // or in a trait, that of any class implementing it
+    std::optional<TypeId> classMethodSelf;
+    if (FFlag::LuwuTraits && enclosingClass && fn->args.size > 0 && fn->args.data[0]->name == "Self")
+    {
+        const ExternType* objectType = get<ExternType>(follow(enclosingClass->ty));
+        const Klass* klass = objectType && objectType->relation ? get_if<Klass>(&*objectType->relation) : nullptr;
+        if (objectType && objectType->traitInfo)
+            classMethodSelf = objectType->traitInfo->implementorClass;
+        else if (klass)
+            classMethodSelf = klass->ty;
+    }
+
     for (size_t i = 0; i < fn->args.size; ++i)
     {
         if (FFlag::LuwuClasses)
@@ -8535,7 +8883,16 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
 
         TypeId argTy = nullptr;
         bool hasSpecifiedArgTy = false;
-        if (local->annotation)
+        if (i == 0 && classMethodSelf)
+        {
+            // the parser refuses an annotation here, but TypeChecker2 still expects it resolved
+            if (local->annotation)
+                resolveType(signatureScope, local->annotation, /* inTypeArguments */ false, /* replaceErrorWithFresh */ true, Polarity::Negative);
+
+            argTy = *classMethodSelf;
+            hasSpecifiedArgTy = true;
+        }
+        else if (local->annotation)
         {
             polarity = Polarity::Negative;
             size_t literalsBefore = literalParameters.size();
@@ -8722,6 +9079,7 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     if (fn->errorHint)
         declaredHint = resolveType(signatureScope, fn->errorHint, /* inTypeArguments */ false);
     actualFunction.errorHint = returnErrorHint(signatureScope, fn->returnAnnotation, declaredHint, /* inTypeArguments */ false);
+    actualFunction.errorHintClosed = closesErrorHint(fn->errorHint);
 
     TypeId actualFunctionType = arena->addType(std::move(actualFunction));
     LUAU_ASSERT(actualFunctionType);
@@ -9348,6 +9706,10 @@ TypeId ConstraintGenerator::resolveReferenceType(
         return builtinTypes->errorType;
     }
 
+    // Luwu Integers (rfcs/integers.md): `integer<T>` is an integer of mode `T`, while bare `integer` stays every mode
+    if (isIntegerWithMode(builtinTypes, *scope, ref))
+        return resolveIntegerType(scope, ty, ref);
+
     std::optional<TypeFun> alias;
 
     if (ref->prefix.has_value())
@@ -9434,6 +9796,36 @@ TypeId ConstraintGenerator::resolveReferenceType(
         genericType->polarity = (genericType->polarity & Polarity::Mixed) | polarity;
 
     return result;
+}
+
+TypeId ConstraintGenerator::resolveIntegerType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref)
+{
+    if (ref->parameters.size != 1 || !ref->parameters.data[0].type)
+    {
+        reportError(ty->location, GenericError{"integer<T> requires exactly one type argument, a mode such as \"u8\" or integer.u8"});
+        module->astResolvedTypes[ty] = builtinTypes->errorType;
+        return builtinTypes->errorType;
+    }
+
+    // Outside a type-argument context for the same reason as `class<T>`: `integer.Mode<"u8">` has to be expanded
+    TypeId modeTy = follow(resolveType_(scope, ref->parameters.data[0].type, /*inTypeArguments*/ false));
+    bool modeKnownLater = get<BlockedType>(modeTy) || get<PendingExpansionType>(modeTy) || get<TypeFunctionInstanceType>(modeTy);
+    if (modeKnownLater)
+        return createTypeFunctionInstance(builtinTypes->typeFunctions->integerFunc, {modeTy}, {}, scope, ty->location);
+
+    std::optional<TypeId> integerTy = integerTypeWithMode(builtinTypes, *arena, modeTy);
+    if (!integerTy)
+    {
+        reportError(ty->location, GenericError{format("%s isn't an integer mode; write one such as \"u8\" or integer.u8", toString(modeTy).c_str())});
+        return builtinTypes->errorType;
+    }
+    return *integerTy;
+}
+
+TypeId ConstraintGenerator::integerLiteralType(AstExprConstantInteger* literal)
+{
+    bool knownMode = FFlag::DebugLuwuIntegers && literal->mode < kIntegerModeCount;
+    return knownMode ? builtinTypes->integerModeTypes[literal->mode] : builtinTypes->integerType;
 }
 
 namespace
@@ -9611,6 +10003,7 @@ TypeId ConstraintGenerator::resolveFunctionType(
     if (fn->errorHint)
         declaredHint = resolveType_(signatureScope, fn->errorHint, inTypeArguments, replaceErrorWithFresh);
     ftv.errorHint = returnErrorHint(signatureScope, fn->returnTypes, declaredHint, inTypeArguments);
+    ftv.errorHintClosed = closesErrorHint(fn->errorHint);
     ftv.isCheckedFunction = fn->isCheckedFunction();
     ftv.literalParameters = std::move(literalParameters);
     AstAttr* deprecatedAttr = fn->getAttribute(AstAttr::Type::Deprecated);

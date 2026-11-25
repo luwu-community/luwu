@@ -40,6 +40,11 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             return dest.addType(a);
         else if constexpr (std::is_same_v<T, PrimitiveType>)
         {
+            // Luwu Integers (rfcs/integers.md): `integer<T>` is the one primitive that holds another type. A library
+            // function's is persistent like the rest of its signature, and still has to be instantiated.
+            if (a.mode)
+                return dest.addType(a);
+
             LUAU_ASSERT(ty->persistent);
             return ty;
         }
@@ -107,6 +112,7 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.literalParameters = a.literalParameters;
             // Luwu try expressions
             clone.errorHint = a.errorHint;
+            clone.errorHintClosed = a.errorHintClosed;
             clone.name = a.name;
             clone.syntheticName = a.syntheticName;
             return dest.addType(std::move(clone));
@@ -282,6 +288,9 @@ void Tarjan::visitChildren(TypeId ty, int index)
         if (ftv->errorHint)
             visitChild(*ftv->errorHint);
     }
+    // Luwu Integers (rfcs/integers.md): the mode of `integer<T>`
+    else if (const PrimitiveType* ptv = get<PrimitiveType>(ty); ptv && ptv->mode)
+        visitChild(*ptv->mode);
     else if (const TableType* ttv = get<TableType>(ty))
     {
         LUAU_ASSERT(!ttv->boundTo);
@@ -382,7 +391,7 @@ void Tarjan::visitChildren(TypeId ty, int index)
                 visitChild(*etv->traitInfo->selfMarker);
             for (const auto& [_, field] : etv->traitInfo->selfFieldTemplates)
                 visitChild(field);
-            for (const auto& [_, function] : etv->traitInfo->scopedFunctions)
+            for (const auto& [_, function] : etv->traitInfo->scopedMembers)
                 visitChild(function);
             for (const auto& [_, function] : etv->traitInfo->selfFunctions)
             {
@@ -989,6 +998,9 @@ void Substitution::replaceChildren(TypeId ty)
         if (ftv->errorHint)
             ftv->errorHint = replace(*ftv->errorHint);
     }
+    // Luwu Integers (rfcs/integers.md): the mode of `integer<T>`
+    else if (PrimitiveType* ptv = getMutable<PrimitiveType>(ty); ptv && ptv->mode)
+        ptv->mode = replace(*ptv->mode);
     else if (TableType* ttv = getMutable<TableType>(ty))
     {
         LUAU_ASSERT(!ttv->boundTo);
@@ -1088,7 +1100,7 @@ void Substitution::replaceChildren(TypeId ty)
                 etv->traitInfo->selfMarker = replace(*etv->traitInfo->selfMarker);
             for (auto& [_, field] : etv->traitInfo->selfFieldTemplates)
                 field = replace(field);
-            for (auto& [_, function] : etv->traitInfo->scopedFunctions)
+            for (auto& [_, function] : etv->traitInfo->scopedMembers)
                 function = replace(function);
             for (auto& [_, function] : etv->traitInfo->selfFunctions)
             {

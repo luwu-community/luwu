@@ -47,7 +47,7 @@ class Player(name: string, user_id: Id) implements DamageDealer, Health
 end
 
 trait Json needs serialization.Codec<JsonReadConfig, JsonWriteConfig>
-    function Self.encode<T>(value: JsonSerializable<T>, config: JsonWriteConfig?)
+    scoped function encode<T>(value: JsonSerializable<T>, config: JsonWriteConfig?)
     end
     -- ...
     expect function detect?(value: string | buffer, position: number): boolean
@@ -160,7 +160,7 @@ Specifically:
   - Traits may define a real `function __create`, which allows them to be factories of concrete classes.
   - Traits may define a `final function __implemented(cls)`, which runs once for each class that implements the trait.
   - The `final` modifier may precede any real field or function in the trait.
-  - Fields or functions of traits may start with `Self.` to indicate they are trait-qualified and not class-qualified.
+  - Fields or functions of traits may be marked `scoped` to indicate they are trait-qualified and not class-qualified.
 - The trait body and trait definition ends with the `end` keyword.
 
 Like classes, traits definitions are block constructs and do not evaluate to an expression, and may only be defined at the top level of a module.
@@ -383,7 +383,7 @@ end
 In the future, we want to allow for classes to override functions to resolve conflicts, but allowing so raises questions around how to resolve method
 arity differences when an object that implements the trait is narrowed via `class.implements` and the concrete class is not known.
 
-Instead, for now, we allow traits to introduce *trait-qualified* members. A trait qualified member is defined with `Self.member` syntax, and may only
+Instead, for now, we allow traits to introduce *trait-qualified* members. A trait qualified member is defined with the `scoped` modifier, and may only
 be called on an object by specifying its trait explicitly: `payment:Json:encode()` vs `payment:Csv:encode()`,  `cat:Screaming:meow()` vs
 `cat:Whispers:meow()`.
 
@@ -403,12 +403,12 @@ In classes and traits `Self` is now a `const` upvalue that refers to the concret
 in a class, and the class of `self` in a trait method. A trait function without `self` has no concrete class, so `Self` there is a syntax error.
 Like `self` in methods, `Self` may not be reassigned within the lexical scope of a class or trait definition block.
 
-`Self` is also used in trait-qualified member syntax:
+`scoped` marks trait-qualified members:
 
 ```luwu
 trait Animal
-    expect Self.species: string
-    function Self.describe(self)
+    expect scoped species: string
+    scoped function describe(self)
     end
 end
 class Cat implements Animal
@@ -418,6 +418,44 @@ class Cat implements Animal
     end
 end
 ```
+
+A scoped field has a value in each object unless it's `scoped shared`, one value on the class that objects can read, or `scoped static`, one value on
+the class value only. `scoped traitonly` is a syntax error. You can write a scoped field qualified, the same way you read it:
+
+```luwu
+trait Counted
+    scoped count = 0
+    scoped shared total = 0
+end
+class Tick implements Counted
+end
+local tick = Tick()
+tick:Counted.count += 1
+Tick:Counted.total = 5
+```
+
+Writing a `const` scoped field raises, and so does writing a `scoped shared` field through an object.
+
+To pick the trait at runtime, put an expression in brackets: `row:[formats[format]]:encode()` or `row:[Json].tag`. The expression's value has to be
+a trait, which is checked when the read or write runs.
+
+### Class methods
+
+A function whose first parameter is named `Self` is a class method, and `Self` is the class the method is called on:
+
+```luwu
+class Button
+    static count = 0
+    function bump(Self)
+        Self.count += 1
+        return Self.count
+    end
+end
+Button:bump()
+```
+
+`Self` must be the first parameter, can't be annotated and is `const`. The class is checked when the method is called, so `Button.bump()` raises. In
+a trait, `Self` is the implementing class the method is called on, and calling it on the trait itself raises.
 
 ### Class library
 

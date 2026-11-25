@@ -1042,7 +1042,7 @@ enum class IrCmd : uint8_t
     // writes nil there once every initializer has run (a jump on C's tag follows). Runs no Luau code.
     // A: unsigned int (bytecode instruction index)
     // B: Rn (how many initializers have run, read and written; the object and the arguments follow it)
-    // C: Rn (the call frame, written)
+    // C: Rn (the call frame: read for the previous call's result, then written)
     // D: int (how many `implements` arguments there are)
     FALLBACK_INITTRAITS,
 
@@ -1071,6 +1071,14 @@ enum class IrCmd : uint8_t
     // C: Rn (object or class)
     // D: Rn (trait)
     FALLBACK_GETQUALIFIED,
+
+    // Luwu Traits (rfcs/classes/traits.md): LOP_SETQUALIFIED, a write to a trait's scoped field. Runs no Luau code, but
+    // raises when the field can't be written there.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (value)
+    // C: Rn (object or class)
+    // D: Rn (trait)
+    FALLBACK_SETQUALIFIED,
 
     // Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL, through the interpreter's implementation. It can call
     // an __index metamethod.

@@ -586,6 +586,10 @@ LUA_API int lua_classof(lua_State* L, int idx);
 // Luwu Classes (rfcs/classes): `class.is` for embedders. Returns 1 if the value at `idx` is an object of exactly the class
 // at `classidx`, 0 otherwise. Raises if the value at `classidx` isn't a class.
 LUA_API int lua_classis(lua_State* L, int idx, int classidx);
+// Luwu opaque values: marks the class at `idx`, or the class of the object at `idx`, opaque. Its objects then never
+// appear in error records, `class.fields` raises on it, and reading a private member from outside raises the error a
+// missing member gives. A mark can't be removed. Raises if the value isn't a class or object.
+LUA_API void lua_setclassopaque(lua_State* L, int idx);
 
 // Luwu try expressions: options and results for embedders. Building one raises if the result library (luaopen_result)
 // isn't open. lua_pushsome pushes `Some(v)` for the value at `idx`, which can be nil or none. An empty option is

@@ -189,6 +189,9 @@ struct UnknownProperty
     Language language = Language::Luwu;
     // Luwu Classes (rfcs/classes): `table` is a class value and `key` is a field of its objects (`Paint.gloss`)
     bool fieldOfItsObjects = false;
+    // Luwu Traits (rfcs/classes/traits.md): `key` names a trait the object's class implements (`cat.Animal`), so the help
+    // suggests a trait-scoped read (`cat:Animal.species`)
+    bool traitScoped = false;
     // Luwu: whether the message carries help (see Helpifier)
     bool showHelp = true;
 
@@ -523,6 +526,10 @@ struct TypePackMismatch
 struct DynamicPropertyLookupOnExternTypesUnsafe
 {
     TypeId ty;
+    // Luwu Traits (rfcs/classes/traits.md): the key is a trait the object's class implements (`cat[Animal]`), so the help
+    // suggests a trait-scoped read (`cat:Animal.species`)
+    bool traitScoped = false;
+    bool showHelp = true;
 
     bool operator==(const DynamicPropertyLookupOnExternTypesUnsafe& rhs) const;
 };

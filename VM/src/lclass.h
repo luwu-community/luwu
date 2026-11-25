@@ -6,6 +6,7 @@
 #include "lobject.h"
 #include "lstate.h"
 #include "lbytecode.h"
+#include "ltable.h"
 
 // An instance's members are allocated inline, immediately after the LuauObject header, so a
 // construction costs one GC allocation rather than two. Everything that allocates, frees or
@@ -174,6 +175,15 @@ LUAI_FUNC bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Cl
 // Luwu Classes (rfcs/classes): the closure of the Luwu code a VM-internal C function acts for, or NULL
 LUAI_FUNC const Closure* luaR_callinglua(lua_State* L);
 
+// Luwu opaque values: the metafield that marks a table or userdata opaque when its value is truthy. The name isn't
+// final, so nothing else spells it.
+#define LUWU_OPAQUE_MARK "__opaque"
+
+// Luwu opaque values: whether `value` is opaque, a class or object of a class marked with lua_setclassopaque, or a table
+// or userdata whose metatable has a truthy LUWU_OPAQUE_MARK. An opaque value hides what it holds from error records and
+// reflection. Only error paths call this: it looks the metafield up by name.
+LUAI_FUNC bool luaR_isopaque(lua_State* L, const TValue* value);
+
 /**
  * Errors (via luaG_privateaccesserror) if the member at `offset` is private and `cl` is not one
  * of `classdef`'s own methods, or (via luaG_blockedinitaccesserror) if it is `__init`
@@ -254,20 +264,90 @@ LUAU_FORCEINLINE void luaR_checkconstassignfast(
     }
 }
 
+// The lookup luaR_classvalueoffset makes for each kind of key
+inline const TValue* luaR_membermapget(LuaTable* map, const TValue* key)
+{
+    return luaH_get(map, key);
+}
+
+inline const TValue* luaR_membermapget(LuaTable* map, TString* key)
+{
+    return luaH_getstr(map, key);
+}
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): the offset of `classdef`'s member `key` as a read through the class value finds
+ * it, or nil. A static member may share its name with an object field: `memberstooffset` then has the field and
+ * `staticshadows` the static. The second lookup only happens where the first found an object field, which can't be read
+ * through the class value.
+ */
+template<typename Key>
+LUAU_FORCEINLINE const TValue* luaR_classvalueoffset(const LuauClass* classdef, Key key)
+{
+    const TValue* offset = luaR_membermapget(classdef->memberstooffset, key);
+    bool objectfield = !ttisnil(offset) && uint32_t(nvalue(offset)) < classdef->numberofinstancemembers;
+
+    if (LUAU_UNLIKELY(objectfield && classdef->staticshadows))
+    {
+        const TValue* shadow = luaR_membermapget(classdef->staticshadows, key);
+        if (!ttisnil(shadow))
+            return shadow;
+    }
+
+    return offset;
+}
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): maps the member `name` to `offset` in `map`, a members-to-offset table being
+ * filled in offset order. A static member (`isstatic`) whose name an object field already has goes in `*shadows` instead,
+ * which is created when it's first needed (see LuauClass::staticshadows).
+ */
+LUAI_FUNC void luaR_mapmembername(
+    lua_State* L,
+    LuaTable* map,
+    LuaTable** shadows,
+    TString* name,
+    uint32_t offset,
+    bool isstatic,
+    uint32_t numberofinstancemembers
+);
+
 /**
  * Add a new class member to `classdef` named `name` and with value `method`. As the naming implies
  * we only support methods today.
  */
 LUAI_FUNC void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValue* method);
 
+// Luwu Traits (rfcs/classes/traits.md): gives the field `name` on the class value (LBC_CLASSMEMBER_CLASSFIELD) its value, as
+// the class statement runs (LBC_NEWCLASSMEMBER_FIELD)
+LUAI_FUNC void luaR_addclassfield(lua_State* L, LuauClass* classdef, TString* name, const TValue* value);
+
+// Luwu Traits (rfcs/classes/traits.md): adds the metamethod `name` of the class or trait value itself to its metatable, as
+// the class statement runs (LBC_NEWCLASSMEMBER_VALUEMETAMETHOD): `tostring(Cat)` calls a class's `function __tostring(Self)`
+// with the class. A Lua function is the class's code, for its `Self` check and private access.
+LUAI_FUNC void luaR_addvaluemetamethod(lua_State* L, LuauClass* classdef, TString* name, const TValue* fn);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): writes the field at `offset` of the class value `classdef`, `Cat.species = v`.
+ * Raises unless it's a field on the class value (LBC_CLASSMEMBER_CLASSFIELD) that isn't const, and checks private
+ * access against `cl`. `key` is the field's name, for messages.
+ */
+LUAI_FUNC void luaR_setclassfield(lua_State* L, LuauClass* classdef, const TValue* key, const Closure* cl, uint32_t offset, const TValue* value);
+
+// Luwu Traits (rfcs/classes/traits.md): raised by a write through an object to a field on its class value
+LUAI_FUNC l_noret luaR_sharedfieldwriteerror(lua_State* L, const LuauObject* object, const TValue* key);
+
 LUAI_FUNC void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page);
 
-// Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits.
+// Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits, which
+// place a member the way a class body's modifiers do. A name the language gives a meaning follows its entry in
+// Luau/ClassMemberNames.h: a metamethod goes on the objects, or with LBC_CLASSMEMBER_STATIC on the class value when the
+// registry allows it there (`__tostring`).
 struct luaR_NativeMember
 {
     const char* name;
     lua_CFunction method;
-    uint8_t flags;
+    uint16_t flags;
     // A method's frameless version for the interpreter, or NULL
     luaR_FastMethod fast;
 };
@@ -279,6 +359,10 @@ struct luaR_NativeMember
  * like a class without `__init`. Names must outlive the state: methods use them as their debug names.
  */
 LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init);
+
+// Luwu builtin classes: a builtin class value's `__tostring`, which prints it like a primitive, by name and without an
+// address. Builtin libraries list it as a static member (luaR_NativeMember).
+LUAI_FUNC int luaR_builtinclasstostring(lua_State* L);
 
 /**
  * Luwu Native Classes (rfcs/native-classes.md): gives every object of `classdef` constructed from now on `size` bytes of
@@ -309,13 +393,24 @@ LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const
 // holding the error in `ra` and where it was raised in `ra + 1` to `ra + 3`. Doesn't run the collector.
 LUAI_FUNC void luaR_wrapresult(lua_State* L, StkId ra, bool caught);
 
-// Luwu error variants (rfcs/integers.md): raises an object of the error variant `kind` (`Error.Overflow`, ...) whose
-// positions are the `nargs` values on top of the stack. Missing positions are nil. When the result library isn't open,
-// raises the object's message as a string instead.
-LUAI_FUNC l_noret luaR_raisevariant(lua_State* L, LuwuBuiltinClass kind, int nargs);
-
 // Luwu try expressions: the value a `Some`, `Ok` or `Err` holds, or NULL for any other value
 LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
+
+// Luwu structured runtime errors: writes the `kind` positions of `record`, an `Error.Runtime`'s and an
+// `Error.NotIndexable`'s, from its `subkind` as the strings the variants hold. Call it while the record is a GC root.
+LUAI_FUNC void luaR_fillerrorsubkind(lua_State* L, LuwuErrorRecord& record);
+
+// Luwu structured runtime errors: adds the message of a recorded error to `b`, without its position.
+// luaR_fillerrorsubkind must have filled it.
+LUAI_FUNC void luaR_adderrorrecord(struct luaL_Strbuf* b, const LuwuErrorRecord& record);
+
+// Luwu structured runtime errors: a new object of the recorded error's variant, `Error.NotIndexable(...)` and the
+// others, or NULL when the result library (luaopen_result) isn't open. The record stays as it is.
+LUAI_FUNC LuauObject* luaR_newerrorvariant(lua_State* L);
+
+// Luwu structured runtime errors: raises error variant `kind` with the `nargs` values on top of the stack as its
+// positions, at the nearest Luwu code. `pcall` gets its message and `try` an object of the variant.
+LUAI_FUNC l_noret luaR_raisevariant(lua_State* L, LuwuBuiltinClass kind, int nargs);
 
 /**
  * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns
@@ -484,11 +579,14 @@ LUAI_FUNC void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, cons
 LUAI_FUNC bool luaR_nexttraitinit(lua_State* L, StkId state, StkId frame, int nargs);
 
 /**
- * Luwu Traits (rfcs/classes/traits.md): records `fn` as `classdef`'s qualified implementation of the member `name` of
- * the trait `trait` (`function Json.name`, LBC_NEWCLASSMEMBER_QUALIFIED). luaR_implementtraits checks it. Ignored once
- * the class has implemented its traits.
+ * Luwu Traits (rfcs/classes/traits.md): records `value` as `classdef`'s qualified implementation of the member `name` of
+ * the trait `trait`. `form` is the LOP_NEWCLASSMEMBER form that says what `value` is: a function (`function Json.name`,
+ * LBC_NEWCLASSMEMBER_QUALIFIED), the class's object slot for each object's value of a scoped field (`Animal.items = {}`,
+ * LBC_NEWCLASSMEMBER_QUALIFIEDFIELD), or the value of a scoped field on the class (`shared Animal.kind = "cat"`,
+ * LBC_NEWCLASSMEMBER_QUALIFIEDSHARED, and LBC_NEWCLASSMEMBER_QUALIFIEDSTATIC). Raises when the trait's member is the other
+ * kind or has another placement; luaR_implementtraits checks the rest. Ignored once the class has implemented its traits.
  */
-LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* fn);
+LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue* trait, TString* name, const TValue* value, int form);
 
 /**
  * Luwu Traits (rfcs/classes/traits.md): sets `ra` to the class's version of the member `name` of `trait`, for
@@ -496,6 +594,14 @@ LUAI_FUNC void luaR_addqualified(lua_State* L, LuauClass* classdef, const TValue
  * doesn't implement the trait, or the trait has no such function.
  */
 LUAI_FUNC void luaR_getqualified(lua_State* L, StkId ra, const TValue* receiver, const TValue* trait, TString* name);
+
+/**
+ * Luwu Traits (rfcs/classes/traits.md): writes `value` to the scoped field `name` of the trait `trait`, for
+ * `obj:Trait.name = value` (LOP_SETQUALIFIED). A per-object field is written through an object, and a `scoped shared` or
+ * `scoped static` one through the class. Raises when `receiver` doesn't implement the trait, the field is const, or it's
+ * written through the wrong receiver.
+ */
+LUAI_FUNC void luaR_setqualified(lua_State* L, const TValue* receiver, const TValue* trait, TString* name, const TValue* value);
 
 // Luwu Traits (rfcs/classes/traits.md): whether `classdef` implements `trait`, listed or implied through `needs`.
 LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait);

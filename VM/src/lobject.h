@@ -677,6 +677,11 @@ typedef struct LuauClass
     // Mapping from member name to offset.
     LuaTable* memberstooffset;
 
+    // Luwu Traits (rfcs/classes/traits.md): the static members (LBC_CLASSMEMBER_STATIC) that share their name with an
+    // object field, by name. `memberstooffset` maps such a name to the field, which is what objects read, and reads
+    // through the class value look here (luaR_classvalueoffset). NULL when there are none.
+    LuaTable* staticshadows;
+
     // Mapping from offset to member name. NULL at `initoffset`: `__init` is only ever resolved by name
     // (see luaR_sealclassshape).
     TString** offsettomember;
@@ -708,6 +713,11 @@ typedef struct LuauClass
     // instance or static members, creating objects).
     uint32_t numberofallmembers;
 
+    // Luwu Traits (rfcs/classes/traits.md): the members an object of this class can read, from offset 0 up to this one.
+    // The static slots past it hold the members only the class value can read (LBC_CLASSMEMBER_STATIC), so an object's
+    // slot check against this count leaves them out at no extra cost.
+    uint32_t numberofobjectmembers;
+
     // Set when this class defines a user `__init` method. When true, the
     // class's constructor (`ClassName(...)`) calls `__init(self, ...)`
     // instead of the default POD table-copy constructor.
@@ -727,7 +737,7 @@ typedef struct LuauClass
 
     // Per-member attribute bits, indexed by the same offset as `offsettomember` (see
     // LBC_CLASSMEMBER_* in Luau/Bytecode.h). Owned by this class object; freed in luaR_freeclass.
-    uint8_t* memberflags;
+    uint16_t* memberflags;
 
     // True if any entry in `memberflags` has LBC_CLASSMEMBER_PRIVATE set. Lets a member access whose
     // slot is already cached skip the private-access check entirely for classes without one.
@@ -822,7 +832,7 @@ typedef struct LuauClass
 
     // Luwu Traits (rfcs/classes/traits.md): the class's version of trait members read through a trait (luaR_getqualified),
     // keyed by the trait, each a table from a member's name to its function: the class's qualified implementations
-    // (`function Json.name`) and its copies of the defaults of scoped members (`function Self.name`). Until the class
+    // (`function Json.name`) and its copies of the defaults of scoped members (`scoped function name`). Until the class
     // implements its traits, it holds only the qualified implementations, unchecked. NULL when there are none. Marked in
     // traverseclass.
     struct LuaTable* qualified;
@@ -847,6 +857,10 @@ typedef struct LuauClass
     // members, zeroed, and the tag that picks their destructor. 0 bytes for a class without native data.
     uint32_t nativesize;
     uint8_t nativetag;
+
+    // Luwu opaque values: the class and its objects are opaque (luaR_isopaque). `class.fields` raises on them, and a
+    // private member read from outside raises the error a missing member gives.
+    bool isopaque;
 
 } LuauClass;
 

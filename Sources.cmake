@@ -4,6 +4,7 @@ target_sources(Luwu.Common PRIVATE
     Common/include/Luau/Bytecode.h
     Common/include/Luau/BytecodeUtils.h
     Common/include/Luau/BytecodeWire.h
+    Common/include/Luau/ClassMemberNames.h
     Common/include/Luau/DenseHash.h
     Common/include/Luau/ExperimentalFlags.h
     Common/include/Luau/HashUtil.h
@@ -17,6 +18,7 @@ target_sources(Luwu.Common PRIVATE
     Common/include/Luau/VecDeque.h
 
     Common/src/BytecodeWire.cpp
+    Common/src/ClassMemberNames.cpp
     Common/src/LuwuFlags.cpp
     Common/src/StringUtils.cpp
     Common/src/TimeTrace.cpp
@@ -251,6 +253,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/GlobalTypes.h
     Analysis/include/Luau/Instantiation.h
     Analysis/include/Luau/Instantiation2.h
+    Analysis/include/Luau/IntegerModes.h
     Analysis/include/Luau/IostreamHelpers.h
     Analysis/include/Luau/IterativeTypeVisitor.h
     Analysis/include/Luau/JsonEmitter.h
@@ -261,6 +264,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/include/Luau/MismatchExplanation.h
     Analysis/include/Luau/MismatchWording.h
     Analysis/include/Luau/Module.h
+    Analysis/include/Luau/NeverReturns.h
     Analysis/include/Luau/ModuleResolver.h
     Analysis/include/Luau/NonStrictTypeChecker.h
     Analysis/include/Luau/Normalize.h
@@ -352,6 +356,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/GlobalTypes.cpp
     Analysis/src/Instantiation.cpp
     Analysis/src/Instantiation2.cpp
+    Analysis/src/IntegerModes.cpp
     Analysis/src/IostreamHelpers.cpp
     Analysis/src/IterativeTypeVisitor.cpp
     Analysis/src/IterativeTypeFunctionTypeVisitor.cpp
@@ -361,6 +366,7 @@ target_sources(Luwu.Analysis PRIVATE
     Analysis/src/MismatchExplanation.cpp
     Analysis/src/MismatchWording.cpp
     Analysis/src/Module.cpp
+    Analysis/src/NeverReturns.cpp
     Analysis/src/NonStrictTypeChecker.cpp
     Analysis/src/Normalize.cpp
     Analysis/src/OverloadResolver.cpp

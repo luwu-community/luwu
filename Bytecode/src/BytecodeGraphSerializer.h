@@ -591,6 +591,11 @@ struct BytecodeGraphSerializer
             bcb.emitAux(getVmConstInputAux(insn, 2));
             break;
 
+        case LOP_SETQUALIFIED:
+            bcb.emitABC(LOP_SETQUALIFIED, getRegInput(insn, 0), getRegInput(insn, 1), getRegInput(insn, 2));
+            bcb.emitAux(getVmConstInputAux(insn, 3));
+            break;
+
         case LOP_GETOBJECTMEMBER:
             bcb.emitABC(LOP_GETOBJECTMEMBER, getRegister(insnOp), getRegInput(insn, 0), 0);
             bcb.emitAux(getImmInt(insn, 1));

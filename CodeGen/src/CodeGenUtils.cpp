@@ -640,7 +640,7 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
 
             VM_PROTECT_PC(); // private-member auth / missing-member checks can raise
 
-            if (slot < inst->lclass->numberofallmembers && tsvalue(kv) == inst->lclass->offsettomember[slot])
+            if (slot < inst->lclass->numberofobjectmembers && tsvalue(kv) == inst->lclass->offsettomember[slot])
             {
                 luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, slot);
                 setobj2s(L, ra, luaR_lookupmemberatoffset(inst, slot));
@@ -649,7 +649,8 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
             else
             {
                 const TValue* offset = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
-                if (ttisnil(offset))
+                // Luwu Traits (rfcs/classes/traits.md): a member only the class value reads is missing here
+                if (ttisnil(offset) || uint32_t(nvalue(offset)) >= inst->lclass->numberofobjectmembers)
                     luaG_missingmembererror(L, rb, kv);
                 const uint32_t offsetnum = uint32_t(nvalue(offset));
                 luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
@@ -673,7 +674,7 @@ const Instruction* executeGETTABLEKS(lua_State* L, const Instruction* pc, StkId 
             }
             else
             {
-                const TValue* offset = luaH_getstr(lco->memberstooffset, tsvalue(kv));
+                const TValue* offset = luaR_classvalueoffset(lco, tsvalue(kv));
                 if (ttisnil(offset))
                     luaG_missingmembererror(L, rb, kv);
                 const uint32_t offsetnum = uint32_t(nvalue(offset));
@@ -780,9 +781,11 @@ const Instruction* executeSETTABLEKS(lua_State* L, const Instruction* pc, StkId 
             else
             {
                 const TValue* offset = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
-                if (ttisnil(offset))
+                if (ttisnil(offset) || uint32_t(nvalue(offset)) >= inst->lclass->numberofobjectmembers)
                     luaG_missingmembererror(L, rb, kv);
                 const uint32_t offsetnum = uint32_t(nvalue(offset));
+                if (offsetnum >= inst->lclass->numberofinstancemembers && (inst->lclass->memberflags[offsetnum] & LBC_CLASSMEMBER_CLASSFIELD))
+                    luaR_sharedfieldwriteerror(L, inst, kv);
                 if (offsetnum >= inst->lclass->numberofinstancemembers)
                     luaG_indexerror(L, rb, kv);
                 luaR_checkprivateaccessfast(L, kv, inst->lclass, cl, offsetnum);
@@ -840,10 +843,10 @@ const Instruction* executeNAMECALL(lua_State* L, const Instruction* pc, StkId ba
 
         uint32_t offset = slot;
 
-        if (slot >= inst->lclass->numberofallmembers || tsvalue(kv) != inst->lclass->offsettomember[slot])
+        if (slot >= inst->lclass->numberofobjectmembers || tsvalue(kv) != inst->lclass->offsettomember[slot])
         {
             const TValue* found = luaH_getstr(inst->lclass->memberstooffset, tsvalue(kv));
-            if (ttisnil(found))
+            if (ttisnil(found) || uint32_t(nvalue(found)) >= inst->lclass->numberofobjectmembers)
                 luaG_missingmembererror(L, rb, kv);
             offset = uint32_t(nvalue(found));
         }
@@ -1172,12 +1175,14 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
         return pc;
     }
 
-    // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function
-    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_QUALIFIED)
+    // Luwu Traits (rfcs/classes/traits.md): the class's qualified implementation of a trait's function, or its value of a
+    // trait's scoped field
+    bool qualified = LBC_NEWCLASSMEMBER_ISQUALIFIED(LUAU_INSN_B(insn));
+    if (qualified)
     {
         TValue* name = VM_KV(aux);
         LUAU_ASSERT(ttisstring(name));
-        VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc));
+        VM_PROTECT(luaR_addqualified(L, classvalue(ra), rc + 1, tsvalue(name), rc, LUAU_INSN_B(insn)));
         return pc;
     }
 
@@ -1186,6 +1191,24 @@ const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, St
     {
         VM_PROTECT_PC();
         luaR_setconstructor(L, classvalue(ra), rc);
+        return pc;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): a metamethod of the class value itself
+    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_VALUEMETAMETHOD)
+    {
+        TValue* name = VM_KV(aux);
+        LUAU_ASSERT(ttisstring(name));
+        luaR_addvaluemetamethod(L, classvalue(ra), tsvalue(name), rc);
+        return pc;
+    }
+
+    // Luwu Traits (rfcs/classes/traits.md): the value of a field on the class value
+    if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD)
+    {
+        TValue* name = VM_KV(aux);
+        LUAU_ASSERT(ttisstring(name));
+        luaR_addclassfield(L, classvalue(ra), tsvalue(name), rc);
         return pc;
     }
 
@@ -1223,6 +1246,23 @@ const Instruction* executeGETQUALIFIED(lua_State* L, const Instruction* pc, StkI
     LUAU_ASSERT(ttisstring(name));
 
     VM_PROTECT(luaR_getqualified(L, ra, rb, rc, tsvalue(name)));
+    return pc;
+}
+
+// Luwu Traits (rfcs/classes/traits.md): LOP_SETQUALIFIED for native code (see FALLBACK_SETQUALIFIED). Kept in step with
+// VM_CASE(LOP_SETQUALIFIED) in lvmexecute.cpp.
+const Instruction* executeSETQUALIFIED(lua_State* L, const Instruction* pc, StkId base, TValue* k)
+{
+    [[maybe_unused]] Closure* cl = clvalue(L->ci->func);
+    Instruction insn = *pc++;
+    uint32_t aux = *pc++;
+    StkId ra = VM_REG(LUAU_INSN_A(insn));
+    StkId rb = VM_REG(LUAU_INSN_B(insn));
+    StkId rc = VM_REG(LUAU_INSN_C(insn));
+    TValue* name = VM_KV(aux);
+    LUAU_ASSERT(ttisstring(name));
+
+    VM_PROTECT(luaR_setqualified(L, rb, rc, tsvalue(name), ra));
     return pc;
 }
 

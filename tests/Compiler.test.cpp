@@ -12746,7 +12746,7 @@ TEST_CASE("ClassTraitQualifiedReads")
 
     const char* source = R"(
 trait Json
-    function Self.write(self) end
+    scoped function write(self) end
 end
 
 class Cat() implements Json

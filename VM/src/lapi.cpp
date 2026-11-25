@@ -1753,7 +1753,21 @@ static const TValue* findclassmember(lua_State* L, int idx, const char* memberna
     if (!*classdef)
         luaG_runerror(L, "expected a class or object, got %s", luaT_objtypename(L, o));
 
-    return luaH_getstr((*classdef)->memberstooffset, luaS_new(L, membername));
+    TString* name = luaS_new(L, membername);
+    if (ttisclass(o))
+        return luaR_classvalueoffset(*classdef, name);
+
+    return luaH_getstr((*classdef)->memberstooffset, name);
+}
+
+void lua_setclassopaque(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    LuauClass* classdef = classofvalue(o);
+    if (!classdef)
+        luaG_runerror(L, "expected a class or object, got %s", luaT_objtypename(L, o));
+
+    classdef->isopaque = true;
 }
 
 int lua_istrait(lua_State* L, int idx)
@@ -1874,8 +1888,9 @@ int lua_ismemberconst(lua_State* L, int idx, const char* membername)
         return 0;
 
     uint32_t offsetnum = uint32_t(nvalue(offset));
-    // functions (static members) are always immutable
-    return offsetnum >= classdef->numberofinstancemembers || (classdef->memberflags[offsetnum] & LBC_CLASSMEMBER_CONST) != 0;
+    // functions (static members) are always immutable; a field on the class value is unless it's const
+    bool function = offsetnum >= classdef->numberofinstancemembers && !(classdef->memberflags[offsetnum] & LBC_CLASSMEMBER_CLASSFIELD);
+    return function || (classdef->memberflags[offsetnum] & LBC_CLASSMEMBER_CONST) != 0;
 }
 
 // Whether a trait the class implements, directly or through `needs`, declares `name` final. The class's own copy of a

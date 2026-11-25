@@ -8,10 +8,10 @@ local function id<T>(value: T): T
     return value
 end
 
--- the error a call raises, or nil when it doesn't
+-- the error a call raises, or nil when it doesn't. `try` gets the library's and the VM's errors as `Error` variants.
 local function raised(f: () -> ()): unknown
-    local ok, err = pcall(f)
-    return if ok then nil else err
+    local r = try f()
+    return if class.isinstance(r, Err) then r.error else nil
 end
 
 local function raisesmessage(f: () -> (), needle: string): boolean
@@ -115,6 +115,11 @@ do
     assert(typeof(raised(function()
         local _ = id(1int) / 0int
     end)) == "Error.DivisionByZero")
+
+    local ok, message = pcall(function()
+        local _ = id(1int) // 0int
+    end)
+    assert(not ok and string.find(message, "^[^:]*:%d+: attempt to divide by zero$"))
 end
 
 -- unary minus wraps signed modes, grows `int` and raises on unsigned ones
@@ -161,7 +166,7 @@ do
     assert(big == 100000000000000000000int and big ~= 100000000000000000001int and big ~= 5int)
 end
 
--- ordering integers of different modes, or with a number, raises Error.InvalidComparison
+-- ordering integers of different modes, or with a number, raises Error.InvalidOperation
 do
     assert(id(5int) <= 5int and id(4int) < 5int and id(7u8) >= 7u8 and id(255u8) > 0u8)
     assert(id(-1i8) < 0i8 and id(18446744073709551615u64) > 0u64 and id(9223372036854775808u64) > 9223372036854775807u64)
@@ -173,14 +178,20 @@ do
     local err = raised(function()
         local _ = id(4int) < 5u8
     end)
-    assert(class.isinstance(err, Error.InvalidComparison) and tostring(err) == "attempt to compare int with u8")
-    assert(err.left == 4int and err.right == 5u8)
+    assert(class.isinstance(err, Error.InvalidOperation) and tostring(err) == "attempt to compare int < u8")
+    assert(err.operator == "lt" and err.left == 4int and err.right == 5u8)
     assert(class.isinstance(raised(function()
         local _ = id(5) >= 7u8
-    end), Error.InvalidComparison))
+    end), Error.InvalidOperation))
     assert(class.isinstance(raised(function()
         local _ = id(5i8) <= 7
-    end), Error.InvalidComparison))
+    end), Error.InvalidOperation))
+
+    -- `pcall` gets the message with the position, like any other runtime error
+    local ok, message = pcall(function()
+        local _ = id(4int) < 5u8
+    end)
+    assert(not ok and string.find(message, "^[^:]*:%d+: attempt to compare int < u8$"))
 end
 
 -- table keys of the same value in different modes don't collide

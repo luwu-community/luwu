@@ -56,7 +56,8 @@ do
     end
     assert(expectok(4) == 4)
     const failed = try expectok(-1)
-    assert(class.isinstance(failed, Err) and string.find(failed.error, "assertion failed", 1, true))
+    assert(class.isinstance(failed, Err) and class.isinstance(failed.error, Error.AssertionFailed))
+    assert(tostring(failed.error) == "assertion failed!")
 end
 
 -- the test is one value wherever a call could give several

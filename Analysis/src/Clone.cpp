@@ -335,7 +335,9 @@ private:
 
     void cloneChildren(PrimitiveType* t)
     {
-        // noop.
+        // Luwu Integers (rfcs/integers.md): the mode of `integer<T>`
+        if (t->mode)
+            t->mode = shallowClone(*t->mode);
     }
 
     void cloneChildren(BlockedType* t)
@@ -450,7 +452,7 @@ private:
                 t->traitInfo->selfMarker = shallowClone(*t->traitInfo->selfMarker);
             for (auto& [_, field] : t->traitInfo->selfFieldTemplates)
                 field = shallowClone(field);
-            for (auto& [_, function] : t->traitInfo->scopedFunctions)
+            for (auto& [_, function] : t->traitInfo->scopedMembers)
                 function = shallowClone(function);
             for (auto& [_, function] : t->traitInfo->selfFunctions)
             {

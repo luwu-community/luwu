@@ -10,6 +10,7 @@
 #include "lapi.h"
 #include "lgc.h"
 #include "lnumutils.h"
+#include "ldebug.h"
 
 #include <string.h>
 
@@ -39,31 +40,12 @@ l_noret luaL_argerrorL(lua_State* L, int narg, const char* extramsg)
 {
     const char* fname = currfuncname(L);
 
-    if (fname)
-        luaL_error(L, "invalid argument #%d to '%s' (%s)", narg, fname, extramsg);
-    else
-        luaL_error(L, "invalid argument #%d (%s)", narg, extramsg);
+    luaG_argumenterror(L, narg, fname, extramsg);
 }
 
 l_noret luaL_typeerrorL(lua_State* L, int narg, const char* tname)
 {
-    const char* fname = currfuncname(L);
-    const TValue* obj = luaA_toobject(L, narg);
-
-    if (obj)
-    {
-        if (fname)
-            luaL_error(L, "invalid argument #%d to '%s' (%s expected, got %s)", narg, fname, tname, luaT_objtypename(L, obj));
-        else
-            luaL_error(L, "invalid argument #%d (%s expected, got %s)", narg, tname, luaT_objtypename(L, obj));
-    }
-    else
-    {
-        if (fname)
-            luaL_error(L, "missing argument #%d to '%s' (%s expected)", narg, fname, tname);
-        else
-            luaL_error(L, "missing argument #%d (%s expected)", narg, tname);
-    }
+    luaG_unexpectedtypeerror(L, narg, currfuncname(L), tname);
 }
 
 static l_noret tag_error(lua_State* L, int narg, int tag)
@@ -90,11 +72,9 @@ l_noret luaL_errorL(lua_State* L, const char* fmt, ...)
 {
     va_list argp;
     va_start(argp, fmt);
-    luaL_where(L, 1);
-    lua_pushvfstring(L, fmt, argp);
-    va_end(argp);
-    lua_concat(L, 2);
-    lua_error(L);
+    // Luwu structured runtime errors: recorded as an `Error.Runtime`, which `pcall` gets as luaL_where's position and
+    // the message
+    luaG_runerrorcallerv(L, LUWU_RUNTIME_LIBRARY, fmt, argp);
 }
 
 // }======================================================
@@ -298,9 +278,12 @@ int luaL_getmetafield(lua_State* L, int obj, const char* event)
     // metamethods still apply (`__tostring` through luaL_tolstring, for one), so read the field
     // straight out of it. The metamethods are static members of the class anyway, so this reveals
     // nothing new.
-    if (lua_isobject(L, obj))
+    // Luwu Traits (rfcs/classes/traits.md): a class or trait value's own metamethods (`function __tostring(Self)`) are in its
+    // metatable, which lua_getmetatable doesn't expose either
+    if (lua_isobject(L, obj) || lua_isclass(L, obj))
     {
-        LuaTable* mt = objectvalue(luaA_toobject(L, obj))->lclass->instancemetatable;
+        const TValue* value = luaA_toobject(L, obj);
+        LuaTable* mt = ttisobject(value) ? objectvalue(value)->lclass->instancemetatable : classvalue(value)->metatable;
         const TValue* field = mt ? luaH_getstr(mt, luaS_new(L, event)) : luaO_nilobject;
         if (ttisnil(field))
             return 0;
@@ -702,24 +685,6 @@ void luaL_pushresultsize(luaL_Strbuf* B, size_t size)
 
 // }======================================================
 
-// Luwu builtin classes: the builtin class at `idx`, or NULL when the value there isn't one. Only class values count, since
-// builtin objects print through their own `__tostring`.
-static LuauClass* builtinclassat(lua_State* L, int idx)
-{
-    const TValue* o = luaA_toobject(L, idx);
-    if (!ttisclass(o))
-        return NULL;
-
-    LuauClass* classdef = classvalue(o);
-    for (int i = 0; i < LUWU_BUILTIN__COUNT; ++i)
-    {
-        if (L->global->builtinclasses[i] == classdef)
-            return classdef;
-    }
-
-    return NULL;
-}
-
 const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
 {
     if (luaL_callmeta(L, idx, "__tostring")) // is there a metafield?
@@ -777,13 +742,6 @@ const char* luaL_tolstring(lua_State* L, int idx, size_t* len)
         break;
     default:
     {
-        // Luwu builtin classes: a builtin class prints like a primitive, by name and without an address
-        if (LuauClass* builtin = builtinclassat(L, idx))
-        {
-            lua_pushfstring(L, "builtin class %s", getstr(builtin->name));
-            break;
-        }
-
         const void* ptr = lua_topointer(L, idx);
         unsigned long long enc = lua_encodepointer(L, uintptr_t(ptr));
         lua_pushfstring(L, "%s: 0x%016llx", luaL_typename(L, idx), enc);

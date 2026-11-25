@@ -427,7 +427,7 @@ assert(ecall(function() for i=1,2,'a' do end end) == "invalid 'for' step (number
 assert(ecall(function() ({}):foo() end) == "attempt to call missing method 'foo' of table")
 assert(ecall(function() (""):foo() end) == "attempt to call missing method 'foo' of string")
 assert(ecall(function() (42):foo() end) == "attempt to index number with 'foo'")
-assert(ecall(function() ({foo=42}):foo() end) == "attempt to call a number value")
+assert(ecall(function() ({foo=42}):foo() end) == "attempt to call a number value (method 'foo')")
 assert(ecall(function() local ud = newproxy(true) getmetatable(ud).__index = {} ud:foo() end) == "attempt to call missing method 'foo' of userdata")
 assert(ecall(function() local ud = newproxy(true) getmetatable(ud).__index = function() end ud:foo() end) == "attempt to call missing method 'foo' of userdata")
 assert(ecall(function() local ud = newproxy(true) getmetatable(ud).__index = function() error("nope") end ud:foo() end) == "nope")

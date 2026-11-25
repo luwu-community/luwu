@@ -228,22 +228,9 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
             visitor.useRange(vmRegOp(OP_C(inst)), form <= LBC_PRESIZE_ITER_HASH ? 2 : 3);
         break;
     }
-    case IrCmd::FALLBACK_WRAPRESULT:
-        // the ERR form also reads where the error was raised
-        visitor.useRange(vmRegOp(OP_B(inst)), function.intOp(OP_C(inst)) == LBC_WRAPRESULT_ERR ? 4 : 1);
-        visitor.def(OP_B(inst));
-        break;
     case IrCmd::FALLBACK_GETQUALIFIED:
         visitor.use(OP_C(inst));
         visitor.use(OP_D(inst));
-        visitor.def(OP_B(inst));
-        break;
-    case IrCmd::FALLBACK_PUSH:
-        visitor.use(OP_B(inst));
-        visitor.useRange(vmRegOp(OP_C(inst)), function.intOp(OP_D(inst)));
-        break;
-    case IrCmd::FALLBACK_POP:
-        visitor.use(OP_C(inst));
         visitor.def(OP_B(inst));
         break;
     case IrCmd::FALLBACK_TABLEBUNDLE:
@@ -254,6 +241,24 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
             visitor.use(OP_B(inst));
         else
             visitor.def(OP_B(inst));
+        break;
+    case IrCmd::FALLBACK_SETQUALIFIED:
+        visitor.use(OP_B(inst));
+        visitor.use(OP_C(inst));
+        visitor.use(OP_D(inst));
+        break;
+    case IrCmd::FALLBACK_PUSH:
+        visitor.use(OP_B(inst));
+        visitor.useRange(vmRegOp(OP_C(inst)), function.intOp(OP_D(inst)));
+        break;
+    case IrCmd::FALLBACK_POP:
+        visitor.use(OP_C(inst));
+        visitor.def(OP_B(inst));
+        break;
+    case IrCmd::FALLBACK_WRAPRESULT:
+        // the ERR form also reads where the error was raised
+        visitor.useRange(vmRegOp(OP_B(inst)), function.intOp(OP_C(inst)) == LBC_WRAPRESULT_ERR ? 4 : 1);
+        visitor.def(OP_B(inst));
         break;
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         visitor.use(OP_B(inst));

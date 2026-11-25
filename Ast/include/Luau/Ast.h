@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #pragma once
 
+#include "Luau/ClassMemberNames.h"
 #include "Luau/Common.h"
 #include "Luau/Location.h"
 #include "Luau/Variant.h"
@@ -651,6 +652,9 @@ public:
     // Luwu Traits (rfcs/classes/traits.md): the trait in a qualified read, `obj:Trait:name` or `Class:Trait.name`, which
     // reads the class's version of the trait's member `name`. `op` is the second operator. nullptr for a plain index.
     AstExpr* qualifiedTrait = nullptr;
+    // Luwu Traits (rfcs/classes/traits.md): the trait was written in brackets, `obj:[expr]:name`, so it's whatever value
+    // `expr` has at runtime rather than a binding in scope
+    bool dynamicTrait = false;
 };
 
 class AstExprIndexExpr : public AstExpr
@@ -1666,6 +1670,37 @@ enum class AstClassMemberVisibility
 };
 
 std::string toString(AstClassMemberVisibility visibility);
+
+// Luwu Traits (rfcs/classes/traits.md): where a member lives, written as one modifier after the access specifier.
+// `Default` is a field on each object, a method (shared) or a function without `self` (static), by its shape.
+enum class AstClassMemberPlacement
+{
+    Default,
+    // `shared`: one value on the class, readable through its objects too
+    Shared,
+    // `static`: on the class value only
+    Static,
+    // `traitonly`: on the trait value only; implementing classes don't get it
+    TraitOnly,
+};
+
+// Luwu Traits (rfcs/classes/traits.md): who may provide an expected member. `Any` is a bare `expect`.
+enum class AstClassExpectTarget
+{
+    Any,
+    // `expect class to override`: only an implementing class
+    Class,
+    // `expect trait to override`: only a trait that needs this one
+    Trait,
+};
+
+// The keyword a placement is written with; nullptr for `Default`
+const char* toString(AstClassMemberPlacement placement);
+
+// Luwu Traits (rfcs/classes/traits.md): a written placement as the member name registry spells it (ClassMemberNames.h).
+// `Default` isn't a placement anyone writes; it maps to `Shared`.
+ClassMemberNamePlacement toClassMemberNamePlacement(AstClassMemberPlacement placement);
+
 template<>
 std::optional<AstClassMemberVisibility> fromString<AstClassMemberVisibility>(std::string_view s);
 
@@ -1694,6 +1729,20 @@ struct AstClassProperty
     // Luwu Traits (rfcs/classes/traits.md): location of `final` in a trait's `final name = value`: a const field only the
     // trait sets, from its default; not even an implementing class's `__init` can write it. nullopt in a class.
     std::optional<Location> finalLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): who may provide an expected field, and the `class to override` or
+    // `trait to override` phrase that says so
+    AstClassExpectTarget expectTarget = AstClassExpectTarget::Any;
+    std::optional<Location> expectTargetLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): `shared`, `static` or `traitonly`, and where it's written
+    AstClassMemberPlacement placement = AstClassMemberPlacement::Default;
+    std::optional<Location> placementLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): location of `scoped` in a trait's `scoped species = value`. A scoped field is
+    // in the trait's slot of each implementing class, and only `obj:Trait.name` and `Class:Trait.name` reach it. Its
+    // placement says where: on each object by default, or on the class when `shared` or `static`.
+    std::optional<Location> scopedLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): the trait in a class's `Animal.species = value`, which gives that trait's scoped
+    // field `species` its value for the class. nullptr otherwise.
+    AstExpr* qualifiedTrait = nullptr;
 };
 
 struct AstClassMethod
@@ -1714,15 +1763,33 @@ struct AstClassMethod
     // Luwu Traits (rfcs/classes/traits.md): location of `final` in a trait's `final function`, which no implementing class may
     // define itself. nullopt in a class.
     std::optional<Location> finalLocation = std::nullopt;
-    // Luwu Traits (rfcs/classes/traits.md): location of `Self` in a trait's `function Self.name`, a member scoped to the
-    // trait. Implementing classes don't get it as a member; `obj:Trait:name()` and `Class:Trait.name()` reach it.
-    std::optional<Location> scopeLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): who may provide an expected function, and the `class to override` or
+    // `trait to override` phrase that says so
+    AstClassExpectTarget expectTarget = AstClassExpectTarget::Any;
+    std::optional<Location> expectTargetLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): `shared`, `static` or `traitonly`, and where it's written
+    AstClassMemberPlacement placement = AstClassMemberPlacement::Default;
+    std::optional<Location> placementLocation = std::nullopt;
+    // Luwu Traits (rfcs/classes/traits.md): location of `scoped` in a trait's `scoped function name`. A scoped function
+    // isn't a member of implementing classes: `obj:Trait:name()` and `Class:Trait.name()` reach it.
+    std::optional<Location> scopedLocation = std::nullopt;
     // Luwu Traits (rfcs/classes/traits.md): the trait in a class's `function Json.name`, a qualified implementation of that
     // trait's member `name`. It isn't a member of the class. nullptr otherwise.
     AstExpr* qualifiedTrait = nullptr;
 };
 
 using AstClassMember = Variant<AstClassProperty, AstClassMethod>;
+
+// Luwu Traits (rfcs/classes/traits.md): where a function lives when it's written without `shared`, `static` or
+// `traitonly`: a name the language gives a meaning has its own placement (ClassMemberNames.h), a method (`self`) is
+// shared, and any other function, a class method (`Self`) among them, is static. A placement written on the function is
+// returned as written.
+AstClassMemberPlacement effectivePlacement(const AstClassMethod& method);
+
+// Luwu Traits (rfcs/classes/traits.md): whether a metamethod is the class or trait value's own rather than its objects':
+// `function __tostring(Self)` (or `static function __tostring(Self)`) in a class, `traitonly function __tostring(trait)`
+// in a trait. ClassMemberName::onValues says which names can be.
+bool isValueMetamethod(const AstClassMethod& method);
 
 // Luwu Classes (rfcs/classes): the access specifier and modifiers written directly on a primary
 // constructor parameter, Kotlin-style: `class SshKey(public const public_key: string)`. A parameter

@@ -7,6 +7,7 @@
 #include "Luau/LinterConfig.h"
 #include "Luau/LuwuOnlyApi.h"
 #include "Luau/Module.h"
+#include "Luau/NeverReturns.h"
 #include "Luau/ParseResult.h"
 #include "Luau/PrettyPrinter.h"
 #include "Luau/Scope.h"
@@ -105,6 +106,12 @@ struct LintContext
             return std::nullopt;
 
         return *it;
+    }
+
+    // Luwu never-returning calls: the calls the module's checker found declared to return `never`, if there is a module
+    const NeverReturningCalls* neverReturningCalls() const
+    {
+        return module ? &module->neverReturningCalls : nullptr;
     }
 };
 
@@ -1752,6 +1759,8 @@ private:
         Break,
         Give,
         Return,
+        // Luwu never-returning calls: a call to a function declared to return `never`, other than `error` and `assert`
+        NeverReturns,
         Error,
     };
 
@@ -1760,19 +1769,22 @@ private:
         switch (status)
         {
         case Continue:
-            return "continue";
+            return "always continues";
 
         case Break:
-            return "break";
+            return "always breaks";
 
         case Give:
-            return "give";
+            return "always gives";
 
         case Return:
-            return "return";
+            return "always returns";
+
+        case NeverReturns:
+            return "never returns";
 
         case Error:
-            return "error";
+            return "always errors";
 
         default:
             return "unknown";
@@ -1797,9 +1809,11 @@ private:
 
                     // silence the warning for common pattern of Error (coming from error()) + Return
                     // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): or + Give, which a `do` expression's block needs last
+                    // Luwu never-returning calls: a call that never returns followed by `return` is silenced the same way.
                     bool leavesAfterError = next->is<AstStatReturn>() || next->is<AstStatGive>();
-                    if (step == Error && si->is<AstStatExpr>() && leavesAfterError && i + 2 == stat->body.size)
-                        return Error;
+                    bool neverReturningCall = step == Error || step == NeverReturns;
+                    if (neverReturningCall && si->is<AstStatExpr>() && leavesAfterError && i + 2 == stat->body.size)
+                        return step;
 
                     // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a `do` expression's block must end in a statement like
                     // `give`, so one written only for that after a statement that always leaves gets a way to drop it
@@ -1815,7 +1829,7 @@ private:
                             *context,
                             LintWarning::Code_UnreachableCode,
                             next->location,
-                            "Unreachable code (previous statement always %ss). %s",
+                            "Unreachable code (previous statement %s). %s",
                             getReason(step),
                             advice
                         );
@@ -1824,7 +1838,7 @@ private:
                             *context,
                             LintWarning::Code_UnreachableCode,
                             next->location,
-                            "Unreachable code (previous statement always %ss)",
+                            "Unreachable code (previous statement %s)",
                             getReason(step)
                         );
                     return step;
@@ -1852,7 +1866,7 @@ private:
                         *context,
                         LintWarning::Code_UnreachableCode,
                         stat->thenbody->body.data[0]->location,
-                        "Unreachable code (the condition always %ss before it can be true)",
+                        "Unreachable code (the condition %s before it can be true)",
                         getReason(ifs)
                     );
             }
@@ -1907,8 +1921,12 @@ private:
         else if (AstStatExpr* stat = node->as<AstStatExpr>())
         {
             if (AstExprCall* call = stat->expr->as<AstExprCall>())
+            {
                 if (doesCallError(call))
                     return Error;
+                if (callNeverReturns(call, context->neverReturningCalls()))
+                    return NeverReturns;
+            }
 
             return guardLeaveStatus(stat->expr);
         }
@@ -2385,7 +2403,7 @@ private:
 
     bool visit(AstExprFunction* node) override
     {
-        const AstStat* bodyf = getFallthrough(node->body);
+        const AstStat* bodyf = getFallthrough(node->body, context->neverReturningCalls());
         AstStat* vret = getValueReturn(node->body);
 
         if (bodyf && vret)
@@ -10300,6 +10318,139 @@ private:
     }
 };
 
+// Luwu structured runtime errors: a string error that says "unreachable" or "TODO", which the `unreachable` and `todo`
+// globals raise as `Error.Unreachable` and `Error.Unimplemented`. Only in Luwu modules, where those globals exist.
+class LintErrorStrings : AstVisitor
+{
+public:
+    LUAU_NOINLINE static void process(LintContext& context)
+    {
+        if (!context.module || context.module->language != Language::Luwu || !resultLibraryEnabled())
+            return;
+
+        LintErrorStrings pass;
+        pass.context = &context;
+
+        context.root->visit(&pass);
+    }
+
+private:
+    LintContext* context;
+
+    // The global the error points at, and what goes in its call
+    struct Replacement
+    {
+        const char* global;
+        // the text after the keyword, empty for none
+        std::string message;
+    };
+
+    // `text` is `keyword` alone or `keyword: message`, ignoring case and the spaces around them
+    static std::optional<std::string> matchKeyword(std::string_view text, std::string_view keyword)
+    {
+        auto trimmed = [](std::string_view s)
+        {
+            size_t first = s.find_first_not_of(" \t");
+            if (first == std::string_view::npos)
+                return std::string_view();
+            size_t last = s.find_last_not_of(" \t");
+            return s.substr(first, last - first + 1);
+        };
+
+        std::string_view body = trimmed(text);
+        if (body.size() < keyword.size())
+            return std::nullopt;
+        for (size_t i = 0; i < keyword.size(); ++i)
+        {
+            if (tolower((unsigned char)body[i]) != keyword[i])
+                return std::nullopt;
+        }
+
+        std::string_view rest = trimmed(body.substr(keyword.size()));
+        if (rest.empty())
+            return std::string();
+        if (rest[0] != ':')
+            return std::nullopt;
+        return std::string(trimmed(rest.substr(1)));
+    }
+
+    static std::optional<Replacement> replacementFor(std::string_view text)
+    {
+        if (std::optional<std::string> message = matchKeyword(text, "unreachable"))
+            return Replacement{"unreachable", *message};
+        for (std::string_view keyword : {"todo", "not implemented", "unimplemented"})
+        {
+            if (std::optional<std::string> message = matchKeyword(text, keyword))
+                return Replacement{"todo", *message};
+        }
+        return std::nullopt;
+    }
+
+    // `s` as a double-quoted string literal
+    static std::string quoted(const std::string& s)
+    {
+        std::string result = "\"";
+        for (char c : s)
+        {
+            if (c == '"' || c == '\\')
+                result += '\\';
+            result += c;
+        }
+        return result + "\"";
+    }
+
+    static bool isGlobalCall(AstExprCall* call, const char* name)
+    {
+        AstExprGlobal* global = call->func->as<AstExprGlobal>();
+        return global && strcmp(global->name.value, name) == 0;
+    }
+
+    bool visit(AstExprCall* node) override
+    {
+        // `error("unreachable")`; a level argument changes where the error points, which the globals don't take
+        AstExprConstantString* text = nullptr;
+        if (isGlobalCall(node, "error") && node->args.size == 1)
+            text = node->args.data[0]->as<AstExprConstantString>();
+
+        // `assert(false, "unreachable")`
+        bool assertsFalse = isGlobalCall(node, "assert") && node->args.size == 2 && node->args.data[0]->is<AstExprConstantBool>() &&
+                            !node->args.data[0]->as<AstExprConstantBool>()->value;
+        if (assertsFalse)
+            text = node->args.data[1]->as<AstExprConstantString>();
+
+        if (!text)
+            return true;
+
+        std::optional<Replacement> replacement = replacementFor(std::string_view(text->value.data, text->value.size));
+        if (!replacement)
+            return true;
+
+        bool needsReason = strcmp(replacement->global, "unreachable") == 0 && replacement->message.empty();
+        if (needsReason)
+        {
+            emitWarning(
+                *context,
+                LintWarning::Code_ErrorStrings,
+                node->location,
+                "Use 'unreachable(\"...\")' here, with a reason this can't happen; it raises an Error.Unreachable that 'try' can match"
+            );
+            return true;
+        }
+
+        std::string call = std::string(replacement->global) + "(" + (replacement->message.empty() ? "" : quoted(replacement->message)) + ")";
+        const char* variant = strcmp(replacement->global, "unreachable") == 0 ? "Error.Unreachable" : "Error.Unimplemented";
+        emitWarning(
+            *context,
+            LintWarning::Code_ErrorStrings,
+            node->location,
+            "Use '%s' here; it raises an %s that 'try' can match",
+            call.c_str(),
+            variant
+        );
+        return true;
+    }
+};
+
 // Luwu: `x = x` and `t.x = t.x`, which do nothing; usually a typo for another name
 class LintSelfAssignment : AstVisitor
 {
@@ -12297,6 +12448,9 @@ std::vector<LintWarning> lint(
 
     if (context.warningEnabled(LintWarning::Code_SelfAssignment))
         LintSelfAssignment::process(context);
+
+    if (context.warningEnabled(LintWarning::Code_ErrorStrings))
+        LintErrorStrings::process(context);
 
     if (context.warningEnabled(LintWarning::Code_DeadStore))
         LintDeadStore::process(context);

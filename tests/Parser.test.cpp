@@ -4710,9 +4710,9 @@ TEST_CASE_FIXTURE(Fixture, "class_const_before_qualifier_is_a_syntax_error")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
-    // `const` is only recognized after the `public`/`private` qualifier (or in front of a bare,
-    // implicitly-public name). Writing it the other way around is a dedicated syntax error rather
-    // than silently reinterpreting `public`/`private` as an ordinary property name.
+    // `const` goes after the `public`/`private` qualifier (or in front of a bare, implicitly-public name).
+    // Writing it the other way around is a syntax error naming the order, rather than silently
+    // reinterpreting `public`/`private` as an ordinary property name.
     ParseResult result = tryParse(R"(
         class Vector3
             const public x: number
@@ -4720,18 +4720,17 @@ TEST_CASE_FIXTURE(Fixture, "class_const_before_qualifier_is_a_syntax_error")
     )");
 
     REQUIRE(result.errors.size() == 1);
-    CHECK(result.errors[0].getMessage() == "The 'const' modifier must come after the access specifier, e.g. 'public const'");
+    CHECK(result.errors[0].getMessage().find("Write 'public const' instead: modifiers go in the order") == 0);
 
     const AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
     REQUIRE(cls);
     REQUIRE(cls->members.size == 1);
 
-    // Recovery: the misplaced `const` is skipped, so `public` is parsed normally as the
-    // qualifier for a single (non-const) `x` property.
+    // Recovery: the member keeps both modifiers, as if they were written in order
     auto x = cls->members.data[0].get_if<AstClassProperty>();
     REQUIRE(x);
     CHECK(x->name == "x");
-    CHECK(!x->isConst);
+    CHECK(x->isConst);
     CHECK(x->qualifierLocation.has_value());
     CHECK(x->visibility == AstClassMemberVisibility::Public);
 }
@@ -4747,7 +4746,7 @@ TEST_CASE_FIXTURE(Fixture, "class_const_before_private_qualifier_is_a_syntax_err
     )");
 
     REQUIRE(result.errors.size() == 1);
-    CHECK(result.errors[0].getMessage() == "The 'const' modifier must come after the access specifier, e.g. 'private const'");
+    CHECK(result.errors[0].getMessage().find("Write 'private const' instead: modifiers go in the order") == 0);
 }
 
 TEST_CASE_FIXTURE(Fixture, "class_const_does_not_apply_to_methods")
@@ -5722,7 +5721,7 @@ TEST_CASE_FIXTURE(Fixture, "trait_names_are_not_class_keywords")
 {
     ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
 
-    for (const char* name : {"class", "trait", "public", "private", "const", "extends", "implements", "needs", "expect", "final"})
+    for (const char* name : {"class", "trait", "public", "private", "const", "extends", "implements", "needs", "expect", "final", "shared", "static", "traitonly", "scoped"})
     {
         std::string code = std::string("trait ") + name + "\nend";
         ParseResult result = tryParse(code);
@@ -5756,7 +5755,7 @@ class Hello
     function helloagain() end
 end
         )",
-        "Duplicate class member 'helloagain'"
+        "Duplicate class member 'helloagain': only a 'static' member can share a name with an object field"
     );
 }
 
@@ -6276,7 +6275,7 @@ TEST_CASE_FIXTURE(Fixture, "class_self_cannot_be_annotated")
     );
 }
 
-// Luwu Traits (rfcs/classes/traits.md): `function Self.name` in a trait, `function Trait.name` in a class, and the
+// Luwu Traits (rfcs/classes/traits.md): `scoped function name` in a trait, `function Trait.name` in a class, and the
 // qualified reads `obj:Trait:name()` and `Class:Trait.name`
 TEST_CASE_FIXTURE(Fixture, "trait_scoped_functions_and_qualified_reads_parse")
 {
@@ -6284,8 +6283,8 @@ TEST_CASE_FIXTURE(Fixture, "trait_scoped_functions_and_qualified_reads_parse")
 
     AstStatBlock* block = parse(R"(
         trait Json
-            function Self.encode(value) end
-            expect function Self.tag?(self)
+            scoped function encode(value) end
+            expect scoped function tag?(self)
         end
 
         class Cat() implements Json, mod.Toml
@@ -6307,7 +6306,8 @@ TEST_CASE_FIXTURE(Fixture, "trait_scoped_functions_and_qualified_reads_parse")
     {
         const AstClassMethod* method = member.get_if<AstClassMethod>();
         REQUIRE(method);
-        CHECK(method->scopeLocation);
+        CHECK(method->scopedLocation);
+        CHECK(method->placement == AstClassMemberPlacement::Default);
         CHECK(!method->qualifiedTrait);
     }
 
@@ -6349,11 +6349,160 @@ TEST_CASE_FIXTURE(Fixture, "trait_scoped_functions_and_qualified_reads_parse_err
 {
     ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
 
-    matchParseError("trait T function Other.f(self) end end", "A trait can only scope a function to itself: write 'function Self.f'");
-    matchParseError("trait T function Self.__tostring(self) end end", "'__tostring' can't be scoped to a trait: the VM looks it up as a member of the class");
+    matchParseError("trait T scoped function __tostring(self) end end", "'__tostring' can't be scoped to a trait: the VM looks it up as a member of the class");
     matchParseError("class C() function T.f(self) end end", "Class 'C' implements no traits, so it can't implement 'T.f'");
     matchParseError("class C() implements T function T.f(self) end function T.f(self) end end", "Duplicate class member 'T.f'");
-    matchParseError("local x = C:T.f\nC:T.f = 1", "Assigned expression must be a variable or a field");
+
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `obj:Trait.name` is assignable, and `obj:[expr]` names the trait with any expression
+TEST_CASE_FIXTURE(Fixture, "qualified_writes_and_dynamic_traits_parse")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        cat:Animal.species = "x"
+        cat:Animal.count += 1
+        local a = cat:[traits.animal].species
+        cat:[traits[1]]:describe()
+        Cat:[t].total = 2
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 5);
+
+    AstStatAssign* assign = block->body.data[0]->as<AstStatAssign>();
+    REQUIRE(assign);
+    AstExprIndexName* written = assign->vars.data[0]->as<AstExprIndexName>();
+    REQUIRE(written);
+    CHECK(written->qualifiedTrait);
+    CHECK(!written->dynamicTrait);
+
+    AstStatCompoundAssign* compound = block->body.data[1]->as<AstStatCompoundAssign>();
+    REQUIRE(compound);
+    AstExprIndexName* compounded = compound->var->as<AstExprIndexName>();
+    REQUIRE(compounded);
+    CHECK(compounded->qualifiedTrait);
+
+    AstStatLocal* local = block->body.data[2]->as<AstStatLocal>();
+    REQUIRE(local);
+    AstExprIndexName* read = local->values.data[0]->as<AstExprIndexName>();
+    REQUIRE(read);
+    CHECK(read->dynamicTrait);
+    CHECK(read->qualifiedTrait->is<AstExprIndexName>());
+    CHECK_EQ(read->op, '.');
+
+    AstStatExpr* call = block->body.data[3]->as<AstStatExpr>();
+    REQUIRE(call);
+    AstExprCall* callExpr = call->expr->as<AstExprCall>();
+    REQUIRE(callExpr);
+    AstExprIndexName* method = callExpr->func->as<AstExprIndexName>();
+    REQUIRE(method);
+    CHECK(method->dynamicTrait);
+    CHECK(method->qualifiedTrait->is<AstExprIndexExpr>());
+    CHECK_EQ(method->op, ':');
+
+    matchParseError("local x = cat:[t]", "Expected '.' or ':' after the trait in brackets, got <eof>");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a first parameter named `Self` makes a class method, and is const like `self`
+// Luwu Traits (rfcs/classes/traits.md): a class value's own `__tostring` takes `Self`, a trait value's own is `traitonly`, and
+// either can sit next to the objects' one
+TEST_CASE_FIXTURE(Fixture, "value_metamethods_parse")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        class Cat
+            function __tostring(Self) return "Cat" end
+            function __tostring(self) return "cat" end
+        end
+        class Dog
+            static function __tostring(Self) return "Dog" end
+        end
+        trait Json
+            traitonly function __tostring(trait) return "Json" end
+            function __tostring(self) return "json" end
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 3);
+
+    AstStatClass* cat = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(cat);
+    REQUIRE(cat->members.size == 2);
+    const AstClassMethod* classValue = cat->members.data[0].get_if<AstClassMethod>();
+    const AstClassMethod* objects = cat->members.data[1].get_if<AstClassMethod>();
+    REQUIRE(classValue);
+    REQUIRE(objects);
+    CHECK(isValueMetamethod(*classValue));
+    CHECK(!isValueMetamethod(*objects));
+
+    AstStatClass* json = block->body.data[2]->as<AstStatClass>();
+    REQUIRE(json);
+    const AstClassMethod* traitValue = json->members.data[0].get_if<AstClassMethod>();
+    REQUIRE(traitValue);
+    CHECK(isValueMetamethod(*traitValue));
+
+    matchParseError(
+        "class C function __add(Self) end end", "'__add' is a metamethod of objects: its first parameter is 'self', not 'Self'"
+    );
+    matchParseError(
+        "trait T function __tostring(Self) end end",
+        "Write 'traitonly function __tostring(trait)' to give the trait value its own '__tostring'; each class writes its own "
+        "'function __tostring(Self)'"
+    );
+    matchParseError(
+        "trait T traitonly function __tostring(self) end end",
+        "Rename 'self': a trait value's own '__tostring' is given the trait, as in 'traitonly function __tostring(trait)'"
+    );
+    matchParseError(
+        "class C function __tostring(Self) end static function __tostring(Self) end end", "Duplicate class member 'Self.__tostring'"
+    );
+}
+
+TEST_CASE_FIXTURE(Fixture, "class_method_Self_parameter_rules")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    CHECK_EQ(parse("class C function f(Self, n) return Self end end")->body.size, 1);
+    matchParseError("class C function f(n, Self) end end", "'Self' must be the first parameter: it's the class a class method is called on");
+    matchParseError("class C function f(Self: number) end end", "The 'Self' parameter cannot have a type annotation");
+    matchParseError("class C function f(Self) Self = nil end end", "Variable 'Self' is constant and may not be reassigned");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a modifier may restate the placement a function's first parameter gives it, but not
+// contradict it
+TEST_CASE_FIXTURE(Fixture, "function_placements_follow_the_first_parameter")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    CHECK_EQ(
+        parse(R"(
+            trait T
+                static function a(x) end
+                shared function b(self) end
+                shared function c(x) end
+                scoped static function d(x) end
+                scoped shared function e(self) end
+                scoped shared function f(x) end
+            end
+        )")
+            ->body.size,
+        1
+    );
+
+    matchParseError(
+        "class C static function make(self) end end",
+        "A static function can't take 'self': write 'function make(Self)' for a class method, or drop 'self' for a static"
+    );
+    matchParseError(
+        "trait T scoped static function make(self) end end",
+        "A static function can't take 'self': write 'function make(Self)' for a class method, or drop 'self' for a static"
+    );
+    matchParseError(
+        "class C shared function make(Self) end end",
+        "Remove 'shared': a class method takes its class as 'Self', and an object calling it would arrive as 'Self' instead"
+    );
 }
 
 // Luwu Traits (rfcs/classes/traits.md)
@@ -6489,6 +6638,291 @@ TEST_CASE_FIXTURE(Fixture, "trait_syntax_errors")
     matchParseError("trait T expect function __init?(self) end", "An expected '__init' can't be optional");
     // a trait may expect a constructor, to construct its implementing classes
     CHECK_EQ(parse("trait T expect function __init(self, x: number) end")->body.size, 1);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): the placement modifiers and the expectation targets
+TEST_CASE_FIXTURE(Fixture, "member_placement_modifiers_parse")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait Animal
+            expect class to override shared species: string
+            expect trait to override scoped function encode(self)
+            expect function make(): Animal
+            shared sound = "..."
+            static registry = {}
+            traitonly hooks = 0
+            traitonly function count() end
+            shared final function describe(self) end
+        end
+
+        class Cat implements Animal
+            shared species = "Felis catus"
+            static const MAX = 10
+            static function make() return Cat() end
+            function helper(Self) end
+            shared function both() end
+            shared: number = 1
+            static = 2
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 2);
+
+    AstStatClass* animal = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(animal);
+    REQUIRE(animal->members.size == 8);
+
+    const AstClassProperty* species = animal->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(species);
+    CHECK(species->expectLocation);
+    CHECK(species->expectTarget == AstClassExpectTarget::Class);
+    CHECK(species->expectTargetLocation);
+    CHECK(species->placement == AstClassMemberPlacement::Shared);
+
+    const AstClassMethod* encode = animal->members.data[1].get_if<AstClassMethod>();
+    REQUIRE(encode);
+    CHECK(encode->expectTarget == AstClassExpectTarget::Trait);
+    CHECK(encode->scopedLocation);
+
+    const AstClassProperty* hooks = animal->members.data[5].get_if<AstClassProperty>();
+    REQUIRE(hooks);
+    CHECK(hooks->placement == AstClassMemberPlacement::TraitOnly);
+
+    const AstClassMethod* describe = animal->members.data[7].get_if<AstClassMethod>();
+    REQUIRE(describe);
+    CHECK(describe->placement == AstClassMemberPlacement::Shared);
+    CHECK(describe->finalLocation);
+
+    AstStatClass* cat = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(cat);
+    REQUIRE(cat->members.size == 7);
+
+    const AstClassProperty* max = cat->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(max);
+    CHECK(max->placement == AstClassMemberPlacement::Static);
+    CHECK(max->isConst);
+
+    // a modifier word is a member's name where no member follows it
+    const AstClassProperty* namedShared = cat->members.data[5].get_if<AstClassProperty>();
+    REQUIRE(namedShared);
+    CHECK_EQ(std::string(namedShared->name.value), "shared");
+    CHECK(namedShared->placement == AstClassMemberPlacement::Default);
+
+    const AstClassProperty* namedStatic = cat->members.data[6].get_if<AstClassProperty>();
+    REQUIRE(namedStatic);
+    CHECK_EQ(std::string(namedStatic->name.value), "static");
+}
+
+TEST_CASE_FIXTURE(Fixture, "member_modifiers_go_in_one_order")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    const std::string order =
+        "modifiers go in the order expect, 'class to override' or 'trait to override', public or private, scoped, shared, static or "
+        "traitonly, final, const";
+
+    matchParseError("trait T public expect x: number end", "Write 'expect public' instead: " + order);
+    matchParseError("trait T shared expect x: number end", "Write 'expect shared' instead: " + order);
+    matchParseError("trait T final private function f(self) end end", "Write 'private final' instead: " + order);
+    matchParseError("trait T private expect class to override x: number end", "Write 'expect class to override private' instead: " + order);
+    matchParseError("class C const static x = 1 end", "Write 'static const' instead: " + order);
+    matchParseError("trait T final shared x = 1 end", "Write 'shared final' instead: " + order);
+    matchParseError("class C shared shared x = 1 end", "Remove the second 'shared'");
+    matchParseError("class C shared static x = 1 end", "Remove 'static': this member is already 'shared'");
+    matchParseError("class C public private x = 1 end", "Remove 'private': this member is already 'public'");
+    matchParseError("trait T shared scoped x = 1 end", "Write 'scoped shared' instead: " + order);
+    matchParseError("trait T scoped scoped x = 1 end", "Remove the second 'scoped'");
+    CHECK_EQ(parse("trait T private scoped static const x = 1 end")->body.size, 1);
+}
+
+TEST_CASE_FIXTURE(Fixture, "member_modifier_exclusions")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    matchParseError("trait T traitonly final function f() end end", "Remove 'final': nothing can override a 'traitonly' member");
+    matchParseError("trait T expect final function f(self) end", "Expected members can't be 'final'");
+    matchParseError("trait T shared final const x = 1 end", "'final' fields are already const");
+    matchParseError("trait T expect traitonly x: number end", "Expected members can't be 'traitonly': no class or other trait could provide them");
+    matchParseError("trait T class to override x: number end", "Write 'expect' before 'class to override': it says who provides an expected member");
+    matchParseError("trait T expect class to x: number end", "Expected 'override' after 'class to', got 'x'");
+
+    // `expect`, the override targets, `traitonly` and `scoped` are only for traits
+    matchParseError("class C expect class to override x: number end", "Only traits can 'expect' members");
+    matchParseError("class C traitonly x = 1 end", "Only traits can have 'traitonly' members");
+    matchParseError("class C scoped function f(self) end end", "Only traits can have 'scoped' members");
+    matchParseError("trait T scoped traitonly x = 1 end", "Remove 'traitonly': a scoped member is on each implementing class");
+
+    // a parameter is a field of each object
+    matchParseError("class C(n: number) shared n = 1 end", "'n' is a parameter, so it's a field of each object and can't be 'shared'");
+
+    // the VM finds metamethods and constructors where they always are
+    matchParseError("class C static function __tostring(self) end end", "A class value's own '__tostring' takes the class as 'Self': write 'function __tostring(Self)'");
+    matchParseError("class C shared function __init(self) end end", "'__init' can't be 'shared'");
+    CHECK_EQ(parse("trait T traitonly function __create() end end")->body.size, 1);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): objects never read a static member, so it may share a name with an object field
+TEST_CASE_FIXTURE(Fixture, "static_members_may_share_an_object_fields_name")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        class Counter
+            static count = 0
+            count = 5
+            size = 2
+            static function size() return 1 end
+        end
+        trait Tally
+            tally = 0
+            static tally = 0
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 2);
+    AstStatClass* counter = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(counter);
+    CHECK_EQ(counter->members.size, 4);
+
+    // objects would read both of these
+    const std::string sharesWithField = "Duplicate class member 'count': only a 'static' member can share a name with an object field";
+    matchParseError("class C count = 5 shared count = 0 end", sharesWithField);
+    matchParseError("class C shared count = 0 count = 5 end", sharesWithField);
+    matchParseError("class C count = 5 function count(self) end end", sharesWithField);
+
+    // and the class value would read both of these
+    matchParseError("class C static count = 0 static count = 1 end", "Duplicate class member 'count'");
+    matchParseError("class C static count = 0 function count(self) end end", "Duplicate class member 'count'");
+    matchParseError("class C static count = 0 shared count = 1 end", "Duplicate class member 'count'");
+    matchParseError("class C count = 0 count = 1 end", "Duplicate class member 'count'");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait scopes a field with `scoped`, and a class gives it a value qualified with the
+// trait's name
+TEST_CASE_FIXTURE(Fixture, "scoped_fields_parse")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        trait Animal
+            expect scoped species: string
+            scoped legs = 4
+        end
+
+        class Cat implements Animal, m.Plant
+            Animal.species = "Felis Catus"
+            m.Plant.kingdom: string = "Plantae"
+        end
+    )");
+    REQUIRE(block);
+    REQUIRE(block->body.size == 2);
+
+    AstStatClass* animal = block->body.data[0]->as<AstStatClass>();
+    REQUIRE(animal);
+    const AstClassProperty* species = animal->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(species);
+    CHECK(species->scopedLocation);
+    CHECK(species->expectLocation);
+
+    AstStatClass* cat = block->body.data[1]->as<AstStatClass>();
+    REQUIRE(cat);
+    REQUIRE(cat->members.size == 2);
+
+    const AstClassProperty* catSpecies = cat->members.data[0].get_if<AstClassProperty>();
+    REQUIRE(catSpecies);
+    CHECK_EQ(std::string(catSpecies->name.value), "species");
+    REQUIRE(catSpecies->qualifiedTrait);
+    CHECK(catSpecies->qualifiedTrait->is<AstExprGlobal>());
+    CHECK(!catSpecies->scopedLocation);
+    CHECK(catSpecies->defaultValue);
+
+    const AstClassProperty* kingdom = cat->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(kingdom);
+    CHECK_EQ(std::string(kingdom->name.value), "kingdom");
+    REQUIRE(kingdom->qualifiedTrait);
+    CHECK(kingdom->qualifiedTrait->is<AstExprIndexName>());
+    CHECK(kingdom->ty);
+    CHECK(catSpecies->placement == AstClassMemberPlacement::Default);
+
+    // the class spells the placement of a value on the class
+    AstStatBlock* placed = parse(R"(
+        class Cat implements Animal
+            shared Animal.kind = "cat"
+            static Animal.registry = {}
+        end
+    )");
+    REQUIRE(placed);
+    AstStatClass* placedCat = placed->body.data[0]->as<AstStatClass>();
+    REQUIRE(placedCat);
+    REQUIRE(placedCat->members.size == 2);
+    const AstClassProperty* kind = placedCat->members.data[0].get_if<AstClassProperty>();
+    const AstClassProperty* registry = placedCat->members.data[1].get_if<AstClassProperty>();
+    REQUIRE(kind);
+    REQUIRE(registry);
+    CHECK(kind->placement == AstClassMemberPlacement::Shared);
+    CHECK(kind->placementLocation);
+    CHECK(kind->qualifiedTrait);
+    CHECK(registry->placement == AstClassMemberPlacement::Static);
+
+    matchParseError("trait T end class C implements T T.x end", "'T.x' needs a value: write 'T.x = value'");
+    matchParseError("trait T end class C implements T T.x = 1 T.x = 2 end", "Duplicate class member 'T.x'");
+    matchParseError("trait T end class C implements T traitonly T.x = 1 end", "Only traits can have 'traitonly' members");
+    matchParseError("trait T end class C implements T const T.x = 1 end", "Remove 'const': 'T.x' only gives a trait's scoped field its value for this class");
+    matchParseError("class C T.x = 1 end", "Expected 'end' (to close 'class' at line 1), got 'T'");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): `__ok` is the one field whose name starts with `__`, in any placement
+TEST_CASE_FIXTURE(Fixture, "ok_is_the_only_field_starting_with_underscores")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    AstStatBlock* block = parse(R"(
+        class Request
+            private __ok = false
+            private static __ok = true
+        end
+        class Failure
+            private shared const __ok = false
+        end
+        trait Fallible
+            __ok = true
+        end
+    )");
+    REQUIRE(block);
+    CHECK_EQ(block->body.size, 3);
+
+    matchParseError("class C __okay = 1 end", "Class fields cannot start with '__'");
+    matchParseError("class C static __ok_ = 1 end", "Class fields cannot start with '__'");
+    matchParseError("trait T __oks = 1 end", "Trait fields cannot start with '__'");
+    matchParseError("class C shared __ok = 1 static __ok = 2 end", "Duplicate class member '__ok'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "const_is_never_a_function_modifier")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    matchParseError("class C shared const function f() end end", "Functions in a class are always const; remove 'const' here");
+    matchParseError("trait T traitonly const function f() end end", "Functions in a trait are always const; remove 'const' here");
+    matchParseError("trait T shared const function f() end end", "Functions in a trait are always const; remove 'const' here");
+
+    // written first, `const` is out of order too, and still not a function's modifier
+    ParseResult result = tryParse("class C const shared function f() end end");
+    REQUIRE(result.errors.size() == 2);
+    CHECK(result.errors[0].getMessage().find("Write 'shared const' instead") == 0);
+    CHECK_EQ(result.errors[1].getMessage(), "Functions in a class are always const; remove 'const' here");
+}
+
+// Luwu Traits (rfcs/classes/traits.md): a trait scopes a function with `scoped`, and nothing else declares a member through
+// `Self`
+TEST_CASE_FIXTURE(Fixture, "self_qualified_members_are_plain_parse_errors")
+{
+    ScopedFastFlag _[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    CHECK(!tryParse("trait T function Self.f(self) end end").errors.empty());
+    CHECK(!tryParse("trait T Self.x = 1 end").errors.empty());
+    CHECK(!tryParse("class C Self.x = 1 end").errors.empty());
 }
 
 TEST_CASE_FIXTURE(Fixture, "an_unterminated_trait_ends_at_the_next_declaration")

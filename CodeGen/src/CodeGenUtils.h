@@ -40,12 +40,13 @@ const Instruction* executeNEWOBJECT(lua_State* L, const Instruction* pc, StkId b
 const Instruction* executeNEWCLASSMEMBER(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 const Instruction* executeINITTRAITS(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 const Instruction* executePRESIZETABLE(lua_State* L, const Instruction* pc, StkId base, TValue* k);
-const Instruction* executeWRAPRESULT(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 const Instruction* executeGETQUALIFIED(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 const Instruction* executeGETPOSITIONAL(lua_State* L, const Instruction* pc, StkId base, TValue* k);
+const Instruction* executeTABLEBUNDLE(lua_State* L, const Instruction* pc, StkId base, TValue* k);
+const Instruction* executeSETQUALIFIED(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 const Instruction* executePUSH(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 const Instruction* executePOP(lua_State* L, const Instruction* pc, StkId base, TValue* k);
-const Instruction* executeTABLEBUNDLE(lua_State* L, const Instruction* pc, StkId base, TValue* k);
+const Instruction* executeWRAPRESULT(lua_State* L, const Instruction* pc, StkId base, TValue* k);
 void executeGETVARARGSMultRet(lua_State* L, const Instruction* pc, StkId base, int rai);
 void executeGETVARARGSConst(lua_State* L, StkId base, int rai, int b);
 const Instruction* executeDUPCLOSURE(lua_State* L, const Instruction* pc, StkId base, TValue* k);

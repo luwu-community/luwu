@@ -2179,7 +2179,6 @@ end
     )";
     CHECK_EQ(code, prettyPrint(code, {}, true).code);
 
-    // the printer doesn't print traits as traits yet, so only their bodies are compared
     std::string trait = R"(
 trait Cloner
     function clone(self)
@@ -2187,8 +2186,61 @@ trait Cloner
     end
 end
     )";
-    std::string printed = prettyPrint(trait, {}, true).code;
-    CHECK(printed.find("return Self(self)") != std::string::npos);
+    CHECK_EQ(trait, prettyPrint(trait, {}, true).code);
+}
+
+// Luwu Traits (rfcs/classes/traits.md): traits, `needs` and `implements` lists, and every member modifier print as written
+TEST_CASE("traits_and_member_modifiers_print_as_written")
+{
+    ScopedFastFlag flags[2]{{FFlag::LuwuClasses, true}, {FFlag::LuwuTraits, true}};
+
+    std::string code = R"(
+trait Animal
+    shared sound = "..."
+    static registry = {}
+    traitonly hooks = 0
+    shared final kind = "animal"
+    traitonly function count()
+        return Animal.hooks
+    end
+    scoped function encode(self)
+        return "json"
+    end
+    expect scoped species: string
+    scoped legs = 4
+    scoped shared total = 0
+    scoped static const tag = "a"
+    scoped static function make()
+        return 1
+    end
+end
+trait Pet needs Animal
+end
+class Cat implements Pet, Animal
+    shared sound = "meow"
+    static const MAX = 10
+    Animal.species = "Felis Catus"
+    shared Animal.total = 1
+    static Animal.tag = "b"
+    static count = 0
+    count = 1
+    function make(Self)
+        return Self
+    end
+    shared function noise()
+        return "meow"
+    end
+    function Animal.encode(self)
+        return "cat"
+    end
+end
+local cat = Cat()
+cat:Animal.legs = 3
+cat:Animal.legs += 1
+Cat:[traits.animal].total = 2
+local json = cat:[traits[1]]:encode()
+    )";
+    CHECK_EQ(code, prettyPrint(code, {}, true).code);
 }
 
 TEST_CASE("remixed_simple_class")
