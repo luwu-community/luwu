@@ -34,8 +34,6 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
-LUAU_FASTFLAG(LuauAutocompleteMetatableInheritance)
-LUAU_FASTFLAG(LuauAutocompleteSkipErrorTypeInUnion)
 
 static std::optional<AutocompleteEntryMap> nullCallback(std::string tag, std::optional<const ExternType*> ptr, std::optional<std::string> contents)
 {
@@ -1616,8 +1614,6 @@ tbl.
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "autocomplete_props_through_metatable_typed_metatable")
 {
-    ScopedFastFlag sff{FFlag::LuauAutocompleteMetatableInheritance, true};
-
     const std::string source = R"(
 local Base = { baseProp = 5 }
 local Meta = setmetatable({ __index = Base }, {})
@@ -5561,8 +5557,6 @@ end
 
 TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "fragment_ac_on_nonexistent_table")
 {
-    ScopedFastFlag _{FFlag::LuauAutocompleteSkipErrorTypeInUnion, true};
-
     const std::string source = R"(
         local mygame = {}
 

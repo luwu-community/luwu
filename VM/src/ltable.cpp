@@ -493,6 +493,11 @@ static int adjustasize(LuaTable* t, int size, const TValue* ek)
 
 void luaH_resizearray(lua_State* L, LuaTable* t, int nasize)
 {
+    // Luwu: from upstream's LuauTableArrayAdjustCheck (0.739). An array past MAXSIZE overflows the size computations below, as
+    // `table.move({}, 1, maxinteger, 1)` asked for.
+    if (nasize > MAXSIZE)
+        luaG_runerror(L, "table overflow");
+
     int nsize = (t->node == dummynode) ? 0 : sizenode(t);
     int asize = adjustasize(t, nasize, NULL);
     resize(L, t, asize, nsize);

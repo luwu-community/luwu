@@ -25,7 +25,6 @@ LUAU_DYNAMIC_FASTINTVARIABLE(LuauTypeFunctionSerdeIterationLimit, 100'000);
 
 LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
 LUAU_FASTFLAG(LuauTypeFunctionSerializeArgNames)
-LUAU_FASTFLAG(LuauTypeFunctionTableIndexerIsReadOnly)
 
 namespace Luau
 {
@@ -499,7 +498,7 @@ private:
             t2->indexer = TypeFunctionTableIndexer(
                 shallowSerialize(t1->indexer->indexType),
                 shallowSerialize(t1->indexer->indexResultType),
-                FFlag::LuauTypeFunctionTableIndexerIsReadOnly ? t1->indexer->isReadOnly : false
+                t1->indexer->isReadOnly
             );
         }
     }
@@ -1344,7 +1343,7 @@ private:
             t1->indexer = TableIndexer(
                 shallowDeserialize(t2->indexer->keyType),
                 shallowDeserialize(t2->indexer->valueType),
-                FFlag::LuauTypeFunctionTableIndexerIsReadOnly ? t2->indexer->isReadOnly : false
+                t2->indexer->isReadOnly
             );
         }
     }

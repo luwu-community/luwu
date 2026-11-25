@@ -97,7 +97,12 @@ std::optional<CodeData> emitCode(lua_State* L, RuntimeBcFunction& graph, std::ve
 
     bcb.foldJumps();
 
-    std::vector<uint32_t> remap = bcb.expandJumps();
+    bool hasLongJumpError = false;
+    std::vector<uint32_t> remap = bcb.expandJumps(hasLongJumpError);
+
+    if (hasLongJumpError)
+        return {};
+
     if (remap.size() > 0)
     {
         LUAU_ASSERT(insnsPC.size() <= remap.size());

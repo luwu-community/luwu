@@ -9,7 +9,6 @@
 using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
-LUAU_FASTFLAG(LuauSubtypeUnionsTogether)
 LUAU_FASTFLAG(LuauDropUnionSubtypeReasoning)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
 
@@ -1198,8 +1197,6 @@ TEST_CASE_FIXTURE(Fixture, "oss_2134")
 
 TEST_CASE_FIXTURE(Fixture, "oss_2393")
 {
-    ScopedFastFlag _{FFlag::LuauSubtypeUnionsTogether, true};
-
     LUAU_REQUIRE_NO_ERRORS(check(R"(
         --!strict
 
