@@ -12,3 +12,7 @@ LUAU_FASTFLAGVARIABLE(LuwuClasses)
 // and split's maxpieces argument. Off, the string library is exactly upstream's. The compiler reads it to emit the
 // startswith, endswith and contains fastcalls.
 LUAU_FASTFLAGVARIABLE(LuwuStringExtensions)
+
+// Luwu: the `@[inline(reason)]` attribute. The compiler weighs a marked function by a third of its size at its call sites,
+// and a call it still can't inline is a compile error at the call. In progress, so a Debug flag.
+LUAU_FASTFLAGVARIABLE(DebugLuwuEncourageInline)
