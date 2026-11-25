@@ -209,6 +209,8 @@ enum LuwuBuiltinClass
     LUWU_BUILTIN_SOME,
     LUWU_BUILTIN_OK,
     LUWU_BUILTIN_ERR,
+    // Luwu class reflection: `class.ClassMember`
+    LUWU_BUILTIN_CLASSMEMBER,
     // Luwu structured runtime errors: the variants of the global `Error`, in the order of kErrorVariants in
     // lresultlib.cpp. The VM raises the ones up to LUWU_BUILTIN_ERR_STACKOVERFLOW, the libraries the ones up to
     // LUWU_BUILTIN_ERR_UNEXPECTEDFLOAT, and the rest are for user code.
