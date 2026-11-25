@@ -1276,7 +1276,10 @@ static bool isNominalSubclass(const ExternType* cls, const ExternType* parent)
 {
     while (cls)
     {
-        if (cls == parent)
+        // Luwu: classes and traits a type function made are the same when their keys are (ExternType::generatedKey)
+        bool sameGenerated =
+            cls->generatedKey && parent->generatedKey && (cls->generatedKey == parent->generatedKey || *cls->generatedKey == *parent->generatedKey);
+        if (cls == parent || sameGenerated)
             return true;
         else if (FFlag::LuwuGenericNominals && isSameGenericNominalInstantiation(cls, parent))
             return true;
