@@ -58,6 +58,8 @@ struct GlobalOptions
     bool parseCst = false;
 
     bool dumpRegSpills = false;
+    // Luwu pretty bytecode dumps
+    bool prettyDump = false;
 } globalOptions;
 
 static Luau::CompileOptions copts()
@@ -349,6 +351,8 @@ static bool compileFile(
                              Luau::BytecodeBuilder::Dump_Remarks | Luau::BytecodeBuilder::Dump_Types;
             if (dumpConstants)
                 flags |= Luau::BytecodeBuilder::Dump_Constants;
+            if (globalOptions.prettyDump)
+                flags |= Luau::BytecodeBuilder::Dump_Pretty;
             bcb.setDumpFlags(flags);
             bcb.setDumpSource(*source);
         }
@@ -448,6 +452,7 @@ static void displayHelp(const char* argv0)
     printf("  --bytecode-summary: Compute bytecode operation distribution.\n");
     printf("  --dump-constants: Dump constant table for each function (text mode only).\n");
     printf("  --dump-regspills: include register spill events in codegen output.\n");
+    printf("  --pretty: indent each function's code under it and each inlined call under the call (text mode only).\n");
     printf("  --stats-file=<filename>: file in which compilation stats will be recored (default 'stats.json').\n");
     printf("  --vector-lib=<name>: name of the library providing vector type operations.\n");
     printf("  --vector-ctor=<name>: name of the function constructing a vector value.\n");
@@ -582,6 +587,10 @@ int main(int argc, char** argv)
         else if (strcmp(argv[i], "--dump-constants") == 0)
         {
             dumpConstants = true;
+        }
+        else if (strcmp(argv[i], "--pretty") == 0)
+        {
+            globalOptions.prettyDump = true;
         }
         else if (strcmp(argv[i], "--dump-regspills") == 0)
         {
