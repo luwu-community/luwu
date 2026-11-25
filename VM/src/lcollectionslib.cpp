@@ -1841,8 +1841,8 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     {"__iter", vecdequeiter, 0},
     {"__tostring", vecdequetostring, 0},
     // Luwu Integers (rfcs/integers.md)
-    {"from", containerfrom<LUWU_BUILTIN_VECDEQUE>, 0},
     {"tostring", vecdequebytes, 0},
+    {"from", containerfrom<LUWU_BUILTIN_VECDEQUE>, LBC_CLASSMEMBER_STATIC},
     {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC},
 };
 
@@ -1994,8 +1994,8 @@ static const luaR_NativeMember kVecMembers[] = {
     {"__iter", veciter, 0},
     {"__tostring", vectostring, 0},
     // Luwu Integers (rfcs/integers.md)
-    {"from", containerfrom<LUWU_BUILTIN_VEC>, 0},
     {"tostring", vecbytes, 0},
+    {"from", containerfrom<LUWU_BUILTIN_VEC>, LBC_CLASSMEMBER_STATIC},
     {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC},
 };
 
