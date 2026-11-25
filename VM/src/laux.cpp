@@ -9,6 +9,7 @@
 #include "lapi.h"
 #include "lgc.h"
 #include "lnumutils.h"
+#include "ldebug.h"
 
 #include <string.h>
 
@@ -36,31 +37,12 @@ l_noret luaL_argerrorL(lua_State* L, int narg, const char* extramsg)
 {
     const char* fname = currfuncname(L);
 
-    if (fname)
-        luaL_error(L, "invalid argument #%d to '%s' (%s)", narg, fname, extramsg);
-    else
-        luaL_error(L, "invalid argument #%d (%s)", narg, extramsg);
+    luaG_argumenterror(L, narg, fname, extramsg);
 }
 
 l_noret luaL_typeerrorL(lua_State* L, int narg, const char* tname)
 {
-    const char* fname = currfuncname(L);
-    const TValue* obj = luaA_toobject(L, narg);
-
-    if (obj)
-    {
-        if (fname)
-            luaL_error(L, "invalid argument #%d to '%s' (%s expected, got %s)", narg, fname, tname, luaT_objtypename(L, obj));
-        else
-            luaL_error(L, "invalid argument #%d (%s expected, got %s)", narg, tname, luaT_objtypename(L, obj));
-    }
-    else
-    {
-        if (fname)
-            luaL_error(L, "missing argument #%d to '%s' (%s expected)", narg, fname, tname);
-        else
-            luaL_error(L, "missing argument #%d (%s expected)", narg, tname);
-    }
+    luaG_unexpectedtypeerror(L, narg, currfuncname(L), tname);
 }
 
 static l_noret tag_error(lua_State* L, int narg, int tag)
@@ -87,11 +69,9 @@ l_noret luaL_errorL(lua_State* L, const char* fmt, ...)
 {
     va_list argp;
     va_start(argp, fmt);
-    luaL_where(L, 1);
-    lua_pushvfstring(L, fmt, argp);
-    va_end(argp);
-    lua_concat(L, 2);
-    lua_error(L);
+    // Luwu structured runtime errors: recorded as an `Error.Runtime`, which `pcall` gets as luaL_where's position and
+    // the message
+    luaG_runerrorcallerv(L, LUWU_RUNTIME_LIBRARY, fmt, argp);
 }
 
 // }======================================================

@@ -254,6 +254,16 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         visitor.use(OP_C(inst));
         visitor.def(OP_B(inst));
         break;
+    case IrCmd::FALLBACK_WRAPRESULT:
+        // the ERR form also reads where the error was raised
+        visitor.useRange(vmRegOp(OP_B(inst)), function.intOp(OP_C(inst)) == LBC_WRAPRESULT_ERR ? 4 : 1);
+        visitor.def(OP_B(inst));
+        break;
+    case IrCmd::FALLBACK_GETQUALIFIED:
+        visitor.use(OP_C(inst));
+        visitor.use(OP_D(inst));
+        visitor.def(OP_B(inst));
+        break;
     case IrCmd::FALLBACK_NEWCLASSMEMBER:
         visitor.use(OP_B(inst));
         visitor.useRange(vmRegOp(OP_C(inst)), function.intOp(OP_D(inst)));
@@ -319,6 +329,9 @@ static void visitVmRegDefsUses(T& visitor, IrFunction& function, IrInst& inst)
         break;
     case IrCmd::MARK_DEAD:
         // Does not affect VM def/use info
+        break;
+    case IrCmd::MARK_TRY_READS:
+        // Luwu try expressions: only dead store elimination reads it (see IrData.h)
         break;
 
         // Luwu: from upstream's LuauCodegenX64ConflictCheck (0.746). These read a VmReg only after optimizeMemoryOperandsX64 folds a

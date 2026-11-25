@@ -1197,7 +1197,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_calling_each_other_3")
 
     LUAU_REQUIRE_ERROR_COUNT(3, result);
     CHECK(toString(result.errors[0]) == R"(Unknown variable 'fourth', define it with 'local fourth = value')");
-    CHECK(toString(result.errors[1]) == R"('third' type function errored at runtime: [string "first"]:4: attempt to call a nil value)");
+    CHECK(toString(result.errors[1]) == R"('third' type function errored at runtime: [string "first"]:4: attempt to call a nil value (global 'fourth'))");
 }
 
 // Ported from upstream 0.734 (`LuauUdtfPopulateEnv`), plus a type function calling itself in a loop. A type function
@@ -1444,7 +1444,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "no_type_methods_on_types")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK(toString(result.errors[0]) == R"('test' type function errored at runtime: [string "test"]:3: attempt to call a nil value)");
+    CHECK(toString(result.errors[0]) == R"('test' type function errored at runtime: [string "test"]:3: attempt to call a nil value (field 'is'))");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "no_types_functions_on_type")
@@ -1459,7 +1459,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "no_types_functions_on_type")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK(toString(result.errors[0]) == R"('test' type function errored at runtime: [string "test"]:3: attempt to call a nil value)");
+    CHECK(toString(result.errors[0]) == R"('test' type function errored at runtime: [string "test"]:3: attempt to call a nil value (field 'singleton'))");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "no_metatable_writes")
@@ -1476,7 +1476,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "no_metatable_writes")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK(toString(result.errors[0]) == R"('test' type function errored at runtime: [string "test"]:4: attempt to index nil with 'is')");
+    CHECK(toString(result.errors[0]) == R"('test' type function errored at runtime: [string "test"]:4: attempt to index nil (local 'a') with 'is')");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "no_eq_field")
@@ -1491,7 +1491,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "no_eq_field")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
-    CHECK(toString(result.errors[0]) == R"('test' type function errored at runtime: [string "test"]:3: attempt to call a nil value)");
+    CHECK(toString(result.errors[0]) == R"('test' type function errored at runtime: [string "test"]:3: attempt to call a nil value (field '__eq'))");
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "tag_field")

@@ -3,6 +3,7 @@
 #include "lualib.h"
 
 #include "ldebug.h"
+#include "ldo.h"
 #include "lstate.h"
 #include "lvm.h"
 
@@ -19,7 +20,9 @@ static int costatus(lua_State* L)
     return 1;
 }
 
-static int auxresume(lua_State* L, lua_State* co, int narg)
+// Resumes `co` with `narg` arguments. With `keeprecord` (coroutine.wrap), an error recorded in the coroutine stays
+// recorded for the caller to raise again (luaD_resumerecorded).
+static int auxresume(lua_State* L, lua_State* co, int narg, bool keeprecord)
 {
     // error handling for edge cases
     if (co->status != LUA_YIELD)
@@ -47,7 +50,7 @@ static int auxresume(lua_State* L, lua_State* co, int narg)
 
     co->singlestep = L->singlestep;
 
-    int status = lua_resume(co, L, narg);
+    int status = keeprecord ? luaD_resumerecorded(co, L, narg) : lua_resume(co, L, narg);
     if (status == 0 || status == LUA_YIELD)
     {
         int nres = cast_int(co->top - co->base);
@@ -67,6 +70,11 @@ static int auxresume(lua_State* L, lua_State* co, int narg)
     else
     {
         lua_xmove(co, L, 1); // move error message
+
+        // Luwu structured runtime errors: the coroutine keeps a copy of its error for coroutine.close, which only a
+        // coroutine the wrapped function shared could reach. The sentinel mustn't escape, so that copy goes.
+        if (lua_gettop(co) && luaG_iserrorrecord(co, co->top - 1))
+            setnilvalue(co->top - 1);
         return CO_STATUS_ERROR;
     }
 }
@@ -119,7 +127,7 @@ static int coresumey(lua_State* L)
     lua_State* co = lua_tothread(L, 1);
     luaL_argexpected(L, co, 1, "thread");
     int narg = cast_int(L->top - L->base) - 1;
-    int r = auxresume(L, co, narg);
+    int r = auxresume(L, co, narg, false);
 
     if (r == CO_STATUS_BREAK)
         return interruptThread(L, co);
@@ -151,6 +159,11 @@ static int auxwrapfinish(lua_State* L, int r)
             lua_insert(L, -2);
             lua_concat(L, 2);
         }
+        else if (luaG_iserrorrecord(L, L->top - 1))
+        {
+            // Luwu structured runtime errors: the error stays recorded, and its message gets the same position
+            luaG_prefixerrorrecord(L);
+        }
         lua_error(L); // propagate error
     }
     return r;
@@ -160,7 +173,7 @@ static int auxwrapy(lua_State* L)
 {
     lua_State* co = lua_tothread(L, lua_upvalueindex(1));
     int narg = cast_int(L->top - L->base);
-    int r = auxresume(L, co, narg);
+    int r = auxresume(L, co, narg, true);
 
     if (r == CO_STATUS_BREAK)
         return interruptThread(L, co);
