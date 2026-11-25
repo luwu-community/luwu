@@ -64,6 +64,11 @@ LUAU_FASTFLAGVARIABLE(DebugLuwuBuiltinClasses)
 // which holds the protected ranges.
 LUAU_FASTFLAGVARIABLE(DebugLuwuTryExpressions)
 
+// Luwu Integers (rfcs/integers.md): integer literals (`7int`, `255u8`), integer arithmetic and the `integer` library. A
+// Debug flag while it's in progress. The parser gates the syntax, and while it is on the compiler emits WIP bytecode
+// (version 200), whose integer constants carry their mode.
+LUAU_FASTFLAGVARIABLE(DebugLuwuIntegers)
+
 // Luwu bundles: the `bundle` library, its classes, and the compiler's fastcalls and unfolding for it. A prototype whose
 // API can still change. Needs LuwuClasses.
 LUAU_FASTFLAGVARIABLE(DebugLuwuBundles)
