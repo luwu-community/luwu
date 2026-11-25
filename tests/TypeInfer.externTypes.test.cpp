@@ -25,7 +25,6 @@ LUAU_FASTFLAG(LuwuExternTypeUseDefinitionScope)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(LuauHigherOrderGenericInference)
 LUAU_FASTFLAG(LuauSolverV2)
-LUAU_FASTFLAG(LuauAllowIntersectionOfOneTableWithExtern)
 LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)
 
 TEST_SUITE_BEGIN("TypeInferExternTypes");
@@ -2099,8 +2098,6 @@ TEST_CASE_FIXTURE(Fixture, "extern_type_generics_do_not_crash_old_solver")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_intersected_against_extern_type_1")
 {
-    ScopedFastFlag _{FFlag::LuauAllowIntersectionOfOneTableWithExtern, true};
-
     loadDefinition(R"(
         declare extern type Frame with
         end
@@ -2121,8 +2118,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "table_intersected_against_extern_type_1")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_intersected_against_extern_type_2")
 {
-    ScopedFastFlag _{FFlag::LuauAllowIntersectionOfOneTableWithExtern, true};
-
     loadDefinition(R"(
         declare extern type Folder with
         end

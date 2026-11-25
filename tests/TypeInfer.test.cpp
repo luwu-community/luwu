@@ -29,12 +29,8 @@ LUAU_FASTINT(LuauTypeInferTypePackLoopLimit)
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(DebugLuauMagicTypes)
 LUAU_FASTFLAG(DebugLuauForbidInternalTypes)
-LUAU_FASTFLAG(LuauInstantiationUsesPolarity)
-LUAU_FASTFLAG(LuauCollapseDirectBoundCycles)
 LUAU_FASTFLAG(LuauSubtypingMissingPropertiesAsNil)
 LUAU_FASTFLAG(LuauImproveUniqueTableWidthSubtyping)
-LUAU_FASTFLAG(LuauDontBindOptionalGenericToNil)
-LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
 
 using namespace Luau;
@@ -2952,7 +2948,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "fuzzer_global_type_inference")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "fuzzer_instantiate_iter_function")
 {
-    ScopedFastFlag _{FFlag::LuauInstantiationUsesPolarity, true};
     // We do not care about the results of type checking this
     // snippet, only that it does not trip an assertion.
     //
@@ -2977,8 +2972,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "fuzzer_instantiate_iter_function")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "table_insert_and_unpack_generic_order_independence")
 {
-    ScopedFastFlag sff{FFlag::LuauCollapseDirectBoundCycles, true};
-
     CheckResult result = check(R"(
         local tbl = {}
         for i=0, 3 do
@@ -3010,7 +3003,6 @@ TEST_CASE_FIXTURE(Fixture, "generic_P_inference_with_optional_param_does_not_lea
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauDontBindOptionalGenericToNil, true},
     };
 
     // Width subtyping: passing a table that lacks an optional field to a component
@@ -3033,9 +3025,7 @@ TEST_CASE_FIXTURE(Fixture, "generic_P_with_intersection_props_and_partial_table"
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
 
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauDontBindOptionalGenericToNil, true},
         {FFlag::LuauSubtypingMissingPropertiesAsNil, true},
-        {FFlag::LuauBidirectionalInferenceSimplifyTables, true},
     };
 
     // When a component's props are an intersection of table types with optional
@@ -3063,9 +3053,7 @@ TEST_CASE_FIXTURE(Fixture, "generic_P_widening_with_recursive_optional_field")
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
 
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauDontBindOptionalGenericToNil, true},
         {FFlag::LuauSubtypingMissingPropertiesAsNil, true},
-        {FFlag::LuauBidirectionalInferenceSimplifyTables, true},
     };
 
     // When a component has a recursive optional field (like React's children),
