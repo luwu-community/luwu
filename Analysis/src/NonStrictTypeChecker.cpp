@@ -301,6 +301,8 @@ struct NonStrictTypeChecker
             return visit(s);
         else if (auto s = stat->as<AstStatCompoundAssign>())
             return visit(s);
+        else if (auto s = stat->as<AstStatPush>())
+            return visit(s);
         else if (auto s = stat->as<AstStatFunction>())
             return visit(s);
         else if (auto s = stat->as<AstStatLocalFunction>())
@@ -482,6 +484,16 @@ struct NonStrictTypeChecker
         return {};
     }
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): the container is read, not assigned
+    NonStrictContext visit(AstStatPush* push)
+    {
+        visit(push->target, ValueContext::RValue);
+        for (AstExpr* value : push->values)
+            visit(value, ValueContext::RValue);
+
+        return {};
+    }
+
     NonStrictContext visit(AstStatFunction* statFn)
     {
         return visit(statFn->func, ValueContext::RValue);
@@ -625,6 +637,8 @@ struct NonStrictTypeChecker
         else if (auto e = expr->as<AstExprMatchPattern>())
             return visit(e->checked, ValueContext::RValue);
         else if (auto e = expr->as<AstExprTableComprehension>())
+            return visit(e);
+        else if (auto e = expr->as<AstExprPop>())
             return visit(e);
         else
         {
@@ -891,6 +905,12 @@ struct NonStrictTypeChecker
     NonStrictContext visit(AstExprUnary* unary)
     {
         return visit(unary->expr, ValueContext::RValue);
+    }
+
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    NonStrictContext visit(AstExprPop* pop)
+    {
+        return visit(pop->expr, ValueContext::RValue);
     }
 
     NonStrictContext visit(AstExprBinary* binary)

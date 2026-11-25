@@ -22,3 +22,7 @@ LUAU_FASTFLAGVARIABLE(LuwuTableComprehensions)
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` and the `is` and `implements` patterns (in
 // progress). While it is on, the compiler emits WIP bytecode (version 200), which has LOP_JUMPXTYPE and LOP_JUMPXMATCH.
 LUAU_FASTFLAGVARIABLE(DebugLuwuMatchExpressions)
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `target <+ values` and `<-container` (in progress). While it
+// is on, the compiler emits WIP bytecode (version 200), which has LOP_PUSH and LOP_POP.
+LUAU_FASTFLAGVARIABLE(DebugLuwuPoperators)
