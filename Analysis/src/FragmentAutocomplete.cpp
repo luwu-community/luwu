@@ -230,6 +230,62 @@ Location getFragmentLocation(AstStat* nearestStatement, const Position& cursorPo
     return empty;
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): a destructuring declaration desugars to several statements, and all
+// but the first start inside its pattern. Reparsing from one of those would start mid-pattern, so only the first,
+// which spans the whole declaration, can start a fragment.
+static bool canStartFragment(AstStat* stat)
+{
+    if (AstStatTypeAlias* alias = stat->as<AstStatTypeAlias>())
+        return !alias->destructuredFrom;
+
+    AstStatLocal* local = stat->as<AstStatLocal>();
+    return !local || !local->isDesugaredField();
+}
+
+// The end of the destructuring declaration whose pattern holds `cursor` in `root`. A fragment normally ends at the
+// cursor, but a pattern's completions come from the value after it, so the fragment has to include that value.
+struct DestructuringDeclarationFinder : AstVisitor
+{
+    explicit DestructuringDeclarationFinder(Position cursor)
+        : cursor(cursor)
+    {
+    }
+
+    bool visit(AstStatLocal* local) override
+    {
+        bool holdsCursor = local->destructure && local->destructure->location && local->destructure->location->begin <= cursor &&
+                           cursor <= local->location.end;
+        if (holdsCursor)
+            end = local->location.end;
+
+        return true;
+    }
+
+    bool visit(AstStatTypeAlias* alias) override
+    {
+        bool holdsCursor = alias->destructure && alias->destructure->location.begin <= cursor && cursor <= alias->location.end;
+        if (holdsCursor)
+            end = alias->location.end;
+
+        return true;
+    }
+
+    Position cursor;
+    std::optional<Position> end;
+};
+
+// Where a fragment starting at `stat` begins: the declaration it was desugared from, if any.
+static Position fragmentStartOf(AstStat* stat)
+{
+    if (AstStatLocal* local = stat->as<AstStatLocal>(); local && local->destructuredFrom)
+        return local->destructuredFrom->location.begin;
+
+    if (AstStatTypeAlias* alias = stat->as<AstStatTypeAlias>(); alias && alias->destructuredFrom)
+        return alias->destructuredFrom->location.begin;
+
+    return stat->location.begin;
+}
+
 struct NearestStatementFinder : public AstVisitor
 {
     explicit NearestStatementFinder(const Position& cursorPosition)
@@ -244,7 +300,7 @@ struct NearestStatementFinder : public AstVisitor
             parent = block;
             for (auto v : block->body)
             {
-                if (v->location.begin <= cursor)
+                if (v->location.begin <= cursor && canStartFragment(v))
                 {
                     nearest = v;
                 }
@@ -329,11 +385,11 @@ std::optional<Position> blockDiffStart(AstStatBlock* blockOld, AstStatBlock* blo
 
         bool isSame = oldStat->classIndex == newStat->classIndex && oldStat->location == newStat->location;
         if (!isSame)
-            return {oldStat->location.begin};
+            return {fragmentStartOf(oldStat)};
     }
 
     if (oldSize <= stIndex)
-        return {_new.data[oldSize]->location.begin};
+        return {fragmentStartOf(_new.data[oldSize])};
 
     return std::nullopt;
 }
@@ -610,6 +666,12 @@ struct UsageFinder : public AstVisitor
     bool visit(AstStatTypeAlias* alias) override
     {
         declaredAliases.insert(std::string(alias->name.value));
+
+        // Luwu Destructuring (rfcs/destructuring.md): a key in `type .{...} = module` completes from every type the
+        // module exports, not only the ones already written
+        if (alias->destructure && alias->destructure->module != kParseNameError)
+            referencedImportedModules.emplace_back(alias->destructure->module.value);
+
         return true;
     }
 
@@ -660,6 +722,7 @@ struct UsageFinder : public AstVisitor
     DenseHashSet<const Def*> mentionedDefs{nullptr};
     std::vector<Name> referencedBindings{""};
     std::vector<std::pair<Name, Name>> referencedImportedBindings{{"", ""}};
+    std::vector<Name> referencedImportedModules;
     std::vector<std::pair<AstName, const Def*>> globalDefsToPrePopulate;
     std::vector<AstName> globalFunctionsReferenced;
     std::vector<std::pair<const Def*, Symbol>> symbolsToRefine;
@@ -754,6 +817,22 @@ void cloneTypesFromFragment(
         }
     }
 
+    // Modules a type destructuring reads from are imported whole
+    for (const Name& mod : f.referencedImportedModules)
+    {
+        for (const Scope* scope = staleScope; scope; scope = scope->parent.get())
+        {
+            auto imported = scope->importedTypeBindings.find(mod);
+            if (imported == scope->importedTypeBindings.end())
+                continue;
+
+            for (const auto& [name, tf] : imported->second)
+                destScope->importedTypeBindings[mod].insert_or_assign(name, Luau::cloneIncremental(tf, *destArena, cloneState, destScope));
+
+            break;
+        }
+    }
+
     // Fourth  - prepopulate the global function types
     for (const auto& name : f.globalFunctionsReferenced)
     {
@@ -821,7 +900,7 @@ FragmentAutocompleteAncestryResult findAncestryForFragmentParse_DEPRECATED(AstSt
         {
             for (auto stat : block->body)
             {
-                if (stat->location.begin <= cursorPos)
+                if (stat->location.begin <= cursorPos && canStartFragment(stat))
                     nearestStatement = stat;
             }
         }
@@ -1314,8 +1393,19 @@ std::pair<FragmentTypeCheckStatus, FragmentTypeCheckResult> typecheckFragment(
         return {};
     }
 
+    // Luwu Destructuring (rfcs/destructuring.md): a pattern's fields complete from the value after the pattern, so
+    // a cursor inside one extends the fragment to the end of its declaration.
+    std::optional<Position> parseEndPosition = fragmentEndPosition;
+    if (recentParse)
+    {
+        DestructuringDeclarationFinder finder{cursorPos};
+        recentParse->visit(&finder);
+        if (finder.end && *finder.end > fragmentEndPosition.value_or(cursorPos))
+            parseEndPosition = finder.end;
+    }
+
     std::optional<FragmentParseResult> tryParse;
-    tryParse = parseFragment(module->root, recentParse, module->names.get(), src, cursorPos, fragmentEndPosition);
+    tryParse = parseFragment(module->root, recentParse, module->names.get(), src, cursorPos, parseEndPosition);
 
 
     if (!tryParse)

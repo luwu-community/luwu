@@ -231,6 +231,9 @@ struct HasIndexerConstraint
     TypeId resultType;
     TypeId subjectType;
     TypeId indexType;
+    // Luwu Destructuring (rfcs/destructuring.md): an element of a positional pattern, 0 for the first. An object of a
+    // class gives the field its primary constructor takes there instead of an indexer's result.
+    std::optional<size_t> position;
 };
 
 // assignProp lhsType propName rhsType

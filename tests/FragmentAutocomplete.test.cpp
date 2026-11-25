@@ -25,6 +25,7 @@ LUAU_FASTINT(LuauParseErrorLimit)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -5593,6 +5594,74 @@ type M = {
             REQUIRE(result.result);
             CHECK_EQ(result.result->acResults.entryMap.count("use"), 1);
             CHECK_EQ(result.result->acResults.entryMap.count("reason"), 1);
+        }
+    );
+}
+
+TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "destructuring_keys_complete_in_a_fragment")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    // The declaration desugars to statements that start inside the pattern; the fragment has to start at the
+    // declaration, or it reparses from the middle of `.{...}` and completes an expression (and suggests imports)
+    const std::string source = R"(
+local value = { alpha = 1, beta = "b" }
+local .{alpha} = value
+)";
+    const std::string updated = R"(
+local value = { alpha = 1, beta = "b" }
+local .{alpha, @1} = value
+)";
+
+    autocompleteFragmentInBothSolvers(
+        source,
+        updated,
+        '1',
+        [](FragmentAutocompleteStatusResult& fragment)
+        {
+            REQUIRE(fragment.result);
+            auto acResults = fragment.result->acResults;
+
+            CHECK_EQ(AutocompleteContext::Property, acResults.context);
+            CHECK(acResults.entryMap.count("beta"));
+            CHECK(!acResults.entryMap.count("alpha"));
+            CHECK(!acResults.entryMap.count("value"));
+        }
+    );
+}
+
+TEST_CASE_FIXTURE(FragmentAutocompleteBuiltinsFixture, "type_destructuring_keys_complete_in_a_fragment")
+{
+    ScopedFastFlag luwuDestructuring{FFlag::LuwuDestructuring, true};
+
+    fileResolver.source["MainModule/A"] = R"(
+export type Point = { x: number }
+export type Size = number
+return {}
+    )";
+
+    // The fragment has to include the module after the pattern, and must not start at the second alias
+    const std::string source = R"(
+local A = require(script.A)
+type .{Point} = A
+)";
+    const std::string updated = R"(
+local A = require(script.A)
+type .{Point, @1} = A
+)";
+
+    autocompleteFragmentInBothSolvers(
+        source,
+        updated,
+        '1',
+        [](FragmentAutocompleteStatusResult& fragment)
+        {
+            REQUIRE(fragment.result);
+            auto acResults = fragment.result->acResults;
+
+            CHECK_EQ(AutocompleteContext::Type, acResults.context);
+            CHECK(acResults.entryMap.count("Size"));
+            CHECK(!acResults.entryMap.count("Point"));
         }
     );
 }
