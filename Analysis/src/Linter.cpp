@@ -795,11 +795,9 @@ private:
             if (AstStatTypeAlias* alias = node->body.data[i]->as<AstStatTypeAlias>(); alias && alias->destructuredFrom)
                 continue;
 
-            // A loop's destructured fields are written in the loop's header, before its body
+            // A loop's destructured fields and its `when` chain are written in the loop's header, before its body
             if (AstStatLocal* local = node->body.data[i - 1]->as<AstStatLocal>(); local && local->destructuredFromLoop)
                 continue;
-
-            // A loop's destructured fields and its `when` chain are written in the loop's header, before its body
             if (AstStatIf* guard = node->body.data[i]->as<AstStatIf>(); guard && guard->isWhenGuard)
                 continue;
 
@@ -5010,7 +5008,9 @@ private:
     {
         for (const AstIfClause& clause : clauses)
         {
-            if (clause.declaration)
+            // a destructuring clause's value is the destructured source, never a condition
+            bool plainBinding = clause.declaration && !clause.declaration->destructure && !clause.declaration->isDesugaredField();
+            if (plainBinding)
                 checkBinding(clause.local, clause.expr);
         }
     }
@@ -5870,7 +5870,13 @@ private:
     // line reads as a new statement. `operand` is the code that starts the line, after the `-` if there is one.
     void checkContinuation(AstExpr* continued, AstExpr* operand, unsigned int extraColumns, const std::string& reading)
     {
-        if (statementStarts.empty() || continued->location.end.line >= operand->location.begin.line)
+        checkContinuation(continued->location, operand, extraColumns, reading);
+    }
+
+    // `continued` is the code the line continues, such as a `try` keyword
+    void checkContinuation(const Location& continued, AstExpr* operand, unsigned int extraColumns, const std::string& reading)
+    {
+        if (statementStarts.empty() || continued.end.line >= operand->location.begin.line)
             return;
 
         // A line that doesn't parse as an operand (`x -` with `local` below it) is code being typed, which the parser
@@ -5892,7 +5898,7 @@ private:
             line,
             "This line continues the expression above it as %s; to start a new statement here, end line %d with ';'",
             reading.c_str(),
-            continued->location.end.line + 1
+            continued.end.line + 1
         );
     }
 
@@ -5917,6 +5923,15 @@ private:
 
     // The longest code a continuation warning quotes
     static constexpr size_t kMaxContinuationQuote = 40;
+
+    // Luwu try expressions: `try` at the end of a line takes the expression on the next one
+    bool visit(AstExprTry* node) override
+    {
+        if (enabled.ambiguousContinuation && luwuFile())
+            checkContinuation(node->tryLocation, node->expr, 0, "a 'try' expression");
+
+        return true;
+    }
 
     bool visitLoopBody(AstStatBlock* body)
     {
@@ -9503,8 +9518,8 @@ private:
 
     bool visit(AstStatLocal* node) override
     {
-        // A local without a value can't be `const`
-        bool candidate = !node->isConst && node->values.size > 0;
+        // A destructuring declaration desugars to several locals, and one without a value can't be `const`
+        bool candidate = !node->isConst && node->values.size > 0 && !node->destructure && !node->isDesugaredField();
         if (!candidate)
             return true;
 

@@ -530,6 +530,30 @@ struct FindExprOrLocal : public AstVisitor
         return true;
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the names a pattern binds are declared where they're
+    // written in it
+    bool visit(AstExprMatchPattern* pattern) override
+    {
+        visit(static_cast<AstExpr*>(pattern));
+        for (const AstPatternAlternative& alternative : pattern->alternatives)
+        {
+            if (alternative.fields)
+                visitPatternLocals(*alternative.fields);
+            if (alternative.rest)
+                visitLocal(alternative.rest);
+        }
+        return true;
+    }
+
+    void visitPatternLocals(const AstDestructurePattern& pattern)
+    {
+        for (const AstDestructureField& field : pattern.fields)
+        {
+            visitLocal(field.target.local);
+            visitPatternLocals(field.target);
+        }
+    }
+
     bool visit(AstStatLocal* al) override
     {
         bool matchedVar = false;
@@ -540,7 +564,8 @@ struct FindExprOrLocal : public AstVisitor
 
         // Luwu Destructuring (rfcs/destructuring.md): a binding of a pattern is declared by a statement whose value reads
         // its key, at the same location as a shorthand binding (`.{name}`). The binding is what's pointed at there.
-        if (al->isDesugaredField() && matchedVar)
+        bool declaresBinding = al->isDesugaredField() || al->destructure;
+        if (declaresBinding && matchedVar)
             return false;
 
         return true;

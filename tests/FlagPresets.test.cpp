@@ -10,8 +10,6 @@
 #include <utility>
 #include <vector>
 
-LUAU_DYNAMIC_FASTFLAG(LuauSelfIsSelfAndAlwaysSelf)
-
 // Luwu: the boolean flag `name`, or nullptr when the build has none
 static Luau::FValue<bool>* findBoolFlag(const char* name)
 {
@@ -50,9 +48,6 @@ TEST_SUITE_BEGIN("FlagPresets");
 // every library that defines one.
 TEST_CASE("PresetsNameRealFlags")
 {
-    // Nothing else in this binary uses Require's only preset flag, and an object file nothing uses isn't linked
-    CHECK(findBoolFlag("LuauSelfIsSelfAndAlwaysSelf") == &DFFlag::LuauSelfIsSelfAndAlwaysSelf);
-
     size_t count = 0;
     const Luau::FlagPresetEntry* entries = Luau::flagPresetEntries(&count);
     REQUIRE(count > 0);

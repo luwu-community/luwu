@@ -2,7 +2,7 @@
 
 Status: Implemented (Flagged)
 
-FFlag: LuwuBufferBatched
+FFlag: DebugLuwuBufferBatched
 
 ## Summary
 
@@ -227,7 +227,7 @@ of the `buffer` table for autocomplete and hover, and the magic only affects the
 This is a pure library addition: no new syntax, no new keywords, no new bytecode instructions or builtins, and no
 change to the behavior of any existing function, so Luau 0.730 code keeps working unchanged and valid Luwu code stays
 valid Luau code (the new functions simply do not exist upstream yet). The `buffer` table gains 16 fields when
-`LuwuBufferBatched` is on, which is the only observable difference for an embedder.
+`DebugLuwuBufferBatched` is on, which is the only observable difference for an embedder.
 
 The feature interacts with two other Luwu features and deliberately follows their rules rather than defining its own:
 
@@ -239,7 +239,7 @@ The feature interacts with two other Luwu features and deliberately follows thei
   no batched counterpart in this RFC, because their values are `integer`s and `unpack*`/`pack*` are specified in terms
   of `number`. See [Future work](#future-work).
 
-`LuwuBufferBatched` gates the whole feature - the VM registration and the type declarations together - so turning it
+`DebugLuwuBufferBatched` gates the whole feature - the VM registration and the type declarations together - so turning it
 off restores upstream `buffer` exactly. Since the functions are additive and low risk, the flag is intended to be on
 by default in standard builds of `luwu` and `luwu-lsp`.
 
@@ -316,7 +316,7 @@ The whole feature lives in three places, all tagged `// Luwu Batched Buffer Read
 
 `VM/src/lbuflib.cpp` adds four templates - `buffer_unpackinteger`, `buffer_unpackfp`, `buffer_packinteger`,
 `buffer_packfp` - instantiated for the eight widths, and a `bufferlib_batched` registration table that is applied with
-`luaL_register(L, NULL, ...)` only when `LuwuBufferBatched` is on, so the functions do not exist at all when the flag
+`luaL_register(L, NULL, ...)` only when `DebugLuwuBufferBatched` is on, so the functions do not exist at all when the flag
 is off. The batch is bounds checked up front with an `isoutofboundsbatch(offset, len, count, accessize)` macro that
 extends the existing `isoutofbounds` rule to `count` values; because offset and count are limited to 31 bits the
 comparison is a single 64-bit comparison and cannot overflow. `unpack*` reserves room for all of its return values

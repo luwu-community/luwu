@@ -27,6 +27,7 @@ LUAU_FASTINT(LuwuCompileInlineCallCost)
 LUAU_FASTINT(LuwuCompileInlineFewCallSites)
 LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTFLAG(LuwuIfLocal)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(DebugLuwuPoperators)
@@ -10685,18 +10686,18 @@ return string.startswith(s, "a"), string.endswith(s, "a", "b"), string.contains(
 )"),
         R"(
 GETVARARGS R0 1
-FASTCALL2K 135 R0 K0 L0 ['a']
+FASTCALL2K 136 R0 K0 L0 ['a']
 MOVE R2 R0
 LOADK R3 K0 ['a']
 GETIMPORT R1 3 [string.startswith]
 CALL R1 2 1
 L0: LOADK R4 K0 ['a']
 LOADK R5 K4 ['b']
-FASTCALL3 136 R0 R4 R5 L1
+FASTCALL3 137 R0 R4 R5 L1
 MOVE R3 R0
 GETIMPORT R2 6 [string.endswith]
 CALL R2 3 1
-L1: FASTCALL2K 137 R0 K0 L2 ['a']
+L1: FASTCALL2K 138 R0 K0 L2 ['a']
 MOVE R4 R0
 LOADK R5 K0 ['a']
 GETIMPORT R3 8 [string.contains]
@@ -10746,6 +10747,25 @@ TEST_CASE("StringMethodsOnProvenStringsCompileAsFunctions")
         CHECK_MESSAGE(compileFunction0(source).find("NAMECALL") != std::string::npos, source);
 }
 
+TEST_CASE("StringMethodsProvenByOrLeave")
+{
+    ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
+    ScopedFastFlag doExpressions{FFlag::LuwuDoExpr, true};
+
+    // `type(s) == "string" or return` proves `s` for the rest of the block, as a statement, a declaration's value or an
+    // assignment's value
+    const std::pair<const char*, const char*> kSameAsFunctionForm[] = {
+        {R"(local s = ... typeof(s) == "string" or return 0 return s:len())", R"(local s = ... typeof(s) == "string" or return 0 return string.len(s))"},
+        {R"(local s = ... local ok = type(s) == "string" or return 0 return s:upper())",
+         R"(local s = ... local ok = type(s) == "string" or return 0 return string.upper(s))"},
+        {R"(local s, ok = ... ok = type(s) == "string" or return 0 return s:upper())",
+         R"(local s, ok = ... ok = type(s) == "string" or return 0 return string.upper(s))"},
+    };
+
+    for (const auto& [method, function] : kSameAsFunctionForm)
+        CHECK_MESSAGE(compileFunction0(method) == compileFunction0(function), method);
+}
+
 TEST_CASE("StringMethodsOnTrustedStringAnnotations")
 {
     ScopedFastFlag stringExtensions{FFlag::LuwuStringExtensions, true};
@@ -10782,7 +10802,7 @@ return f
                    0
                ),
         R"(
-FASTCALL2K 135 R0 K0 L0 ['a']
+FASTCALL2K 136 R0 K0 L0 ['a']
 LOADK R4 K0 ['a']
 NAMECALL R2 R0 K1 ['startswith']
 CALL R2 2 1
@@ -10791,7 +10811,7 @@ LOADN R6 2
 FASTCALL3 45 R0 R5 R6 L1
 NAMECALL R3 R0 K2 ['sub']
 CALL R3 3 1
-L1: FASTCALL2 136 R0 R1 L2
+L1: FASTCALL2 137 R0 R1 L2
 MOVE R6 R1
 NAMECALL R4 R0 K3 ['endswith']
 CALL R4 2 1
@@ -15555,6 +15575,112 @@ RETURN R1 1
 )");
 }
 
+// Luwu bundles: destructuring a bundle the code builds creates no object; its bindings are the argument registers
+TEST_CASE("CollectionsBundleDestructuringCreatesNoObject")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuauEmitCallFeedback, false},
+    };
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(a, b)
+    const .(first, second) = bundle.pack(a + 1, b)
+    return first + second
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+ADDK R2 R0 K0 [1]
+MOVE R3 R1
+ADD R4 R2 R3
+RETURN R4 1
+)"
+    );
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function g(x)
+    const .{ 1 as first, 2 as second } = do
+        if x then
+            give bundle.pack(x, 1)
+        end
+        give bundle.pack(2, 3)
+    return first + second
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+JUMPIFNOT R0 L0
+MOVE R1 R0
+LOADN R2 1
+JUMP L1
+L0: LOADN R1 2
+LOADN R2 3
+L1: ADD R3 R1 R2
+RETURN R3 1
+)"
+    );
+
+    // `.(a, b)` builds the same pair, and a positional pattern reads it the same way
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function h(x)
+    const .(name, age) = do
+        local got = "user" .. x
+        give .(got, x * 2)
+    return name, age
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+LOADK R4 K0 ['user']
+MOVE R5 R0
+CONCAT R3 R4 R5
+MOVE R1 R3
+MULK R2 R0 K1 [2]
+RETURN R1 2
+)"
+    );
+
+    // a module that assigns `bundle` keeps the call
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+bundle = nil
+local function f(a, b)
+    const .(first) = bundle.pack(a, b)
+    return first
+end
+)",
+                   0,
+                   2
+               ),
+        R"(
+GETGLOBAL R2 K0 ['bundle']
+GETTABLEKS R2 R2 K1 ['pack']
+MOVE R3 R0
+MOVE R4 R1
+CALL R2 2 1
+GETPOSITIONAL R3 R2 0 [1]
+RETURN R3 1
+)"
+    );
+}
+
 // Luwu try expressions: the expression runs in a protected range of fresh registers and ends wrapped in an `ok`. The
 // range's handler, which only the VM jumps to, wraps the caught error in an `err`.
 TEST_CASE("TryExpressionCompilesToAProtectedRange")
@@ -15644,6 +15770,114 @@ return r.value
     CHECK(escaping.find(" OK\n") != std::string::npos);
 }
 
+// `r is Ok(v)` on a try result kept in registers: the test reads the flag and the first element is the value or error
+// register, through aliases of `Ok` and `Err` too. An `Err`'s later elements check the flag like its fields.
+TEST_CASE("TryResultPatternsStayInRegisters")
+{
+    ScopedFastFlag sff[]{
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CHECK_EQ("\n" + compileFunction(R"(
+local Success = Ok
+local Failure = Err
+local r = try f()
+if r is Success(v) then
+    return v
+elseif r is Failure(e, module) then
+    return e, module
+end
+return nil
+)", 0, 2),
+        R"(
+try: pc 5 to 7, handler pc 9, R2
+GETIMPORT R0 1 [Ok]
+GETIMPORT R1 3 [Err]
+GETIMPORT R2 5 [f]
+CALL R2 0 1
+LOADB R6 1 +1
+LOADB R6 0
+L0: JUMPIFNOT R6 L1
+MOVE R7 R2
+RETURN R7 1
+L1: JUMPIF R6 L3
+MOVE R7 R2
+JUMPIF R6 L2
+MOVE R8 R3
+RETURN R7 2
+L2: MOVE R9 R2
+WRAPRESULT R9 OK
+GETPOSITIONAL R8 R9 1 [2]
+RETURN R7 2
+L3: LOADNIL R7
+RETURN R7 1
+)");
+}
+
+// `is Ok(v)` in an `if const` chain, and a `match` on a local result, read the result's registers too
+TEST_CASE("TryResultPatternsInChainsAndMatchesStayInRegisters")
+{
+    ScopedFastFlag sff[]{
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    CHECK_EQ("\n" + compileFunction(R"(
+if const r = try f() when r is Ok(v) then
+    return v
+end
+return nil
+)", 0, 2),
+        R"(
+try: pc 1 to 3, handler pc 5, R0
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+LOADB R4 1 +1
+LOADB R4 0
+L0: JUMPIFNOT R4 L1
+MOVE R5 R0
+RETURN R5 1
+L1: LOADNIL R0
+RETURN R0 1
+)");
+
+    CHECK_EQ("\n" + compileFunction(R"(
+const r = try f()
+return match r
+    case is Ok(v) then v
+    case is Err(e) then e
+    else nil
+)", 0, 2),
+        R"(
+try: pc 1 to 3, handler pc 5, R0
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+LOADB R4 1 +1
+LOADB R4 0
+L0: JUMPIFNOT R4 L1
+MOVE R6 R0
+MOVE R5 R6
+RETURN R5 1
+L1: JUMPIF R4 L2
+MOVE R6 R0
+MOVE R5 R6
+RETURN R5 1
+L2: LOADNIL R5
+RETURN R5 1
+)");
+
+    // a `case` arm that binds the subject needs the object
+    std::string named = compileFunction("const r = try f() return match r case is Ok(v) then v case other then other", 0, 2);
+    CHECK(named.find("WRAPRESULT") != std::string::npos);
+}
+
 // `class.isinstance(r, Ok)`, which `r is Ok(value)` desugars to, is answered by the result's flag at O2, the level that
 // assumes builtins. The class may be `Ok` or `Err` or an alias of either through any chain of locals.
 TEST_CASE("TryResultVariantTestsStayInRegisters")
@@ -15695,6 +15929,39 @@ RETURN R7 1
     std::string asserted = compileFunction("local r = try f() assert(class.isinstance(r, Ok)) return r.value", 0, 2);
     CHECK(asserted.find("WRAPRESULT R0 OK") == std::string::npos);
     CHECK(asserted.find("JUMPXISA") == std::string::npos);
+}
+
+// A result bound by `if const` is kept in registers like `local r = try e`: the binding always passes, and the test in
+// the chain reads the flag the range writes.
+TEST_CASE("TryResultBoundInAWhenChainStaysInRegisters")
+{
+    ScopedFastFlag sff[]{{FFlag::DebugLuwuTryExpressions, true}, {FFlag::LuwuClasses, true}, {FFlag::LuwuIfLocal, true}};
+
+    CHECK_EQ("\n" + compileFunction(R"(
+if const r = try f() when class.isinstance(r, Ok) then
+    return r.value
+end
+return r2
+)", 0, 2),
+        R"(
+try: pc 1 to 3, handler pc 5, R0
+GETIMPORT R0 1 [f]
+CALL R0 0 1
+LOADB R4 1 +1
+LOADB R4 0
+L0: JUMPIFNOT R4 L2
+MOVE R5 R0
+JUMPIF R4 L1
+MOVE R6 R0
+MOVE R7 R1
+MOVE R8 R2
+MOVE R9 R3
+WRAPRESULT R6 ERR
+GETTABLEKS R5 R6 K2 ['value']
+L1: RETURN R5 1
+L2: GETIMPORT R0 4 [r2]
+RETURN R0 1
+)");
 }
 
 TEST_SUITE_END();

@@ -674,12 +674,27 @@ AstExprMatchPattern::AstExprMatchPattern(
 {
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): the expressions and nested patterns in a pattern's fields
+static void visitPatternFields(const AstDestructurePattern& pattern, AstVisitor* visitor)
+{
+    for (const AstDestructureField& field : pattern.fields)
+    {
+        if (field.keyExpr)
+            field.keyExpr->visit(visitor);
+        visitPatternFields(field.target, visitor);
+    }
+
+    if (pattern.test)
+        pattern.test->visit(visitor);
+}
+
 void AstExprMatchPattern::visit(AstVisitor* visitor)
 {
     if (!visitor->visit(this))
         return;
 
-    if (visitor->visitsPatternChecks())
+    // a pattern nested in a field of several alternatives has no plain-code meaning of its own
+    if (visitor->visitsPatternChecks() && checked)
     {
         checked->visit(visitor);
         return;
@@ -691,6 +706,8 @@ void AstExprMatchPattern::visit(AstVisitor* visitor)
     {
         if (alternative.operand)
             alternative.operand->visit(visitor);
+        if (alternative.fields)
+            visitPatternFields(*alternative.fields, visitor);
     }
 }
 
