@@ -1928,7 +1928,8 @@ std::optional<TypeId> TypeSimplifier::intersectWithSimpleDiscriminant(TypeId tar
     if (auto ut = get<UnionType>(target))
     {
         seen.insert(target);
-        TypeIds options;
+        // Luwu: a UnionBuilder, so `("a" | string) & "a"` is `"a"`. Upstream collects TypeIds and gives `"a" | "a"`.
+        UnionBuilder options{arena, builtinTypes};
         for (TypeId option : ut)
         {
             auto result = intersectWithSimpleDiscriminant(option, discriminant, seen);
@@ -1939,14 +1940,9 @@ std::optional<TypeId> TypeSimplifier::intersectWithSimpleDiscriminant(TypeId tar
             if (is<UnknownType>(result))
                 return builtinTypes->unknownType;
 
-            if (!is<NeverType>(*result))
-                options.insert(*result);
+            options.add(*result);
         }
-        if (options.empty())
-            return builtinTypes->neverType;
-        if (options.size() == 1)
-            return *options.begin();
-        return arena->addType(UnionType{options.take()});
+        return options.build();
     }
 
     if (auto it = get<IntersectionType>(target))
