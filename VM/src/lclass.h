@@ -375,6 +375,41 @@ LUAI_FUNC void luaR_setclassnativedata(LuauClass* classdef, uint32_t size, int t
  */
 LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method);
 
+// Luwu builtin classes: an `__init` that fills the object's fields from its arguments in order. A field with no
+// argument for it stays nil.
+LUAI_FUNC int luaR_fieldsinit(lua_State* L);
+
+// Luwu builtin classes: pops the value on top of the stack and adds it to `b` the way a constructor call in `__tostring`
+// shows it: strings quoted, everything else as `tostring` gives it
+LUAI_FUNC void luaR_addshowntop(struct luaL_Strbuf* b);
+
+// Luwu try expressions: a new `Some`, `Ok` or `Err` (`kind`) holding `value`, for the C API and `try`. Raises if the
+// library isn't open.
+LUAI_FUNC LuauObject* luaR_newpayload(lua_State* L, LuwuBuiltinClass kind, const TValue* value);
+
+// Luwu try expressions: LOP_WRAPRESULT. Replaces the value in `ra` with an `Ok` holding it, or with `caught` an `Err`
+// holding the error in `ra` and where it was raised in `ra + 1` to `ra + 3`. Doesn't run the collector.
+LUAI_FUNC void luaR_wrapresult(lua_State* L, StkId ra, bool caught);
+
+// Luwu try expressions: the value a `Some`, `Ok` or `Err` holds, or NULL for any other value
+LUAI_FUNC const TValue* luaR_payload(lua_State* L, const TValue* value);
+
+// Luwu structured runtime errors: writes the `kind` positions of `record`, an `Error.Runtime`'s and an
+// `Error.NotIndexable`'s, from its `subkind` as the strings the variants hold. Call it while the record is a GC root.
+LUAI_FUNC void luaR_fillerrorsubkind(lua_State* L, LuwuErrorRecord& record);
+
+// Luwu structured runtime errors: adds the message of a recorded error to `b`, without its position.
+// luaR_fillerrorsubkind must have filled it.
+LUAI_FUNC void luaR_adderrorrecord(struct luaL_Strbuf* b, const LuwuErrorRecord& record);
+
+// Luwu structured runtime errors: a new object of the recorded error's variant, `Error.NotIndexable(...)` and the
+// others, or NULL when the result library (luaopen_result) isn't open. The record stays as it is.
+LUAI_FUNC LuauObject* luaR_newerrorvariant(lua_State* L);
+
+// Luwu structured runtime errors: raises error variant `kind` with the `nargs` values on top of the stack as its
+// positions, at the nearest Luwu code. `pcall` gets its message and `try` an object of the variant.
+LUAI_FUNC l_noret luaR_raisevariant(lua_State* L, LuwuBuiltinClass kind, int nargs);
+
 /**
  * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns
  * false otherwise. The loop calls neither `__iter` nor anything per step: `ra` becomes a boolean, which FORGLOOP hands
