@@ -38,7 +38,7 @@
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
-LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(DebugLuwuBufferBatched)
 
 namespace Luau
 {
@@ -1318,7 +1318,7 @@ void registerBuiltinGlobals(Frontend& frontend, GlobalTypes& globals, bool typeC
 
     // Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md): every `unpack*` shares one magic, since the batch
     // size is read off the call site rather than off the element type being unpacked
-    if (FFlag::LuwuBufferBatched)
+    if (FFlag::DebugLuwuBufferBatched)
     {
         if (TableType* btv = getMutable<TableType>(getGlobalBinding(globals, "buffer")))
         {
@@ -2465,13 +2465,6 @@ static void reportMetamethodsOnIndex(const MagicFunctionTypeCheckContext& contex
     }
 }
 
-bool MagicSetMetatable::typeCheck(const MagicFunctionTypeCheckContext& context)
-{
-    reportMetamethodsOnIndex(context);
-    // the call is still checked as usual
-    return false;
-}
-
 bool MagicSetMetatable::infer(const MagicFunctionCallContext&)
 {
     return false;
@@ -2596,6 +2589,8 @@ static void reportMetamethodsMissingSelf(const MagicFunctionTypeCheckContext& co
 
 bool MagicSetMetatable::typeCheck(const MagicFunctionTypeCheckContext& ctx)
 {
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): metamethods in `__index`, then the classes check
+    reportMetamethodsOnIndex(ctx);
     reportMetamethodsMissingSelf(ctx);
     return reportLuwuNominalFirstArgument(ctx);
 }
