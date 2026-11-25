@@ -17,6 +17,7 @@
 LUAU_FASTINTVARIABLE(LuauRecursionLimit, 1000)
 LUAU_FASTINTVARIABLE(LuauTypeLengthLimit, 1000)
 LUAU_FASTINTVARIABLE(LuauParseErrorLimit, 100)
+LUAU_FASTFLAG(DebugLuwuEncourageInline)
 
 // Warning: If you are introducing new syntax, ensure that it is behind a separate
 // flag so that we don't break production games by reverting syntax changes.
@@ -160,6 +161,18 @@ std::vector<std::pair<Location, std::string>> deprecatedArgsValidator(Location a
     return errors;
 }
 
+// Luwu: `@[inline(reason)]` takes one string constant, why the function should be inlined
+std::vector<std::pair<Location, std::string>> inlineArgsValidator(Location attrLoc, const AstArray<AstExpr*>& args)
+{
+    if (args.size != 1)
+        return {{attrLoc, "@inline needs one reason: write @[inline(\"why this function should be inlined\")]"}};
+
+    if (!args.data[0]->is<AstExprConstantString>())
+        return {{args.data[0]->location, "@inline's reason must be a string constant"}};
+
+    return {};
+}
+
 AttributeEntry kAttributeEntries_DEPRECATED[] = {
     {"@checked", AstAttr::Type::Checked, {}},
     {"@native", AstAttr::Type::Native, {}},
@@ -176,6 +189,7 @@ AttributeEntry kAttributeEntries[] = {
 
 std::pair<AttributeEntry, Luau::FValue<bool>&> kDebugAttributeEntries[] = {
     {{"debugnoinline", AstAttr::Type::DebugNoinline, {}}, FFlag::DebugLuauNoInline},
+    {{"inline", AstAttr::Type::Inline, inlineArgsValidator}, FFlag::DebugLuwuEncourageInline},
 };
 
 ParseError::ParseError(const Location& location, std::string message)
@@ -297,17 +311,31 @@ static bool shouldParseTypePack(Lexer& lexer)
     return false;
 }
 
-ParseResult Parser::parse(const char* buffer, size_t bufferSize, AstNameTable& names, Allocator& allocator, ParseOptions options)
-{
-    LUAU_TIMETRACE_SCOPE("Parser::parse", "Parser");
+// Luwu: the most `end`s a file with errors is parsed again without (see Parser::parse)
+constexpr size_t kMaxExtraEndRetries = 3;
 
+// Luwu: one parse of `buffer`, with `extraEnd` skipped as an extra `end` when set. The `end`s that may be extra are
+// written to `extraEndSuspects`.
+ParseResult Parser::parseOnce(
+    const char* buffer,
+    size_t bufferSize,
+    AstNameTable& names,
+    Allocator& allocator,
+    const ParseOptions& options,
+    std::optional<Location> extraEnd,
+    std::vector<Location>* extraEndSuspects
+)
+{
     Parser p(buffer, bufferSize, names, allocator, options);
+    p.extraEnd = extraEnd;
 
     try
     {
         AstStatBlock* root = p.parseChunk();
         size_t lines = p.lexer.current().location.end.line + (bufferSize > 0 && buffer[bufferSize - 1] != '\n');
 
+        if (extraEndSuspects)
+            *extraEndSuspects = std::move(p.extraEndSuspects);
         return ParseResult{root, lines, std::move(p.hotcomments), std::move(p.parseErrors), std::move(p.commentLocations), std::move(p.cstNodeMap)};
     }
     catch (ParseError& err)
@@ -317,6 +345,28 @@ ParseResult Parser::parse(const char* buffer, size_t bufferSize, AstNameTable& n
 
         return ParseResult{nullptr, 0, {}, p.parseErrors, {}, std::move(p.cstNodeMap)};
     }
+}
+
+// Luwu: an extra `end` closes the block around it early, and everything after it fails to parse up to the end of the
+// file. Upstream reports those errors. When a file has errors and an `end` looked extra while parsing (noteEndClosing),
+// Luwu parses it again without that `end` and keeps that parse unless it has more errors. Skipping an `end` that was
+// needed leaves its block unclosed, which adds an error, so code without errors keeps its parse however it's indented.
+ParseResult Parser::parse(const char* buffer, size_t bufferSize, AstNameTable& names, Allocator& allocator, ParseOptions options)
+{
+    LUAU_TIMETRACE_SCOPE("Parser::parse", "Parser");
+
+    std::vector<Location> suspects;
+    ParseResult result = parseOnce(buffer, bufferSize, names, allocator, options, std::nullopt, &suspects);
+
+    for (size_t i = 0; i < suspects.size() && i < kMaxExtraEndRetries && !result.errors.empty(); i++)
+    {
+        ParseResult recovered = parseOnce(buffer, bufferSize, names, allocator, options, suspects[i], nullptr);
+        bool noMoreErrors = recovered.root && recovered.errors.size() <= result.errors.size();
+        if (noMoreErrors)
+            result = std::move(recovered);
+    }
+
+    return result;
 }
 
 template<typename Node, typename F>
@@ -463,13 +513,54 @@ static bool isStatLast(AstStat* stat)
     return stat->is<AstStatBreak>() || stat->is<AstStatContinue>() || stat->is<AstStatReturn>();
 }
 
+// Luwu: the `end` about to close the block that `openerBegin` opens looks extra when it's indented past the opener and
+// the next line continues at the block's indent: it most likely closes the block early. Parser::parse tries the file
+// again without it if the file has errors.
+void Parser::noteEndClosing(const Position& openerBegin)
+{
+    const Location& end = lexer.current().location;
+    bool indentedPastOpener = end.begin.line > openerBegin.line && end.begin.column > openerBegin.column;
+    if (!indentedPastOpener || extraEnd || extraEndSuspects.size() >= kMaxExtraEndRetries)
+        return;
+
+    Lexeme next = lexer.lookahead();
+    bool blockContinues = next.location.begin.line > end.end.line && next.location.begin.column > openerBegin.column && !blockFollow(next);
+    if (blockContinues)
+        extraEndSuspects.push_back(end);
+}
+
+// Luwu: in a recovery parse (Parser::parse), reports and skips the `end` marked as extra
+void Parser::skipExtraEnd()
+{
+    bool atExtraEnd = extraEnd && lexer.current().type == Lexeme::ReservedEnd && lexer.current().location == *extraEnd;
+    if (!atExtraEnd)
+        return;
+
+    report(lexer.current().location, "This extra 'end' doesn't close a function or statement; remove it and see if syntax errors persist");
+    nextLexeme();
+}
+
+// Luwu: whether the block being parsed ends at the current token, past an `end` skipped as extra
+bool Parser::blockEnds()
+{
+    skipExtraEnd();
+    return blockFollow(lexer.current());
+}
+
+// Luwu: whether the class body being parsed ends at the current token, past an `end` skipped as extra
+bool Parser::classBodyEnds()
+{
+    skipExtraEnd();
+    return lexer.current().type == Lexeme::ReservedEnd || lexer.current().type == Lexeme::Eof;
+}
+
 AstStatBlock* Parser::parseBlockNoScope()
 {
     TempVector<AstStat*> body(scratchStat);
 
     const Position prevPosition = lexer.previousLocation().end;
 
-    while (!blockFollow(lexer.current()))
+    while (!blockEnds())
     {
         unsigned int oldRecursionCount = recursionCounter;
 
@@ -2103,7 +2194,7 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     // second time.
     bool unterminated = false;
 
-    while (lexer.current().type != Lexeme::ReservedEnd && lexer.current().type != Lexeme::Eof)
+    while (!classBodyEnds())
     {
         // A class body and a statement list overlap: `const x = f()` is valid as either. So a class
         // missing its `end` swallows the statements after it, and the error shows up at whichever token
@@ -2555,6 +2646,8 @@ LUAU_NOINLINE AstStat* Parser::parseClassStat(const Location& start, bool export
     // plan to add a `class` library.
     // An unterminated class ends at its last member, not at the statement that follows it.
     Location end = unterminated ? lexer.previousLocation() : lexer.current().location;
+    if (!unterminated && lexer.current().type == Lexeme::ReservedEnd)
+        noteEndClosing(start.begin);
     bool hasEnd = unterminated ? false : expectAndConsume(Lexeme::ReservedEnd, "class");
     Location location{start, end};
 
@@ -6392,6 +6485,9 @@ LUAU_NOINLINE bool Parser::expectMatchEndAndConsume(Lexeme::Type type, const Mat
 {
     if (lexer.current().type != type)
         return expectMatchEndAndConsumeFailWithLookahead(type, begin);
+
+    if (type == Lexeme::ReservedEnd)
+        noteEndClosing(begin.position);
 
     // If the token matches on a different line and a different column, it suggests misleading indentation
     // This can be used to pinpoint the problem location for a possible future *actual* mismatch

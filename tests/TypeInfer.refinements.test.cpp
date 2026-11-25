@@ -3385,4 +3385,27 @@ TEST_CASE_FIXTURE(Fixture, "cli_181894_refinement_cancelled_by_for_loop")
     )"));
 }
 
+// Luwu: a refinement against a string literal lists each singleton once. Upstream gives `"NaN" | "NaN"` here, since the
+// declared `"NaN"` and the one `string` narrows to are separate types.
+TEST_CASE_FIXTURE(Fixture, "singleton_refinements_list_each_value_once")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        function f(a: "NaN" | "negative" | string, b: "NaN" | string)
+            if a == "NaN" then
+                local x = a
+            end
+            if b == "NaN" or b == "x" then
+                local y = b
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("\"NaN\"", toString(requireTypeAtPosition({3, 26})));
+    CHECK_EQ("\"NaN\" | \"x\"", toString(requireTypeAtPosition({6, 26})));
+}
+
 TEST_SUITE_END();
