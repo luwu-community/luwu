@@ -62,6 +62,8 @@ Proto* luaF_newproto(lua_State* L)
     f->tablesiteslisted = 0;
     f->tablesites = NULL;
     f->nextsited = NULL;
+    f->tryranges = NULL;
+    f->sizetryranges = 0;
     f->funid = 0;
     f->optimized = nullptr;
     f->deoptimized = nullptr;
@@ -222,6 +224,9 @@ void luaF_freeproto(lua_State* L, Proto* f, lua_Page* page)
 
     if (f->tablesites)
         luaM_freearray(L, f->tablesites, f->sizetablesites, TableSite, f->memcat);
+
+    if (f->tryranges)
+        luaM_freearray(L, f->tryranges, f->sizetryranges, LuauTryRange, f->memcat);
 
     luaM_freegco(L, f, sizeof(Proto), f->memcat, page);
 }

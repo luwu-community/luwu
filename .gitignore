@@ -32,6 +32,7 @@ __pycache__
 .clangd
 /rfcx/
 /copytoluwu.luau
-
+# everyone would have a different seal build/directory so.... dont track this in vc
+/.luaurc
 # scratch/working notes: anything *ignore.* stays out of version control
 *ignore.*

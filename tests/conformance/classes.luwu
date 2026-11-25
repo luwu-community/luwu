@@ -151,7 +151,7 @@ expectfail("classobject invalid key", "cannot index class with a table", functio
     return Point[{}]
 end)
 
-expectfail("classobject set method", "attempt to index class with 'zero'", function ()
+expectfail("classobject set method", "attempt to index class (upvalue 'Point') with 'zero'", function ()
     Point.zero = function () end
 end)
 

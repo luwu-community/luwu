@@ -146,10 +146,10 @@ do
     expectfail("missing member of a trait", "trait 'Sound' does not have a member named 'nope'", function() return Sound.nope end)
     expectfail("field through a trait", "cannot read field 'noise' of trait 'Sound'", function() return Sound.noise end)
     expectfail("rawget on a trait", "table expected, got trait", function() return rawget(Sound, "speak") end)
-    expectfail("write to a trait", "attempt to index trait with 'speak'", function() Sound.speak = function() end end)
+    expectfail("write to a trait", "attempt to index trait (upvalue 'Sound') with 'speak'", function() Sound.speak = function() end end)
 
     -- a trait isn't a class to implement, or a class to need
-    expectfail("implement a class", "class 'K' can only implement traits, but entry 1 of its 'implements' list is class 'Plain'", function()
+    expectfail("implement a class", "class 'K' implements local 'Plain', which is class 'Plain', not a trait", function()
         compile([[local Plain = ... class K implements Plain end]])(Plain)
     end)
     expectfail("need a class", "trait 'N' can't need class 'Plain': traits can only need other traits", function()

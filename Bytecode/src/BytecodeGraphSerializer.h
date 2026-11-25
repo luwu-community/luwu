@@ -615,6 +615,9 @@ struct BytecodeGraphSerializer
         case LOP_INITTRAITS:
         case LOP_GETTABLEBUNDLE:
         case LOP_SETTABLEBUNDLE:
+        // Luwu try expressions: the parser refuses functions with protected ranges
+        case LOP_WRAPRESULT:
+        case LOP_RESULTGET:
             LUAU_UNREACHABLE();
 
         case LOP_GETPOSITIONAL:
