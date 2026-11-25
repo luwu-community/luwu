@@ -129,6 +129,14 @@ void luaV_gettablefor(lua_State* L, const TValue* t, TValue* key, StkId val, con
         else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisobject(t)))
         {
             LuauObject* inst = objectvalue(t);
+
+            // Luwu bundles: `b[n]` reads a position; a string still finds a method
+            if (luaR_isbundle(inst) && !ttisstring(key))
+            {
+                luaR_getbundleposition(L, inst, key, val);
+                return;
+            }
+
             const TValue* offsettval = luaH_get(inst->lclass->memberstooffset, key);
 
             // Objects throw if you try to access a member that is not
@@ -213,6 +221,88 @@ void luaV_getpositional(lua_State* L, const TValue* t, int position, StkId val)
     );
 }
 
+// Luwu bundles: runs `op` with a new bundle of the `n` values at `values` as its key, anchored on the stack. For the
+// lookups that need the key itself: a metamethod, a table that isn't plain, or a key to insert.
+template<typename Op>
+static void withbundlekey(lua_State* L, StkId values, int n, Op op)
+{
+    // a new object is white, so filling it needs no barrier
+    LuauObject* bundle = luaR_newbundleuninit(L, n, "bundle.pack");
+    for (int i = 0; i < n; i++)
+        setobj(L, &luaR_members(bundle)[i], values + i);
+    luaR_sealbundle(bundle);
+
+    // the stack always has EXTRA_STACK slots past the top
+    StkId key = L->top;
+    setobjectvalue(L, key, bundle);
+    L->top++;
+
+    op(key);
+
+    L->top--;
+}
+
+// Luwu bundles: whether `.(...)` can build a bundle; when it can't, building one raises
+static bool bundlesopen(lua_State* L)
+{
+    return L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0] != NULL;
+}
+
+void luaV_gettablebundle(lua_State* L, StkId t, StkId values, int n, StkId val)
+{
+    // A plain table answers without the bundle. So does a hit in any table, since `__index` only runs on a miss.
+    if (bundlesopen(L) && ttistable(t))
+    {
+        LuaTable* h = hvalue(t);
+        const TValue* res = luaH_getbundle(h, values, n);
+        if (!ttisnil(res) || !fasttm(L, h->metatable, TM_INDEX))
+        {
+            setobj2s(L, val, res);
+            return;
+        }
+    }
+
+    ptrdiff_t tslot = savestack(L, t);
+    ptrdiff_t valslot = savestack(L, val);
+    withbundlekey(
+        L,
+        values,
+        n,
+        [&](StkId key)
+        {
+            luaV_gettable(L, restorestack(L, tslot), key, restorestack(L, valslot));
+        }
+    );
+}
+
+void luaV_settablebundle(lua_State* L, StkId t, StkId values, int n, StkId val)
+{
+    // an existing key is assigned in place, as luaV_settable does without consulting `__newindex`
+    if (bundlesopen(L) && ttistable(t) && !hvalue(t)->readonly)
+    {
+        LuaTable* h = hvalue(t);
+        TValue* slot = const_cast<TValue*>(luaH_getbundle(h, values, n));
+        if (!ttisnil(slot))
+        {
+            setobj2t(L, slot, val);
+            luaC_barriert(L, h, val);
+            return;
+        }
+    }
+
+    ptrdiff_t tslot = savestack(L, t);
+    ptrdiff_t valslot = savestack(L, val);
+    withbundlekey(
+        L,
+        values,
+        n,
+        [&](StkId key)
+        {
+            luaV_settable(L, restorestack(L, tslot), key, restorestack(L, valslot));
+        }
+    );
+}
+
 void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
 {
     int loop;
@@ -247,6 +337,10 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
         else if (LUAU_UNLIKELY(FFlag::LuwuClasses && ttisobject(t)))
         {
             LuauObject* inst = objectvalue(t);
+            // Luwu bundles: `b[n] = v` names `with`; a string is a missing field like on any object
+            if (luaR_isbundle(inst) && !ttisstring(key))
+                luaR_bundleassignerror(L, key);
+
             const TValue* offset = luaH_get(inst->lclass->memberstooffset, key);
             if (ttisnil(offset) || uint32_t(nvalue(offset)) >= inst->lclass->numberofobjectmembers)
                 luaG_missingmembererror(L, t, key);
@@ -266,7 +360,7 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
                 if (inst->lclass->hasconstmembers)
                     luaR_checkconstassignfast(L, key, inst, cl, offsetnum);
             }
-            setobj2class(L, &inst->members[offsetnum], val);
+            setobj2class(L, &luaR_members(inst)[offsetnum], val);
             luaC_barrier(L, inst, val);
             return;
         }
@@ -707,6 +801,18 @@ void luaV_dolen(lua_State* L, StkId ra, const TValue* rb)
         setnvalue(ra, cast_num(ts->len));
         return;
     }
+    case LUA_TOBJECT:
+    {
+        // Luwu collections: builtin containers know their length without `__len`
+        double length = luaR_objectlength(objectvalue(rb));
+        if (length >= 0)
+        {
+            setnvalue(ra, length);
+            return;
+        }
+        tm = luaT_gettmbyobj(L, rb, TM_LEN);
+        break;
+    }
     default:
         tm = luaT_gettmbyobj(L, rb, TM_LEN);
     }
@@ -787,8 +893,13 @@ LUAU_NOINLINE void luaV_callTM(lua_State* L, int nparams, int res)
     --L->nCcalls;
 }
 
-LUAU_NOINLINE void luaV_tryfuncTM(lua_State* L, StkId func)
+LUAU_NOINLINE int luaV_tryfuncTM(lua_State* L, StkId func, StkId argtop)
 {
+    // Luwu Classes (rfcs/classes): a call on a class runs its constructor in the class's place, with the arguments where
+    // they are
+    if (ttisclass(func) && luaR_prepareclasscall(L, func, argtop))
+        return 0;
+
     const TValue* tm = luaT_gettmbyobj(L, func, TM_CALL);
     if (!ttisfunction(tm))
         luaG_typeerror(L, func, "call");
@@ -796,6 +907,7 @@ LUAU_NOINLINE void luaV_tryfuncTM(lua_State* L, StkId func)
         setobj2s(L, p, p - 1);
     L->top++;              // stack space pre-allocated by the caller
     setobj2s(L, func, tm); // tag method is the new function to be called
+    return 1;
 }
 
 // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): how many elements a table iterated by a generic for can

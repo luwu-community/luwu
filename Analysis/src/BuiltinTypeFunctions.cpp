@@ -270,6 +270,22 @@ TypeFunctionReductionResult<TypeId> lenTypeFunction(
     ErrorVec dummy;
 
     std::optional<TypeId> mmType = findMetatableEntry(ctx->builtins, dummy, operandTy, "__len", Location{});
+
+    // Luwu: an intersection has the `__len` of a part that has one, so a generic narrowed to a bundle
+    // (`T & .(...unknown)`) has a length. Upstream looks for a metatable on the whole intersection, which has none.
+    if (const IntersectionType* parts = get<IntersectionType>(normalizedOperand); parts && !mmType)
+    {
+        for (TypeId part : parts->parts)
+        {
+            mmType = findMetatableEntry(ctx->builtins, dummy, part, "__len", Location{});
+            if (mmType)
+            {
+                operandTy = follow(part);
+                break;
+            }
+        }
+    }
+
     if (!mmType)
     {
         // If we have a metatable type with no __len, this means we still have a table with default length function
@@ -1270,6 +1286,24 @@ bool occurs(TypeId haystack, TypeId needle)
 
 } // namespace
 
+// Luwu bundles: whether `ty` is a bundle, or a union of only bundles
+static bool isBundles(TypeId ty)
+{
+    ty = follow(ty);
+    if (const UnionType* options = get<UnionType>(ty))
+    {
+        for (TypeId option : options)
+        {
+            const ExternType* etv = get<ExternType>(follow(option));
+            if (!etv || !isBundle(etv))
+                return false;
+        }
+        return true;
+    }
+    const ExternType* etv = get<ExternType>(ty);
+    return etv && isBundle(etv);
+}
+
 TypeFunctionReductionResult<TypeId> refineTypeFunction(
     TypeId instance,
     const std::vector<TypeId>& typeParams,
@@ -1384,7 +1418,10 @@ TypeFunctionReductionResult<TypeId> refineTypeFunction(
         // If the target type is a table, then simplification already implements the logic to deal with refinements properly since the
         // type of the discriminant is guaranteed to only ever be an (arbitrarily-nested) table of a single property type.
         // We also fire for simple discriminants such as false? and ~(false?): the falsy and truthy types respectively.
-        if (is<TableType>(target) || isTruthyOrFalsyType(discriminant))
+        // Luwu bundles: a test of a bundle's position refines it with a table of that position, which simplification
+        // narrows (`if b.1 == "ok"`). Normalization would keep the intersection.
+        bool testsBundlePosition = isBundles(target) && is<TableType>(discriminant);
+        if (is<TableType>(target) || isTruthyOrFalsyType(discriminant) || testsBundlePosition)
         {
             SimplifyResult result = simplifyIntersection(ctx->builtins, ctx->arena, target, discriminant);
             // Simplification considers free and generic types to be

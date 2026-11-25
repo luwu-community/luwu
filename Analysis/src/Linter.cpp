@@ -3,6 +3,7 @@
 
 #include "Luau/AstQuery.h"
 #include "Luau/AstUtils.h"
+#include "Luau/BuiltinDefinitions.h"
 #include "Luau/LinterConfig.h"
 #include "Luau/LuwuOnlyApi.h"
 #include "Luau/Module.h"
@@ -2087,6 +2088,10 @@ private:
             return Kind_Primitive;
         if (FFlag::LuwuClasses && FFlag::LuwuTraits && name == "trait")
             return Kind_Primitive;
+
+        // Luwu builtin classes: `typeof` names an object of one after what it is ("bundle", "vec"), as it does userdata
+        if (isBuiltinClassTypeofName(name))
+            return Kind_Userdata;
 
         if (std::optional<TypeFun> maybeTy = context->scope->lookupType(name))
             return Kind_Userdata;
@@ -9814,22 +9819,39 @@ private:
         return std::nullopt;
     }
 
-    bool visit(AstExprIndexName* node) override
+    void report(const Location& location, const std::string& name)
     {
-        std::optional<std::string> library = libraryOf(node);
-        if (!library || !isLuwuOnlyMember(*library, node->index.value))
-            return true;
-
-        std::string qualified = *library + "." + node->index.value;
         const char* language = context->module->language == Language::Lua ? "Lua" : "Luau";
         emitWarning(
             *context,
             LintWarning::Code_LuwuOnlyApi,
-            node->location,
+            location,
             "'%s' only exists in Luwu, but this is a %s file; rename it to '.luwu' if it's Luwu code",
-            qualified.c_str(),
+            name.c_str(),
             language
         );
+    }
+
+    bool visit(AstExprIndexName* node) override
+    {
+        std::optional<std::string> library = libraryOf(node);
+        if (library && isLuwuOnlyMember(*library, node->index.value))
+            report(node->location, *library + "." + node->index.value);
+        return true;
+    }
+
+    bool visit(AstExprGlobal* node) override
+    {
+        if (isLuwuOnlyGlobal(node->name.value))
+            report(node->location, node->name.value);
+        return true;
+    }
+
+    // A Luwu-only library's types (`collections.Vec<T>`, or `type .{ Vec } = collections`, which desugars to it)
+    bool visit(AstTypeReference* node) override
+    {
+        if (node->prefix && isLuwuOnlyGlobal(node->prefix->value))
+            report(node->location, std::string(node->prefix->value) + "." + node->name.value);
         return true;
     }
 };

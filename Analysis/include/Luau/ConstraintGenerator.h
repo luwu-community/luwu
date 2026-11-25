@@ -218,6 +218,18 @@ struct ConstraintGenerator
     NotNull<TypeFunctionRuntime> typeFunctionRuntime;
     DenseHashMap<const AstStatTypeFunction*, ScopePtr> astTypeFunctionEnvironmentScopes{nullptr};
 
+    // Luwu collections: an empty `Vec()` or `VecDeque()` whose local's next use is a push takes its element type from
+    // that push (findFirstPushes), the way the runtime fixes it from the first value. The constructor call's element
+    // type, bound by the push.
+    DenseHashMap<const AstExprCall*, TypeId> firstPushElementTypes{nullptr};
+    struct FirstPush
+    {
+        TypeId elementType;
+        // Which argument of the push holds the value
+        size_t valueIndex;
+    };
+    DenseHashMap<const AstExprCall*, FirstPush> firstPushes{nullptr};
+
     // Needed to resolve modules to make 'require' import types properly.
     NotNull<ModuleResolver> moduleResolver;
     // Occasionally constraint generation needs to produce an ICE.
@@ -486,6 +498,7 @@ private:
     );
 
     ControlFlow visitBlockWithoutChildScope(const ScopePtr& scope, AstStatBlock* block);
+    void findFirstPushes(AstStatBlock* block);
 
     ControlFlow visit(const ScopePtr& scope, AstStat* stat);
     ControlFlow visit(const ScopePtr& scope, AstStatBlock* block);
@@ -618,6 +631,7 @@ private:
     );
 
     void visitLValue(const ScopePtr& scope, AstExpr* expr, TypeId rhsType);
+    std::optional<TypeId> expectedTypeOfAssignedBundle(const ScopePtr& scope, AstExpr* target, AstExpr* value);
     void visitLValue(const ScopePtr& scope, AstExprLocal* local, TypeId rhsType);
     void visitLValue(const ScopePtr& scope, AstExprGlobal* global, TypeId rhsType);
     void visitLValue(const ScopePtr& scope, AstExprIndexName* expr, TypeId rhsType);
