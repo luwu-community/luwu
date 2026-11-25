@@ -1,0 +1,231 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing when chains on loops")
+
+-- for: a failing chain skips the iteration
+do
+    local out = {}
+    for i = 1, 10 when i % 2 == 0 when local sq = i * i when sq > 10 do
+        table.insert(out, sq)
+    end
+    assert(table.concat(out, ",") == "16,36,64,100")
+
+    local seen = {}
+    for k, v in { a = 1, b = false, c = 3 } when v do
+        seen[k] = v
+    end
+    assert(seen.a == 1 and seen.b == nil and seen.c == 3)
+
+    -- a constant false chain skips everything, a constant true one nothing
+    local n = 0
+    for _ = 1, 5 when false do
+        n += 1
+    end
+    for _ = 1, 5 when true do
+        n += 10
+    end
+    assert(n == 50)
+end
+
+-- for: continue and break in the body, and in the chain itself (from a do expression)
+do
+    local out = {}
+    for i = 1, 10 when i ~= 3 do
+        if i == 5 then
+            continue
+        end
+        if i == 8 then
+            break
+        end
+        table.insert(out, i)
+    end
+    assert(table.concat(out, ",") == "1,2,4,6,7")
+
+    out = {}
+    for i = 1, 10 when (do
+        if i == 6 then
+            break
+        end
+        give i % 2 == 1
+    ) do
+        table.insert(out, i)
+    end
+    assert(table.concat(out, ",") == "1,3,5")
+end
+
+-- for: closures capture each iteration's binding
+do
+    local fns = {}
+    for i = 1, 4 when local d = i * 10 when i % 2 == 0 do
+        table.insert(fns, function()
+            return d
+        end)
+    end
+    assert(#fns == 2 and fns[1]() == 20 and fns[2]() == 40)
+end
+
+-- for: a later clause captures an earlier binding and fails; the next iteration reuses the register
+do
+    local saved = {}
+    for i = 1, 3 when local v = { i } when (function()
+        table.insert(saved, function()
+            return v
+        end)
+        return false
+    end)() do
+        error("unreachable")
+    end
+    assert(saved[1]()[1] == 1 and saved[2]()[1] == 2 and saved[3]()[1] == 3)
+end
+
+-- while local: the chain runs before every pass, and the loop ends when it fails
+do
+    local q = { 3, 2, 1 }
+    local got = {}
+    while local x = table.remove(q) when x < 3 do
+        table.insert(got, x)
+    end
+    assert(table.concat(got, ",") == "1,2")
+    -- the failing pass still removed its value
+    assert(#q == 0)
+
+    -- a plain condition can come first
+    local ready = true
+    local items = { "a", "b" }
+    local out = {}
+    while ready when local item = table.remove(items, 1) do
+        table.insert(out, item)
+        ready = item ~= "a"
+    end
+    assert(table.concat(out, ",") == "a")
+end
+
+-- while local: the initializer sees the name from outside the loop, not the previous pass's binding
+do
+    local x = 10
+    local n = 0
+    local got = {}
+    while local x = if n < 3 then x + n else nil do
+        n += 1
+        table.insert(got, x)
+        -- lasts only for this pass
+        x = 999
+    end
+    assert(table.concat(got, ",") == "10,11,12")
+    assert(x == 10)
+end
+
+-- while local: closures capture each pass's binding, written or not
+do
+    local k = 0
+    local function step()
+        k += 1
+        return if k <= 3 then k else nil
+    end
+
+    local fns = {}
+    while local j = step() do
+        table.insert(fns, function()
+            j += 100
+            return j
+        end)
+    end
+    assert(fns[1]() == 101 and fns[2]() == 102 and fns[3]() == 103)
+    assert(fns[1]() == 201)
+end
+
+-- while local: continue re-runs the chain, break leaves
+do
+    local items = { 1, 2, 3, 4, 5, 6 }
+    local i = 0
+    local function nexti()
+        i += 1
+        return items[i]
+    end
+
+    local odd = {}
+    while local v = nexti() when v < 6 do
+        if v % 2 == 0 then
+            continue
+        end
+        if v == 5 then
+            break
+        end
+        table.insert(odd, v)
+    end
+    assert(table.concat(odd, ",") == "1,3")
+    assert(i == 5)
+end
+
+-- while local: a later clause captures an earlier binding and fails; the loop's exit closes it
+do
+    local saved
+    local passes = 0
+    while local v = { "kept" } when (function()
+        saved = function()
+            return v
+        end
+        passes += 1
+        return passes < 3
+    end)() do
+        local clobber = { "body" }
+        assert(clobber[1] == "body")
+    end
+    local clobber = { "after" }
+    assert(clobber[1] == "after")
+    assert(saved()[1] == "kept")
+    assert(passes == 3)
+end
+
+-- while local: break and continue inside the chain belong to the loop around it
+do
+    local out = {}
+    for i = 1, 4 do
+        local left = 2
+        while local x = (do
+            if i == 2 then
+                continue
+            end
+            if i == 4 then
+                break
+            end
+            left -= 1
+            give if left >= 0 then i else nil
+        ) do
+            table.insert(out, x)
+        end
+    end
+    assert(table.concat(out, ",") == "1,1,3,3")
+end
+
+-- while local: nested loops, each with its own binding
+do
+    local outer = { { 1, 2 }, { 3 } }
+    local sum = 0
+    while local row = table.remove(outer, 1) do
+        while local v = table.remove(row) do
+            sum += v
+        end
+    end
+    assert(sum == 6)
+end
+
+-- while local: yielding from the chain and the body
+do
+    local co = coroutine.wrap(function()
+        local n = 0
+        while local v = coroutine.yield("need") when v ~= "stop" do
+            n += 1
+            coroutine.yield(v)
+        end
+        return n
+    end)
+
+    assert(co() == "need")
+    assert(co("a") == "a")
+    assert(co() == "need")
+    assert(co("b") == "b")
+    assert(co() == "need")
+    assert(co("stop") == 2)
+end
+
+return "OK"
