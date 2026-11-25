@@ -1979,4 +1979,41 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "destructured_types_report_what_the_module_do
     CHECK(get<IncorrectGenericParameterCount>(result.errors[1]));
 }
 
+// Luwu never-returning calls: a required module's function declared to return `never` ends a code path, and a call
+// through another of its functions doesn't
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_required_modules_never_returning_function_ends_a_code_path")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    fileResolver.source["game/Process"] = R"(
+        type Process = { exit: (code: number?) -> never, run: () -> () }
+        return {} :: Process
+    )";
+    fileResolver.source["game/Main"] = R"(
+        local process = require(game.Process)
+
+        local function exits(x: number?): number
+            if not x then
+                process.exit(1)
+            end
+            return x + 1
+        end
+
+        local function runs(x: number?): number
+            if not x then
+                process.run()
+            end
+            return x + 1
+        end
+
+        return { exits, runs }
+    )";
+
+    CheckResult result = getFrontend().check("game/Main");
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    // `x + 1` in `runs`, where `x` can still be nil
+    CHECK_EQ(result.errors[0].location.begin.line, 14);
+}
+
 TEST_SUITE_END();
