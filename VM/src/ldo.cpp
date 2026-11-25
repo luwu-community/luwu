@@ -752,7 +752,11 @@ static int resume_finish(lua_State* L, int status, int oldnCcalls, bool keepreco
     CallInfo* ch = NULL;
     while (status != LUA_OK && (ch = resume_findhandler(L)) != NULL)
     {
+        // Luwu structured runtime errors: formatting the error can reallocate the CallInfo array. The handler is found
+        // again by its offset.
+        ptrdiff_t handler = saveci(L, ch);
         status = luaD_finisherror(L, status);
+        ch = restoreci(L, handler);
 
         if (lua_isyieldable(L) != 0 && L->global->cb.debugprotectederror)
         {
