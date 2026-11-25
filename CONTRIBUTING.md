@@ -67,7 +67,7 @@ design decision. This means if you're implementing a feature, use these headers:
 - `// Luwu:` for a one-off difference from upstream Luau that belongs to no feature.
 
 For feature headers, always use Title Case and a title that matches the RFC's title. A feature named after an API
-keeps the API's own spelling: `// Luwu table.drop (rfcs/table-drop.md):`, never `Table Drop` or `Table.Drop`.
+keeps the API's own spelling: `// Luwu table.discard (rfcs/table-discard.md):`, never `Table Discard` or `Table.Discard`.
 
 If a feature has an existing tag convention, reuse the existing tag, and never use a fast/feature flag's name as the tag.
 
