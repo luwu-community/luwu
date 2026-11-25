@@ -461,8 +461,10 @@ void luaR_checkconstassign(lua_State* L, const TValue* key, const LuauObject* ob
     // deviaze: embedder code isn't allowed to bypass `const` access (unlike private access) because
     // allowing such could lead to UB in future const optimizations.
     // also if you're using `const` just to have embedder-only-assignable fields please just use userdata
+    TValue target;
+    setobjectvalue(L, &target, const_cast<LuauObject*>(object));
     if (!cl || (!isfinal && !luaR_closureisinit(classdef, cl)))
-        luaG_constassignerror(L, key, classdef->name);
+        luaG_constassignerror(L, &target, key);
 
     // `__init` constructs the object in its `self` parameter, which is register 0 of its frame. This
     // holds for a vararg `__init` too: its fixed parameters are moved up, and its frame base moves with
@@ -472,7 +474,7 @@ void luaR_checkconstassign(lua_State* L, const TValue* key, const LuauObject* ob
     bool writesownself = ttisobject(self) && objectvalue(self) == object;
 
     if (!writesownself)
-        luaG_constassignnotselferror(L, key, classdef->name);
+        luaG_constassignnotselferror(L, &target, key);
 }
 
 // Stamps `ownerclass` recursively on function proto `p` and every function proto lexically nested

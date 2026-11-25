@@ -236,7 +236,10 @@ private:
         }
         else if (get<UnknownType>(ty))
         {
-            if (FFlag::LuauUdtfReuseTypeUserdatas)
+            // Luwu try expressions: weakunknown keeps its flag, so it's never the pinned plain unknown
+            if (ty == state->ctx->builtins->weakUnknownType)
+                target = typeFunctionRuntime->typeArena.allocate(TypeFunctionUnknownType{/* weak */ true});
+            else if (FFlag::LuauUdtfReuseTypeUserdatas)
                 target = typeFunctionRuntime->pinnedTypes[TypeFunctionPinnedType::Unknown];
             else
                 target = typeFunctionRuntime->typeArena.allocate(TypeFunctionUnknownType{});
@@ -577,6 +580,10 @@ private:
         f2->argTypes = shallowSerialize(f1->argTypes);
         f2->retTypes = shallowSerialize(f1->retTypes);
 
+        // Luwu try expressions
+        if (f1->errorHint)
+            f2->errorHint = shallowSerialize(*f1->errorHint);
+
         if (FFlag::LuauTypeFunctionSerializeArgNames)
         {
             f2->argNames.reserve(f1->argNames.size());
@@ -903,8 +910,8 @@ private:
                 state->ctx->ice->ice("Deserializing user defined type function arguments: mysterious type is being deserialized");
             }
         }
-        else if (get<TypeFunctionUnknownType>(ty))
-            target = state->ctx->builtins->unknownType;
+        else if (const TypeFunctionUnknownType* unknown = get<TypeFunctionUnknownType>(ty))
+            target = unknown->weak ? state->ctx->builtins->weakUnknownType : state->ctx->builtins->unknownType;
         else if (get<TypeFunctionNeverType>(ty))
             target = state->ctx->builtins->neverType;
         else if (get<TypeFunctionAnyType>(ty))
@@ -1488,6 +1495,10 @@ private:
 
         if (f2->retTypes)
             f1->retTypes = shallowDeserialize(f2->retTypes);
+
+        // Luwu try expressions
+        if (f2->errorHint)
+            f1->errorHint = shallowDeserialize(*f2->errorHint);
 
         if (FFlag::LuauTypeFunctionSerializeArgNames)
         {
