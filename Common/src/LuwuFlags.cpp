@@ -71,3 +71,7 @@ LUAU_FASTFLAGVARIABLE(DebugLuwuBundles)
 // Luwu: the `@[inline(reason)]` attribute. The compiler weighs a marked function by a third of its size at its call sites,
 // and a call it still can't inline is a compile error at the call. In progress, so a Debug flag.
 LUAU_FASTFLAGVARIABLE(DebugLuwuEncourageInline)
+
+// Luwu: string.format and interpolated strings compile to a fastcall (LBF_STRING_FORMAT). While it is on, the compiler
+// emits WIP bytecode (version 200), which a VM without the builtin can't run.
+LUAU_FASTFLAGVARIABLE(LuwuStringFormatFastcall)

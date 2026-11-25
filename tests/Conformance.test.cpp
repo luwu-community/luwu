@@ -35,6 +35,8 @@
 #include <thread>
 #include <string>
 #include <unordered_map>
+#include <cmath>
+#include <limits>
 #include <vector>
 #include <math.h>
 
@@ -92,6 +94,7 @@ LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuStringFormatFastcall)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
@@ -1482,6 +1485,71 @@ TEST_CASE("StringExtensionsFlagDisabled")
     CHECK(lua_pcall(L, 0, 1, 0) != LUA_OK);
 
     lua_close(L);
+}
+
+// Luwu: string.format prints a plain `%.Nf` and `%d` without snprintf. Its output has to match snprintf's for every
+// value: halfway values, negatives that round to zero, values too large for the fast path, NaN and infinity.
+TEST_CASE("StringFormatNumbersMatchSnprintf")
+{
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    auto luaFormat = [L](const char* format, double value) -> std::string
+    {
+        lua_getglobal(L, "string");
+        lua_getfield(L, -1, "format");
+        lua_pushstring(L, format);
+        lua_pushnumber(L, value);
+        lua_call(L, 2, 1);
+        std::string result = lua_tostring(L, -1);
+        lua_pop(L, 2);
+        return result;
+    };
+
+    std::vector<double> values = {
+        0.0, -0.0, 0.5, 1.5, 2.5, -2.5, 0.125, 0.375, 382.255, 1.005, -0.001, -0.004, 9.999, 99.995, 1023.99999,
+        1e9, 1e10, 123456789.123, 1e-12, -1e-12, 3.0, 1e300, -1e300, std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN(),
+    };
+    uint64_t seed = 0x9E3779B97F4A7C15ull;
+    for (int i = 0; i < 200000; i++)
+    {
+        seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+        double unit = double(seed >> 11) / double(1ull << 53);
+        double magnitude = std::pow(10.0, double(int(seed % 12)) - 4.0);
+        double value = (unit - 0.5) * 2 * magnitude;
+        // every eighth value is a multiple of 1/8, which ends on a tie at one or two decimals
+        if (i % 8 == 0)
+            value = std::floor(value * 8) / 8;
+        values.push_back(value);
+    }
+
+    const char* formats[] = {"%.0f", "%.1f", "%.2f", "%.3f", "%.4f", "%.9f"};
+    char expected[512];
+    for (double value : values)
+    {
+        for (const char* format : formats)
+        {
+            snprintf(expected, sizeof(expected), format, value);
+            REQUIRE_MESSAGE(luaFormat(format, value) == expected, format << " of " << value);
+        }
+
+        bool integral = std::isfinite(value) && std::fabs(value) < 9e18;
+        if (integral)
+        {
+            snprintf(expected, sizeof(expected), "%lld", (long long)value);
+            REQUIRE_MESSAGE(luaFormat("%d", value) == expected, "%d of " << value);
+        }
+    }
+}
+
+// Luwu: string.format and interpolated strings through the LBF_STRING_FORMAT fastcall give what the call gives, and
+// anything the fastcall can't write exactly (a __tostring, an error, a long result) still runs the call
+TEST_CASE("StringFormatFastcall")
+{
+    ScopedFastFlag stringFormatFastcall{FFlag::LuwuStringFormatFastcall, true};
+    runConformance("string_format_fastcall.luau");
 }
 
 TEST_CASE("StringInterp")
@@ -7648,6 +7716,7 @@ TEST_CASE("LuwuBytecodeHeader")
         ScopedFastFlag luwuClassesOff{FFlag::LuwuClasses, false};
         ScopedFastFlag destructuringOff{FFlag::LuwuDestructuring, false};
         ScopedFastFlag comprehensionsOff{FFlag::LuwuTableComprehensions, false};
+        ScopedFastFlag formatFastcallOff{FFlag::LuwuStringFormatFastcall, false};
         std::string bytecode = Luau::compile("return 1");
         REQUIRE(bytecode.size() > LWBC_HEADER_SIZE);
         CHECK(uint8_t(bytecode[0]) == LWBC_MAGIC);
