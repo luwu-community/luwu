@@ -99,6 +99,7 @@ public:
     void emitAux(uint32_t aux);
 
     void undoEmit(LuauOpcode op);
+    unsigned lastInstruction();
 
     size_t emitLabel();
 
@@ -108,7 +109,7 @@ public:
     void patchAux(size_t targetAux, int32_t newValue);
 
     void foldJumps();
-    std::vector<uint32_t> expandJumps();
+    std::vector<uint32_t> expandJumps(bool& hasLongJumpError);
 
     void setFunctionTypeInfo(std::string value);
     void pushLocalTypeInfo(LuauBytecodeType type, uint8_t reg, uint32_t startpc, uint32_t endpc);
