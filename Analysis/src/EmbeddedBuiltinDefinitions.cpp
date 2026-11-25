@@ -2,7 +2,7 @@
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/LuwuFlags.h"
 
-LUAU_FASTFLAG(LuauIntegerLibrary)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuClasses)
@@ -284,10 +284,7 @@ declare buffer: {
     writebits: @checked (b: buffer, bitOffset: number, bitCount: number, value: number) -> (),
 )BUILTIN_SRC";
 
-static constexpr const char* kBuiltinDefinitionBufferSrcInteger = R"BUILTIN_SRC(
-    readinteger: @checked (b: buffer, offset: number) -> integer,
-    writeinteger: @checked (b: buffer, offset: number, value: integer) -> (),
-)BUILTIN_SRC";
+
 
 static constexpr const char* kBuiltinDefinitionBufferSrcIsFrozen = R"BUILTIN_SRC(
     isfrozen: @checked (b: buffer) -> boolean,
@@ -319,6 +316,12 @@ static constexpr const char* kBuiltinDefinitionBufferSrcBatched = R"BUILTIN_SRC(
     packu32: @checked (b: buffer, offset: number, ...number) -> (),
     packf32: @checked (b: buffer, offset: number, ...number) -> (),
     packf64: @checked (b: buffer, offset: number, ...number) -> (),
+)BUILTIN_SRC";
+
+// Luwu Integers (rfcs/integers.md): `mode` is an `integer.Mode`, which the `integer` library's own definitions declare
+static constexpr const char* kBuiltinDefinitionBufferSrcIntegers = R"BUILTIN_SRC(
+    readinteger: @checked (b: buffer, offset: number, mode: unknown) -> integer,
+    writeinteger: @checked (b: buffer, offset: number, value: integer) -> (),
 )BUILTIN_SRC";
 
 static constexpr const char* kBuiltinDefinitionBufferSrcClose = R"BUILTIN_SRC(
@@ -355,52 +358,85 @@ declare vector: {
 
 )BUILTIN_SRC";
 
+// Luwu Integers (rfcs/integers.md): the `integer` library (lintegerlib.cpp), a definition file of its own (see
+// registerBuiltinGlobals) whose types are `integer.Mode` and each mode's type, `integer.u8` for `integer<"u8">`. `Mode`'s
+// parameter is the mode's name. Bare `integer.Mode` is any mode, since its parameter is covariant (isIntegerModeClass).
 static const char* const kBuiltinDefinitionIntegerSrc = R"BUILTIN_SRC(
+class type Mode<T = "int" | "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64">
+    public const min: integer<T>?
+    public const max: integer<T>?
+    public function __call(self, from: unknown): integer<T>
+    public function __tostring(self): string
+end
+
+export type dynamic = integer<"int">
+export type i8 = integer<"i8">
+export type u8 = integer<"u8">
+export type i16 = integer<"i16">
+export type u16 = integer<"u16">
+export type i32 = integer<"i32">
+export type u32 = integer<"u32">
+export type i64 = integer<"i64">
+export type u64 = integer<"u64">
 
 declare integer: {
-    create: @checked (x: number) -> integer,
-    tonumber: @checked (x: integer) -> number,
-    neg: @checked (value: integer) -> integer,
-    add: @checked (x: integer, y: integer) -> integer,
-    sub: @checked (x: integer, y: integer) -> integer,
-    mul: @checked (x: integer, y: integer) -> integer,
-    div: @checked (x: integer, y: integer) -> integer,
-    rem: @checked (x: integer, y: integer) -> integer,
-    idiv: @checked (x: integer, y: integer) -> integer,
-    mod: @checked (x: integer, y: integer) -> integer,
-    udiv: @checked (x: integer, y: integer) -> integer,
-    urem: @checked (x: integer, y: integer) -> integer,
-    min: @checked (integer, ...integer) -> integer,
-    max: @checked (integer, ...integer) -> integer,
-    band: @checked (...integer) -> integer,
-    bor: @checked (...integer) -> integer,
-    bnot: @checked (x: integer) -> integer,
-    bxor: @checked (...integer) -> integer,
-    lt: @checked (x: integer, y: integer) -> boolean,
-    le: @checked (x: integer, y: integer) -> boolean,
-    ult: @checked (x: integer, y: integer) -> boolean,
-    ule: @checked (x: integer, y: integer) -> boolean,
-    gt: @checked (x: integer, y: integer) -> boolean,
-    ge: @checked (x: integer, y: integer) -> boolean,
-    ugt: @checked (x: integer, y: integer) -> boolean,
-    uge: @checked (x: integer, y: integer) -> boolean,
-    lshift: @checked (x: integer, numBitPositions: integer) -> integer,
-    rshift: @checked (x: integer, numBitPositions: integer) -> integer,
-    arshift: @checked (x: integer, numBitPositions: integer) -> integer,
-    lrotate: @checked (x: integer, numBitPositions: integer) -> integer,
-    rrotate: @checked (x: integer, numBitPositions: integer) -> integer,
-    extract: @checked (value: integer, bitPosition: integer, numBits: integer?) -> integer,
-    replace: @checked (value: integer, replacement: integer, bitPosition: integer, numBits: integer?) -> integer,
-    clamp: @checked (value: integer, min: integer, max: integer) -> integer,
-    btest: @checked (...integer) -> boolean,
-    countrz: @checked (x: integer) -> integer,
-    countlz: @checked (x: integer) -> integer,
-    bswap: @checked (x: integer) -> integer,
-    fromstring: @checked (str: string, base: number?) -> integer,
-    minsigned: integer,
-    maxsigned: integer
-}
+    Mode: class<Mode>,
+    dynamic: Mode<"int">,
+    i8: Mode<"i8">,
+    u8: Mode<"u8">,
+    i16: Mode<"i16">,
+    u16: Mode<"u16">,
+    i32: Mode<"i32">,
+    u32: Mode<"u32">,
+    i64: Mode<"i64">,
+    u64: Mode<"u64">,
+    suffixes: unknown,
 
+    cast: <T>(from: unknown, to: Mode<T>?) -> integer<T>,
+    tonumber: @checked (i: integer) -> Result<number, number>,
+    mode: <T>(i: integer<T>) -> Mode<T>,
+    isbig: @checked (i: int) -> boolean,
+
+    min: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
+    max: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
+    clamp: <T>(i: integer<T>, min: integer<T>, max: integer<T>) -> integer<T>,
+    abs: <T>(i: integer<T>) -> integer<T>,
+    signum: <T>(i: integer<T>) -> integer<T>,
+
+    sadd: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    ssub: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    smul: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    cadd: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    csub: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    cmul: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+    cdiv: <T>(a: integer<T>, b: integer<T>) -> integer<T>,
+
+    pow: <T>(i: integer<T>, exp: integer) -> integer<T>,
+    spow: <T>(i: integer<T>, exp: integer) -> integer<T>,
+    cpow: <T>(i: integer<T>, exp: integer) -> integer<T>,
+    sqrt: <T>(i: integer<T>) -> integer<T>,
+    log2: <T>(i: integer<T>) -> integer<T>,
+    log10: <T>(i: integer<T>) -> integer<T>,
+
+    band: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
+    bor: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
+    bxor: <T>(first: integer<T>, ...integer<T>) -> integer<T>,
+    bnot: <T>(i: integer<T>) -> integer<T>,
+
+    lshift: <T>(i: integer<T>, by: integer) -> integer<T>,
+    rshift: <T>(i: integer<T>, by: integer) -> integer<T>,
+    lrotate: <T>(i: integer<T>, by: integer) -> integer<T>,
+    rrotate: <T>(i: integer<T>, by: integer) -> integer<T>,
+
+    countlz: <T>(i: integer<T>) -> integer<T>,
+    countrz: <T>(i: integer<T>) -> integer<T>,
+    popcount: <T>(i: integer<T>) -> integer<T>,
+
+    extract: <T>(i: integer<T>, field: integer, width: integer?) -> integer<T>,
+    replace: <T>(i: integer<T>, value: integer<T>, field: integer, width: integer?) -> integer<T>,
+    btest: <T>(first: integer<T>, ...integer<T>) -> boolean,
+    bswap: <T>(i: integer<T>) -> integer<T>,
+}
 )BUILTIN_SRC";
 
 // Luwu object notation: the `luwon` library. Tables a file returns carry their comments and locations in a metatable
@@ -525,6 +561,9 @@ class type Vec<T>
     public function __len(self): number
     public function __iter(self): ((Vec<T>, number?) -> (number?, T), Vec<T>, nil)
     public function __tostring(self): string
+    -- Luwu Integers (rfcs/integers.md): a string or a buffer gives a Vec of its bytes as `u8` integers
+    public function from<U>(items: {U} | string | buffer): Vec<U>
+    public function tostring(self): string
 end
 
 class type VecDeque<T>
@@ -544,6 +583,9 @@ class type VecDeque<T>
     public function __len(self): number
     public function __iter(self): ((VecDeque<T>, number?) -> (number?, T), VecDeque<T>, nil)
     public function __tostring(self): string
+    -- Luwu Integers (rfcs/integers.md): a string or a buffer gives a VecDeque of its bytes as `u8` integers
+    public function from<U>(items: {U} | string | buffer): VecDeque<U>
+    public function tostring(self): string
 end
 
 declare collections: {
@@ -761,14 +803,14 @@ std::string getBuiltinDefinitionSource()
     result += kBuiltinDefinitionDebugSrc;
     result += kBuiltinDefinitionUtf8Src;
     result += kBuiltinDefinitionBufferSrcCore;
-    if (FFlag::LuauIntegerType2 && FFlag::LuauIntegerLibrary)
-        result += kBuiltinDefinitionBufferSrcInteger;
     if (FFlag::LuwuBufferIsFrozen)
         result += kBuiltinDefinitionBufferSrcIsFrozen;
     if (FFlag::DebugLuwuBufferComparison)
         result += kBuiltinDefinitionBufferSrcComparison;
     if (FFlag::LuwuBufferBatched)
         result += kBuiltinDefinitionBufferSrcBatched;
+    if (integerLibraryEnabled())
+        result += kBuiltinDefinitionBufferSrcIntegers;
     result += kBuiltinDefinitionBufferSrcClose;
 
     result += kBuiltinDefinitionVectorSrc;
@@ -791,10 +833,6 @@ std::string getBuiltinDefinitionSource()
     }
     result += luwonSrc;
 
-    if (FFlag::LuauIntegerType2 && FFlag::LuauIntegerLibrary)
-    {
-        result += kBuiltinDefinitionIntegerSrc;
-    }
 
     bool classes = FFlag::LuwuClasses && FFlag::LuauAllowGlobalDeclarationToBeCalledClass;
     if (classes && !classReflectionEnabled())
@@ -818,11 +856,6 @@ std::string getBuiltinDefinitionSource()
 bool classReflectionEnabled()
 {
     return FFlag::LuwuTraits && FFlag::DebugLuwuBundles && resultLibraryEnabled();
-}
-
-std::string getErrorDefinitionSource()
-{
-    return kBuiltinDefinitionErrorSrc;
 }
 
 bool resultLibraryEnabled()
@@ -932,6 +965,31 @@ declare bundle: {
     with: (b: unknown, position: number, value: unknown) -> unknown,
 }
 )BUILTIN_SRC";
+
+bool integerLibraryEnabled()
+{
+    return FFlag::LuauIntegerType2 && FFlag::DebugLuwuIntegers && FFlag::LuwuClasses && FFlag::LuwuGenericNominals &&
+           FFlag::LuwuDeclareStatements;
+}
+
+std::string getIntegerDefinitionSource()
+{
+    // `integer.tonumber` gives a `Result`, which only the try expressions' result library declares
+    std::string source = kBuiltinDefinitionIntegerSrc;
+    if (!resultLibraryEnabled())
+    {
+        const std::string result = "Result<number, number>";
+        size_t at = source.find(result);
+        LUAU_ASSERT(at != std::string::npos);
+        source.replace(at, result.size(), "unknown");
+    }
+    return source;
+}
+
+std::string getErrorDefinitionSource()
+{
+    return kBuiltinDefinitionErrorSrc;
+}
 
 std::string getBundleDefinitionSource()
 {

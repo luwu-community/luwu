@@ -3,15 +3,19 @@
 #include "lualib.h"
 
 #include "lbuffer.h"
+#include "lapi.h"
+#include "ldo.h"
+#include "linteger.h"
+#include "lstate.h"
 
 #if defined(LUAU_BIG_ENDIAN)
 #include <endian.h>
 #endif
 
-LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAGVARIABLE(LuwuBufferIsFrozen)
 LUAU_FASTFLAGVARIABLE(LuwuBufferBatched)
 LUAU_FASTFLAGVARIABLE(DebugLuwuBufferComparison)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 
 #include <string.h>
 
@@ -114,43 +118,6 @@ static int buffer_writeinteger(lua_State* L)
     return 0;
 }
 
-static int buffer_readlong(lua_State* L)
-{
-    size_t len = 0;
-    void* buf = luaL_checkbuffer(L, 1, &len);
-    int offset = luaL_checkinteger(L, 2);
-
-    if (isoutofbounds(offset, len, sizeof(uint64_t)))
-        luaL_error(L, "buffer access out of bounds");
-
-    int64_t val;
-    memcpy(&val, (char*)buf + offset, sizeof(int64_t));
-
-#if defined(LUAU_BIG_ENDIAN)
-    val = buffer_swapbe(val);
-#endif
-
-    lua_pushinteger64(L, val);
-    return 1;
-}
-
-static int buffer_writelong(lua_State* L)
-{
-    size_t len = 0;
-    void* buf = luaL_checkbuffermutable(L, 1, &len);
-    int offset = luaL_checkinteger(L, 2);
-    int64_t value = luaL_checkinteger64(L, 3);
-
-    if (isoutofbounds(offset, len, sizeof(int64_t)))
-        luaL_error(L, "buffer access out of bounds");
-
-#if defined(LUAU_BIG_ENDIAN)
-    value = buffer_swapbe(value);
-#endif
-
-    memcpy((char*)buf + offset, &value, sizeof(int64_t));
-    return 0;
-}
 
 template<typename T, typename StorageType>
 static int buffer_readfp(lua_State* L)
@@ -459,7 +426,7 @@ static int buffer_order(lua_State* L)
     int b1offset = luaL_optinteger(L, 3, 0);
     int b2offset = luaL_optinteger(L, 4, 0);
 
-    int mincount = (int(b1len) - b1offset) < (int(b2len) - b2offset) 
+    int mincount = (int(b1len) - b1offset) < (int(b2len) - b2offset)
         ? (int(b1len) - b1offset) : (int(b2len) - b2offset);
 
     int count = luaL_optinteger(L, 5, mincount);
@@ -649,8 +616,6 @@ static const luaL_Reg bufferlib[] = {
     {"fill", buffer_fill},
     {"readbits", buffer_readbits},
     {"writebits", buffer_writebits},
-    {"readinteger", buffer_readlong},
-    {"writeinteger", buffer_writelong},
     {NULL, NULL},
 };
 
@@ -674,45 +639,64 @@ static const luaL_Reg bufferlib_batched[] = {
     {"packu32", buffer_packinteger<uint32_t>},
     {"packf32", buffer_packfp<float, uint32_t>},
     {"packf64", buffer_packfp<double, uint64_t>},
+
     {NULL, NULL},
 };
 
-static const luaL_Reg bufferlib_NOINTEGER[] = {
-    {"create", buffer_create},
-    {"fromstring", buffer_fromstring},
-    {"tostring", buffer_tostring},
-    {"readi8", buffer_readinteger<int8_t>},
-    {"readu8", buffer_readinteger<uint8_t>},
-    {"readi16", buffer_readinteger<int16_t>},
-    {"readu16", buffer_readinteger<uint16_t>},
-    {"readi32", buffer_readinteger<int32_t>},
-    {"readu32", buffer_readinteger<uint32_t>},
-    {"readf32", buffer_readfp<float, uint32_t>},
-    {"readf64", buffer_readfp<double, uint64_t>},
-    {"writei8", buffer_writeinteger<int8_t>},
-    {"writeu8", buffer_writeinteger<uint8_t>},
-    {"writei16", buffer_writeinteger<int16_t>},
-    {"writeu16", buffer_writeinteger<uint16_t>},
-    {"writei32", buffer_writeinteger<int32_t>},
-    {"writeu32", buffer_writeinteger<uint32_t>},
-    {"writef32", buffer_writefp<float, uint32_t>},
-    {"writef64", buffer_writefp<double, uint64_t>},
-    {"readstring", buffer_readstring},
-    {"writestring", buffer_writestring},
-    {"len", buffer_len},
-    {"copy", buffer_copy},
-    {"fill", buffer_fill},
-    {"readbits", buffer_readbits},
-    {"writebits", buffer_writebits},
-    {NULL, NULL},
-};
+// Luwu Integers (rfcs/integers.md): the width in bytes of the sized mode at `arg`. A dynamically-sized integer has none.
+static size_t checkintegerbytes(lua_State* L, int arg, IntegerMode mode)
+{
+    int width = luaZ_modewidth(mode);
+    if (width == 0)
+        luaL_argerrorL(L, arg, "a dynamically-sized integer has no fixed width; cast it to a sized mode first");
+    return size_t(width / 8);
+}
+
+// Luwu Integers (rfcs/integers.md): `buffer.readinteger(b, offset, mode)`, little-endian in as many bytes as the mode
+// takes
+static int buffer_readintegerofmode(lua_State* L)
+{
+    size_t len = 0;
+    const unsigned char* data = (const unsigned char*)luaL_checkbuffer(L, 1, &len);
+    int offset = luaL_checkinteger(L, 2);
+    IntegerMode mode = luaZ_checkmode(L, 3);
+    size_t bytes = checkintegerbytes(L, 3, mode);
+
+    if (isoutofbounds(offset, len, bytes))
+        luaL_error(L, "buffer access out of bounds");
+
+    uint64_t bits = 0;
+    for (size_t i = 0; i < bytes; i++)
+        bits |= uint64_t(data[offset + i]) << (8 * i);
+
+    luaZ_setint(L->top, int64_t(bits), mode);
+    incr_top(L);
+    return 1;
+}
+
+// Luwu Integers (rfcs/integers.md): `buffer.writeinteger(b, offset, value)`, in as many bytes as the value's mode takes
+static int buffer_writeintegerofmode(lua_State* L)
+{
+    size_t len = 0;
+    unsigned char* data = (unsigned char*)luaL_checkbuffermutable(L, 1, &len);
+    int offset = luaL_checkinteger(L, 2);
+    const TValue* value = luaA_toobject(L, 3);
+    if (!value || !ttisinteger(value))
+        luaL_typeerrorL(L, 3, "integer");
+    size_t bytes = checkintegerbytes(L, 3, integermode(value));
+
+    if (isoutofbounds(offset, len, bytes))
+        luaL_error(L, "buffer access out of bounds");
+
+    uint64_t bits = luaZ_bits(value);
+    for (size_t i = 0; i < bytes; i++)
+        data[offset + i] = (unsigned char)(bits >> (8 * i));
+    return 0;
+}
 
 int luaopen_buffer(lua_State* L)
 {
-    if (FFlag::LuauIntegerLibrary)
-        luaL_register(L, LUA_BUFFERLIBNAME, bufferlib);
-    else
-        luaL_register(L, LUA_BUFFERLIBNAME, bufferlib_NOINTEGER);
+    luaL_register(L, LUA_BUFFERLIBNAME, bufferlib);
 
     if (FFlag::LuwuBufferBatched)
         luaL_register(L, NULL, bufferlib_batched);
@@ -730,6 +714,14 @@ int luaopen_buffer(lua_State* L)
 
         lua_pushcfunction(L, buffer_equals, "equals");
         lua_setfield(L, -2, "equals");
+    }
+
+    if (FFlag::DebugLuwuIntegers)
+    {
+        lua_pushcfunction(L, buffer_readintegerofmode, "readinteger");
+        lua_setfield(L, -2, "readinteger");
+        lua_pushcfunction(L, buffer_writeintegerofmode, "writeinteger");
+        lua_setfield(L, -2, "writeinteger");
     }
 
     return 1;

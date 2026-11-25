@@ -661,6 +661,15 @@ static bool runFile(const char* name, lua_State* GL, bool repl)
         {
             error = str;
         }
+        else
+        {
+            // Luwu: an error that isn't a string, such as an `Error.Overflow` object, prints as `tostring` gives it. The
+            // thread that raised it can't run `__tostring`, so the main thread does.
+            lua_pushvalue(L, -1);
+            lua_xmove(L, GL, 1);
+            error = luaL_tolstring(GL, -1, nullptr);
+            lua_pop(GL, 2);
+        }
 
         error += "\nstacktrace:\n";
         error += lua_debugtrace(L);
