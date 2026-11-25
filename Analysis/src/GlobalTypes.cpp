@@ -5,6 +5,7 @@
 #include "Luau/BuiltinDefinitions.h"
 
 LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuauTruthyFalsy)
@@ -24,6 +25,9 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     globalScope->addBuiltinTypeBinding("number", TypeFun{{}, builtinTypes->numberType});
     if (FFlag::LuauIntegerType2)
         globalScope->addBuiltinTypeBinding("integer", TypeFun{{}, builtinTypes->integerType});
+    // Luwu Integers (rfcs/integers.md): `int` is the dynamically-sized mode's type, `integer<"int">`
+    if (FFlag::LuauIntegerType2 && FFlag::DebugLuwuIntegers)
+        globalScope->addBuiltinTypeBinding("int", TypeFun{{}, builtinTypes->integerModeTypes[IntegerMode_Dynamic]});
     globalScope->addBuiltinTypeBinding("string", TypeFun{{}, builtinTypes->stringType});
     globalScope->addBuiltinTypeBinding("boolean", TypeFun{{}, builtinTypes->booleanType});
     globalScope->addBuiltinTypeBinding("thread", TypeFun{{}, builtinTypes->threadType});
@@ -53,6 +57,8 @@ GlobalTypes::GlobalTypes(NotNull<BuiltinTypes> builtinTypes, SolverMode mode)
     makeVectorMetatable(builtinTypes);
     if (resultLibraryEnabled())
         makeNoneMetatable(builtinTypes);
+    if (integerLibraryEnabled())
+        makeIntegerMetatable(builtinTypes);
     freeze(*builtinTypes->arena);
 }
 

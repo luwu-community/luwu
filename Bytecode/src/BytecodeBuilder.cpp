@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuTableComprehensions)
@@ -357,14 +357,29 @@ int32_t BytecodeBuilder::addConstantNumber(double value)
     return addConstant(k, c);
 }
 
-int32_t BytecodeBuilder::addConstantInteger(int64_t value)
+int32_t BytecodeBuilder::addConstantInteger(int64_t value, uint8_t mode)
 {
-    Constant c = {Constant::Type_Integer};
+    Constant c = {Constant::Type_Integer, mode};
     c.valueInteger64 = value;
 
     ConstantKey k = {Constant::Type_Integer};
+    k.extra1 = mode;
     static_assert(sizeof(k.value) == sizeof(value), "Expecting integer to be 64-bit");
     memcpy(&k.value, &value, sizeof(value));
+
+    return addConstant(k, c);
+}
+
+int32_t BytecodeBuilder::addConstantIntegerHeap(StringRef value, uint8_t mode)
+{
+    unsigned int index = addStringTableEntry(value);
+
+    Constant c = {Constant::Type_IntegerHeap, mode};
+    c.valueString = index;
+
+    ConstantKey k = {Constant::Type_IntegerHeap};
+    k.extra1 = mode;
+    k.value = index;
 
     return addConstant(k, c);
 }
@@ -993,14 +1008,20 @@ void BytecodeBuilder::writeFunction(std::string& ss, uint32_t id, uint8_t flags,
             writeByte(ss, LBC_CONSTANT_INTEGER);
             if (c.valueInteger64 < 0)
             {
-                writeByte(ss, 1);
+                writeByte(ss, (c.mode << 1) | 1);
                 writeVarInt(ss, ~(uint64_t)c.valueInteger64 + 1);
             }
             else
             {
-                writeByte(ss, 0);
+                writeByte(ss, (c.mode << 1) | 0);
                 writeVarInt(ss, c.valueInteger64);
             }
+            break;
+
+        case Constant::Type_IntegerHeap:
+            writeByte(ss, LBC_CONSTANT_INTEGER_HEAP);
+            writeByte(ss, c.mode);
+            writeVarInt(ss, c.valueString);
             break;
 
         case Constant::Type_Vectorf:
@@ -1596,8 +1617,8 @@ uint8_t BytecodeBuilder::getVersion()
     if (FFlag::LuwuStringFormatFastcall)
         return LWBC_VERSION_WIP;
 
-    // Luwu Classes (rfcs/classes) and Luwu try expressions: work-in-progress formats
-    if (FFlag::LuwuClasses || FFlag::DebugLuwuTryExpressions)
+    // Luwu Classes (rfcs/classes), Luwu try expressions and Luwu Integers (rfcs/integers.md): work-in-progress formats
+    if (FFlag::LuwuClasses || FFlag::DebugLuwuTryExpressions || FFlag::DebugLuwuIntegers)
         return LWBC_VERSION_WIP;
 
     // Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL is WIP bytecode too
@@ -2382,6 +2403,12 @@ void BytecodeBuilder::dumpConstant(std::string& result, int k, bool detailed) co
     case Constant::Type_Integer:
         formatAppend(result, "%lld", (long long)(int64_t)data.valueInteger64);
         break;
+    case Constant::Type_IntegerHeap:
+    {
+        const StringRef& str = debugStrings[data.valueString - 1];
+        formatAppend(result, "%.*sint", int(str.length), str.data);
+        break;
+    }
     case Constant::Type_Vectorf:
         // 3-vectors is the most common configuration, so truncate to three components if possible
         if (data.valueVectorf[3] == 0.0f)

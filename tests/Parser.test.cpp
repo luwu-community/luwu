@@ -10,6 +10,7 @@
 
 #include "doctest.h"
 
+#include <iterator>
 #include <limits.h>
 
 using namespace Luau;
@@ -23,8 +24,8 @@ LUAU_FASTFLAG(DebugLuwuLuauClassCompat)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauCstAttr)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(DebugLuwuEncourageInline)
-LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
@@ -876,9 +877,9 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_decimal")
     CHECK_EQ(str->list.data[4]->as<AstExprConstantNumber>()->value, 1.5e-5);
     CHECK_EQ(str->list.data[5]->as<AstExprConstantNumber>()->value, 12345.125);
 
-    if (FFlag::LuauIntegerType2)
+    if (FFlag::DebugLuwuIntegers)
     {
-        stat = parse("return 1i, 1_000_000i");
+        stat = parse("return 1int, 1_000_000int");
         REQUIRE(stat != nullptr);
 
         str = stat->as<AstStatBlock>()->body.data[0]->as<AstStatReturn>();
@@ -902,9 +903,9 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_hexadecimal")
     CHECK_EQ(str->list.data[2]->as<AstExprConstantNumber>()->value, 0xFFFF);
     CHECK_EQ(str->list.data[3]->as<AstExprConstantNumber>()->value, double(ULLONG_MAX));
 
-    if (FFlag::LuauIntegerType2)
+    if (FFlag::DebugLuwuIntegers)
     {
-        stat = parse("return 0xabi, 0XAB05i, 0xff_ffi, 0x7fffffffffffffffi, 0x8000000000000000i, 0xffffffffffffffffi");
+        stat = parse("return 0xabint, 0XAB05int, 0xff_ffint, 0x7fffffffffffffffint, 0x8000000000000000u64, 0xffffffffffffffffu64");
         REQUIRE(stat != nullptr);
 
         str = stat->as<AstStatBlock>()->body.data[0]->as<AstStatReturn>();
@@ -930,11 +931,11 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_binary")
     CHECK_EQ(str->list.data[2]->as<AstExprConstantNumber>()->value, 42);
     CHECK_EQ(str->list.data[3]->as<AstExprConstantNumber>()->value, double(ULLONG_MAX));
 
-    if (FFlag::LuauIntegerType2)
+    if (FFlag::DebugLuwuIntegers)
     {
         AstStat* stat = parse(
-            "return 0b1i, 0b0i, 0b101010i, 0b111111111111111111111111111111111111111111111111111111111111111i, "
-            "0b1000000000000000000000000000000000000000000000000000000000000000i, 0b1111111111111111111111111111111111111111111111111111111111111111i"
+            "return 0b1int, 0b0int, 0b101010int, 0b111111111111111111111111111111111111111111111111111111111111111int, "
+            "0b1000000000000000000000000000000000000000000000000000000000000000u64, 0b1111111111111111111111111111111111111111111111111111111111111111u64"
         );
         REQUIRE(stat != nullptr);
 
@@ -958,22 +959,144 @@ TEST_CASE_FIXTURE(Fixture, "parse_numbers_error")
     matchParseError("return 0x0x123", "Malformed number");
     matchParseError("return 0xffffffffffffffffffffllllllg", "Malformed number");
     matchParseError("return 0x0xffffffffffffffffffffffffffff", "Malformed number");
-    if (FFlag::LuauIntegerType2)
+    if (FFlag::DebugLuwuIntegers)
     {
-        matchParseError("return 0x0xABCi", "Malformed integer");
-        matchParseError("return 0xABCMi", "Malformed integer");
-        matchParseError("return 0b250i", "Malformed integer");
-        matchParseError("return 0bbbbi", "Malformed integer");
-        matchParseError("return 0b0b1i", "Malformed integer");
-        matchParseError("return 123ii", "Malformed integer");
-        matchParseError("return 0xABii", "Malformed integer");
-
-        matchParseError("return 99999999999999999999i", "Integer overflow");
-        matchParseError("return 0xFFFFFFFFFFFFFFFFFFi", "Integer overflow");
-        matchParseError("return 0b10000000000000000000000000000000000000000000000000000000000000000i", "Integer overflow");
-        matchParseError("return 123ii", "Malformed integer");
-        matchParseError("return 0xABii", "Malformed integer");
+        matchParseError("return 0x0xABCint", "Malformed integer");
+        matchParseError("return 0xABCMint", "Malformed integer");
+        matchParseError("return 0b250int", "Malformed integer");
+        matchParseError("return 0bbbbint", "Malformed integer");
+        matchParseError("return 0b0b1int", "Malformed integer");
+        matchParseError("return 123iint", "Malformed integer");
+        matchParseError("return 0xABiint", "Malformed integer");
     }
+}
+
+// Luwu Integers (rfcs/integers.md)
+TEST_CASE_FIXTURE(Fixture, "integer_literal_suffixes")
+{
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
+
+    AstStat* stat = parse("return 7int, 7_int, 7u64, 7_u64, 255u8, 0x7fi8, 0b1_0000_0000u16, 0xffffffffffffffffu64, 7i64, 99999999999999999999int");
+    REQUIRE(stat != nullptr);
+
+    AstStatReturn* ret = stat->as<AstStatBlock>()->body.data[0]->as<AstStatReturn>();
+    REQUIRE(ret->list.size == 10);
+
+    struct Expected
+    {
+        int64_t value;
+        IntegerMode mode;
+    };
+    const Expected expected[] = {
+        {7, IntegerMode_Dynamic},
+        {7, IntegerMode_Dynamic},
+        {7, IntegerMode_U64},
+        {7, IntegerMode_U64},
+        {255, IntegerMode_U8},
+        {127, IntegerMode_I8},
+        {256, IntegerMode_U16},
+        {-1, IntegerMode_U64},
+        {7, IntegerMode_I64},
+    };
+
+    for (size_t i = 0; i < std::size(expected); ++i)
+    {
+        AstExprConstantInteger* literal = ret->list.data[i]->as<AstExprConstantInteger>();
+        REQUIRE(literal);
+        CHECK_EQ(literal->value, expected[i].value);
+        CHECK_EQ(literal->mode, expected[i].mode);
+    }
+
+    AstExprConstantInteger* big = ret->list.data[9]->as<AstExprConstantInteger>();
+    REQUIRE(big);
+    CHECK(big->parseResult == ConstantNumberParseResult::HeapInteger);
+    CHECK_EQ(std::string(big->stringValue), "99999999999999999999");
+
+    // `n` was the dynamic suffix before `int`
+    matchParseError("return 7n", "Malformed number");
+    matchParseError("return 1.5int", "Malformed integer");
+}
+
+// Luwu Integers (rfcs/integers.md): a negated literal can be the smallest value of its mode
+TEST_CASE_FIXTURE(Fixture, "integer_literal_smallest_values")
+{
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
+
+    ParseResult result = tryParse("return -128i8, -9223372036854775808i64, -0x80_i8");
+    CHECK(result.errors.empty());
+}
+
+// Luwu Integers (rfcs/integers.md): an unsigned literal can't be negated, and the error suggests a signed mode that holds the value
+TEST_CASE_FIXTURE(Fixture, "integer_literal_negated_unsigned")
+{
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
+
+    matchParseError("return -5u8", "Write '-5i8' instead of '-5u8': unsigned integers can't be negative", Location({0, 7}, {0, 11}));
+    matchParseError("return -200u8", "Write '-200i16' instead of '-200u8': unsigned integers can't be negative");
+    matchParseError("return -0xff_u8", "Write '-0xff_i16' instead of '-0xff_u8': unsigned integers can't be negative");
+    matchParseError("return -5u32", "Write '-5i32' instead of '-5u32': unsigned integers can't be negative");
+    matchParseError("return -9223372036854775808u64", "Write '-9223372036854775808i64' instead of '-9223372036854775808u64': unsigned integers can't be negative");
+    matchParseError("return -18446744073709551615u64", "Write '-18446744073709551615int' instead of '-18446744073709551615u64': unsigned integers can't be negative");
+    matchParseError("return -0u8", "Write '0u8' instead of '-0u8': unsigned integers can't be negative");
+
+    // A negated unsigned literal out of its range gets only the one error
+    ParseResult result = tryParse("return -300u8 + 1u8");
+    REQUIRE(result.errors.size() == 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Write '-300i16' instead of '-300u8': unsigned integers can't be negative");
+
+    // A minus that isn't right before the literal is a runtime negation, not a negative literal
+    result = tryParse("return -(5u8), 1u8 - 5u8");
+    CHECK(result.errors.empty());
+}
+
+// Luwu Integers (rfcs/integers.md): a sized literal must fit its mode, and the literal still parses
+TEST_CASE_FIXTURE(Fixture, "integer_literal_out_of_range")
+{
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
+
+    matchParseError("return 300u8", "'300u8' is out of range for u8 (0 to 255)");
+    matchParseError("return 128i8", "'128i8' is out of range for i8 (-128 to 127)");
+    matchParseError("return -129i8", "'129i8' is out of range for i8 (-128 to 127)");
+    matchParseError("return 0xff_i8", "'0xff_i8' is out of range for i8 (-128 to 127)");
+    matchParseError("return 18446744073709551616u64", "'18446744073709551616u64' is out of range for u64 (0 to 18446744073709551615)");
+    matchParseError("return 0x1_0000_0000_0000_0000int", "Write '0x1_0000_0000_0000_0000int' in decimal: only decimal integer literals can be larger than 64 bits");
+
+    ParseResult result = tryParse("return 300u8 + 1u8");
+    REQUIRE(result.errors.size() == 1);
+    AstStatReturn* ret = result.root->body.data[0]->as<AstStatReturn>();
+    REQUIRE(ret);
+    CHECK(ret->list.data[0]->is<AstExprBinary>());
+}
+
+// Luwu Integers (rfcs/integers.md): upstream Luau's `7i` is an error, recovered as `7int`
+TEST_CASE_FIXTURE(Fixture, "integer_literal_upstream_suffix")
+{
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
+
+    matchParseError(
+        "return 0xffi",
+        "Write '0xffint' or '0xffi64' instead of '0xffi': Luwu sizes integers with 'u8' and 'i8' up to 'u64' and 'i64', or 'int' for "
+        "integers of dynamic size, bigints included",
+        Location({0, 7}, {0, 12})
+    );
+
+    ParseResult result = tryParse("return 7i");
+    REQUIRE(result.errors.size() == 1);
+    AstStatReturn* ret = result.root->body.data[0]->as<AstStatReturn>();
+    REQUIRE(ret);
+    AstExprConstantInteger* literal = ret->list.data[0]->as<AstExprConstantInteger>();
+    REQUIRE(literal);
+    CHECK_EQ(literal->value, 7);
+    CHECK_EQ(literal->mode, IntegerMode_Dynamic);
+}
+
+// Luwu Integers (rfcs/integers.md): with integers off, an integer literal says which flag enables them
+TEST_CASE_FIXTURE(Fixture, "integer_literal_suffixes_need_integers")
+{
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, false};
+
+    matchParseError("return 7u8", "attempt to use disabled Luwu feature integers; enable via FFlag 'DebugLuwuIntegers'");
+    matchParseError("return 7int", "attempt to use disabled Luwu feature integers; enable via FFlag 'DebugLuwuIntegers'");
 }
 
 TEST_CASE_FIXTURE(Fixture, "break_return_not_last_error")

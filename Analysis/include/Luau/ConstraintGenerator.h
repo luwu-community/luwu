@@ -765,6 +765,9 @@ private:
 
     // Specializations of 'resolveType' below
     TypeId resolveReferenceType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref, bool inTypeArguments, bool replaceErrorWithFresh);
+    // Luwu Integers (rfcs/integers.md): `integer<T>`, and the type of an integer literal (`5u8` is a `u8`)
+    TypeId resolveIntegerType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref);
+    TypeId integerLiteralType(AstExprConstantInteger* literal);
     // Luwu try expressions: the return annotation being resolved, when it's exactly one alias reference: the one place an
     // alias with an error hint may go
     AstTypeReference* hintedAliasReturn = nullptr;
