@@ -325,6 +325,9 @@ struct MagicRefinementContext
     // (`class.isinstance(x, C)` refines `x` by `C`) needs the arguments, and the solver for its builtin types.
     NotNull<struct ConstraintSolver> solver;
     TypePackId arguments;
+    // Luwu user-defined refinements: what each argument is refined to when the call is falsy, where the constraint
+    // generator made one (Proposition::negativeDiscriminantTy). One left blocked negates the argument's discriminant.
+    std::vector<std::optional<TypeId>> negativeDiscriminantTypes;
 };
 
 struct MagicFunctionTypeCheckContext

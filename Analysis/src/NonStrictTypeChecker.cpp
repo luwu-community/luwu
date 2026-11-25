@@ -3,6 +3,7 @@
 
 #include "Luau/Ast.h"
 #include "Luau/AstQuery.h"
+#include "Luau/BuiltinDefinitions.h"
 #include "Luau/Common.h"
 #include "Luau/Def.h"
 #include "Luau/Error.h"
@@ -272,6 +273,8 @@ struct NonStrictTypeChecker
             return visit(s);
         else if (auto s = stat->as<AstStatIf>())
             return visit(s);
+        else if (auto s = stat->as<AstStatMatch>())
+            return visitMatch(s->subject, s->arms);
         else if (auto s = stat->as<AstStatWhile>())
             return visit(s);
         else if (auto s = stat->as<AstStatRepeat>())
@@ -281,6 +284,10 @@ struct NonStrictTypeChecker
         else if (auto s = stat->as<AstStatContinue>())
             return visit(s);
         else if (auto s = stat->as<AstStatReturn>())
+            return visit(s);
+        else if (auto s = stat->as<AstStatGive>())
+            return visit(s);
+        else if (auto s = stat->as<AstStatComprehensionItem>())
             return visit(s);
         else if (auto s = stat->as<AstStatExpr>())
             return visit(s);
@@ -356,9 +363,25 @@ struct NonStrictTypeChecker
         return ctx;
     }
 
+    // Luwu If Local (rfcs/control-flow/if-local.md): only a `when` chain's first clause always runs, so only its context is kept.
+    // The clauses after it are still checked.
+    NonStrictContext visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses)
+    {
+        for (const AstIfClause& clause : clauses)
+            if (clause.local && clause.local->annotation)
+                visit(clause.local->annotation);
+
+        NonStrictContext first = visit(condition, ValueContext::RValue);
+
+        for (size_t i = 1; i < clauses.size; ++i)
+            visit(clauses.data[i].expr, ValueContext::RValue);
+
+        return first;
+    }
+
     NonStrictContext visit(AstStatIf* ifStatement)
     {
-        NonStrictContext condB = visit(ifStatement->condition, ValueContext::RValue);
+        NonStrictContext condB = visitIfCondition(ifStatement->condition, ifStatement->clauses);
         NonStrictContext branchContext;
 
         NonStrictContext thenBody = visit(ifStatement->thenbody);
@@ -373,7 +396,7 @@ struct NonStrictTypeChecker
 
     NonStrictContext visit(AstStatWhile* whileStatement)
     {
-        NonStrictContext condition = visit(whileStatement->condition, ValueContext::RValue);
+        NonStrictContext condition = visitIfCondition(whileStatement->condition, whileStatement->clauses);
         NonStrictContext body = visit(whileStatement->body);
         return NonStrictContext::disjunction(builtinTypes, arena, condition, body);
     }
@@ -594,6 +617,15 @@ struct NonStrictTypeChecker
         // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
         else if (auto e = expr->as<AstExprSelfClass>())
             return visit(e->classOf);
+        else if (auto e = expr->as<AstExprDo>())
+            return visit(e);
+        else if (auto e = expr->as<AstExprMatch>())
+            return visitMatch(e->subject, e->arms);
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern is checked as what it means in plain code
+        else if (auto e = expr->as<AstExprMatchPattern>())
+            return visit(e->checked, ValueContext::RValue);
+        else if (auto e = expr->as<AstExprTableComprehension>())
+            return visit(e);
         else
         {
             LUAU_ASSERT(!"NonStrictTypeChecker encountered an unknown expression type");
@@ -675,6 +707,11 @@ struct NonStrictTypeChecker
             visit(arg, ValueContext::RValue);
 
         NonStrictContext fresh{};
+
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the `class.isinstance` call `x is LIMIT` is
+        // checked as can't fail. A name that doesn't hold a class is compared with `==`.
+        if (isPatternIsinstance(*call))
+            return fresh;
         TypeId* originalCallTy = module->astOriginalCallTypes.find(call->func);
         if (!originalCallTy)
             return fresh;
@@ -870,9 +907,64 @@ struct NonStrictTypeChecker
         return visit(typeAssertion->expr, ValueContext::RValue);
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): every part is checked, but any arm may be the one
+    // that runs, so none of their context carries out of the `match`
+    NonStrictContext visitMatch(const AstMatchSubject& subject, const AstArray<AstMatchArm>& arms)
+    {
+        if (subject.declaration)
+            visit(subject.declaration);
+        else
+            visit(subject.value, ValueContext::RValue);
+
+        for (const AstMatchArm& arm : arms)
+        {
+            if (arm.condition)
+                visitIfCondition(arm.condition, arm.clauses);
+            if (arm.value)
+                visit(arm.value, ValueContext::RValue);
+            if (arm.body)
+                visit(arm.body);
+        }
+
+        return {};
+    }
+
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the block is checked, but since a `give` can leave it early, none of
+    // its context carries out of the expression
+    NonStrictContext visit(AstExprDo* doExpr)
+    {
+        visit(doExpr->body);
+        return {};
+    }
+
+    NonStrictContext visit(AstStatGive* give)
+    {
+        if (give->item)
+            return visit(give->item);
+
+        visit(give->value, ValueContext::RValue);
+        return {};
+    }
+
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the loop may run zero times, so like any loop's, its
+    // context doesn't carry out
+    NonStrictContext visit(AstExprTableComprehension* comprehension)
+    {
+        visit(comprehension->loop);
+        return {};
+    }
+
+    NonStrictContext visit(AstStatComprehensionItem* item)
+    {
+        if (item->key)
+            visit(item->key, ValueContext::RValue);
+        visit(item->value, ValueContext::RValue);
+        return {};
+    }
+
     NonStrictContext visit(AstExprIfElse* ifElse)
     {
-        NonStrictContext condB = visit(ifElse->condition, ValueContext::RValue);
+        NonStrictContext condB = visitIfCondition(ifElse->condition, ifElse->clauses);
         NonStrictContext thenB = visit(ifElse->trueExpr, ValueContext::RValue);
         NonStrictContext elseB = visit(ifElse->falseExpr, ValueContext::RValue);
         return NonStrictContext::disjunction(builtinTypes, arena, condB, NonStrictContext::conjunction(builtinTypes, arena, thenB, elseB));
