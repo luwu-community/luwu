@@ -112,6 +112,8 @@ void initFunctions(NativeContext& context)
     context.executeGETQUALIFIED = executeGETQUALIFIED;
     context.executeSETQUALIFIED = executeSETQUALIFIED;
     context.executeGETPOSITIONAL = executeGETPOSITIONAL;
+    context.executePUSH = executePUSH;
+    context.executePOP = executePOP;
     context.executeGETVARARGSMultRet = executeGETVARARGSMultRet;
     context.executeGETVARARGSConst = executeGETVARARGSConst;
     context.executeDUPCLOSURE = executeDUPCLOSURE;
