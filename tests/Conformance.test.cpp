@@ -85,6 +85,7 @@ LUAU_FASTFLAG(LuauCustomYieldablePcalls)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(DebugLuwuCompilerTrustsTypeAnnotations)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
@@ -6693,6 +6694,16 @@ TEST_CASE("DefaultArguments")
     runConformance("defaultarg.luwu");
 }
 
+TEST_CASE("Destructuring")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    runConformance("destructuring.luwu");
+}
+
 TEST_CASE("None")
 {
     ScopedFastFlag sff{FFlag::LuwuNonePrimitive, true};
@@ -6837,6 +6848,7 @@ TEST_CASE("LuwuBytecodeHeader")
     {
         // a WIP feature's flag switches the version to LWBC_VERSION_WIP
         ScopedFastFlag luwuClassesOff{FFlag::LuwuClasses, false};
+        ScopedFastFlag destructuringOff{FFlag::LuwuDestructuring, false};
         std::string bytecode = Luau::compile("return 1");
         REQUIRE(bytecode.size() > LWBC_HEADER_SIZE);
         CHECK(uint8_t(bytecode[0]) == LWBC_MAGIC);

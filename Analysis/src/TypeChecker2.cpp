@@ -1667,6 +1667,12 @@ void TypeChecker2::visit(AstStatTypeAlias* stat)
     }
 
     visitGenerics(stat->generics, stat->genericPacks);
+
+    // Luwu Destructuring (rfcs/destructuring.md): a destructured alias of a generic type has its generics, so its
+    // reference, written without type arguments, isn't checked against them
+    if (const Scope* scope = findInnermostScope(stat->location); scope && importedGenericOfDestructuredAlias(*scope, stat))
+        return;
+
     visit(stat->type);
 }
 
@@ -3880,6 +3886,64 @@ TypeId TypeChecker2::stripFromNilAndReport(TypeId ty, const Location& location)
     return ty;
 }
 
+// Luwu Destructuring (rfcs/destructuring.md): a position read (`x.1`, or an element of `.(a, b)`) from an object, or a
+// union of objects, reads the field each class's primary constructor takes at that position. Anything else has no
+// positions. Returns false only when the position isn't a number literal.
+bool TypeChecker2::checkPositionalElement(AstExprIndexExpr* indexExpr)
+{
+    const AstExprConstantNumber* number = indexExpr->index->as<AstExprConstantNumber>();
+    if (!number || number->value < 1)
+        return false;
+
+    size_t position = size_t(number->value) - 1;
+
+    std::vector<TypeId> options;
+    TypeId exprType = follow(lookupType(indexExpr->expr));
+    if (const UnionType* union_ = get<UnionType>(exprType))
+    {
+        for (TypeId option : union_)
+            options.push_back(follow(option));
+    }
+    else
+    {
+        options.push_back(exprType);
+    }
+
+    visit(indexExpr->expr, ValueContext::RValue);
+
+    // the parser writes the position of a pattern's element nowhere in the source
+    bool inPattern = indexExpr->index->location.begin == indexExpr->index->location.end;
+
+    for (TypeId option : options)
+    {
+        const ExternType* cls = get<ExternType>(option);
+        const ClassFieldUserData* data = getClassFieldUserData(option);
+        if (!data)
+        {
+            // only objects have positions; `any` and an earlier error read as anything
+            bool readsAnything = get<AnyType>(option) || get<ErrorType>(option);
+            if (!readsAnything)
+                reportError(PositionalDestructuring{toString(option), position, std::nullopt, /* notObject */ true, inPattern}, indexExpr->location);
+            continue;
+        }
+        LUAU_ASSERT(cls);
+
+        bool hasPosition = data->positionalFields && position < data->positionalFields->size();
+        if (hasPosition)
+        {
+            checkPrivatePropertyAccess(option, (*data->positionalFields)[position], indexExpr->location);
+            continue;
+        }
+
+        // A class without a primary constructor can't be destructured at any position: one error for the pattern
+        bool reportsPattern = data->positionalFields || position == 0;
+        if (reportsPattern)
+            reportError(PositionalDestructuring{cls->name, position, data->positionalFields}, indexExpr->location);
+    }
+
+    return true;
+}
+
 void TypeChecker2::checkPrivatePropertyAccess(TypeId tableTy, const std::string& prop, const Location& location)
 {
     if (!FFlag::LuwuClasses)
@@ -4266,6 +4330,9 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
         visitExprName(indexExpr->expr, indexExpr->location, stringValue, context, astIndexExprType, 0);
         return;
     }
+
+    if (indexExpr->positional && checkPositionalElement(indexExpr))
+        return;
 
     visit(indexExpr->expr, ValueContext::RValue);
     visit(indexExpr->index, ValueContext::RValue);
