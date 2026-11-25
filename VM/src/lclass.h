@@ -344,9 +344,10 @@ struct luaR_NativeMember
 
 /**
  * Luwu builtin classes: builds a class from C++, the way the loader builds one from bytecode, and leaves it on the
- * stack. `members` lists the fields first, in the order of their offsets, then the methods and metamethods. `init` is
- * the class's `__init`, called with the new object and the constructor's arguments; without one, the class constructs
- * like a class without `__init`. Names must outlive the state: methods use them as their debug names.
+ * stack. `members` lists the fields first, in the order of their offsets, then the methods and metamethods, and the
+ * static methods (LBC_CLASSMEMBER_STATIC) last. `init` is the class's `__init`, called with the new object and the
+ * constructor's arguments; without one, the class constructs like a class without `__init`. Names must outlive the
+ * state: methods use them as their debug names.
  */
 LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init);
 
