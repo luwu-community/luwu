@@ -1991,6 +1991,8 @@ void TypeChecker2::visit(AstStatTypeAlias* stat)
         return;
 
     visit(stat->type);
+    if (stat->errorHint)
+        visit(stat->errorHint);
 }
 
 void TypeChecker2::visit(AstStatTypeFunction* stat)
@@ -2011,6 +2013,9 @@ void TypeChecker2::visit(AstStatDeclareFunction* stat)
     visitGenerics(stat->generics, stat->genericPacks);
     visit(stat->params);
     visit(stat->retTypes);
+    // Luwu try expressions
+    if (stat->errorHint)
+        visit(stat->errorHint);
 }
 
 void TypeChecker2::visit(AstStatDeclareGlobal* stat)
@@ -2066,6 +2071,10 @@ void TypeChecker2::visit(AstStatDeclareClass* stat)
 
             if (function->returnAnnotation)
                 visit(function->returnAnnotation);
+
+            // Luwu try expressions
+            if (function->errorHint)
+                visit(function->errorHint);
         }
     }
 }
@@ -3265,6 +3274,10 @@ void TypeChecker2::visit(AstStatClass* stat)
                 if (fn->returnAnnotation)
                     visit(fn->returnAnnotation);
 
+                // Luwu try expressions
+                if (fn->errorHint)
+                    visit(fn->errorHint);
+
                 continue;
             }
 
@@ -3393,6 +3406,8 @@ void TypeChecker2::visit(AstExpr* expr, ValueContext context)
     // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
     else if (auto e = expr->as<AstExprSelfClass>())
         return visit(e->classOf, context);
+    else if (auto e = expr->as<AstExprTry>())
+        return visit(e->expr, ValueContext::RValue);
     else if (auto e = expr->as<AstExprError>())
         return visit(e);
     else
@@ -4415,7 +4430,7 @@ std::optional<ContainerElement> objectElement(const ExternType* object)
 }
 
 // The element a value of type `ty` fixes, or nullopt when the type doesn't pin one down (a union, `unknown`, a generic)
-std::optional<ContainerElement> containerElementOf(NotNull<BuiltinTypes> builtinTypes, TypeId ty)
+std::optional<ContainerElement> containerElementOf(NotNull<BuiltinTypes> builtinTypes, const Scope* scope, TypeId ty)
 {
     ty = follow(ty);
     if (const SingletonType* singleton = get<SingletonType>(ty))
@@ -4456,6 +4471,9 @@ std::optional<ContainerElement> containerElementOf(NotNull<BuiltinTypes> builtin
         const ExternType* declared = externType->genericTemplate ? get<ExternType>(follow(*externType->genericTemplate)) : externType;
         if (!declared || declared->traitInfo)
             return std::nullopt;
+        // Luwu try expressions: `Ok` and `Err` are both results at runtime, and `Some` an option
+        if (std::optional<std::string> plural = builtinEnumPlural(scope, ty))
+            return ContainerElement{*plural, nullptr, *plural, withArticle(plural->substr(0, plural->size() - 1))};
         if (declared->relation && declared->relation->get_if<Klass>())
             return objectElement(externType);
         if (!declared->relation)
@@ -4484,7 +4502,8 @@ void TypeChecker2::checkContainerConstructor(AstExprCall* call)
     if (!containerName)
         return;
 
-    std::optional<ContainerElement> fixed = containerElementOf(builtinTypes, lookupType(call->args.data[0]));
+    const Scope* scope = findInnermostScope(call->location);
+    std::optional<ContainerElement> fixed = containerElementOf(builtinTypes, scope, lookupType(call->args.data[0]));
     if (!fixed)
         return;
 
@@ -4498,7 +4517,7 @@ void TypeChecker2::checkContainerConstructor(AstExprCall* call)
     for (size_t i = 1; i < checked; i++)
     {
         AstExpr* arg = call->args.data[i];
-        std::optional<ContainerElement> element = containerElementOf(builtinTypes, lookupType(arg));
+        std::optional<ContainerElement> element = containerElementOf(builtinTypes, scope, lookupType(arg));
         if (!element || sameElement(*element, *fixed))
             continue;
 
@@ -4550,6 +4569,28 @@ void TypeChecker2::visit(AstExprCall* call)
 
     visitCall(call);
     checkContainerConstructor(call);
+    checkRaisedError(call);
+}
+
+// Luwu try expressions: `error(v)` in a function with a `! E` hint raises an `E`. A string that looks like a misspelling
+// of one the hint names is reported as a typo of it.
+void TypeChecker2::checkRaisedError(AstExprCall* call)
+{
+    bool raises = isErrorCall(call) && call->args.size > 0;
+    if (!raises || enclosingFunctions.empty())
+        return;
+
+    const AstExprFunction* fn = enclosingFunctions.back();
+    if (!fn->errorHint || call == finalErrorCall(fn))
+        return;
+
+    const TypeId* signature = module->astTypes.find(fn);
+    const FunctionType* function = signature ? get<FunctionType>(follow(*signature)) : nullptr;
+    if (!function || !function->errorHint)
+        return;
+
+    AstExpr* raised = call->args.data[0];
+    testIsSubtype(lookupType(raised), *function->errorHint, raised->location);
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern's operand for a message. A value `is` read
@@ -4616,6 +4657,28 @@ std::optional<TypeId> TypeChecker2::tryStripUnionFromNil(TypeId ty) const
     }
 
     return std::nullopt;
+}
+
+// Luwu try expressions: a union without its weakunknown members, so `(NotFound | unknown).kind` reads NotFound's.
+// weakunknown on its own stays.
+TypeId TypeChecker2::stripWeakUnknown(TypeId ty) const
+{
+    const UnionType* utv = get<UnionType>(ty);
+    if (!utv)
+        return ty;
+
+    std::vector<TypeId> rest;
+    for (TypeId option : utv)
+    {
+        if (follow(option) != builtinTypes->weakUnknownType)
+            rest.push_back(option);
+    }
+
+    if (rest.size() == utv->options.size() || rest.empty())
+        return ty;
+    if (rest.size() == 1)
+        return follow(rest[0]);
+    return module->internalTypes->addType(UnionType{std::move(rest)});
 }
 
 TypeId TypeChecker2::stripFromNilAndReport(TypeId ty, const Location& location)
@@ -5022,7 +5085,7 @@ void TypeChecker2::visitExprName(
 )
 {
     visit(expr, ValueContext::RValue);
-    TypeId leftType = stripFromNilAndReport(lookupType(expr), location);
+    TypeId leftType = stripWeakUnknown(stripFromNilAndReport(lookupType(expr), location));
     if (reportImproperUse(expr, leftType, ImproperUse::Index))
         return;
     std::string receiver;
@@ -5371,6 +5434,10 @@ void TypeChecker2::visit(AstExprFunction* fn)
     // we need to typecheck the return annotation itself, if it exists.
     if (fn->returnAnnotation)
         visit(fn->returnAnnotation);
+
+    // Luwu try expressions
+    if (fn->errorHint)
+        visit(fn->errorHint);
 
 
     // If the function type has a function annotation, we need to see if we can suggest an annotation
@@ -6919,6 +6986,9 @@ void TypeChecker2::visit(AstTypeFunction* ty)
     visitGenerics(ty->generics, ty->genericPacks);
     visit(ty->argTypes);
     visit(ty->returnTypes);
+    // Luwu try expressions
+    if (ty->errorHint)
+        visit(ty->errorHint);
 }
 
 // The source spelling of a name or a chain of field reads (`Cat`, `a.Node`).
@@ -9249,6 +9319,26 @@ bool TypeChecker2::checkIndexTypeFromType(
     return false;
 }
 
+// Luwu try expressions: the table of methods `none` has while the result library exists (`get` and `expect`, from
+// makeNoneMetatable)
+static std::optional<TypeId> noneMethods(TypeId ty)
+{
+    const PrimitiveType* none = get<PrimitiveType>(ty);
+    if (!none || none->type != PrimitiveType::NoneType || !none->metatable)
+        return std::nullopt;
+
+    const TableType* metatable = get<TableType>(follow(*none->metatable));
+    if (!metatable)
+        return std::nullopt;
+
+    auto index = metatable->props.find("__index");
+    if (index == metatable->props.end() || !index->second.readTy)
+        return std::nullopt;
+
+    return follow(*index->second.readTy);
+}
+
+
 PropertyType TypeChecker2::hasIndexTypeFromType(
     TypeId ty,
     const std::string& prop,
@@ -9275,6 +9365,8 @@ PropertyType TypeChecker2::hasIndexTypeFromType(
         LUAU_ASSERT(mtIndex);
         ty = *mtIndex;
     }
+    else if (std::optional<TypeId> methods = noneMethods(ty); methods && context == ValueContext::RValue)
+        ty = *methods;
 
     if (auto tt = getTableType(ty))
     {

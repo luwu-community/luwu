@@ -331,9 +331,9 @@ local function proofMultipleAssign(c)
     return "no"
 end
 
-expectfail("function statement ends an if proof", "attempt to index function with 'name'", proofFunctionStatement, ProofCat())
-expectfail("function statement ends an assert proof", "attempt to index function with 'meow'", proofAssertFunctionStatement, ProofCat())
-expectfail("multiple assignment ends a proof", "attempt to index number with 'name'", proofMultipleAssign, ProofCat())
+expectfail("function statement ends an if proof", "attempt to index function (local 'c') with 'name'", proofFunctionStatement, ProofCat())
+expectfail("function statement ends an assert proof", "attempt to index function (local 'c') with 'meow'", proofAssertFunctionStatement, ProofCat())
+expectfail("multiple assignment ends a proof", "attempt to index number (local 'c') with 'name'", proofMultipleAssign, ProofCat())
 
 -- A fused `assert(class.isinstance(...))` still evaluates its message on success...
 do
@@ -406,7 +406,7 @@ do
 
     local ok, result = pcall(unfusedMessage, ProofDog())
     assert(ok and result == "dog", tostring(result))
-    expectfail("unfused assert on a number", "attempt to index number with 'name'", unfusedMessage, 42)
+    expectfail("unfused assert on a number", "attempt to index number (local 'c') with 'name'", unfusedMessage, 42)
     expectfail("unfused assert calls the Dog's own method", "'ProofDog'", unfusedField, ProofDog())
     assert(unfusedField(ProofCat()) == "meow cat")
 end
