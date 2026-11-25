@@ -58,6 +58,9 @@ struct BuiltinTypeFunctions
     // `expr` has type V: the member of the trait V is the value of, or `unknown` when V isn't a trait
     TypeFunction qualifiedFunc;
 
+    // Luwu: `oneof<A, B, ...>`, the union of its arguments where each table member has the others' fields as `nil`
+    TypeFunction oneofFunc;
+
     void addToScope(NotNull<TypeArena> arena, NotNull<Scope> scope) const;
 };
 
