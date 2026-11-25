@@ -990,6 +990,150 @@ static int luauF_rawequal(lua_State* L, StkId res, TValue* arg0, int nresults, S
 // Luwu Classes (rfcs/classes): class.isinstance(value, class) -> value is an instance of class.
 // arg0 is the value under test; args[0] is the class. Only fast-pathed when the second argument is
 // actually a class; otherwise fall back to the library function to raise the usual argument error.
+// Luwu: the longest result luauF_format writes; a longer one goes through string.format's call
+static const int kMaxFastFormatLength = 512;
+
+// Luwu: luauF_format's output, which fails (and then the whole format falls back to the call) when it fills up
+struct FastFormatBuffer
+{
+    char data[kMaxFastFormatLength];
+    char* end = data;
+
+    bool append(const char* text, size_t length)
+    {
+        if (length > size_t(data + sizeof(data) - end))
+            return false;
+        memcpy(end, text, length);
+        end += length;
+        return true;
+    }
+};
+
+// Luwu: `value` as `%*` prints it, when that runs no Lua code (no __tostring): nil, booleans, numbers, strings and none
+static bool appendPlainValue(FastFormatBuffer& out, const TValue* value)
+{
+    switch (ttype(value))
+    {
+    case LUA_TNIL:
+        return out.append("nil", 3);
+    case LUA_TSYMNONE:
+        return out.append("none", 4);
+    case LUA_TBOOLEAN:
+        return bvalue(value) ? out.append("true", 4) : out.append("false", 5);
+    case LUA_TNUMBER:
+    {
+        char s[LUAI_MAXNUM2STR];
+        char* e = luai_num2str(s, nvalue(value));
+        return out.append(s, e - s);
+    }
+    case LUA_TINTEGER:
+    {
+        char s[LUAI_MAXINT2STR];
+        char* e = luai_int2str(s, lvalue(value));
+        return out.append(s, e - s);
+    }
+    case LUA_TSTRING:
+        return out.append(svalue(value), tsvalue(value)->len);
+    default:
+        return false;
+    }
+}
+
+// Luwu: one `%d`, `%.Nf` or `%s` item that string.format would print with no flags or width, when its argument can't
+// make string.format raise
+static bool appendPlainItem(FastFormatBuffer& out, char option, int precision, const TValue* value)
+{
+    if (option == 's')
+        return ttisstring(value) && out.append(svalue(value), tsvalue(value)->len);
+
+    if (option == 'd' && ttisinteger(value))
+    {
+        char s[LUAI_MAXINT2STR];
+        char* e = luai_int2str(s, lvalue(value));
+        return out.append(s, e - s);
+    }
+
+    // a double outside int64_t's range would be undefined to convert, as string.format converts it
+    bool convertible = ttisnumber(value) && fabs(nvalue(value)) < 9.2e18;
+    if (option == 'd' && convertible)
+    {
+        char s[LUAI_MAXINT2STR];
+        char* e = luai_int2str(s, int64_t(nvalue(value)));
+        return out.append(s, e - s);
+    }
+
+    if (option == 'f' && ttisnumber(value))
+    {
+        char s[LUAI_MAXNUM2STR];
+        char* e = luai_fixed2str(s, nvalue(value), precision);
+        return e && out.append(s, e - s);
+    }
+
+    return false;
+}
+
+// Luwu: string.format, and the interpolated strings compiled to it, without a call frame. Only formats that can't raise
+// are written here: literal text, `%%`, `%*`, and a plain `%s`, `%d` or `%.Nf` with an argument of the right type.
+// So are only arguments that run no Lua code: a value with __tostring falls back to the call, and a __tostring
+// metamethod or an error still sees string.format's frame.
+static int luauF_format(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    if (nparams < 1 || nresults > 1 || !ttisstring(arg0) || luaC_needsGC(L))
+        return -1;
+
+    const char* p = svalue(arg0);
+    const char* formatEnd = p + tsvalue(arg0)->len;
+    int nextArg = 0; // args[0] is the second parameter
+    FastFormatBuffer out;
+
+    while (p < formatEnd)
+    {
+        const char* percent = (const char*)memchr(p, '%', formatEnd - p);
+        const char* literalEnd = percent ? percent : formatEnd;
+        if (!out.append(p, literalEnd - p))
+            return -1;
+        if (!percent)
+            break;
+
+        p = percent + 1;
+        if (p < formatEnd && *p == '%')
+        {
+            if (!out.append("%", 1))
+                return -1;
+            p++;
+            continue;
+        }
+
+        // the item's option and precision: `%*`, `%s`, `%d` or `%.Nf`, with nothing else in between
+        int precision = -1;
+        if (p + 2 < formatEnd && p[0] == '.' && p[1] >= '0' && p[1] <= '9')
+        {
+            precision = p[1] - '0';
+            p += 2;
+        }
+        if (p >= formatEnd)
+            return -1;
+        char option = *p++;
+
+        bool hasArg = nextArg < nparams - 1;
+        if (!hasArg)
+            return -1;
+        const TValue* value = args + nextArg++;
+
+        bool plainOption = (option == '*' || option == 's' || option == 'd') && precision < 0;
+        bool fixed = option == 'f' && precision >= 0;
+        if (!plainOption && !fixed)
+            return -1;
+
+        bool written = option == '*' ? appendPlainValue(out, value) : appendPlainItem(out, option, precision, value);
+        if (!written)
+            return -1;
+    }
+
+    setsvalue(L, res, luaS_newlstr(L, out.data, out.end - out.data));
+    return 1;
+}
+
 static int luauF_class_isinstance(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
 {
     if (nparams >= 2 && nresults <= 1 && ttisclass(args))
@@ -2959,6 +3103,9 @@ const luau_FastFunction luauF_table[256] = {
 
     luauF_bundlepack,
     luauF_bundleunpack,
+
+    // Luwu: string.format
+    luauF_format,
 
 // When adding builtins, add them above this line; what follows is 64 "dummy" entries with luauF_missing fallback.
 // This is important so that older versions of the runtime that don't support newer builtins automatically fall back via luauF_missing.
