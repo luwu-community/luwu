@@ -280,10 +280,16 @@ static AstType* typeFunctionLiteralArgument(const Scope& scope, AstType* annotat
     return nullptr;
 }
 
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+static bool isPushOrPopMetamethod(const Name& name)
+{
+    return name == "__push" || name == "__pop";
+}
+
 static bool isValidClassMetamethod(const Name& name)
 {
     const ClassMemberName* special = findClassMemberName(name.c_str());
-    return special && special->kind == ClassMemberNameKind::Metamethod;
+    return (special && special->kind == ClassMemberNameKind::Metamethod) || isPushOrPopMetamethod(name);
 }
 
 static std::optional<AstExpr*> matchRequire(const AstExprCall& call)
@@ -3796,6 +3802,8 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
         return visit(scope, a);
     else if (auto a = stat->as<AstStatCompoundAssign>())
         return visit(scope, a);
+    else if (auto p = stat->as<AstStatPush>())
+        return visit(scope, p);
     else if (auto f = stat->as<AstStatFunction>())
         return visit(scope, f);
     else if (auto f = stat->as<AstStatLocalFunction>())
@@ -4729,6 +4737,57 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatAssign* ass
     return ControlFlow::None;
 }
 
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): see PushConstraint
+ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatPush* push)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+
+    TypeId containerType = check(scope, push->target).ty;
+
+    // A container with a declared element type (`const comments: { Comment } = {}`) is what each value is checked
+    // against, so a table literal is inferred against it like an annotated local's value is.
+    std::optional<TypeId> elementType;
+    const TableType* containerTable = get<TableType>(follow(containerType));
+    if (containerTable && containerTable->indexer && follow(containerTable->indexer->indexType) == builtinTypes->numberType)
+        elementType = containerTable->indexer->indexResultType;
+
+    // The values settle first: an expected type they take on the way (a literal's singletons) is part of what's pushed
+    std::vector<std::optional<TypeId>> expectedTypes(push->values.size, elementType);
+    Checkpoint valuesStart = checkpoint(this);
+    TypePackId valuesPack = checkPack(scope, push->values, expectedTypes).tp;
+    Checkpoint valuesEnd = checkpoint(this);
+
+    // A container whose type isn't known yet passes its element type to the values through the solver, before their own
+    // constraints run, as a parameter's type reaches an argument. A call's values are fixed by its own constraints (a
+    // bundle literal's), so only a call needs it: anything else still takes the element type when it's pushed.
+    bool pushesCall = std::any_of(push->values.begin(), push->values.end(), [](AstExpr* value) { return value->is<AstExprCall>(); });
+    if (!elementType && pushesCall)
+    {
+        TypeId element = arena->addType(BlockedType{});
+        NotNull<Constraint> indexer =
+            addConstraint(scope, push->target->location, HasIndexerConstraint{element, containerType, builtinTypes->numberType});
+        getMutable<BlockedType>(element)->setOwner(indexer);
+
+        for (AstExpr* value : push->values)
+        {
+            TypeId* valueType = module->astTypes.find(value);
+            if (!valueType)
+                continue;
+            NotNull<Constraint> expected = addConstraint(
+                scope,
+                value->location,
+                PushTypeConstraint{element, *valueType, NotNull{&module->astTypes}, NotNull{&module->astExpectedTypes}, NotNull{value}}
+            );
+            addAllAsReverseDependencies(valuesStart, valuesEnd, this, expected);
+        }
+    }
+
+    NotNull<Constraint> pushConstraint = addConstraint(scope, push->location, PushConstraint{containerType, valuesPack});
+    addAllAsDependencies(valuesStart, valuesEnd, this, pushConstraint);
+
+    return ControlFlow::None;
+}
+
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatCompoundAssign* assign)
 {
     TypeId resultTy = checkAstExprBinary(scope, assign->location, assign->op, assign->var, assign->value, std::nullopt).ty;
@@ -5188,7 +5247,7 @@ static bool isMetamethod(const Name& name)
     return name == "__index" || name == "__newindex" || name == "__call" || name == "__concat" || name == "__unm" || name == "__add" ||
            name == "__sub" || name == "__mul" || name == "__div" || name == "__mod" || name == "__pow" || name == "__tostring" ||
            name == "__metatable" || name == "__eq" || name == "__lt" || name == "__le" || name == "__mode" || name == "__iter" || name == "__len" ||
-           name == "__idiv";
+           name == "__idiv" || isPushOrPopMetamethod(name);
 }
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExternType* declaredExternType)
@@ -6651,6 +6710,8 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
         result = check(scope, table, expectedType);
     else if (auto unary = expr->as<AstExprUnary>())
         result = check(scope, unary);
+    else if (auto pop = expr->as<AstExprPop>())
+        result = check(scope, pop);
     else if (auto binary = expr->as<AstExprBinary>())
         result = check(scope, binary, expectedType);
     else if (auto ifElse = expr->as<AstExprIfElse>())
@@ -7011,6 +7072,17 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprFunction* fun
     {
         return Inference{sig.signature};
     }
+}
+
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): see popTypeFunction
+Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprPop* pop)
+{
+    InConditionalContext inContext(&typeContext, TypeContext::Default);
+
+    TypeId containerType = check(scope, pop->expr).ty;
+    TypeId resultType = createTypeFunctionInstance(builtinTypes->typeFunctions->popFunc, {containerType}, {}, scope, pop->location);
+
+    return Inference{resultType};
 }
 
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprUnary* unary)
