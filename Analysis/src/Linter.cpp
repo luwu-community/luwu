@@ -7,6 +7,7 @@
 #include "Luau/LinterConfig.h"
 #include "Luau/LuwuOnlyApi.h"
 #include "Luau/Module.h"
+#include "Luau/NeverReturns.h"
 #include "Luau/ParseResult.h"
 #include "Luau/PrettyPrinter.h"
 #include "Luau/Scope.h"
@@ -105,6 +106,12 @@ struct LintContext
             return std::nullopt;
 
         return *it;
+    }
+
+    // Luwu never-returning calls: the calls the module's checker found declared to return `never`, if there is a module
+    const NeverReturningCalls* neverReturningCalls() const
+    {
+        return module ? &module->neverReturningCalls : nullptr;
     }
 };
 
@@ -1754,6 +1761,8 @@ private:
         Break,
         Give,
         Return,
+        // Luwu never-returning calls: a call to a function declared to return `never`, other than `error` and `assert`
+        NeverReturns,
         Error,
     };
 
@@ -1762,19 +1771,22 @@ private:
         switch (status)
         {
         case Continue:
-            return "continue";
+            return "always continues";
 
         case Break:
-            return "break";
+            return "always breaks";
 
         case Give:
-            return "give";
+            return "always gives";
 
         case Return:
-            return "return";
+            return "always returns";
+
+        case NeverReturns:
+            return "never returns";
 
         case Error:
-            return "error";
+            return "always errors";
 
         default:
             return "unknown";
@@ -1799,9 +1811,11 @@ private:
 
                     // silence the warning for common pattern of Error (coming from error()) + Return
                     // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): or + Give, which a `do` expression's block needs last
+                    // Luwu never-returning calls: a call that never returns followed by `return` is silenced the same way.
                     bool leavesAfterError = next->is<AstStatReturn>() || next->is<AstStatGive>();
-                    if (step == Error && si->is<AstStatExpr>() && leavesAfterError && i + 2 == stat->body.size)
-                        return Error;
+                    bool neverReturningCall = step == Error || step == NeverReturns;
+                    if (neverReturningCall && si->is<AstStatExpr>() && leavesAfterError && i + 2 == stat->body.size)
+                        return step;
 
                     // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): a `do` expression's block must end in a statement like
                     // `give`, so one written only for that after a statement that always leaves gets a way to drop it
@@ -1817,7 +1831,7 @@ private:
                             *context,
                             LintWarning::Code_UnreachableCode,
                             next->location,
-                            "Unreachable code (previous statement always %ss). %s",
+                            "Unreachable code (previous statement %s). %s",
                             getReason(step),
                             advice
                         );
@@ -1826,7 +1840,7 @@ private:
                             *context,
                             LintWarning::Code_UnreachableCode,
                             next->location,
-                            "Unreachable code (previous statement always %ss)",
+                            "Unreachable code (previous statement %s)",
                             getReason(step)
                         );
                     return step;
@@ -1854,7 +1868,7 @@ private:
                         *context,
                         LintWarning::Code_UnreachableCode,
                         stat->thenbody->body.data[0]->location,
-                        "Unreachable code (the condition always %ss before it can be true)",
+                        "Unreachable code (the condition %s before it can be true)",
                         getReason(ifs)
                     );
             }
@@ -1909,8 +1923,12 @@ private:
         else if (AstStatExpr* stat = node->as<AstStatExpr>())
         {
             if (AstExprCall* call = stat->expr->as<AstExprCall>())
+            {
                 if (doesCallError(call))
                     return Error;
+                if (callNeverReturns(call, context->neverReturningCalls()))
+                    return NeverReturns;
+            }
 
             return guardLeaveStatus(stat->expr);
         }
@@ -2387,7 +2405,7 @@ private:
 
     bool visit(AstExprFunction* node) override
     {
-        const AstStat* bodyf = getFallthrough(node->body);
+        const AstStat* bodyf = getFallthrough(node->body, context->neverReturningCalls());
         AstStat* vret = getValueReturn(node->body);
 
         if (bodyf && vret)

@@ -13,6 +13,8 @@ enum class ControlFlow
 {
     None = 0b00001,
     Returns = 0b00010,
+    // Luwu never-returning calls: also a call to a function declared to return `never`, like `process.exit`, which
+    // ends the process instead of raising. Read Throws as "this path ends", not as "an error was raised".
     Throws = 0b00100,
     Breaks = 0b01000,
     Continues = 0b10000,
