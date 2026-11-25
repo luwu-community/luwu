@@ -20,8 +20,8 @@ LUAU_DYNAMIC_FASTINT(LuauSubtypingRecursionLimit)
 
 LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(DebugLuwuMatchExpressions)
-LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
@@ -29,15 +29,18 @@ LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuLiteralTypes)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(LuwuDoExpr)
-LUAU_FASTFLAG(LuwuLiteralTypes)
 LUAU_FASTFLAG(LuwuAttributesEverywhere)
+LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
+LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAG(LuwuStringExtensions)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
+LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
 LUAU_FASTFLAG(LuwuTableDiscard)
@@ -6176,29 +6179,6 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_without_required_ar
     CHECK(!ac.entryMap["deprecated"].insertText);
 }
 
-TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_inline_attribute_inserts_its_reason")
-{
-    ScopedFastFlag encourageInline{FFlag::DebugLuwuEncourageInline, true};
-
-    check(R"(
-        \@[inl@1]
-        local function f() end
-    )");
-
-    auto ac = autocomplete('1');
-    REQUIRE(ac.entryMap.count("inline"));
-    CHECK_EQ(ac.entryMap["inline"].insertText, "inline(\"why this function should be inlined\")");
-
-    check(R"(
-        \@inl@1
-        local function f() end
-    )");
-
-    ac = autocomplete('1');
-    REQUIRE(ac.entryMap.count("inline"));
-    CHECK_EQ(ac.entryMap["inline"].insertText, "[inline(\"why this function should be inlined\")]");
-}
-
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_inserts_its_required_arguments")
 {
     // `@[lint]` has to name the lints it turns on, and a `@[nolint]` that names none is linted against
@@ -6224,6 +6204,29 @@ TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_attribute_inserts_its_require
     ac = autocomplete('1');
     REQUIRE(ac.entryMap.count("lint"));
     CHECK_EQ(ac.entryMap["lint"].insertText, "[lint()]");
+}
+
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_inline_attribute_inserts_its_reason")
+{
+    ScopedFastFlag encourageInline{FFlag::DebugLuwuEncourageInline, true};
+
+    check(R"(
+        \@[inl@1]
+        local function f() end
+    )");
+
+    auto ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("inline"));
+    CHECK_EQ(ac.entryMap["inline"].insertText, "inline(\"why this function should be inlined\")");
+
+    check(R"(
+        \@inl@1
+        local function f() end
+    )");
+
+    ac = autocomplete('1');
+    REQUIRE(ac.entryMap.count("inline"));
+    CHECK_EQ(ac.entryMap["inline"].insertText, "[inline(\"why this function should be inlined\")]");
 }
 
 TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_empty_braced_attribute")

@@ -3385,29 +3385,6 @@ TEST_CASE_FIXTURE(Fixture, "cli_181894_refinement_cancelled_by_for_loop")
     )"));
 }
 
-// Luwu: a refinement against a string literal lists each singleton once. Upstream gives `"NaN" | "NaN"` here, since the
-// declared `"NaN"` and the one `string` narrows to are separate types.
-TEST_CASE_FIXTURE(Fixture, "singleton_refinements_list_each_value_once")
-{
-    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
-
-    CheckResult result = check(R"(
-        function f(a: "NaN" | "negative" | string, b: "NaN" | string)
-            if a == "NaN" then
-                local x = a
-            end
-            if b == "NaN" or b == "x" then
-                local y = b
-            end
-        end
-    )");
-
-    LUAU_REQUIRE_NO_ERRORS(result);
-
-    CHECK_EQ("\"NaN\"", toString(requireTypeAtPosition({3, 26})));
-    CHECK_EQ("\"NaN\" | \"x\"", toString(requireTypeAtPosition({6, 26})));
-}
-
 // Luwu never-returning calls: code after `if not x then exit(1) end` runs only when `x` is truthy
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_branch_ending_in_a_never_returning_call_refines_what_follows")
 {
@@ -3472,6 +3449,29 @@ TEST_CASE_FIXTURE(Fixture, "a_branch_ending_in_a_call_that_may_return_doesnt_ref
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
+}
+
+// Luwu: a refinement against a string literal lists each singleton once. Upstream gives `"NaN" | "NaN"` here, since the
+// declared `"NaN"` and the one `string` narrows to are separate types.
+TEST_CASE_FIXTURE(Fixture, "singleton_refinements_list_each_value_once")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    CheckResult result = check(R"(
+        function f(a: "NaN" | "negative" | string, b: "NaN" | string)
+            if a == "NaN" then
+                local x = a
+            end
+            if b == "NaN" or b == "x" then
+                local y = b
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+
+    CHECK_EQ("\"NaN\"", toString(requireTypeAtPosition({3, 26})));
+    CHECK_EQ("\"NaN\" | \"x\"", toString(requireTypeAtPosition({6, 26})));
 }
 
 TEST_SUITE_END();

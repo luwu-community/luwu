@@ -419,6 +419,7 @@ const AstAttr::Context kLintScopeContexts = AstAttr::Context(
     unsigned(AstAttr::Context::AnyFunction) | unsigned(AstAttr::Context::Class) | unsigned(AstAttr::Context::ClassField) |
     unsigned(AstAttr::Context::Local)
 );
+
 // Luwu: `@[inline(reason)]` takes one string constant, why the function should be inlined
 std::vector<std::pair<Location, std::string>> inlineArgsValidator(Location attrLoc, const AstArray<AstExpr*>& args)
 {
@@ -430,7 +431,6 @@ std::vector<std::pair<Location, std::string>> inlineArgsValidator(Location attrL
 
     return {};
 }
-
 
 AttributeEntry kAttributeEntries[] = {
     {"checked", AstAttr::Type::Checked, AstAttr::Context::AnyFunction, "functions", nullptr, {}},

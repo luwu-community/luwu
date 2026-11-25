@@ -38,11 +38,6 @@ LUAU_FASTFLAGVARIABLE(DebugLuwuLuauClassCompat)
 LUAU_FASTFLAGVARIABLE(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAGVARIABLE(DebugLuauUserDefinedClassesRuntime)
 
-// Luwu String Extensions (rfcs/string-extensions.md): trim, trimstart, trimend, startswith, endswith, contains, replace
-// and split's maxpieces argument. Off, the string library is exactly upstream's. The compiler reads it to emit the
-// startswith, endswith and contains fastcalls.
-LUAU_FASTFLAGVARIABLE(LuwuStringExtensions)
-
 namespace Luau
 {
 
@@ -52,6 +47,11 @@ bool luauClassCompat()
 }
 
 } // namespace Luau
+
+// Luwu String Extensions (rfcs/string-extensions.md): trim, trimstart, trimend, startswith, endswith, contains, replace
+// and split's maxpieces argument. Off, the string library is exactly upstream's. The compiler reads it to emit the
+// startswith, endswith and contains fastcalls.
+LUAU_FASTFLAGVARIABLE(LuwuStringExtensions)
 
 // Luwu builtin classes: standard library classes written in C++, in the VM and in Analysis's builtin definitions. So far
 // that's the `collections` library (`OrderedMap`, `Vec`, `VecDeque`). A prototype whose API can still change. Needs
@@ -80,3 +80,7 @@ LUAU_FASTFLAGVARIABLE(DebugLuwuEncourageInline)
 // Luwu: string.format and interpolated strings compile to a fastcall (LBF_STRING_FORMAT). While it is on, the compiler
 // emits WIP bytecode (version 200), which a VM without the builtin can't run.
 LUAU_FASTFLAGVARIABLE(LuwuStringFormatFastcall)
+
+// Luwu: the `@[inline(reason)]` attribute. The compiler weighs a marked function by a third of its size at its call sites,
+// and a call it still can't inline is a compile error at the call. In progress, so a Debug flag.
+LUAU_FASTFLAGVARIABLE(DebugLuwuEncourageInline)
