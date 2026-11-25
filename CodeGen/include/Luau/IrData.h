@@ -1135,6 +1135,13 @@ enum class IrCmd : uint8_t
     // D: Rn (trait)
     FALLBACK_GETQUALIFIED,
 
+    // Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL, through the interpreter's implementation. It can call
+    // an __index metamethod.
+    // A: unsigned int (bytecode instruction index)
+    // B: Rn (dest)
+    // C: Rn (value)
+    FALLBACK_GETPOSITIONAL,
+
     // Luwu Traits (rfcs/classes/traits.md): LOP_SETQUALIFIED, a write to a trait's scoped field. Runs no Luau code, but
     // raises when the field can't be written there.
     // A: unsigned int (bytecode instruction index)
