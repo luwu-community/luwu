@@ -8,7 +8,7 @@ LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
-LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(DebugLuwuBufferBatched)
 LUAU_FASTFLAG(LuwuTableDiscard)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
@@ -496,8 +496,7 @@ declare class: {
     implements: @checked (o: unknown, t: trait) -> boolean,
     of: @checked (o: unknown) -> class?,
     name: @checked (o: class | object | trait) -> string,
-    fields: @checked (o: class | object | trait) -> ({ [string]: unknown }, boolean)
-}
+    fields: @checked (o: class | object | trait) -> ({ [string]: unknown }, boolean),
 )CLASS_SRC";
 
 // Luwu class reflection (rfcs/classes): the class library with `class.member`, and `class.fields` listing ClassMembers
@@ -522,7 +521,6 @@ declare class: {
     name: @checked (o: class | object | trait) -> string,
     member: @checked (o: class | object, name: string) -> ClassMember<unknown>,
     fields: @checked (o: class | object) -> { ClassMember<unknown> },
-}
 )CLASS_SRC";
 
 // Luwu collections: the `collections` library's classes. The VM builds them in C++ (lcollectionslib.cpp); these are
@@ -807,7 +805,7 @@ std::string getBuiltinDefinitionSource()
         result += kBuiltinDefinitionBufferSrcIsFrozen;
     if (FFlag::DebugLuwuBufferComparison)
         result += kBuiltinDefinitionBufferSrcComparison;
-    if (FFlag::LuwuBufferBatched)
+    if (FFlag::DebugLuwuBufferBatched)
         result += kBuiltinDefinitionBufferSrcBatched;
     if (integerLibraryEnabled())
         result += kBuiltinDefinitionBufferSrcIntegers;
@@ -822,6 +820,10 @@ std::string getBuiltinDefinitionSource()
         size_t sourcePos = luwonSrc.find(sourceEntry);
         if (sourcePos != std::string::npos)
             luwonSrc.insert(sourcePos + sourceEntry.size(), "    tagged: class,\n");
+
+        // Luwu Traits (rfcs/classes/traits.md): `luwon.data` is a trait
+        if (FFlag::LuwuTraits && sourcePos != std::string::npos)
+            luwonSrc.insert(sourcePos + sourceEntry.size(), "    data: trait,\n");
 
         // A reader holds classes
         const std::string readerEntry = "    reader: @checked (classes: { unknown }) -> {\n        read classes: { [string]: unknown },";
@@ -848,7 +850,12 @@ std::string getBuiltinDefinitionSource()
 
     // Luwu class reflection (rfcs/classes): `ClassMember` holds an `Option`, so the class library comes after it
     if (classes && classReflectionEnabled())
+    {
         result += kBuiltinDefinitionClassReflectionSrc;
+        if (luauClassCompat())
+            result += kBuiltinDefinitionClassSrcClassof;
+        result += kBuiltinDefinitionClassSrcClose;
+    }
 
     return result;
 }
@@ -1029,10 +1036,7 @@ std::string getTypeFunctionDefinitionSource()
 {
     std::string common = R"(
     is: (self: type, tag: Tag) -> boolean,
-)";
-    if (FFlag::LuauUdtfTypeIsSubtypeOf)
-        common += "    issubtypeof: (self: type, arg: type) -> boolean,\n";
-    common += R"(
+    issubtypeof: (self: type, arg: type) -> boolean,
     metadata: (self: type) -> Metadata,
     setmetadata: (self: type, metadata: Metadata?) -> (),
 )";
@@ -1195,6 +1199,7 @@ declare types: {
     negationof: @checked (arg: type) -> Negation,
     unionof: @checked (...type) -> type,
     intersectionof: @checked (...type) -> type,
+    raises: @checked (fn: type) -> type,
     newtable: @checked (
         props: { read [any]: type } | { read [any]: { read read: type?, read write: type? } }?,
         indexer: { read index: type, read readresult: type, read writeresult: type }?,

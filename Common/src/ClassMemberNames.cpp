@@ -44,6 +44,10 @@ const ClassMemberName kNames[] = {
     {"__iter", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self)", ClassMemberNameReturn::Value, false},
     // Luwu Integers (rfcs/integers.md): `integer.cast` and calling a mode convert a value through it, so it isn't a tag method
     {"__tointeger", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, "(self): integer", ClassMemberNameReturn::Value, false},
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `<+` and `<-` call these. Completion leaves them out while
+    // the operators are behind a Debug flag.
+    {"__push", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr, ClassMemberNameReturn::Anything, false},
+    {"__pop", ClassMemberNameKind::Metamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr, ClassMemberNameReturn::Value, false},
 
     // Classes have their own member lookup and layout, which these would replace
     {"__index", ClassMemberNameKind::ForbiddenMetamethod, kBoth, ClassMemberNamePlacement::Shared, kNoPlacement, false, nullptr, ClassMemberNameReturn::Anything, false},

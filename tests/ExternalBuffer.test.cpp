@@ -11,7 +11,7 @@
 
 LUAU_FASTFLAG(LuwuExternallyManagedBuffers)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
-LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(DebugLuwuBufferBatched)
 
 static int s_externalBufferFreeCount = 0;
 static void test_buffer_free_cb(lua_State* L, void* data, size_t sz, void* userdata)
@@ -160,7 +160,7 @@ TEST_CASE("ExternalBufferBatchedMutable")
 {
     ScopedFastFlag sff{FFlag::LuwuExternallyManagedBuffers, true};
     ScopedFastFlag sff2{FFlag::LuwuBufferIsFrozen, true};
-    ScopedFastFlag sff3{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag sff3{FFlag::DebugLuwuBufferBatched, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();
@@ -200,7 +200,7 @@ TEST_CASE("ExternalBufferBatchedImmutable")
 {
     ScopedFastFlag sff{FFlag::LuwuExternallyManagedBuffers, true};
     ScopedFastFlag sff2{FFlag::LuwuBufferIsFrozen, true};
-    ScopedFastFlag sff3{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag sff3{FFlag::DebugLuwuBufferBatched, true};
 
     std::unique_ptr<lua_State, void (*)(lua_State*)> state(luaL_newstate(), lua_close);
     lua_State* L = state.get();

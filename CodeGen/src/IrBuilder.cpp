@@ -858,27 +858,6 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
         translateInstResultGet(*this, pc, i);
         break;
 
-    case LOP_GETTABLEBUNDLE:
-    case LOP_SETTABLEBUNDLE:
-        inst(
-            IrCmd::FALLBACK_TABLEBUNDLE,
-            constUint(i),
-            vmReg(LUAU_INSN_A(*pc)),
-            vmReg(LUAU_INSN_B(*pc)),
-            vmReg(LUAU_INSN_C(*pc)),
-            constInt(int(pc[1])),
-            constInt(LUAU_INSN_OP(*pc) == LOP_SETTABLEBUNDLE)
-        );
-        break;
-
-    case LOP_GETQUALIFIED:
-        inst(IrCmd::FALLBACK_GETQUALIFIED, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_B(*pc)), vmReg(LUAU_INSN_C(*pc)));
-        break;
-
-    case LOP_SETQUALIFIED:
-        inst(IrCmd::FALLBACK_SETQUALIFIED, constUint(i), vmReg(LUAU_INSN_A(*pc)), vmReg(LUAU_INSN_B(*pc)), vmReg(LUAU_INSN_C(*pc)));
-        break;
-
     case LOP_GETOBJECTMEMBER:
         translateInstGetObjectMember(*this, pc, i);
         break;
@@ -1016,8 +995,9 @@ void IrBuilder::clone(std::vector<uint32_t> sourceIdxs, bool removeCurrentTermin
             IrInst clone = function.instructions[index];
 
             // Skip pseudo instructions to make clone more compact, but validate that they have no users
-            // Luwu: from upstream's LuauCodegenMarkUsed (0.745), MARK_DEAD and MARK_USED are kept: they mark register liveness
-            bool marksLiveness = clone.cmd == IrCmd::MARK_DEAD || clone.cmd == IrCmd::MARK_USED;
+            // Luwu: from upstream's LuauCodegenMarkUsed (0.745), MARK_DEAD and MARK_USED are kept: they mark register liveness.
+            // MARK_TRY_READS does too: a try handler reads those registers.
+            bool marksLiveness = clone.cmd == IrCmd::MARK_DEAD || clone.cmd == IrCmd::MARK_USED || clone.cmd == IrCmd::MARK_TRY_READS;
             if (isPseudo(clone.cmd) && !marksLiveness)
             {
                 CODEGEN_ASSERT(clone.useCount == 0);
