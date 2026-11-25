@@ -15,6 +15,7 @@ LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(LuwuStringFormatFastcall)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 
 namespace Luau
@@ -1587,6 +1588,10 @@ std::string BytecodeBuilder::getError(const std::string& message)
 
 uint8_t BytecodeBuilder::getVersion()
 {
+    // Luwu: the string.format fastcall (LBF_STRING_FORMAT) is WIP bytecode too
+    if (FFlag::LuwuStringFormatFastcall)
+        return LWBC_VERSION_WIP;
+
     // Luwu Classes (rfcs/classes) and Luwu try expressions: work-in-progress formats
     if (FFlag::LuwuClasses || FFlag::DebugLuwuTryExpressions)
         return LWBC_VERSION_WIP;
