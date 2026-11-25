@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/TypeChecker2.h"
 
+#include "Luau/LuwuFlags.h"
 #include "Luau/UnreachableProof.h"
 
 #include "Luau/ApplyTypeFunction.h"
@@ -4875,6 +4876,16 @@ void TypeChecker2::visitExprName(
     checkConstPropertyAssignment(leftType, expr, propName, context, location);
 }
 
+// Luwu: with class compat, the `class` library's definitions have both languages' names (EmbeddedBuiltinDefinitions), and
+// each module sees only its own: upstream's `classof` in a Luau module, Luwu's `of`, `name` and `fields` in a Luwu module.
+static bool isOtherLanguagesClassMember(Language language, std::string_view member)
+{
+    if (language == Language::Luwu)
+        return member == "classof";
+
+    return member == "of" || member == "name" || member == "fields";
+}
+
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
 {
     // Luwu Traits (rfcs/classes/traits.md): `obj:Trait:name` reads `Trait.name`, or the trait's scoped function `name`, which
@@ -4898,6 +4909,15 @@ void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)
 
         if (scoped || traitWrite)
             checkScopedMemberAccess(indexName, trait, context);
+        return;
+    }
+
+    AstExprGlobal* global = indexName->expr->as<AstExprGlobal>();
+    bool otherLanguagesClassMember =
+        global && global->name == "class" && luauClassCompat() && isOtherLanguagesClassMember(module->language, indexName->index.value);
+    if (otherLanguagesClassMember)
+    {
+        reportError(UnknownProperty{lookupType(indexName->expr), indexName->index.value}, indexName->location);
         return;
     }
 
