@@ -1740,6 +1740,13 @@ static bool isTopLevelStatementPosition(const std::vector<AstNode*>& ancestry)
     return true;
 }
 
+// Luwu: a Luau or Lua module can't use a global only Luwu has (LuwuOnlyApi), so it isn't offered there. A local of
+// that name is the module's own.
+static bool isLuwuOnlyGlobalIn(const Module& module, const Symbol& name)
+{
+    return module.language != Language::Luwu && !name.local && name.global.value && isLuwuOnlyGlobal(name.global.value);
+}
+
 static AutocompleteEntryMap autocompleteStatement(
     const Module& module,
     const std::vector<AstNode*>& ancestry,
@@ -1762,7 +1769,7 @@ static AutocompleteEntryMap autocompleteStatement(
     {
         for (const auto& [name, binding] : scope->bindings)
         {
-            if (!isBindingLegalAtCurrentPosition(name, binding, position))
+            if (!isBindingLegalAtCurrentPosition(name, binding, position) || isLuwuOnlyGlobalIn(module, name))
                 continue;
 
             std::string n = toString(name);
@@ -1967,7 +1974,7 @@ static AutocompleteContext autocompleteExpression(
         {
             for (const auto& [name, binding] : scope->bindings)
             {
-                if (!isBindingLegalAtCurrentPosition(name, binding, position))
+                if (!isBindingLegalAtCurrentPosition(name, binding, position) || isLuwuOnlyGlobalIn(module, name))
                     continue;
 
                 if (isBeingDefined(ancestry, name))
@@ -2166,6 +2173,37 @@ static std::optional<AutocompleteEntryMap> convertRequireSuggestionsToAutocomple
         result[std::move(suggestion.label)] = std::move(entry);
     }
     return result;
+}
+
+// Luwu bundles: the expected type of the position the innermost node of `ancestry` fills in a bundle literal `.(a, b)`,
+// from the expected type of the whole bundle. nullopt outside a bundle literal or without a bundle type expected.
+static std::optional<TypeId> bundlePositionExpectedType(
+    TypeArena& arena,
+    const Module& module,
+    const std::vector<AstNode*>& ancestry,
+    const ScopePtr& scope
+)
+{
+    if (ancestry.size() < 2)
+        return std::nullopt;
+
+    AstExpr* value = ancestry.back()->asExpr();
+    AstExprCall* bundle = ancestry[ancestry.size() - 2]->as<AstExprCall>();
+    if (!value || !bundle || !isBundlePackCall(bundle))
+        return std::nullopt;
+
+    const TypeId* expected = module.astExpectedTypes.find(bundle);
+    std::optional<std::vector<TypeId>> positions =
+        expected ? expectedBundlePositions(&arena, scope.get(), *expected, bundle, value) : std::nullopt;
+    if (!positions)
+        return std::nullopt;
+
+    for (size_t i = 0; i < bundle->args.size && i < positions->size(); i++)
+    {
+        if (bundle->args.data[i] == value)
+            return (*positions)[i];
+    }
+    return std::nullopt;
 }
 
 static std::optional<AutocompleteEntryMap> autocompleteStringParams(
@@ -3395,6 +3433,11 @@ AutocompleteResult autocomplete_(
 
         if (std::optional<TypeId> tested = patternTestedType(*module, ancestry, scopeAtPosition))
             autocompleteStringSingleton(*tested, false, node, position, result);
+
+        // Luwu bundles: a string in a bundle literal `.(a, b)` completes what its position of the bundle's expected type
+        // allows. The bundle is a `bundle.pack` call, whose own argument check records `unknown` for the string.
+        if (std::optional<TypeId> expected = bundlePositionExpectedType(*typeArena, *module, ancestry, scopeAtPosition))
+            autocompleteStringSingleton(*expected, false, node, position, result);
 
         return {std::move(result), ancestry, AutocompleteContext::String};
     }

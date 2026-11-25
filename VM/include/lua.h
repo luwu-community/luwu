@@ -578,6 +578,24 @@ LUA_API int lua_classof(lua_State* L, int idx);
 // Luwu Classes (rfcs/classes): `class.is` for embedders. Returns 1 if the value at `idx` is an object of exactly the class
 // at `classidx`, 0 otherwise. Raises if the value at `classidx` isn't a class.
 LUA_API int lua_classis(lua_State* L, int idx, int classidx);
+// Luwu opaque values: marks the class at `idx`, or the class of the object at `idx`, opaque. Its objects then never
+// appear in error records, `class.fields` raises on it, and reading a private member from outside raises the error a
+// missing member gives. A mark can't be removed. Raises if the value isn't a class or object.
+LUA_API void lua_setclassopaque(lua_State* L, int idx);
+
+// Luwu Native Classes (rfcs/native-classes.md): the destructor of every object whose native data has `tag`, called with
+// the data once, when the object is freed. Like a userdata destructor, it must not call back into Luwu.
+LUA_API void lua_setobjectdtor(lua_State* L, int tag, lua_Destructor dtor);
+LUA_API lua_Destructor lua_getobjectdtor(lua_State* L, int tag);
+// Luwu Native Classes (rfcs/native-classes.md): the native data of the object at `idx` when it has data with `tag`, and
+// NULL for any other value
+LUA_API void* lua_toobjectdata(lua_State* L, int idx, int tag);
+
+// Luwu bundles: lua_packbundle pops `n` values and pushes a bundle of them, as `bundle.pack` does; it raises past 1024
+// values or when the bundle library (luaopen_bundle) isn't open. lua_unpackbundle pushes the values of the bundle at
+// `idx` and returns how many, or pushes nothing and returns -1 for any other value.
+LUA_API void lua_packbundle(lua_State* L, int n);
+LUA_API int lua_unpackbundle(lua_State* L, int idx);
 
 LUA_API int lua_getbuffermode(lua_State* L, int idx);
 LUA_API void* lua_getbufferuserdata(lua_State* L, int idx);

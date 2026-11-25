@@ -998,11 +998,19 @@ do
     assert(c.y == 2 and c.z == "class")
 end
 
--- The functions construction runs for the VM (`__implements`, `__traitinit`, `__needs`, `__defaults` and the trait
--- initializer runner) trust that construction called them with an object of their class, so the debug library never
--- hands them out: from every position that runs during construction, their frames give nil for "f"
+-- The functions construction runs for the VM (each class's constructor, `__implements`, `__traitinit`, `__needs` and
+-- `__defaults`) trust that construction called them with an object of their class, so the debug library never hands
+-- them out: from every position that runs during construction, their frames give nil for "f". A constructor's frame is
+-- named after its class.
 do
-    local internal = { __implements = true, __traitinit = true, __needs = true, inittraits = true }
+    local internal = {
+        Leaky = true,
+        Pod = true,
+        Init = true,
+        Plain = true,
+        __traitinit = true,
+        __needs = true,
+    }
     local leaked, frames = {}, {}
 
     local function walk()
@@ -1022,7 +1030,7 @@ do
         return 1
     end
 
-    -- `__defaults` has no debug name, so it's found by position: 1 is this function, 2 the `__defaults` calling it
+    -- found by position: 1 is this function, 2 the constructor evaluating the default
     local defaultsseen = false
     local function defaults()
         assert(debug.info(2, "s") and debug.info(2, "f") == nil)
@@ -1074,7 +1082,7 @@ do
         end)()
     end
 
-    assert(frames.__implements and frames.__traitinit and frames.inittraits and defaultsseen)
+    assert(frames.Pod and frames.__traitinit and defaultsseen)
     assert(next(leaked) == nil, `leaked {next(leaked)}`)
 end
 

@@ -19,6 +19,7 @@
 
 #include "Luau/ClassMemberNames.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -78,6 +79,7 @@ LuauClass* luaR_newclass(
     classdef->offsettomember = NULL;
     classdef->metatable = NULL;
     classdef->instancemetatable = NULL;
+    classdef->constructor = NULL;
     classdef->numberofinstancemembers = numberofinstancemembers;
     classdef->numberofallmembers = numberofinstancemembers + numberofstaticmembers;
     classdef->numberofobjectmembers = classdef->numberofallmembers;
@@ -104,7 +106,13 @@ LuauClass* luaR_newclass(
     classdef->numoverriddenconsts = 0;
     classdef->traitdefaults = NULL;
     classdef->compiledtraitcopies = NULL;
+    classdef->lengthfield = LUAR_NO_LENGTH_FIELD;
+    classdef->fastmethods = NULL;
     classdef->qualified = NULL;
+    classdef->typeofname = NULL;
+    classdef->nativesize = 0;
+    classdef->nativetag = 0;
+    classdef->isopaque = false;
     classdef->positionalmembers = NULL;
     classdef->numberofpositional = -1;
 
@@ -271,9 +279,11 @@ size_t luaR_classsize(const LuauClass* classdef)
            (classdef->numberofallmembers * (sizeof(TString*) + sizeof(uint16_t))) +
            // ... plus the constant field defaults, when the class carries them ...
            (classdef->memberdefaults ? classdef->numberofinstancemembers * sizeof(TValue) : 0) +
-           // ... plus what it keeps about the traits it implements.
+           // ... plus what it keeps about the traits it implements ...
            (classdef->numtraits * sizeof(LuauClass*)) + (classdef->numtraitinits * (sizeof(TValue) + 2 * sizeof(uint32_t))) +
            (classdef->numoverriddenconsts * sizeof(uint32_t)) +
+           // ... plus a builtin class's fast methods.
+           (classdef->fastmethods ? classdef->numberofallmembers * sizeof(luaR_FastMethod) : 0) +
            // ... plus the offsets of its positional members.
            (classdef->positionalmembers ? classdef->numberofpositional * sizeof(uint32_t) : 0);
 }
@@ -305,10 +315,7 @@ bool luaR_closureistraitinit(const LuauClass* classdef, const Closure* cl)
 
 bool luaR_isvminternalfunction(lua_State* L, const Closure* cl)
 {
-    if (cl->isC)
-        return cl == L->global->traitinitrunner;
-
-    return (cl->l.p->flags & LPF_VM_INTERNAL) != 0;
+    return !cl->isC && (cl->l.p->flags & LPF_VM_INTERNAL) != 0;
 }
 
 bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl)
@@ -329,13 +336,18 @@ bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl)
 // construction *on behalf of whoever called the class*. Its immediate caller is not that: for
 // `pcall(SomeClass, ...)` it is `pcall`, and a builtin's C frame is not authority for anything. Note
 // this is not the rule for an access a C function performs itself -- see luaR_checkprivateaccess.
-static const Closure* luaR_callinglua(lua_State* L)
+static const Closure* luaR_callingluafrom(lua_State* L, CallInfo* from)
 {
-    for (CallInfo* ci = L->ci; ci > L->base_ci; ci--)
+    for (CallInfo* ci = from; ci > L->base_ci; ci--)
         if (isLua(ci))
             return clvalue(ci->func);
 
     return NULL;
+}
+
+static const Closure* luaR_callinglua(lua_State* L)
+{
+    return luaR_callingluafrom(L, L->ci);
 }
 
 void luaR_checkprivateaccess(lua_State* L, const TValue* key, const LuauClass* classdef, const Closure* cl, uint32_t offset)
@@ -389,7 +401,28 @@ void luaR_checkprivateaccess(lua_State* L, const TValue* key, const LuauClass* c
     if (luaR_closureownsprivateaccess(classdef, cl))
         return;
 
+    // Luwu opaque values: an opaque class doesn't confirm that a private member exists. A private field can only be
+    // reached through an object, and a private static member is reported as read through the class.
+    if (classdef->isopaque && ttisstring(key))
+        luaG_classmembererror(L, classdef, offset < classdef->numberofinstancemembers, tsvalue(key));
+
     luaG_privateaccesserror(L, key, classdef->name);
+}
+
+bool luaR_isopaque(lua_State* L, const TValue* value)
+{
+    if (ttisclass(value))
+        return classvalue(value)->isopaque;
+    if (ttisobject(value))
+        return objectvalue(value)->lclass->isopaque;
+
+    LuaTable* metatable = NULL;
+    if (ttistable(value))
+        metatable = hvalue(value)->metatable;
+    else if (ttisuserdata(value))
+        metatable = uvalue(value)->metatable;
+
+    return metatable && !l_isfalse(luaH_getstr(metatable, luaS_new(L, LUWU_OPAQUE_MARK)));
 }
 
 void luaR_checkprivateconstructor(lua_State* L, const LuauClass* classdef, const Closure* cl)
@@ -451,6 +484,42 @@ static void luaR_stampownerclass(lua_State* L, Proto* p, LuauClass* classdef)
 
     for (int i = 0; i < p->sizep; i++)
         luaR_stampownerclass(L, p->p[i], classdef);
+}
+
+static l_noret luaR_podargumentcounterror(lua_State* L, const LuauClass* classdef);
+
+void luaR_setconstructor(lua_State* L, LuauClass* classdef, const TValue* fn)
+{
+    LUAU_ASSERT(ttisfunction(fn) && !clvalue(fn)->isC && !classdef->istrait);
+
+    Closure* constructor = clvalue(fn);
+
+    // the constructor stores private and const fields, and only the VM calls it: debug.info never hands it out
+    luaR_stampownerclass(L, constructor->l.p, classdef);
+    constructor->l.p->flags |= LPF_VM_INTERNAL;
+
+    classdef->constructor = constructor;
+    luaC_objbarrier(L, classdef, constructor);
+}
+
+bool luaR_prepareclasscall(lua_State* L, StkId func, StkId argtop)
+{
+    LuauClass* classdef = classvalue(func);
+
+    if (!classdef->constructor)
+        return false;
+
+    // The constructor belongs to the class, so the private-constructor check uses the code that called the class:
+    // the nearest Lua frame, which is the caller itself unless a builtin like pcall made the call
+    if (luaR_hasprivateconstructor(classdef))
+        luaR_checkprivateconstructor(L, classdef, luaR_callinglua(L));
+
+    bool podconstructor = !classdef->hascustominit;
+    if (podconstructor && argtop - func > 2)
+        luaR_podargumentcounterror(L, classdef);
+
+    setclvalue(L, func, classdef->constructor);
+    return true;
 }
 
 // Whether a trait's member at `off` is scoped to the trait (`scoped function name`, `scoped name = value`), which
@@ -669,11 +738,12 @@ void luaR_addclassmember(lua_State* L, LuauClass* classdef, TString* name, TValu
 
 void luaR_addvaluemetamethod(lua_State* L, LuauClass* classdef, TString* name, const TValue* fn)
 {
-    // the compiler only passes the names the registry allows on values (Luau::ClassMemberName::onValues)
-    LUAU_ASSERT(ttisfunction(fn) && !clvalue(fn)->isC);
+    // the compiler and luaR_newnativeclass only pass the names the registry allows on values (Luau::ClassMemberName::onValues)
+    LUAU_ASSERT(ttisfunction(fn));
     LUAU_ASSERT(Luau::findClassMemberName(getstr(name)) && Luau::findClassMemberName(getstr(name))->onValues);
 
-    luaR_stampownerclass(L, clvalue(fn)->l.p, classdef);
+    if (!clvalue(fn)->isC)
+        luaR_stampownerclass(L, clvalue(fn)->l.p, classdef);
 
     // luaH_setstr ignores `readonly`, which keeps the metatable locked for everything else
     TValue* dest = luaH_setstr(L, classdef->metatable, name);
@@ -749,11 +819,11 @@ void luaR_applyobjectfields(lua_State* L, LuauClass* classdef, LuauObject* objec
         const TValue* value = luaH_getstr(arg, classdef->offsettomember[idx]);
 
         // A field absent from the table (or explicitly nil) keeps whatever's already in
-        // object->members[idx] -- nil, or that field's default.
+        // luaR_members(object)[idx] -- nil, or that field's default.
         if (!ttisnil(value))
         {
             luaR_checknotfinal(L, classdef, idx);
-            setobj(L, &object->members[idx], value);
+            setobj(L, &luaR_members(object)[idx], value);
         }
     }
 }
@@ -790,7 +860,7 @@ static void luaR_applyobjectfieldsas(lua_State* L, LuauClass* classdef, LuauObje
         if (!ttisnil(value))
         {
             luaR_checknotfinal(L, classdef, idx);
-            setobj(L, &object->members[idx], value);
+            setobj(L, &luaR_members(object)[idx], value);
             // An __index call can run the collector, so `object` may already be black. Once the next
             // field's lookup overwrites the stack slot, this member is the value's only reference, so
             // it needs the barrier.
@@ -829,7 +899,7 @@ static l_noret luaR_podargumentcounterror(lua_State* L, const LuauClass* classde
 static void luaR_storepoddefaults(lua_State* L, const LuauClass* classdef, LuauObject* object, StkId results)
 {
     for (uint32_t idx = 0; idx < classdef->numberofownmembers; idx++)
-        setobj(L, &object->members[idx], &results[idx]);
+        setobj(L, &luaR_members(object)[idx], &results[idx]);
 
     // `object` can be black by now, and the argument's __index calls after this can run the collector
     luaC_barrierfast(L, object);
@@ -982,18 +1052,47 @@ static int luaR_podconstructionstep(lua_State* L)
     return 1;
 }
 
+void luaR_applyobjectargument(lua_State* L, LuauClass* classdef, LuauObject* object, const TValue* arg)
+{
+    // a table carrying a metatable needs the generic, __index-aware path
+    if (LUAU_LIKELY(ttistable(arg) && hvalue(arg)->metatable == NULL))
+    {
+        luaR_applyobjectfields(L, classdef, object, hvalue(arg));
+        return;
+    }
+
+    // The argument's private fields are read with the rights of the code constructing the object. In the class's
+    // constructor, that's the code that called the class: the nearest Lua frame below the constructor's.
+    const Closure* accessor = isLua(L->ci) ? clvalue(L->ci->func) : NULL;
+    if (accessor && accessor == classdef->constructor)
+        accessor = luaR_callingluafrom(L, L->ci - 1);
+
+    luaR_applyobjectfieldsas(L, classdef, object, arg, accessor);
+}
+
 LuauObject* luaR_newobjectuninit(lua_State* L, LuauClass* classdef)
 {
     // See luaR_newobject: the same allocation, minus initializing the members. Only for a caller that
     // fills every one of them immediately, with nothing in between that could trigger a GC step --
     // traverseobject reads them all.
     uint32_t nummembers = classdef->numberofinstancemembers;
-    LuauObject* object = luaM_newgco(L, LuauObject, luaR_objectsize(nummembers), L->activememcat);
+    uint32_t nativesize = classdef->nativesize;
+    size_t size = nativesize == 0 ? luaR_objectsize(nummembers) : luaR_nativeallocsize(nummembers, nativesize);
+    LuauObject* object = luaM_newgco(L, LuauObject, size, L->activememcat);
     luaC_init(L, object, LUA_TOBJECT);
+    object->storagekind = nativesize == 0 ? LUAR_STORAGE_NONE : LUAR_STORAGE_NATIVE;
     object->lclass = classdef;
     object->numberofmembers = nummembers;
-    object->members = cast_to(TValue*, object + 1);
 
+    // Luwu Native Classes (rfcs/native-classes.md): the data is zeroed, so a destructor can tell what construction
+    // never got to
+    if (LUAU_UNLIKELY(nativesize != 0))
+    {
+        LuauNativeData* native = luaR_nativedata(object);
+        native->size = nativesize;
+        native->tag = classdef->nativetag;
+        memset(native + 1, 0, nativesize);
+    }
     return object;
 }
 
@@ -1001,14 +1100,10 @@ LuauObject* luaR_newobject(lua_State* L, LuauClass* classdef)
 {
     // The members live in the same allocation as the object itself (see luaR_objectsize): one GC
     // object per instance instead of two, which halves both the allocator traffic and the sweep cost
-    // of constructing objects. The interpreter reads them through `members`; native code addresses
-    // them from the object pointer (LUAR_OBJECT_MEMBERS_OFFSET).
-    uint32_t nummembers = classdef->numberofinstancemembers;
-    LuauObject* object = luaM_newgco(L, LuauObject, luaR_objectsize(nummembers), L->activememcat);
-    luaC_init(L, object, LUA_TOBJECT);
-    object->lclass = classdef;
-    object->numberofmembers = nummembers;
-    object->members = cast_to(TValue*, object + 1);
+    // of constructing objects. Both the interpreter (luaR_members) and native code
+    // (LUAR_OBJECT_MEMBERS_OFFSET) address them from the object pointer.
+    LuauObject* object = luaR_newobjectuninit(L, classdef);
+    uint32_t nummembers = object->numberofmembers;
 
     // Initialize every member before anything can trigger a GC step, since traverseobject reads them
     // all. Constant defaults go straight in here, so the common case writes each member exactly once
@@ -1016,12 +1111,12 @@ LuauObject* luaR_newobject(lua_State* L, LuauClass* classdef)
     if (classdef->memberdefaults)
     {
         for (uint32_t idx = 0; idx < nummembers; idx++)
-            setobj(L, &object->members[idx], &classdef->memberdefaults[idx]);
+            setobj(L, &luaR_members(object)[idx], &classdef->memberdefaults[idx]);
     }
     else
     {
         for (uint32_t idx = 0; idx < nummembers; idx++)
-            setnilvalue(&object->members[idx]);
+            setnilvalue(&luaR_members(object)[idx]);
     }
 
     return object;
@@ -1155,6 +1250,8 @@ void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
         luaM_freearray(L, classdef->memberflags, classdef->numberofallmembers, uint16_t, classdef->memcat);
     if (classdef->memberdefaults)
         luaM_freearray(L, classdef->memberdefaults, classdef->numberofinstancemembers, TValue, classdef->memcat);
+    if (classdef->fastmethods)
+        luaM_freearray(L, classdef->fastmethods, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
     if (classdef->positionalmembers)
         luaM_freearray(L, classdef->positionalmembers, classdef->numberofpositional, uint32_t, classdef->memcat);
     luaM_freegco(L, classdef, sizeof(LuauClass), classdef->memcat, page);
@@ -1162,7 +1259,17 @@ void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page)
 
 void luaR_freeobject(lua_State* L, LuauObject* object, lua_Page* page)
 {
-    luaM_freegco(L, object, luaR_objectsize(object->numberofmembers), object->memcat, page);
+    if (LuauStorage* storage = luaR_storage(object))
+        luaM_free_(L, storage, luaR_storagesize(storage->capacity), object->memcat);
+
+    // Luwu Native Classes (rfcs/native-classes.md): like a userdata's destructor, this runs during the sweep, so it must
+    // not run Luwu code or allocate GC objects
+    if (LuauNativeData* native = luaR_nativedata(object))
+    {
+        if (lua_Destructor dtor = L->global->objectdtors[native->tag])
+            dtor(L, native + 1);
+    }
+    luaM_freegco(L, object, luaR_objectallocsize(object), object->memcat, page);
 }
 
 // Luwu Traits (rfcs/classes/traits.md)
@@ -3095,83 +3202,56 @@ void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint3
     L->top = restorestack(L, oldtop);
 }
 
-// LOP_INITTRAITS's runner: calls the class's copy of each trait's `__traitinit`, in dependency order, with that trait's own
-// `implements` arguments, so that trait initializers may yield like the rest of construction. A C function can't keep
-// going after a call that yields, so each call is the last thing a step does and the next step is this function's
-// continuation, which luaL_callyieldable calls right away when nothing yielded, and resume calls otherwise. The runner is
-// called with the object and every `implements` argument; its progress lives in two stack slots above them, the
-// argument count and the next initializer.
-static int luaR_traitinitstep(lua_State* L, int status)
+bool luaR_nexttraitinit(lua_State* L, StkId state, StkId frame, int nargs)
 {
-    // an initializer that raises takes this frame with it, so it's never resumed after one
-    LUAU_ASSERT(status == LUA_OK);
+    LUAU_ASSERT(ttisnumber(state) && ttisobject(state + 1));
 
-    int nargs = int(lua_tointeger(L, -2));
-    uint32_t next = uint32_t(lua_tointeger(L, -1));
-    LuauObject* object = objectvalue(L->base);
+    LuauObject* object = objectvalue(state + 1);
     LuauClass* classdef = object->lclass;
+    uint32_t next = uint32_t(nvalue(state));
 
     if (next < classdef->numtraitinits)
     {
         uint32_t argoffset = classdef->traitinitargs[2 * next];
         uint32_t argcount = classdef->traitinitargs[2 * next + 1];
 
-        // the compiler passes every entry's arguments, but the runner can be reached through the debug library
-        if (argoffset + argcount > uint32_t(nargs))
-            luaL_error(L, "trait initializers of '%s' expected %d arguments, got %d", getstr(classdef->name), int(argoffset + argcount), nargs);
+        // the compiler passes every `implements` entry's arguments, which the class's entries index into
+        LUAU_ASSERT(argoffset + argcount <= uint32_t(nargs));
 
-        setnvalue(L->top - 1, double(next + 1));
+        setnvalue(state, double(next + 1));
+        setobj2s(L, frame, &classdef->traitinits[next]);
+        setobj2s(L, frame + 1, state + 1);
 
-        luaL_checkstack(L, 2 + int(argcount), "trait initializer arguments");
-        luaC_threadbarrier(L);
+        for (uint32_t a = 0; a < uint32_t(nargs); a++)
+        {
+            if (a < argcount)
+            {
+                setobj2s(L, frame + 2 + a, state + 2 + argoffset + a);
+            }
+            else
+            {
+                setnilvalue(frame + 2 + a);
+            }
+        }
 
-        StkId fn = L->top;
-        setobj2s(L, fn, &classdef->traitinits[next]);
-        setobj2s(L, fn + 1, L->base);
-        for (uint32_t a = 0; a < argcount; a++)
-            setobj2s(L, fn + 2 + a, L->base + 1 + argoffset + a);
-        L->top = fn + 2 + argcount;
-
-        return luaL_callyieldable(L, 1 + int(argcount), 0);
+        return true;
     }
+
+    if (!classdef->traitinits)
+        return false;
 
     // An overridden field's constant goes back in last: allocation copied it in, then the overridden trait's initializer
     // wrote the field by name (see LuauClass::overriddenconsts)
     for (uint32_t i = 0; i < classdef->numoverriddenconsts; i++)
     {
         uint32_t off = classdef->overriddenconsts[i];
-        setobj(L, &object->members[off], &classdef->memberdefaults[off]);
+        setobj(L, &luaR_members(object)[off], &classdef->memberdefaults[off]);
     }
 
-    // the constants were already reachable from the class, but the object may have been blackened by a call above
+    // the constants were already reachable from the class, but the object may have been blackened by an initializer
     luaC_barrierfast(L, object);
 
-    return 0;
-}
-
-static int luaR_traitinitrunner(lua_State* L)
-{
-    // LOP_INITTRAITS only calls it for an object whose class has trait initializers, but the debug library can call it
-    // with anything
-    const TValue* object = L->base;
-    bool hasinits = lua_gettop(L) >= 1 && ttisobject(object) && objectvalue(object)->lclass->traitinits;
-    if (!hasinits)
-        luaL_error(L, "trait initializers run during construction only");
-
-    int nargs = lua_gettop(L) - 1;
-    lua_pushinteger(L, nargs);
-    lua_pushinteger(L, 0);
-
-    return luaR_traitinitstep(L, LUA_OK);
-}
-
-Closure* luaR_newtraitinitrunner(lua_State* L)
-{
-    Closure* runner = luaF_newCclosure(L, 0, L->gt);
-    runner->c.f = luaR_traitinitrunner;
-    runner->c.cont = luaR_traitinitstep;
-    runner->c.debugname = "inittraits";
-    return runner;
+    return false;
 }
 
 bool luaR_implements(const LuauClass* classdef, const LuauClass* trait)
@@ -3181,6 +3261,365 @@ bool luaR_implements(const LuauClass* classdef, const LuauClass* trait)
             return true;
 
     return false;
+}
+
+// Luwu bundles: how deep bundles nest inside a key before an inner one counts by identity. It bounds the C stack a table
+// lookup uses: a chain of bundles can be as deep as a list.
+static const int kKeyByValueDepth = 32;
+
+// Luwu bundles: the heaviest bundle (LuauBundleKey::weight) that compares by value. Bundles can share nested bundles, so
+// a few small ones can unfold to billions of values, and comparing two equal copies would visit all of them.
+static const uint32_t kBundleWeightLimit = 1 << 16;
+
+// Mixes `value` into the hash `h`
+static unsigned int mixkeyhash(unsigned int h, unsigned int value)
+{
+    return (h ^ value) * 0x01000193u;
+}
+
+// A value's hash. Values that are raw equal hash the same: the sign of a zero is dropped, and a vector hashes to nothing
+// rather than reproduce its comparison. A nested bundle gives the hash it was built with.
+static unsigned int keyvaluehash(const TValue* value)
+{
+    switch (ttype(value))
+    {
+    case LUA_TNUMBER:
+    {
+        double n = nvalue(value);
+        uint64_t bits;
+        memcpy(&bits, &n, sizeof(bits));
+        bits &= ~(uint64_t(1) << 63);
+        return unsigned(bits) ^ unsigned(bits >> 32);
+    }
+    case LUA_TINTEGER:
+    {
+        uint64_t bits = uint64_t(lvalue(value));
+        return unsigned(bits) ^ unsigned(bits >> 32);
+    }
+    case LUA_TBOOLEAN:
+        return unsigned(bvalue(value));
+    case LUA_TSTRING:
+        return tsvalue(value)->hash;
+    case LUA_TLIGHTUSERDATA:
+        return unsigned(uintptr_t(pvalue(value)));
+    case LUA_TOBJECT:
+        if (luaR_isbundle(objectvalue(value)))
+            return luaR_bundlekey(objectvalue(value))->hash;
+        return unsigned(uintptr_t(gcvalue(value)));
+    case LUA_TVECTOR:
+        return 0;
+    default:
+        return iscollectable(value) ? unsigned(uintptr_t(gcvalue(value))) : unsigned(ttype(value));
+    }
+}
+
+// The key of a bundle holding `n` values: its hash, and its weight (the size of the tree it unfolds to)
+static LuauBundleKey bundlekeyof(const TValue* values, uint32_t n)
+{
+    unsigned int h = mixkeyhash(0x811c9dc5u, n);
+    uint64_t weight = 1;
+
+    for (uint32_t i = 0; i < n; i++)
+    {
+        h = mixkeyhash(h, keyvaluehash(&values[i]));
+
+        bool nested = ttisobject(&values[i]) && luaR_isbundle(objectvalue(&values[i]));
+        weight += nested ? luaR_bundlekey(objectvalue(&values[i]))->weight : 1;
+    }
+
+    // MurmurHash3 32-bit finalizer, as table keys use for pointers
+    h ^= h >> 16;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16;
+
+    LuauBundleKey key;
+    key.hash = h;
+    key.weight = weight > UINT32_MAX ? UINT32_MAX : uint32_t(weight);
+    return key;
+}
+
+void luaR_sealbundle(LuauObject* bundle)
+{
+    *luaR_bundlekey(bundle) = bundlekeyof(luaR_members(bundle), bundle->numberofmembers);
+}
+
+unsigned int luaR_keyhash(const LuauObject* bundle)
+{
+    return luaR_bundlekey(bundle)->hash;
+}
+
+bool luaR_bundletooheavy(const LuauObject* bundle)
+{
+    return luaR_bundlekey(bundle)->weight > kBundleWeightLimit;
+}
+
+static bool keyvaluesequal(const TValue* left, const TValue* right, uint32_t n, int depth);
+
+// Past kKeyByValueDepth, or past the weight limit, a bundle is only equal to itself
+static bool keyequal(const LuauObject* a, const LuauObject* b, int depth)
+{
+    if (a == b)
+        return true;
+    if (!luaR_isbundle(a) || !luaR_isbundle(b) || depth == 0)
+        return false;
+    if (a->numberofmembers != b->numberofmembers || luaR_bundlekey(a)->hash != luaR_bundlekey(b)->hash)
+        return false;
+    if (luaR_bundletooheavy(a) || luaR_bundletooheavy(b))
+        return false;
+
+    return keyvaluesequal(luaR_members(a), luaR_members(b), a->numberofmembers, depth - 1);
+}
+
+static bool keyvaluesequal(const TValue* left, const TValue* right, uint32_t n, int depth)
+{
+    for (uint32_t i = 0; i < n; i++)
+    {
+        bool equal;
+        if (ttisobject(&left[i]) && ttisobject(&right[i]))
+            equal = keyequal(objectvalue(&left[i]), objectvalue(&right[i]), depth);
+        else
+            equal = luaO_rawequalObj(&left[i], &right[i]);
+
+        if (!equal)
+            return false;
+    }
+    return true;
+}
+
+bool luaR_keyequal(const LuauObject* a, const LuauObject* b)
+{
+    return keyequal(a, b, kKeyByValueDepth);
+}
+
+bool luaR_bundlekeyprobe(const TValue* values, uint32_t n, unsigned int* hash)
+{
+    LuauBundleKey key = bundlekeyof(values, n);
+    *hash = key.hash;
+    return key.weight <= kBundleWeightLimit;
+}
+
+bool luaR_bundlekeyequals(const LuauObject* bundle, unsigned int hash, const TValue* values, uint32_t n)
+{
+    // what keyequal decides for this bundle and a new one holding `values`, which is never the same object
+    if (!luaR_isbundle(bundle) || bundle->numberofmembers != n || luaR_bundlekey(bundle)->hash != hash || luaR_bundletooheavy(bundle))
+        return false;
+
+    return keyvaluesequal(luaR_members(bundle), values, n, kKeyByValueDepth - 1);
+}
+
+// The class of a bundle of `size` values
+static LuauClass* bundleclass(lua_State* L, int size)
+{
+    if (size <= LUWU_BUNDLE_FIXED_MAX)
+        return L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0 + size];
+    return L->global->builtinclasses[LUWU_BUILTIN_BIGBUNDLE];
+}
+
+LuauObject* luaR_newbundleuninit(lua_State* L, int size, const char* what)
+{
+    LUAU_ASSERT(size >= 0);
+    if (size > LUWU_BUNDLE_LIMIT)
+        luaG_runerror(L, "%s: a bundle holds at most %d values, but got %d", what, LUWU_BUNDLE_LIMIT, size);
+
+    LuauClass* classdef = bundleclass(L, size);
+    if (!classdef)
+        luaG_runerror(L, "%s: open the bundle library (luaopen_bundle) before building a bundle", what);
+
+    LuauObject* bundle = luaM_newgco(L, LuauObject, luaR_bundleallocsize(uint32_t(size)), L->activememcat);
+    luaC_init(L, bundle, LUA_TOBJECT);
+    bundle->storagekind = LUAR_STORAGE_BUNDLE;
+    bundle->lclass = classdef;
+    bundle->numberofmembers = uint32_t(size);
+    return bundle;
+}
+
+int luaR_bundlesize(const TValue* value)
+{
+    if (!ttisobject(value) || !luaR_isbundle(objectvalue(value)))
+        return -1;
+    return int(objectvalue(value)->numberofmembers);
+}
+
+void luaR_getbundleposition(lua_State* L, const LuauObject* bundle, const TValue* key, StkId val)
+{
+    if (!ttisnumber(key))
+        luaG_runerror(L, "a bundle is indexed by position, but got %s", luaT_objtypename(L, key));
+
+    // checked before converting, which is undefined for a number out of an int's range
+    double position = nvalue(key);
+    bool inrange = position >= 1 && position <= double(bundle->numberofmembers) && position == floor(position);
+    if (!inrange)
+        luaG_runerror(L, "position %.14g is out of range 1 to %d", position, int(bundle->numberofmembers));
+
+    setobj2s(L, val, &luaR_members(bundle)[int(position) - 1]);
+}
+
+l_noret luaR_bundleassignerror(lua_State* L, const TValue* key)
+{
+    if (ttisnumber(key))
+        luaG_runerror(L, "a bundle can't be changed; b:with(%.14g, value) makes a copy with that position replaced", nvalue(key));
+    luaG_runerror(L, "a bundle can't be changed");
+}
+
+// Whether a builtin class's member is the class value's own metamethod: a name the registry allows on values, written
+// static (luaR_NativeMember)
+static bool luaR_isnativevaluemetamethod(const luaR_NativeMember& member)
+{
+    const Luau::ClassMemberName* special = Luau::findClassMemberName(member.name);
+    return member.method && special && special->onValues && (member.flags & LBC_CLASSMEMBER_STATIC);
+}
+
+// Whether a builtin class's member follows the registry's rules for its name, as the parser holds a class body to them: a
+// `__` field is one the registry names as a field, and a `__` function a metamethod, placed on the objects or (when the
+// registry allows it) on the class value
+#if defined(LUAU_ASSERTENABLED)
+static bool luaR_isvalidnativemember(const luaR_NativeMember& member)
+{
+    if (member.name[0] != '_' || member.name[1] != '_')
+        return true;
+
+    const Luau::ClassMemberName* special = Luau::findClassMemberName(member.name);
+    if (!special)
+        return false;
+
+    if (!member.method)
+        return special->kind == Luau::ClassMemberNameKind::Field;
+
+    bool placed = (member.flags & LBC_CLASSMEMBER_STATIC) != 0;
+    return special->kind == Luau::ClassMemberNameKind::Metamethod && (!placed || special->onValues);
+}
+#endif
+
+static Closure* luaR_newnativemethod(lua_State* L, const char* name, lua_CFunction method)
+{
+    Closure* cl = luaF_newCclosure(L, 0, L->gt);
+    cl->c.f = method;
+    cl->c.debugname = name;
+    return cl;
+}
+
+static void luaR_addnativemethod(lua_State* L, LuauClass* classdef, const char* name, lua_CFunction method)
+{
+    TValue value;
+    setclvalue(L, &value, luaR_newnativemethod(L, name, method));
+    luaR_addclassmember(L, classdef, luaS_new(L, name), &value);
+}
+
+int luaR_builtinclasstostring(lua_State* L)
+{
+    // the class value's metatable only calls it with that class
+    LUAU_ASSERT(L->top > L->base && ttisclass(L->base));
+    lua_pushfstring(L, "builtin class %s", getstr(classvalue(L->base)->name));
+    return 1;
+}
+
+LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init)
+{
+    uint32_t numfields = 0;
+    while (numfields < uint32_t(count) && !members[numfields].method)
+        numfields++;
+
+    // the class value's own metamethods have no member slot
+    uint32_t numvalue = 0;
+    for (int idx = 0; idx < count; idx++)
+    {
+#if defined(LUAU_ASSERTENABLED)
+        LUAU_ASSERT(luaR_isvalidnativemember(members[idx]));
+#endif
+        numvalue += luaR_isnativevaluemetamethod(members[idx]) ? 1 : 0;
+    }
+
+    luaD_checkstack(L, 1);
+
+    // Every part of the class is allocated separately, as the loader does it, so no GC step may run until the class is
+    // anchored on the stack
+    const ScopedSetGCThreshold pauseGC{L->global, SIZE_MAX};
+
+    // every class has an `__init` member, `init` or the one that's only there to be refused by name
+    uint32_t numslots = uint32_t(count) - numvalue;
+    uint32_t numstatic = numslots - numfields + 1;
+    LuauClass* classdef = luaR_newclass(L, luaS_new(L, name), numfields, numstatic, /* hasmemberdefaults= */ false);
+    setclassvalue(L, L->top, classdef);
+    incr_top(L);
+
+    // Luwu Traits (rfcs/classes/traits.md): the slots only the class value reads (LBC_CLASSMEMBER_STATIC) come last, so
+    // `__init` goes in front of them
+    uint32_t initslot = numslots;
+    uint32_t slot = 0;
+    for (int idx = 0; idx < count; idx++)
+    {
+        if (luaR_isnativevaluemetamethod(members[idx]))
+            continue;
+
+        bool isstatic = (members[idx].flags & LBC_CLASSMEMBER_STATIC) != 0;
+        if (isstatic && initslot == numslots)
+            initslot = slot++;
+
+        LUAU_ASSERT((slot < numfields) == !members[idx].method);
+        LUAU_ASSERT(isstatic == (initslot < slot));
+        TString* membername = luaS_new(L, members[idx].name);
+        classdef->offsettomember[slot] = membername;
+        classdef->memberflags[slot] = members[idx].flags;
+        setnvalue(luaH_setstr(L, classdef->memberstooffset, membername), double(slot));
+
+        if (members[idx].fast)
+        {
+            if (!classdef->fastmethods)
+            {
+                classdef->fastmethods = luaM_newarray(L, classdef->numberofallmembers, luaR_FastMethod, classdef->memcat);
+                for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+                    classdef->fastmethods[i] = NULL;
+            }
+            classdef->fastmethods[slot] = members[idx].fast;
+        }
+        slot++;
+    }
+
+    TString* initname = luaS_newliteral(L, "__init");
+    classdef->offsettomember[initslot] = initname;
+    classdef->memberflags[initslot] = 0;
+    setnvalue(luaH_setstr(L, classdef->memberstooffset, initname), double(initslot));
+
+    luaR_sealclassshape(L, classdef);
+
+    for (int idx = int(numfields); idx < count; idx++)
+    {
+        if (luaR_isnativevaluemetamethod(members[idx]))
+        {
+            luaD_checkstack(L, 1);
+            setclvalue(L, L->top, luaR_newnativemethod(L, members[idx].name, members[idx].method));
+            incr_top(L);
+            luaR_addvaluemetamethod(L, classdef, luaS_new(L, members[idx].name), L->top - 1);
+            L->top--;
+            continue;
+        }
+
+        luaR_addnativemethod(L, classdef, members[idx].name, members[idx].method);
+    }
+
+    if (init)
+        luaR_addnativemethod(L, classdef, "__init", init);
+
+    return classdef;
+}
+
+void luaR_setclassnativedata(LuauClass* classdef, uint32_t size, int tag)
+{
+    LUAU_ASSERT(unsigned(tag) < LUA_OTAG_LIMIT);
+    classdef->nativesize = size;
+    classdef->nativetag = uint8_t(tag);
+}
+
+LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method)
+{
+    if (L->top > L->base && ttisobject(L->base) && objectvalue(L->base)->lclass == classdef)
+        return objectvalue(L->base);
+
+    TValue none;
+    setnilvalue(&none);
+    luaG_selfclasserror(L, L->top > L->base ? L->base : &none, classdef, luaS_new(L, method), false);
 }
 
 // Luwu Traits (rfcs/classes/traits.md): the trait and the receiver's class of a qualified read or write (`verb`) of `name`.
@@ -3254,7 +3693,7 @@ void luaR_getqualified(lua_State* L, StkId ra, const TValue* receiver, const TVa
 
             if (luaR_isscopedobjectfield(trait, off))
             {
-                setobj2s(L, ra, &objectvalue(receiver)->members[uint32_t(nvalue(fn))]);
+                setobj2s(L, ra, &luaR_members(objectvalue(receiver))[uint32_t(nvalue(fn))]);
             }
             else
             {
@@ -3331,7 +3770,7 @@ void luaR_setqualified(lua_State* L, const TValue* receiver, const TValue* trait
             L->top--;
         }
 
-        setobj(L, &object->members[slot], value);
+        setobj(L, &luaR_members(object)[slot], value);
         luaC_barrier(L, object, value);
         return;
     }

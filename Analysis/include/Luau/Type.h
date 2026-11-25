@@ -761,6 +761,14 @@ struct ExternType
     // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): set on an instantiation of a generic class, to the class's template
     std::optional<TypeId> genericTemplate;
 
+    // Luwu bundles: a bundle class (`bundle.Bundle2`), which prints the way `.(A, B)` writes it. Set on the declared class;
+    // an instantiation reads its template's.
+    bool printsAsBundle = false;
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): the alias an instantiation is the type of (`type Nums =
+    // Vec<number>`, `type UDim2 = .(.(number, number), .(number, number))`), which it prints as. See TableType::name.
+    std::optional<std::string> aliasName;
+
     // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): whether the members still have to be built (see props)
     bool hasUnbuiltMembers() const
     {
@@ -1052,6 +1060,10 @@ struct PendingExpansionType
     std::vector<TypeId> typeArguments;
     std::vector<TypePackId> packArguments;
     size_t index;
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): set when this is the body of a non-generic alias, `Vec<number>`
+    // in `type Nums = Vec<number>`. An instantiation of a generic class it expands to prints as the alias's name.
+    std::optional<std::string> aliasName;
 
     static size_t nextIndex;
 };
@@ -1515,6 +1527,33 @@ const Property* lookupExternTypeProp(const ExternType* cls, const Name& name);
 
 // Whether `cls` is a subclass of `parent`
 bool isSubclass(const ExternType* cls, const ExternType* parent);
+
+// Luwu bundles: whether `etv` is a bundle of any size
+bool isBundle(const ExternType* etv);
+
+// Luwu bundles: whether `etv` is `.(...unknown)`, the type of a bundle nothing is known about. Every bundle is one.
+bool isAnyBundle(const ExternType* etv);
+
+// Luwu bundles: the types of a bundle's positions. `rest` holds what follows `head` in a bundle whose size the checker
+// doesn't know (`.(number, T...)`).
+struct BundleShape
+{
+    std::vector<TypeId> head;
+    std::optional<TypePackId> rest;
+
+    // The type of the value at 0-based `index`, or nullopt past the end of a bundle without a rest. A rest gives its
+    // variadic type, or `unknown` when it's a generic pack.
+    std::optional<TypeId> at(NotNull<BuiltinTypes> builtinTypes, size_t index) const;
+};
+
+// Luwu bundles: the positions of the bundle `etv`, or nullopt when it isn't one
+std::optional<BundleShape> bundleShape(const ExternType* etv);
+
+// Luwu bundles: the positions of the bundle `etv` as one type pack: a fixed size's type arguments, or a `BigBundle`'s pack
+TypePackId bundlePositionPack(NotNull<TypeArena> arena, const ExternType* etv);
+
+// Luwu bundles: the 0-based position the property name `name` reads (`"1"` is 0), or nullopt when it isn't a position
+std::optional<size_t> bundlePositionOfName(const std::string& name);
 
 // Luwu Traits (rfcs/classes/traits.md): a trait, or an intersection of traits. Two of these may share instances even when neither is a subtype
 // of the other, unlike two classes, which are final.
