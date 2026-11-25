@@ -308,7 +308,7 @@ if(LUAU_BUILD_TESTS)
     target_compile_options(Luwu.UnitTest PRIVATE ${LUAU_OPTIONS})
     target_compile_definitions(Luwu.UnitTest PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY DOCTEST_CONFIG_USE_STD_HEADERS)
     target_include_directories(Luwu.UnitTest PRIVATE extern)
-    target_link_libraries(Luwu.UnitTest PRIVATE Luwu.Analysis Luwu.Bytecode Luwu.Compiler Luwu.CodeGen)
+    target_link_libraries(Luwu.UnitTest PRIVATE Luwu.Analysis Luwu.Bytecode Luwu.Compiler Luwu.CodeGen Luwu.Require)
 
     target_compile_options(Luwu.Conformance PRIVATE ${LUAU_OPTIONS})
     target_compile_definitions(Luwu.Conformance PRIVATE DOCTEST_CONFIG_DOUBLE_STRINGIFY DOCTEST_CONFIG_USE_STD_HEADERS)
