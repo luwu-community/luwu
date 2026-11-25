@@ -122,6 +122,12 @@ struct ConstraintGraph
     bool addDependencyOf(Constraint* dependency, Constraint* target);
 
     /**
+     * Luwu: stop [dependency] blocking [target]. Unlike [unblockTypeOrPack],
+     * nothing else [dependency] blocks is touched.
+     */
+    void removeDependencyOf(ConstraintVertex dependency, ConstraintVertex target);
+
+    /**
      * Take all of the reverse dependencies of [existingVertex] and *also*
      * make them reverse dependencies of [newVertex].
      */

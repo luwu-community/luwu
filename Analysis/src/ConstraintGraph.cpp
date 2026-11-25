@@ -181,6 +181,12 @@ bool ConstraintGraph::addDependencyOf(Constraint* dependency, Constraint* target
     return addDependencyOf(static_cast<const Constraint*>(dependency), static_cast<const Constraint*>(target));
 }
 
+void ConstraintGraph::removeDependencyOf(ConstraintVertex dependency, ConstraintVertex target)
+{
+    findDependencyList(target)->remove(dependency);
+    findReverseDependencyList(dependency)->remove(target);
+}
+
 /**
  * Let's say we have nodes A, B, C, and D (where => means "depends on")
  *

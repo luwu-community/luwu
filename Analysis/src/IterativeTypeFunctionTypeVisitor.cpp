@@ -292,6 +292,8 @@ void IterativeTypeFunctionTypeVisitor::process(TypeFunctionTypeId ty)
     }
     else if (auto tfgt = get<TypeFunctionGenericType>(ty))
         visit(ty, *tfgt);
+    else if (get<TypeFunctionErrorType>(ty))
+        visit(ty); // Luwu: `types.error(...)` has no children
     else
         LUAU_ASSERT(!"GenericTypeFunctionTypeVisitor::traverse(TypeFunctionTypeId) is not exhaustive!");
 
