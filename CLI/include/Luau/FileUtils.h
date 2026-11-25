@@ -20,6 +20,8 @@ std::optional<std::string> readStdin();
 bool hasFileExtension(std::string_view name, const std::vector<std::string>& extensions);
 // Luwu: the language a source file is written in, going by its extension. A name that isn't a Luau or Lua file is Luwu.
 Luau::Language languageOfPath(std::string_view path);
+// Luwu object notation: whether a file is a `.luwon` data file. Requiring one reads its value instead of running it.
+bool isLuwonPath(std::string_view path);
 
 bool isAbsolutePath(std::string_view path);
 bool isFile(const std::string& path);
