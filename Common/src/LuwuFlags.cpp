@@ -11,3 +11,7 @@ LUAU_FASTFLAGVARIABLE(LuwuClasses)
 // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `target <+ values` and `<-container` (in progress). While it
 // is on, the compiler emits WIP bytecode (version 200), which has LOP_PUSH and LOP_POP.
 LUAU_FASTFLAGVARIABLE(DebugLuwuPoperators)
+
+// Luwu: the `@[inline(reason)]` attribute. The compiler weighs a marked function by a third of its size at its call sites,
+// and a call it still can't inline is a compile error at the call. In progress, so a Debug flag.
+LUAU_FASTFLAGVARIABLE(DebugLuwuEncourageInline)
