@@ -14,7 +14,7 @@ LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
-LUAU_FASTFLAG(LuwuTableDrop)
+LUAU_FASTFLAG(LuwuTableDiscard)
 
 using namespace Luau;
 
@@ -2449,15 +2449,15 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "TableRemoveFootgunLint")
     REQUIRE(3 == result.warnings.size());
     CHECK_EQ(
         result.warnings[0].text,
-        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.drop` instead. If order is not important, use a key/value table for better performance."
+        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.discard` instead. If order is not important, use a key/value table for better performance."
     );
     CHECK_EQ(
         result.warnings[1].text,
-        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.drop` instead. If order is not important, use a key/value table for better performance."
+        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.discard` instead. If order is not important, use a key/value table for better performance."
     );
     CHECK_EQ(
         result.warnings[2].text,
-        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.drop` instead. If order is not important, use a key/value table for better performance."
+        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.discard` instead. If order is not important, use a key/value table for better performance."
     );
 }
 
