@@ -3,6 +3,7 @@
 #include "Luau/TableLiteralInference.h"
 
 #include "Luau/Ast.h"
+#include "Luau/BuiltinDefinitions.h"
 #include "Luau/Common.h"
 #include "Luau/ConstraintSolver.h"
 #include "Luau/HashUtil.h"
@@ -221,6 +222,18 @@ struct BidirectionalTypePusher
             {
                 if (!give->item)
                     pushType(expectedType, give->value);
+            }
+            return exprType;
+        }
+
+        // Luwu bundles: a bundle literal `.(a, b)` (a `bundle.pack` call) takes each position's expected type, so
+        // `.("torch", 1)` where an `.(ItemId, number)` goes keeps "torch" as a singleton
+        if (auto call = expr->as<AstExprCall>(); call && isBundlePackCall(call))
+        {
+            if (std::optional<std::vector<TypeId>> positions = expectedBundlePositions(solver->arena, constraint->scope.get(), expectedType, call))
+            {
+                for (size_t i = 0; i < call->args.size && i < positions->size(); i++)
+                    pushType((*positions)[i], call->args.data[i]);
             }
             return exprType;
         }

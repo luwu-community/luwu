@@ -59,6 +59,7 @@ LUAU_FASTFLAG(DebugLuauCyclicRequireTypeInference)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 // Luwu literal types: `literal<B>` in parameter and local annotations, and `V<literal<B>>` validators (in progress)
 LUAU_FASTFLAGVARIABLE(LuwuLiteralTypes)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 
 namespace Luau
 {
@@ -3793,6 +3794,99 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
     }
 }
 
+namespace
+{
+
+// Whether `local` is read or written anywhere in `node`
+bool mentionsLocal(AstNode* node, const AstLocal* local)
+{
+    struct Finder : AstVisitor
+    {
+        const AstLocal* local = nullptr;
+        bool found = false;
+
+        bool visit(AstNode*) override
+        {
+            return !found;
+        }
+
+        bool visit(AstExprLocal* expr) override
+        {
+            found = found || expr->local == local;
+            return false;
+        }
+    };
+
+    Finder finder;
+    finder.local = local;
+    node->visit(&finder);
+    return finder.found;
+}
+
+// The argument holding the value when `call` pushes onto `receiver`: `x:push(v)`, `x:pushback(v)`, `x:pushfront(v)`, or
+// `x:insert(i, v)`. nullopt for any other call, or one whose arguments read `receiver` themselves.
+std::optional<size_t> pushedValueIndex(const AstExprCall* call, const AstLocal* receiver)
+{
+    const AstExprIndexName* method = call->self ? call->func->as<AstExprIndexName>() : nullptr;
+    const AstExprLocal* object = method ? method->expr->as<AstExprLocal>() : nullptr;
+    if (!object || object->local != receiver)
+        return std::nullopt;
+
+    std::optional<size_t> index;
+    if (method->index == "push" || method->index == "pushback" || method->index == "pushfront")
+        index = 0;
+    else if (method->index == "insert")
+        index = 1;
+    if (!index || *index >= call->args.size)
+        return std::nullopt;
+
+    for (AstExpr* arg : call->args)
+    {
+        if (mentionsLocal(arg, receiver))
+            return std::nullopt;
+    }
+    return index;
+}
+
+} // namespace
+
+// Luwu collections: finds each `local x = C()` in `block`, without arguments or an annotation, whose next use is a push.
+// Its constructor gets an element type that push binds (firstPushElementTypes, firstPushes). The solver only applies it
+// when `C` turns out to be Vec or VecDeque.
+void ConstraintGenerator::findFirstPushes(AstStatBlock* block)
+{
+    for (size_t i = 0; i < block->body.size; i++)
+    {
+        const AstStatLocal* declaration = block->body.data[i]->as<AstStatLocal>();
+        bool oneValue = declaration && declaration->vars.size == 1 && declaration->values.size == 1;
+        if (!oneValue || declaration->vars.data[0]->annotation)
+            continue;
+
+        AstExprCall* constructor = declaration->values.data[0]->as<AstExprCall>();
+        bool empty = constructor && constructor->args.size == 0 && !constructor->self && constructor->typeArguments.size == 0;
+        if (!empty || constructor->func->is<AstExprInstantiate>())
+            continue;
+
+        AstLocal* container = declaration->vars.data[0];
+        for (size_t j = i + 1; j < block->body.size; j++)
+        {
+            AstStat* stat = block->body.data[j];
+            if (!mentionsLocal(stat, container))
+                continue;
+
+            const AstStatExpr* statement = stat->as<AstStatExpr>();
+            AstExprCall* push = statement ? statement->expr->as<AstExprCall>() : nullptr;
+            if (std::optional<size_t> valueIndex = push ? pushedValueIndex(push, container) : std::nullopt)
+            {
+                TypeId elementType = arena->addType(BlockedType{});
+                firstPushElementTypes[constructor] = elementType;
+                firstPushes[push] = FirstPush{elementType, *valueIndex};
+            }
+            break;
+        }
+    }
+}
+
 ControlFlow ConstraintGenerator::visitBlockWithoutChildScope(const ScopePtr& scope, AstStatBlock* block)
 {
     RecursionCounter counter{&recursionCount};
@@ -3804,6 +3898,8 @@ ControlFlow ConstraintGenerator::visitBlockWithoutChildScope(const ScopePtr& sco
     }
 
     prototypeTypeDefinitions(scope, block);
+    if (FFlag::DebugLuwuBuiltinClasses)
+        findFirstPushes(block);
 
     std::optional<ControlFlow> firstControlFlow;
     for (AstStat* stat : block->body)
@@ -4795,7 +4891,10 @@ void ConstraintGenerator::applyOrLeaveRefinements(const ScopePtr& scope, const A
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatAssign* assign)
 {
-    TypePackId resultPack = checkPack(scope, assign->values).tp;
+    std::vector<std::optional<TypeId>> expectedTypes;
+    for (size_t i = 0; i < assign->vars.size && i < assign->values.size; ++i)
+        expectedTypes.push_back(expectedTypeOfAssignedBundle(scope, assign->vars.data[i], assign->values.data[i]));
+    TypePackId resultPack = checkPack(scope, assign->values, expectedTypes).tp;
     applyOrLeaveRefinements(scope, assign->values);
 
     std::vector<TypeId> valueTypes;
@@ -4881,6 +4980,35 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatPush* push)
     addAllAsDependencies(valuesStart, valuesEnd, this, pushConstraint);
 
     return ControlFlow::None;
+}
+
+// Luwu bundles: the type a bundle literal assigned to `target` is expected to have, so its positions take their expected
+// types as in a declaration (`later = .("coal", 3)` keeps "coal" a singleton where an `.(ItemId, number)` goes): an
+// annotated local's type, or the type of a local's property. nullopt for any other value or target, which are checked
+// without an expected type as before.
+std::optional<TypeId> ConstraintGenerator::expectedTypeOfAssignedBundle(const ScopePtr& scope, AstExpr* target, AstExpr* value)
+{
+    const AstExprCall* call = value->as<AstExprCall>();
+    if (!call || !isBundlePackCall(call))
+        return std::nullopt;
+
+    if (const AstExprLocal* local = target->as<AstExprLocal>())
+        return local->local->annotation ? scope->lookup(local->local) : std::nullopt;
+
+    const AstExprIndexName* property = target->as<AstExprIndexName>();
+    const AstExprLocal* object = property ? property->expr->as<AstExprLocal>() : nullptr;
+    std::optional<TypeId> objectType = object ? scope->lookup(object->local) : std::nullopt;
+    if (!objectType)
+        return std::nullopt;
+
+    TypeId propertyType = arena->addType(BlockedType{});
+    NotNull<Constraint> hasProp = addConstraint(
+        scope,
+        property->location,
+        HasPropConstraint{propertyType, *objectType, property->index.value, ValueContext::LValue, inConditional(typeContext)}
+    );
+    getMutable<BlockedType>(propertyType)->setOwner(hasProp);
+    return propertyType;
 }
 
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatCompoundAssign* assign)
@@ -5235,6 +5363,13 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeAlias* 
         if (TypeId* literalTy = module->astResolvedTypes.find(literal))
             attachDeclarationComments(*literalTy, Location{alias->location.begin, literal->location.end});
     }
+
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): a non-generic alias of a generic class instantiation prints
+    // as its name (see PendingExpansionType::aliasName)
+    // An alias of another alias (`type B = A`) is bound to that alias's type, which keeps its own name.
+    bool generic = alias->generics.size > 0 || alias->genericPacks.size > 0;
+    if (PendingExpansionType* body = generic ? nullptr : get_if<PendingExpansionType>(&asMutable(ty)->ty))
+        body->aliasName = alias->name.value;
 
     TypeId aliasTy = bindingIt->second.type;
     LUAU_ASSERT(get<BlockedType>(aliasTy));
@@ -6420,9 +6555,34 @@ InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall*
         fnType = check(scope, call->func).ty;
     }
 
+    // Luwu collections: an empty `Vec()` or `VecDeque()` constructs with the element type its first push binds
+    if (TypeId* elementType = firstPushElementTypes.find(call))
+    {
+        TypeId placeholder = arena->addType(BlockedType{});
+        TypeInstantiationConstraint instantiation{fnType, placeholder, {*elementType}, {}};
+        instantiation.fromFirstPush = true;
+        NotNull<Constraint> constraint = addConstraint(scope, call->func->location, std::move(instantiation));
+        getMutable<BlockedType>(placeholder)->setOwner(constraint);
+        fnType = placeholder;
+    }
+
     Checkpoint funcEndCheckpoint = checkpoint(this);
 
     InferencePack result = checkExprCall(scope, call, fnType, funcBeginCheckpoint, funcEndCheckpoint, expectedType);
+
+    // Luwu collections: the first push onto an empty `Vec()` or `VecDeque()` binds its element type
+    if (const FirstPush* push = firstPushes.find(call))
+    {
+        // A call's values are recorded as a pack, any other expression's as a type
+        AstExpr* value = call->args.data[push->valueIndex];
+        TypePackId source = builtinTypes->unknownTypePack;
+        if (TypePackId* values = module->astTypePacks.find(value))
+            source = *values;
+        else if (TypeId* valueType = module->astTypes.find(value))
+            source = arena->addTypePack({*valueType});
+        NotNull<Constraint> constraint = addConstraint(scope, value->location, UnpackConstraint{{push->elementType}, source});
+        getMutable<BlockedType>(push->elementType)->setOwner(constraint);
+    }
 
     // Luwu Traits (rfcs/classes/traits.md): `class.of(self)(...)` in a trait method generic over `Self` constructs another
     // object of self's class, whatever the trait's constructor says it makes
@@ -6431,6 +6591,32 @@ InferencePack ConstraintGenerator::checkPack(const ScopePtr& scope, AstExprCall*
         std::optional<TypeId> selfType = scope->lookup(of);
         if (selfType && traitSelfTypes.contains(*selfType))
             result = InferencePack{arena->addTypePack({*selfType})};
+    }
+
+    // Luwu bundles: a bundle literal `.(a, b)` takes its positions' expected types (BidirectionalTypePusher). The pusher
+    // reads the expression's type, but a call as an argument or a local's value is recorded as a pack only. A bundle
+    // literal is always one value, so record that too.
+    if (isBundlePackCall(call) && !module->astTypes.contains(call))
+        module->astTypes[call] = flattenPack(scope, call->location, result).ty;
+
+    // Where the expected type is known here (an annotated local), the push comes before the call builds the bundle's
+    // type from its arguments. An argument's comes from the function check.
+    if (expectedType && isBundlePackCall(call))
+    {
+        TypeId bundleType = module->astTypes[call];
+        Checkpoint callEndCheckpoint = checkpoint(this);
+        NotNull<Constraint> push = addConstraint(
+            scope,
+            call->location,
+            PushTypeConstraint{
+                /* expectedType */ *expectedType,
+                /* targetType */ bundleType,
+                /* astTypes */ NotNull{&module->astTypes},
+                /* astExpectedTypes */ NotNull{&module->astExpectedTypes},
+                /* expr */ NotNull{call},
+            }
+        );
+        addAllAsReverseDependencies(funcBeginCheckpoint, callEndCheckpoint, this, push);
     }
 
     // Luwu: every call's values, not only those of a call in a place that takes them all, so the DiscardedValues lint
@@ -6503,6 +6689,10 @@ InferencePack ConstraintGenerator::checkExprCall(
     for (size_t i = 0; i < exprArgs.size(); ++i)
     {
         AstExpr* arg = exprArgs[i];
+        // Luwu bundles: a bundle literal `.(a, b)` is a call that's always one value, so as the last argument it's an
+        // ordinary one, which the function check pushes the parameter's type into
+        const AstExprCall* argCall = arg->as<AstExprCall>();
+        bool spreads = (argCall && !isBundlePackCall(argCall)) || arg->is<AstExprVarargs>();
 
         if (i == 0 && call->self)
         {
@@ -6516,7 +6706,7 @@ InferencePack ConstraintGenerator::checkExprCall(
             else
                 args.push_back(freshType(scope, Polarity::Negative));
         }
-        else if (i < exprArgs.size() - 1 || !(arg->is<AstExprCall>() || arg->is<AstExprVarargs>()))
+        else if (i < exprArgs.size() - 1 || !spreads)
         {
             std::optional<TypeId> expectedType = std::nullopt;
             if (i < expectedTypesForCall.size())
@@ -7701,6 +7891,31 @@ std::pair<std::vector<TypeId>, std::vector<TypePackId>> ConstraintGenerator::res
     return {std::move(resolvedTypeArguments), std::move(resolvedTypePackArguments)};
 }
 
+// The global type `typeof` can name `name`, if any. We're only interested in a type that `typeof` can actually name.
+// For userdata that's a datatype root (a direct child of the `userdata` root, e.g. `Instance`); `typeof` returns those
+// by name. For classes `typeof` returns "object"/"class" uniformly, so the only nameable discriminants there are the
+// `object`/`class` roots themselves -- never an individual class (whose typeof is "object").
+static std::optional<TypeId> typeofNameableGlobalType(const Scope* globalScope, NotNull<BuiltinTypes> builtinTypes, const std::string& name)
+{
+    std::optional<TypeFun> typeFun = globalScope->lookupType(name);
+    if (!typeFun)
+        return std::nullopt;
+
+    bool nominal = FFlag::LuwuGenericNominals ? get<ExternType>(follow(typeFun->type)) != nullptr
+                                              : (typeFun->typeParams.empty() && typeFun->typePackParams.empty());
+    if (!nominal)
+        return std::nullopt;
+
+    TypeId ty = follow(typeFun->type);
+    const ExternType* etv = get<ExternType>(ty);
+    bool nameable = etv && (etv->parent == builtinTypes->externType || ty == builtinTypes->objectType || ty == builtinTypes->classType ||
+                            hasTag(ty, kTypeofRootTag));
+    if (!nameable)
+        return std::nullopt;
+
+    return ty;
+}
+
 std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
     const ScopePtr& scope,
     AstExprBinary::Op op,
@@ -7770,6 +7985,16 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         if (!key)
             return {leftType, rightType, nullptr};
 
+        // Luwu builtin classes: `typeof` names an object of one after what it is ("bundle", "vec")
+        std::optional<TypeId> builtinClass;
+        if (typeguard->isTypeof)
+        {
+            std::vector<TypeId> copiedReferences;
+            builtinClass = builtinClassTypeofType(arena, builtinTypes, globalScope.get(), typeguard->type, copiedReferences);
+            for (TypeId reference : copiedReferences)
+                addConstraint(scope, typeguard->target->location, TypeAliasExpansionConstraint{reference});
+        }
+
         TypeId discriminantTy = builtinTypes->neverType;
         if (typeguard->type == "nil")
             discriminantTy = builtinTypes->nilType;
@@ -7803,6 +8028,14 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
             discriminantTy = builtinTypes->objectType;
         else if (FFlag::LuwuClasses && FFlag::LuwuTraits && typeguard->type == "trait")
             discriminantTy = builtinTypes->traitType;
+        else if (builtinClass)
+        {
+            // Luwu builtin classes: a userdata can report the same `typeof` name. When the definitions declare an extern
+            // type by that name, the check narrows to either, and `type(v) == "object"` tells them apart.
+            discriminantTy = *builtinClass;
+            if (std::optional<TypeId> sameName = typeofNameableGlobalType(globalScope.get(), builtinTypes, typeguard->type))
+                discriminantTy = arena->addType(UnionType{{*builtinClass, *sameName}});
+        }
         else if (typeguard->type == "vector" && !typeguard->isTypeof)
         {
             // `vector` is defined in EmbeddedBuiltinDefinitions, not as an actual built-in type
@@ -7812,23 +8045,8 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
         }
         else if (!typeguard->isTypeof)
             discriminantTy = builtinTypes->neverType;
-        else if (auto typeFun = globalScope->lookupType(typeguard->type);
-                 typeFun && (FFlag::LuwuGenericNominals ? get<ExternType>(follow(typeFun->type)) != nullptr
-                                                         : (typeFun->typeParams.empty() && typeFun->typePackParams.empty())))
-        {
-            TypeId ty = follow(typeFun->type);
-
-            // We're only interested in a type that `typeof` can actually name.
-            // For userdata that's a datatype root (a direct child of the
-            // `userdata` root, e.g. `Instance`); `typeof` returns those by name.
-            // For classes `typeof` returns "object"/"class" uniformly, so the
-            // only nameable discriminants there are the `object`/`class` roots
-            // themselves -- never an individual class (whose typeof is "object").
-            if (auto etv = get<ExternType>(ty); etv &&
-                (etv->parent == builtinTypes->externType || ty == builtinTypes->objectType || ty == builtinTypes->classType ||
-                 hasTag(ty, kTypeofRootTag)))
-                discriminantTy = ty;
-        }
+        else if (std::optional<TypeId> nameable = typeofNameableGlobalType(globalScope.get(), builtinTypes, typeguard->type))
+            discriminantTy = *nameable;
 
         RefinementId proposition = refinementArena.proposition(key, discriminantTy);
         if (op == AstExprBinary::CompareEq)

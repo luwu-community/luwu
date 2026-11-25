@@ -10,6 +10,7 @@
 #include "ldo.h"
 #include "lbuffer.h"
 #include "lvector.h"
+#include "lclass.h"
 
 #include <math.h>
 #include <string.h>
@@ -1017,6 +1018,55 @@ static int luauF_class_of(lua_State* L, StkId res, TValue* arg0, int nresults, S
     }
 
     return -1;
+}
+
+// Luwu bundles: `bundle.pack(...)` without a call frame. Past the bundle limit, or without the library, it falls back to
+// the function, which raises.
+static int luauF_bundlepack(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    bool opened = L->global->builtinclasses[LUWU_BUILTIN_BUNDLE0] != NULL;
+    if (nresults > 1 || nparams > LUWU_BUNDLE_LIMIT || !opened || luaC_needsGC(L))
+        return -1;
+
+    // A new object is white, so storing into it needs no barrier
+    LuauObject* bundle = luaR_newbundleuninit(L, nparams, "bundle.pack");
+    TValue* values = luaR_members(bundle);
+    if (nparams >= 1)
+        setobj(L, &values[0], arg0);
+    for (int i = 1; i < nparams; i++)
+        setobj(L, &values[i], &args[i - 1]);
+    luaR_sealbundle(bundle);
+
+    setobjectvalue(L, res, bundle);
+    return 1;
+}
+
+// Luwu bundles: `bundle.unpack(b)` without a call frame. A range, or anything but a bundle, falls back to the function.
+static int luauF_bundleunpack(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+{
+    int size = luaR_bundlesize(arg0);
+    if (nparams != 1 || size < 0)
+        return -1;
+
+    int count = nresults < 0 ? size : nresults;
+    if (cast_int(L->stack_last - res) < count)
+        return -1;
+
+    // the values stay put while the results overwrite the arguments: they're on the heap
+    const TValue* values = luaR_members(objectvalue(arg0));
+    for (int i = 0; i < count; i++)
+    {
+        if (i < size)
+        {
+            setobj2s(L, res + i, &values[i]);
+        }
+        else
+        {
+            setnilvalue(res + i);
+        }
+    }
+    expandstacklimit(L, res + count);
+    return count;
 }
 
 static int luauF_rawget(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
@@ -2868,6 +2918,9 @@ const luau_FastFunction luauF_table[256] = {
     luauF_startswith,
     luauF_endswith,
     luauF_contains,
+
+    luauF_bundlepack,
+    luauF_bundleunpack,
 
 // When adding builtins, add them above this line; what follows is 64 "dummy" entries with luauF_missing fallback.
 // This is important so that older versions of the runtime that don't support newer builtins automatically fall back via luauF_missing.

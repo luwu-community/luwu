@@ -36,6 +36,8 @@ LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
+LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(DebugLuwuMatchExpressions)
@@ -11797,10 +11799,13 @@ TEST_CASE("ClassDeclBasic")
         end
         print(Point)
     )";
-    auto res0 = "\n" + compileFunction(source.c_str(), 0, 0, 0);
+    auto res0 = "\n" + compileFunction(source.c_str(), 1, 0, 0);
     CHECK(R"(
 LOADNIL R0
 LOADKX R0 K3 [class Point (props: 2, methods: 0)]
+NEWCLOSURE R1 P0
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R1
 GETGLOBAL R1 K4 ['print']
 MOVE R2 R0
 CALL R1 1 0
@@ -13501,12 +13506,15 @@ MUL R3 R4 R5
 ADD R1 R2 R3
 RETURN R1 1
 )" == res0);
-    auto res1 = "\n" + compileFunction(source.c_str(), 1, 0, 0);
+    auto res1 = "\n" + compileFunction(source.c_str(), 2, 0, 0);
     CHECK(R"(
 LOADNIL R0
 LOADKX R0 K4 [class Point (props: 2, methods: 1)]
 NEWCLOSURE R1 P0
 NEWCLASSMEMBER R0 R1 ['magnitude']
+NEWCLOSURE R1 P1
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R1
 GETGLOBAL R1 K5 ['print']
 MOVE R2 R0
 CALL R1 1 0
@@ -13534,23 +13542,29 @@ TEST_CASE("ClassConstantFieldDefaults")
         print(ConstDefaults, ComputedDefault)
     )";
 
-    // function 0 is ComputedDefault's `__defaults`; ConstDefaults contributes no function at all
-    auto res0 = "\n" + compileFunction(source.c_str(), 0, 2, 0);
+    // function 1 is ComputedDefault's `__defaults`; ConstDefaults contributes only its constructor (function 0)
+    auto res0 = "\n" + compileFunction(source.c_str(), 1, 2, 0);
     CHECK(R"(
 NEWTABLE R0 0 0
 LOADN R1 1
 RETURN R0 2
 )" == res0);
 
-    auto res1 = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    auto res1 = "\n" + compileFunction(source.c_str(), 3, 2, 0);
     CHECK(R"(
 LOADNIL R0
 LOADNIL R1
-LOADKX R0 K5 [class ConstDefaults (props: 2, methods: 0)]
-LOADKX R1 K10 [class ComputedDefault (props: 2, methods: 1)]
-DUPCLOSURE R2 K8 []
+LOADKX R0 K6 [class ConstDefaults (props: 2, methods: 0)]
+DUPCLOSURE R2 K5 ['ConstDefaults']
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R2
+LOADKX R1 K12 [class ComputedDefault (props: 2, methods: 1)]
+DUPCLOSURE R2 K9 []
 NEWCLASSMEMBER R1 R2 ['__defaults']
-GETIMPORT R2 12 [print]
+DUPCLOSURE R2 K11 ['ComputedDefault']
+CAPTURE VAL R1
+NEWCLASSMEMBER R1 CONSTRUCTOR R2
+GETIMPORT R2 14 [print]
 MOVE R3 R0
 MOVE R4 R1
 CALL R2 2 0
@@ -13564,8 +13578,8 @@ TEST_CASE("ClassNewObject")
 
     // A call whose callee is a statically resolved class compiles to NEWOBJECT: on its own for a
     // class using the default constructor, and followed by a plain CALL of `__init` for a class that
-    // declares one. A class with non-constant defaults behind a `__defaults` closure still needs the
-    // constructor to call it, so it keeps the ordinary CALL sequence.
+    // declares one. A class with non-constant defaults is allocated (ALLOC) and the site stores the
+    // defaults itself, so it needs no call either.
     std::string source = R"(
         class Pod
             public x: number = 1
@@ -13585,18 +13599,27 @@ TEST_CASE("ClassNewObject")
         print(a, b, c, d)
     )";
 
-    auto res = "\n" + compileFunction(source.c_str(), 2, 2, 0);
+    auto res = "\n" + compileFunction(source.c_str(), 5, 2, 0);
     CHECK(R"(
 LOADNIL R0
 LOADNIL R1
 LOADNIL R2
-LOADKX R0 K5 [class Pod (props: 2, methods: 0)]
-LOADKX R1 K9 [class WithInit (props: 1, methods: 1)]
-DUPCLOSURE R3 K7 ['__init']
+LOADKX R0 K6 [class Pod (props: 2, methods: 0)]
+DUPCLOSURE R3 K5 ['Pod']
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R3
+LOADKX R1 K11 [class WithInit (props: 1, methods: 1)]
+DUPCLOSURE R3 K8 ['__init']
 NEWCLASSMEMBER R1 R3 ['__init']
-LOADKX R2 K14 [class Computed (props: 1, methods: 1)]
-DUPCLOSURE R3 K12 []
+DUPCLOSURE R3 K10 ['WithInit']
+CAPTURE VAL R1
+NEWCLASSMEMBER R1 CONSTRUCTOR R3
+LOADKX R2 K17 [class Computed (props: 1, methods: 1)]
+DUPCLOSURE R3 K14 []
 NEWCLASSMEMBER R2 R3 ['__defaults']
+DUPCLOSURE R3 K16 ['Computed']
+CAPTURE VAL R2
+NEWCLASSMEMBER R2 CONSTRUCTOR R3
 NEWOBJECT R3 R0 0
 LOADNIL R7
 LOADN R6 9
@@ -13606,9 +13629,11 @@ LOADN R9 5
 NEWOBJECT R6 R1 1 INIT
 CALL R7 2 0
 MOVE R5 R6
-MOVE R6 R2
-CALL R6 0 1
-GETIMPORT R7 16 [print]
+NEWOBJECT R7 R2 0 ALLOC
+NEWTABLE R9 0 0
+SETOBJECTMEMBER R9 R7 0
+MOVE R6 R7
+GETIMPORT R7 19 [print]
 MOVE R8 R3
 MOVE R9 R4
 MOVE R10 R5
@@ -13616,6 +13641,140 @@ MOVE R11 R6
 CALL R7 4 0
 RETURN R0 0
 )" == res);
+}
+
+TEST_CASE("ClassConstructorBuildsTheObjectWithoutACall")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuTraits, true},
+        {FFlag::LuwuDefaultArguments, true},
+    };
+
+    // A call on a class the compiler can't see (another module's, or one in a local) runs the class's constructor, a
+    // function the compiler builds from the declaration. Its body constructs the class the way a call site in the
+    // class's module does: a primary constructor's fields directly, an explicit `__init` through INIT and a CALL with
+    // the constructor's own parameters, and a POD class with computed defaults through ALLOC, its defaults, and APPLY.
+    // A trait from elsewhere initializes its fields in a loop of ordinary calls (INITTRAITS).
+    std::string source = R"(
+        local Base, seed = ...
+        class Point(x: number, y: number = 2)
+            sum = x + y + seed
+        end
+        class Init
+            public v: number = 0
+            public function __init(self, v) self.v = v end
+        end
+        class Pod implements Base(seed)
+            public t = {}
+        end
+    )";
+
+    // the initializer reads `seed`, a local of the module, as an upvalue
+    CHECK_EQ(
+        "\n" + compileFunction(source.c_str(), 2, 2, 0),
+        R"(
+MOVE R7 R0
+MOVE R8 R1
+GETUPVAL R9 0
+JUMPXEQKNIL R8 L0 NOT
+LOADN R8 2
+L0: ADD R10 R7 R8
+GETUPVAL R11 1
+ADD R4 R10 R11
+MOVE R5 R7
+MOVE R6 R8
+NEWOBJECT R3 R9 3 FIELDS
+MOVE R2 R3
+RETURN R2 1
+RETURN R0 0
+)"
+    );
+
+    CHECK_EQ(
+        "\n" + compileFunction(source.c_str(), 3, 2, 0),
+        R"(
+MOVE R5 R0
+GETUPVAL R6 0
+NEWOBJECT R2 R6 1 INIT
+CALL R3 2 0
+MOVE R1 R2
+RETURN R1 1
+RETURN R0 0
+)"
+    );
+
+    CHECK_EQ(
+        "\n" + compileFunction(source.c_str(), 6, 2, 0),
+        R"(
+MOVE R3 R0
+GETUPVAL R4 0
+NEWOBJECT R2 R4 0 ALLOC
+GETUPVAL R7 1
+MOVE R6 R2
+LOADN R5 0
+L0: INITTRAITS R5 L1
+CALL R8 2 0
+JUMPBACK L0
+L1: NEWTABLE R5 0 0
+SETOBJECTMEMBER R5 R2 0
+NEWOBJECT R2 R4 1 APPLY
+MOVE R1 R2
+RETURN R1 1
+RETURN R0 0
+)"
+    );
+}
+
+TEST_CASE("BundleLiteralKeysAreReadFromRegisters")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+    };
+
+    // `t[.(a, b)]` passes the bundle's values to the lookup in registers instead of building the bundle, for reads,
+    // writes and compound assignments alike
+    std::string source = R"(
+        local cache = {}
+        local function g(a, b)
+            return cache[bundle.pack(a, b)]
+        end
+        local function h(a, b, v)
+            cache[bundle.pack(a, b)] = v
+            cache[bundle.pack(a, b)] += 1
+        end
+        return g, h
+    )";
+
+    CHECK_EQ(
+        "\n" + compileFunction(source.c_str(), 0, 1, 0),
+        R"(
+GETUPVAL R3 0
+MOVE R4 R0
+MOVE R5 R1
+GETTABLEBUNDLE R2 R3 R4 2
+RETURN R2 1
+)"
+    );
+
+    CHECK_EQ(
+        "\n" + compileFunction(source.c_str(), 1, 1, 0),
+        R"(
+GETUPVAL R3 0
+MOVE R4 R0
+MOVE R5 R1
+SETTABLEBUNDLE R2 R3 R4 2
+GETUPVAL R3 0
+MOVE R4 R0
+MOVE R5 R1
+GETTABLEBUNDLE R6 R3 R4 2
+ADDK R6 R6 K0 [1]
+SETTABLEBUNDLE R6 R3 R4 2
+RETURN R0 0
+)"
+    );
 }
 
 TEST_CASE("ClassPrimaryConstructor")
@@ -13638,19 +13797,22 @@ TEST_CASE("ClassPrimaryConstructor")
         print(f)
     )";
 
-    auto res = "\n" + compileFunction(source.c_str(), 1, 2, 0);
+    auto res = "\n" + compileFunction(source.c_str(), 2, 2, 0);
     CHECK(R"(
 LOADNIL R0
-LOADKX R0 K6 [class Frame (props: 3, methods: 1)]
+LOADKX R0 K7 [class Frame (props: 3, methods: 1)]
 DUPCLOSURE R1 K4 ['__init']
 NEWCLASSMEMBER R0 R1 ['__init']
-LOADK R5 K7 ['main']
+DUPCLOSURE R1 K6 ['Frame']
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R1
+LOADK R5 K8 ['main']
 LOADN R6 10
 LOADN R3 7
-MULK R4 R6 K8 [2]
+MULK R4 R6 K9 [2]
 NEWOBJECT R2 R0 3 FIELDS
 MOVE R1 R2
-GETIMPORT R2 10 [print]
+GETIMPORT R2 11 [print]
 MOVE R3 R1
 CALL R2 1 0
 RETURN R0 0
@@ -13903,12 +14065,15 @@ CALL R2 3 1
 CALLFB R1 1 0 [0]
 RETURN R0 0
 )" == res0);
-    auto res1 = "\n" + compileFunction(source.c_str(), 1, 0, 0);
+    auto res1 = "\n" + compileFunction(source.c_str(), 2, 0, 0);
     CHECK(R"(
 LOADNIL R0
 LOADKX R0 K4 [class Point (props: 2, methods: 1)]
 NEWCLOSURE R1 P0
 NEWCLASSMEMBER R0 R1 ['print']
+NEWCLOSURE R1 P1
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R1
 DUPTABLE R1 5
 LOADK R2 K0 ['Point']
 SETTABLE R0 R1 R2
@@ -13927,11 +14092,14 @@ TEST_CASE("ClassDeclHoistingForwardReference")
         end
     )";
 
-    auto res = "\n" + compileFunction(source.c_str(), 0, 0, 0);
+    auto res = "\n" + compileFunction(source.c_str(), 1, 0, 0);
     CHECK(R"(
 LOADNIL R0
 MOVE R1 R0
 LOADKX R0 K2 [class Point (props: 1, methods: 0)]
+NEWCLOSURE R2 P0
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R2
 RETURN R0 0
 )" == res);
 }
@@ -13954,11 +14122,14 @@ TEST_CASE("ClassDeclHoistingNestedFunctionUpvalCapture")
 GETUPVAL R0 0
 RETURN R0 1
 )" == inner);
-    auto outer = "\n" + compileFunction(source.c_str(), 1, 0, 0);
+    auto outer = "\n" + compileFunction(source.c_str(), 2, 0, 0);
     CHECK(R"(
 LOADNIL R0
 LOADKX R0 K2 [class Point (props: 1, methods: 0)]
 NEWCLOSURE R1 P0
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R1
+NEWCLOSURE R1 P1
 CAPTURE VAL R0
 RETURN R0 0
 )" == outer);
@@ -14927,18 +15098,21 @@ TEST_CASE("ExportClass")
     };
 
     CHECK_EQ(
-        "\n" + compileFunction0(R"(
+        "\n" + compileFunction(R"(
 export class Point
     x: number
     y: number
 end
-)"),
+)", 1),
         R"(
 LOADNIL R0
 NEWTABLE R1 0 0
-LOADKX R0 K3 [class Point (props: 2, methods: 0)]
+LOADKX R0 K4 [class Point (props: 2, methods: 0)]
+DUPCLOSURE R2 K3 ['Point']
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R2
 SETTABLEKS R0 R1 K0 ['Point']
-GETIMPORT R2 6 [table.freeze]
+GETIMPORT R2 7 [table.freeze]
 MOVE R3 R1
 CALL R2 1 1
 RETURN R2 1
@@ -14961,18 +15135,21 @@ export class Point
     end
 end
 )",
-                   2
+                   3
                ),
         R"(
 LOADNIL R0
 NEWTABLE R1 0 0
-LOADKX R0 K7 [class Point (props: 2, methods: 2)]
+LOADKX R0 K8 [class Point (props: 2, methods: 2)]
 DUPCLOSURE R2 K3 ['getX']
 NEWCLASSMEMBER R0 R2 ['getX']
 DUPCLOSURE R2 K5 ['getY']
 NEWCLASSMEMBER R0 R2 ['getY']
+DUPCLOSURE R2 K7 ['Point']
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R2
 SETTABLEKS R0 R1 K0 ['Point']
-GETIMPORT R2 10 [table.freeze]
+GETIMPORT R2 11 [table.freeze]
 MOVE R3 R1
 CALL R2 1 1
 RETURN R2 1
@@ -14989,19 +15166,22 @@ end
 
 local p = Point {x = 1, y = 2}
 )",
-                   0,
+                   1,
                    2
                ),
         R"(
 LOADNIL R0
 NEWTABLE R1 0 0
-LOADKX R0 K3 [class Point (props: 2, methods: 0)]
+LOADKX R0 K4 [class Point (props: 2, methods: 0)]
+DUPCLOSURE R2 K3 ['Point']
+CAPTURE VAL R0
+NEWCLASSMEMBER R0 CONSTRUCTOR R2
 LOADN R4 1
 LOADN R5 2
 NEWOBJECT R3 R0 2 FIELDS
 MOVE R2 R3
 SETTABLEKS R0 R1 K0 ['Point']
-GETIMPORT R3 6 [table.freeze]
+GETIMPORT R3 7 [table.freeze]
 MOVE R4 R1
 CALL R3 1 1
 RETURN R3 1
@@ -15524,3 +15704,208 @@ end
 }
 
 // Compiler B (classes review) end
+
+// Luwu collections: a small table literal in a loop header is never built. The body runs once per item, skipping the
+// items that are nil at run time, and those known to be nil aren't compiled at all.
+TEST_CASE("LoopOverSmallTableLiteralBuildsNoTable")
+{
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(x, y)
+    local t = {}
+    for i, v in { x, nil, y } do
+        t[i] = v
+    end
+    return t
+end
+)",
+                   0,
+                   1
+               ),
+        R"(
+NEWTABLE R2 0 0
+MOVE R3 R0
+LOADNIL R4
+MOVE R5 R1
+JUMPXEQKNIL R3 L0
+LOADN R6 1
+SETTABLE R3 R2 R6
+L0: JUMPXEQKNIL R5 L1
+LOADN R6 3
+SETTABLE R5 R2 R6
+L1: RETURN R2 1
+)"
+    );
+
+    // five items, keys or a trailing call build the table and loop over it
+    const char* const kept[] = {
+        "local function f(t) for _, v in { 1, 2, 3, 4, 5 } do t[v] = v end end",
+        "local function f(t) for _, v in { a = 1 } do t[v] = v end end",
+        "local function f(t, g) for _, v in { 1, g() } do t[v] = v end end",
+    };
+    for (const char* source : kept)
+    {
+        INFO(source);
+        std::string bytecode = compileFunction(source, 0, 1);
+        CHECK(bytecode.find("FORGLOOP") != std::string::npos);
+    }
+}
+
+// Luwu bundles: calling `bundle.pack` or `bundle.unpack` directly or through a local compiles to a fastcall. Any chain
+// of locals that are never written resolves, which is what destructuring them out of `bundle` desugars to.
+TEST_CASE("BundleFunctionsCompileToFastcalls")
+{
+    ScopedFastFlag bundles{FFlag::DebugLuwuBundles, true};
+
+    const char* fastcalls[] = {
+        "local function f(x) local v = bundle.pack(x, x) return v end",
+        "local pack = bundle.pack local function f(x) local v = pack(x, x, x, x) return v end",
+        "local c = bundle local p = c.pack local function f(x) local v = p(x, x) return v end",
+        "local c = bundle local function f(x) local v = c.pack(x, x) return v end",
+        "local c = bundle local c2 = c local function f(x) local v = c2.pack(x, x, x) return v end",
+        "local function f(x) local v = bundle.pack(x, x, x, x, x) return v end",
+        "local function f(...) local v = bundle.pack(...) return v end",
+        "local function f(b) return bundle.unpack(b) end",
+    };
+    for (const char* source : fastcalls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("FASTCALL") != std::string::npos);
+    }
+
+    const char* calls[] = {
+        "local bundle = {} local function f(x) local v = bundle.pack(x, x) return v end",
+        "local function f(x) local v = string.pick(x, x) return v end",
+        "local function f(x) local v = bundle.Other(x) return v end",
+        "local c = bundle c = {} local function f(x) local v = c.pack(x, x) return v end",
+        "local p = bundle.pack p = print local function f(x) local v = p(x, x) return v end",
+    };
+    for (const char* source : calls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("FASTCALL") == std::string::npos);
+    }
+
+    ScopedFastFlag off{FFlag::DebugLuwuBundles, false};
+    CHECK(compileFunction(fastcalls[0], 0, 1).find("FASTCALL") == std::string::npos);
+}
+
+// Luwu collections: an OrderedMap built from `.(key, value)` bundles, as arguments or as a list, builds neither: it's
+// an empty map and a `set` call per entry. Anything else is an ordinary call.
+TEST_CASE("OrderedMapFromBundlesBuildsNoBundle")
+{
+    ScopedFastFlag collections{FFlag::DebugLuwuBuiltinClasses, true};
+    ScopedFastFlag bundles{FFlag::DebugLuwuBundles, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(a, b)
+    local m = collections.OrderedMap({ bundle.pack("x", a), bundle.pack(b, 2) })
+    return m
+end
+)",
+                   0,
+                   1
+               ),
+        R"(
+GETIMPORT R3 2 [collections.OrderedMap]
+CALL R3 0 1
+LOADK R6 K4 ['x']
+MOVE R7 R0
+NAMECALL R4 R3 K3 ['set']
+CALL R4 3 0
+MOVE R6 R1
+LOADN R7 2
+NAMECALL R4 R3 K3 ['set']
+CALL R4 3 0
+MOVE R2 R3
+RETURN R2 1
+)"
+    );
+
+    const char* lowered[] = {
+        "local function f(a) local m = collections.OrderedMap(bundle.pack(1, a), bundle.pack(2, a)) return m end",
+        "local function f(a) local m = collections.OrderedMap({ bundle.pack(1, a) }) return m end",
+    };
+    for (const char* source : lowered)
+    {
+        INFO(source);
+        std::string bytecode = compileFunction(source, 0, 1);
+        CHECK(bytecode.find("NAMECALL") != std::string::npos);
+        CHECK(bytecode.find("FASTCALL") == std::string::npos);
+    }
+
+    const char* calls[] = {
+        "local function f(a) local m = collections.OrderedMap(bundle.pack(1, a), a) return m end",
+        "local function f(a) local m = collections.OrderedMap({ bundle.pack(1, a), k = bundle.pack(2, a) }) return m end",
+        "local function f(a) local m = collections.OrderedMap(bundle.pack(1, a, a)) return m end",
+        "local function f(a) local m = collections.OrderedMap({ bundle.pack(1, a) }, bundle.pack(2, a)) return m end",
+        "local collections = {} local function f(a) local m = collections.OrderedMap(bundle.pack(1, a)) return m end",
+    };
+    for (const char* source : calls)
+    {
+        INFO(source);
+        CHECK(compileFunction(source, 0, 1).find("NAMECALL") == std::string::npos);
+    }
+}
+
+// Luwu bundles: `for i, v in bundle.pack(a, b)` constructs no bundle. The position is only loaded when the body
+// reads it.
+TEST_CASE("LoopOverBundleConstructionBuildsNoBundle")
+{
+    ScopedFastFlag bundles{FFlag::DebugLuwuBundles, true};
+
+    CHECK_EQ(
+        "\n" + compileFunction(
+                   R"(
+local function f(t, a, b)
+    for i, v in bundle.pack(a, b) do
+        t[i] = v
+    end
+    for _, v in bundle.pack(a, b, a) do
+        t[v] = true
+    end
+end
+)",
+                   0,
+                   1
+               ),
+        R"(
+MOVE R3 R1
+MOVE R4 R2
+LOADN R5 1
+SETTABLE R3 R0 R5
+LOADN R5 2
+SETTABLE R4 R0 R5
+MOVE R3 R1
+MOVE R4 R2
+MOVE R5 R1
+LOADB R6 1
+SETTABLE R6 R0 R3
+LOADB R6 1
+SETTABLE R6 R0 R4
+LOADB R6 1
+SETTABLE R6 R0 R5
+RETURN R0 0
+)"
+    );
+}
+
+// Luwu bundles: a loop over `bundle.pack` with a fixed count unfolds like one over a named bundle, up to four elements;
+// a larger bundle is built and iterated
+TEST_CASE("LoopOverBundlePackUnfoldsUpToFourElements")
+{
+    ScopedFastFlag bundles{FFlag::DebugLuwuBundles, true};
+
+    std::string small = compileFunction("local function f(t, a, b) for _, v in bundle.pack(a, b) do t[v] = true end end", 0, 1);
+    CHECK(small.find("FASTCALL") == std::string::npos);
+    CHECK(small.find("FORGLOOP") == std::string::npos);
+
+    std::string large = compileFunction("local function f(t, a) for _, v in bundle.pack(a, a, a, a, a) do t[v] = true end end", 0, 1);
+    CHECK(large.find("FORGLOOP") != std::string::npos);
+
+    std::string spread = compileFunction("local function f(t, ...) for _, v in bundle.pack(...) do t[v] = true end end", 0, 1);
+    CHECK(spread.find("FORGLOOP") != std::string::npos);
+}
