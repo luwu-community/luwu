@@ -413,11 +413,14 @@ IrValueKind getCmdValueKind(IrCmd cmd)
     case IrCmd::FALLBACK_GETPOSITIONAL:
     case IrCmd::FALLBACK_PUSH:
     case IrCmd::FALLBACK_POP:
+    case IrCmd::FALLBACK_WRAPRESULT:
+    case IrCmd::FALLBACK_GETQUALIFIED:
         return IrValueKind::None;
     case IrCmd::SUBSTITUTE:
         return IrValueKind::Unknown;
     case IrCmd::MARK_USED:
     case IrCmd::MARK_DEAD:
+    case IrCmd::MARK_TRY_READS:
         return IrValueKind::None;
     case IrCmd::BITAND_UINT:
     case IrCmd::BITXOR_UINT:
@@ -1804,7 +1807,8 @@ void killUnusedBlocks(IrFunction& function)
     {
         IrBlock& block = function.blocks[i];
 
-        if (block.kind != IrBlockKind::Dead && block.useCount == 0)
+        // Luwu try expressions: a handler has no uses, since only the VM enters it
+        if (block.kind != IrBlockKind::Dead && block.useCount == 0 && (block.flags & kBlockFlagTryHandler) == 0)
             kill(function, block);
     }
 }

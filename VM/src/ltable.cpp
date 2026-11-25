@@ -851,12 +851,13 @@ TValue* luaH_set(lua_State* L, LuaTable* t, const TValue* key)
 
 TValue* luaH_newkey(lua_State* L, LuaTable* t, const TValue* key)
 {
-    if (ttisnil(key))
-        luaG_runerror(L, "table index is nil");
-    else if (ttisnumber(key) && luai_numisnan(nvalue(key)))
-        luaG_runerror(L, "table index is NaN");
-    else if (ttisvector(key) && luai_vecisnan(vvalue(key)))
-        luaG_runerror(L, "table index contains NaN");
+    bool invalid = ttisnil(key) || (ttisnumber(key) && luai_numisnan(nvalue(key))) || (ttisvector(key) && luai_vecisnan(vvalue(key)));
+    if (invalid)
+    {
+        TValue indexed;
+        sethvalue(L, &indexed, t);
+        luaG_invalidkeyerror(L, &indexed, key);
+    }
     return newkey(L, t, key);
 }
 

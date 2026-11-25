@@ -512,6 +512,10 @@ void create(lua_State* L, SharedCodeGenContext* codeGenContext)
             nativeExecData[i] = unassignedOffset;
     }
 
+    // Luwu try expressions: the VM resumes a native frame at a handler by its offset
+    for (int i = 0; i < proto->sizetryranges; ++i)
+        CODEGEN_ASSERT(ir.function.bcMapping[proto->tryranges[i].handlerpc].asmLocation != ~0u);
+
     // After the instruction offsets, custom native data is placed
     for (uint32_t i = 0; i < extraDataCount; i++)
         nativeExecData[proto->sizecode + i] = ir.function.extraNativeData[i];

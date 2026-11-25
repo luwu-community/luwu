@@ -3,6 +3,7 @@
 
 #include "Luau/ApplyTypeFunction.h"
 #include "Luau/Ast.h"
+#include "Luau/AstQuery.h"
 #include "Luau/ClassMemberNames.h"
 #include "Luau/AstUtils.h"
 #include "Luau/BuiltinDefinitions.h"
@@ -59,6 +60,7 @@ LUAU_FASTFLAG(DebugLuauCyclicRequireTypeInference)
 LUAU_FASTFLAG(DebugLuwuUserDefinedRefinements)
 // Luwu literal types: `literal<B>` in parameter and local annotations, and `V<literal<B>>` validators (in progress)
 LUAU_FASTFLAGVARIABLE(LuwuLiteralTypes)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 
 namespace Luau
@@ -3523,6 +3525,8 @@ void ConstraintGenerator::prototypeTypeDefinitions(const ScopePtr& scope, AstSta
                 initialFun.typePackParams.push_back(genPack);
             }
             initialFun.definitionLocation = alias->location;
+            if (alias->errorHint)
+                initialFun.errorHint = arena->addType(BlockedType{});
 
             if (alias->exported)
                 scope->exportedTypeBindings[alias->name.value] = std::move(initialFun);
@@ -5381,6 +5385,13 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatTypeAlias* 
     else
         emplaceType<BoundType>(asMutable(aliasTy), ty);
 
+    // Luwu try expressions: the hint resolves like the type, with the alias's generics in scope
+    if (alias->errorHint && bindingIt->second.errorHint)
+    {
+        TypeId hint = resolveType(defnScope, alias->errorHint, /* inTypeArguments */ false, /* replaceErrorWithFresh */ false);
+        emplaceType<BoundType>(asMutable(*bindingIt->second.errorHint), hint);
+    }
+
     std::vector<TypeId> typeParams;
     for (const auto& tyParam : createGenerics(defnScope, alias->generics, /* useCache */ true, /* addTypes */ false))
         typeParams.push_back(tyParam.second.ty);
@@ -5757,6 +5768,22 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareExte
     return ControlFlow::None;
 }
 
+// Luwu try expressions: whether a written error hint is closed, `! never` or a union whose last member is `never`
+// (`! NotFound | never`). A closed hint says the function raises nothing else, so `try` gets no weakunknown. It's read
+// from what was written: an alias that holds `never` doesn't close a hint.
+static bool closesErrorHint(AstType* hint)
+{
+    auto isNever = [](AstType* type)
+    {
+        AstTypeReference* reference = type ? type->as<AstTypeReference>() : nullptr;
+        return reference && !reference->prefix && !reference->hasParameterList && reference->name == "never";
+    };
+
+    if (AstTypeUnion* options = hint ? hint->as<AstTypeUnion>() : nullptr)
+        return options->types.size > 0 && isNever(options->types.data[options->types.size - 1]);
+    return isNever(hint);
+}
+
 ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunction* global)
 {
     std::vector<std::pair<Name, GenericTypeDefinition>> generics = createGenerics(scope, global->generics);
@@ -5783,7 +5810,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunc
     TypePackId paramPack = resolveTypePack(
         funScope, global->params, /* inTypeArguments */ false, /* replaceErrorWithFresh */ false, /* initialPolarity */ Polarity::Negative
     );
-    TypePackId retPack = resolveTypePack(
+    TypePackId retPack = resolveReturnTypePack(
         funScope, global->retTypes, /* inTypeArguments */ false, /* replaceErrorWithFresh */ false, /* initialPolarity */ Polarity::Positive
     );
 
@@ -5815,6 +5842,14 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStatDeclareFunc
     ftv->argNames.reserve(global->paramNames.size);
     for (const auto& el : global->paramNames)
         ftv->argNames.emplace_back(FunctionArgument{el.first.value, el.second});
+
+    // Luwu try expressions
+    std::optional<TypeId> declaredHint;
+    if (global->errorHint)
+        declaredHint = resolveType(funScope, global->errorHint, /* inTypeArguments */ false);
+    ftv->errorHint = returnErrorHint(funScope, global->retTypes, declaredHint, /* inTypeArguments */ false);
+    ftv->errorHintClosed = closesErrorHint(global->errorHint);
+
     Name fnName(global->name.value);
 
     if (declaresFileGlobals())
@@ -6714,6 +6749,11 @@ InferencePack ConstraintGenerator::checkExprCall(
                 expectedType = expectedTypesForCall[i];
             }
 
+            // Luwu try expressions: `error(v)` in a function with an annotated hint expects the hint, so `error("NaN")`
+            // is the singleton and `error("` completes the hint's strings
+            if (std::optional<TypeId> hint = annotatedHintFor(call, i))
+                expectedType = hint;
+
             // Example: `table.insert<V>(t: {V}, value: V)`. `expectedType` for `value` is just
             // the bare generic `V` here, since it was computed before any argument was checked.
             // `t` (arg 0) has already been checked by this point though, so if it's a `{Foo}`,
@@ -6805,6 +6845,8 @@ InferencePack ConstraintGenerator::checkExprCall(
     }
 
     Checkpoint argEndCheckpoint = checkpoint(this);
+
+    recordRaisedError(scope, call, args, argTail);
 
     // Luwu: upstream refines `x` in `class.isinstance(x, C)` here, matching the call by its spelling (a global's
     // `.isinstance`). Luwu does it in MagicClassInstanceCheck::refine, by the callee's type, so an alias (`const is =
@@ -7048,6 +7090,8 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
     // Luwu Traits (rfcs/classes/traits.md): `Self` in a trait method is its `class.of(self)` call
     else if (auto selfClass = expr->as<AstExprSelfClass>())
         result = check(scope, selfClass->classOf, std::nullopt, forceSingleton);
+    else if (auto tryExpr = expr->as<AstExprTry>())
+        result = check(scope, tryExpr);
     else if (auto err = expr->as<AstExprError>())
     {
         // Open question: Should we traverse into this?
@@ -7838,6 +7882,34 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprInterpString*
         check(scope, expr);
 
     return Inference{builtinTypes->stringType};
+}
+
+// Luwu try expressions: `try expr` is `Result<T, E>`, with T expr's type. It's expanded like that annotation, but looked
+// up in the global scope, so a module's own `Result` type can't change it. E is weakunknown, joined with the callee's
+// error hints when expr is a call.
+Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprTry* tryExpr)
+{
+    TypeId valueTy = check(scope, tryExpr->expr).ty;
+
+    TypeId errorTy = builtinTypes->weakUnknownType;
+    if (AstExprCall* call = tryExpr->expr->as<AstExprCall>())
+    {
+        if (TypeId* callee = module->astOriginalCallTypes.find(call->func))
+            errorTy = createTypeFunctionInstance(builtinTypes->typeFunctions->raisesFunc, {*callee}, {}, scope, tryExpr->location);
+    }
+
+    const AstName result{"Result"};
+    if (!globalScope->lookupType(result.value))
+    {
+        const char* message = "'try' gives a Result, which needs the LuwuNonePrimitive, LuwuDeclareStatements and "
+                              "LuwuGenericNominals flags";
+        reportError(tryExpr->tryLocation, GenericError{message});
+        return Inference{builtinTypes->errorType};
+    }
+
+    TypeId resultTy = arena->addType(PendingExpansionType{std::nullopt, result, {valueTy, errorTy}, {}});
+    addConstraint(globalScope, tryExpr->location, TypeAliasExpansionConstraint{/* target */ resultTy});
+    return Inference{resultTy};
 }
 
 Inference ConstraintGenerator::check(const ScopePtr& scope, AstExprInstantiate* explicitTypeInstantiation)
@@ -8774,7 +8846,7 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     if (fn->returnAnnotation)
     {
         TypePackId annotatedRetType =
-            resolveTypePack(signatureScope, fn->returnAnnotation, /* inTypeArguments */ false, /* replaceErrorWithFresh*/ true);
+            resolveReturnTypePack(signatureScope, fn->returnAnnotation, /* inTypeArguments */ false, /* replaceErrorWithFresh*/ true, Polarity::Positive);
         // We bind the annotated type directly here so that, when we need to
         // generate constraints for return typeArguments, we have a guarantee that we
         // know the annotated return type already, if one was provided.
@@ -8810,6 +8882,14 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
 
     if (FFlag::DebugLuwuUserDefinedRefinements)
         actualFunction.truthyRefinement = resolveTruthyRefinement(signatureScope, fn);
+
+    // Luwu try expressions: the declared hint, and the hint of an alias the return type names. checkFunctionBody joins
+    // the inferred one onto them.
+    std::optional<TypeId> declaredHint;
+    if (fn->errorHint)
+        declaredHint = resolveType(signatureScope, fn->errorHint, /* inTypeArguments */ false);
+    actualFunction.errorHint = returnErrorHint(signatureScope, fn->returnAnnotation, declaredHint, /* inTypeArguments */ false);
+    actualFunction.errorHintClosed = closesErrorHint(fn->errorHint);
 
     TypeId actualFunctionType = arena->addType(std::move(actualFunction));
     LUAU_ASSERT(actualFunctionType);
@@ -9113,12 +9193,205 @@ TypePackId ConstraintGenerator::resolveParameterAnnotations(
     return addTypePack(std::move(head), tail);
 }
 
+// Luwu try expressions: `X | unknown` means `X | weakunknown`. Plain `unknown` would absorb X, which can't be what
+// someone who wrote the union meant. `unknown?` stays as it is. `members` are the resolved types of `annotation`'s.
+void ConstraintGenerator::weakenUnknownMembers(AstTypeUnion* annotation, std::vector<TypeId>& members)
+{
+    if (!FFlag::DebugLuwuTryExpressions || members.size() != annotation->types.size)
+        return;
+
+    bool hasOtherMember = false;
+    for (size_t i = 0; i < members.size(); ++i)
+    {
+        bool isNil = annotation->types.data[i]->is<AstTypeOptional>();
+        hasOtherMember |= !isNil && follow(members[i]) != builtinTypes->unknownType;
+    }
+    if (!hasOtherMember)
+        return;
+
+    for (TypeId& member : members)
+    {
+        if (follow(member) == builtinTypes->unknownType)
+            member = builtinTypes->weakUnknownType;
+    }
+}
+
 void ConstraintGenerator::checkFunctionBody(const ScopePtr& scope, AstExprFunction* fn)
 {
+    if (FFlag::DebugLuwuTryExpressions)
+    {
+        RaisedErrors raised;
+        raised.unreachableError = finalErrorCall(fn);
+        TypeId* signature = module->astTypes.find(fn);
+        const FunctionType* function = signature ? get<FunctionType>(follow(*signature)) : nullptr;
+        if (function && fn->errorHint)
+            raised.declared = function->errorHint;
+        raisedErrors.push_back(std::move(raised));
+    }
+
     // If it is possible for execution to reach the end of the function, the return type must be compatible with ()
     ControlFlow cf = visitBlockWithoutChildScope(scope, fn->body);
     if (cf == ControlFlow::None)
         addConstraint(scope, fn->location, PackSubtypeConstraint{builtinTypes->emptyTypePack, scope->returnType});
+
+    if (!FFlag::DebugLuwuTryExpressions)
+        return;
+
+    // Luwu try expressions: a function without a `! E` annotation gets a hint inferred from its body, joined with the one
+    // its return alias declares
+    std::vector<TypeId> raised = std::move(raisedErrors.back().types);
+    raisedErrors.pop_back();
+
+    TypeId* signature = module->astTypes.find(fn);
+    FunctionType* function = signature ? getMutable<FunctionType>(follow(*signature)) : nullptr;
+    if (!function || raised.empty())
+        return;
+
+    if (function->errorHint)
+        raised.insert(raised.begin(), *function->errorHint);
+    // One member per type, so a hint the body also raises isn't listed twice, and `error("a")` and `error("b")` give
+    // `string` once
+    TypeIds unique;
+    for (TypeId ty : raised)
+    {
+        ty = follow(ty);
+        const UnionType* options = get<UnionType>(ty);
+        if (!options)
+        {
+            unique.insert(ty);
+            continue;
+        }
+        for (TypeId option : options)
+            unique.insert(follow(option));
+    }
+    raised.assign(unique.begin(), unique.end());
+    if (raised.size() == 1)
+        function->errorHint = raised[0];
+    else
+        function->errorHint = arena->addType(UnionType{std::move(raised)});
+}
+
+// Luwu try expressions: what `error(v)` raises in a function without an annotated hint. A string literal raises `string`,
+// widened like a local's initializer. A call as the only argument (`error(message())`) is in `argTail`, and raises its
+// first value.
+TypeId ConstraintGenerator::raisedErrorType(
+    const ScopePtr& scope,
+    AstExprCall* call,
+    const std::vector<TypeId>& args,
+    std::optional<TypePackId> argTail
+)
+{
+    if (call->args.size == 0)
+        return builtinTypes->nilType;
+
+    bool stringLiteral = call->args.data[0]->is<AstExprConstantString>();
+    if (stringLiteral)
+        return builtinTypes->stringType;
+
+    if (!args.empty())
+        return args[0];
+    if (argTail)
+        return flattenPack(scope, call->args.data[0]->location, InferencePack{*argTail}).ty;
+    return builtinTypes->nilType;
+}
+
+// Luwu try expressions: the annotated hint of the function `call` is in, when `call` is `error(...)` and argument `index`
+// is what it raises
+std::optional<TypeId> ConstraintGenerator::annotatedHintFor(AstExprCall* call, size_t index)
+{
+    if (index != 0 || raisedErrors.empty() || call == raisedErrors.back().unreachableError || !isErrorCall(call))
+        return std::nullopt;
+    return raisedErrors.back().declared;
+}
+
+// Luwu try expressions: `error(v)` raises v's type, and `assert(...)` raises a string. Each joins the inferred hint of the
+// function the call is in, when that function's hint isn't annotated.
+void ConstraintGenerator::recordRaisedError(
+    const ScopePtr& scope,
+    AstExprCall* call,
+    const std::vector<TypeId>& args,
+    std::optional<TypePackId> argTail
+)
+{
+    // an annotated hint is the function's whole hint
+    if (raisedErrors.empty() || raisedErrors.back().declared || call == raisedErrors.back().unreachableError)
+        return;
+
+    AstExprGlobal* callee = call->func->as<AstExprGlobal>();
+    if (!callee)
+        return;
+
+    if (callee->name == "error")
+        raisedErrors.back().types.push_back(raisedErrorType(scope, call, args, argTail));
+    else if (callee->name == "assert")
+        raisedErrors.back().types.push_back(builtinTypes->stringType);
+}
+
+// Luwu try expressions: the alias a return annotation is, when it's exactly one alias reference (`(): Result<string>`)
+static AstTypeReference* soleReturnReference(AstTypePack* returns)
+{
+    AstTypePackExplicit* explicitReturns = returns ? returns->as<AstTypePackExplicit>() : nullptr;
+    if (!explicitReturns || explicitReturns->typeList.tailType || explicitReturns->typeList.types.size != 1)
+        return nullptr;
+
+    AstType* type = explicitReturns->typeList.types.data[0];
+    while (AstTypeGroup* group = type->as<AstTypeGroup>())
+        type = group->type;
+
+    return type->as<AstTypeReference>();
+}
+
+// Luwu try expressions: resolves a function's return annotation, the one place an alias with an error hint may go
+TypePackId ConstraintGenerator::resolveReturnTypePack(
+    const ScopePtr& scope,
+    AstTypePack* returns,
+    bool inTypeArguments,
+    bool replaceErrorWithFresh,
+    std::optional<Polarity> initialPolarity
+)
+{
+    AstTypeReference* outer = hintedAliasReturn;
+    hintedAliasReturn = soleReturnReference(returns);
+
+    TypePackId result = initialPolarity ? resolveTypePack(scope, returns, inTypeArguments, replaceErrorWithFresh, *initialPolarity)
+                                        : resolveTypePack_(scope, returns, inTypeArguments, replaceErrorWithFresh);
+
+    hintedAliasReturn = outer;
+    return result;
+}
+
+// Luwu try expressions: a function's error hint, from its declared one and the hint of an alias its return annotation is
+// (`type Result<T> = T ! IoError` and `function read(): Result<string>`). The alias's hint is expanded with the arguments
+// the return annotation gives it. `returns` is already resolved.
+std::optional<TypeId> ConstraintGenerator::returnErrorHint(
+    const ScopePtr& scope,
+    AstTypePack* returns,
+    std::optional<TypeId> declared,
+    bool inTypeArguments
+)
+{
+    AstTypeReference* ref = soleReturnReference(returns);
+    if (!ref)
+        return declared;
+
+    std::optional<TypeFun> alias = ref->prefix ? scope->lookupImportedType(ref->prefix->value, ref->name.value) : scope->lookupType(ref->name.value);
+    if (!alias || !alias->errorHint)
+        return declared;
+
+    TypeId hint = *alias->errorHint;
+    TypeId* resolved = module->astResolvedTypes.find(ref);
+    if (const PendingExpansionType* expansion = resolved ? get<PendingExpansionType>(follow(*resolved)) : nullptr)
+    {
+        hint = arena->addType(PendingExpansionType{expansion->prefix, expansion->name, expansion->typeArguments, expansion->packArguments});
+        getMutable<PendingExpansionType>(hint)->errorHint = true;
+        if (!inTypeArguments)
+            addConstraint(scope, ref->location, TypeAliasExpansionConstraint{/* target */ hint});
+    }
+
+    if (!declared)
+        return hint;
+
+    return arena->addType(UnionType{{*declared, hint}});
 }
 
 TypeId ConstraintGenerator::resolveReferenceType(
@@ -9252,6 +9525,10 @@ TypeId ConstraintGenerator::resolveReferenceType(
     {
         alias = scope->lookupType(ref->name.value);
     }
+
+    // Luwu try expressions: an alias with a hint only means something as a function's whole return type
+    if (alias && alias->errorHint && ref != hintedAliasReturn)
+        reportError(ty->location, GenericError{format("'%s' has an error hint, so it can only be a function's return type", ref->name.value)});
 
     if (alias.has_value())
     {
@@ -9491,11 +9768,17 @@ TypeId ConstraintGenerator::resolveFunctionType(
     else
         argTypes = resolveTypePack_(signatureScope, &tempArgTypes, inTypeArguments, replaceErrorWithFresh);
     polarity = p;
-    TypePackId returnTypes = resolveTypePack_(signatureScope, fn->returnTypes, inTypeArguments, replaceErrorWithFresh);
+    TypePackId returnTypes = resolveReturnTypePack(signatureScope, fn->returnTypes, inTypeArguments, replaceErrorWithFresh);
 
     // TODO: FunctionType needs a pointer to the scope so that we know
     // how to quantify/instantiate it.
     FunctionType ftv{TypeLevel{}, {}, {}, argTypes, returnTypes};
+    // Luwu try expressions
+    std::optional<TypeId> declaredHint;
+    if (fn->errorHint)
+        declaredHint = resolveType_(signatureScope, fn->errorHint, inTypeArguments, replaceErrorWithFresh);
+    ftv.errorHint = returnErrorHint(signatureScope, fn->returnTypes, declaredHint, inTypeArguments);
+    ftv.errorHintClosed = closesErrorHint(fn->errorHint);
     ftv.isCheckedFunction = fn->isCheckedFunction();
     ftv.literalParameters = std::move(literalParameters);
     AstAttr* deprecatedAttr = fn->getAttribute(AstAttr::Type::Deprecated);
@@ -9576,6 +9859,7 @@ TypeId ConstraintGenerator::resolveType_(const ScopePtr& scope, AstType* ty, boo
                 parts.push_back(resolveType_(scope, part, inTypeArguments));
             }
 
+            weakenUnknownMembers(unionAnnotation, parts);
             result = arena->addType(UnionType{std::move(parts)});
         }
     }
