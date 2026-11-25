@@ -592,14 +592,271 @@ AstExprIfElse::AstExprIfElse(
 {
 }
 
+// Luwu If Local (rfcs/control-flow/if-local.md)
+static void visitIfCondition(AstExpr* condition, const AstArray<AstIfClause>& clauses, AstVisitor* visitor)
+{
+    if (clauses.size == 0)
+    {
+        condition->visit(visitor);
+        return;
+    }
+
+    for (const AstIfClause& clause : clauses)
+    {
+        if (clause.fromPattern && !visitor->visitsPatternClauses())
+            continue;
+
+        if (clause.declaration)
+            clause.declaration->visit(visitor);
+        else
+            clause.expr->visit(visitor);
+    }
+}
+
+static Location ifConditionLocation(AstExpr* condition, const AstArray<AstIfClause>& clauses)
+{
+    if (clauses.size == 0)
+        return condition->location;
+
+    const AstIfClause& first = clauses.data[0];
+    Position begin = first.declaration ? first.declaration->location.begin : first.expr->location.begin;
+    return Location{begin, clauses.data[clauses.size - 1].expr->location.end};
+}
+
+Location AstExprIfElse::conditionLocation() const
+{
+    return ifConditionLocation(condition, clauses);
+}
+
+void AstExprIfElse::visitCondition(AstVisitor* visitor)
+{
+    visitIfCondition(condition, clauses, visitor);
+}
+
 void AstExprIfElse::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
-        condition->visit(visitor);
+        visitCondition(visitor);
         trueExpr->visit(visitor);
         falseExpr->visit(visitor);
     }
+}
+
+AstExprMatchPattern::AstExprMatchPattern(
+    const Location& location,
+    AstExpr* value,
+    AstLocal* subject,
+    const Location& keywordLocation,
+    bool negated,
+    bool implements,
+    const AstArray<AstPatternAlternative>& alternatives
+)
+    : AstExpr(ClassIndex(), location)
+    , value(value)
+    , subject(subject)
+    , keywordLocation(keywordLocation)
+    , negated(negated)
+    , implements(implements)
+    , alternatives(alternatives)
+{
+}
+
+void AstExprMatchPattern::visit(AstVisitor* visitor)
+{
+    if (!visitor->visit(this))
+        return;
+
+    if (visitor->visitsPatternChecks())
+    {
+        checked->visit(visitor);
+        return;
+    }
+
+    if (value)
+        value->visit(visitor);
+    for (const AstPatternAlternative& alternative : alternatives)
+    {
+        if (alternative.operand)
+            alternative.operand->visit(visitor);
+    }
+}
+
+void AstMatchArm::visitCondition(AstVisitor* visitor) const
+{
+    if (condition)
+        visitIfCondition(condition, clauses, visitor);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the header's declaration (or the tested local), then
+// each arm's condition and value or block
+static void visitMatch(const AstMatchSubject& subject, const AstArray<AstMatchArm>& arms, AstVisitor* visitor)
+{
+    if (subject.declaration)
+        subject.declaration->visit(visitor);
+    else
+        subject.value->visit(visitor);
+
+    for (const AstMatchArm& arm : arms)
+    {
+        arm.visitCondition(visitor);
+        if (arm.value)
+            arm.value->visit(visitor);
+        if (arm.body)
+            arm.body->visit(visitor);
+    }
+}
+
+bool matchesEveryValue(const AstArray<AstMatchArm>& arms)
+{
+    if (arms.size == 0)
+        return false;
+
+    const AstMatchArm& last = arms.data[arms.size - 1];
+    return last.kind == AstMatchArm::Else || last.catchAll;
+}
+
+AstExprMatch::AstExprMatch(const Location& location, const AstMatchSubject& subject, const AstArray<AstMatchArm>& arms)
+    : AstExpr(ClassIndex(), location)
+    , subject(subject)
+    , arms(arms)
+{
+}
+
+void AstExprMatch::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        visitMatch(subject, arms, visitor);
+}
+
+AstStatMatch::AstStatMatch(const Location& location, const AstMatchSubject& subject, const AstArray<AstMatchArm>& arms, bool hasEnd)
+    : AstStat(ClassIndex(), location)
+    , subject(subject)
+    , arms(arms)
+    , hasEnd(hasEnd)
+{
+}
+
+void AstStatMatch::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        visitMatch(subject, arms, visitor);
+}
+
+bool AstExprDo::alwaysLeaves() const
+{
+    return shorthand || gives().empty();
+}
+
+std::vector<AstStatGive*> AstExprDo::gives() const
+{
+    struct GiveFinder : AstVisitor
+    {
+        std::vector<AstStatGive*> found;
+
+        bool visit(AstStatGive* give) override
+        {
+            found.push_back(give);
+            return false;
+        }
+
+        // a nested `do` expression's gives are its own, except the shorthand's (`x or give v`), and a function's body is
+        // another function
+        bool visit(AstExprDo* expr) override
+        {
+            return expr->shorthand;
+        }
+
+        bool visit(AstExprFunction*) override
+        {
+            return false;
+        }
+    };
+
+    GiveFinder finder;
+    for (AstStat* stat : body->body)
+        stat->visit(&finder);
+
+    return std::move(finder.found);
+}
+
+AstExpr* withoutGroups(AstExpr* expr)
+{
+    while (AstExprGroup* group = expr->as<AstExprGroup>())
+        expr = group->expr;
+
+    return expr;
+}
+
+AstExprDo* asLeave(AstExpr* operand)
+{
+    AstExprDo* leave = withoutGroups(operand)->as<AstExprDo>();
+    return leave && leave->alwaysLeaves() ? leave : nullptr;
+}
+
+AstExprBinary* asLeaveGuard(AstExpr* expr)
+{
+    AstExprBinary* binary = expr->as<AstExprBinary>();
+    bool isAndOr = binary && (binary->op == AstExprBinary::Or || binary->op == AstExprBinary::And);
+    return isAndOr && asLeave(binary->right) ? binary : nullptr;
+}
+
+AstExprBinary* asOrLeave(AstExpr* expr)
+{
+    AstExprBinary* guard = asLeaveGuard(expr);
+    return guard && guard->op == AstExprBinary::Or ? guard : nullptr;
+}
+
+AstExprBinary* asLeaveEitherWay(AstExpr* expr)
+{
+    AstExprBinary* guard = asOrLeave(expr);
+    AstExprBinary* left = guard ? asLeaveGuard(withoutGroups(guard->left)) : nullptr;
+    return left && left->op == AstExprBinary::And ? left : nullptr;
+}
+
+bool isLeaveStatement(AstExpr* expr)
+{
+    AstExprBinary* binary = expr->as<AstExprBinary>();
+    while (binary && (binary->op == AstExprBinary::Or || binary->op == AstExprBinary::And))
+    {
+        if (asLeave(binary->right))
+            return true;
+
+        binary = withoutGroups(binary->right)->as<AstExprBinary>();
+    }
+
+    return false;
+}
+
+AstExprDo::AstExprDo(const Location& location, AstStatBlock* body)
+    : AstExpr(ClassIndex(), location)
+    , body(body)
+{
+}
+
+void AstExprDo::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        body->visit(visitor);
+}
+
+AstExprTableComprehension::AstExprTableComprehension(
+    const Location& location,
+    AstStat* loop,
+    AstStatComprehensionItem* item,
+    unsigned clauseCount
+)
+    : AstExpr(ClassIndex(), location)
+    , loop(loop)
+    , item(item)
+    , clauseCount(clauseCount)
+{
+}
+
+void AstExprTableComprehension::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+        loop->visit(visitor);
 }
 
 AstExprError::AstExprError(const Location& location, const AstArray<AstExpr*>& expressions, unsigned messageIndex)
@@ -698,11 +955,21 @@ AstStatIf::AstStatIf(
 {
 }
 
+Location AstStatIf::conditionLocation() const
+{
+    return ifConditionLocation(condition, clauses);
+}
+
+void AstStatIf::visitCondition(AstVisitor* visitor)
+{
+    visitIfCondition(condition, clauses, visitor);
+}
+
 void AstStatIf::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
-        condition->visit(visitor);
+        visitCondition(visitor);
         thenbody->visit(visitor);
 
         if (elsebody)
@@ -727,11 +994,21 @@ AstStatWhile::AstStatWhile(
 {
 }
 
+Location AstStatWhile::conditionLocation() const
+{
+    return ifConditionLocation(condition, clauses);
+}
+
+void AstStatWhile::visitCondition(AstVisitor* visitor)
+{
+    visitIfCondition(condition, clauses, visitor);
+}
+
 void AstStatWhile::visit(AstVisitor* visitor)
 {
     if (visitor->visit(this))
     {
-        condition->visit(visitor);
+        visitCondition(visitor);
         body->visit(visitor);
     }
 }
@@ -770,6 +1047,40 @@ AstStatBreak::AstStatBreak(const Location& location)
 void AstStatBreak::visit(AstVisitor* visitor)
 {
     visitor->visit(this);
+}
+
+AstStatGive::AstStatGive(const Location& location, AstExpr* value)
+    : AstStat(ClassIndex(), location)
+    , value(value)
+{
+}
+
+void AstStatGive::visit(AstVisitor* visitor)
+{
+    if (!visitor->visit(this))
+        return;
+
+    if (item)
+        item->visit(visitor);
+    else
+        value->visit(visitor);
+}
+
+AstStatComprehensionItem::AstStatComprehensionItem(const Location& location, AstExpr* key, AstExpr* value)
+    : AstStat(ClassIndex(), location)
+    , key(key)
+    , value(value)
+{
+}
+
+void AstStatComprehensionItem::visit(AstVisitor* visitor)
+{
+    if (visitor->visit(this))
+    {
+        if (key)
+            key->visit(visitor);
+        value->visit(visitor);
+    }
 }
 
 AstStatContinue::AstStatContinue(const Location& location)

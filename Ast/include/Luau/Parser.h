@@ -124,6 +124,8 @@ private:
 
     Parser(const char* buffer, std::size_t bufferSize, AstNameTable& names, Allocator& allocator, const ParseOptions& options);
 
+    static ParseResult finishParse(Parser& p, AstStatBlock* root, const char* buffer, size_t bufferSize);
+
     bool blockFollow(const Lexeme& l);
     // Luwu: extra `end` recovery (see Parser::parse)
     static ParseResult parseOnce(
@@ -146,7 +148,7 @@ private:
     // block ::= chunk
     AstStatBlock* parseBlock();
 
-    AstStatBlock* parseBlockNoScope();
+    AstStatBlock* parseBlockNoScope(bool doExprBody = false);
 
     // stat ::=
     // varlist `=' explist |
@@ -165,6 +167,17 @@ private:
 
     // if exp then block {elseif exp then block} [else block] end
     AstStat* parseIf();
+
+    // Luwu If Local (rfcs/control-flow/if-local.md)
+    AstExpr* parseIfCondition(AstArray<AstIfClause>& clauses, const char* head = "if");
+    AstExpr* parseIfConditionClauses(AstArray<AstIfClause>& clauses, const char* head, const Location& start);
+    AstArray<AstIfClause> parseLoopWhenChain(Location& whenLocation, bool inComprehension = false);
+    AstStatBlock* wrapInWhenGuard(const AstArray<AstIfClause>& when, const Location& whenLocation, AstStatBlock* body, AstStatIf*& guard);
+    void parseIfBindingClause(std::vector<AstIfClause>& chain, const std::optional<Location>& whenLocation);
+    bool ifBindingFollows();
+    bool whenFollows();
+    bool andStartsBinding();
+    void reportAndBeforeBinding();
 
     // while exp do block end
     AstStat* parseWhile();
@@ -333,6 +346,7 @@ private:
 
     // return [explist]
     AstStat* parseReturn();
+    AstStatReturn* finishReturn(const Location& start, TempVector<AstExpr*>& list, TempVector<Position>& commaPositions);
 
     // type Name `=' Type
     AstStat* parseTypeAlias(
@@ -458,6 +472,7 @@ private:
 
     // explist ::= {exp `,'} exp
     void parseExprList(TempVector<AstExpr*>& result, TempVector<Position>* commaPositions = nullptr);
+    void parseExprListTail(TempVector<AstExpr*>& result, TempVector<Position>* commaPositions = nullptr);
 
     // binding ::= Name [`:` Type] [`=` Default]
     // `allowAttributes` is set for parameter lists only; a `local` or `for` binding cannot carry
@@ -538,10 +553,17 @@ private:
     static std::optional<AstExprBinary::Op> parseBinaryOp(const Lexeme& l);
     static std::optional<AstExprBinary::Op> parseCompoundOp(const Lexeme& l);
 
+public:
     struct BinaryOpPriority
     {
         unsigned char left, right;
     };
+
+private:
+    AstExpr* parseBinaryTail(AstExpr* expr, const Location& start, unsigned int limit);
+    bool onlyStartsValue(const Lexeme& l);
+    AstStat* parseOrLeaveStatement(AstExpr* expr, size_t errorsBeforeStatement);
+    AstStatError* reportIncompleteStatement(AstExpr* expr, size_t errorsBeforeStatement, const char* message);
 
     std::optional<AstExprUnary::Op> checkUnaryConfusables();
     std::optional<AstExprBinary::Op> checkBinaryConfusables(const BinaryOpPriority binaryPriority[], unsigned int limit);
@@ -593,7 +615,96 @@ private:
     AstExpr* parseDotTableConstructor();
 
     // TODO: Add grammar rules here?
-    AstExpr* parseIfElseExpr();
+    // `guardCondition` is set for the `if` right after `return`: the condition of a `return if c` guard
+    AstExpr* parseIfElseExpr(AstExpr** guardCondition = nullptr);
+
+    // Luwu Guards (rfcs/control-flow/guards.md): `<leave> if <condition>`
+    bool leaveGuardFollows(AstStat* stat);
+    AstStat* parseLeaveGuard(AstStat* leave);
+    AstStatIf* makeLeaveGuard(AstStat* leave, const Location& ifLocation, AstExpr* condition);
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): one alternative of a pattern after `is`, parsed
+    // before anything is tested
+    struct PatternAlternative
+    {
+        Location location;
+        // What the value is compared with (`nil`, `none`, a literal), the class it's an instance of, or the trait it
+        // implements
+        AstExpr* operand = nullptr;
+        bool isClass = false;
+        bool isTrait = false;
+        // The name `type(value)` gives
+        std::optional<std::string> tag;
+    };
+    // `is <alternatives>`, `is not <alternatives>` or `implements <traits>`
+    struct Pattern
+    {
+        Location location;
+        // The `is` or `implements`
+        Location keywordLocation;
+        bool negated = false;
+        bool implements = false;
+        std::vector<PatternAlternative> alternatives;
+    };
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match` and the `is` / `implements` operators
+    bool matchExpressionsAvailable();
+    bool patternFollows();
+    AstExpr* parseMatchPatternExpr(AstExpr* value, AstLocal* subject, const Location& start);
+    Pattern parsePattern();
+    PatternAlternative parsePatternAlternative();
+    PatternAlternative parseTraitAlternative();
+    bool patternAlternativeFollows(const char* expected);
+    AstExpr* parsePatternClass(bool implements);
+    void reportPatternTypeArguments();
+    AstExpr* buildMatchPattern(AstExpr* value, AstLocal* subject, const Pattern& pattern, const Location& start);
+    AstArray<AstPatternAlternative> patternAlternatives(const Pattern& pattern);
+    AstExpr* makePatternCheck(AstExpr* value, const Pattern& pattern, const Location& start);
+    AstExpr* makeAlternativeTest(AstExpr* value, const PatternAlternative& alternative, bool negated, const Location& start);
+    bool literalPatternFollows();
+    std::optional<AstExpr*> parseNothingValue();
+    bool matchExpressionFollows();
+    AstExpr* parseMatchExpr();
+    AstStat* parseMatchStat();
+    bool matchStatementFollows();
+    bool matchArmFollows();
+    AstMatchSubject parseMatchSubject(const Location& start);
+    AstMatchArm parseMatchArmHead(AstLocal* subject);
+    AstExpr* parseMatchArmValue(const char* introducer, bool& isContinue);
+    AstStatBlock* parseMatchArmBlock();
+    bool skipArmBeingTyped(bool report, const char* message);
+    void recordArmContinues(AstArray<AstMatchArm>& arms, const std::vector<size_t>& continues);
+    bool parseCaseHead(AstLocal* subject, std::vector<AstIfClause>& chain);
+    bool checkCaseBindingName(const Name& name);
+    AstExpr* parseCasePattern(AstLocal* subject);
+    AstExpr* parseCaseAlternative(AstLocal* subject, bool reportMissingIs);
+    AstExprCall* makeGlobalCall(AstName library, std::optional<AstName> function, const Location& location, std::initializer_list<AstExpr*> args);
+    // Luwu: a missing `then`/`else` in an if-else expression is reported on its keyword (see parseIfElseExpr)
+    enum class IfElseKeyword
+    {
+        Found,
+        Recovered,
+        Missing,
+    };
+    IfElseKeyword expectIfElseKeyword(Lexeme::Type type, const Location& keyword);
+    void noteStrayEnd(const char* message, bool reported);
+    void reportLeftoverAtEndOfChunk();
+    AstExpr* missingIfElseArm();
+    AstExpr* missingValueAfter(const char* keyword);
+    AstExprError* missingValueHere();
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md)
+    AstExpr* parseDoExpr();
+    AstStat* parseGive();
+    AstExpr* parseGiveValue();
+    void reportExtraGiveValues();
+    bool orLeaveFollows();
+    bool orContinueFollows();
+    void resolveOrContinues();
+    AstExpr* parseOrLeave(const char* introducer = "or");
+    bool closesOpenBracket(const Lexeme& l);
+    bool doExprBodyFollow(const Lexeme& l);
+    bool valueEnds(const Lexeme& l);
+    void checkDoExprKeywordAsName(const Name& name);
 
     // stringinterp ::= <INTERP_BEGIN> exp {<INTERP_MID> exp} <INTERP_END>
     AstExpr* parseInterpString();
@@ -648,17 +759,9 @@ private:
     bool nextLineStartsStatement(bool (*cantContinue)(const Lexeme& afterName));
     bool nextLineStartsUnpatternedStatement();
     bool statementReportedError();
-    AstExpr* unfinishedIfElseExpr(
-        const Location& start,
-        AstExpr* condition,
-        size_t errorsBefore,
-        const char* keyword,
-        bool hasThen,
-        AstExpr* trueExpr = nullptr,
-        std::optional<Location> thenLocation = std::nullopt
-    );
     bool expectAndConsumeFailWithLookahead(Lexeme::Type type, const char* context);
     void expectAndConsumeFail(Lexeme::Type type, const char* context);
+    void reportExpected(const Location& location, Lexeme::Type type, const char* context);
 
     struct MatchLexeme
     {
@@ -671,6 +774,34 @@ private:
         Lexeme::Type type;
         Position position;
     };
+
+    AstExpr* parseTableComprehension(const Location& start, const MatchLexeme& matchBrace);
+
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the parts of a `[key] = value` or `[key] op= value` item
+    struct ComprehensionKeyedItem
+    {
+        AstExpr* key = nullptr;
+        AstExpr* value = nullptr;
+        std::optional<AstExprBinary::Op> accumulate;
+    };
+
+    // Starts at the `[`. A missing value isn't reported when `}` follows an error reported since `errorsBefore`.
+    ComprehensionKeyedItem parseComprehensionKeyedItem(CstExprTable::Item& cst, size_t errorsBefore);
+
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): a comprehension's `do` item being parsed. A `give`
+    // directly in it can write a key (`give [k] = v`), and either every such `give` writes one or none does.
+    struct ComprehensionDoItem
+    {
+        // The `do` expression depth of the item's block
+        unsigned int doExprDepth = 0;
+        std::vector<AstStatComprehensionItem*> givenItems;
+        // Whether the first `give` wrote a key, once there is one
+        std::optional<bool> keyed;
+    };
+
+    AstStat* parseComprehensionGive(const Location& start);
+    void noteComprehensionGive(AstStatGive* give);
+    bool givesFromComprehensionItem();
 
     bool expectMatchAndConsume(char value, const MatchLexeme& begin, bool searchForMissing = false);
     void expectMatchAndConsumeFail(Lexeme::Type type, const MatchLexeme& begin, const char* extra = nullptr);
@@ -737,6 +868,16 @@ private:
     {
         bool vararg;
         unsigned int loopDepth;
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): how many `do` expressions enclose the current position in
+        // this function. Inside one, `give` and `continue` are hard keywords.
+        unsigned int doExprDepth = 0;
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): this frame stands for a default value (a default argument,
+        // a field default, a primary constructor parameter's default or a trait argument), which runs inside a
+        // synthesized function or the callee's prologue. A `do` expression there can't `return`.
+        bool defaultValue = false;
+        // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the innermost comprehension's `do` item in this
+        // function, while its block is being parsed
+        ComprehensionDoItem* comprehensionDoItem = nullptr;
 
         Function()
             : vararg(false)
@@ -847,16 +988,88 @@ private:
 
     unsigned int recursionCounter;
 
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): where the expression directly inside the innermost `(` being parsed
+    // starts, so a `do` expression can tell it is parenthesized.
+    std::optional<Position> parenthesizedExprStart;
+
+    // Luwu: how many table constructors, call argument lists and parentheses enclose the position being parsed. While
+    // one is open, a block ends at a closing bracket, so a function missing its `end` leaves the bracket to them.
+    unsigned int openBracketDepth = 0;
+
+    struct OpenBracket
+    {
+        explicit OpenBracket(unsigned int& depth)
+            : depth(depth)
+        {
+            depth++;
+        }
+
+        ~OpenBracket()
+        {
+            depth--;
+        }
+
+        unsigned int& depth;
+    };
+
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the statement being parsed is directly in a `do` expression's block, not
+    // in a block nested in it. A `give` there ends the expression, so a `,` after its value belongs to the list around it.
+    bool doExprTopLevel = false;
+
+
+    // Luwu If Local (rfcs/control-flow/if-local.md): an `if`/`elseif`/`while` condition is being parsed, where `and local x` and
+    // `and const x` were meant as `when`. `andBeforeBinding` is that `and`, already reported and consumed.
+    bool inIfCondition = false;
+    std::optional<Location> andBeforeBinding;
+
+    // Luwu: `end`s found right after an if-else or `do` expression (see noteStrayEnd)
+    struct StrayEnd
+    {
+        Location location;
+        const char* message;
+        bool reported;
+    };
+    std::vector<StrayEnd> strayEnds;
+    // The stray `end` reportLeftoverAtEndOfChunk blamed. Parser::parse parses the file again with it skipped (as
+    // skippedStrayEnd), so the code after it isn't cut off at the block it closed early.
+    std::optional<Location> blamedStrayEnd;
+    std::optional<Location> skippedStrayEnd;
+
+    // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): `x or continue` is the continue shorthand only in a module that never
+    // uses `continue` as a name. Name uses are counted as the module is parsed, and each shorthand keeps the slot it was
+    // stored in, so resolveOrContinues can turn it back into a variable read if the count isn't zero at the end.
+    // Whether one is a Luwu-only feature in this module is only known then too.
+    struct OrContinue
+    {
+        AstExpr** slot;
+        // `or`, `and`, `then` or `else`, for the feature error
+        const char* introducer;
+    };
+    size_t continueNameUses = 0;
+    std::vector<OrContinue> orContinues;
+    void recordOrContinue(AstExpr** slot, const char* introducer);
+    void keepOrContinueKeyword(AstExpr** slot);
+    void checkLeaveShorthandFeature(const Location& keyword, const char* introducer);
+
     AstName nameSelf;
     AstName nameSelfClass;
     AstName nameOf;
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the globals and functions `is` / `implements`
+    // call, and a `match` subject's hidden name
+    AstName nameClass;
+    AstName nameType;
+    AstName nameIsinstance;
+    AstName nameImplements;
+    AstName nameMatched;
+    AstName nameNone;
+    AstName nameNoneGlobal;
     AstName nameNumber;
     AstName nameAny;
     AstName nameError;
     // Luwu Destructuring (rfcs/destructuring.md): the hidden local an unnamed pattern binds its value to.
     AstName nameDestructured;
     AstName nameNil;
-    AstName nameClass;
+    AstName nameContinue;
     AstName nameTrait;
 
     MatchLexeme endMismatchSuspect;
@@ -943,6 +1156,10 @@ private:
     std::string scratchData;
 
     CstNodeMap cstNodeMap;
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the next block is a `match` statement's arm, which ends where
+    // the next arm starts (see parseMatchArmBlock)
+    bool nextBlockIsMatchArm = false;
 
     // Luwu Declare Statements (rfcs/declare-statements.md): whether the block being parsed may contain `declare`
     // (the top level, or a `do` block there), and what the next block parseBlockNoScope starts should allow.

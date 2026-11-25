@@ -426,20 +426,34 @@ Lexeme Lexer::lookahead()
 
 Lexeme Lexer::lookaheadSecond()
 {
+    return lookaheadBy(2);
+}
+
+Lexeme Lexer::lookaheadThird()
+{
+    return lookaheadBy(3);
+}
+
+Lexeme Lexer::lookaheadBy(unsigned int count)
+{
+    constexpr unsigned int kMaxLookahead = 3;
+    LUAU_ASSERT(count >= 2 && count <= kMaxLookahead);
+
     unsigned int currentOffset = offset;
     unsigned int currentLine = line;
     unsigned int currentLineOffset = lineOffset;
     Lexeme currentLexeme = lexeme;
     Location currentPrevLocation = prevLocation;
 
-    // two lexemes can only close the last two braces, or open new ones, so only those are kept
+    // `count` lexemes can only close the last `count` braces, or open new ones, so only those are kept
     size_t currentBraceStackSize = braceStack.size();
-    size_t untouchedBraces = currentBraceStackSize >= 2 ? currentBraceStackSize - 2 : 0;
-    BraceType lastBraces[2] = {BraceType::Normal, BraceType::Normal};
+    size_t untouchedBraces = currentBraceStackSize >= count ? currentBraceStackSize - count : 0;
+    BraceType lastBraces[kMaxLookahead] = {BraceType::Normal, BraceType::Normal, BraceType::Normal};
     for (size_t i = untouchedBraces; i < currentBraceStackSize; ++i)
         lastBraces[i - untouchedBraces] = braceStack[i];
 
-    next();
+    for (unsigned int i = 1; i < count; ++i)
+        next();
     Lexeme result = next();
 
     offset = currentOffset;

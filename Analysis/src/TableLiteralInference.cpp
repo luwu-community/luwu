@@ -200,6 +200,26 @@ struct BidirectionalTypePusher
             return exprType;
         }
 
+        // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): each arm's value, like an if-else expression's branches
+        if (auto match = expr->as<AstExprMatch>())
+        {
+            for (const AstMatchArm& arm : match->arms)
+                pushType(expectedType, arm.value);
+            return exprType;
+        }
+
+        // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): each value the `do` expression gives. A `give [k] = v` in a
+        // comprehension's item writes the comprehension's table instead.
+        if (auto doExpr = expr->as<AstExprDo>(); doExpr && !doExpr->shorthand)
+        {
+            for (AstStatGive* give : doExpr->gives())
+            {
+                if (!give->item)
+                    pushType(expectedType, give->value);
+            }
+            return exprType;
+        }
+
         if (!isLiteral(expr))
             // NOTE: For now we aren't using the result of this function, so
             // just return the original expression type.
