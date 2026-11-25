@@ -4742,6 +4742,18 @@ bool TypeChecker2::checkPositionalElement(AstExprIndexExpr* indexExpr)
 
     for (TypeId option : options)
     {
+        // Luwu bundles: a bundle has a position for each of its values, and any past them when it has a rest
+        if (std::optional<BundleShape> shape = bundleShapeOf(option))
+        {
+            if (!shape->at(builtinTypes, position))
+            {
+                PositionalDestructuring error{toString(option), position, std::nullopt, /* notObject */ false, inPattern};
+                error.bundleSize = shape->head.size();
+                reportError(std::move(error), indexExpr->location);
+            }
+            continue;
+        }
+
         const ExternType* cls = get<ExternType>(option);
         const ClassFieldUserData* data = getClassFieldUserData(option);
         if (!data)
@@ -5105,13 +5117,14 @@ void TypeChecker2::visitExprName(
 }
 
 // Luwu: with class compat, the `class` library's definitions have both languages' names (EmbeddedBuiltinDefinitions), and
-// each module sees only its own: upstream's `classof` in a Luau module, Luwu's `of`, `name` and `fields` in a Luwu module.
+// each module sees only its own: upstream's `classof` in a Luau module, Luwu's `of`, `name`, `fields` and `implements` in a
+// Luwu module.
 static bool isOtherLanguagesClassMember(Language language, std::string_view member)
 {
     if (language == Language::Luwu)
         return member == "classof";
 
-    return member == "of" || member == "name" || member == "fields";
+    return member == "of" || member == "name" || member == "fields" || member == "implements";
 }
 
 void TypeChecker2::visit(AstExprIndexName* indexName, ValueContext context)

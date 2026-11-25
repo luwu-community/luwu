@@ -119,6 +119,8 @@ public:
             return writeTable(*value.table, indent);
         case LuwonValue::Kind::Object:
             return writeObject(value, indent);
+        case LuwonValue::Kind::Bundle:
+            return "." + writeArgs(value, indent);
         }
 
         LUAU_UNREACHABLE();
@@ -263,11 +265,17 @@ private:
         if (value.args.size() == 1 && value.args[0].kind == LuwonValue::Kind::Table)
             return value.bytes + " " + write(value.args[0], indent);
 
+        return value.bytes + writeArgs(value, indent);
+    }
+
+    // An object's arguments or a bundle's values in parentheses.
+    std::string writeArgs(const LuwonValue& value, const std::string& indent)
+    {
         std::vector<std::string> args;
         for (const LuwonValue& arg : value.args)
             args.push_back(write(arg, indent));
 
-        return value.bytes + "(" + join(args, ", ") + ")";
+        return "(" + join(args, ", ") + ")";
     }
 
     static std::string join(const std::vector<std::string>& parts, const char* separator)
