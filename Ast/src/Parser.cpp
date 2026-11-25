@@ -17,6 +17,7 @@
 LUAU_FASTINTVARIABLE(LuauRecursionLimit, 1000)
 LUAU_FASTINTVARIABLE(LuauTypeLengthLimit, 1000)
 LUAU_FASTINTVARIABLE(LuauParseErrorLimit, 100)
+LUAU_FASTFLAG(DebugLuwuEncourageInline)
 
 // Warning: If you are introducing new syntax, ensure that it is behind a separate
 // flag so that we don't break production games by reverting syntax changes.
@@ -164,6 +165,18 @@ std::vector<std::pair<Location, std::string>> deprecatedArgsValidator(Location a
     return errors;
 }
 
+// Luwu: `@[inline(reason)]` takes one string constant, why the function should be inlined
+std::vector<std::pair<Location, std::string>> inlineArgsValidator(Location attrLoc, const AstArray<AstExpr*>& args)
+{
+    if (args.size != 1)
+        return {{attrLoc, "@inline needs one reason: write @[inline(\"why this function should be inlined\")]"}};
+
+    if (!args.data[0]->is<AstExprConstantString>())
+        return {{args.data[0]->location, "@inline's reason must be a string constant"}};
+
+    return {};
+}
+
 AttributeEntry kAttributeEntries_DEPRECATED[] = {
     {"@checked", AstAttr::Type::Checked, {}},
     {"@native", AstAttr::Type::Native, {}},
@@ -180,6 +193,7 @@ AttributeEntry kAttributeEntries[] = {
 
 std::pair<AttributeEntry, Luau::FValue<bool>&> kDebugAttributeEntries[] = {
     {{"debugnoinline", AstAttr::Type::DebugNoinline, {}}, FFlag::DebugLuauNoInline},
+    {{"inline", AstAttr::Type::Inline, inlineArgsValidator}, FFlag::DebugLuwuEncourageInline},
 };
 
 ParseError::ParseError(const Location& location, std::string message)
