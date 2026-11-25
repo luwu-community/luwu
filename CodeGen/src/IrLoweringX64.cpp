@@ -17,10 +17,7 @@
 #include "lstate.h"
 #include "lgc.h"
 
-LUAU_FASTFLAG(LuauCodegenFixBufferLenCheck)
-LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCIProto)
-LUAU_FASTFLAG(LuauCodegenSharedLog)
 
 namespace Luau
 {
@@ -2629,10 +2626,12 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         {
             int offset = intOp(OP_B(inst));
 
-            int endOffset = FFlag::LuauCodegenFixBufferLenCheck ? maxOffset : accessSize;
+            int endOffset = maxOffset;
 
             // Constant folding can take care of it, but for safety we avoid overflow/underflow cases here
-            if (offset < 0 || unsigned(offset) + unsigned(endOffset) >= unsigned(INT_MAX))
+            // Luwu: from upstream's LuauCodegenConstPropMinOffset (0.741). A merged check's access can start before the offset
+            // (`minOffset < 0`), and that start must not fall before the buffer.
+            if (offset < 0 || offset + minOffset < 0 || unsigned(offset) + unsigned(endOffset) >= unsigned(INT_MAX))
                 jumpOrAbortOnUndefNoFinalize(ConditionX64::Count, OP_F(inst), index, next, fresh);
             else
                 build.cmp(dword[regA + offsetof(Buffer, len)], offset + endOffset);
@@ -3091,25 +3090,13 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         callWrap.addArgument(SizeX64::dword, vmRegOp(OP_A(inst)));
         callWrap.addArgument(SizeX64::dword, intOp(OP_B(inst)));
 
-        if (FFlag::LuauYieldIter2)
-        {
-            callWrap.call(qword[rNativeContext + offsetof(NativeContext, forgLoopNonTableFallback)]);
+        callWrap.call(qword[rNativeContext + offsetof(NativeContext, forgLoopNonTableFallback)]);
 
-            emitUpdateBase(build);
+        emitUpdateBase(build);
 
-            build.test(eax, eax);
-            build.jcc(ConditionX64::Less, helpers.exitNoContinueVm);
-            build.jcc(ConditionX64::Greater, labelOp(OP_C(inst)));
-        }
-        else
-        {
-            callWrap.call(qword[rNativeContext + offsetof(NativeContext, forgLoopNonTableFallback_DEPRECATED)]);
-
-            emitUpdateBase(build);
-
-            build.test(al, al);
-            build.jcc(ConditionX64::NotZero, labelOp(OP_C(inst)));
-        }
+        build.test(eax, eax);
+        build.jcc(ConditionX64::Less, helpers.exitNoContinueVm);
+        build.jcc(ConditionX64::Greater, labelOp(OP_C(inst)));
 
         jumpOrFallthrough(blockOp(OP_D(inst)), next);
         break;
@@ -4163,6 +4150,13 @@ void IrLoweringX64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
     regs.currInstIdx = kInvalidInstIdx;
 
     regs.freeLastUseRegs(inst, index);
+
+    // Luwu: from upstream's LuauCodegenCmpAnySideEffecting (0.745), the register of a result nothing uses is freed
+    if (inst.lastUse == 0 && hasResult(inst.cmd))
+    {
+        regs.freeReg(inst.regX64);
+        inst.regX64 = noreg;
+    }
 }
 
 void IrLoweringX64::startBlock(const IrBlock& curr)
@@ -4191,10 +4185,8 @@ void IrLoweringX64::finishBlock(const IrBlock& curr, const IrBlock& next)
 
 void IrLoweringX64::finishFunction()
 {
-    if (FFlag::LuauCodegenSharedLog && logger && logger->options.includeAssembly)
+    if (logger && logger->options.includeAssembly)
         logger->formatAppend("; interrupt handlers\n");
-    else if (!FFlag::LuauCodegenSharedLog && build.logText)
-        build.logAppend("; interrupt handlers\n");
 
     for (InterruptHandler& handler : interruptHandlers)
     {
@@ -4204,10 +4196,8 @@ void IrLoweringX64::finishFunction()
         build.jmp(helpers.interrupt);
     }
 
-    if (FFlag::LuauCodegenSharedLog && logger && logger->options.includeAssembly)
+    if (logger && logger->options.includeAssembly)
         logger->formatAppend("; exit handlers\n");
-    else if (!FFlag::LuauCodegenSharedLog && build.logText)
-        build.logAppend("; exit handlers\n");
 
     for (ExitHandler& handler : exitHandlers)
     {
@@ -4236,16 +4226,8 @@ void IrLoweringX64::finishFunction()
 
     if (stats)
     {
-        if (FFlag::LuauCodegenNoEcbData)
-        {
-            if (regs.maxUsedSlot > kSpillSlots)
-                stats->regAllocErrors++;
-        }
-        else
-        {
-            if (regs.maxUsedSlot > kSpillSlots_DEPRECATED + kExtraSpillSlots_DEPRECATED)
-                stats->regAllocErrors++;
-        }
+        if (regs.maxUsedSlot > kSpillSlots)
+            stats->regAllocErrors++;
 
         if (regs.maxUsedSlot > stats->maxSpillSlotsUsed)
             stats->maxSpillSlotsUsed = regs.maxUsedSlot;
@@ -4254,17 +4236,13 @@ void IrLoweringX64::finishFunction()
 
 bool IrLoweringX64::hasError() const
 {
+    // Luwu: from upstream's LuauCodegenExitSyncUpdate (0.742)
+    if (regs.error)
+        return true;
+
     // If register allocator had to use more stack slots than we have available, this function can't run natively
-    if (FFlag::LuauCodegenNoEcbData)
-    {
-        if (regs.maxUsedSlot > kSpillSlots)
-            return true;
-    }
-    else
-    {
-        if (regs.maxUsedSlot > kSpillSlots_DEPRECATED + kExtraSpillSlots_DEPRECATED)
-            return true;
-    }
+    if (regs.maxUsedSlot > kSpillSlots)
+        return true;
 
     return false;
 }
@@ -4429,10 +4407,8 @@ void IrLoweringX64::allocAndIncrementCounterAt(CodeGenCounter kind, uint32_t pcp
     if (!function.recordCounters)
         return;
 
-    if (FFlag::LuauCodegenSharedLog && logger && logger->options.includeAssembly)
+    if (logger && logger->options.includeAssembly)
         logger->formatAppend("; counter kind %u at pcpos %d\n", unsigned(kind), pcpos);
-    else if (!FFlag::LuauCodegenSharedLog && build.logText)
-        build.logAppend("; counter kind %u at pcpos %d\n", unsigned(kind), pcpos);
 
     // {uint32_t, uint32_t, uint64_t}
     function.extraNativeData.push_back(unsigned(kind));
