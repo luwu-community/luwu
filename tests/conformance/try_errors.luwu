@@ -311,6 +311,15 @@ do
     assert(tostring(Error.TimedOut()) == "timed out")
     assert(tostring(Error.Unimplemented()) == "not implemented yet")
 
+    -- a variant built without the field that names its subject leaves that part out
+    assert(tostring(Error.Runtime()) == "runtime error")
+    assert(tostring(Error.InvalidOperation()) == "invalid operation")
+    assert(tostring(Error.MissingMember()) == "missing member")
+    assert(tostring(Error.UnexpectedType()) == "unexpected type")
+    assert(tostring(Error.CannotBeParsed()) == "couldn't parse")
+    assert(tostring(Error.UnexpectedFloat()) == "expected a whole number")
+    assert(tostring(Error.OutOfRange()) == "out of range")
+
     const raised = try error(Error.NotFound("c"))
     assert(class.isinstance(raised.error, Error.NotFound) and raised.error.what == "c")
 end
