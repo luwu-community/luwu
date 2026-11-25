@@ -142,6 +142,9 @@ struct ConstraintGenerator
 
     // Map a function's signature scope back to its signature type.
     DenseHashMap<Scope*, TypeId> scopeToFunction{nullptr};
+    // Luwu Destructuring (rfcs/destructuring.md): the type of each position read (`b.1`) the first time it's checked,
+    // by its definition (applyRefinements)
+    DenseHashMap<const Def*, TypeId> positionReadTypes{nullptr};
 
     // The private scope of type aliases for which the type parameters belong to.
     DenseHashMap<const AstStatTypeAlias*, ScopePtr> astTypeAliasDefiningScopes{nullptr};
@@ -203,6 +206,8 @@ struct ConstraintGenerator
     DenseHashMap<AstExpr*, Inference> inferredExprCache{nullptr};
 
     DenseHashMap<AstLocal*, std::unique_ptr<ClassDeclRecord>> classDeclRecords{nullptr};
+    // Luwu Destructuring (rfcs/destructuring.md): locals bindImportedTypes gave an imported type
+    DenseHashSet<const AstLocal*> importedTypeLocals{nullptr};
 
     DcrLogger* logger;
 
@@ -457,6 +462,15 @@ private:
     ControlFlow visit(const ScopePtr& scope, AstStatBlock* block);
     ControlFlow visit(const ScopePtr& scope, AstStatLocal* local);
     void importRequiredTypes(const ScopePtr& scope, AstStatLocal* statLocal);
+    void bindImportedTypes(const ScopePtr& scope, AstStatLocal* statLocal);
+    std::optional<TypeFun> importedFieldType(const ScopePtr& scope, const AstExprIndexName* index);
+    void exportReturnedTypes(const ScopePtr& scope, AstStatReturn* ret);
+    void bindModuleAliases(const ScopePtr& scope, AstStatLocal* statLocal);
+    void importExportedModules(const ScopePtr& scope, const Name& alias, const ModulePtr& imported, const ModuleName& importedName);
+    std::optional<Name> importedModulePath(const ScopePtr& scope, const AstExpr* expr);
+    std::optional<ModuleName> findImportedModule(const ScopePtr& scope, const Name& path);
+    // the types imported under `path` by this scope or one around it
+    const std::unordered_map<Name, TypeFun>* findImportedTypes(const ScopePtr& scope, const Name& path);
     ControlFlow visit(const ScopePtr& scope, AstStatFor* for_);
     ControlFlow visit(const ScopePtr& scope, AstStatForIn* forIn);
     ControlFlow visit(const ScopePtr& scope, AstStatWhile* while_);
