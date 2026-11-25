@@ -409,6 +409,10 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
         // so the result could be anything
         types.result = LBC_TYPE_ANY;
         break;
+    case LBF_STRING_FORMAT:
+        types.result = LBC_TYPE_STRING;
+        types.a = LBC_TYPE_STRING;
+        break;
     case LBF_TABLE_UNPACK:
         types.result = LBC_TYPE_ANY;
         types.a = LBC_TYPE_TABLE;
