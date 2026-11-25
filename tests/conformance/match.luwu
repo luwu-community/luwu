@@ -1,0 +1,365 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+-- Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `match`, `is`, `is not` and `implements`
+print("testing match expressions")
+
+class Point(public x: number, public y: number)
+end
+class Circle(public radius: number)
+end
+
+trait NotFlac
+end
+trait Unreadable
+end
+class Mp3() implements NotFlac
+end
+class Broken() implements Unreadable
+end
+class Flac()
+end
+
+-- literals and alternatives, and the subject named for `else`
+local function which(arg: string)
+    return match const a = arg
+        case is "p" | "patch" then "patch"
+        case is "u" | "unpatch" then "unpatch"
+        else `other:{a}`
+end
+assert(which("p") == "patch")
+assert(which("patch") == "patch")
+assert(which("unpatch") == "unpatch")
+assert(which("x") == "other:x")
+
+-- type tests and guards, first matching arm wins
+local function describe(value: unknown): string
+    return match const v = value
+        case is string then `text:{v}`
+        case is number when v > 0 then "positive"
+        case is number then "number"
+        case is Point then `point:{v.x},{v.y}`
+        case is Circle when const r = v.radius when r > 1 then `big:{r}`
+        case is nil then "nil"
+        else "other"
+end
+assert(describe("hi") == "text:hi")
+assert(describe(3) == "positive")
+assert(describe(-1) == "number")
+assert(describe(Point(1, 2)) == "point:1,2")
+assert(describe(Circle(5)) == "big:5")
+assert(describe(Circle(0.5)) == "other")
+assert(describe(nil) == "nil")
+assert(describe(true) == "other")
+
+-- an unnamed subject is evaluated once
+local calls = 0
+local function next_value()
+    calls += 1
+    return calls
+end
+local first = match next_value()
+    case is 2 then "two"
+    case is 1 then "one"
+    else "many"
+assert(first == "one" and calls == 1)
+
+-- the operators in expressions
+local p = Point(1, 2)
+assert(p is Point)
+assert(p is not Circle)
+assert(not (p is Circle))
+assert(p is object)
+assert("s" is string and 1 is not string)
+assert((function() end) is function)
+assert((match p
+    case is Circle then "circle"
+    else "not a circle") == "not a circle")
+
+-- `nil` and `none` as patterns and after `is`
+local function nothing(v: unknown): string
+    return match v
+        case is nil then "nil"
+        case is none then "none"
+        else "something"
+end
+assert(nothing(nil) == "nil")
+assert(nothing(none) == "none")
+assert(nothing(false) == "something")
+assert(nothing(0) == "something")
+local function nothing_is(v: unknown): string
+    return match v
+        case is nil then "nil"
+        case is none then "none"
+        else "something"
+end
+assert(nothing_is(nil) == "nil")
+assert(nothing_is(none) == "none")
+assert(nothing_is("x") == "something")
+assert(none is none and none is not nil and nil is nil and 1 is not none)
+
+-- `is` takes a pattern: alternatives joined by `|`, negated together by `is not`
+local function small(n: number): boolean
+    return n is 1 | 2 | 3
+end
+assert(small(1) and small(3) and not small(4))
+assert(4 is not 1 | 2 | 3)
+assert(not (2 is not 1 | 2 | 3))
+assert("leave" is "join" | "leave")
+assert(-1 is -1 | 1 and true is false | true)
+assert(p is Circle | Point and p is not Circle | string)
+assert(nil is number | nil and 1 is string | number)
+
+-- a value that isn't a local is read once, however many alternatives test it
+local reads = 0
+local message = setmetatable({}, {
+    __index = function(_, key)
+        reads += 1
+        return "leave"
+    end,
+})
+assert(message.kind is "join" | "leave" | "kick")
+assert(reads == 1)
+
+-- `case is A | is B` is still two patterns, and a pattern after `is` can have alternatives of its own
+local function shape(v: unknown): string
+    return match v
+        case is Circle | is Point then "shape"
+        case is 1 | 2 then "small"
+        else "other"
+end
+assert(shape(p) == "shape" and shape(Circle(1)) == "shape" and shape(2) == "small" and shape("x") == "other")
+
+-- a local named like the globals the operators call doesn't capture them
+do
+    local type = function() return "nope" end
+    local class = {}
+    assert("s" is string)
+    assert(p is Point)
+    assert(type() == "nope" and class)
+end
+
+-- `case name is <pattern>` binds the subject's value as `name`, narrowed by the pattern; `case name` alone matches every
+-- value, `nil` included, and as the last arm it's the `else`
+do
+    local function describe(v)
+        return match v
+            case s is string then `string {s}`
+            case n is number when n > 10 then `big {n}`
+            case is nil then "nothing"
+            case other then `other {tostring(other)}`
+    end
+    assert(describe("a") == "string a")
+    assert(describe(20) == "big 20")
+    assert(describe(3) == "other 3")
+    assert(describe(nil) == "nothing")
+    assert(describe(false) == "other false")
+
+    -- the subject is read once, and every arm's name sees that value
+    local reads = 0
+    local function read()
+        reads += 1
+        return reads
+    end
+    local seen = match read()
+        case n is 1 | 2 then n * 10
+        case other then -other
+    assert(seen == 10 and reads == 1)
+
+    -- an arm can leave instead of giving a value
+    local function first_positive(xs)
+        for _, x in xs do
+            const r = match x
+                case is 0 then continue
+                case n when n < 0 then return nil
+                case n then n
+            return r
+        end
+        return "none"
+    end
+    assert(first_positive({ 0, 0, 5 }) == 5)
+    assert(first_positive({ 0, -1, 5 }) == nil)
+    assert(first_positive({ 0 }) == "none")
+end
+
+-- a literal pattern after `is` works in any condition
+do
+    local function kind(k)
+        if k is "join" | "leave" then
+            return "membership"
+        end
+        return "other"
+    end
+    assert(kind("join") == "membership" and kind("x") == "other")
+end
+
+-- a `match` statement runs the first arm that matches, and nothing when no arm does
+do
+    local function describe(v)
+        local out = "none"
+        match v
+            case is nil then
+                out = "nil"
+            case n is number when n > 10 then
+                out = `big {n}`
+            when v == 3 then
+                out = "three"
+            case is string then
+                out = `string {v}`
+        end
+        return out
+    end
+    assert(describe(nil) == "nil")
+    assert(describe(20) == "big 20")
+    assert(describe(3) == "three")
+    assert(describe("a") == "string a")
+    assert(describe(5) == "none")
+
+    -- arms can return, break and continue, and `else` takes the rest
+    local function classify(xs)
+        local seen = {}
+        for _, x in xs do
+            match const n = x * 2
+                case is 0 then
+                    continue
+                when n > 100 then
+                    break
+                when n < 0 then
+                    return "negative"
+                else
+                    table.insert(seen, n)
+            end
+        end
+        return table.concat(seen, ",")
+    end
+    assert(classify({ 1, 0, 2, 500, 3 }) == "2,4")
+    assert(classify({ 1, -1 }) == "negative")
+
+    -- a closure in an arm captures that arm's binding, and the subject is read once
+    local reads = 0
+    local function read()
+        reads += 1
+        return 7
+    end
+    local captured
+    match const n = read()
+        case is 7 then
+            captured = function()
+                return n
+            end
+        else
+            captured = nil
+    end
+    assert(reads == 1 and captured and captured() == 7)
+end
+
+-- `implements` takes alternatives, in an `if` and in a `case`
+do
+    local function problem(file: unknown)
+        if file implements NotFlac | Unreadable then
+            return "problem"
+        end
+        return "fine"
+    end
+    assert(problem(Mp3()) == "problem" and problem(Broken()) == "problem" and problem(Flac()) == "fine")
+    assert(problem(1) == "fine")
+
+    local reads = 0
+    local function read()
+        reads += 1
+        return Broken()
+    end
+    local described = match read()
+        case implements NotFlac | Unreadable then "problem"
+        else "fine"
+    assert(described == "problem" and reads == 1)
+end
+
+-- each tag is one instruction, which matches exactly what type() says
+do
+    local function tags(v: unknown): string
+        return match v
+            case is boolean then "boolean"
+            case is number then "number"
+            case is string then "string"
+            case is table then "table"
+            case is function then "function"
+            case is thread then "thread"
+            case is userdata then "userdata"
+            case is vector then "vector"
+            case is buffer then "buffer"
+            case is object then "object"
+            case is class then "class"
+            else "other"
+    end
+    for _, v in { true, 1, "s", {}, print, coroutine.create(print), newproxy(), vector.create(1, 2, 3), buffer.create(1), Point(1, 2), Point } do
+        assert(tags(v) == type(v), `{type(v)} matched as {tags(v)}`)
+    end
+    assert(tags(nil) == "other")
+
+    local function notTags(v: unknown): boolean
+        return v is not string | number
+    end
+    assert(notTags(true) and notTags({}) and not notTags("s") and not notTags(1))
+end
+
+-- `x is none` checks for the primitive like `x is string` does, whatever a local, the global or the function's
+-- environment calls `none`
+do
+    local real_none = none
+    local function is_none(v: unknown): boolean
+        return v is none
+    end
+    assert(is_none(real_none) and not is_none(nil) and not is_none(false))
+
+    do
+        local none = "walrus"
+        local function shadowed(v: unknown): boolean
+            return v is none
+        end
+        assert(shadowed(real_none) and not shadowed("walrus"))
+    end
+
+    none = "walrus"
+    assert(is_none(real_none) and not is_none("walrus"))
+    none = real_none
+
+    local function in_env(v: unknown): boolean
+        return v is not none
+    end
+    setfenv(in_env, setmetatable({ none = 42 }, { __index = getfenv(1) }))
+    assert(in_env(42) and not in_env(real_none))
+end
+
+-- a name that holds something other than a class compares like a literal, and one holding a class tests instances
+do
+    const LIMIT = 10
+    local kinds = { streaminfo = 0, padding = 1, point = Point }
+
+    local function other(v: unknown): boolean
+        return v is not kinds.streaminfo | kinds.padding | LIMIT
+    end
+    assert(not other(0) and not other(1) and not other(10) and other(2) and other("0") and other(nil))
+
+    local function point(v: unknown): boolean
+        return v is kinds.point
+    end
+    assert(point(Point(1, 2)) and not point(Point) and not point(1))
+
+    local function same(v: unknown, name: unknown): boolean
+        return v is name
+    end
+    assert(same(Point(1, 2), Point) and same("x", "x") and not same("x", "y") and same(nil, nil) and not same(1, "1"))
+    assert(same(2, 2) and not same(2, 3) and not same(0 / 0, 0 / 0) and same(true, true) and not same(Point, Point(1, 2)))
+    local equal_by_metamethod = { __eq = function() return true end }
+    assert(same(setmetatable({}, equal_by_metamethod), setmetatable({}, equal_by_metamethod)) and not same({}, {}))
+
+    local function label(v: unknown): string
+        return match v
+            case is kinds.streaminfo then "streaminfo"
+            case is LIMIT | kinds.point then "limit or point"
+            else "other"
+    end
+    assert(label(0) == "streaminfo" and label(10) == "limit or point" and label(Point(1, 2)) == "limit or point")
+    assert(label(1) == "other")
+end
+
+return "OK"
