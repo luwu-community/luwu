@@ -22,7 +22,6 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 namespace Luau
 {
 
-bool doesCallError(const AstExprCall* call); // TypeInfer.cpp
 
 struct PushScope
 {
@@ -124,6 +123,11 @@ std::optional<Symbol> DataFlowGraph::getSymbolFromDef(const Def* def) const
     return std::nullopt;
 }
 
+bool DataFlowGraph::callNeverReturns(const AstExprCall* call) const
+{
+    return Luau::callNeverReturns(call, neverReturningCalls);
+}
+
 std::optional<DefId> DfgScope::lookup(Symbol symbol) const
 {
     for (const DfgScope* current = this; current; current = current->parent)
@@ -175,13 +179,15 @@ DataFlowGraph DataFlowGraphBuilder::build(
     AstStatBlock* block,
     NotNull<DefArena> defArena,
     NotNull<RefinementKeyArena> keyArena,
-    NotNull<struct InternalErrorReporter> handle
+    NotNull<struct InternalErrorReporter> handle,
+    const NeverReturningCalls* neverReturningCalls
 )
 {
     LUAU_TIMETRACE_SCOPE("DataFlowGraphBuilder::build", "Typechecking");
 
     DataFlowGraphBuilder builder(defArena, keyArena);
     builder.handle = handle;
+    builder.graph.neverReturningCalls = neverReturningCalls;
 
     DfgScope* moduleScope = builder.scopes.emplace_back(new DfgScope{nullptr, DfgScope::ScopeType::Linear}).get();
     PushScope ps{builder.scopeStack, moduleScope};
@@ -702,7 +708,7 @@ ControlFlow DataFlowGraphBuilder::visit(AstStatReturn* r)
 ControlFlow DataFlowGraphBuilder::visit(AstStatExpr* e)
 {
     visitExpr(e->expr);
-    if (auto call = e->expr->as<AstExprCall>(); call && doesCallError(call))
+    if (auto call = e->expr->as<AstExprCall>(); call && graph.callNeverReturns(call))
         return ControlFlow::Throws;
     else
         return ControlFlow::None;
