@@ -15,6 +15,7 @@
 
 LUAU_FASTFLAG(LuauTypeFunctionSupportsFrozen)
 LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
+LUAU_FASTFLAG(LuauUdtfReuseTypeUserdatas)
 
 namespace Luau
 {
@@ -199,7 +200,11 @@ static int evaluateTypeAliasCall(lua_State* L)
         freezer.run(serializedTy);
     }
 
-    allocTypeUserData(L, serializedTy->type, /* frozen */ true);
+    if (FFlag::LuauUdtfReuseTypeUserdatas)
+        pushType(L, serializedTy);
+    else
+        allocTypeUserData(L, serializedTy->type, /* frozen */ true);
+
     return 1;
 }
 
@@ -339,7 +344,11 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
                             freezer.run(serializedTy);
                         }
 
-                        allocTypeUserData(L, serializedTy->type, /* frozen */ true);
+                        if (FFlag::LuauUdtfReuseTypeUserdatas)
+                            pushType(L, serializedTy);
+                        else
+                            allocTypeUserData(L, serializedTy->type, /* frozen */ true);
+
                         lua_setfield(L, -2, name.c_str());
                     }
                 }
@@ -392,7 +401,10 @@ TypeFunctionReductionResult<TypeId> userDefinedTypeFunction(
         if (!serializedTy)
             return {std::nullopt, Reduction::Erroneous, {}, {}, "Complexity limit reached when passing a type to a type function"};
 
-        allocTypeUserData(L, serializedTy->type);
+        if (FFlag::LuauUdtfReuseTypeUserdatas)
+            pushType(L, serializedTy);
+        else
+            allocTypeUserData(L, serializedTy->type);
     }
 
     // Set up an interrupt handler for type functions to respect type checking limits and LSP cancellation requests.
