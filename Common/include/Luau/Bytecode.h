@@ -650,6 +650,15 @@ enum LuauOpcode
     // AUX: the member's name as a constant string
     LOP_GETQUALIFIED,
 
+    // GETPOSITIONAL: Luwu Destructuring (rfcs/destructuring.md): the element at position C + 1 of a positional pattern
+    // `.(a, b)`. For an object, the member at that position of its class (LuauClass::positionalmembers), read with the
+    // same private-access check as reading it by name; a class without a primary constructor, or a position past its
+    // last parameter, raises. For any other value, B[C + 1], like GETTABLEN.
+    // A: target register
+    // B: register holding the value
+    // C: position - 1 (0..255)
+    LOP_GETPOSITIONAL,
+
     // GETTABLEBUNDLE: Luwu bundles: `t[.(a, b)]` without building the bundle. A table answers from its hash part, and
     // only a miss in a table with `__index`, or a value that isn't a table, gets a new bundle and an ordinary lookup.
     // A: target register
@@ -690,15 +699,6 @@ enum LuauOpcode
     // C: register holding the trait
     // AUX: the field's name as a constant string
     LOP_SETQUALIFIED,
-
-    // GETPOSITIONAL: Luwu Destructuring (rfcs/destructuring.md): the element at position C + 1 of a positional pattern
-    // `.(a, b)`. For an object, the member at that position of its class (LuauClass::positionalmembers), read with the
-    // same private-access check as reading it by name; a class without a primary constructor, or a position past its
-    // last parameter, raises. For any other value, B[C + 1], like GETTABLEN.
-    // A: target register
-    // B: register holding the value
-    // C: position - 1 (0..255)
-    LOP_GETPOSITIONAL,
 
     // PUSH: Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `A <+ values`. Calls A's `__push` once with every
     // non-nil value when it has one; otherwise A must be a table, and each non-nil value is stored raw at its length + 1,
