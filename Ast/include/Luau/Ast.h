@@ -235,6 +235,8 @@ public:
         // Luwu @noinline (rfcs/noinline-attribute.md): upstream's `DebugNoinline` (`@debugnoinline`), shipped as
         // `@noinline`.
         Noinline,
+        // Luwu: `@[inline(reason)]`, which asks the compiler to inline every call it can (DebugLuwuEncourageInline)
+        Inline,
         Unknown
     };
 
