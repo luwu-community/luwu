@@ -642,19 +642,50 @@ struct TableMutationTracker : AstVisitor
         }
     }
 
-    void markEscapedTableIndex(AstExpr* expr, bool isLvalue)
+    // The index of an index expression escapes on its own (visit(AstExprIndexExpr*))
+    void markEscapedTableIndex(AstExpr* expr)
     {
         if (AstExprIndexName* idx = expr->as<AstExprIndexName>())
-        {
             markEscaped(idx->expr);
-        }
         else if (AstExprIndexExpr* idx = expr->as<AstExprIndexExpr>())
-        {
             markEscaped(idx->expr);
+    }
 
-            if (isLvalue)
-                markEscaped(idx->index);
+    // Luwu: from upstream's LuauCompileTableFoldFix (0.742). An operand of an operator with a metamethod escapes: `__add` or
+    // `__concat` can change the table. Comparisons don't take operands with different metamethods, and `and` and `or` have
+    // none.
+    void markEscapedBinaryOp(AstExpr* lhs, AstExpr* rhs, AstExprBinary::Op op)
+    {
+        switch (op)
+        {
+        case AstExprBinary::CompareLt:
+        case AstExprBinary::CompareLe:
+        case AstExprBinary::CompareGt:
+        case AstExprBinary::CompareGe:
+        case AstExprBinary::CompareEq:
+        case AstExprBinary::CompareNe:
+        case AstExprBinary::And:
+        case AstExprBinary::Or:
+            return;
+        default:
+            break;
         }
+
+        markEscaped(lhs);
+        markEscaped(rhs);
+    }
+
+    bool visit(AstExprBinary* node) override
+    {
+        markEscapedBinaryOp(node->left, node->right, node->op);
+        return true;
+    }
+
+    // Luwu: from upstream's LuauCompileTableFoldFix (0.742), a table used as a key escapes: `__index` or `__newindex` can change it
+    bool visit(AstExprIndexExpr* node) override
+    {
+        markEscaped(node->index);
+        return true;
     }
 
     bool visit(AstExprCall* node) override
@@ -665,7 +696,7 @@ struct TableMutationTracker : AstVisitor
 
         // Table indexed in a self call escapes through 'self'
         if (node->self)
-            markEscapedTableIndex(node->func, false);
+            markEscapedTableIndex(node->func);
 
         return true;
     }
@@ -701,7 +732,7 @@ struct TableMutationTracker : AstVisitor
 
         // LHS index expressions mutate the table being indexed
         for (AstExpr* lhs : node->vars)
-            markEscapedTableIndex(lhs, true);
+            markEscapedTableIndex(lhs);
 
         return true;
     }
@@ -709,14 +740,15 @@ struct TableMutationTracker : AstVisitor
     bool visit(AstStatCompoundAssign* node) override
     {
         // LHS index expressions mutate the table
-        markEscapedTableIndex(node->var, true);
+        markEscapedTableIndex(node->var);
+        markEscapedBinaryOp(node->var, node->value, node->op);
         return true;
     }
 
     bool visit(AstStatFunction* node) override
     {
         // Adding a method on a table mutates it
-        markEscapedTableIndex(node->name, true);
+        markEscapedTableIndex(node->name);
         return true;
     }
 

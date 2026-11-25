@@ -15,11 +15,7 @@ LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
 LUAU_FASTFLAG(LuauTypeFunctionSerializeArgNames)
 LUAU_FASTFLAG(LuauSubtypingMissingPropertiesAsNil)
 LUAU_FASTFLAG(LuauIntegerType2)
-LUAU_FASTFLAG(LuauUdtfTypeIsSubtypeOf)
-LUAU_FASTFLAG(LuauTypeFunctionTableIndexerIsReadOnly)
 LUAU_DYNAMIC_FASTINT(LuauTypeFunctionSerdeIterationLimit)
-LUAU_FASTFLAG(LuauUdtfCreateSingletonFixErrorMessage)
-LUAU_FASTFLAG(LuauUdtfTypeToStringMetamethod)
 
 TEST_SUITE_BEGIN("UserDefinedTypeFunctionTests");
 
@@ -3192,7 +3188,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "udtf_setgenerics_wrong_argcount_check")
 TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag sff{FFlag::LuauUdtfTypeIsSubtypeOf, true};
 
     CheckResult results = check(R"(
         type function checksubtype(a, b)
@@ -3225,7 +3220,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof")
 TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_top_and_bottom")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag sff{FFlag::LuauUdtfTypeIsSubtypeOf, true};
 
     CheckResult results = check(R"(
         type function issub(a, b)
@@ -3259,7 +3253,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_top_and_bottom")
 TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_any")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag sff{FFlag::LuauUdtfTypeIsSubtypeOf, true};
 
     CheckResult results = check(R"(
         type function issub(a, b)
@@ -3284,7 +3277,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_any")
 TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_table_structural")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag sff{FFlag::LuauUdtfTypeIsSubtypeOf, true};
 
     CheckResult results = check(R"(
         type function issub(a, b)
@@ -3319,7 +3311,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_table_structural")
 TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_function")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag sff{FFlag::LuauUdtfTypeIsSubtypeOf, true};
 
     CheckResult results = check(R"(
         type function issub(a, b)
@@ -3350,7 +3341,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_function")
 TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_union")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag sff{FFlag::LuauUdtfTypeIsSubtypeOf, true};
 
     CheckResult results = check(R"(
         type function issub(a, b)
@@ -3374,7 +3364,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_union")
 TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_intersection")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag sff{FFlag::LuauUdtfTypeIsSubtypeOf, true};
 
     CheckResult results = check(R"(
         type function issub(a, b)
@@ -3399,7 +3388,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_intersection")
 TEST_CASE_FIXTURE(ExternTypeFixture, "issubtypeof_extern_type_hierarchy")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag sff{FFlag::LuauUdtfTypeIsSubtypeOf, true};
 
     CheckResult results = check(R"(
         type function issub(a, b)
@@ -3421,10 +3409,6 @@ TEST_CASE_FIXTURE(ExternTypeFixture, "issubtypeof_extern_type_hierarchy")
 TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_table_indexer")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag sffs[] = {
-        {FFlag::LuauUdtfTypeIsSubtypeOf, true}, {FFlag::LuauTypeFunctionTableIndexerIsReadOnly, true}
-    };
-
     CheckResult results = check(R"(
         type function issub(a, b)
             return types.singleton(a:issubtypeof(b))
@@ -3451,7 +3435,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "issubtypeof_table_indexer")
 TEST_CASE_FIXTURE(BuiltinsFixture, "type_tostring")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag tostringMetamethod{FFlag::LuauUdtfTypeToStringMetamethod, true};
 
     CheckResult results = check(R"(
         type function foo(ty)
@@ -3478,7 +3461,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "type_tostring")
 TEST_CASE_FIXTURE(BuiltinsFixture, "types_singleton_error_message")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-    ScopedFastFlag fixErrorMessage{FFlag::LuauUdtfCreateSingletonFixErrorMessage, true};
 
     CheckResult results = check(R"(
         type alias = {}

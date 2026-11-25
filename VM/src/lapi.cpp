@@ -22,8 +22,6 @@
 
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuNonePrimitive)
-LUAU_FASTFLAGVARIABLE(LuauAutoStack)
-LUAU_FASTFLAGVARIABLE(LuauCloneTableFix)
 LUAU_FASTFLAGVARIABLE(LuwuExternallyManagedBuffers)
 LUAU_FASTFLAGVARIABLE(LuwuExternalString)
 LUAU_FASTFLAGVARIABLE(DebugLuwuAllowNonNullTerminatedStrings)
@@ -68,7 +66,7 @@ const char* luwu_ident = "$Luwu: Copyright (C) 2026 Luwu contributors $\n"
 
 #define ensure_stack_impl(L, errorL, size) \
     { \
-        if (FFlag::LuauAutoStack && L->top + (size) > L->ci->top && !lua_checkstack(L, (size))) \
+        if (L->top + (size) > L->ci->top && !lua_checkstack(L, (size))) \
         { \
             luaO_pushfstring(errorL, "stack overflow"); \
             lua_error(errorL); \
@@ -2313,11 +2311,8 @@ void lua_cleartable(lua_State* L, int idx)
 
 void lua_clonetable(lua_State* L, int idx)
 {
-    if (FFlag::LuauCloneTableFix)
-    {
-        luaC_checkGC(L);
-        luaC_threadbarrier(L);
-    }
+    luaC_checkGC(L);
+    luaC_threadbarrier(L);
 
     ensure_stack(L, 1);
     StkId t = index2addr(L, idx);

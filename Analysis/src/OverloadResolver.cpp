@@ -13,7 +13,6 @@
 #include "Luau/TypeUtils.h"
 #include "Luau/Unifier2.h"
 
-LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAG(LuauBetterPackAndVariadicMismatchErrors)
 
 namespace Luau
@@ -130,7 +129,7 @@ static bool reasoningIsReturnTypes(const Path& path)
 
 static void ignoreReasoningForReturnType(SubtypingResult& sr)
 {
-    SubtypingReasonings result{kEmptyReasoning};
+    SubtypingReasonings result;
 
     for (const SubtypingReasoning& reasoning : sr.reasoning)
     {
@@ -677,9 +676,6 @@ void OverloadResolver::testFunction(
     }
 
     TypeId prospectiveFunction = arena->addType(FunctionType{argsPack, builtinTypes->anyTypePack});
-
-    if (!FFlag::LuauBidirectionalInferenceSimplifyTables)
-        subtyping.uniqueTypes = uniqueTypes;
 
     SubtypingResult r = subtyping.isSubtype(fnTy, prospectiveFunction, scope);
 

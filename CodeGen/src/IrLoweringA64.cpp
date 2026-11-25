@@ -13,11 +13,7 @@
 #include "lstate.h"
 #include "lgc.h"
 
-LUAU_FASTFLAGVARIABLE(LuauCodegenFixBufferLenCheck)
-LUAU_FASTFLAGVARIABLE(LuauCodegenFixTwoResA64Builtin)
-LUAU_FASTFLAG(LuauYieldIter2)
 LUAU_FASTFLAG(LuauCIProto)
-LUAU_FASTFLAG(LuauCodegenSharedLog)
 
 namespace Luau
 {
@@ -241,17 +237,9 @@ static bool emitBuiltin(AssemblyBuilderA64& build, IrFunction& function, IrRegAl
 
         if (nresults == 2)
         {
-            if (FFlag::LuauCodegenFixTwoResA64Builtin)
-            {
-                RegisterA64 temp2 = regs.allocTemp(KindA64::w);
-                build.ldr(temp2, sTemporary);
-                build.scvtf(d1, temp2);
-            }
-            else
-            {
-                build.ldr(w0, sTemporary);
-                build.scvtf(d1, w0);
-            }
+            RegisterA64 temp2 = regs.allocTemp(KindA64::w);
+            build.ldr(temp2, sTemporary);
+            build.scvtf(d1, temp2);
 
             build.str(d1, mem(rBase, (res + 1) * sizeof(TValue) + offsetof(TValue, value.n)));
             build.str(temp, mem(rBase, (res + 1) * sizeof(TValue) + offsetof(TValue, tt)));
@@ -1522,7 +1510,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         // We have reserved the result register, so we can free it now so it is not recorded in the spill sequence
         regs.freeReg(inst.regA64);
 
-        size_t spills = regs.spill(index);
+        size_t spills = regs.spill(index, {}, /* keepLazyLocations */ true);
 
         build.mov(x0, rState);
         build.add(x1, rBase, uint16_t(vmRegOp(OP_A(inst)) * sizeof(TValue)));
@@ -2490,7 +2478,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
             Label skip;
             checkObjectBarrierConditions(temp1, temp2, value, OP_B(inst), OP_C(inst).kind == IrOpKind::Undef ? -1 : tagOp(OP_C(inst)), skip);
 
-            size_t spills = regs.spill(index, {temp1, value});
+            size_t spills = regs.spill(index, {temp1, value}, /* keepLazyLocations */ true);
 
             build.mov(x1, temp1);
             build.mov(x0, rState);
@@ -2777,11 +2765,13 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         else if (OP_B(inst).kind == IrOpKind::Constant)
         {
             int offset = intOp(OP_B(inst));
-            int endOffset = FFlag::LuauCodegenFixBufferLenCheck ? maxOffset : accessSize;
-            ConditionA64 failCond = FFlag::LuauCodegenFixBufferLenCheck ? ConditionA64::UnsignedLess : ConditionA64::UnsignedLessEqual;
+            int endOffset = maxOffset;
+            ConditionA64 failCond = ConditionA64::UnsignedLess;
 
             // Constant folding can take care of it, but for safety we avoid overflow/underflow cases here
-            if (offset < 0 || unsigned(offset) + unsigned(endOffset) >= unsigned(INT_MAX))
+            // Luwu: from upstream's LuauCodegenConstPropMinOffset (0.741). A merged check's access can start before the offset
+            // (`minOffset < 0`), and that start must not fall before the buffer.
+            if (offset < 0 || offset + minOffset < 0 || unsigned(offset) + unsigned(endOffset) >= unsigned(INT_MAX))
             {
                 build.b(target);
             }
@@ -3167,7 +3157,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cmp(temp1, temp2);
         build.b(ConditionA64::UnsignedGreater, skip);
 
-        size_t spills = regs.spill(index);
+        size_t spills = regs.spill(index, {}, /* keepLazyLocations */ true);
 
         build.mov(x0, rState);
         build.mov(w1, 1);
@@ -3189,7 +3179,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         checkObjectBarrierConditions(regOp(OP_A(inst)), temp, noreg, OP_B(inst), OP_C(inst).kind == IrOpKind::Undef ? -1 : tagOp(OP_C(inst)), skip);
 
         RegisterA64 reg = regOp(OP_A(inst)); // note: we need to call regOp before spill so that we don't do redundant reloads
-        size_t spills = regs.spill(index, {reg});
+        size_t spills = regs.spill(index, {reg}, /* keepLazyLocations */ true);
         build.mov(x1, reg);
         build.mov(x0, rState);
         build.ldr(x2, mem(rBase, vmRegOp(OP_B(inst)) * sizeof(TValue) + offsetof(TValue, value)));
@@ -3212,7 +3202,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.tbz(temp, BLACKBIT, skip);
 
         RegisterA64 reg = regOp(OP_A(inst)); // note: we need to call regOp before spill so that we don't do redundant reloads
-        size_t spills = regs.spill(index, {reg});
+        size_t spills = regs.spill(index, {reg}, /* keepLazyLocations */ true);
         build.mov(x1, reg);
         build.mov(x0, rState);
         build.add(x2, x1, uint16_t(offsetof(LuaTable, gclist)));
@@ -3234,7 +3224,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
         RegisterA64 reg = regOp(OP_A(inst)); // note: we need to call regOp before spill so that we don't do redundant reloads
         AddressA64 addr = tempAddr(OP_B(inst), offsetof(TValue, value));
-        size_t spills = regs.spill(index, {reg});
+        size_t spills = regs.spill(index, {reg}, /* keepLazyLocations */ true);
         build.mov(x1, reg);
         build.mov(x0, rState);
         build.ldr(x2, addr);
@@ -3273,7 +3263,7 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.cmp(temp2, temp1);
         build.b(ConditionA64::UnsignedGreater, skip);
 
-        size_t spills = regs.spill(index, {temp2});
+        size_t spills = regs.spill(index, {temp2}, /* keepLazyLocations */ true);
         build.mov(x1, temp2);
         build.mov(x0, rState);
         build.ldr(x2, mem(rNativeContext, offsetof(NativeContext, luaF_close)));
@@ -3406,22 +3396,12 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
         build.mov(w1, vmRegOp(OP_A(inst)));
         build.mov(w2, intOp(OP_B(inst)));
 
-        if (FFlag::LuauYieldIter2)
-        {
-            build.ldr(x3, mem(rNativeContext, offsetof(NativeContext, forgLoopNonTableFallback)));
-            build.blr(x3);
-            emitUpdateBase(build);
-            build.cmp(w0, uint16_t(0));
-            build.b(ConditionA64::Less, helpers.exitNoContinueVm);
-            build.b(ConditionA64::Greater, labelOp(OP_C(inst)));
-        }
-        else
-        {
-            build.ldr(x3, mem(rNativeContext, offsetof(NativeContext, forgLoopNonTableFallback_DEPRECATED)));
-            build.blr(x3);
-            emitUpdateBase(build);
-            build.cbnz(w0, labelOp(OP_C(inst)));
-        }
+        build.ldr(x3, mem(rNativeContext, offsetof(NativeContext, forgLoopNonTableFallback)));
+        build.blr(x3);
+        emitUpdateBase(build);
+        build.cmp(w0, uint16_t(0));
+        build.b(ConditionA64::Less, helpers.exitNoContinueVm);
+        build.b(ConditionA64::Greater, labelOp(OP_C(inst)));
 
         jumpOrFallthrough(blockOp(OP_D(inst)), next);
         break;
@@ -4168,6 +4148,13 @@ void IrLoweringA64::lowerInst(IrInst& inst, uint32_t index, const IrBlock& next)
 
     regs.freeLastUseRegs(inst, index);
     regs.freeTempRegs();
+
+    // Luwu: from upstream's LuauCodegenCmpAnySideEffecting (0.745), the register of a result nothing uses is freed
+    if (inst.lastUse == 0 && hasResult(inst.cmd))
+    {
+        regs.freeReg(inst.regA64);
+        inst.regA64 = noreg;
+    }
 }
 
 void IrLoweringA64::startBlock(const IrBlock& curr)
@@ -4196,10 +4183,8 @@ void IrLoweringA64::finishBlock(const IrBlock& curr, const IrBlock& next)
 
 void IrLoweringA64::finishFunction()
 {
-    if (FFlag::LuauCodegenSharedLog && logger && logger->options.includeAssembly)
+    if (logger && logger->options.includeAssembly)
         logger->formatAppend("; interrupt handlers\n");
-    else if (!FFlag::LuauCodegenSharedLog && build.logText)
-        build.logAppend("; interrupt handlers\n");
 
     for (InterruptHandler& handler : interruptHandlers)
     {
@@ -4209,10 +4194,8 @@ void IrLoweringA64::finishFunction()
         build.b(helpers.interrupt);
     }
 
-    if (FFlag::LuauCodegenSharedLog && logger && logger->options.includeAssembly)
+    if (logger && logger->options.includeAssembly)
         logger->formatAppend("; exit handlers\n");
-    else if (!FFlag::LuauCodegenSharedLog && build.logText)
-        build.logAppend("; exit handlers\n");
 
     for (ExitHandler& handler : exitHandlers)
     {
@@ -4323,10 +4306,8 @@ void IrLoweringA64::allocAndIncrementCounterAt(CodeGenCounter kind, uint32_t pcp
     if (!function.recordCounters)
         return;
 
-    if (FFlag::LuauCodegenSharedLog && logger && logger->options.includeAssembly)
+    if (logger && logger->options.includeAssembly)
         logger->formatAppend("; counter kind %u at pcpos %d\n", unsigned(kind), pcpos);
-    else if (!FFlag::LuauCodegenSharedLog && build.logText)
-        build.logAppend("; counter kind %u at pcpos %d\n", unsigned(kind), pcpos);
 
     // {uint32_t, uint32_t, uint64_t}
     function.extraNativeData.push_back(unsigned(kind));

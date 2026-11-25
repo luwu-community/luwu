@@ -30,15 +30,11 @@ LUAU_FLAGVERSION(LuauExportValueSyntax, 3)
 
 LUAU_FASTFLAGVARIABLE(DebugLuauNoInline)
 LUAU_FASTFLAGVARIABLE(LuauAllowGlobalDeclarationToBeCalledClass)
-LUAU_FASTFLAGVARIABLE(LuauDisallowExternClassInTypeDefinitions)
-LUAU_FASTFLAGVARIABLE(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAGVARIABLE(LuauCstAttr)
-LUAU_FASTFLAGVARIABLE(LuauStoreConstKeywordBegin)
 LUAU_FASTFLAGVARIABLE(LuauTrackPrefixLocal)
 LUAU_FASTFLAGVARIABLE(LuwuDefaultArguments)
 LUAU_FASTFLAGVARIABLE(LuwuExternTypeGenericMethods)
 LUAU_FASTFLAGVARIABLE(LuwuGenericNominals)
-LUAU_FASTFLAGVARIABLE(LuauNoDuplicateBinaryPrefix)
 
 // Clip with DebugLuauReportReturnTypeVariadicWithTypeSuffix
 bool luau_telemetry_parsed_return_type_variadic_with_type_suffix = false;
@@ -1657,7 +1653,7 @@ AstStat* Parser::parseLocal(
             var,
             body,
             isConst,
-            isConst && FFlag::LuauStoreConstKeywordBegin ? keywordPosition : Position::missing(),
+            isConst ? keywordPosition : Position::missing(),
             start,
             functionKeywordLocation
         );
@@ -2861,23 +2857,13 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
     // global variable declaration whose name is `class`, not as a malformed class declaration. This allows
     // us to support a global table like string/math/bit32 called `class`. CLI-203833 tracks the work to actually
     // remove support for `declare class X [extends Y]` syntax.
-    else if (FFlag::LuauDisallowExternClassInTypeDefinitions
-                 ? AstName(lexer.current().name) == "extern"
-                 : (AstName(lexer.current().name) == "class" &&
-                    (FFlag::LuauAllowGlobalDeclarationToBeCalledClass ? lexer.lookahead().type != ':' : true)) ||
-                       AstName(lexer.current().name) == "extern")
+    else if (AstName(lexer.current().name) == "extern")
     {
-        bool foundExtern = false;
-        if (AstName(lexer.current().name) == "extern")
-        {
-            if (!FFlag::LuauDisallowExternClassInTypeDefinitions)
-                foundExtern = true;
-            nextLexeme();
-            if (AstName(lexer.current().name) != "type")
-                return reportStatError(
-                    lexer.current().location, {}, {}, "Expected `type` keyword after `extern`, but got %s instead", lexer.current().name
-                );
-        }
+        nextLexeme();
+        if (AstName(lexer.current().name) != "type")
+            return reportStatError(
+                lexer.current().location, {}, {}, "Expected `type` keyword after `extern`, but got %s instead", lexer.current().name
+            );
 
         Location classLocation = lexer.current().location;
         nextLexeme();
@@ -2912,17 +2898,14 @@ AstStat* Parser::parseDeclaration(const Location& start, const AstArray<AstAttr*
             superName = parseName("supertype name").name;
         }
 
-        if (FFlag::LuauDisallowExternClassInTypeDefinitions || foundExtern)
-        {
-            if (AstName(lexer.current().name) != "with")
-                report(
-                    lexer.current().location,
-                    "Expected `with` keyword before listing properties of the external type, but got %s instead",
-                    lexer.current().name
-                );
-            else
-                nextLexeme();
-        }
+        if (AstName(lexer.current().name) != "with")
+            report(
+                lexer.current().location,
+                "Expected `with` keyword before listing properties of the external type, but got %s instead",
+                lexer.current().name
+            );
+        else
+            nextLexeme();
 
         TempVector<AstDeclaredExternTypeProperty> props(scratchDeclaredClassProps);
         AstTableIndexer* indexer = nullptr;
@@ -5008,13 +4991,10 @@ static ConstantNumberParseResult parseInteger(double& result, const char* data, 
 {
     LUAU_ASSERT(base == 2 || base == 16);
 
-    if (FFlag::LuauNoDuplicateBinaryPrefix)
-    {
-        // Some libc implementations accept an optional 0b prefix for base-2 parsing.
-        // Binary literals have already had their leading 0b stripped by us.
-        if (base == 2 && data[0] == '0' && (data[1] == 'b' || data[1] == 'B'))
-            return ConstantNumberParseResult::Malformed;
-    }
+    // Some libc implementations accept an optional 0b prefix for base-2 parsing.
+    // Binary literals have already had their leading 0b stripped by us.
+    if (base == 2 && data[0] == '0' && (data[1] == 'b' || data[1] == 'B'))
+        return ConstantNumberParseResult::Malformed;
 
     char* end = nullptr;
     unsigned long long value = strtoull(data, &end, base);
@@ -5067,11 +5047,8 @@ static ConstantNumberParseResult parseInteger64(int64_t& result, const char* dat
     }
     else
     {
-        if (FFlag::LuauNoDuplicateBinaryPrefix)
-        {
-            if (base == 2 && data[0] == '0' && (data[1] == 'b' || data[1] == 'B'))
-                return ConstantNumberParseResult::Malformed;
-        }
+        if (base == 2 && data[0] == '0' && (data[1] == 'b' || data[1] == 'B'))
+            return ConstantNumberParseResult::Malformed;
 
         // hex and binary literals represent bit patterns covering the full uint64 range
         unsigned long long u = strtoull(data, &end, base);
@@ -5407,14 +5384,9 @@ AstExpr* Parser::parseTableConstructor()
 
     MatchLexeme matchBrace = lexer.current();
     expectAndConsume('{', "table literal");
-    // Clip with LuauTableEntriesDontNeedToMatchIndent
-    unsigned lastElementIndent_DEPRECATED = 0;
 
     while (lexer.current().type != '}')
     {
-        if (!FFlag::LuauTableEntriesDontNeedToMatchIndent)
-            lastElementIndent_DEPRECATED = lexer.current().location.begin.column;
-
         if (lexer.current().type == '[')
         {
             Position indexerOpenPosition = lexer.current().location.begin;
@@ -5496,8 +5468,7 @@ AstExpr* Parser::parseTableConstructor()
         // declaration. Read as the next element, it would loop forever: parseExpr reports it without consuming it.
         // Upstream has no such recovery and reads `const` as a global.
         bool declarationFollows = startsConstDeclaration() || startsTypeAliasDeclaration();
-        bool elementFollows = (lexer.current().type == '[' || lexer.current().type == Lexeme::Name) &&
-                              (FFlag::LuauTableEntriesDontNeedToMatchIndent ? true : lexer.current().location.begin.column == lastElementIndent_DEPRECATED);
+        bool elementFollows = lexer.current().type == '[' || lexer.current().type == Lexeme::Name;
 
         if (lexer.current().type == ',' || lexer.current().type == ';')
         {

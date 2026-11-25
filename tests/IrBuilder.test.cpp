@@ -14,10 +14,8 @@
 
 LUAU_FASTFLAG(DebugLuauAbortingChecks)
 LUAU_FASTFLAG(LuauCodegenInteger3)
-LUAU_FASTFLAG(LuauCodegenVmExitSyncMultiUse)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerLibrary)
-LUAU_FASTFLAG(LuauCodegenSubstituteReplacements)
 
 using namespace Luau::CodeGen;
 
@@ -3473,8 +3471,6 @@ bb_fallback_1:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "NumericSimplifications")
 {
-    ScopedFastFlag luauCodegenSubstituteReplacements{FFlag::LuauCodegenSubstituteReplacements, true};
-
     IrOp block = build.block(IrBlockKind::Internal);
 
     build.beginBlock(block);
@@ -3523,8 +3519,6 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "FloatSimplifications")
 {
-    ScopedFastFlag luauCodegenSubstituteReplacements{FFlag::LuauCodegenSubstituteReplacements, true};
-
     IrOp block = build.block(IrBlockKind::Internal);
 
     build.beginBlock(block);
@@ -3579,8 +3573,6 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "DoubleContractionDeduplication")
 {
-    ScopedFastFlag luauCodegenSubstituteReplacements{FFlag::LuauCodegenSubstituteReplacements, true};
-
     IrOp block = build.block(IrBlockKind::Internal);
 
     build.beginBlock(block);
@@ -3621,8 +3613,6 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "FloatContractionDeduplication")
 {
-    ScopedFastFlag luauCodegenSubstituteReplacements{FFlag::LuauCodegenSubstituteReplacements, true};
-
     IrOp block = build.block(IrBlockKind::Internal);
 
     build.beginBlock(block);
@@ -3666,8 +3656,6 @@ bb_0:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "IntegerConversionDeduplication")
 {
-    ScopedFastFlag luauCodegenSubstituteReplacements{FFlag::LuauCodegenSubstituteReplacements, true};
-
     IrOp block = build.block(IrBlockKind::Internal);
 
     build.beginBlock(block);
@@ -7869,8 +7857,6 @@ bb_exit_1:
 }
 TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncMultiUseSink")
 {
-    ScopedFastFlag luauCodegenVmExitSyncMultiUse{FFlag::LuauCodegenVmExitSyncMultiUse, true};
-
     IrOp block = build.block(IrBlockKind::Internal);
 
     build.beginBlock(block);
@@ -7921,8 +7907,6 @@ bb_exit_2:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncMultiUseChainedDependency1")
 {
-    ScopedFastFlag luauCodegenVmExitSyncMultiUse{FFlag::LuauCodegenVmExitSyncMultiUse, true};
-
     IrOp block = build.block(IrBlockKind::Internal);
 
     build.beginBlock(block);
@@ -7970,8 +7954,6 @@ bb_exit_1:
 
 TEST_CASE_FIXTURE(IrBuilderFixture, "DseVmExitSyncMultiUseChainedDependency2")
 {
-    ScopedFastFlag luauCodegenVmExitSyncMultiUse{FFlag::LuauCodegenVmExitSyncMultiUse, true};
-
     IrOp block = build.block(IrBlockKind::Internal);
 
     build.beginBlock(block);

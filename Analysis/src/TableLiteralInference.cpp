@@ -17,8 +17,7 @@
 #include <stdlib.h>
 
 LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceVariadics)
-LUAU_FASTFLAGVARIABLE(LuauBidirectionalInferenceBetterLambdaHandling)
-LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
+LUAU_FASTFLAG(LuauRelaxConstraintOrderingForFunctionCheck)
 
 namespace Luau
 {
@@ -71,40 +70,38 @@ struct FindFunctionTypeIn : IterativeTypeVisitor
         // the user may be in nonstrict mode.
         //
         // On top of that we have to do a bunch of `int` casting here.
-        if (FFlag::LuauBidirectionalInferenceBetterLambdaHandling)
+        if (candidate == nullptr)
         {
-            if (candidate == nullptr)
-            {
-                candidate = get<FunctionType>(ty);
-                ambiguous = false;
-                return false;
-            }
-
-            int candidateDistance = abs(int(size(candidate->argTypes)) - numberOfLambdaParameters);
-            int thisDistance = abs(int(size(ftv.argTypes)) - numberOfLambdaParameters);
-
-            if (thisDistance < candidateDistance)
-            {
-                candidate = get<FunctionType>(ty);
-                ambiguous = false;
-            }
-            else if (thisDistance == candidateDistance)
-            {
-                ambiguous = true;
-            }
+            candidate = get<FunctionType>(ty);
+            ambiguous = false;
+            return false;
         }
-        else
+
+        int candidateDistance = abs(int(size(candidate->argTypes)) - numberOfLambdaParameters);
+        int thisDistance = abs(int(size(ftv.argTypes)) - numberOfLambdaParameters);
+
+        if (thisDistance < candidateDistance)
         {
-            if (candidate == nullptr ||
-                abs(int(size(candidate->argTypes)) - numberOfLambdaParameters) > abs(int(size(ftv.argTypes)) - numberOfLambdaParameters))
-            {
-                candidate = get<FunctionType>(ty);
-                return false;
-            }
+            candidate = get<FunctionType>(ty);
+            ambiguous = false;
+        }
+        else if (thisDistance == candidateDistance)
+        {
+            ambiguous = true;
         }
         return false;
     }
 };
+
+/**
+ * Is this an expression that we can check has an expected type, for now this
+ * is limited to literals (including lambdas, "function literals"), groups
+ * (parenthesized expressions), and if-else expressions.
+ */
+bool isCheckableExpr(const AstExpr* expr)
+{
+    return isLiteral(expr) || expr->is<AstExprGroup>() || expr->is<AstExprIfElse>();
+}
 
 struct BidirectionalTypePusher
 {
@@ -159,6 +156,14 @@ struct BidirectionalTypePusher
         expectedType = follow(expectedType);
         exprType = follow(exprType);
 
+        if (FFlag::LuauRelaxConstraintOrderingForFunctionCheck && !isCheckableExpr(expr))
+        {
+            // NOTE: For now we aren't using the result of this function, so
+            // just return the original expression type.
+            return exprType;
+        }
+
+
         // NOTE: We cannot block on free types here, as that trivially means
         // any recursive function would have a cycle, consider:
         //
@@ -197,10 +202,14 @@ struct BidirectionalTypePusher
             return exprType;
         }
 
-        if (!isLiteral(expr))
-            // NOTE: For now we aren't using the result of this function, so
-            // just return the original expression type.
-            return exprType;
+        if (!FFlag::LuauRelaxConstraintOrderingForFunctionCheck)
+        {
+            if (!isLiteral(expr))
+                // NOTE: For now we aren't using the result of this function, so
+                // just return the original expression type.
+                return exprType;
+        }
+
 
         if (expr->is<AstExprConstantString>() || expr->is<AstExprConstantNumber>() || expr->is<AstExprConstantBool>() ||
             expr->is<AstExprConstantNil>())
@@ -283,21 +292,12 @@ struct BidirectionalTypePusher
                     }
                 }
 
-                if (FFlag::LuauBidirectionalInferenceBetterLambdaHandling)
-                {
-                    // When multiple union arms have the same arg count, it's
-                    // ambiguous. Don't bind the return type so the solver can infer
-                    // it from the body.
-                    if (!ffti.ambiguous && !exprLambda->returnAnnotation && get<FreeTypePack>(follow(lambdaTy->retTypes)) &&
-                        !containsGeneric(expectedLambdaTy->retTypes, NotNull{genericTypesAndPacks}))
-                        solver->bind(NotNull{constraint}, lambdaTy->retTypes, expectedLambdaTy->retTypes);
-                }
-                else
-                {
-                    if (!exprLambda->returnAnnotation && get<FreeTypePack>(follow(lambdaTy->retTypes)) &&
-                        !containsGeneric(expectedLambdaTy->retTypes, NotNull{genericTypesAndPacks}))
-                        solver->bind(NotNull{constraint}, lambdaTy->retTypes, expectedLambdaTy->retTypes);
-                }
+                // When multiple union arms have the same arg count, it's
+                // ambiguous. Don't bind the return type so the solver can infer
+                // it from the body.
+                if (!ffti.ambiguous && !exprLambda->returnAnnotation && get<FreeTypePack>(follow(lambdaTy->retTypes)) &&
+                    !containsGeneric(expectedLambdaTy->retTypes, NotNull{genericTypesAndPacks}))
+                    solver->bind(NotNull{constraint}, lambdaTy->retTypes, expectedLambdaTy->retTypes);
             }
         }
 
@@ -312,16 +312,8 @@ struct BidirectionalTypePusher
             {
                 if (auto utv = get<UnionType>(expectedType))
                 {
-                    if (FFlag::LuauBidirectionalInferenceSimplifyTables)
-                    {
-                        if (auto tt = extractMatchingTableType(utv, exprType, solver->builtinTypes, solver->arena))
-                            (void)pushType(*tt, expr);
-                    }
-                    else
-                    {
-                        if (auto tt = extractMatchingTableType_DEPRECATED(utv, exprType, solver->builtinTypes))
-                            (void)pushType(*tt, expr);
-                    }
+                    if (auto tt = extractMatchingTableType(utv, exprType, solver->builtinTypes, solver->arena))
+                        (void)pushType(*tt, expr);
                 }
                 else if (auto itv = get<IntersectionType>(expectedType))
                 {

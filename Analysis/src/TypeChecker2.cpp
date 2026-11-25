@@ -41,12 +41,8 @@
 LUAU_FASTFLAG(DebugLuauMagicTypes)
 
 LUAU_FASTFLAGVARIABLE(LuauCheckFunctionStatementTypes)
-LUAU_FASTFLAGVARIABLE(LuauPropertyModifierMismatchErrors)
-LUAU_FASTFLAG(LuauTweakAccessViolationReporting)
 LUAU_FASTFLAG(LuauReadOnlyIndexers)
 LUAU_FASTFLAGVARIABLE(LuauIndexerModifierMismatchErrors)
-LUAU_FASTFLAG(LuauImproveUniqueTableWidthSubtyping)
-LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAGVARIABLE(LuauBetterPackAndVariadicMismatchErrors)
 // Luwu (helpful subtyping errors): explain a failed subtyping test with a structural diff: one rooted path per
 // place the two types disagree, how close they are, and which union member was meant
@@ -4460,9 +4456,9 @@ Reasonings TypeChecker2::explainReasonings_(TID subTy, TID superTy, Location loc
         TypePath::Path subNarration = narrationPath(reasoning.subPath, commonContext);
         TypePath::Path superNarration = narrationPath(reasoning.superPath, commonContext);
 
-        if ((FFlag::LuauPropertyModifierMismatchErrors || FFlag::LuauIndexerModifierMismatchErrors) && reasoning.isAccessModifierViolation)
+        if (reasoning.isAccessModifierViolation)
         {
-            if (FFlag::LuauPropertyModifierMismatchErrors && FFlag::LuauIndexerModifierMismatchErrors)
+            if (FFlag::LuauIndexerModifierMismatchErrors)
             {
                 // The leaf types at the end of the paths are the same type, so a
                 // plain "X is not a subtype of X" message would be misleading.
@@ -5651,32 +5647,7 @@ bool TypeChecker2::testLiteralOrAstTypeIsSubtype(AstExpr* expr, TypeId expectedT
     NotNull<Scope> scope{findInnermostScope(expr->location)};
     auto exprTy = lookupType(expr);
 
-    SubtypingResult r;
-
-    if (FFlag::LuauImproveUniqueTableWidthSubtyping && !FFlag::LuauBidirectionalInferenceSimplifyTables)
-    {
-        DenseHashSet<TypeId> uniqueTypes{nullptr};
-        findUniqueTypes(NotNull{&uniqueTypes}, std::vector{expr}, NotNull{&module->astTypes});
-
-        // We create a separate `Subtyping` instance here because, in this
-        // particular context, we have knowledge that any table literals are
-        // unique references to their types.  Because we know that no other
-        // references to those values can exist, we can safely test those table
-        // types covariantly.
-        //
-        // These same TypeIds must _not_ be considered to be unique references
-        // if they occur in any other context, and so we need to separate the
-        // caches.
-
-        Subtyping st{builtinTypes, NotNull{module->internalTypes.get()}, NotNull{&normalizer}, typeFunctionRuntime, ice};
-        st.uniqueTypes = &uniqueTypes;
-
-        r = st.isSubtype(exprTy, expectedType, scope);
-    }
-    else
-    {
-        r = subtyping->isSubtype(exprTy, expectedType, scope);
-    }
+    SubtypingResult r = subtyping->isSubtype(exprTy, expectedType, scope);
 
     if (r.isSubtype)
         return true;
@@ -5765,10 +5736,7 @@ bool TypeChecker2::testPotentialLiteralIsSubtype(AstExpr* expr, TypeId expectedT
         if (auto utv = get<UnionType>(expectedType))
         {
             std::optional<TypeId> matching;
-            if (FFlag::LuauBidirectionalInferenceSimplifyTables)
-                matching = extractMatchingTableType(utv, exprType, builtinTypes, NotNull{module->internalTypes.get()});
-            else
-                matching = extractMatchingTableType_DEPRECATED(utv, exprType, builtinTypes);
+            matching = extractMatchingTableType(utv, exprType, builtinTypes, NotNull{module->internalTypes.get()});
 
             if (matching)
             {

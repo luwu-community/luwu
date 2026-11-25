@@ -16,7 +16,6 @@ LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuauTruthyFalsy)
-LUAU_FASTFLAG(LuauAlwaysIntersectTablesWithTables)
 
 using namespace Luau;
 
@@ -1194,8 +1193,6 @@ TEST_CASE_FIXTURE(NormalizeFixture, "normalize_class_against_union_of_tables")
 TEST_CASE_FIXTURE(NormalizeFixture, "intersection_of_table_and_truthy")
 {
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
-
-    ScopedFastFlag _{FFlag::LuauAlwaysIntersectTablesWithTables, true};
 
     TableType tt{{{"x", Property::rw(getBuiltins()->numberType)}}, std::nullopt, {}, TableState::Sealed};
     TypeId tbl = arena.addType(std::move(tt));

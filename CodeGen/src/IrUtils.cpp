@@ -468,7 +468,8 @@ static void removeInstUse(IrFunction& function, uint32_t instIdx)
     CODEGEN_ASSERT(inst.useCount);
     inst.useCount--;
 
-    if (inst.useCount == 0)
+    // Luwu: from upstream's LuauCodegenCmpAnySideEffecting (0.745), an instruction with side effects stays without users
+    if (inst.useCount == 0 && !hasSideEffects(inst.cmd))
         kill(function, inst);
 }
 
@@ -1884,6 +1885,12 @@ void propagateTagsFromPredecessors(
     if (blockIdx >= function.cfg.predecessorsOffsets.size())
         return;
 
+    // Luwu: this and the Dead predecessor skips below come with upstream 0.734's LuauCodegenPropagateFallbackTags. With
+    // fallback blocks propagated, a jump back to the entry block brings tags the function start doesn't have.
+    // Entry block has an implicit edge as the function start and it has no tag info at that moment
+    if (function.entryBlock == blockIdx)
+        return;
+
     BlockIteratorWrapper preds = predecessors(function.cfg, blockIdx);
 
     if (preds.empty())
@@ -1895,6 +1902,9 @@ void propagateTagsFromPredecessors(
 
     for (uint32_t predIdx : preds)
     {
+        if (function.blocks[predIdx].kind == IrBlockKind::Dead)
+            continue;
+
         if (predIdx >= numBlockExitTags)
             return;
 
@@ -1907,6 +1917,9 @@ void propagateTagsFromPredecessors(
 
     for (uint32_t predIdx : preds)
     {
+        if (function.blocks[predIdx].kind == IrBlockKind::Dead)
+            continue;
+
         const std::vector<uint8_t>& predTags = function.blockExitTags[predIdx];
 
         CODEGEN_ASSERT(minRegsKnown <= predTags.size());
@@ -1972,6 +1985,29 @@ std::optional<uint8_t> tryGetLuauTagForBcType(uint8_t bcType, bool ignoreOptiona
     }
 
     return std::nullopt;
+}
+
+bool exitStoreClobbers(const VmExitSyncInfo& sync, uint8_t reg, uint32_t instIdx)
+{
+    for (const VmExitStoreInfo& regStore : sync.regStores)
+    {
+        if (regStore.reg != reg)
+            continue;
+
+        // A store of the instruction's own value leaves it in place
+        for (const VmExitStoreRecord& record : regStore.stores)
+        {
+            for (const IrOp& op : record.backup.ops)
+            {
+                if (op.kind == IrOpKind::Inst && op.index == instIdx)
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 } // namespace CodeGen

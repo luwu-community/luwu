@@ -28,7 +28,6 @@ LUAU_FASTINT(LuwuCompileInlineFewCallSites)
 LUAU_FASTINT(LuauRecursionLimit)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuauIntegerFastcalls)
-LUAU_FASTFLAG(LuauCompileIifeInline)
 LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuauExportValueSyntax)
@@ -5023,26 +5022,26 @@ TEST_CASE("JumpTrampoline")
         head += insns[i] + "\n";
 
     CHECK_EQ("\n" + head, R"(
-local 0: reg 3, start pc 8 line 3, end pc 54545 line 20002
-local 1: reg 0, start pc 2 line 2, end pc 54549 line 20004
-R3: number from 2 to 54546
-R0: number from 1 to 54550
+local 0: reg 3, start pc 8 line 3, end pc 54547 line 20002
+local 1: reg 0, start pc 2 line 2, end pc 54551 line 20004
+R3: number from 2 to 54548
+R0: number from 1 to 54552
 LOADN R0 0
 LOADN R3 1
 LOADN R1 3
 LOADN R2 1
 JUMP L1
-L0: JUMPX L14543
+L0: JUMPX L14545
 L1: FORNPREP R1 L0
 L2: ADD R0 R0 R3
 LOADK R4 K0 [150000]
 JUMP L4
-L3: JUMPX L14543
+L3: JUMPX L14545
 L4: JUMPIFLT R4 R0 L3
 ADD R0 R0 R3
 LOADK R4 K0 [150000]
 JUMP L6
-L5: JUMPX L14543
+L5: JUMPX L14545
 )");
 
     // FORNLOOP has to go through a trampoline since the jump is back to the beginning of the function
@@ -5052,16 +5051,18 @@ L5: JUMPX L14543
         tail += insns[i] + "\n";
 
     CHECK_EQ("\n" + tail, R"(
+LOADK R4 K0 [150000]
+JUMPIFLT R4 R0 L14545
 ADD R0 R0 R3
 LOADK R4 K0 [150000]
-JUMPIFLT R4 R0 L14543
+JUMPIFLT R4 R0 L14545
 ADD R0 R0 R3
 LOADK R4 K0 [150000]
-JUMPIFLT R4 R0 L14543
-JUMP L14542
-L14541: JUMPX L2
-L14542: FORNLOOP R1 L14541
-L14543: RETURN R0 1
+JUMPIFLT R4 R0 L14545
+JUMP L14544
+L14543: JUMPX L2
+L14544: FORNLOOP R1 L14543
+L14545: RETURN R0 1
 )");
 }
 
@@ -6983,14 +6984,13 @@ return x
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
-NEWTABLE R2 0 0
-LOADN R3 1
-SETTABLEN R3 R2 1
-LOADN R3 2
-SETTABLEN R3 R2 2
-LOADN R3 3
-SETTABLEN R3 R2 3
-MOVE R1 R2
+NEWTABLE R1 0 0
+LOADN R2 1
+SETTABLEN R2 R1 1
+LOADN R2 2
+SETTABLEN R2 R1 2
+LOADN R2 3
+SETTABLEN R2 R1 3
 RETURN R1 1
 )"
     );
@@ -7014,14 +7014,13 @@ return x
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
-NEWTABLE R2 0 0
-LOADN R3 1
-SETTABLEN R3 R2 1
-LOADN R3 2
-SETTABLEN R3 R2 2
-LOADN R3 3
-SETTABLEN R3 R2 3
-MOVE R1 R2
+NEWTABLE R1 0 0
+LOADN R2 1
+SETTABLEN R2 R1 1
+LOADN R2 2
+SETTABLEN R2 R1 2
+LOADN R2 3
+SETTABLEN R2 R1 3
 RETURN R1 1
 )"
     );
@@ -7074,9 +7073,8 @@ return x
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
-LOADN R2 42
-ORK R2 R2 K1 [5]
-MOVE R1 R2
+LOADN R1 42
+ORK R1 R1 K1 [5]
 RETURN R1 1
 )"
     );
@@ -7124,8 +7122,7 @@ return y
 DUPCLOSURE R0 K0 ['foo']
 GETVARARGS R1 1
 LOADNIL R1
-MOVE R3 R1
-MOVE R2 R3
+MOVE R2 R1
 RETURN R2 1
 )"
     );
@@ -7177,8 +7174,7 @@ end
                    2
                ),
         R"(
-GETUPVAL R1 0
-MOVE R0 R1
+GETUPVAL R0 0
 RETURN R0 1
 )"
     );
@@ -7306,9 +7302,8 @@ return y
 DUPCLOSURE R0 K0 ['foo']
 LOADNIL R1
 LOADN R1 42
-MOVE R3 R1
 NEWCLOSURE R2 P1
-CAPTURE VAL R3
+CAPTURE VAL R1
 RETURN R2 1
 )"
     );
@@ -7588,9 +7583,8 @@ return x
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
-LOADNIL R2
-LOADN R2 42
-MOVE R1 R2
+LOADNIL R1
+LOADN R1 42
 RETURN R1 1
 )"
     );
@@ -7795,8 +7789,6 @@ L0: MOVE R3 R2
 RETURN R3 1
 )"
     );
-
-    ScopedFastFlag luauCompileIifeInline{FFlag::LuauCompileIifeInline, true};
 
     // IIFE with a function exceeding regular inline complexity
     CHECK_EQ(
@@ -8068,9 +8060,8 @@ return y
         R"(
 DUPCLOSURE R0 K0 ['foo']
 GETVARARGS R1 1
-MOVE R3 R1
-LOADN R3 42
-MOVE R2 R3
+MOVE R2 R1
+LOADN R2 42
 RETURN R2 1
 )"
     );
@@ -8099,10 +8090,9 @@ GETVARARGS R1 1
 NEWCLOSURE R2 P1
 CAPTURE REF R1
 SETGLOBAL R2 K1 ['mutator']
-MOVE R3 R1
-GETGLOBAL R4 K1 ['mutator']
-CALL R4 0 0
-MOVE R2 R3
+MOVE R2 R1
+GETGLOBAL R3 K1 ['mutator']
+CALL R3 0 0
 CLOSEUPVALS R1
 RETURN R2 1
 )"
@@ -8615,20 +8605,18 @@ return x, y
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
+LOADN R1 0
+ADDK R1 R1 K1 [1]
+ADDK R1 R1 K2 [2]
+ADDK R1 R1 K3 [3]
+ADDK R1 R1 K4 [4]
+ADDK R1 R1 K5 [5]
 LOADN R2 0
-ADDK R2 R2 K1 [1]
-ADDK R2 R2 K2 [2]
-ADDK R2 R2 K3 [3]
-ADDK R2 R2 K4 [4]
-ADDK R2 R2 K5 [5]
-MOVE R1 R2
-LOADN R3 0
-SUBK R3 R3 K1 [1]
-SUBK R3 R3 K2 [2]
-SUBK R3 R3 K3 [3]
-SUBK R3 R3 K4 [4]
-SUBK R3 R3 K5 [5]
-MOVE R2 R3
+SUBK R2 R2 K1 [1]
+SUBK R2 R2 K2 [2]
+SUBK R2 R2 K3 [3]
+SUBK R2 R2 K4 [4]
+SUBK R2 R2 K5 [5]
 RETURN R1 2
 )"
     );
@@ -8748,11 +8736,10 @@ return x, y
                ),
         R"(
 DUPCLOSURE R0 K0 ['foo']
-LOADN R2 0
-ADDK R2 R2 K1 [1]
-ADDK R2 R2 K2 [2]
-ADDK R2 R2 K3 [3]
-MOVE R1 R2
+LOADN R1 0
+ADDK R1 R1 K1 [1]
+ADDK R1 R1 K2 [2]
+ADDK R1 R1 K3 [3]
 MOVE R2 R0
 LOADN R3 100
 CALL R2 1 1

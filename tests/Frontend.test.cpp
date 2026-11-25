@@ -22,11 +22,8 @@ LUAU_FASTFLAG(DebugLuauMagicTypes)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuauExportValueTypecheck)
-LUAU_FASTFLAG(LuauDontBindOptionalGenericToNil)
 LUAU_FASTFLAG(LuauSubtypingMissingPropertiesAsNil)
-LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
-LUAU_FASTFLAG(LuauFrontendSourceNodeErase)
 
 namespace
 {
@@ -2047,9 +2044,7 @@ TEST_CASE_FIXTURE(FrontendFixture, "generic_P_widening_with_cross_module_recursi
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
 
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauDontBindOptionalGenericToNil, true},
         {FFlag::LuauSubtypingMissingPropertiesAsNil, true},
-        {FFlag::LuauBidirectionalInferenceSimplifyTables, true},
     };
 
     // Module A: exports a recursive type and a component that uses it.
@@ -2083,8 +2078,6 @@ TEST_CASE_FIXTURE(FrontendFixture, "generic_P_widening_with_cross_module_recursi
 
 TEST_CASE_FIXTURE(FrontendFixture, "deleted_source_is_evicted_on_recheck")
 {
-    ScopedFastFlag luauFrontendSourceNodeErase{FFlag::LuauFrontendSourceNodeErase, true};
-
     fileResolver.source["game/A"] = R"(
         export type Props = { name: string, value: number, label: string? }
         local function make(p: Props): Props

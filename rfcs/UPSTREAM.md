@@ -142,3 +142,38 @@ Rows without notes are marked `**Status**: Implemented` in luau-lang/rfcs as of 
 | [Extended numeric literal syntax](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-number-literals.md) | 2021-05-03 | |
 | [Type ascriptions](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-type-ascription.md) | 2021-05-03 | |
 | [Typed variadics](https://github.com/luau-lang/rfcs/blob/c03475e9e3ca53ceb3449296882a4edb75a7ca38/docs/syntax-typed-variadics.md) | 2021-05-03 | |
+
+## Backported from upstream (26)
+
+Upstream changes from after 0.730 that Luwu ported ahead of a sync, mostly performance fixes with no RFC. "Luwu FFlag" is
+the flag that gates the port here: upstream's name where it was kept, or none where the port is always on. Ports Luwu
+runs without a flag still name upstream's flag, so a later sync can find what it replaces.
+
+| Feature | Upstream version | Upstream FFlag | Luwu FFlag | Reason |
+| --- | --- | --- | --- | --- |
+| Relaxed constraint ordering for `function_check` | 0.732 | `LuauRelaxConstraintOrderingForFunctionCheck` | `LuauRelaxConstraintOrderingForFunctionCheck` | A call inside a table literal passed to a call blocked the outer call's check, which made checking quadratic: 8000 such statements took 20.6s to check, and 0.94s with it. |
+| Subtyping reasonings in `DenseHash2` | 0.734 | none | none | Every passing subtyping check allocated a set for reasonings nothing read. With the next row, 2000 checks of a table literal against a 150-field record went from 989ms to 556ms. |
+| Unread subtyping reasonings skipped | [#2992](https://github.com/luau-lang/luau/pull/2992) | `LuauSubtypingSkipUnreadReasoning` | `LuauSubtypingSkipUnreadReasoning` | The same case as the row above. |
+| Tag propagation through fallback blocks | 0.734, fixed in 0.742 | `LuauCodegenPropagateFallbackTags` | none | Native code forgot every register's tag where a fallback block rejoined the fast path and checked them again. Guards that exit to the VM in a loop-heavy benchmark went from 61 to 31. 0.742's fix is for constant propagation limits, which Luwu doesn't have yet. |
+| Move elision around inlined calls | 0.736, fixed in 0.742 | `LuauCompileMoveElision`, `LuauCompileMoveElisionFix` | none | An inlined call copied its result into the call's target, and copied a reassigned argument into a fresh register. Interpreted color math ran 35% slower than upstream. Under native code, each copy's 16-byte load can't be forwarded from the two smaller stores before it, which costs about 9 cycles per copy on Zen 3. |
+| GC check on loop back-edges made permanent | 0.731, flag removed in 0.743 | `LuauBackedgeHeapCheck` | none | Upstream checks for a GC step on every loop back-edge and dropped the flag in 0.743. Luwu still tested the flag in the interpreter on every back-edge, which made a loop-heavy benchmark run 1.2% more instructions than upstream for identical bytecode. |
+| Lazy restore locations stay lazy in conditional spills | 0.742 | `LuauCodegenScopedSpillKeepLazy` | none | Native code wrote a value to its lazy VM register only inside a write barrier's slow path, then reloaded it from that register on the path that skipped the barrier. Two inlined class constructions stored a class pointer tagged as an object, which corrupted the heap. The classes fuzzer found it at O2 with native code. |
+| Exit sync restores arguments before overwriting their registers | 0.742 | `LuauCodegenExitSyncUpdate` | none | A VM exit's stores could overwrite the register a pending value was restored from, so the exit wrote the new value in place of the old one. The same change makes running out of registers fall back to the interpreter instead of emitting code with no register. |
+| Ints spilled to the stack are reloaded from the stack | 0.740 ([#2987](https://github.com/luau-lang/luau/pull/2987)) | `LuauCodegenX64IntSpillRestore` | none | An int spilled to a stack slot was reloaded by converting the double in its VM register, which may hold a different value by then. A buffer index reloaded that way after its range check could read or write out of bounds. |
+| Load forwarding checks the register link | 0.732 | `LuauCodegenOriginVerifyMatch` | none | Constant propagation reused an earlier load linked to another register, which read a value that had changed since. |
+| Builtin value checked with extra arguments | 0.733 | `LuauCodegenStoreTagCheck` | none | A buffer write builtin skipped the type check of its value when the call passed more arguments than it uses. |
+| `continue` closes locals declared before it | 0.737 | `LuauCompileContinueEagerClose` | none | A second `continue` moved the point locals are closed from, so it left open a captured local declared after the first `continue`. |
+| Jumps too long to encode are an error | 0.737 | `LuauCompileExpandLimit` | none | A jump still too long after its trampoline had its offset truncated, and the VM jumped somewhere else. |
+| Trampolines at exactly the conservative distance | 0.738 | `LuauCompileExpandShortLimit` | none | A jump of exactly the conservative distance got no trampoline and could overflow once others were added. |
+| Table array size limit | 0.739 | `LuauTableArrayAdjustCheck` | none | An array past `MAXSIZE` overflowed the size computations: `table.move({}, 1, maxinteger, 1)` corrupted memory. |
+| Merged buffer checks cover the access's start | 0.741 | `LuauCodegenConstPropMinOffset` | none | A merged bounds check could start before the buffer, which let a negative index read or write out of bounds. |
+| GC heap growth when the heap shrinks | 0.741 ([#2996](https://github.com/luau-lang/luau/pull/2996)) | `LuauGcHeapShrinkFix` | none | A heap that shrank between measurements made the growth computation wrap around, which is undefined behavior and broke GC pacing. |
+| Operands of metamethod operators escape constant table folding | 0.742 | `LuauCompileTableFoldFix` | none | The compiler folded reads of a table that `__add`, `__concat`, `__index` or `__newindex` could change. |
+| A scale of 0 is never folded | 0.742 | `LuauCodegenNoZeroScale` | none | `x * 4 * 0` is NaN when `x * 4` overflows, but was folded to `x * 0`, so two buffer indices shared one bounds check. |
+| Dead store elimination tracks tag invalidation | 0.744 | `LuauCodegenDseTrackTagInvalidation` | none | A tag guard on a load from before a store told dead store elimination the register's tag, which the store had changed. |
+| `MARK_USED` and `MARK_DEAD` liveness | 0.745 | `LuauCodegenMarkUsed` | none | Dead store elimination removed a store a VM exit needed after a register was marked dead, and cloned blocks dropped the marks. |
+| `CMP_ANY` has side effects | 0.745 | `LuauCodegenCmpAnySideEffecting` | none | A comparison whose result nothing used was removed, so its `__eq` or `__lt` never ran and its error was never raised. |
+| X64 memory operands check for writes in between | 0.746 | `LuauCodegenX64ConflictCheck` | none | A load folded into a later instruction read the register after another instruction had written it. |
+| Fastcall analysis stays inside the call's arguments | 0.747 | `LuauCodegenFastcallAnalysisLimit` | none | Bytecode analysis annotated three registers past a builtin call's base, which could run off the end of the register tags. |
+| Unrolled loops keep `-0` | 0.747 | `LuauCompileLoopUnrollNegativeZero` | none | An unrolled `for i = -0, ...` loop's first iteration got `+0`, so `1 / i` gave `inf` instead of `-inf`. |
+| Inlined calls into captured registers | 0.748 | `LuauCompileCapturedCallTarget` | none | Inlined code could write the call's target register before a closure that captured it read the old value. |

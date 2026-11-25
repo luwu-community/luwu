@@ -1587,6 +1587,9 @@ struct IrFunction
     // Stores register tags that are known after constant propagating through a block, indexed by that block's index
     std::vector<std::vector<uint8_t>> blockExitTags; // blockIdx → tag array
 
+    // Known VM register tag values on fallback entry (intersection of data from each individual jump point)
+    std::vector<std::vector<uint8_t>> fallbackEntryTags;
+
     IrBlock& blockOp(IrOp op)
     {
         CODEGEN_ASSERT(op.kind == IrOpKind::Block);

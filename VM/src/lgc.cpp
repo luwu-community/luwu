@@ -16,14 +16,10 @@
 
 #include <string.h>
 
-LUAU_FASTFLAG(LuauUdataDirectAccess6)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAGVARIABLE(LuauUdataMetatablePinned)
-LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcTableStepFix, false)
 LUAU_FASTFLAGVARIABLE(LuauGcTraceUdata)
 LUAU_FLAGVERSION(LuauGcTraceUdata, 2)
-LUAU_DYNAMIC_FASTFLAGVARIABLE(LuauGcMarkUdataAccess, false)
-LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 
 /*
  * Luau uses an incremental non-generational non-moving mark&sweep garbage collector.
@@ -552,10 +548,7 @@ static size_t propagatemark(global_State* g)
         if (traversetable(g, h)) // table is weak?
             black2gray(o);       // keep it gray
 
-        if (DFFlag::LuauGcTableStepFix)
-            return sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * (h->node == &luaH_dummynode ? 0 : sizenode(h));
-        else
-            return sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * sizenode(h);
+        return sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * (h->node == &luaH_dummynode ? 0 : sizenode(h));
     }
     case LUA_TFUNCTION:
     {
@@ -694,10 +687,7 @@ static size_t cleartable(lua_State* L, GCObject* l)
     {
         LuaTable* h = gco2h(l);
 
-        if (DFFlag::LuauGcTableStepFix)
-            work += sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * (h->node == &luaH_dummynode ? 0 : sizenode(h));
-        else
-            work += sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * sizenode(h);
+        work += sizeof(LuaTable) + sizeof(TValue) * h->sizearray + sizeof(LuaNode) * (h->node == &luaH_dummynode ? 0 : sizenode(h));
 
         int i = h->sizearray;
         while (i--)
@@ -848,7 +838,6 @@ void luaC_freeall(lua_State* L)
 
 static void markudatadirectaccess(global_State* g)
 {
-    LUAU_ASSERT(DFFlag::LuauGcMarkUdataAccess);
     for (int i = 0; i < UTAG_INTERNAL_LIMIT; i++)
     {
         lua_UdataDirectAccessData& udatadirect = g->udatadirect[i];
@@ -908,24 +897,7 @@ static void markroot(lua_State* L)
             g->embeddergc(g->mainthread, nullptr);
     }
 
-    if (FFlag::LuauUdataDirectAccess6)
-    {
-        if (DFFlag::LuauGcMarkUdataAccess)
-        {
-            markudatadirectaccess(g);
-        }
-        else
-        {
-            for (int i = 0; i < UTAG_INTERNAL_LIMIT; i++)
-            {
-                lua_UdataDirectAccessData& udatadirect = L->global->udatadirect[i];
-
-                markvalue(g, &udatadirect.indextm);
-                markvalue(g, &udatadirect.newindextm);
-                markvalue(g, &udatadirect.namecalltm);
-            }
-        }
-    }
+    markudatadirectaccess(g);
 
     if (FFlag::LuauDirectFieldGet)
         markudatadirectfields(g);
@@ -1022,8 +994,7 @@ static size_t atomic(lua_State* L)
     if (FFlag::LuauUdataMetatablePinned)
         marktaggetmt(g); // mark tagged userdata metatables (again)
 
-    if (DFFlag::LuauGcMarkUdataAccess)
-        markudatadirectaccess(g); // mark tagged userdata direct access functions (again)
+    markudatadirectaccess(g); // mark tagged userdata direct access functions (again)
 
     if (FFlag::LuauDirectFieldGet)
         markudatadirectfields(g); // mark direct field dispatch tables (again)
@@ -1268,6 +1239,14 @@ static int64_t getheaptriggererroroffset(global_State* g)
     return int64_t(totalTerm * 1024);
 }
 
+// Luwu: from upstream's LuauGcHeapShrinkFix (0.741). The heap can shrink between measurements (after a full collection, or when
+// thread stacks shrink during marking), which counts as no growth. Subtracting would wrap around and give an int64_t conversion
+// with undefined behavior.
+static size_t getheapgrowth(size_t current, size_t previous)
+{
+    return current > previous ? current - previous : 0;
+}
+
 static size_t getheaptrigger(global_State* g, size_t heapgoal)
 {
     // adjust threshold based on a guess of how many bytes will be allocated between the cycle start and sweep phase
@@ -1279,7 +1258,7 @@ static size_t getheaptrigger(global_State* g, size_t heapgoal)
     if (allocationduration < durationthreshold)
         return heapgoal;
 
-    double allocationrate = (g->gcstats.atomicstarttotalsizebytes - g->gcstats.endtotalsizebytes) / allocationduration;
+    double allocationrate = getheapgrowth(g->gcstats.atomicstarttotalsizebytes, g->gcstats.endtotalsizebytes) / allocationduration;
     double markduration = g->gcstats.atomicstarttimestamp - g->gcstats.starttimestamp;
 
     int64_t expectedgrowth = int64_t(markduration * allocationrate);
@@ -1312,7 +1291,7 @@ size_t luaC_step(lua_State* L, bool assist)
 #endif
 
     // if allocations outpace the GC to require an assist, adjust step size to cover the difference
-    if ((FFlag::LuauBackedgeHeapCheck || LUA_VECTOR_DOUBLE == 1) && assist)
+    if (assist)
     {
         size_t need = debt * g->gcstepmul / 100;
 
@@ -1424,6 +1403,10 @@ void luaC_fullgc(lua_State* L)
 
     g->gcstats.heapgoalsizebytes = heapgoalsizebytes;
 
+    // Luwu: from upstream's LuauGcHeapShrinkFix (0.741), a full collection ends a cycle, so heap growth is measured from here
+    g->gcstats.endtimestamp = lua_clock();
+    g->gcstats.endtotalsizebytes = g->totalbytes;
+
 #ifdef LUAI_GCMETRICS
     finishGcCycleMetrics(g);
 #endif
@@ -1508,7 +1491,7 @@ int64_t luaC_allocationrate(lua_State* L)
         if (duration < durationthreshold)
             return -1;
 
-        return int64_t((g->totalbytes - g->gcstats.endtotalsizebytes) / duration);
+        return int64_t(getheapgrowth(g->totalbytes, g->gcstats.endtotalsizebytes) / duration);
     }
 
     // totalbytes is unstable during the sweep, use the rate measured at the end of mark phase
@@ -1517,7 +1500,7 @@ int64_t luaC_allocationrate(lua_State* L)
     if (duration < durationthreshold)
         return -1;
 
-    return int64_t((g->gcstats.atomicstarttotalsizebytes - g->gcstats.endtotalsizebytes) / duration);
+    return int64_t(getheapgrowth(g->gcstats.atomicstarttotalsizebytes, g->gcstats.endtotalsizebytes) / duration);
 }
 
 const char* luaC_statename(int state)

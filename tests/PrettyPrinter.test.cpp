@@ -11,7 +11,6 @@
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuauNoInline)
 LUAU_FASTFLAG(LuwuClasses)
-LUAU_FASTFLAG(LuauTableEntriesDontNeedToMatchIndent)
 LUAU_FASTFLAG(LuauCstAttr)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -2544,8 +2543,6 @@ end)";
 
 TEST_CASE_FIXTURE(Fixture, "pretty_print_incomplete_table_expr")
 {
-    ScopedFastFlag fflag2{FFlag::LuauTableEntriesDontNeedToMatchIndent, true};
-
     std::string code = R"(local a = { a = 1 ["b"] = 2 })";
 
     CHECK_EQ(code, prettyPrint(code, {}, true, true).code);
