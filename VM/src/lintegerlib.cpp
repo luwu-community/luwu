@@ -46,7 +46,7 @@ void luaZ_pushmode(lua_State* L, IntegerMode mode)
 }
 
 // The mode of the Mode object at `idx`, or -1 when it isn't one
-static int tomode(lua_State* L, int idx)
+int luaZ_tomode(lua_State* L, int idx)
 {
     const TValue* o = luaA_toobject(L, idx);
     if (!o || !ttisobject(o) || objectvalue(o)->lclass != modeclass(L))
@@ -63,7 +63,7 @@ static int tomode(lua_State* L, int idx)
 
 IntegerMode luaZ_checkmode(lua_State* L, int idx)
 {
-    int mode = tomode(L, idx);
+    int mode = luaZ_tomode(L, idx);
     if (mode < 0)
         luaL_typeerrorL(L, idx, "integer mode such as integer.u8");
     return IntegerMode(mode);
@@ -1044,9 +1044,10 @@ static int mode_call(lua_State* L)
     return castto(L, 2, int(mode));
 }
 
+// `IntegerMode<u8>`, so a printed mode doesn't read like a string
 static int mode_tostring(lua_State* L)
 {
-    lua_pushstring(L, luaZ_modename(luaZ_checkmode(L, 1)));
+    lua_pushfstring(L, "IntegerMode<%s>", luaZ_modename(luaZ_checkmode(L, 1)));
     return 1;
 }
 

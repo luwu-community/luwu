@@ -123,5 +123,7 @@ LUAI_FUNC uint64_t luaZ_trailingzeros(const TValue* o);
 
 // Pushes the `integer.Mode` object of `mode`; the integer library has to be open
 LUAI_FUNC void luaZ_pushmode(lua_State* L, IntegerMode mode);
+// The mode of the `integer.Mode` object at stack `idx`, or -1 when it isn't one
+LUAI_FUNC int luaZ_tomode(lua_State* L, int idx);
 // The mode of the `integer.Mode` object at stack `idx`, raising when it isn't one
 LUAI_FUNC IntegerMode luaZ_checkmode(lua_State* L, int idx);

@@ -23,7 +23,7 @@ do
     assert(integer.i8.min == -128i8 and integer.i8.max == 127i8)
     assert(integer.u64.max == 18446744073709551615u64 and integer.i64.min == -9223372036854775808i64)
     assert(integer.dynamic.min == nil and integer.dynamic.max == nil)
-    assert(tostring(integer.u16) == "u16" and tostring(integer.dynamic) == "int")
+    assert(tostring(integer.u16) == "IntegerMode<u16>" and tostring(integer.dynamic) == "IntegerMode<int>")
     assert(typeof(integer.u8) == "integermode" and class.isinstance(integer.u8, integer.Mode))
     assert(integer.mode(5u8) == integer.u8 and integer.mode(100000000000000000000int) == integer.dynamic)
     assert(integer.isbig(100000000000000000000int) and not integer.isbig(5int) and not integer.isbig(5u8))
