@@ -506,4 +506,14 @@ do
     assert(#{ for i = 1, 3 do give [i] = i } == 3)
 end
 
+-- an unrolled constant range keeps its first value exactly, so a range from -0 starts at -0
+do
+    const reciprocals = { for i = -0, 0 give 1 / i }
+    assert(#reciprocals == 1 and reciprocals[1] == -math.huge)
+
+    local function boxed(x) return { x } end
+    const boxes = { for i = -0, 0 give boxed(1 / i) }
+    assert(boxes[1][1] == -math.huge)
+end
+
 return "OK"

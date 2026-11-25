@@ -7113,7 +7113,8 @@ struct Compiler
         for (int iv = 0; iv < tripCount && foldable; ++iv)
         {
             locstants[var].type = Constant::Type_Number;
-            locstants[var].valueNumber = from + iv * step;
+            // the first item keeps `from` exactly: `-0 + 0 * step` would be +0
+            locstants[var].valueNumber = iv == 0 ? from : from + iv * step;
 
             // the first fold records what it changes, so the state before the comprehension can be restored
             foldConstants(
@@ -9201,7 +9202,8 @@ struct Compiler
         {
             // we need to re-fold constants in the loop body with the new value; this reuses computed constant values elsewhere in the tree
             locstants[var].type = Constant::Type_Number;
-            locstants[var].valueNumber = from + iv * step;
+            // the first iteration keeps `from` exactly: `-0 + 0 * step` would be +0
+            locstants[var].valueNumber = iv == 0 ? from : from + iv * step;
 
             if (iv == 0)
                 foldConstants(
