@@ -20,6 +20,7 @@
 LUAU_FASTINTVARIABLE(LuauRecursionLimit, 1000)
 LUAU_FASTINTVARIABLE(LuauTypeLengthLimit, 1000)
 LUAU_FASTINTVARIABLE(LuauParseErrorLimit, 100)
+LUAU_FASTFLAG(DebugLuwuEncourageInline)
 
 // Warning: If you are introducing new syntax, ensure that it is behind a separate
 // flag so that we don't break production games by reverting syntax changes.
@@ -405,6 +406,18 @@ const AstAttr::Context kLintScopeContexts = AstAttr::Context(
     unsigned(AstAttr::Context::AnyFunction) | unsigned(AstAttr::Context::Class) | unsigned(AstAttr::Context::ClassField) |
     unsigned(AstAttr::Context::Local)
 );
+// Luwu: `@[inline(reason)]` takes one string constant, why the function should be inlined
+std::vector<std::pair<Location, std::string>> inlineArgsValidator(Location attrLoc, const AstArray<AstExpr*>& args)
+{
+    if (args.size != 1)
+        return {{attrLoc, "@inline needs one reason: write @[inline(\"why this function should be inlined\")]"}};
+
+    if (!args.data[0]->is<AstExprConstantString>())
+        return {{args.data[0]->location, "@inline's reason must be a string constant"}};
+
+    return {};
+}
+
 
 AttributeEntry kAttributeEntries[] = {
     {"checked", AstAttr::Type::Checked, AstAttr::Context::AnyFunction, "functions", nullptr, {}},
@@ -428,6 +441,13 @@ std::pair<AttributeEntry, Luau::FValue<bool>&> kFlaggedAttributeEntries[] = {
      FFlag::LuwuNoinlineAttribute},
     // Luwu user-defined refinements: parsed by parseTruthyAttribute, since its second argument is a type
     {{"truthy", AstAttr::Type::Truthy, AstAttr::Context::AnyFunction, "functions", nullptr, {}}, FFlag::DebugLuwuUserDefinedRefinements},
+    {{"inline",
+      AstAttr::Type::Inline,
+      AstAttr::Context::InlinableFunction,
+      "a local function, a const function, a class method or a function expression",
+      nullptr,
+      inlineArgsValidator},
+     FFlag::DebugLuwuEncourageInline},
 };
 
 std::vector<AttributeInfo> getKnownAttributes()
