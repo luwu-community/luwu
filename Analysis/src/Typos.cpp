@@ -93,16 +93,6 @@ const StringSingleton* stringSingletonOf(TypeId ty)
     return singleton ? get<StringSingleton>(singleton) : nullptr;
 }
 
-// The name of a literal's property, when it's written as one (`name = v` or `["name"] = v`)
-std::optional<std::string> literalPropertyName(const AstExprTable::Item& item)
-{
-    if (item.kind == AstExprTable::Item::Kind::List || !item.key)
-        return std::nullopt;
-    if (AstExprConstantString* key = item.key->as<AstExprConstantString>())
-        return std::string(key->value.data, key->value.size);
-    return std::nullopt;
-}
-
 // The tables a literal is checked against for `expected`: a table, or each table of an intersection, through a `T?`.
 // Empty when one of them has an indexer (any name fits it) or isn't a table.
 std::vector<const TableType*> expectedTables(TypeId expected)
@@ -230,6 +220,20 @@ TypeId withWrittenStrings(TypeId given, const AstExpr* literal, const std::vecto
 }
 
 } // namespace
+
+std::optional<std::string> literalPropertyName(const AstExprTable::Item& item)
+{
+    if (item.kind == AstExprTable::Item::Kind::List || !item.key)
+        return std::nullopt;
+    if (AstExprConstantString* key = item.key->as<AstExprConstantString>())
+        return std::string(key->value.data, key->value.size);
+    return std::nullopt;
+}
+
+bool withinOneEdit(const std::string& a, const std::string& b)
+{
+    return editDistanceWithin(a, b, 1).has_value();
+}
 
 std::optional<size_t> typoDistance(const std::string& written, const std::string& meant)
 {

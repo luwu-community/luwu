@@ -57,8 +57,10 @@ TEST_CASE_FIXTURE(Fixture, "infer_the_maximum_number_of_values_the_function_coul
     TypeId t = requireType("getMinCardCountForWidth");
     REQUIRE(t);
 
+    // Luwu: the returns are joined value by value (ConstraintSolver::dispatchInferredReturn). Upstream takes the first
+    // `return` as the function's type: `(number) -> number`.
     if (!FFlag::DebugLuauForceOldSolver)
-        CHECK_EQ("(number) -> number", toString(t));
+        CHECK_EQ("(number) -> (number, string?)", toString(t));
     else
         CHECK_EQ("(any) -> (...any)", toString(t));
 }

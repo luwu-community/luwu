@@ -100,6 +100,7 @@ TEST_CASE_FIXTURE(Fixture, "load_definition_file_errors_do_not_pollute_global_sc
     std::optional<Binding> fooTy = tryGetGlobalBinding(getFrontend().globals, "foo");
     CHECK(!fooTy.has_value());
 
+    unfreeze(getFrontend().globals.globalTypes);
     LoadDefinitionFileResult checkFailResult = getFrontend().loadDefinitionFile(
         getFrontend().globals,
         getFrontend().globals.globalScope,
@@ -110,10 +111,48 @@ TEST_CASE_FIXTURE(Fixture, "load_definition_file_errors_do_not_pollute_global_sc
         "@test",
         /* captureComments */ false
     );
+    freeze(getFrontend().globals.globalTypes);
 
-    REQUIRE(!checkFailResult.success);
+    // Luwu: a type error doesn't stop a definition file from loading (upstream fails it and leaves `bar` unbound).
+    REQUIRE(checkFailResult.success);
+    REQUIRE(checkFailResult.module);
+    CHECK_EQ(checkFailResult.module->errors.size(), 1);
     std::optional<Binding> barTy = tryGetGlobalBinding(getFrontend().globals, "bar");
-    CHECK(!barTy.has_value());
+    CHECK(barTy.has_value());
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "definition_file_loads_despite_errors_inside_type_function_bodies")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    // Regression test: a type error in a type function's body failed the whole file and dropped every global it
+    // declares. PhoenixEngine's `phoenix.d.luau` calls `components()` on a `type` it hasn't narrowed to a union, which
+    // is an error since only `Union` and `Intersection` have it. The type function must still run.
+    unfreeze(getFrontend().globals.globalTypes);
+    LoadDefinitionFileResult result = getFrontend().loadDefinitionFile(
+        getFrontend().globals,
+        getFrontend().globals.globalScope,
+        R"(
+        type function keep(t: type)
+            local parts = t:components()
+            return t
+        end
+
+        declare foo: keep<number | string>
+    )",
+        "@test",
+        /* captureComments */ false
+    );
+    freeze(getFrontend().globals.globalTypes);
+
+    REQUIRE(result.success);
+    REQUIRE(result.module);
+    REQUIRE_EQ(result.module->errors.size(), 1);
+    CHECK_EQ(result.module->errors[0].location.begin.line, 2);
+
+    std::optional<Binding> fooTy = tryGetGlobalBinding(getFrontend().globals, "foo");
+    REQUIRE(fooTy.has_value());
+    CHECK_EQ("number | string", toString(fooTy->typeId));
 }
 
 TEST_CASE_FIXTURE(Fixture, "definition_file_extern_types")
@@ -171,7 +210,8 @@ TEST_CASE_FIXTURE(Fixture, "class_definitions_cannot_overload_non_function")
     );
     freeze(getFrontend().globals.globalTypes);
 
-    REQUIRE(!result.success);
+    // Luwu: type errors don't stop a definition file from loading.
+    REQUIRE(result.success);
     CHECK_EQ(result.parseResult.errors.size(), 0);
     REQUIRE(bool(result.module));
     if (!FFlag::DebugLuauForceOldSolver)
@@ -211,7 +251,8 @@ TEST_CASE_FIXTURE(Fixture, "class_definitions_cannot_extend_non_class")
     );
     freeze(getFrontend().globals.globalTypes);
 
-    REQUIRE(!result.success);
+    // Luwu: type errors don't stop a definition file from loading.
+    REQUIRE(result.success);
     CHECK_EQ(result.parseResult.errors.size(), 0);
     REQUIRE(bool(result.module));
     REQUIRE_EQ(result.module->errors.size(), 1);
@@ -238,7 +279,17 @@ TEST_CASE_FIXTURE(Fixture, "no_cyclic_defined_extern_types")
     );
     freeze(getFrontend().globals.globalTypes);
 
-    REQUIRE(!result.success);
+    // Luwu: type errors don't stop a definition file from loading. The cycle is reported, and neither type is
+    // persisted with a superclass, so using them afterward can't loop.
+    REQUIRE(result.success);
+    REQUIRE(bool(result.module));
+    CHECK(!result.module->errors.empty());
+
+    check(R"(
+        local function f(foo: Foo, bar: Bar)
+            return foo.x, bar.y
+        end
+    )");
 }
 
 TEST_CASE_FIXTURE(Fixture, "declaring_generic_functions")
