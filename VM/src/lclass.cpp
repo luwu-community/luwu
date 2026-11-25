@@ -3451,6 +3451,7 @@ static bool luaR_isnativevaluemetamethod(const luaR_NativeMember& member)
 // Whether a builtin class's member follows the registry's rules for its name, as the parser holds a class body to them: a
 // `__` field is one the registry names as a field, and a `__` function a metamethod, placed on the objects or (when the
 // registry allows it) on the class value
+#if defined(LUAU_ASSERTENABLED)
 static bool luaR_isvalidnativemember(const luaR_NativeMember& member)
 {
     if (member.name[0] != '_' || member.name[1] != '_')
@@ -3466,6 +3467,7 @@ static bool luaR_isvalidnativemember(const luaR_NativeMember& member)
     bool placed = (member.flags & LBC_CLASSMEMBER_STATIC) != 0;
     return special->kind == Luau::ClassMemberNameKind::Metamethod && (!placed || special->onValues);
 }
+#endif
 
 static Closure* luaR_newnativemethod(lua_State* L, const char* name, lua_CFunction method)
 {
@@ -3500,7 +3502,9 @@ LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_Native
     uint32_t numvalue = 0;
     for (int idx = 0; idx < count; idx++)
     {
+#if defined(LUAU_ASSERTENABLED)
         LUAU_ASSERT(luaR_isvalidnativemember(members[idx]));
+#endif
         numvalue += luaR_isnativevaluemetamethod(members[idx]) ? 1 : 0;
     }
 
