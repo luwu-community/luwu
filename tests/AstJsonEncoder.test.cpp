@@ -13,6 +13,7 @@ using namespace Luau;
 
 
 LUAU_FASTFLAG(LuwuDefaultArguments)
+LUAU_FASTFLAG(LuwuClasses)
 
 struct JsonEncoderFixture
 {
@@ -476,6 +477,31 @@ TEST_CASE_FIXTURE(JsonEncoderFixture, "encode_AstStatDeclareClass")
     std::string_view expected2 =
         R"({"type":"AstStatDeclareClass","location":"6,8 - 8,11","name":"Bar","superName":"Foo","props":[{"name":"prop2","nameLocation":"7,12 - 7,17","type":"AstDeclaredClassProp","luauType":{"type":"AstTypeReference","location":"7,19 - 7,25","name":"string","nameLocation":"7,19 - 7,25","parameters":[]},"location":"7,12 - 7,25"}],"indexer":null})";
     CHECK(toJson(root->body.data[1]) == expected2);
+}
+
+// Luwu Classes (rfcs/classes): a class statement had no AstJsonEncoder override, so visiting it fell
+// through to AstStatClass::visit's manual child walk, which writes each primary constructor default
+// (and every other class child) as its own top-level JSON value with no enclosing object and no comma
+// between siblings -- invalid JSON like `..."value":false}{"type":"AstExprConstantString",...`.
+TEST_CASE_FIXTURE(JsonEncoderFixture, "encode_AstStatClass_primaryConstructorDefaults")
+{
+    ScopedFastFlag sffClasses{FFlag::LuwuClasses, true};
+
+    AstStatBlock* root = expectParse(R"(
+        class Writer(pretty = false, indent = "  ")
+        end
+    )");
+
+    REQUIRE(1 == root->body.size);
+
+    std::string actual = toJson(root->body.data[0]);
+
+    // No two sibling JSON values written back-to-back with a missing comma.
+    CHECK(actual.find("}{") == std::string::npos);
+
+    std::string_view expected =
+        R"({"type":"AstStatClass","location":"1,8 - 2,11","name":{"luauType":null,"name":"Writer","isConst":true,"type":"AstLocal","location":"1,14 - 1,20"},"exported":false,"generics":[],"genericPacks":[],"primaryConstructor":{"type":"AstClassPrimaryConstructor","visibility":"public","args":[{"luauType":null,"name":"pretty","isConst":false,"type":"AstLocal","location":"1,21 - 1,27"},{"luauType":null,"name":"indent","isConst":false,"type":"AstLocal","location":"1,37 - 1,43"}],"argsDefaults":[{"type":"AstExprConstantBool","location":"1,30 - 1,35","value":false},{"type":"AstExprConstantString","location":"1,46 - 1,50","value":"  "}],"argsQualifiers":[{"type":"AstClassPrimaryConstructorParamQualifiers","visibility":"public","isConst":false},{"type":"AstClassPrimaryConstructorParamQualifiers","visibility":"public","isConst":false}],"argLocation":"1,20 - 1,51"},"members":[],"hasEnd":true,"attributes":[],"implements":[],"needs":[]})";
+    CHECK(actual == expected);
 }
 
 TEST_CASE_FIXTURE(JsonEncoderFixture, "encode_annotation")

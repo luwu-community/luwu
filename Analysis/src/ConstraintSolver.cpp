@@ -4,6 +4,7 @@
 #include "Luau/Anyification.h"
 #include "Luau/ApplyTypeFunction.h"
 #include "Luau/AstUtils.h"
+#include "Luau/BuiltinDefinitions.h"
 #include "Luau/BuiltinTypeFunctions.h"
 #include "Luau/Clone.h"
 #include "Luau/Common.h"
@@ -134,12 +135,22 @@ std::pair<std::vector<TypeId>, std::vector<TypePackId>> saturateArguments(
     // mutually exclusive with the type pack -> type conversion we do below:
     // extraTypes will only have elements in it if we have more types than we
     // have parameter slots for them to go into.
+    size_t firstRawPack = 0;
     if (!extraTypes.empty() && !fn.typePackParams.empty())
     {
-        saturatedPackArguments.push_back(arena->addTypePack(extraTypes));
+        // Luwu: a pack after the extra types is the rest of theirs when the function has one pack parameter, so
+        // `F<number, ...string>` for `type F<T...>` passes `(number, ...string)`, and `.(number, T...)` is a bundle of
+        // a number and then `T...`. Upstream drops the pack: `F<number, ...string>` is `F<number>`.
+        std::optional<TypePackId> rest;
+        if (fn.typePackParams.size() == 1 && !rawPackArguments.empty())
+        {
+            rest = rawPackArguments[0];
+            firstRawPack = 1;
+        }
+        saturatedPackArguments.push_back(arena->addTypePack(TypePack{extraTypes, rest}));
     }
 
-    for (size_t i = 0; i < rawPackArguments.size(); ++i)
+    for (size_t i = firstRawPack; i < rawPackArguments.size(); ++i)
     {
         TypePackId tp = rawPackArguments[i];
 
@@ -1581,7 +1592,9 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
     // If we use the same signature, we don't need to bother trying to
     // instantiate the alias again, since the instantiation should be
     // deterministic.
-    if (TypeId* cached = instantiatedAliases.find(signature))
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an alias's body gets an instantiation of its own (below)
+    bool namesInstantiation = petv->aliasName && FFlag::LuwuGenericNominals && get<ExternType>(follow(tf->type));
+    if (TypeId* cached = namesInstantiation ? nullptr : instantiatedAliases.find(signature))
     {
         bindResult(*cached);
         return true;
@@ -1627,7 +1640,12 @@ bool ConstraintSolver::tryDispatch(const TypeAliasExpansionConstraint& c, NotNul
         for (TypePackId argument : packArguments)
             queuer.run(argument);
 
-        instantiatedAliases[signature] = instantiation;
+        // The body of `type Nums = Vec<number>` prints as `Nums`. Every other `Vec<number>` shares the cached instantiation,
+        // so this one isn't cached.
+        if (namesInstantiation)
+            getMutable<ExternType>(instantiation)->aliasName = petv->aliasName;
+        else
+            instantiatedAliases[signature] = instantiation;
         bindResult(instantiation);
         return true;
     }
@@ -3781,6 +3799,11 @@ bool ConstraintSolver::tryDispatch(const TypeInstantiationConstraint& c, NotNull
     // Luwu Classes (rfcs/classes): `Box<<string>>` is the constructor (a trait's `__create`) with its type arguments
     // given, so `Box<<string>>(x)` is a `Box<string>`. Its `__call` takes the class value first, which the call won't pass.
     std::optional<TypeId> classCall = FFlag::LuwuClasses ? classValueCallType(builtinTypes, c.functionType) : std::nullopt;
+    if (c.fromFirstPush && !(classCall && fixedElementContainerName(arena, constraint->scope.get(), c.functionType)))
+    {
+        bind(constraint, c.placeholderType, c.functionType);
+        return true;
+    }
     if (classCall)
     {
         if (isBlocked(*classCall))
@@ -4890,6 +4913,10 @@ bool ConstraintSolver::bindCachedExpansion(TypeId pendingExpansion, NotNull<Scop
     TypeId target = follow(pendingExpansion);
     const PendingExpansionType* petv = get<PendingExpansionType>(target);
     if (!petv)
+        return false;
+    // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): an alias's body gets an instantiation of its own
+    // (tryDispatch(TypeAliasExpansionConstraint))
+    if (petv->aliasName)
         return false;
 
     std::optional<TypeFun> tf;

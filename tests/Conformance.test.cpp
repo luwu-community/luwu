@@ -4,6 +4,8 @@
 #include "lua.h"
 #include "lapix.h"
 #include "lobject.h"
+#include "lstate.h"
+#include "lclass.h"
 #include "lualib.h"
 #include "luacode.h"
 #include "luacodegen.h"
@@ -27,6 +29,7 @@
 #include <fstream>
 #include <chrono>
 #include <functional>
+#include <set>
 #include <tuple>
 #include <thread>
 #include <string>
@@ -96,6 +99,9 @@ LUAU_FASTFLAG(LuauUdataMetatablePinned)
 LUAU_FASTFLAG(LuauGcTraceUdata)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
+LUAU_FASTFLAG(DebugLuwuBundles)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
@@ -3596,9 +3602,8 @@ return f
                     CHECK(sv == "u42");
                 else if (tt == LUA_TPROTO)
                     CHECK((sv == "proto unnamed:1 =GCDump" || sv == "proto foo:7 =GCDump" || sv == "proto f:4 =GCDump"));
-                // Luwu Traits (rfcs/classes/traits.md): every state has the trait initializer runner (global_State::traitinitrunner)
                 else if (tt == LUA_TFUNCTION)
-                    CHECK((sv == "test" || sv == "unnamed:1 =GCDump" || sv == "foo:7 =GCDump" || sv == "f:4 =GCDump" || sv == "inittraits"));
+                    CHECK((sv == "test" || sv == "unnamed:1 =GCDump" || sv == "foo:7 =GCDump" || sv == "f:4 =GCDump"));
                 else if (tt == LUA_TTHREAD)
                     CHECK(sv == "thread at unnamed:1 =GCDump");
             }
@@ -4744,6 +4749,143 @@ TEST_CASE("CursedClasses")
     runConformance("cursed_classes.luwu");
 }
 
+static std::string joinNames(const std::set<std::string>& names)
+{
+    std::string joined;
+    for (const std::string& name : names)
+        joined += name + " ";
+    return joined;
+}
+
+// The public members a builtin class's objects have in the VM, metamethods included. Static members come after them.
+static std::string vmClassMembers(const LuauClass* classdef)
+{
+    std::set<std::string> names;
+    for (uint32_t i = 0; i < classdef->numberofobjectmembers; i++)
+    {
+        const TString* name = classdef->offsettomember[i];
+        if (name && !(classdef->memberflags[i] & LBC_CLASSMEMBER_PRIVATE))
+            names.insert(getstr(name));
+    }
+    return joinNames(names);
+}
+
+// The public members the type checker gives the objects of a declared class: their properties, except `__init`, which
+// can't be read, and the metamethods in their metatable
+static std::string declaredObjectMembers(Luau::TypeId objectType)
+{
+    std::set<std::string> names;
+    const Luau::ExternType* object = Luau::get<Luau::ExternType>(Luau::follow(objectType));
+    REQUIRE(object);
+
+    for (const auto& prop : object->props())
+    {
+        if (!prop.second.isPrivate && prop.first != "__init")
+            names.insert(prop.first);
+    }
+
+    if (object->metatable)
+    {
+        const Luau::TableType* metatable = Luau::get<Luau::TableType>(Luau::follow(*object->metatable));
+        REQUIRE(metatable);
+        for (const auto& metamethod : metatable->props)
+            names.insert(metamethod.first);
+    }
+    return joinNames(names);
+}
+
+// The public members of the objects of the class value `classValue` (see declaredObjectMembers)
+static std::string declaredClassMembers(Luau::TypeId classValue)
+{
+    const Luau::ExternType* value = Luau::get<Luau::ExternType>(Luau::follow(classValue));
+    REQUIRE(value);
+    REQUIRE(value->relation);
+    const Luau::Obj* obj = Luau::get_if<Luau::Obj>(&*value->relation);
+    REQUIRE(obj);
+    return declaredObjectMembers(obj->ty);
+}
+
+// The declared class value named `name` in the library table
+static std::optional<Luau::TypeId> declaredClassValue(const Luau::TableType* library, const std::string& name)
+{
+    auto declared = library->props.find(name);
+    if (declared == library->props.end() || !declared->second.readTy)
+        return std::nullopt;
+    return declared->second.readTy;
+}
+
+// Luwu collections and bundles: the builtin definitions declare each class the VM builds, with exactly its public members.
+// A bundle class is a type the `bundle` library exports, since the library's table holds only functions.
+TEST_CASE("CollectionsDeclarationsMatchTheVm")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    Luau::NullFileResolver fileResolver;
+    Luau::NullConfigResolver configResolver;
+    Luau::Frontend frontend{Luau::SolverMode::New, &fileResolver, &configResolver};
+    Luau::registerBuiltinGlobals(frontend, frontend.globals);
+
+    const Luau::TableType* library = Luau::get<Luau::TableType>(Luau::follow(Luau::getGlobalBinding(frontend.globals, "collections")));
+    REQUIRE(library);
+    const auto& bundleTypes = frontend.globals.globalScope->importedTypeBindings["bundle"];
+
+    StateRef state(luaL_newstate(), lua_close);
+    luaL_openlibs(state.get());
+
+    for (int kind = 0; kind < LUWU_BUILTIN__COUNT; kind++)
+    {
+        const LuauClass* classdef = state->global->builtinclasses[kind];
+        REQUIRE(classdef);
+        std::string name = getstr(classdef->name);
+        INFO(name);
+
+        if (kind <= LUWU_BUILTIN_BIGBUNDLE)
+        {
+            auto declaredBundle = bundleTypes.find(name);
+            REQUIRE(declaredBundle != bundleTypes.end());
+            CHECK_EQ(declaredObjectMembers(declaredBundle->second.type), vmClassMembers(classdef));
+            continue;
+        }
+
+        std::optional<Luau::TypeId> declared = declaredClassValue(library, name);
+        REQUIRE(declared);
+        CHECK_EQ(declaredClassMembers(*declared), vmClassMembers(classdef));
+    }
+}
+
+TEST_CASE("Collections")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    runConformance("collections.luwu");
+}
+
+TEST_CASE("CollectionsFastPaths")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    runConformance("collections_fastpaths.luwu");
+}
+
 TEST_CASE("ClassesExportHoistingRepro")
 {
     ScopedFastFlag sffs[] = {
@@ -4858,6 +5000,31 @@ TEST_CASE("ClassesNativeCodegen")
     runConformance("classes_ncg.luwu");
 }
 
+TEST_CASE("ClassesOpaque")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    runConformance(
+        "classes_opaque.luwu",
+        [](lua_State* L)
+        {
+            lua_pushcfunction(
+                L,
+                [](lua_State* L)
+                {
+                    lua_setclassopaque(L, 1);
+                    return 0;
+                },
+                "markopaque"
+            );
+            lua_setglobal(L, "markopaque");
+        }
+    );
+}
+
 // Luwu Classes (rfcs/classes): regressions for review fixes, one file per area. Each runs at every
 // optimization level, since several of the bugs were specific to O2 inlining or to O0's lack of it.
 static void runClassesFixesConformance(const char* name)
@@ -4869,6 +5036,8 @@ static void runClassesFixesConformance(const char* name)
         {FFlag::LuwuGenericNominals, true},
         // names the variable in const-binding errors ("Variable 'self' is constant ...")
         {FFlag::LuauExportValueSyntax, true},
+        // a trait's `__create` is what reaches the C constructor (the constructor closure lifetime case)
+        {FFlag::LuwuTraits, true},
     };
 
     for (int level = 0; level <= 2; ++level)
@@ -5094,6 +5263,8 @@ TEST_CASE("ClassesCApi")
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuDefaultArguments, true},
         {FFlag::LuwuNonePrimitive, true},
+        // a trait's `__create` is what reaches the C constructor (the debug name case)
+        {FFlag::LuwuTraits, true},
     };
 
     StateRef globalState(luaL_newstate(), lua_close);
@@ -5758,11 +5929,11 @@ Yielder_ = Yielder
         luaL_openlibs(QL);
 
         std::string className(1100, 'N');
-        std::string classSource = "class " + className +
+        // a class constructs through its compiled constructor, which debug.info never hands out; a trait's `__create`
+        // reaches the C constructor
+        std::string classSource = "trait " + className +
                                   "\n"
-                                  "    x: number\n"
-                                  "    function __init(self)\n"
-                                  "        self.x = 1\n"
+                                  "    function __create()\n"
                                   "        LEAKED_CTOR = debug.info(2, 'f')\n"
                                   "    end\n"
                                   "end\n"
@@ -5795,6 +5966,144 @@ Yielder_ = Yielder
     }
 }
 
+// The native data ClassesNativeData gives its objects
+struct NativeDataPayload
+{
+    int* destroyed;
+    double value;
+};
+
+static void destroyNativeDataPayload(lua_State* L, void* data)
+{
+    NativeDataPayload* payload = static_cast<NativeDataPayload*>(data);
+    if (payload->destroyed)
+        (*payload->destroyed)++;
+}
+
+// Pushes an object of the global class `name`, constructed from C with no arguments
+static void newNativeDataObject(lua_State* L, const char* name)
+{
+    lua_getglobal(L, name);
+    lua_newobject(L, -1);
+}
+
+TEST_CASE("ClassesNativeData")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+    };
+
+    const int handleTag = 3;
+    const int otherTag = 4;
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+    lua_setobjectdtor(L, handleTag, destroyNativeDataPayload);
+    CHECK(bool(lua_getobjectdtor(L, handleTag) == destroyNativeDataPayload));
+    CHECK(bool(lua_getobjectdtor(L, otherTag) == nullptr));
+
+    const luaR_NativeMember members[] = {
+        {"label", nullptr, 0, nullptr},
+    };
+
+    LuauClass* handle = luaR_newnativeclass(L, "Handle", members, 1, nullptr);
+    luaR_setclassnativedata(handle, sizeof(NativeDataPayload), handleTag);
+    lua_setglobal(L, "Handle");
+
+    LuauClass* other = luaR_newnativeclass(L, "Other", members, 1, nullptr);
+    luaR_setclassnativedata(other, sizeof(NativeDataPayload), otherTag);
+    lua_setglobal(L, "Other");
+
+    luaR_newnativeclass(L, "Plain", members, 1, nullptr);
+    lua_setglobal(L, "Plain");
+
+    int destroyed = 0;
+
+    SUBCASE("New objects get zeroed data and keep it through collections")
+    {
+        newNativeDataObject(L, "Handle");
+        NativeDataPayload* payload = static_cast<NativeDataPayload*>(lua_toobjectdata(L, -1, handleTag));
+        REQUIRE(payload);
+        CHECK(payload->destroyed == nullptr);
+        CHECK(payload->value == 0);
+        payload->destroyed = &destroyed;
+        payload->value = 42;
+
+        // churn the heap so the collections free something next to it
+        for (int i = 0; i < 1000; i++)
+        {
+            newNativeDataObject(L, "Plain");
+            lua_pop(L, 1);
+        }
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        lua_gc(L, LUA_GCCOLLECT, 0);
+
+        CHECK(lua_toobjectdata(L, -1, handleTag) == payload);
+        CHECK(payload->value == 42);
+        CHECK(destroyed == 0);
+
+        // the member is still an ordinary field
+        lua_pushliteral(L, "first");
+        lua_setfield(L, -2, "label");
+        lua_getfield(L, -1, "label");
+        CHECK(strcmp(lua_tostring(L, -1), "first") == 0);
+    }
+
+    SUBCASE("Reading data with another tag or from another value gives NULL")
+    {
+        newNativeDataObject(L, "Handle");
+        CHECK(lua_toobjectdata(L, -1, otherTag) == nullptr);
+        newNativeDataObject(L, "Other");
+        CHECK(lua_toobjectdata(L, -1, handleTag) == nullptr);
+        CHECK(lua_toobjectdata(L, -1, otherTag) != nullptr);
+        newNativeDataObject(L, "Plain");
+        CHECK(lua_toobjectdata(L, -1, 0) == nullptr);
+        CHECK(lua_toobjectdata(L, -1, handleTag) == nullptr);
+        lua_pushnumber(L, 1);
+        CHECK(lua_toobjectdata(L, -1, handleTag) == nullptr);
+        lua_getglobal(L, "Handle");
+        CHECK(lua_toobjectdata(L, -1, handleTag) == nullptr);
+    }
+
+    SUBCASE("Constructing from Luwu code gives the object data")
+    {
+        const char* source = "return Handle()";
+        size_t bytecodeSize = 0;
+        char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+        int loadResult = luau_load(L, "=ClassesNativeData", bytecode, bytecodeSize, 0);
+        free(bytecode);
+        REQUIRE(loadResult == 0);
+        REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+
+        NativeDataPayload* payload = static_cast<NativeDataPayload*>(lua_toobjectdata(L, -1, handleTag));
+        REQUIRE(payload);
+        CHECK(payload->destroyed == nullptr);
+    }
+
+    SUBCASE("The destructor runs once when the object is collected")
+    {
+        newNativeDataObject(L, "Handle");
+        static_cast<NativeDataPayload*>(lua_toobjectdata(L, -1, handleTag))->destroyed = &destroyed;
+        lua_pop(L, 1);
+
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        CHECK(destroyed == 1);
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        CHECK(destroyed == 1);
+    }
+
+    SUBCASE("The destructor runs once when the state is closed")
+    {
+        newNativeDataObject(L, "Handle");
+        static_cast<NativeDataPayload*>(lua_toobjectdata(L, -1, handleTag))->destroyed = &destroyed;
+        lua_setglobal(L, "kept");
+
+        globalState.reset();
+        CHECK(destroyed == 1);
+    }
+}
+
 // Luwu Classes (rfcs/classes): differential and crash fuzzing of classes.
 //
 // tests/classes_fuzz/run.luau generates random class programs. It runs each one through the luau CLI at every
@@ -5812,6 +6121,116 @@ Yielder_ = Yielder
 // sets neither -O nor --codegen, not again under each of them.
 //
 // Run it from an assert-enabled build: it uses the luau CLI built alongside this binary.
+static int nativeClassValueToString(lua_State* L)
+{
+    lua_pushstring(L, "the Gadget class");
+    return 1;
+}
+
+static int nativeObjectToString(lua_State* L)
+{
+    lua_pushstring(L, "a gadget");
+    return 1;
+}
+
+static int nativeObjectLength(lua_State* L)
+{
+    lua_pushnumber(L, 3);
+    return 1;
+}
+
+// Luwu builtin classes: a class built in C++ places its `__` members the way a class body does (Luau/ClassMemberNames.h):
+// metamethods go on its objects, and a static `__tostring` on the class value
+TEST_CASE("ClassesNativeMembersFollowTheRegistry")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    const luaR_NativeMember members[] = {
+        {"label", nullptr, 0, nullptr},
+        {"__tostring", nativeObjectToString, 0, nullptr},
+        {"__tostring", nativeClassValueToString, LBC_CLASSMEMBER_STATIC, nullptr},
+        {"__len", nativeObjectLength, 0, nullptr},
+    };
+
+    luaR_newnativeclass(L, "Gadget", members, int(sizeof(members) / sizeof(members[0])), nullptr);
+    lua_setglobal(L, "Gadget");
+
+    const luaR_NativeMember plainMembers[] = {
+        {"label", nullptr, 0, nullptr},
+    };
+    luaR_newnativeclass(L, "Plain", plainMembers, 1, nullptr);
+    lua_setglobal(L, "Plain");
+
+    const char* source = R"(
+        local g = Gadget()
+        assert(tostring(Gadget) == "the Gadget class")
+        assert(tostring(g) == "a gadget" and #g == 3)
+        -- the value metamethod has no member slot, and isn't builtin printing
+        assert(g.label == nil)
+        assert(string.find(tostring(Plain), "^class: "))
+        return "OK"
+    )";
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    REQUIRE(luau_load(L, "=native", bytecode, bytecodeSize, 0) == 0);
+    free(bytecode);
+
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK(std::string(lua_tostring(L, -1)) == "OK");
+}
+
+static int nativeStaticMake(lua_State* L)
+{
+    lua_pushstring(L, "made");
+    return 1;
+}
+
+// Luwu builtin classes: a static method of a class built in C++ is the class value's, like a function without `self` in a
+// class body, and its objects don't have it
+TEST_CASE("ClassesNativeStaticMethodsAreTheClassValues")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    const luaR_NativeMember members[] = {
+        {"label", nullptr, 0, nullptr},
+        {"__len", nativeObjectLength, 0, nullptr},
+        {"make", nativeStaticMake, LBC_CLASSMEMBER_STATIC, nullptr},
+    };
+
+    LuauClass* classdef = luaR_newnativeclass(L, "Widget", members, int(sizeof(members) / sizeof(members[0])), nullptr);
+    CHECK(classdef->numberofobjectmembers == 3);
+    lua_setglobal(L, "Widget");
+
+    const char* source = R"(
+        local w = Widget()
+        assert(Widget.make() == "made")
+        assert(#w == 3)
+        assert(not pcall(function() return w.make end))
+        return "OK"
+    )";
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    REQUIRE(luau_load(L, "=native", bytecode, bytecodeSize, 0) == 0);
+    free(bytecode);
+
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK(std::string(lua_tostring(L, -1)) == "OK");
+}
+
 TEST_CASE("ClassesFuzz")
 {
     const char* skipEnv = std::getenv("LUWU_SKIP_CLASSES_FUZZ");
@@ -7040,8 +7459,19 @@ TEST_CASE("LegacyBytecodeRefusesLuwuAdditions")
     std::string opcode = asLegacyBytecode(Luau::compile("class A x: number = 1 end local a = A() return a", options));
     CHECK(contains(getLoadError(opcode), "uses opcode"));
 
-    // a class shape, whatever its layout
-    std::string shape = asLegacyBytecode(Luau::compile("class A end return A", options));
+    // a class shape, whatever its layout. A compiled class also has a constructor using NEWOBJECT, which the loader
+    // refuses first, so this chunk holds the shape and nothing else.
+    Luau::BytecodeBuilder bcb;
+    uint32_t main = bcb.beginFunction(0, /* isvararg= */ true);
+    Luau::BytecodeBuilder::ClassShape classShape;
+    classShape.className = bcb.addConstantString(Luau::BytecodeBuilder::StringRef{"A", 1});
+    REQUIRE(bcb.addClassShape(classShape) >= 0);
+    bcb.emitABC(LOP_RETURN, 0, 1, 0);
+    bcb.endFunction(1, 0);
+    bcb.setMainFunction(main);
+    bcb.finalize();
+
+    std::string shape = asLegacyBytecode(bcb.getBytecode());
     CHECK(contains(getLoadError(shape), "contains classes"));
 }
 
@@ -7222,3 +7652,61 @@ TEST_CASE("ClassesInterpreterMemberSlotCacheSkipsWideOffsets")
 }
 
 TEST_SUITE_END();
+
+// Luwu bundles: an embedder packs and unpacks bundles with no Lua frame
+TEST_CASE("BundleCApi")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    lua_pushnumber(L, 1);
+    lua_pushstring(L, "x");
+    lua_packbundle(L, 2);
+    REQUIRE(lua_gettop(L) == 1);
+    CHECK(std::string(lua_getclassname(L, -1)) == "Bundle2");
+    CHECK(std::string(luaL_tolstring(L, -1, nullptr)) == ".(1, \"x\")");
+    lua_pop(L, 1);
+
+    REQUIRE(lua_unpackbundle(L, -1) == 2);
+    CHECK(lua_tonumber(L, -2) == 1);
+    CHECK(std::string(lua_tostring(L, -1)) == "x");
+    lua_settop(L, 0);
+
+    // anything else isn't a bundle, and pushes nothing
+    lua_newtable(L);
+    CHECK(lua_unpackbundle(L, -1) == -1);
+    CHECK(lua_gettop(L) == 1);
+    lua_settop(L, 0);
+
+    lua_packbundle(L, 0);
+    CHECK(lua_unpackbundle(L, -1) == 0);
+    lua_settop(L, 0);
+
+    // past six values, any size is a `BigBundle`
+    for (int i = 0; i < 13; i++)
+        lua_pushnumber(L, i);
+    lua_packbundle(L, 13);
+    CHECK(std::string(lua_getclassname(L, -1)) == "BigBundle");
+    REQUIRE(lua_unpackbundle(L, -1) == 13);
+    CHECK(lua_tonumber(L, -1) == 12);
+    lua_settop(L, 0);
+
+    std::string tooMany = classesCApiProtected(
+        L,
+        [](lua_State* L)
+        {
+            lua_checkstack(L, 1025);
+            for (int i = 0; i < 1025; i++)
+                lua_pushnumber(L, i);
+            lua_packbundle(L, 1025);
+        }
+    );
+    CHECK(tooMany == "lua_packbundle: a bundle holds at most 1024 values, but got 1025");
+}
