@@ -1029,8 +1029,9 @@ static bool appendPlainValue(FastFormatBuffer& out, const TValue* value)
     }
     case LUA_TINTEGER:
     {
+        // Luwu Integers (rfcs/integers.md): a u64 past INT64_MAX prints as unsigned; a bigint falls back to the call
         char s[LUAI_MAXINT2STR];
-        char* e = luai_int2str(s, lvalue(value));
+        char* e = luaZ_formatinline(value, s);
         return out.append(s, e - s);
     }
     case LUA_TSTRING:
@@ -1047,10 +1048,11 @@ static bool appendPlainItem(FastFormatBuffer& out, char option, int precision, c
     if (option == 's')
         return ttisstring(value) && out.append(svalue(value), tsvalue(value)->len);
 
-    if (option == 'd' && ttisinteger(value))
+    // Luwu Integers (rfcs/integers.md): an inline integer of any mode; a bigint falls back to the call
+    if (option == 'd' && ttype(value) == LUA_TINTEGER)
     {
         char s[LUAI_MAXINT2STR];
-        char* e = luai_int2str(s, lvalue(value));
+        char* e = luaZ_formatinline(value, s);
         return out.append(s, e - s);
     }
 

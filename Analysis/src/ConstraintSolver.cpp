@@ -1,6 +1,8 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/ConstraintSolver.h"
 
+#include "Luau/BuiltinDefinitions.h"
+
 #include "Luau/Anyification.h"
 #include "Luau/ApplyTypeFunction.h"
 #include "Luau/AstUtils.h"
@@ -3027,6 +3029,13 @@ bool ConstraintSolver::tryDispatchPositional(
         if (get<AnyType>(option))
         {
             results.push_back(builtinTypes->anyType);
+            continue;
+        }
+
+        // Luwu bundles: a bundle's positions are its class's type arguments, and an intersection reads its bundles'
+        if (std::optional<TypeId> read = readBundlePosition(builtinTypes, NotNull{arena}, option, position))
+        {
+            results.push_back(*read);
             continue;
         }
 
