@@ -165,6 +165,11 @@ std::pair<TypeIds, TypePackIds> Constraint::getMaybeMutatedTypes() const
         rci.traverse(aic->indexType);
         rci.traverse(aic->rhsType);
     }
+    else if (auto pc = get<PushConstraint>(*this))
+    {
+        rci.traverse(pc->containerType);
+        rci.traverse(pc->valuesPack);
+    }
     else if (auto uc = get<UnpackConstraint>(*this))
     {
         for (TypeId ty : uc->resultPack)

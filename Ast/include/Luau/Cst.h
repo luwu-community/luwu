@@ -375,6 +375,18 @@ public:
     Position opPosition;
 };
 
+// Luwu Push and Pop Operators (rfcs/push-pop-operators.md): `target <+ v1, v2`
+class CstStatPush : public CstNode
+{
+public:
+    LUAU_CST_RTTI(CstStatPush)
+
+    CstStatPush(Position opPosition, AstArray<Position> valuesCommaPositions);
+
+    Position opPosition;
+    AstArray<Position> valuesCommaPositions;
+};
+
 class CstStatFunction : public CstNode
 {
 public:

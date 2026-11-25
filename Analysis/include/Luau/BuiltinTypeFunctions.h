@@ -17,6 +17,8 @@ struct BuiltinTypeFunctions
     TypeFunction notFunc;
     TypeFunction lenFunc;
     TypeFunction unmFunc;
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): the type of `<-container`. Not bound to a type name.
+    TypeFunction popFunc;
 
     TypeFunction addFunc;
     TypeFunction subFunc;
