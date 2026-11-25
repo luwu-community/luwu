@@ -1012,6 +1012,7 @@ struct TypeMapVisitor : AstVisitor
             case LBF_TYPEOF:
             case LBF_STRING_SUB:
             case LBF_TOSTRING:
+            case LBF_STRING_FORMAT:
                 recordResolvedType(node, &builtinTypes.stringType);
                 break;
 

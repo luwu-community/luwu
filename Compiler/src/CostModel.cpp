@@ -10,6 +10,8 @@
 
 #include <limits.h>
 
+LUAU_FASTFLAG(LuwuStringFormatFastcall)
+
 namespace Luau
 {
 namespace Compile
@@ -220,7 +222,9 @@ struct CostVisitor : AstVisitor
         else if (AstExprInterpString* expr = node->as<AstExprInterpString>())
         {
             // Baseline cost of string.format
-            Cost cost = 3;
+            // Luwu: with the string.format fastcall, an interpolated string costs what a builtin call does. One FASTCALL
+            // runs in place of upstream's NAMECALL and CALL.
+            Cost cost = FFlag::LuwuStringFormatFastcall ? 2 : 3;
 
             for (AstExpr* innerExpression : expr->expressions)
                 cost += model(innerExpression);
