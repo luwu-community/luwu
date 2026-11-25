@@ -11,4 +11,7 @@ doesn't come with any security guarantees; make sure to sign and/or encrypt the 
 
 # Reporting a Vulnerability
 
-Please DM a language maintainer on [our Discord](https://discord.gg/3MJ37CFNWh) or email deviaze at `dev@deviaze.com` to report a security vulnerability in `mluau/luwu`.
+Report memory safety vulnerabilities privately through this repository's
+[security advisories](https://github.com/luwu-community/luwu/security/advisories/new), never in a public issue. That
+covers anything a script can abuse, like an exploitable buffer overflow. Crashes (`SIGSEGV`, `SIGILL`, ...) are public
+issues. [BUGS.md](BUGS.md) lists how serious each kind of bug is.
