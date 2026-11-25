@@ -33,7 +33,7 @@ LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
-LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(LuwuNoinlineAttribute)
 LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAG(LuwuDefaultArguments)
@@ -13170,14 +13170,14 @@ RETURN R0 1
 )");
 }
 
-TEST_CASE("DebugNoInline")
+TEST_CASE("NoinlineAttribute")
 {
-    ScopedFastFlag noInline{FFlag::DebugLuauNoInline, true};
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
 
     CHECK_EQ(
         "\n" + compileFunction(
                    R"(
-@debugnoinline
+@noinline
 local function foo()
     return 42
 end
@@ -13199,7 +13199,7 @@ RETURN R1 1
     CHECK_EQ(
         "\n" + compileFunction(
                    R"(
-@debugnoinline
+@noinline
 local function foo(a, b, c)
     if a then
         return b
@@ -13225,6 +13225,138 @@ CALL R1 -1 1
 RETURN R1 1
 )"
     );
+}
+
+TEST_CASE("NoinlineStaticFunctionExplainsItselfInRemarks")
+{
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    std::string remarks = compileWithRemarks(R"(
+class Size
+    @noinline
+    function double(n: number): number
+        return n * 2
+    end
+end
+
+return Size.double(2)
+)");
+
+    CHECK_MESSAGE(remarks.find("inlining failed: Size.double is marked @noinline") != std::string::npos, remarks);
+}
+
+TEST_CASE("NoinlineAttributeExplainsItselfInRemarks")
+{
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
+    ScopedFastFlag classes{FFlag::LuwuClasses, true};
+
+    std::string remarks = compileWithRemarks(R"(
+@noinline
+local function foo()
+    return 42
+end
+
+class Cat
+    @noinline
+    function meow(self)
+        return 1
+    end
+end
+
+local cat = Cat()
+return foo(), cat:meow()
+)");
+
+    CHECK(remarks.find("inlining failed: foo is marked @noinline") != std::string::npos);
+    CHECK(remarks.find("inlining failed: Cat:meow is marked @noinline") != std::string::npos);
+}
+
+TEST_CASE("NoinlineAttributeIsNotMarkedInlinable")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuNoinlineAttribute, true}, {FFlag::LuauEmitCallFeedback, true}};
+
+    Luau::BytecodeBuilder bcb;
+    Luau::CompileOptions options;
+    options.optimizationLevel = 2;
+    Luau::compileOrThrow(
+        bcb,
+        R"(
+local function plain(x) return x end
+
+@noinline
+local function kept(x) return x end
+
+-- reading `plain` keeps its body, which is stubbed once inlining compiles every call to it
+return plain(1) + kept(2), plain
+)",
+        options
+    );
+
+    // A function's serialized header is maxstacksize, numparams, numupvalues and isvararg, then its
+    // proto flags.
+    constexpr size_t kProtoFlagsOffset = 4;
+
+    std::string plain = bcb.getFunctionData(0);
+    std::string kept = bcb.getFunctionData(1);
+    REQUIRE(plain.size() > kProtoFlagsOffset);
+    REQUIRE(kept.size() > kProtoFlagsOffset);
+
+    CHECK((uint8_t(plain[kProtoFlagsOffset]) & LPF_INLINABLE) != 0);
+    CHECK((uint8_t(kept[kProtoFlagsOffset]) & LPF_INLINABLE) == 0);
+}
+
+TEST_CASE("NoinlineAttributeInEveryInlinablePosition")
+{
+    ScopedFastFlag sffs[] = {{FFlag::LuwuNoinlineAttribute, true}, {FFlag::LuwuClasses, true}};
+
+    // Each position rfcs/noinline-attribute.md allows, written once without the attribute to show the
+    // call really inlines there, and once with it to show it no longer does. A class method goes through
+    // its own inlining path (tryResolveMethodCall), so it is not covered by the local function case.
+    struct InlinableForm
+    {
+        const char* name;
+        const char* before;
+        const char* after;
+    };
+    const InlinableForm forms[] = {
+        {"const function", "", "const function callee(x)\n    return x * 2\nend\n"},
+        {"function expression", "local callee = ", "function(x)\n    return x * 2\nend\n"},
+    };
+
+    // `use` is function 1: the callee compiles first, then `use`, then the main chunk.
+    auto callSurvives = [](const std::string& source)
+    {
+        Luau::BytecodeBuilder bcb;
+        bcb.setDumpFlags(Luau::BytecodeBuilder::Dump_Code);
+
+        Luau::CompileOptions options;
+        options.optimizationLevel = 2;
+        Luau::compileOrThrow(bcb, source, options);
+
+        return bcb.dumpFunction(1).find("CALL") != std::string::npos;
+    };
+
+    for (const InlinableForm& form : forms)
+    {
+        CAPTURE(form.name);
+
+        const std::string use = "\nfunction use(n)\n    local r = callee(n)\n    return r\nend\n";
+        CHECK_FALSE(callSurvives(std::string(form.before) + form.after + use));
+        CHECK(callSurvives(std::string(form.before) + "@noinline " + form.after + use));
+    }
+
+    // The receiver is constructed right here, so `cat:meow()` resolves to Cat.meow and inlines.
+    auto methodSource = [](const char* attribute)
+    {
+        return std::string("class Cat\n    public name: string\n\n    ") + attribute +
+               "public function meow(self): string\n        return self.name\n    end\nend\n\n"
+               "function use(n: string)\n    local cat = Cat(n)\n    local r = cat:meow()\n    return r\nend\n";
+    };
+
+    CAPTURE("class method");
+    CHECK_FALSE(callSurvives(methodSource("")));
+    CHECK(callSurvives(methodSource("@noinline ")));
 }
 
 TEST_CASE("FoldConstTableProps")
@@ -14618,8 +14750,8 @@ TEST_CASE("InlineOnlyCallSiteRegardlessOfCost")
                          "end\n";
     CHECK_EQ(countCalls(compileFunction(native, 1, 2)), 1);
 
-    ScopedFastFlag noInline{FFlag::DebugLuauNoInline, true};
-    const char* optedOut = "@debugnoinline\n"
+    ScopedFastFlag noInline{FFlag::LuwuNoinlineAttribute, true};
+    const char* optedOut = "@noinline\n"
                            "local function big(t)\n" LUWU_EXPENSIVE_BODY "end\n"
                            "local function main(t)\n"
                            "    big(t)\n"

@@ -5894,7 +5894,10 @@ TypeId TypeChecker::resolveTypeWorker(const ScopePtr& scope, const AstType& anno
             else if (prop.access == AstTableAccess::Write)
                 reportError(prop.accessLocation.value_or(Location{}), GenericError{"write keyword is illegal here"});
             else if (prop.access == AstTableAccess::ReadWrite)
+            {
                 props[prop.name.value] = {resolveType(scope, *prop.type), /* deprecated: */ false, {}, std::nullopt, {}, std::nullopt, prop.location};
+                applyDeprecatedAttribute(props[prop.name.value], prop.attributes);
+            }
             else
                 ice("Unexpected property access " + std::to_string(int(prop.access)));
         }
