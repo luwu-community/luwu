@@ -1,0 +1,198 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+--!optimize 2
+print("testing type tests on try results kept in registers")
+
+-- At O2, `r is Ok(v)` on a result kept in registers reads its registers. These compare each answer with the object's,
+-- which passing the result to a function gets.
+
+local function value(n: number): number
+    if n < 0 then
+        error("negative")
+    end
+    return n
+end
+
+local function describe(r: unknown): string
+    if r is Ok(v) then
+        return `ok {v}`
+    elseif r is Err(e, module, line, traceback) then
+        return `err {e} {module} {line} {traceback}`
+    end
+    return "neither"
+end
+
+for _, n in { 5, -1 } do
+    const r = try value(n)
+    local kept = "neither"
+    if r is Ok(v) then
+        kept = `ok {v}`
+    elseif r is Err(e, module, line, traceback) then
+        kept = `err {e} {module} {line} {traceback}`
+    end
+    assert(kept == describe(try value(n)), kept)
+
+    const matched = match r
+        case is Ok(v) then v
+        case is Err(e) then e
+        else nil
+    assert(if n >= 0 then matched == 5 else string.find(matched, "negative", 1, true) ~= nil)
+
+    assert((r is not Ok) == (n < 0))
+end
+
+-- an ok has one element, so asking for a second raises what the object raises
+do
+    local function second(r: unknown): unknown
+        if r is Ok(v, extra) then
+            return extra
+        end
+        return nil
+    end
+    local function inregisters(): unknown
+        const r = try value(1)
+        if r is Ok(v, extra) then
+            return extra
+        end
+        return nil
+    end
+    const kept = try inregisters()
+    const object = try second(try value(1))
+    assert(class.isinstance(kept, Err) and class.isinstance(object, Err))
+    assert(tostring(kept.error) == tostring(object.error), tostring(kept.error))
+end
+
+-- the subject of `match try e` is kept in registers too
+do
+    local function first(n: number): number
+        return match try value(n)
+            case is Ok(v) then v
+            case is Err(e) then -1
+            else 0
+    end
+    assert(first(3) == 3 and first(-3) == -1)
+end
+
+-- a result bound by `if const`, `elseif const` or `while const`, and one a `match` on the local tests, are kept in
+-- registers too
+do
+    local function chained(n: number): number
+        if const r = try value(n) when r is Ok(v) then
+            return v
+        end
+        return 0
+    end
+    assert(chained(2) == 2 and chained(-2) == 0)
+
+    local function nested(n: number): unknown
+        if const r = try value(n) then
+            if r is Ok(v) then
+                return v
+            elseif r is Err(e) then
+                return e
+            end
+        end
+        return nil
+    end
+    assert(nested(2) == 2 and string.find(nested(-2) :: string, "negative", 1, true) ~= nil)
+
+    local function after(n: number, first: boolean): unknown
+        if first then
+            return "first"
+        elseif const r = try value(n) when r is Err(e) then
+            return e
+        elseif const r = try value(n) when r is Ok(v) then
+            return v
+        end
+        return nil
+    end
+    assert(after(2, true) == "first" and after(2, false) == 2)
+    assert(string.find(after(-2, false) :: string, "negative", 1, true) ~= nil)
+
+    local function matched(n: number): number
+        const r = try value(n)
+        return match r
+            case is Ok(v) then v
+            case is Err(e) then -1
+            else 0
+    end
+    assert(matched(2) == 2 and matched(-2) == -1)
+
+    local function inbody(n: number): number
+        if const r = try value(n) then
+            return match r
+                case is Ok(v) then v
+                case is Err(e) then -1
+                else 0
+        end
+        return 0
+    end
+    assert(inbody(2) == 2 and inbody(-2) == -1)
+
+    local function statement(n: number): number
+        const r = try value(n)
+        local result = 0
+        match r
+        case is Ok(v) then
+            result = v
+        case is Err(e) then
+            result = -1
+        else
+            result = -2
+        end
+        return result
+    end
+    assert(statement(2) == 2 and statement(-2) == -1)
+
+    local values = { 1, 2, -1, 4 }
+    local i = 0
+    local sum = 0
+    while const r = try value(values[i + 1]) when r is Ok(v) do
+        sum += v
+        i += 1
+    end
+    assert(sum == 3 and i == 2)
+
+    -- a `case` arm that binds the subject needs the object
+    local function named(n: number): unknown
+        const r = try value(n)
+        return match r
+            case is Ok(v) then v
+            case other then other
+    end
+    assert(named(2) == 2 and class.isinstance(named(-2), Err))
+end
+
+-- `None` is `none` in a pattern, like `none` itself
+do
+    const r = try value(-1)
+    const empty = match r:ok()
+        case is None then "empty"
+        else "full"
+    assert(empty == "empty" and none is None and None is none and Some(1) is not None)
+end
+
+-- options and results destructure by position, and their payload is a public field
+do
+    const .(five) = Some(5)
+    assert(five == 5 and Some(5).value == 5 and Err("e").error == "e")
+    assert(not pcall(function()
+        local s = Some(5)
+        s.value = 6
+    end))
+
+    local function read(path: string): Result<string, string>
+        return if path == "good" then Ok("contents") else Err(`missing {path}`)
+    end
+    if read("good") is Ok(content) then
+        assert(content == "contents")
+    else
+        error("unreachable")
+    end
+    local message = match read("bad")
+        case is Ok(content) then content
+        case is Err(e) then e
+        else error("unreachable")
+    assert(message == "missing bad")
+end
+
+return "OK"

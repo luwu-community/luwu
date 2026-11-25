@@ -15,6 +15,7 @@
 
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(LuwuTraits)
 
 // Luwu object notation: the `luwon` library, and `luwon_load` for `require`. Values cross between Lua and the
 // notation's value tree here.
@@ -300,6 +301,8 @@ public:
             return pushTable(*value.table);
         case LuwonValue::Kind::Object:
             return pushObject(value);
+        case LuwonValue::Kind::Bundle:
+            return pushBundle(value);
         }
 
         LUAU_UNREACHABLE();
@@ -574,6 +577,21 @@ private:
         }
 
         return callProtected(L, 2, 1, error);
+    }
+
+    bool pushBundle(const LuwonValue& bundle)
+    {
+        if (!lua_checkstack(L, int(bundle.args.size())))
+            return fail("stack overflow");
+
+        for (const LuwonValue& value : bundle.args)
+        {
+            if (!push(value))
+                return false;
+        }
+
+        lua_packbundle(L, int(bundle.args.size()));
+        return true;
     }
 };
 
@@ -956,12 +974,41 @@ private:
     // other one a data file may construct from what its `__todata` returns or else from its fields.
     bool convertObject(int idx, LuwonValue& out, const std::string& path)
     {
+        if (std::optional<bool> converted = convertBundle(idx, out, path))
+            return *converted;
         if (std::optional<bool> converted = convertBuiltinObject(idx, out, path))
             return *converted;
         if (std::optional<bool> converted = convertTagged(idx, out, path))
             return *converted;
 
         return convertByFields(idx, out, path);
+    }
+
+    // A bundle as `.(...)`. Returns nullopt for any other object.
+    std::optional<bool> convertBundle(int idx, LuwonValue& out, const std::string& path)
+    {
+        int top = lua_gettop(L);
+        int size = lua_unpackbundle(L, idx);
+        if (size < 0)
+            return std::nullopt;
+
+        out = LuwonValue{LuwonValue::Kind::Bundle};
+        depth++;
+        for (int i = 1; i <= size; i++)
+        {
+            LuwonValue value;
+            if (!convert(top + i, value, format("%s.(value %d)", path.c_str(), i)))
+            {
+                depth--;
+                lua_settop(L, top);
+                return false;
+            }
+            out.args.push_back(std::move(value));
+        }
+        depth--;
+
+        lua_settop(L, top);
+        return true;
     }
 
     // The object at `idx` as a call to `name` with the values its `__todata`, on top of the stack, returns for it.
@@ -1617,6 +1664,48 @@ static void openTaggedClass(lua_State* L)
     lua_setfield(L, LUA_REGISTRYINDEX, kTaggedClassKey);
 }
 
+// Records a class that implements `luwon.data`, for the trait's `__implemented` hook. A reader may then construct it
+// whatever it holds.
+static int registerDataClass(lua_State* L)
+{
+    luaL_checktype(L, 1, LUA_TCLASS);
+    pushDataClasses(L);
+    lua_pushvalue(L, 1);
+    lua_pushboolean(L, 1);
+    lua_rawset(L, -3);
+    return 0;
+}
+
+// `luwon.data`, the trait that lets a reader construct a class whatever it holds. It's a trait written in Luwu: its
+// `__implemented` hook runs once for each class that implements it.
+static const char* const kDataTraitSource = R"(
+const register = ...
+
+trait data
+    final function __implemented(cls)
+        register(cls)
+    end
+end
+
+return data
+)";
+
+// Pushes the trait `luwon.data`, compiling it from kDataTraitSource.
+static void openDataTrait(lua_State* L)
+{
+    CompileOptions options;
+    options.language = int(Language::Luwu);
+    std::string bytecode = compile(kDataTraitSource, options);
+
+    int loaded = luau_load(L, "=luwon.data", bytecode.data(), bytecode.size(), 0);
+    LUAU_ASSERT(loaded == 0);
+    if (loaded != 0)
+        lua_error(L);
+
+    lua_pushcfunction(L, registerDataClass, "register");
+    lua_call(L, 1, 1);
+}
+
 } // namespace Luau
 
 int luaopen_luwon(lua_State* L)
@@ -1627,6 +1716,12 @@ int luaopen_luwon(lua_State* L)
     {
         Luau::openTaggedClass(L);
         lua_setfield(L, -2, "tagged");
+    }
+
+    if (FFlag::LuwuClasses && FFlag::LuwuTraits)
+    {
+        Luau::openDataTrait(L);
+        lua_setfield(L, -2, "data");
     }
 
     return 1;
