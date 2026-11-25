@@ -1042,6 +1042,24 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_string_is_a_typo")
     CHECK(get<TypeMismatch>(result.errors[3]));
 }
 
+// A string that differs from an expected one only in letter case is a typo, however many letters differ and however
+// short it is
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_string_in_the_wrong_case_is_a_typo")
+{
+    ScopedFastFlag sff{FFlag::LuwuHelpfulSubtypingErrors, true};
+
+    CheckResult result = check(R"(
+        local reason: "NaN" | "negative" = "nan"
+        local mode: "READ" | "WRITE" = "read"
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    REQUIRE(get<Typo>(result.errors[0]));
+    CHECK_EQ(toString(result.errors[0]), "Did you mean '\"NaN\"' instead of '\"nan\"'?");
+    REQUIRE(get<Typo>(result.errors[1]));
+    CHECK_EQ(toString(result.errors[1]), "Did you mean '\"READ\"' instead of '\"read\"'?");
+}
+
 // A misspelled tag in a table literal is a typo at the string, though the checker widens the literal's strings to
 // `string`. With another problem, a misspelled tag still picks the member it meant.
 TEST_CASE_FIXTURE(BuiltinsFixture, "a_misspelled_tag_in_a_literal_is_a_typo")
