@@ -894,7 +894,7 @@ static int loadsafe(
                         setobj(L, &lco->memberdefaults[memberOffset], &p->k[did]);
                     }
 
-                    if (idx < numProperties && (lco->memberflags[memberOffset] & LBC_CLASSMEMBER_POSITIONAL))
+                    if (idx < numProperties && (flags & LBC_CLASSMEMBER_POSITIONAL))
                     {
                         uint32_t position = readVarInt(data, size, offset);
                         LUAU_ASSERT(int(position) < lco->numberofpositional);

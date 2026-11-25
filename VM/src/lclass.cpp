@@ -109,12 +109,13 @@ LuauClass* luaR_newclass(
     classdef->lengthfield = LUAR_NO_LENGTH_FIELD;
     classdef->fastmethods = NULL;
     classdef->qualified = NULL;
+    classdef->reflection = NULL;
+    classdef->positionalmembers = NULL;
+    classdef->numberofpositional = -1;
     classdef->typeofname = NULL;
     classdef->nativesize = 0;
     classdef->nativetag = 0;
     classdef->isopaque = false;
-    classdef->positionalmembers = NULL;
-    classdef->numberofpositional = -1;
 
     classdef->offsettomember = luaM_newarray(L, classdef->numberofallmembers, TString*, classdef->memcat);
     for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
@@ -282,10 +283,11 @@ size_t luaR_classsize(const LuauClass* classdef)
            // ... plus what it keeps about the traits it implements ...
            (classdef->numtraits * sizeof(LuauClass*)) + (classdef->numtraitinits * (sizeof(TValue) + 2 * sizeof(uint32_t))) +
            (classdef->numoverriddenconsts * sizeof(uint32_t)) +
+           // ... plus the offsets of its positional members ...
+           (classdef->positionalmembers ? classdef->numberofpositional * sizeof(uint32_t) : 0) +
            // ... plus a builtin class's fast methods.
            (classdef->fastmethods ? classdef->numberofallmembers * sizeof(luaR_FastMethod) : 0) +
            // ... plus the offsets of its positional members.
-           (classdef->positionalmembers ? classdef->numberofpositional * sizeof(uint32_t) : 0);
 }
 
 bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
@@ -345,7 +347,7 @@ static const Closure* luaR_callingluafrom(lua_State* L, CallInfo* from)
     return NULL;
 }
 
-static const Closure* luaR_callinglua(lua_State* L)
+const Closure* luaR_callinglua(lua_State* L)
 {
     return luaR_callingluafrom(L, L->ci);
 }
