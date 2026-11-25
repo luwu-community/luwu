@@ -50,6 +50,8 @@ struct IrLoweringX64
     void storeDoubleAsFloat(OperandX64 dst, IrOp src);
     void checkSafeEnv(IrOp target, uint32_t index, const IrBlock& next);
 
+    void handleIntegerSubtypeWrapping(RegisterX64 reg, const IrOp& modeOp);
+
     void allocAndIncrementCounterAt(CodeGenCounter kind, uint32_t pcpos);
     void incrementCounterAt(size_t offset);
 

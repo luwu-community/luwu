@@ -490,7 +490,8 @@ int lua_toboolean(lua_State* L, int idx)
 int64_t lua_tointeger64(lua_State* L, int idx, int* isinteger)
 {
     const TValue* o = index2addr(L, idx);
-    if (ttisinteger(o))
+    // Luwu Integers (rfcs/integers.md): the bits of an inline integer of any mode; a bigint has no 64-bit value
+    if (ttype(o) == LUA_TINTEGER)
     {
         if (isinteger)
             *isinteger = 1;
