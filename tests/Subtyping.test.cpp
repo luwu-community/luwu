@@ -18,9 +18,7 @@
 #include <initializer_list>
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
-LUAU_FASTFLAG(LuauImproveUniqueTableWidthSubtyping)
-LUAU_FASTFLAG(LuauSubtypingMissingPropertiesAsNil)
-LUAU_FASTFLAG(LuauBidirectionalInferenceSimplifyTables)
+LUAU_FASTFLAG(LuauSubtypingSkipUnreadReasoning)
 
 using namespace Luau;
 
@@ -49,7 +47,7 @@ std::ostream& operator<<(std::ostream& lhs, const SubtypingReasoning& reasoning)
     return lhs << toString(reasoning.subPath) << " </: " << toString(reasoning.superPath) << " (" << reasoning.variance << ")";
 }
 
-bool operator==(const DenseHashSet<SubtypingReasoning, SubtypingReasoningHash>& set, const std::vector<SubtypingReasoning>& items)
+bool operator==(const DenseHashSet2<SubtypingReasoning, SubtypingReasoningHash>& set, const std::vector<SubtypingReasoning>& items)
 {
     if (items.size() != set.size())
         return false;
@@ -1654,59 +1652,6 @@ TEST_CASE_FIXTURE(Fixture, "fuzzer_non_generics_in_function_generics")
     )");
 }
 
-TEST_CASE_FIXTURE(SubtypeFixture, "unique_table_missing_optional_prop_is_subtype_of_intersection")
-{
-    ScopedFastFlag sff[] = {
-        {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauSubtypingMissingPropertiesAsNil, true},
-        {FFlag::LuauImproveUniqueTableWidthSubtyping, true},
-        // Clip this test when this flag is clipped.
-        {FFlag::LuauBidirectionalInferenceSimplifyTables, false},
-    };
-
-    // { tag: string } <: ({ b1: number? } & { tag: string? })?
-    // should succeed when the sub table is in uniqueTypes (it's a fresh literal),
-    // and fail when it is not.
-
-    TypeId subTy = tbl({
-        {"tag", Property::rw(getBuiltins()->stringType)},
-    });
-
-    TypeId baseProps = tbl({
-        {"tag", Property::rw(getBuiltins()->optionalStringType)},
-    });
-
-    TypeId extraProps = tbl({
-        {"b1", Property::rw(getBuiltins()->optionalNumberType)},
-    });
-
-    TypeId superTy = opt(meet(baseProps, extraProps));
-
-    // We must use separate caches because a type might be unique or not
-    // depending on the specific context in which the subtype test is being
-    // conducted.  We need to keep the caches separate.
-
-    // Without uniqueTypes: should NOT be a subtype (invariant check fails
-    // because the sub table is missing b1)
-    {
-        Subtyping st = mkSubtyping();
-        SubtypingResult result = st.isSubtype(subTy, superTy, NotNull{rootScope.get()});
-        CHECK(!result.isSubtype);
-    }
-
-    // With uniqueTypes containing subTy: should be a subtype (covariant check
-    // permits missing optional props on a unique/fresh table).
-    {
-        DenseHashSet<TypeId> uniqueTypes{nullptr};
-        uniqueTypes.insert(subTy);
-
-        Subtyping st = mkSubtyping();
-        st.uniqueTypes = &uniqueTypes;
-        SubtypingResult result = st.isSubtype(subTy, superTy, NotNull{rootScope.get()});
-        CHECK(result.isSubtype);
-    }
-}
-
 TEST_SUITE_END();
 
 TEST_SUITE_BEGIN("Subtyping.Subpaths");
@@ -1878,6 +1823,15 @@ TEST_CASE_FIXTURE(SubtypeFixture, "negation")
                                 /* superPath */ Path(TypePath::TypeField::Negated),
                             }}
     );
+}
+
+TEST_CASE_FIXTURE(SubtypeFixture, "successful_subtyping_has_no_reasoning")
+{
+    ScopedFastFlag sff{FFlag::LuauSubtypingSkipUnreadReasoning, true};
+
+    SubtypingResult result = isSubtype(getBuiltins()->numberType, negate(getBuiltins()->stringType));
+    CHECK(result.isSubtype);
+    CHECK(result.reasoning.empty());
 }
 
 TEST_CASE_FIXTURE(SubtypeFixture, "multiple_reasonings")

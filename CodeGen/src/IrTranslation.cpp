@@ -13,8 +13,6 @@
 #include "ltm.h"
 
 LUAU_FASTFLAG(LuauCodegenInteger3)
-LUAU_FASTFLAGVARIABLE(LuauCodegenBuilinDeadRange)
-LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 LUAU_FASTFLAG(LuwuClasses)
 
 namespace Luau
@@ -155,8 +153,7 @@ void translateInstJumpBack(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
 
-    if (FFlag::LuauBackedgeHeapCheck)
-        build.inst(IrCmd::CHECK_GC);
+    build.inst(IrCmd::CHECK_GC);
 
     build.inst(IrCmd::JUMP, build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc)));
 }
@@ -389,8 +386,7 @@ void translateInstJumpX(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
 
-    if (FFlag::LuauBackedgeHeapCheck)
-        build.inst(IrCmd::CHECK_GC);
+    build.inst(IrCmd::CHECK_GC);
 
     build.inst(IrCmd::JUMP, build.blockAtInst(pcpos + 1 + LUAU_INSN_E(*pc)));
 }
@@ -1216,7 +1212,7 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
         if (nresults == LUA_MULTRET)
             build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(ra), build.constInt(br.actualResultCount));
         else
-            build.inst(IrCmd::MARK_DEAD, build.vmReg(ra + (FFlag::LuauCodegenBuilinDeadRange ? br.actualResultCount : 1)), build.constInt(-1));
+            build.inst(IrCmd::MARK_DEAD, build.vmReg(ra + br.actualResultCount), build.constInt(-1));
 
         if (br.type != BuiltinImplType::UsesFallback)
         {
@@ -1359,8 +1355,7 @@ void translateInstForNLoop(IrBuilder& build, const Instruction* pc, int pcpos)
     if (repeatJumpTarget != loopInfo.startpc)
         build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
 
-    if (FFlag::LuauBackedgeHeapCheck)
-        build.inst(IrCmd::CHECK_GC);
+    build.inst(IrCmd::CHECK_GC);
 
     IrOp stepK = loopInfo.step;
 
@@ -1501,8 +1496,7 @@ void translateInstForGLoopIpairs(IrBuilder& build, const Instruction* pc, int pc
 
     build.inst(IrCmd::INTERRUPT, build.constUint(pcpos));
 
-    if (FFlag::LuauBackedgeHeapCheck)
-        build.inst(IrCmd::CHECK_GC);
+    build.inst(IrCmd::CHECK_GC);
 
     // fast-path: builtin table iteration
     IrOp tagA = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
