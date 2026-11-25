@@ -1027,10 +1027,32 @@ void UnionBuilder::add(TypeId ty)
     if (auto utv = get<UnionType>(ty))
     {
         for (auto option : utv)
-            options.insert(option);
+            addOption(follow(option));
     }
     else
-        options.insert(ty);
+        addOption(ty);
+}
+
+// Luwu: one member per singleton value. Upstream compares members by TypeId only, so two separate `"a"` types both
+// stay: intersecting `"a" | "b" | string` with `"a"` gave `"a" | "a"`.
+void UnionBuilder::addOption(TypeId option)
+{
+    const SingletonType* singleton = get<SingletonType>(option);
+    const StringSingleton* string = singleton ? get<StringSingleton>(singleton) : nullptr;
+    const BooleanSingleton* boolean = singleton ? get<BooleanSingleton>(singleton) : nullptr;
+
+    if (string && !strings.insert(string->value).second)
+        return;
+
+    if (boolean)
+    {
+        bool& seen = boolean->value ? hasTrue : hasFalse;
+        if (seen)
+            return;
+        seen = true;
+    }
+
+    options.insert(option);
 }
 
 TypeId UnionBuilder::build()
