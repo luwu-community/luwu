@@ -3564,6 +3564,8 @@ end
 local function getsum(x)
     return inl(x, 3) + inl(x, 5)
 end
+-- Luwu: reading it keeps the inlined function's body, which nothing would call otherwise
+return inl
 )",
                    /* includeIrTypes */ true
                ),
@@ -6374,6 +6376,8 @@ end
 local function bar()
     return foo(3, 4)
 end
+-- Luwu: reading it keeps the inlined function's body, which nothing would call otherwise
+return foo
 )"),
         R"(
 ; function foo(a, b) line 2
@@ -6417,6 +6421,8 @@ local function bar()
     local a, b = foo(3, 4)
     return a, b
 end
+-- Luwu: reading it keeps the inlined function's body, which nothing would call otherwise
+return foo
 )"),
         R"(
 ; function foo(a, b) line 2
