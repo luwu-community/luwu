@@ -11,6 +11,8 @@
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuauEmitCallFeedback)
 LUAU_FASTFLAGVARIABLE(LuauVirtualBcBuilder)
 
@@ -1492,6 +1494,14 @@ uint8_t BytecodeBuilder::getVersion()
     if (FFlag::LuwuDestructuring)
         return LWBC_VERSION_WIP;
 
+    // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): LOP_PRESIZETABLE is WIP bytecode too
+    if (FFlag::LuwuTableComprehensions)
+        return LWBC_VERSION_WIP;
+
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): LOP_JUMPXTYPE and LOP_JUMPXMATCH are WIP bytecode too
+    if (FFlag::DebugLuwuMatchExpressions)
+        return LWBC_VERSION_WIP;
+
     return LWBC_VERSION_TARGET;
 }
 
@@ -2002,6 +2012,20 @@ void BytecodeBuilder::validateInstructions() const
             LUAU_ASSERT((insns[i + 1] & ~(0xffu | LBC_JUMPXISA_JUMPIFINSTANCE | LBC_JUMPXISA_CHECKCLASS)) == 0);
             break;
 
+        case LOP_JUMPXTYPE:
+            VREG(LUAU_INSN_A(insn));
+            VJUMP(LUAU_INSN_D(insn));
+            LUAU_ASSERT((insns[i + 1] & ~(0xffu | 0x80000000u)) == 0);
+            LUAU_ASSERT(getJumpxTypeName(insns[i + 1] & 0xff));
+            break;
+
+        case LOP_JUMPXMATCH:
+            VREG(LUAU_INSN_A(insn));
+            VJUMP(LUAU_INSN_D(insn));
+            VREG(insns[i + 1] & 0xff);
+            LUAU_ASSERT((insns[i + 1] & ~(0xffu | 0x80000000u)) == 0);
+            break;
+
         case LOP_GETOBJECTMEMBER:
         case LOP_SETOBJECTMEMBER:
             VREG(LUAU_INSN_A(insn));
@@ -2025,6 +2049,24 @@ void BytecodeBuilder::validateInstructions() const
             // the runner goes in A and the object is in A + 1; the CALL that follows covers the arguments
             VREG(LUAU_INSN_A(insn) + 1);
             VJUMP(LUAU_INSN_D(insn));
+            break;
+
+        case LOP_APPENDTABLE:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            VREG(LUAU_INSN_C(insn));
+            break;
+
+        case LOP_PRESIZETABLE:
+            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_PRESIZE_TRIM);
+            VREG(LUAU_INSN_A(insn));
+            // the iterator forms read B and B + 1, the range forms B to B + 2
+            if (LUAU_INSN_C(insn) == LBC_PRESIZE_TRIM)
+                VREG(LUAU_INSN_B(insn));
+            else if (LUAU_INSN_C(insn) <= LBC_PRESIZE_ITER_HASH)
+                VREG(LUAU_INSN_B(insn) + 1);
+            else
+                VREG(LUAU_INSN_B(insn) + 2);
             break;
 
         case LOP_GETQUALIFIED:
@@ -2861,6 +2903,16 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         break;
     }
 
+    case LOP_JUMPXTYPE:
+        formatAppend(result, "JUMPXTYPE R%d L%d%s ['%s']\n", LUAU_INSN_A(insn), targetLabel, LUAU_INSN_AUX_NOT(*code) ? " NOT" : "", getJumpxTypeName(*code & 0xff));
+        code++;
+        break;
+
+    case LOP_JUMPXMATCH:
+        formatAppend(result, "JUMPXMATCH R%d R%d L%d%s\n", LUAU_INSN_A(insn), *code & 0xff, targetLabel, LUAU_INSN_AUX_NOT(*code) ? " NOT" : "");
+        code++;
+        break;
+
     case LOP_JUMPXISA:
         formatAppend(
             result,
@@ -2896,6 +2948,18 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
     case LOP_INITTRAITS:
         formatAppend(result, "INITTRAITS R%d L%d\n", LUAU_INSN_A(insn), targetLabel);
         break;
+
+    case LOP_APPENDTABLE:
+        formatAppend(result, "APPENDTABLE R%d R%d R%d\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn));
+        break;
+
+    case LOP_PRESIZETABLE:
+    {
+        static const char* const kForms[] = {"ITER_ARRAY", "ITER_HASH", "RANGE_ARRAY", "RANGE_HASH", "TRIM"};
+        LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_PRESIZE_TRIM);
+        formatAppend(result, "PRESIZETABLE R%d R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), kForms[LUAU_INSN_C(insn)]);
+        break;
+    }
 
     case LOP_GETQUALIFIED:
         formatAppend(result, "GETQUALIFIED R%d R%d R%d K%d [", LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), *code);
