@@ -58,7 +58,7 @@ do
     const kept = try inregisters()
     const object = try second(try value(1))
     assert(class.isinstance(kept, Err) and class.isinstance(object, Err))
-    assert(string.gsub(kept.error, "^[^:]*:%d+: ", "") == string.gsub(object.error, "^[^:]*:%d+: ", ""))
+    assert(tostring(kept.error) == tostring(object.error), tostring(kept.error))
 end
 
 -- the subject of `match try e` is kept in registers too

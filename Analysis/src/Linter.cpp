@@ -5879,6 +5879,12 @@ private:
         if (statementStarts.empty() || continued.end.line >= operand->location.begin.line)
             return;
 
+        // A line that doesn't parse as an operand (`x -` with `local` below it) is code being typed, which the parser
+        // already reports
+        bool operandParsed = !operand->is<AstExprError>();
+        if (!operandParsed)
+            return;
+
         if (operand->location.begin.column > statementStarts.back().column + extraColumns)
             return;
 

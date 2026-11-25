@@ -3295,6 +3295,14 @@ return f
     CHECK_EQ(warnings[1].text, "This line continues the expression above it as a call to 'n'; to start a new statement here, end line 6 with ';'");
 }
 
+TEST_CASE_FIXTURE(BuiltinsFixture, "AmbiguousContinuationWaitsForTheOperand")
+{
+    ScopedFastFlag doExpr{FFlag::LuwuDoExpr, true};
+
+    // `local b = a -` has no right operand while it's typed, and the next line's `local` isn't one
+    checkTypewriting(*this, "local a = 1\n", "local b = a - a", "\nlocal after = 2\nprint(after)\n");
+}
+
 // Luwu try expressions: `try` at the end of a line takes the expression on the next one, so a `;` starts a statement
 TEST_CASE_FIXTURE(Fixture, "AmbiguousContinuationAfterTry")
 {

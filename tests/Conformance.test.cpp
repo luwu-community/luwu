@@ -4969,11 +4969,11 @@ static std::string joinNames(const std::set<std::string>& names)
     return joined;
 }
 
-// The public members a builtin class's objects have in the VM, metamethods included
+// The public members a builtin class's objects have in the VM, metamethods included. Static members come after them.
 static std::string vmClassMembers(const LuauClass* classdef)
 {
     std::set<std::string> names;
-    for (uint32_t i = 0; i < classdef->numberofallmembers; i++)
+    for (uint32_t i = 0; i < classdef->numberofobjectmembers; i++)
     {
         const TString* name = classdef->offsettomember[i];
         if (name && !(classdef->memberflags[i] & LBC_CLASSMEMBER_PRIVATE))
@@ -6627,6 +6627,51 @@ TEST_CASE("ClassesNativeMembersFollowTheRegistry")
     CHECK(std::string(lua_tostring(L, -1)) == "OK");
 }
 
+static int nativeStaticMake(lua_State* L)
+{
+    lua_pushstring(L, "made");
+    return 1;
+}
+
+// Luwu builtin classes: a static method of a class built in C++ is the class value's, like a function without `self` in a
+// class body, and its objects don't have it
+TEST_CASE("ClassesNativeStaticMethodsAreTheClassValues")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+    };
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+    luaL_openlibs(L);
+
+    const luaR_NativeMember members[] = {
+        {"label", nullptr, 0, nullptr},
+        {"__len", nativeObjectLength, 0, nullptr},
+        {"make", nativeStaticMake, LBC_CLASSMEMBER_STATIC, nullptr},
+    };
+
+    LuauClass* classdef = luaR_newnativeclass(L, "Widget", members, int(sizeof(members) / sizeof(members[0])), nullptr);
+    CHECK(classdef->numberofobjectmembers == 3);
+    lua_setglobal(L, "Widget");
+
+    const char* source = R"(
+        local w = Widget()
+        assert(Widget.make() == "made")
+        assert(#w == 3)
+        assert(not pcall(function() return w.make end))
+        return "OK"
+    )";
+
+    size_t bytecodeSize = 0;
+    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    REQUIRE(luau_load(L, "=native", bytecode, bytecodeSize, 0) == 0);
+    free(bytecode);
+
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK(std::string(lua_tostring(L, -1)) == "OK");
+}
+
 TEST_CASE("ClassesFuzz")
 {
     const char* skipEnv = std::getenv("LUWU_SKIP_CLASSES_FUZZ");
@@ -7898,8 +7943,19 @@ TEST_CASE("LegacyBytecodeRefusesLuwuAdditions")
     std::string opcode = asLegacyBytecode(Luau::compile("class A x: number = 1 end local a = A() return a", options));
     CHECK(contains(getLoadError(opcode), "uses opcode"));
 
-    // a class shape, whatever its layout
-    std::string shape = asLegacyBytecode(Luau::compile("class A end return A", options));
+    // a class shape, whatever its layout. A compiled class also has a constructor using NEWOBJECT, which the loader
+    // refuses first, so this chunk holds the shape and nothing else.
+    Luau::BytecodeBuilder bcb;
+    uint32_t main = bcb.beginFunction(0, /* isvararg= */ true);
+    Luau::BytecodeBuilder::ClassShape classShape;
+    classShape.className = bcb.addConstantString(Luau::BytecodeBuilder::StringRef{"A", 1});
+    REQUIRE(bcb.addClassShape(classShape) >= 0);
+    bcb.emitABC(LOP_RETURN, 0, 1, 0);
+    bcb.endFunction(1, 0);
+    bcb.setMainFunction(main);
+    bcb.finalize();
+
+    std::string shape = asLegacyBytecode(bcb.getBytecode());
     CHECK(contains(getLoadError(shape), "contains classes"));
 }
 
