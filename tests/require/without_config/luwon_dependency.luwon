@@ -1,0 +1,4 @@
+-- A data file: the require test reads its value without running it.
+const subject = "luwon_dependency"
+
+return { `result from {subject}` }
