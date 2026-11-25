@@ -3495,7 +3495,7 @@ private:
                         *context,
                         LintWarning::Code_TableOperations,
                         args[1]->location,
-                        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.drop` instead. If order is not important, use a key/value table for better performance."
+                        "If this is `nil`, `table.remove` will remove the last element of the array.\nConsider using `table.discard` instead. If order is not important, use a key/value table for better performance."
                     );
                 }
             }
@@ -7454,7 +7454,7 @@ public:
 private:
     LintContext* context;
 
-    // The library `node` reads a member of: a global library (`table.drop`), or `string` for a method on a string. A
+    // The library `node` reads a member of: a global library (`table.discard`), or `string` for a method on a string. A
     // local named `table` is the reader's own, so it doesn't count.
     std::optional<std::string> libraryOf(AstExprIndexName* node)
     {
