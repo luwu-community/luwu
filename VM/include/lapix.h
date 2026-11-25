@@ -8,6 +8,9 @@ LUA_API int64_t lua_gcallocationrate(lua_State* L);
 LUA_API void lua_gcdump(lua_State* L, void* file, const char* (*categoryName)(lua_State* L, uint8_t memcat));
 LUA_API int luau_setfflag(const char* name, int value);
 LUA_API int luau_getfflag(const char* name);
+// Luwu: turns on every flag of the preset named `preset` ("fixes", "recommended", "new" or "workinprogress", see FLAGS.md) and returns how
+// many it turned on, or -1 when no preset has that name. Call it before creating any state.
+LUA_API int luau_setfflagpreset(const char* preset);
 
 // Finds a userdata tag for which neither a metatable nor destructor is associated.
 // Returns -1 if none were found.
