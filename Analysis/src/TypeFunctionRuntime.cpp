@@ -35,11 +35,7 @@ LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauTypeFunctionSupportsFrozen)
 LUAU_FASTFLAGVARIABLE(LuauTypeFunctionStructuredErrors)
 LUAU_FASTFLAGVARIABLE(LuauTypeFunctionSerializeArgNames)
-LUAU_FASTFLAGVARIABLE(LuauUdtfTypeIsSubtypeOf)
-LUAU_FASTFLAGVARIABLE(LuauTypeFunctionTableIndexerIsReadOnly)
-LUAU_FASTFLAGVARIABLE(LuauUdtfCreateSingletonFixErrorMessage)
 LUAU_FASTFLAGVARIABLE(LuauUdtfTypeUseTaggedMetatable)
-LUAU_FASTFLAGVARIABLE(LuauUdtfTypeToStringMetamethod)
 
 namespace Luau
 {
@@ -652,10 +648,7 @@ static int createSingleton(lua_State* L)
         return 1;
     }
 
-    if (FFlag::LuauUdtfCreateSingletonFixErrorMessage)
-        luaL_error(L, "types.singleton: can't create a singleton from a %s", luaL_typename(L, 1));
-    else
-        luaL_error(L, "types.singleton: can't create singleton from `%s` type", lua_typename(L, 1));
+    luaL_error(L, "types.singleton: can't create a singleton from a %s", luaL_typename(L, 1));
 }
 
 // Luau: `types.generic(name: string, ispack: boolean?) -> type
@@ -3233,21 +3226,15 @@ void registerTypeUserData(lua_State* L)
     lua_pushcfunction(L, isEqualToType, "__eq");
     lua_setfield(L, -2, "__eq");
 
-    if (FFlag::LuauUdtfTypeToStringMetamethod)
-    {
-        lua_pushcfunction(L, typeToString, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
+    lua_pushcfunction(L, typeToString, "__tostring");
+    lua_setfield(L, -2, "__tostring");
 
     // Indexing will be a dynamic function because some type fields are dynamic
     lua_newtable(L);
     luaL_register(L, nullptr, typeUserdataMethods);
 
-    if (FFlag::LuauUdtfTypeIsSubtypeOf)
-    {
-        lua_pushcfunction(L, isSubtypeOf, "issubtypeof");
-        lua_setfield(L, -2, "issubtypeof");
-    }
+    lua_pushcfunction(L, isSubtypeOf, "issubtypeof");
+    lua_setfield(L, -2, "issubtypeof");
 
     lua_setreadonly(L, -1, true);
     lua_pushcclosure(L, typeUserdataIndex, "__index", 1);
@@ -4075,7 +4062,7 @@ private:
             t2->indexer = TypeFunctionTableIndexer(
                 shallowClone(t1->indexer->keyType),
                 shallowClone(t1->indexer->valueType),
-                FFlag::LuauTypeFunctionTableIndexerIsReadOnly ? t1->indexer->isReadOnly : false
+                t1->indexer->isReadOnly
             );
         }
 

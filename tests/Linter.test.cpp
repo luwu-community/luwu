@@ -22,7 +22,6 @@ LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuDestructuring)
 LUAU_FASTFLAG(LuwuNonePrimitive)
-LUAU_FASTFLAG(LuauDeprecatedAttributeOnAnonymousFunctions)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
 LUAU_FASTFLAG(LuwuTableDiscard)
@@ -2555,8 +2554,6 @@ end
 
     // @deprecated works on anonymous functions assigned to locals
     {
-        ScopedFastFlag sflag{FFlag::LuauDeprecatedAttributeOnAnonymousFunctions, true};
-
         LintResult result = lint(R"(
 local foo = @deprecated function()
 end

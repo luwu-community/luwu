@@ -23,9 +23,7 @@ LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTINT(LuauTarjanChildLimit)
 LUAU_FASTFLAG(LuauCheckFunctionStatementTypes)
 LUAU_FASTFLAG(LuauBidirectionalInferenceVariadics)
-LUAU_FASTFLAG(LuauBidirectionalInferenceBetterLambdaHandling)
 LUAU_FASTFLAG(LuauHigherOrderGenericInference)
-LUAU_FASTFLAG(LuauCollapseDirectBoundCycles)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuauBetterMissingPropertiesTypeError)
 LUAU_FASTFLAG(LuwuClasses)
@@ -1445,7 +1443,6 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "infer_generic_lib_function_function_argument
     DOES_NOT_PASS_OLD_SOLVER_GUARD();
 
     ScopedFastFlag sffs[] = {
-        {FFlag::LuauCollapseDirectBoundCycles, true},
         {FFlag::LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier, true},
     };
 
@@ -4794,7 +4791,6 @@ TEST_CASE_FIXTURE(Fixture, "bidi_inference_union_of_functions_distinguished_by_r
 {
     ScopedFastFlag sffs[] = {
         {FFlag::DebugLuauForceOldSolver, false},
-        {FFlag::LuauBidirectionalInferenceBetterLambdaHandling, true},
     };
 
     // useEffect pattern: callback is either (() -> ()) or (() -> () -> ())

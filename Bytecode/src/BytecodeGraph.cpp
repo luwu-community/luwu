@@ -413,7 +413,11 @@ std::string toFunctionBytecode(BytecodeBuilder& bcb, CompTimeBcFunction& fn)
 
     bcb.foldJumps();
 
-    bcb.expandJumps();
+    bool hasLongJumpError = false;
+    bcb.expandJumps(hasLongJumpError);
+
+    if (hasLongJumpError)
+        return "";
 
     bcb.endFunction(fn.maxstacksize, fn.nups, fn.flags);
 
