@@ -8565,6 +8565,197 @@ bb_linear_17:
     );
 }
 
+TEST_CASE_FIXTURE(LoweringFixture, "CollectionsMethodsRunInlineWithoutACall")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
+    ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
+
+    // Luwu collections: a `Vec` or `VecDeque` method on an untyped receiver runs inline in the object path
+    // (translateStorageMethod). The table path stays as it is, and every slow path joins the one CALL.
+    //
+    // Expected: no CALL or FALLBACK_NAMECALL between CHECK_STORAGE and the JUMP past the call. `push` checks the element
+    // type and the room left, then stores with a barrier. The argument's parts are read from R1, which the MOVE into R4
+    // copied, and the TValue itself from R4.
+    assemblyOptions.includeOutlinedCode = true;
+
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function push(v, x)
+    v:push(x)
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2
+               ),
+        R"(
+; function push($arg0, $arg1) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R1
+  STORE_TVALUE R4, %0
+  CHECK_TAG R0, ttable, bb_fallback_3
+  %4 = LOAD_POINTER R0
+  %5 = GET_HASH_NODE_ADDR %4, 8031801u
+  JUMP_SLOT_MATCH %5, K0 ('push'), bb_5, bb_6
+bb_5:
+  STORE_POINTER R3, %4
+  STORE_TAG R3, ttable
+  %9 = LOAD_TVALUE %5, 0i
+  STORE_TVALUE R2, %9
+  JUMP bb_1
+bb_6:
+  CHECK_NODE_NO_NEXT %5, bb_fallback_2
+  %13 = TRY_CALL_FASTGETTM %4, 0i, bb_fallback_2
+  %14 = LOAD_TAG %13
+  CHECK_TAG %14, ttable, bb_fallback_2
+  %16 = LOAD_POINTER %13
+  %17 = GET_SLOT_NODE_ADDR %16, 1u, K0 ('push')
+  CHECK_SLOT_MATCH %17, K0 ('push'), bb_fallback_2
+  %19 = LOAD_POINTER R0
+  STORE_POINTER R3, %19
+  STORE_TAG R3, ttable
+  %22 = LOAD_TVALUE %17, 0i
+  STORE_TVALUE R2, %22
+  JUMP bb_1
+bb_1:
+  INTERRUPT 3u
+  SET_SAVEDPC 5u
+  CALL R2, 2i, 0i
+  JUMP bb_4
+bb_4:
+  INTERRUPT 5u
+  RETURN R0, 0i
+bb_fallback_3:
+  CHECK_TAG R0, tobject, bb_fallback_2
+  %27 = LOAD_POINTER R0
+  CHECK_STORAGE %27, 1i, bb_fallback_7
+  %29 = LOAD_STORAGE %27
+  %30 = LOAD_TAG R1
+  %31 = LOAD_POINTER R1
+  CHECK_STORAGE_ELEMENT %29, %30, %31, bb_fallback_2
+  %33 = LOAD_STORAGE_INT %29, 0i
+  %34 = LOAD_STORAGE_INT %29, 4i
+  CHECK_CMP_INT %33, %34, u_lt, bb_fallback_2
+  %36 = GET_STORAGE_ENTRY_ADDR %29, %33
+  %37 = LOAD_TVALUE R4
+  STORE_TVALUE %36, %37
+  %39 = ADD_INT %33, 1i
+  STORE_STORAGE_INT %29, 0i, %39
+  BARRIER_OBJ %27, R1, undef
+  JUMP bb_4
+bb_fallback_7:
+  %43 = LOAD_POINTER R0
+  %44 = TRY_OBJECT_NAMECALL_ADDR %43, 1u, K0 ('push'), bb_fallback_2
+  STORE_POINTER R3, %43
+  STORE_TAG R3, tobject
+  %47 = LOAD_TVALUE %44
+  STORE_TVALUE R2, %47
+  JUMP bb_1
+bb_fallback_2:
+  FALLBACK_NAMECALL 1u, R2, R0, K0 ('push')
+  JUMP bb_1
+)"
+    );
+}
+
+TEST_CASE_FIXTURE(LoweringFixture, "CollectionsFastMethodsRunWithoutACall")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+    ScopedFastFlag callFb{FFlag::LuauCallFeedback, true};
+    ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
+
+    // Luwu collections: a method with an interpreter fast method, like `OrderedMap:get`, runs it through INVOKE_FAST_METHOD
+    // in the untyped receiver's object path. When there's none for the receiver, or it bails, the generic object path and
+    // the CALL follow. `get` is a `Vec` and `VecDeque` method too, so the inline storage read comes first.
+    assemblyOptions.includeOutlinedCode = true;
+
+    CHECK_EQ(
+        "\n" + getCodegenAssembly(
+                   R"(
+local function get(m, k)
+    return m:get(k)
+end
+)",
+                   /* includeIrTypes= */ false,
+                   /* debugLevel= */ 1,
+                   /* optimizationLevel= */ 2
+               ),
+        R"(
+; function get($arg0, $arg1) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R1
+  STORE_TVALUE R4, %0
+  CHECK_TAG R0, ttable, bb_fallback_3
+  %4 = LOAD_POINTER R0
+  %5 = GET_HASH_NODE_ADDR %4, 223071u
+  JUMP_SLOT_MATCH %5, K0 ('get'), bb_5, bb_6
+bb_5:
+  STORE_POINTER R3, %4
+  STORE_TAG R3, ttable
+  %9 = LOAD_TVALUE %5, 0i
+  STORE_TVALUE R2, %9
+  JUMP bb_1
+bb_6:
+  CHECK_NODE_NO_NEXT %5, bb_fallback_2
+  %13 = TRY_CALL_FASTGETTM %4, 0i, bb_fallback_2
+  %14 = LOAD_TAG %13
+  CHECK_TAG %14, ttable, bb_fallback_2
+  %16 = LOAD_POINTER %13
+  %17 = GET_SLOT_NODE_ADDR %16, 1u, K0 ('get')
+  CHECK_SLOT_MATCH %17, K0 ('get'), bb_fallback_2
+  %19 = LOAD_POINTER R0
+  STORE_POINTER R3, %19
+  STORE_TAG R3, ttable
+  %22 = LOAD_TVALUE %17, 0i
+  STORE_TVALUE R2, %22
+  JUMP bb_1
+bb_1:
+  INTERRUPT 3u
+  SET_SAVEDPC 4u
+  CALL R2, 2i, -1i
+  JUMP bb_4
+bb_4:
+  INTERRUPT 4u
+  RETURN R2, -1i
+bb_fallback_3:
+  CHECK_TAG R0, tobject, bb_fallback_2
+  %27 = LOAD_POINTER R0
+  CHECK_STORAGE %27, 3i, bb_fallback_8
+  %29 = LOAD_STORAGE %27
+  CHECK_TAG R1, tnumber, bb_fallback_2
+  %32 = LOAD_DOUBLE R1
+  %33 = TRY_NUM_TO_INDEX %32, bb_fallback_2
+  %34 = SUB_INT %33, 1i
+  %35 = LOAD_STORAGE_INT %29, 0i
+  CHECK_CMP_INT %34, %35, u_lt, bb_fallback_2
+  %37 = GET_STORAGE_ENTRY_ADDR %29, %34
+  %38 = LOAD_TVALUE %37
+  STORE_TVALUE R2, %38
+  ADJUST_STACK_TO_REG R2, 1i
+  JUMP bb_4
+bb_fallback_8:
+  %42 = LOAD_POINTER R0
+  %43 = INVOKE_FAST_METHOD %42, 1u, R2, 1i, -1i
+  CHECK_CMP_INT %43, 0i, ge, bb_fallback_7
+  ADJUST_STACK_TO_REG R2, %43
+  JUMP bb_4
+bb_fallback_7:
+  %47 = LOAD_POINTER R0
+  %48 = TRY_OBJECT_NAMECALL_ADDR %47, 1u, K0 ('get'), bb_fallback_2
+  STORE_POINTER R3, %47
+  STORE_TAG R3, tobject
+  %51 = LOAD_TVALUE %48
+  STORE_TVALUE R2, %51
+  JUMP bb_1
+bb_fallback_2:
+  FALLBACK_NAMECALL 1u, R2, R0, K0 ('get')
+  JUMP bb_1
+)"
+    );
+}
+
 TEST_CASE_FIXTURE(LoweringFixture, "ClassIsinstanceKnownTag")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
@@ -8855,6 +9046,17 @@ bb_4:
 bb_6:
   INTERRUPT 8u
   RETURN R4, 1i
+; function Cat($arg0) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R0
+  STORE_TVALUE R3, %0
+  %2 = GET_UPVALUE U0
+  STORE_TVALUE R4, %2
+  FALLBACK_NEWOBJECT 2u, R2, R4, 0i, 1i
+  %5 = LOAD_TVALUE R2
+  STORE_TVALUE R1, %5
+  INTERRUPT 5u
+  RETURN R1, 1i
 )"
     );
 }
@@ -8900,6 +9102,17 @@ bb_bytecode_2:
   STORE_TAG R2, tnumber
   INTERRUPT 7u
   RETURN R2, 1i
+; function C($arg0) line 2
+bb_bytecode_0:
+  %0 = LOAD_TVALUE R0
+  STORE_TVALUE R3, %0
+  %2 = GET_UPVALUE U0
+  STORE_TVALUE R4, %2
+  FALLBACK_NEWOBJECT 2u, R2, R4, 0i, 1i
+  %5 = LOAD_TVALUE R2
+  STORE_TVALUE R1, %5
+  INTERRUPT 5u
+  RETURN R1, 1i
 )"
     );
 }

@@ -1925,6 +1925,10 @@ void BytecodeBuilder::validateInstructions() const
                 VREGRANGE(LUAU_INSN_C(insn), 2);
                 VCONST(insns[i + 1], String);
             }
+            else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_CONSTRUCTOR)
+            {
+                VREG(LUAU_INSN_C(insn));
+            }
             else
             {
                 LUAU_ASSERT(
@@ -1995,7 +1999,7 @@ void BytecodeBuilder::validateInstructions() const
             break;
 
         case LOP_NEWOBJECT:
-            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_ALLOC);
+            LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_APPLY);
             // with a user __init the instruction lays out `__init`, `self` and the arguments above A;
             // the other forms use one register per argument or per field
             VREG(LUAU_INSN_A(insn) + (LUAU_INSN_C(insn) == LBC_NEWOBJECT_INIT ? 2 : 0) + insns[i + 1]);
@@ -2003,7 +2007,7 @@ void BytecodeBuilder::validateInstructions() const
             break;
 
         case LOP_INITTRAITS:
-            // the runner goes in A and the object is in A + 1; the CALL that follows covers the arguments
+            // the count is in A and the object in A + 1; the CALL that follows names the arguments and the frame
             VREG(LUAU_INSN_A(insn) + 1);
             VJUMP(LUAU_INSN_D(insn));
             break;
@@ -2045,6 +2049,13 @@ void BytecodeBuilder::validateInstructions() const
         case LOP_POP:
             VREG(LUAU_INSN_A(insn));
             VREG(LUAU_INSN_B(insn));
+            break;
+
+        case LOP_GETTABLEBUNDLE:
+        case LOP_SETTABLEBUNDLE:
+            VREG(LUAU_INSN_A(insn));
+            VREG(LUAU_INSN_B(insn));
+            VREGRANGE(LUAU_INSN_C(insn), int(insns[i + 1]));
             break;
 
         default:
@@ -2837,6 +2848,10 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
             dumpConstant(result, *code, false);
             result.append("]\n");
         }
+        else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_CONSTRUCTOR)
+        {
+            formatAppend(result, "NEWCLASSMEMBER R%d CONSTRUCTOR R%d\n", LUAU_INSN_A(insn), LUAU_INSN_C(insn));
+        }
         else if (LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD || LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_VALUEMETAMETHOD)
         {
             const char* form = LUAU_INSN_B(insn) == LBC_NEWCLASSMEMBER_FIELD ? "FIELD" : "VALUEMETAMETHOD";
@@ -2912,8 +2927,8 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
 
     case LOP_NEWOBJECT:
     {
-        static const char* const kForms[] = {"", " INIT", " FIELDS", " ALLOC"};
-        LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_ALLOC);
+        static const char* const kForms[] = {"", " INIT", " FIELDS", " ALLOC", " APPLY"};
+        LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_NEWOBJECT_APPLY);
         formatAppend(result, "NEWOBJECT R%d R%d %d%s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), *code++, kForms[LUAU_INSN_C(insn)]);
         break;
     }
@@ -2931,6 +2946,15 @@ void BytecodeBuilder::dumpInstruction(const uint32_t* code, std::string& result,
         static const char* const kForms[] = {"ITER_ARRAY", "ITER_HASH", "RANGE_ARRAY", "RANGE_HASH", "TRIM"};
         LUAU_ASSERT(LUAU_INSN_C(insn) <= LBC_PRESIZE_TRIM);
         formatAppend(result, "PRESIZETABLE R%d R%d %s\n", LUAU_INSN_A(insn), LUAU_INSN_B(insn), kForms[LUAU_INSN_C(insn)]);
+        break;
+    }
+
+    case LOP_GETTABLEBUNDLE:
+    case LOP_SETTABLEBUNDLE:
+    {
+        const char* name = LUAU_INSN_OP(insn) == LOP_GETTABLEBUNDLE ? "GETTABLEBUNDLE" : "SETTABLEBUNDLE";
+        formatAppend(result, "%s R%d R%d R%d %d\n", name, LUAU_INSN_A(insn), LUAU_INSN_B(insn), LUAU_INSN_C(insn), int(*code));
+        code++;
         break;
     }
 

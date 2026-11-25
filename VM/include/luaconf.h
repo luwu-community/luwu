@@ -108,6 +108,11 @@
 #define LUA_UTAG_LIMIT 128
 #endif
 
+// Luwu Native Classes (rfcs/native-classes.md): number of valid tags for an object's native data
+#ifndef LUA_OTAG_LIMIT
+#define LUA_OTAG_LIMIT 128
+#endif
+
 // number of valid Lua lightuserdata tags
 #ifndef LUA_LUTAG_LIMIT
 #define LUA_LUTAG_LIMIT 128
