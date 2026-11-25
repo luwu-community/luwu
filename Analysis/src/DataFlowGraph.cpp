@@ -8,6 +8,8 @@
 #include "Luau/Error.h"
 #include "Luau/TimeTrace.h"
 
+#include <algorithm>
+#include <cmath>
 #include <optional>
 
 LUAU_FASTFLAG(DebugLuauFreezeArena)
@@ -1239,8 +1241,47 @@ DataFlowResult DataFlowGraphBuilder::visitExpr(AstExprIndexExpr* i)
         return {def, keyArena->node(parentKey, def, index)};
     }
 
+    // Luwu Destructuring (rfcs/destructuring.md): a position read (`b.1`) is refined like a property, so `if b.1 then`
+    // narrows `b` and `b.1` in the branch. Its key is the position's name, `"1"`.
+    const AstExprConstantNumber* number = i->positional ? i->index->as<AstExprConstantNumber>() : nullptr;
+    if (number && number->value >= 1 && number->value == std::floor(number->value))
+    {
+        std::string index = std::to_string(size_t(number->value));
+        DefId def = lookup(parentDef, index, i->location);
+        return {def, keyArena->node(parentKey, def, index)};
+    }
+
     return {defArena->freshCell(Symbol{}, i->location, /* subscripted= */ true), nullptr};
 }
+
+// Luwu Destructuring (rfcs/destructuring.md): whether `name` is the key of a position read (`"1"` for `x.1`)
+static bool isPositionKey(const std::string& name)
+{
+    return !name.empty() && name[0] != '0' && std::all_of(name.begin(), name.end(), [](char c) { return c >= '0' && c <= '9'; });
+}
+
+// Luwu Destructuring (rfcs/destructuring.md): an object's positions read its class's fields (`cat.1` is `cat.name`), so
+// assigning any of its properties forgets what tests of its positions found
+void DataFlowGraphBuilder::forgetPositions(DefId parentDef, const Location& location)
+{
+    DfgScope* scope = currentScope();
+    std::vector<std::string> positions;
+    for (const DfgScope* enclosing = scope; enclosing; enclosing = enclosing->parent)
+    {
+        const std::unordered_map<std::string, const Def*>* props = enclosing->props.find(parentDef);
+        if (!props)
+            continue;
+        for (const auto& [name, def] : *props)
+        {
+            if (isPositionKey(name))
+                positions.push_back(name);
+        }
+    }
+
+    for (const std::string& name : positions)
+        scope->props[parentDef][name] = defArena->freshCell(Symbol{}, location);
+}
+
 DataFlowResult DataFlowGraphBuilder::visitFunction(AstExprFunction* f, NotNull<DfgScope> signatureScope)
 {
     if (AstLocal* self = f->self)
@@ -1469,6 +1510,7 @@ DefId DataFlowGraphBuilder::visitLValue(AstExprIndexName* i, DefId incomingDef)
 
     DfgScope* scope = currentScope();
     DefId updated = defArena->freshCell(i->index, i->location, containsSubscriptedDefinition(incomingDef));
+    forgetPositions(parentDef, i->location);
     scope->props[parentDef][i->index.value] = updated;
     return updated;
 }
@@ -1482,6 +1524,7 @@ DefId DataFlowGraphBuilder::visitLValue(AstExprIndexExpr* i, DefId incomingDef)
     if (auto string = i->index->as<AstExprConstantString>())
     {
         DefId updated = defArena->freshCell(Symbol{}, i->location, containsSubscriptedDefinition(incomingDef));
+        forgetPositions(parentDef, i->location);
         scope->props[parentDef][string->value.data] = updated;
         return updated;
     }
