@@ -26,6 +26,7 @@ LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuauSolverV2)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuOctalLiterals)
 LUAU_FASTFLAG(LuwuNonePrimitive)
 LUAU_FASTFLAG(LuauFunctionUnusedRecursiveLinting)
 LUAU_FASTFLAG(LuwuTableRemoveFootgunLint)
@@ -4525,6 +4526,23 @@ local _ = 0x10000000000000000
     REQUIRE(2 == result.warnings.size());
     CHECK_EQ(result.warnings[0].text, "Binary number literal exceeded available precision and was truncated to 2^64");
     CHECK_EQ(result.warnings[1].text, "Hexadecimal number literal exceeded available precision and was truncated to 2^64");
+}
+
+// Luwu Octal Literals (rfcs/octal-literals.md)
+TEST_CASE_FIXTURE(Fixture, "IntegerParsingOctal")
+{
+    ScopedFastFlag sff{FFlag::LuwuOctalLiterals, true};
+
+    LintResult result = lint(R"(
+local _ = 0o2000000000000000000000
+local _ = 0o400000000000000001
+)");
+
+    REQUIRE(2 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].text, "Octal number literal exceeded available precision and was truncated to 2^64");
+    CHECK_EQ(result.warnings[0].location.begin.line, 1);
+    CHECK_EQ(result.warnings[1].text, "Number literal exceeded available precision and was truncated to closest representable number");
+    CHECK_EQ(result.warnings[1].location.begin.line, 2);
 }
 
 TEST_CASE_FIXTURE(Fixture, "IntegerParsingDecimalImprecise")
