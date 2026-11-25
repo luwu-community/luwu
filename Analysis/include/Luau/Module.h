@@ -58,6 +58,8 @@ struct SourceModule
     SourceCode::Type type = SourceCode::None;
     // Luwu: from the module's config when it's parsed.
     Language language = Language::Luwu;
+    // Luwu object notation: the module is a `.luwon` data file.
+    bool luwon = false;
     std::optional<std::string> environmentName;
     bool cyclic = false;
 
