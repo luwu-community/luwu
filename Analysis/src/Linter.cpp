@@ -7610,7 +7610,7 @@ public:
 private:
     LintContext* context;
 
-    // The library `node` reads a member of: a global library (`table.drop`), or `string` for a method on a string. A
+    // The library `node` reads a member of: a global library (`table.discard`), or `string` for a method on a string. A
     // local named `table` is the reader's own, so it doesn't count.
     std::optional<std::string> libraryOf(AstExprIndexName* node)
     {
