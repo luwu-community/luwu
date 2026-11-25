@@ -5,6 +5,7 @@
 #include "Luau/Constraint.h"
 #include "Luau/DenseHash.h"
 #include "Luau/DocRefs.h"
+#include "Luau/IntegerModes.h"
 #include "Luau/Location.h"
 #include "Luau/Scope.h"
 #include "Luau/Set.h"
@@ -914,6 +915,41 @@ struct TypeStringifier
         state.emit("*");
     }
 
+    // Luwu Integers (rfcs/integers.md): a mode's type is written by its name (`u8`, `int`), and a generic mode as `integer<T>`
+    void stringifyInteger(const PrimitiveType& ptv)
+    {
+        if (!ptv.mode)
+        {
+            state.emit("integer");
+            return;
+        }
+
+        if (std::optional<IntegerModeSet> modes = integerModesNamedBy(*ptv.mode))
+        {
+            if (*modes == kEveryIntegerMode || *modes == 0)
+            {
+                state.emit(*modes ? "integer" : "never");
+                return;
+            }
+
+            const char* separator = "";
+            for (int mode = 0; mode < kIntegerModeCount; ++mode)
+            {
+                if (*modes & (1 << mode))
+                {
+                    state.emit(separator);
+                    state.emit(integerModeName(IntegerMode(mode)));
+                    separator = " | ";
+                }
+            }
+            return;
+        }
+
+        state.emit("integer<");
+        stringify(*ptv.mode);
+        state.emit(">");
+    }
+
     void operator()(TypeId, const PrimitiveType& ptv)
     {
         switch (ptv.type)
@@ -948,7 +984,7 @@ struct TypeStringifier
         case PrimitiveType::Integer:
             if (FFlag::LuauIntegerType2)
             {
-                state.emit("integer");
+                stringifyInteger(ptv);
                 return;
             }
             [[fallthrough]];

@@ -12,7 +12,6 @@
 #include "lstate.h"
 #include "ltm.h"
 
-LUAU_FASTFLAG(LuauCodegenInteger3)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauCallFeedback)
 
@@ -107,10 +106,11 @@ static void translateInstLoadConstant(IrBuilder& build, int ra, int k)
         build.inst(IrCmd::STORE_INT, build.vmReg(ra), build.constInt(protok.value.b));
         build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TBOOLEAN));
     }
-    else if (FFlag::LuauCodegenInteger3 && protok.tt == LUA_TINTEGER)
+    else if (protok.tt == LUA_TINTEGER)
     {
         build.inst(IrCmd::STORE_INT64, build.vmReg(ra), build.constInt64(protok.value.l));
         build.inst(IrCmd::STORE_TAG, build.vmReg(ra), build.constTag(LUA_TINTEGER));
+        build.inst(IrCmd::STORE_EXTRA, build.vmReg(ra), build.constInt(protok.extra[0]));
     }
     else if (protok.tt == LUA_TNUMBER)
     {
@@ -252,49 +252,6 @@ void translateInstJumpIfEqShortcut(IrBuilder& build, const Instruction* pc, int 
             IrCmd::CMP_SPLIT_TVALUE,
             build.constTag(LUA_TNUMBER),
             build.constTag(LUA_TNUMBER),
-            va,
-            vb,
-            build.cond(not_ ? IrCondition::NotEqual : IrCondition::Equal)
-        );
-
-        build.inst(IrCmd::STORE_INT, build.vmReg(rr), result);
-        build.inst(IrCmd::STORE_TAG, build.vmReg(rr), build.constTag(LUA_TBOOLEAN));
-        build.inst(IrCmd::JUMP, next);
-
-        // If we don't need a fallback, we are done
-        if (fallback.kind == IrOpKind::None)
-            return;
-
-        // Otherwise, start the fallback block
-        // Note that if the number fast-path is not taken at all code that would have been in the fallback is actually the main path
-        build.beginBlock(fallback);
-    }
-    else if (FFlag::LuauCodegenInteger3 && isExpectedOrUnknownBytecodeType(bcTypes.a, LBC_TYPE_INTEGER) &&
-             isExpectedOrUnknownBytecodeType(bcTypes.b, LBC_TYPE_INTEGER))
-    {
-        IrOp ta = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
-        build.inst(
-            IrCmd::CHECK_TAG,
-            ta,
-            build.constTag(LUA_TINTEGER),
-            bcTypes.a == LBC_TYPE_INTEGER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
-        );
-
-        IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
-        build.inst(
-            IrCmd::CHECK_TAG,
-            tb,
-            build.constTag(LUA_TINTEGER),
-            bcTypes.b == LBC_TYPE_INTEGER ? build.vmExit(pcpos) : getInitializedFallback(build, fallback, pcpos)
-        );
-
-        IrOp va = build.inst(IrCmd::LOAD_INT64, build.vmReg(ra));
-        IrOp vb = build.inst(IrCmd::LOAD_INT64, build.vmReg(rb));
-
-        IrOp result = build.inst(
-            IrCmd::CMP_SPLIT_TVALUE,
-            build.constTag(LUA_TINTEGER),
-            build.constTag(LUA_TINTEGER),
             va,
             vb,
             build.cond(not_ ? IrCondition::NotEqual : IrCondition::Equal)
@@ -1227,7 +1184,7 @@ IrOp translateFastCallN(IrBuilder& build, const Instruction* pc, int pcpos, bool
 
         if (protok.tt == LUA_TNUMBER)
             builtinArgs = build.constDouble(protok.value.n);
-        else if (FFlag::LuauCodegenInteger3 && protok.tt == LUA_TINTEGER)
+        else if (protok.tt == LUA_TINTEGER)
             builtinArgs = build.constInt64(protok.value.l);
     }
 

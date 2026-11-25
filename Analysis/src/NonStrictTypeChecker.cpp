@@ -7,6 +7,7 @@
 #include "Luau/Common.h"
 #include "Luau/Def.h"
 #include "Luau/Error.h"
+#include "Luau/IntegerModes.h"
 #include "Luau/Normalize.h"
 #include "Luau/RecursionCounter.h"
 #include "Luau/Simplify.h"
@@ -1081,6 +1082,10 @@ struct NonStrictTypeChecker
 
         // Luwu literal types: `literal<B>` isn't a type in scope. The constraint generator resolves it and reports misuse.
         if (isLiteralTypeReference(*scope, ty))
+            return;
+
+        // Luwu Integers (rfcs/integers.md): `integer<T>` has no alias with a parameter to check it against
+        if (isIntegerWithMode(builtinTypes, *scope, ty))
             return;
 
         std::optional<TypeFun> alias = ty->prefix ? scope->lookupImportedType(ty->prefix->value, ty->name.value) : scope->lookupType(ty->name.value);

@@ -9,6 +9,8 @@
 #include "doctest.h"
 
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(LuauIntegerType2)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
@@ -5728,6 +5730,37 @@ return good, bad, hit, empty, shadowed
             names.push_back(warning.text.substr(0, warning.text.find(' ')));
 
     CHECK_EQ(names, std::vector<std::string>{"'Ok'", "'Err'", "'Some'", "'None'"});
+}
+
+// Luwu Integers (rfcs/integers.md): the `integer` members upstream Luau 0.730 didn't have, and `Error`
+TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsIntegerLibraryInLuauFiles")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuauIntegerType2, true},
+        {FFlag::DebugLuwuIntegers, true},
+    };
+
+    fileResolver.source["game/a"] = R"(
+local cast = integer.cast
+local mode = integer.u8
+local power = integer.pow
+local band = integer.band
+local overflow = Error.Overflow
+return cast, mode, power, band, overflow
+)";
+    configResolver.configFiles["game/a"].language = Language::Luau;
+
+    std::vector<std::string> names;
+    for (const LintWarning& warning : lintModule("game/a").warnings)
+        if (warning.code == LintWarning::Code_LuwuOnlyApi)
+            names.push_back(warning.text.substr(0, warning.text.find(' ')));
+
+    CHECK_EQ(names, std::vector<std::string>{"'integer.cast'", "'integer.u8'", "'integer.pow'", "'Error'"});
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "LuwuOnlyApiReportsErrorGlobalsInLuauFiles")

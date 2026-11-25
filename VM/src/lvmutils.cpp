@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lclass.h"
+#include "linteger.h"
 #include "lfunc.h"
 #include "lvm.h"
 
@@ -468,10 +469,18 @@ int luaV_strcmp(const TString* ls, const TString* rs)
 
 int luaV_lessthan(lua_State* L, const TValue* l, const TValue* r)
 {
+    // Luwu Integers (rfcs/integers.md): an inline integer and a bigint have different tags but compare by value, and
+    // an integer compared to anything but an integer of its mode raises Error.InvalidComparison
     if (LUAU_UNLIKELY(ttype(l) != ttype(r)))
+    {
+        if (ttisinteger(l) || ttisinteger(r))
+            return luaZ_lessthan(L, l, r);
         luaG_ordererror(L, l, r, TM_LT);
+    }
     else if (LUAU_LIKELY(ttisnumber(l)))
         return luai_numlt(nvalue(l), nvalue(r));
+    else if (ttisinteger(l))
+        return luaZ_lessthan(L, l, r);
     else if (ttisstring(l))
         return luaV_strcmp(tsvalue(l), tsvalue(r)) < 0;
     else
@@ -482,9 +491,16 @@ int luaV_lessequal(lua_State* L, const TValue* l, const TValue* r)
 {
     int res;
     if (ttype(l) != ttype(r))
+    {
+        // Luwu Integers (rfcs/integers.md): see luaV_lessthan
+        if (ttisinteger(l) || ttisinteger(r))
+            return luaZ_lessequal(L, l, r);
         luaG_ordererror(L, l, r, TM_LE);
+    }
     else if (ttisnumber(l))
         return luai_numle(nvalue(l), nvalue(r));
+    else if (ttisinteger(l))
+        return luaZ_lessequal(L, l, r);
     else if (ttisstring(l))
         return luaV_strcmp(tsvalue(l), tsvalue(r)) <= 0;
     else if ((res = call_orderTM(L, l, r, TM_LE)) != -1) // first try `le'
@@ -506,7 +522,8 @@ int luaV_equalval(lua_State* L, const TValue* t1, const TValue* t2)
     case LUA_TNUMBER:
         return luai_numeq(nvalue(t1), nvalue(t2));
     case LUA_TINTEGER:
-        return luai_inteq(lvalue(t1), lvalue(t2));
+    case LUA_THEAPINTEGER:
+        return luaZ_equal(t1, t2);
     case LUA_TVECTOR:
         return luai_veceq(vvalue(t1), vvalue(t2));
     case LUA_TBOOLEAN:
@@ -724,6 +741,13 @@ void luaV_doarithimpl(lua_State* L, StkId ra, const TValue* rb, const TValue* rc
                 break;
             }
         }
+    }
+
+    // Luwu Integers (rfcs/integers.md): integers of one mode give an integer; luaZ_arith raises for different modes
+    if (ttisinteger(rb) && ttisinteger(rc))
+    {
+        luaZ_arith(L, ra, rb, rc, op);
+        return;
     }
 
     if ((b = luaV_tonumber(rb, &tempb)) != NULL && (c = luaV_tonumber(rc, &tempc)) != NULL)

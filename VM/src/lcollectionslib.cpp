@@ -8,6 +8,7 @@
 #include "ldo.h"
 #include "lfunc.h"
 #include "lgc.h"
+#include "linteger.h"
 #include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"
@@ -147,9 +148,19 @@ static BuiltinEnum enumof(lua_State* L, const TValue* value)
     return NOT_AN_ENUM;
 }
 
-// Fixes the element type of `storage` to the type of `value`: its builtin enum, its class, or its type tag
+// Fixes the element type of `storage` to the type of `value`: its builtin enum, its class, or its type tag. Luwu
+// Integers (rfcs/integers.md): an integer's type is its mode, kept in `elementenum`, so an inline integer and a bigint
+// are one type.
 static void setelementtype(lua_State* L, LuauStorage* storage, const TValue* value)
 {
+    if (ttisinteger(value))
+    {
+        storage->elementtag = LUAR_STORAGE_INTEGER;
+        storage->elementenum = uint8_t(integermode(value));
+        storage->elementclass = NULL;
+        return;
+    }
+
     BuiltinEnum builtinenum = enumof(L, value);
     storage->elementtag = builtinenum != NOT_AN_ENUM ? LUAR_STORAGE_ENUM : uint8_t(ttype(value));
     storage->elementenum = uint8_t(builtinenum);
@@ -163,6 +174,8 @@ static bool hastype(lua_State* L, const LuauStorage* storage, const TValue* valu
 {
     if (storage->elementtag == LUAR_STORAGE_ENUM)
         return enumof(L, value) == BuiltinEnum(storage->elementenum);
+    if (storage->elementtag == LUAR_STORAGE_INTEGER)
+        return ttisinteger(value) && integermode(value) == storage->elementenum;
     return ttype(value) == storage->elementtag && (storage->elementtag != LUA_TOBJECT || objectvalue(value)->lclass == storage->elementclass);
 }
 
@@ -225,6 +238,14 @@ static void addtypeplural(luaL_Strbuf* b, const LuauStorage* storage)
         return;
     }
 
+    // Luwu Integers (rfcs/integers.md): "u8 integers"
+    if (storage->elementtag == LUAR_STORAGE_INTEGER)
+    {
+        luaL_addstring(b, luaZ_modename(IntegerMode(storage->elementenum)));
+        luaL_addstring(b, " integers");
+        return;
+    }
+
     const char* name = getstr(b->L->global->ttname[storage->elementtag]);
     luaL_addstring(b, name);
     if (strcmp(name, "userdata") == 0)
@@ -248,6 +269,16 @@ static void addvaluetype(luaL_Strbuf* b, const TValue* value)
     {
         luaL_addstring(b, "a bundle of ");
         addvaluecount(b, bundlesize);
+        return;
+    }
+
+    // Luwu Integers (rfcs/integers.md): an integer is named by its mode, "an i8 integer"
+    if (ttisinteger(value))
+    {
+        const char* mode = luaZ_modename(integermode(value));
+        luaL_addstring(b, mode[0] == 'i' ? "an " : "a ");
+        luaL_addstring(b, mode);
+        luaL_addstring(b, " integer");
         return;
     }
 
@@ -1500,6 +1531,71 @@ static bool fitsset(lua_State* L, LuauObject* container, StkId args, int nargs)
            fitselement(L, luaR_storage(container), args + 1);
 }
 
+// Luwu Integers (rfcs/integers.md): `Vec.from(t)` and `VecDeque.from(t)`. A table gives a container of its list's
+// values; a string or a buffer gives a container of its bytes as `u8` integers, in one pass.
+template<LuwuBuiltinClass Kind>
+static int containerfrom(lua_State* L)
+{
+    setclassvalue(L, L->top, builtinclass(L, Kind));
+    incr_top(L);
+    lua_call(L, 0, 1);
+    LuauObject* container = objectvalue(L->top - 1);
+
+    if (lua_istable(L, 1))
+    {
+        addback(L, container, listentries(L, container, "from", 1));
+        return 1;
+    }
+
+    size_t len = 0;
+    const char* bytes = NULL;
+    if (lua_type(L, 1) == LUA_TSTRING)
+        bytes = lua_tolstring(L, 1, &len);
+    else if (lua_isbuffer(L, 1))
+        bytes = (const char*)lua_tobuffer(L, 1, &len);
+    else
+        luaL_typeerrorL(L, 1, "table, string or buffer");
+
+    if (len == 0)
+        return 1;
+
+    // the first byte fixes the element type to `u8`; integers aren't collectable, so storing them needs no barrier
+    TValue first;
+    luaZ_setint(&first, uint8_t(bytes[0]), IntegerMode_U8);
+    newstorage(L, container, &first);
+    LuauStorage* storage = reservestorage(L, container, uint32_t(len));
+    for (size_t i = 0; i < len; i++)
+        luaZ_setint(storageslot(storage, uint32_t(i)), uint8_t(bytes[i]), IntegerMode_U8);
+    storage->count = uint32_t(len);
+    return 1;
+}
+
+// Luwu Integers (rfcs/integers.md): `v:tostring()`, the bytes of a container of `u8` integers as a string
+static int bytestostring(lua_State* L, LuauObject* container)
+{
+    LuauStorage* storage = luaR_storage(container);
+    uint32_t count = storage ? storage->count : 0;
+    bool holdsbytes = !storage || (storage->elementtag == LUAR_STORAGE_INTEGER && storage->elementenum == IntegerMode_U8);
+    if (!holdsbytes)
+    {
+        luaL_Strbuf b;
+        luaL_buffinit(L, &b);
+        luaL_addstring(&b, "tostring needs a ");
+        luaL_addstring(&b, getstr(container->lclass->name));
+        luaL_addstring(&b, " of u8 integers, not one of ");
+        addtypeplural(&b, storage);
+        luaL_pushresult(&b);
+        luaL_error(L, "%s", lua_tostring(L, -1));
+    }
+
+    luaL_Strbuf b;
+    char* out = luaL_buffinitsize(L, &b, count);
+    for (uint32_t i = 0; i < count; i++)
+        out[i] = char(luaZ_bits(storageslot(storage, i)));
+    luaL_pushresultsize(&b, count);
+    return 1;
+}
+
 // VecDeque: a double-ended queue on a ring. Pushing at the front moves the head back one slot.
 
 static LuauObject* checkdeque(lua_State* L, const char* method)
@@ -1631,6 +1727,11 @@ static int vecdequetostring(lua_State* L)
     return containertostring(L, dq, countof(dq), vecdequeget);
 }
 
+static int vecdequebytes(lua_State* L)
+{
+    return bytestostring(L, checkdeque(L, "tostring"));
+}
+
 // VecDeque's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or
 // mistyped value, growing, a missing argument and a position that isn't a number.
 
@@ -1739,6 +1840,9 @@ static const luaR_NativeMember kVecDequeMembers[] = {
     {"__len", vecdequelen, 0},
     {"__iter", vecdequeiter, 0},
     {"__tostring", vecdequetostring, 0},
+    // Luwu Integers (rfcs/integers.md)
+    {"tostring", vecdequebytes, 0},
+    {"from", containerfrom<LUWU_BUILTIN_VECDEQUE>, LBC_CLASSMEMBER_STATIC},
     {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC},
 };
 
@@ -1856,6 +1960,11 @@ static int vectostring(lua_State* L)
     return containertostring(L, vec, countof(vec), vecget);
 }
 
+static int vecbytes(lua_State* L)
+{
+    return bytestostring(L, checkvec(L, "tostring"));
+}
+
 // Vec's fast methods (luaR_FastMethod) handle the common case and leave the rest to the C methods: a first or mistyped
 // value, growing, a missing argument and a position that isn't a number.
 
@@ -1884,6 +1993,9 @@ static const luaR_NativeMember kVecMembers[] = {
     {"__len", veclen, 0},
     {"__iter", veciter, 0},
     {"__tostring", vectostring, 0},
+    // Luwu Integers (rfcs/integers.md)
+    {"tostring", vecbytes, 0},
+    {"from", containerfrom<LUWU_BUILTIN_VEC>, LBC_CLASSMEMBER_STATIC},
     {"__tostring", luaR_builtinclasstostring, LBC_CLASSMEMBER_STATIC},
 };
 

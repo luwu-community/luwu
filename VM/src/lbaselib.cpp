@@ -5,6 +5,7 @@
 #include "lstate.h"
 #include "ldebug.h"
 #include "lapi.h"
+#include "linteger.h"
 #include "ldo.h"
 #include "ludata.h"
 
@@ -38,6 +39,18 @@ static int luaB_print(lua_State* L)
 static int luaB_tonumber(lua_State* L)
 {
     int base = luaL_optinteger(L, 2, 10);
+
+    // Luwu Integers (rfcs/integers.md): an integer converts only when a number holds it exactly
+    double exact = 0;
+    if (base == 10 && (lua_isinteger64(L, 1) || lua_isheapinteger(L, 1)))
+    {
+        if (luaZ_tonumber(luaA_toobject(L, 1), &exact))
+            lua_pushnumber(L, exact);
+        else
+            lua_pushnil(L);
+        return 1;
+    }
+
     if (base == 10)
     { // standard conversion
         int isnum = 0;

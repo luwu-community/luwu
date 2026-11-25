@@ -5,6 +5,7 @@
 #include "Luau/Common.h"
 #include "Luau/ConstraintSolver.h"
 #include "Luau/Instantiation.h"
+#include "Luau/IntegerModes.h"
 #include "Luau/OverloadResolver.h"
 #include "Luau/Scope.h"
 #include "Luau/Simplify.h"
@@ -21,6 +22,7 @@ LUAU_DYNAMIC_FASTINT(LuauTypeFamilyApplicationCartesianProductLimit)
 LUAU_DYNAMIC_FASTINTVARIABLE(LuauStepRefineRecursionLimit, 64)
 
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 
@@ -350,6 +352,10 @@ TypeFunctionReductionResult<TypeId> unmTypeFunction(
     if (normTy->isExactlyNumber())
         return {ctx->builtins->numberType, Reduction::MaybeOk, {}, {}};
 
+    // Luwu Integers (rfcs/integers.md): negating an integer gives one of its mode. Upstream's integers have no operators.
+    if (FFlag::DebugLuwuIntegers && isInteger(collapseIntegerUnion(ctx->builtins, *ctx->arena, operandTy)))
+        return {operandTy, Reduction::MaybeOk, {}, {}};
+
     if (auto result = tryDistributeTypeFunctionApp(unmTypeFunction, instance, typeParams, packParams, ctx))
         return *result;
 
@@ -530,6 +536,14 @@ TypeFunctionReductionResult<TypeId> numericBinopTypeFunction(
     // if we're adding two `number` types, the result is `number`.
     if (normLhsTy->isExactlyNumber() && normRhsTy->isExactlyNumber())
         return {ctx->builtins->numberType, Reduction::MaybeOk, {}, {}};
+
+    // Luwu Integers (rfcs/integers.md): arithmetic on integers of one mode gives that mode. Upstream's integers have no
+    // operators. Two modes, an integer and a number, and `^` raise at runtime: TypeChecker2 reports those, so they give the
+    // integer operand's type here.
+    TypeId lhsInteger = collapseIntegerUnion(ctx->builtins, *ctx->arena, lhsTy);
+    TypeId rhsInteger = collapseIntegerUnion(ctx->builtins, *ctx->arena, rhsTy);
+    if (FFlag::DebugLuwuIntegers && isIntegerArithmetic(lhsInteger, rhsInteger))
+        return {integerArithmeticResult(ctx->builtins, *ctx->arena, lhsInteger, rhsInteger), Reduction::MaybeOk, {}, {}};
 
     if (auto result = tryDistributeTypeFunctionApp(numericBinopTypeFunction, instance, typeParams, packParams, ctx, metamethod))
         return *result;
@@ -935,6 +949,15 @@ static TypeFunctionReductionResult<TypeId> comparisonTypeFunction(
 
     // If both types are exactly `number`, we can reduce now.
     if (normLhsTy->isExactlyNumber() && normRhsTy->isExactlyNumber())
+        return {ctx->builtins->booleanType, Reduction::MaybeOk, {}, {}};
+
+    // Luwu Integers (rfcs/integers.md): integers of one mode are ordered. Upstream's integers have no operators. TypeChecker2
+    // reports comparing two modes, or an integer and a number.
+    bool integerComparison = isIntegerArithmetic(
+        collapseIntegerUnion(ctx->builtins, *ctx->arena, lhsTy),
+        collapseIntegerUnion(ctx->builtins, *ctx->arena, rhsTy)
+    );
+    if (FFlag::DebugLuwuIntegers && integerComparison)
         return {ctx->builtins->booleanType, Reduction::MaybeOk, {}, {}};
 
     if (auto result = tryDistributeTypeFunctionApp(comparisonTypeFunction, instance, typeParams, packParams, ctx, metamethod))
@@ -2676,6 +2699,31 @@ static TypeFunctionReductionResult<TypeId> objectTypeHelper(TypeId targetTy, Not
     return {std::nullopt, Reduction::Erroneous, {}, {}};
 }
 
+// Luwu Integers (rfcs/integers.md): `integer<T>` for a mode that wasn't known when the annotation was read, like
+// `integer<integer.Mode<"u8">>`
+static TypeFunctionReductionResult<TypeId> integerTypeFunction(
+    TypeId instance,
+    const std::vector<TypeId>& typeParams,
+    const std::vector<TypePackId>& packParams,
+    NotNull<TypeFunctionContext> ctx
+)
+{
+    if (typeParams.size() != 1 || !packParams.empty())
+    {
+        ctx->ice->ice("integer type function: encountered a type function instance without the required argument structure");
+        LUAU_ASSERT(false);
+    }
+
+    TypeId modeTy = follow(typeParams[0]);
+    if (isPending(modeTy, ctx->solver))
+        return {std::nullopt, Reduction::MaybeOk, {modeTy}, {}};
+
+    if (std::optional<TypeId> integerTy = integerTypeWithMode(ctx->builtins, *ctx->arena, modeTy))
+        return {*integerTy, Reduction::MaybeOk, {}, {}};
+
+    return {std::nullopt, Reduction::Erroneous, {}, {}};
+}
+
 TypeFunctionReductionResult<TypeId> objectTypeFunction(
     TypeId instance,
     const std::vector<TypeId>& typeParams,
@@ -3130,6 +3178,7 @@ BuiltinTypeFunctions::BuiltinTypeFunctions()
     , setmetatableFunc{"setmetatable", setmetatableTypeFunction}
     , getmetatableFunc{"getmetatable", getmetatableTypeFunction}
     , objectFunc{"object", objectTypeFunction}
+    , integerFunc{"integer", integerTypeFunction}
     , classFunc{"class", classTypeFunction}
     , weakoptionalFunc{"weakoptional", weakoptionalTypeFunc}
     , unlessneverFunc{"unlessnever", unlessneverTypeFunction}
