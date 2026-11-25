@@ -534,6 +534,18 @@ struct BytecodeGraphSerializer
             );
             break;
 
+        case LOP_JUMPXTYPE:
+            recordJump(insn, 2);
+            bcb.emitAD(LOP_JUMPXTYPE, getRegInput(insn, 0), 0);
+            bcb.emitAux(static_cast<uint32_t>(getImmBool(insn, 1)) << 31 | static_cast<uint32_t>(getImmInt(insn, 3)));
+            break;
+
+        case LOP_JUMPXMATCH:
+            recordJump(insn, 2);
+            bcb.emitAD(LOP_JUMPXMATCH, getRegInput(insn, 0), 0);
+            bcb.emitAux(static_cast<uint32_t>(getImmBool(insn, 1)) << 31 | getRegInput(insn, 3));
+            break;
+
         case LOP_IDIV:
             bcb.emitABC(LOP_IDIV, getRegister(insnOp), getRegInput(insn, 0), getRegInput(insn, 1));
             break;
@@ -599,6 +611,14 @@ struct BytecodeGraphSerializer
 
         case LOP_GETPOSITIONAL:
             bcb.emitABC(LOP_GETPOSITIONAL, getRegister(insnOp), getRegInput(insn, 0), getImmInt(insn, 1));
+            break;
+
+        case LOP_APPENDTABLE:
+            bcb.emitABC(LOP_APPENDTABLE, getRegInput(insn, 0), getRegInput(insn, 1), getRegister(insnOp));
+            break;
+
+        case LOP_PRESIZETABLE:
+            bcb.emitABC(LOP_PRESIZETABLE, getRegInput(insn, 0), getRegInput(insn, 1), uint8_t(getImmInt(insn, 2)));
             break;
 
         case LOP__COUNT:

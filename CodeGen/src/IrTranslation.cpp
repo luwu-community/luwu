@@ -1636,6 +1636,43 @@ void translateInstSetTableN(IrBuilder& build, const Instruction* pc, int pcpos)
     build.inst(IrCmd::JUMP, next);
 }
 
+// Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): APPENDTABLE. The table and the count register are the
+// comprehension's own (see LOP_APPENDTABLE), so their tags, the metatable and readonly aren't checked: only the array
+// size, whose miss stores through the generic SET_TABLE, which grows the table.
+void translateInstAppendTable(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    int rb = LUAU_INSN_B(*pc);
+    int rc = LUAU_INSN_C(*pc);
+
+    IrOp next = build.blockAtInst(pcpos + 1);
+    IrOp store = build.block(IrBlockKind::Internal);
+
+    IrOp tb = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_EQ_TAG, tb, build.constTag(LUA_TNIL), next, store);
+
+    build.beginBlock(store);
+
+    IrOp count = build.inst(IrCmd::ADD_NUM, build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(rc)), build.constDouble(1.0));
+    build.inst(IrCmd::STORE_DOUBLE, build.vmReg(rc), count);
+
+    IrOp index = build.inst(IrCmd::SUB_INT, build.inst(IrCmd::NUM_TO_INT, count), build.constInt(1));
+    IrOp table = build.inst(IrCmd::LOAD_POINTER, build.vmReg(ra));
+
+    IrOp fallback = build.fallbackBlock(pcpos);
+    build.inst(IrCmd::CHECK_ARRAY_SIZE, table, index, fallback);
+
+    IrOp slot = build.inst(IrCmd::GET_ARR_ADDR, table, index);
+    build.inst(IrCmd::STORE_TVALUE, slot, build.inst(IrCmd::LOAD_TVALUE, build.vmReg(rb)));
+    build.inst(IrCmd::BARRIER_TABLE_FORWARD, table, build.vmReg(rb), build.undef());
+
+    FallbackStreamScope scope(build, fallback, next);
+
+    build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + 1));
+    build.inst(IrCmd::SET_TABLE, build.vmReg(rb), build.vmReg(ra), build.vmReg(rc));
+    build.inst(IrCmd::JUMP, next);
+}
+
 void translateInstGetTable(IrBuilder& build, const Instruction* pc, int pcpos)
 {
     int ra = LUAU_INSN_A(*pc);
@@ -2467,6 +2504,109 @@ void translateInstCmpProto(IrBuilder& build, const Instruction* pc, int pcpos)
     IrOp vb = build.constUint(aux);
 
     build.inst(IrCmd::JUMP_CMP_PROTOID, ccl, vb, next, target);
+
+    // Fallthrough in original bytecode is implicit, so we start next internal block here
+    if (build.isInternalBlock(next))
+        build.beginBlock(next);
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): JUMPXTYPE is a tag compare. `userdata` takes two, since
+// `type()` says "userdata" for light userdata too.
+void translateInstJumpXType(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    int ra = LUAU_INSN_A(*pc);
+    uint32_t aux = pc[1];
+    bool not_ = LUAU_INSN_AUX_NOT(aux) != 0;
+
+    IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
+    IrOp next = build.blockAtInst(pcpos + 2);
+    IrOp matched = not_ ? next : target;
+    IrOp unmatched = not_ ? target : next;
+
+    uint8_t type = uint8_t(aux & 0xff);
+    std::optional<uint8_t> tag = tryGetLuauTagForBcType(type, /* ignoreOptionalPart= */ false);
+    CODEGEN_ASSERT(tag);
+
+    IrOp loaded = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    if (type == LBC_TYPE_USERDATA)
+    {
+        IrOp notFullUserdata = build.block(IrBlockKind::Internal);
+        build.inst(IrCmd::JUMP_EQ_TAG, loaded, build.constTag(LUA_TUSERDATA), matched, notFullUserdata);
+        build.beginBlock(notFullUserdata);
+        build.inst(IrCmd::JUMP_EQ_TAG, loaded, build.constTag(LUA_TLIGHTUSERDATA), matched, unmatched);
+    }
+    else
+    {
+        build.inst(IrCmd::JUMP_EQ_TAG, loaded, build.constTag(*tag), matched, unmatched);
+    }
+
+    // Fallthrough in original bytecode is implicit, so we start next internal block here
+    if (build.isInternalBlock(next))
+        build.beginBlock(next);
+}
+
+void translateInstJumpXMatch(IrBuilder& build, const Instruction* pc, int pcpos)
+{
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): `x is Foo` where the compiler can't tell whether
+    // `Foo` holds a class. A class gets JUMPXISA's test. Two numbers or two strings are compared inline, and anything else
+    // takes JUMPIFEQ's generic comparison.
+    int ra = LUAU_INSN_A(*pc);
+    uint32_t aux = pc[1];
+    int rb = aux & 0xff;
+    bool not_ = LUAU_INSN_AUX_NOT(aux) != 0;
+
+    IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
+    IrOp next = build.blockAtInst(pcpos + 2);
+    IrOp matched = not_ ? next : target;
+    IrOp unmatched = not_ ? target : next;
+
+    IrOp isClass = build.block(IrBlockKind::Internal);
+    IrOp compare = build.block(IrBlockKind::Internal);
+
+    IrOp operandTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_EQ_TAG, operandTag, build.constTag(LUA_TCLASS), isClass, compare);
+
+    build.beginBlock(isClass);
+    IrOp valueTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    IrOp valuePtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(ra));
+    IrOp classPtr = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+    IrOp isInstance = build.inst(IrCmd::CLASS_ISINSTANCE, valueTag, valuePtr, classPtr);
+    build.inst(IrCmd::JUMP_CMP_INT, isInstance, build.constInt(1), build.cond(IrCondition::Equal), matched, unmatched);
+
+    // values of different types are never equal
+    build.beginBlock(compare);
+    IrOp sameType = build.block(IrBlockKind::Internal);
+    IrOp tagA = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    IrOp tagB = build.inst(IrCmd::LOAD_TAG, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_EQ_TAG, tagA, tagB, sameType, unmatched);
+
+    build.beginBlock(sameType);
+    IrOp numbers = build.block(IrBlockKind::Internal);
+    IrOp notNumbers = build.block(IrBlockKind::Internal);
+    IrOp sameTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    build.inst(IrCmd::JUMP_EQ_TAG, sameTag, build.constTag(LUA_TNUMBER), numbers, notNumbers);
+
+    build.beginBlock(numbers);
+    IrOp va = build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(ra));
+    IrOp vb = build.inst(IrCmd::LOAD_DOUBLE, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_CMP_NUM, va, vb, build.cond(IrCondition::NotEqual), unmatched, matched);
+
+    // strings are interned, so equal strings are the same object
+    build.beginBlock(notNumbers);
+    IrOp strings = build.block(IrBlockKind::Internal);
+    IrOp generic = build.block(IrBlockKind::Internal);
+    IrOp otherTag = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra));
+    build.inst(IrCmd::JUMP_EQ_TAG, otherTag, build.constTag(LUA_TSTRING), strings, generic);
+
+    build.beginBlock(strings);
+    IrOp pa = build.inst(IrCmd::LOAD_POINTER, build.vmReg(ra));
+    IrOp pb = build.inst(IrCmd::LOAD_POINTER, build.vmReg(rb));
+    build.inst(IrCmd::JUMP_EQ_POINTER, pa, pb, matched, unmatched);
+
+    build.beginBlock(generic);
+    build.inst(IrCmd::SET_SAVEDPC, build.constUint(pcpos + 1));
+    IrOp equal = build.inst(IrCmd::CMP_ANY, build.vmReg(ra), build.vmReg(rb), build.cond(IrCondition::Equal));
+    build.inst(IrCmd::JUMP_CMP_INT, equal, build.constInt(0), build.cond(IrCondition::Equal), unmatched, matched);
 
     // Fallthrough in original bytecode is implicit, so we start next internal block here
     if (build.isInternalBlock(next))
