@@ -1,0 +1,101 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+--!optimize 2
+print("testing try results bound in when chains")
+
+-- A result bound by `if const`, `elseif const`, `while const` or a loop's `when const` is kept in registers like
+-- `local r = try e`. Each answer is compared with the one the object gives.
+
+local function value(n: number): number
+    if n < 0 then
+        error("negative")
+    end
+    return n
+end
+
+local function describe(r: unknown): string
+    if class.isinstance(r, Ok) then
+        return `ok {r.value}`
+    elseif class.isinstance(r, Err) then
+        return `err {r.error}`
+    end
+    return "neither"
+end
+
+-- `if const`, read through fields and tested with class.isinstance
+local function bound(n: number): string
+    if const r = try value(n) then
+        if class.isinstance(r, Ok) then
+            return `ok {r.value}`
+        end
+        return `err {r.error}`
+    end
+    return "unreachable"
+end
+
+-- the test in the chain itself
+local function chained(n: number): string
+    if const r = try value(n) when class.isinstance(r, Ok) then
+        return `ok {r.value}`
+    end
+    return "failed"
+end
+
+-- `elseif const`, after a branch that isn't taken
+local function after(n: number, first: boolean): string
+    if first then
+        return "first"
+    elseif const r = try value(n) when class.isinstance(r, Err) then
+        return `err {r.error}`
+    elseif const r = try value(n) then
+        return `ok {r.value}`
+    end
+    return "unreachable"
+end
+
+-- an if-else expression
+local function expression(n: number): number
+    return if const r = try value(n) when class.isinstance(r, Ok) then r.value else 0
+end
+
+for _, n in { 5, -1 } do
+    const object = describe(try value(n))
+    assert(bound(n) == object, bound(n))
+    assert(chained(n) == (if n >= 0 then object else "failed"))
+    assert(after(n, true) == "first")
+    assert(after(n, false) == object)
+    assert(expression(n) == (if n >= 0 then n else 0))
+end
+
+-- `while const` stops at the first err
+do
+    local values = { 1, 2, -1, 4 }
+    local i = 0
+    local sum = 0
+    while const r = try value(values[i + 1]) when class.isinstance(r, Ok) do
+        sum += r.value
+        i += 1
+    end
+    assert(sum == 3 and i == 2)
+end
+
+-- a `for` loop's `when const`
+do
+    local sum = 0
+    for _, n in { 1, -2, 3 } when const r = try value(n) when class.isinstance(r, Ok) do
+        sum += r.value
+    end
+    assert(sum == 4)
+end
+
+-- a result bound in a chain and passed somewhere is the object
+do
+    local function passed(n: number): string
+        if const r = try value(n) then
+            return describe(r)
+        end
+        return "unreachable"
+    end
+    assert(passed(5) == "ok 5" and string.find(passed(-1), "negative", 1, true) ~= nil)
+end
+
+return "OK"

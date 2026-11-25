@@ -665,7 +665,16 @@ struct Printer
         }
         else if (const auto& a = expr.as<AstExprCall>())
         {
-            visualize(*a->func);
+            // Luwu bundles: the callee `.(a, b)` calls isn't in the source
+            if (a->fromDotPositional)
+            {
+                advance(a->location.begin);
+                writer.symbol(".");
+            }
+            else
+            {
+                visualize(*a->func);
+            }
 
             const auto cstNode = lookupCstNode<CstExprCall>(a);
 
@@ -1083,13 +1092,7 @@ struct Printer
                     advance(generic->forLocation.begin);
                     writer.keyword("for");
 
-                    CommaSeparatorInserter varComma(writer, cstNode ? cstNode->varsCommaPositions.begin() : nullptr);
-                    for (size_t i = 0; i < generic->vars.size; i++)
-                    {
-                        varComma();
-                        bool hasColon = cstNode && cstNode->varsAnnotationColonPositions.size > i;
-                        visualize(*generic->vars.data[i], hasColon ? cstNode->varsAnnotationColonPositions.data[i] : Position::missing());
-                    }
+                    visualizeLoopVars(*generic, cstNode);
 
                     advance(generic->inLocation.begin);
                     writer.keyword("in");
@@ -2350,60 +2353,6 @@ struct Printer
             LUAU_ASSERT(!"visualizeBlock was expecting an AstStatBlock");
     }
 
-    // Luwu Destructuring (rfcs/destructuring.md): `[export] type .{A, B as C} = module`, from the source form the parser
-    // kept on the first alias.
-    void visualizeTypeDestructuring(const AstStatTypeAlias& first)
-    {
-        const AstTypeDestructure& pattern = *first.destructure;
-
-        if (first.exported)
-            writer.keyword("export");
-
-        advance(first.typeLocation.begin);
-        writer.keyword("type");
-
-        advance(pattern.location.begin);
-        writer.symbol(".");
-        writer.symbol("{");
-
-        CommaSeparatorInserter comma(writer, nullptr);
-        for (const AstTypeDestructureField& field : pattern.fields)
-        {
-            const AstTypeReference* reference = field.alias->destructuredReference();
-            LUAU_ASSERT(reference);
-
-            comma();
-            advance(reference->nameLocation.begin);
-            writer.identifier(reference->name.value);
-
-            if (field.asLocation)
-            {
-                advance(field.asLocation->begin);
-                writer.keyword("as");
-                advance(field.alias->nameLocation.begin);
-                writer.identifier(field.alias->name.value);
-            }
-        }
-
-        if (pattern.closed)
-        {
-            advanceBefore(pattern.location.end, 1);
-            writer.symbol("}");
-        }
-
-        if (!pattern.equalsLocation)
-            return;
-
-        advance(pattern.equalsLocation->begin);
-        writer.symbol("=");
-
-        if (pattern.module != kParseNameError)
-        {
-            advance(pattern.moduleLocation.begin);
-            writer.identifier(pattern.module.value);
-        }
-    }
-
     // Luwu Destructuring (rfcs/destructuring.md): a `for ... in` loop's variables. A destructured one prints its pattern.
     void visualizeLoopVars(const AstStatForIn& loop, const CstStatForIn* cstNode)
     {
@@ -2424,7 +2373,8 @@ struct Printer
     }
 
     // Luwu If Local (rfcs/control-flow/if-local.md): prints a loop's `when` chain, if its body holds one (AstStatFor::whenGuard),
-    // and returns the block as written.
+    // and returns the block as written. Destructured fields at the start of the body print with the loop's bindings, and
+    // print nothing themselves.
     AstStatBlock* visualizeLoopWhen(AstStatBlock& body, AstStatIf* guard)
     {
         if (!guard)
@@ -2503,7 +2453,7 @@ struct Printer
     }
 
     // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain prints clause by clause. A binding prints through its
-    // declaration.
+    // declaration, which also prints a destructuring pattern back as written.
     void visualizeIfCondition(AstExpr& condition, const AstArray<AstIfClause>& clauses)
     {
         if (clauses.size == 0)
@@ -2518,6 +2468,9 @@ struct Printer
             if (clause.fromPattern)
                 continue;
 
+            if (clause.declaration && clause.declaration->destructuredFrom)
+                continue;
+
             if (clause.whenLocation)
             {
                 advance(clause.whenLocation->begin);
@@ -2528,6 +2481,60 @@ struct Printer
                 visualize(static_cast<AstStat&>(*clause.declaration));
             else
                 visualize(*clause.expr);
+        }
+    }
+
+    // Luwu Destructuring (rfcs/destructuring.md): `[export] type .{A, B as C} = module`, from the source form the parser
+    // kept on the first alias.
+    void visualizeTypeDestructuring(const AstStatTypeAlias& first)
+    {
+        const AstTypeDestructure& pattern = *first.destructure;
+
+        if (first.exported)
+            writer.keyword("export");
+
+        advance(first.typeLocation.begin);
+        writer.keyword("type");
+
+        advance(pattern.location.begin);
+        writer.symbol(".");
+        writer.symbol("{");
+
+        CommaSeparatorInserter comma(writer, nullptr);
+        for (const AstTypeDestructureField& field : pattern.fields)
+        {
+            const AstTypeReference* reference = field.alias->destructuredReference();
+            LUAU_ASSERT(reference);
+
+            comma();
+            advance(reference->nameLocation.begin);
+            writer.identifier(reference->name.value);
+
+            if (field.asLocation)
+            {
+                advance(field.asLocation->begin);
+                writer.keyword("as");
+                advance(field.alias->nameLocation.begin);
+                writer.identifier(field.alias->name.value);
+            }
+        }
+
+        if (pattern.closed)
+        {
+            advanceBefore(pattern.location.end, 1);
+            writer.symbol("}");
+        }
+
+        if (!pattern.equalsLocation)
+            return;
+
+        advance(pattern.equalsLocation->begin);
+        writer.symbol("=");
+
+        if (pattern.module != kParseNameError)
+        {
+            advance(pattern.moduleLocation.begin);
+            writer.identifier(pattern.module.value);
         }
     }
 
@@ -2739,7 +2746,31 @@ struct Printer
     void visualizeTypeAnnotation(AstType& typeAnnotation)
     {
         advance(typeAnnotation.location.begin);
-        if (const auto& a = typeAnnotation.as<AstTypeReference>())
+        if (const auto& a = typeAnnotation.as<AstTypeReference>(); a && a->fromDotPositional)
+        {
+            // Luwu bundles: `.(A, B)` names its class nowhere in the source
+            const auto cstNode = lookupCstNode<CstTypeReference>(a);
+            CommaSeparatorInserter comma(writer, cstNode ? cstNode->parametersCommaPositions.begin() : nullptr);
+
+            writer.symbol(".");
+            if (cstNode)
+                advance(cstNode->openParametersPosition);
+            writer.symbol("(");
+            for (auto o : a->parameters)
+            {
+                comma();
+                if (o.type)
+                    visualizeTypeAnnotation(*o.type);
+                else if (o.typePack)
+                    visualizeTypePackAnnotation(*o.typePack, false);
+            }
+
+            if (cstNode)
+                maybeAdvanceAndWrite(cstNode->closeParametersPosition, ")");
+            else
+                writer.symbol(")");
+        }
+        else if (const auto& a = typeAnnotation.as<AstTypeReference>())
         {
             const auto cstNode = lookupCstNode<CstTypeReference>(a);
 

@@ -12,7 +12,7 @@ using namespace Luau;
 
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
 LUAU_FASTFLAG(LuwuStringExtensions)
-LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(DebugLuwuBufferBatched)
 
 TEST_SUITE_BEGIN("BuiltinTests");
 
@@ -551,7 +551,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_is_a_type")
 // binds the call to exactly that many numbers, which is what lets a batch be handed to a fixed arity signature
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_with_literal_count_returns_exact_number_pack")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     CheckResult result = check(R"(
         local b = buffer.create(16)
@@ -572,7 +572,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_with_literal_count_returns_exa
 // the example the feature exists for: a batch of reads straight into a constructor that takes ...number
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_literals_forward_into_a_variadic_constructor")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     CheckResult result = check(R"(
         local b = buffer.create(12)
@@ -587,7 +587,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_literals_forward_into_a_variad
 // one value is still a batch, and a batch of a few hundred values is still cheap to describe
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_literal_count_bounds")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     CheckResult result = check(R"(
         local b = buffer.create(4)
@@ -606,7 +606,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_literal_count_bounds")
 // takes numbers, but a builtin signature like vector.create's - which cannot be called with an open pack - rejects it
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_keeps_the_open_pack_when_the_count_is_not_a_literal")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     CheckResult result = check(R"(
         local b = buffer.create(16)
@@ -625,7 +625,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_keeps_the_open_pack_when_the_c
 // 2.5 does not name a batch size, so it is not given an exact pack either
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_fractional_literal_count_keeps_the_open_pack")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     CheckResult result = check(R"(
         local b = buffer.create(16)
@@ -643,7 +643,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_fractional_literal_count_keeps
 // even though the runtime is happy to read a batch that big
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_huge_literal_count_keeps_the_open_pack")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     CheckResult result = check(R"(
         local b = buffer.create(4)
@@ -659,7 +659,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_huge_literal_count_keeps_the_o
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_pack_takes_the_batch_as_trailing_numbers")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     CheckResult result = check(R"(
         local b = buffer.create(16)
@@ -675,7 +675,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_pack_takes_the_batch_as_trailing_numb
 // unpack into pack, converting widths in one statement
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_feeds_buffer_pack")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     CheckResult result = check(R"(
         local from = buffer.create(12)
@@ -689,7 +689,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_unpack_feeds_buffer_pack")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_pack_rejects_values_that_are_not_numbers")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     CheckResult result = check(R"(
         local b = buffer.create(16)
@@ -702,7 +702,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_pack_rejects_values_that_are_not_numb
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "buffer_batched_library_is_not_declared_when_the_flag_is_off")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, false};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, false};
 
     CheckResult result = check(R"(
         local b = buffer.create(16)

@@ -709,6 +709,10 @@ void BytecodeBuilder::stubFunction(uint32_t fid)
     writeByte(ss, 0); // debug info
 
     writeVarInt(ss, 0); // feedback slots
+
+    // Luwu try expressions: WIP bytecode has a count of protected ranges after the feedback slots
+    if (getVersion() == LWBC_VERSION_WIP)
+        writeVarInt(ss, 0);
 }
 
 void BytecodeBuilder::setFunctionTypeInfo(std::string value)
