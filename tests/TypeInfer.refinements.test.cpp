@@ -3408,4 +3408,70 @@ TEST_CASE_FIXTURE(Fixture, "singleton_refinements_list_each_value_once")
     CHECK_EQ("\"NaN\" | \"x\"", toString(requireTypeAtPosition({6, 26})));
 }
 
+// Luwu never-returning calls: code after `if not x then exit(1) end` runs only when `x` is truthy
+TEST_CASE_FIXTURE(BuiltinsFixture, "a_branch_ending_in_a_never_returning_call_refines_what_follows")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    loadDefinition(R"(
+        declare function exit(code: number): never
+        declare process: { exit: (code: number?) -> never }
+    )");
+
+    CheckResult result = check(R"(
+        local function die(message: string): never
+            error(message)
+        end
+
+        local function viaGlobal(x: number?): number
+            if not x then
+                exit(1)
+            end
+            return x + 1
+        end
+
+        local function viaField(x: number?): number
+            if not x then
+                process.exit(1)
+            end
+            return x + 1
+        end
+
+        local function viaLocal(x: number?): number
+            if x == nil then
+                die("no")
+            end
+            return x + 1
+        end
+
+        return { viaGlobal, viaField, viaLocal }
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "a_branch_ending_in_a_call_that_may_return_doesnt_refine")
+{
+    if (FFlag::DebugLuauForceOldSolver)
+        return;
+
+    loadDefinition(R"(
+        declare function maybe(code: number): number
+    )");
+
+    CheckResult result = check(R"(
+        local function f(x: number?): number
+            if not x then
+                maybe(1)
+            end
+            return x + 1
+        end
+
+        return f
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+}
+
 TEST_SUITE_END();
