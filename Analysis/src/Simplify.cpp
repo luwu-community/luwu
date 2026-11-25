@@ -7,6 +7,7 @@
 #include "Luau/Clone.h"
 #include "Luau/Common.h"
 #include "Luau/DenseHash.h"
+#include "Luau/IntegerModes.h"
 #include "Luau/RecursionCounter.h"
 #include "Luau/Set.h"
 #include "Luau/Type.h"
@@ -179,6 +180,26 @@ static bool isTypeVariable(TypeId ty)
 }
 
 Relation relate(TypeId left, TypeId right, SimplifierSeenSet& seen);
+
+// Luwu Integers (rfcs/integers.md): two integer types by their modes. A generic mode relates to nothing but itself.
+static Relation relateIntegers(TypeId left, TypeId right)
+{
+    std::optional<IntegerModeSet> leftModes = integerModesOf(left);
+    std::optional<IntegerModeSet> rightModes = integerModesOf(right);
+    if (!leftModes || !rightModes)
+        return left == right ? Relation::Coincident : Relation::Intersects;
+
+    IntegerModeSet shared = *leftModes & *rightModes;
+    if (*leftModes == *rightModes)
+        return Relation::Coincident;
+    if (shared == 0)
+        return Relation::Disjoint;
+    if (shared == *leftModes)
+        return Relation::Subset;
+    if (shared == *rightModes)
+        return Relation::Superset;
+    return Relation::Intersects;
+}
 
 Relation relateTableToExternType(const TableType* table, const ExternType* cls, SimplifierSeenSet& seen)
 {
@@ -577,10 +598,12 @@ Relation relate(TypeId left, TypeId right, SimplifierSeenSet& seen)
     {
         if (auto rp = get<PrimitiveType>(right))
         {
-            if (lp->type == rp->type)
-                return Relation::Coincident;
+            if (lp->type != rp->type)
+                return Relation::Disjoint;
+            if (lp->type == PrimitiveType::Integer)
+                return relateIntegers(left, right);
 
-            return Relation::Disjoint;
+            return Relation::Coincident;
         }
 
         if (auto rs = get<SingletonType>(right))

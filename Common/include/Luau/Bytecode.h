@@ -824,6 +824,7 @@ enum LuauBytecodeTag
     LBC_CONSTANT_INTEGER,
     LBC_CONSTANT_CLASS_SHAPE,
     LBC_CONSTANT_VECTORD,
+    LBC_CONSTANT_INTEGER_HEAP,
 
     /** WARNING: This must always be last. */
     LBC_CONSTANT__COUNT
@@ -1002,6 +1003,7 @@ enum LuauBytecodeType
     // (instance). Kept in the 12..14 gap below LBC_TYPE_ANY so existing values don't shift.
     LBC_TYPE_CLASS = 12,
     LBC_TYPE_OBJECT = 13,
+    LBC_TYPE_BIGINT = 14,
 
     LBC_TYPE_ANY = 15,
 
@@ -1157,50 +1159,10 @@ enum LuauBuiltinFunction
     LBF_MATH_ISINF,
     LBF_MATH_ISFINITE,
 
-    // integer
-    LBF_INTEGER_CREATE,
-    LBF_INTEGER_TONUMBER,
-    LBF_INTEGER_NEG,
-    LBF_INTEGER_ADD,
-    LBF_INTEGER_SUB,
-    LBF_INTEGER_MUL,
-    LBF_INTEGER_DIV,
-    LBF_INTEGER_MIN,
-    LBF_INTEGER_MAX,
-    LBF_INTEGER_REM,
-    LBF_INTEGER_IDIV,
-    LBF_INTEGER_UDIV,
-    LBF_INTEGER_UREM,
-    LBF_INTEGER_MOD,
-    LBF_INTEGER_CLAMP,
-    LBF_INTEGER_BAND,
-    LBF_INTEGER_BOR,
-    LBF_INTEGER_BNOT,
-    LBF_INTEGER_BXOR,
-    LBF_INTEGER_LT,
-    LBF_INTEGER_LE,
-    LBF_INTEGER_ULT,
-    LBF_INTEGER_ULE,
-    LBF_INTEGER_GT,
-    LBF_INTEGER_GE,
-    LBF_INTEGER_UGT,
-    LBF_INTEGER_UGE,
-    LBF_INTEGER_LSHIFT,
-    LBF_INTEGER_RSHIFT,
-    LBF_INTEGER_ARSHIFT,
-    LBF_INTEGER_LROTATE,
-    LBF_INTEGER_RROTATE,
-    LBF_INTEGER_EXTRACT,
-    LBF_INTEGER_BTEST,
-    LBF_INTEGER_COUNTRZ,
-    LBF_INTEGER_COUNTLZ,
-    LBF_INTEGER_BSWAP,
-
-    // buffer.readinteger / buffer.writeinteger (int64_t)
-    LBF_BUFFER_READINTEGER,
-    LBF_BUFFER_WRITEINTEGER,
-
-    LBF_BUFFER_ISFROZEN,
+    // Luwu Integers (rfcs/integers.md): the 39 ids after LBF_MATH_ISFINITE were upstream Luau's `integer` library and
+    // `buffer.readinteger`/`writeinteger`. Luwu's integers are a different design, so the ids stay unused (legacy
+    // bytecode that names one calls the function instead), and the ids after them keep their numbers.
+    LBF_BUFFER_ISFROZEN = LBF_MATH_ISFINITE + 40,
 
     // Luwu Classes (rfcs/classes): class.isinstance(value, class) -> boolean
     LBF_CLASS_ISINSTANCE,

@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lclass.h"
+#include "linteger.h"
 #include "lvm.h"
 
 #include "lstate.h"
@@ -113,6 +114,7 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
             } \
         } \
     }
+
 
 #define VM_DISPATCH_OP(op) &&CASE_##op
 
@@ -1640,10 +1642,14 @@ reentry:
                         // need to invoke metamethods).
                         break;
 
+                    // Luwu Integers (rfcs/integers.md): equal integers have the same value and mode
                     case LUA_TINTEGER:
-                        pc += lvalue(ra) == lvalue(rb) ? LUAU_INSN_D(insn) : 1;
+                        pc += (ra->value.l == rb->value.l && ra->extra[0] == rb->extra[0]) ? LUAU_INSN_D(insn) : 1;
                         VM_ASSERT_PC(pc);
                         VM_NEXT();
+
+                    case LUA_THEAPINTEGER:
+                        break;
 
                     default:
                         LUAU_ASSERT(!"Unknown value type");
@@ -1774,10 +1780,14 @@ reentry:
                         // need to invoke metamethods).
                         break;
 
+                    // Luwu Integers (rfcs/integers.md): see LOP_JUMPIFEQ
                     case LUA_TINTEGER:
-                        pc += lvalue(ra) != lvalue(rb) ? LUAU_INSN_D(insn) : 1;
+                        pc += (ra->value.l != rb->value.l || ra->extra[0] != rb->extra[0]) ? LUAU_INSN_D(insn) : 1;
                         VM_ASSERT_PC(pc);
                         VM_NEXT();
+
+                    case LUA_THEAPINTEGER:
+                        break;
 
                     default:
                         LUAU_ASSERT(!"Unknown value type");
@@ -1955,6 +1965,14 @@ reentry:
                 }
                 else
                 {
+                    // Luwu Integers (rfcs/integers.md): two inline integers of one mode, unless the result needs the
+                    // slow path. Numbers and vectors are tested first, so they don't pay for it.
+                    bool integerDone = luaZ_fastarith<TM_ADD>(ra, rb, rc);
+                    if (integerDone)
+                    {
+                        VM_NEXT();
+                    }
+
                     // fast-path for userdata with C functions
                     const TValue* fn = 0;
                     if (ttisuserdata(rb) && (fn = luaT_gettmbyobj(L, rb, TM_ADD)) && ttisfunction(fn) && clvalue(fn)->isC)
@@ -2001,6 +2019,14 @@ reentry:
                 }
                 else
                 {
+                    // Luwu Integers (rfcs/integers.md): two inline integers of one mode, unless the result needs the
+                    // slow path. Numbers and vectors are tested first, so they don't pay for it.
+                    bool integerDone = luaZ_fastarith<TM_SUB>(ra, rb, rc);
+                    if (integerDone)
+                    {
+                        VM_NEXT();
+                    }
+
                     // fast-path for userdata with C functions
                     const TValue* fn = 0;
                     if (ttisuserdata(rb) && (fn = luaT_gettmbyobj(L, rb, TM_SUB)) && ttisfunction(fn) && clvalue(fn)->isC)
@@ -2061,6 +2087,14 @@ reentry:
                 }
                 else
                 {
+                    // Luwu Integers (rfcs/integers.md): two inline integers of one mode, unless the result needs the
+                    // slow path. Numbers and vectors are tested first, so they don't pay for it.
+                    bool integerDone = luaZ_fastarith<TM_MUL>(ra, rb, rc);
+                    if (integerDone)
+                    {
+                        VM_NEXT();
+                    }
+
                     // fast-path for userdata with C functions
                     StkId rbc = ttisnumber(rb) ? rc : rb;
                     const TValue* fn = 0;

@@ -6,6 +6,7 @@
 #include "Luau/Common.h"
 #include "Luau/LuwuFlags.h"
 #include "Luau/LuwonSyntax.h"
+#include "Luau/IntegerParsing.h"
 #include "Luau/StringUtils.h"
 #include "Luau/TimeTrace.h"
 
@@ -30,6 +31,7 @@ LUAU_DYNAMIC_FASTFLAGVARIABLE(DebugLuauReportReturnTypeVariadicWithTypeSuffix, f
 LUAU_FASTFLAGVARIABLE(LuauIntegerType2)
 LUAU_FASTFLAGVARIABLE(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FLAGVERSION(LuauExportValueSyntax, 3)
 
 // Luwu @noinline (rfcs/noinline-attribute.md): gates parsing `@noinline`, and the compiler honoring it (no
@@ -131,6 +133,7 @@ const LuwuFeature kDefaultArgumentsFeature{"default arguments", /* plural= */ tr
 const LuwuFeature kExportsFeature{"exported values", /* plural= */ true, "LuauExportValueSyntax"};
 const LuwuFeature kTryExpressionsFeature{"'try' expressions", /* plural= */ true, "DebugLuwuTryExpressions"};
 const LuwuFeature kErrorHintsFeature{"error hints", /* plural= */ true, "DebugLuwuTryExpressions"};
+const LuwuFeature kIntegersFeature{"integers", /* plural= */ true, "DebugLuwuIntegers"};
 // Luwu Declare Statements (rfcs/declare-statements.md): outside definition files, `declare` is only allowed where it
 // visibly applies to the whole file.
 const char* const kDeclarationPlacementError =
@@ -8873,6 +8876,8 @@ AstExpr* Parser::parseExpr(unsigned int limit)
         Position opPosition = lexer.current().location.begin;
         nextLexeme();
 
+        bool negatesNumber = *uop == AstExprUnary::Op::Minus && lexer.current().type == Lexeme::Number;
+        negatedNumberStart = negatesNumber ? std::optional<Position>(opPosition) : std::nullopt;
         AstExpr* subexpr = parseExpr(unaryPriority);
 
         expr = allocator.alloc<AstExprUnary>(Location(start, subexpr->location), *uop, subexpr);
@@ -9387,58 +9392,6 @@ static ConstantNumberParseResult parseInteger(double& result, const char* data, 
 
     if (value >= (1ull << 53) && static_cast<unsigned long long>(result) != value)
         return ConstantNumberParseResult::Imprecise;
-
-    return ConstantNumberParseResult::Ok;
-}
-
-static ConstantNumberParseResult parseInteger64(int64_t& result, const char* data, int base)
-{
-    LUAU_ASSERT(base == 2 || base == 10 || base == 16);
-
-    char* end = nullptr;
-
-    if (base == 10)
-    {
-        result = strtoll(data, &end, 10);
-
-        if (end == data || *end != 'i' || end[1] != '\0')
-            return ConstantNumberParseResult::Malformed;
-
-        if (((result == LLONG_MIN) || (result == LLONG_MAX)) && (errno == ERANGE))
-        {
-            // 'errno' might have been set before we called 'strtoll', but we don't want the overhead of resetting a TLS variable on each call
-            // so we only reset it when we get a result that might be an out-of-range error and parse again to make sure
-            errno = 0;
-            result = strtoll(data, &end, 10);
-
-            if (errno == ERANGE)
-                return ConstantNumberParseResult::IntOverflow;
-        }
-    }
-    else
-    {
-        if (base == 2 && data[0] == '0' && (data[1] == 'b' || data[1] == 'B'))
-            return ConstantNumberParseResult::Malformed;
-
-        // hex and binary literals represent bit patterns covering the full uint64 range
-        unsigned long long u = strtoull(data, &end, base);
-
-        if (end == data || *end != 'i' || end[1] != '\0')
-            return ConstantNumberParseResult::Malformed;
-
-        if ((u == ULLONG_MAX) && (errno == ERANGE))
-        {
-            // 'errno' might have been set before we called 'strtoull', but we don't want the overhead of resetting a TLS variable on each call
-            // so we only reset it when we get a result that might be an out-of-range error and parse again to make sure
-            errno = 0;
-            u = strtoull(data, &end, base);
-
-            if (errno == ERANGE)
-                return base == 2 ? ConstantNumberParseResult::BinOverflow : ConstantNumberParseResult::HexOverflow;
-        }
-
-        result = (int64_t)u;
-    }
 
     return ConstantNumberParseResult::Ok;
 }
@@ -12860,9 +12813,137 @@ AstExpr* Parser::parsePositionIndex(Position start, AstExpr* expr)
     return expr;
 }
 
+namespace
+{
+
+// Luwu Integers (rfcs/integers.md): a suffix that makes a number literal an integer
+struct IntegerSuffix
+{
+    const char* text;
+    IntegerMode mode;
+    // Upstream Luau's `i`. It's a parse error, recovered as `int` so the rest of the expression still checks.
+    bool upstream;
+};
+
+// Longer suffixes come before the shorter ones they end with: `i16` before `i`
+constexpr IntegerSuffix kIntegerSuffixes[] = {
+    {"int", IntegerMode_Dynamic, false},
+    {"i8", IntegerMode_I8, false},
+    {"u8", IntegerMode_U8, false},
+    {"i16", IntegerMode_I16, false},
+    {"u16", IntegerMode_U16, false},
+    {"i32", IntegerMode_I32, false},
+    {"u32", IntegerMode_U32, false},
+    {"i64", IntegerMode_I64, false},
+    {"u64", IntegerMode_U64, false},
+    {"i", IntegerMode_Dynamic, true},
+};
+
+// The integer suffix `literal` ends with, if any. Underscores are already removed, so `7_u64` is `7u64` here.
+const IntegerSuffix* findIntegerSuffix(const std::string& literal)
+{
+    for (const IntegerSuffix& suffix : kIntegerSuffixes)
+    {
+        size_t length = strlen(suffix.text);
+        bool endsWithSuffix = literal.size() > length && literal.compare(literal.size() - length, length, suffix.text) == 0;
+        if (endsWithSuffix)
+            return &suffix;
+    }
+
+    return nullptr;
+}
+
+// The largest magnitude a literal of a sized `mode` can be written with. A negated signed literal gets one more, for
+// the smallest value (`-128i8`).
+uint64_t largestIntegerLiteral(IntegerMode mode, bool negated)
+{
+    int bits = 64;
+    bool isSigned = false;
+    switch (mode)
+    {
+    case IntegerMode_I8:
+        bits = 8;
+        isSigned = true;
+        break;
+    case IntegerMode_U8:
+        bits = 8;
+        break;
+    case IntegerMode_I16:
+        bits = 16;
+        isSigned = true;
+        break;
+    case IntegerMode_U16:
+        bits = 16;
+        break;
+    case IntegerMode_I32:
+        bits = 32;
+        isSigned = true;
+        break;
+    case IntegerMode_U32:
+        bits = 32;
+        break;
+    case IntegerMode_I64:
+        isSigned = true;
+        break;
+    default:
+        break;
+    }
+
+    if (isSigned)
+        return (uint64_t(1) << (bits - 1)) - (negated ? 0 : 1);
+
+    return bits == 64 ? UINT64_MAX : (uint64_t(1) << bits) - 1;
+}
+
+// The suffix written for `mode`: `u8`, `int`, ...
+const char* integerSuffixText(IntegerMode mode)
+{
+    for (const IntegerSuffix& suffix : kIntegerSuffixes)
+    {
+        if (suffix.mode == mode && !suffix.upstream)
+            return suffix.text;
+    }
+
+    LUAU_UNREACHABLE();
+}
+
+// The mode to suggest for a negated unsigned literal: the narrowest signed mode at least as wide as `mode` that holds
+// `-magnitude`, or `int` when none does
+IntegerMode signedModeForNegated(IntegerMode mode, uint64_t magnitude)
+{
+    constexpr IntegerMode kSignedModes[] = {IntegerMode_I8, IntegerMode_I16, IntegerMode_I32, IntegerMode_I64};
+
+    for (IntegerMode candidate : kSignedModes)
+    {
+        // A signed mode is as wide as an unsigned one when its largest value is half of the unsigned one's
+        bool wideEnough = largestIntegerLiteral(candidate, false) >= largestIntegerLiteral(mode, false) / 2;
+        if (wideEnough && magnitude <= largestIntegerLiteral(candidate, true))
+            return candidate;
+    }
+
+    return IntegerMode_Dynamic;
+}
+
+// The range of a sized `mode` as written in an error, like `-128 to 127`
+std::string integerModeRange(IntegerMode mode)
+{
+    uint64_t largest = largestIntegerLiteral(mode, false);
+    bool isSigned = largestIntegerLiteral(mode, true) != largest;
+    if (isSigned)
+        return "-" + std::to_string((unsigned long long)largest + 1) + " to " + std::to_string((unsigned long long)largest);
+
+    return "0 to " + std::to_string((unsigned long long)largest);
+}
+
+} // namespace
+
 AstExpr* Parser::parseNumber()
 {
     Location start = lexer.current().location;
+
+    std::optional<Position> minus = negatedNumberStart;
+    negatedNumberStart.reset();
+    bool negated = minus.has_value();
 
     scratchData.assign(lexer.current().data, lexer.current().getLength());
     AstArray<char> sourceData;
@@ -12875,26 +12956,99 @@ AstExpr* Parser::parseNumber()
         scratchData.erase(std::remove(scratchData.begin(), scratchData.end(), '_'), scratchData.end());
     }
 
-    if (FFlag::LuauIntegerType2 && (scratchData.back() == 'i'))
-    {
-        int64_t value = 0;
-        ConstantNumberParseResult result;
-        if ((strncmp(scratchData.c_str(), "0x", 2) == 0) || (strncmp(scratchData.c_str(), "0X", 2) == 0))
-            result = parseInteger64(value, scratchData.c_str(), 16); // pass in '0x' prefix, it's handled by strtoll
-        else if ((strncmp(scratchData.c_str(), "0b", 2) == 0) || (strncmp(scratchData.c_str(), "0B", 2) == 0))
-            result = parseInteger64(value, scratchData.c_str() + 2, 2);
-        else
-            result = parseInteger64(value, scratchData.c_str(), 10);
+    const IntegerSuffix* suffix = findIntegerSuffix(scratchData);
 
+    if (suffix)
+    {
+        // Luwu Integers (rfcs/integers.md): the literal still parses when the feature is off, so nothing after it cascades
+        checkLuwuFeature(start, kIntegersFeature, FFlag::DebugLuwuIntegers);
+
+        std::string written(lexer.current().data, lexer.current().getLength());
+        scratchData.erase(scratchData.size() - strlen(suffix->text));
+        IntegerMode mode = suffix->mode;
         nextLexeme();
 
-        if (result == ConstantNumberParseResult::Malformed)
+        // Luwu Integers (rfcs/integers.md): upstream Luau's `7i` is recovered as `7int`
+        if (suffix->upstream)
+        {
+            std::string digits = written.substr(0, written.size() - 1);
+            report(
+                start,
+                "Write '%sint' or '%si64' instead of '%s': Luwu sizes integers with 'u8' and 'i8' up to 'u64' and 'i64', or 'int' "
+                "for integers of dynamic size, bigints included",
+                digits.c_str(),
+                digits.c_str(),
+                written.c_str()
+            );
+        }
+
+        int base = 10;
+        size_t prefixLength = 0;
+        if (scratchData.size() > 2 && scratchData[0] == '0' && (scratchData[1] == 'x' || scratchData[1] == 'X'))
+        {
+            base = 16;
+            prefixLength = 2;
+        }
+        else if (scratchData.size() > 2 && scratchData[0] == '0' && (scratchData[1] == 'b' || scratchData[1] == 'B'))
+        {
+            base = 2;
+            prefixLength = 2;
+        }
+
+        uint64_t magnitude = 0;
+        ParseIntResult parsed = parseIntegerMagnitude(scratchData.c_str() + prefixLength, base, magnitude);
+
+        if (parsed == ParseIntResult::Malformed)
             return reportExprError(start, {}, "Malformed integer");
 
-        if (result != ConstantNumberParseResult::Ok)
-            return reportExprError(start, {}, "Integer overflow");
+        AstExprConstantInteger* node = nullptr;
+        if (mode == IntegerMode_Dynamic)
+        {
+            bool fitsInline = parsed == ParseIntResult::Ok && magnitude <= uint64_t(INT64_MAX);
+            if (fitsInline)
+                node = allocator.alloc<AstExprConstantInteger>(start, int64_t(magnitude), ConstantNumberParseResult::Ok);
+            else if (base == 10)
+                node = allocator.alloc<AstExprConstantInteger>(start, copy(scratchData).data, ConstantNumberParseResult::HeapInteger);
+            else if (parsed == ParseIntResult::Ok)
+                node = allocator.alloc<AstExprConstantInteger>(
+                    start, copy(std::to_string((unsigned long long)magnitude)).data, ConstantNumberParseResult::HeapInteger
+                );
+            else
+                return reportExprError(start, {}, "Write '%s' in decimal: only decimal integer literals can be larger than 64 bits", written.c_str());
+        }
+        else
+        {
+            // Luwu Integers (rfcs/integers.md): an unsigned literal can't be negated. The literal still parses, and
+            // the error suggests a signed mode that holds the value.
+            bool negatedUnsigned = negated && isUnsignedIntegerMode(mode) && parsed == ParseIntResult::Ok;
+            if (negatedUnsigned)
+            {
+                // `-0u8` only needs its minus removed
+                std::string replacement = written;
+                if (magnitude != 0)
+                {
+                    std::string digits = written.substr(0, written.size() - strlen(suffix->text));
+                    replacement = "-" + digits + integerSuffixText(signedModeForNegated(mode, magnitude));
+                }
 
-        AstExprConstantInteger* node = allocator.alloc<AstExprConstantInteger>(start, value, result);
+                report(
+                    Location(*minus, start.end),
+                    "Write '%s' instead of '-%s': unsigned integers can't be negative",
+                    replacement.c_str(),
+                    written.c_str()
+                );
+            }
+
+            // Out of range is reported but still gives a literal, so the rest of the expression checks
+            bool fits = parsed == ParseIntResult::Ok && magnitude <= largestIntegerLiteral(mode, negated);
+            if (!fits && !negatedUnsigned)
+                report(start, "'%s' is out of range for %s (%s)", written.c_str(), suffix->text, integerModeRange(mode).c_str());
+
+            node = allocator.alloc<AstExprConstantInteger>(start, wrapIntegerToMode(int64_t(magnitude), mode), ConstantNumberParseResult::Ok);
+        }
+
+        node->mode = mode;
+
         if (options.storeCstData)
             cstNodeMap[node] = allocator.alloc<CstExprConstantInteger>(sourceData);
         return node;

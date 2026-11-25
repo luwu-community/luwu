@@ -50,6 +50,8 @@ struct BuiltinTypeFunctions
     TypeFunction getmetatableFunc;
 
     TypeFunction objectFunc;
+    // Luwu Integers (rfcs/integers.md): `integer<T>` when `T` isn't known yet where it's written
+    TypeFunction integerFunc;
     TypeFunction classFunc;
 
     TypeFunction weakoptionalFunc;

@@ -1,0 +1,256 @@
+-- This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
+print("testing integers")
+
+-- Luwu Integers (rfcs/integers.md): the operators, comparisons, conversions and formatting of every mode
+
+-- values from a function, so constant folding can't compute what the runtime has to
+local function id<T>(value: T): T
+    return value
+end
+
+-- the error a call raises, or nil when it doesn't. `try` gets the library's and the VM's errors as `Error` variants.
+local function raised(f: () -> ()): unknown
+    local r = try f()
+    return if class.isinstance(r, Err) then r.error else nil
+end
+
+local function raisesmessage(f: () -> (), needle: string): boolean
+    local err = raised(f)
+    return err ~= nil and string.find(tostring(err), needle, 1, true) ~= nil
+end
+
+-- literals and their modes
+do
+    assert(typeof(7int) == "int" and type(7int) == "integer")
+    assert(typeof(255u8) == "u8" and typeof(-128i8) == "i8")
+    assert(typeof(65535u16) == "u16" and typeof(-32768i16) == "i16")
+    assert(typeof(4294967295u32) == "u32" and typeof(-2147483648i32) == "i32")
+    assert(typeof(18446744073709551615u64) == "u64" and typeof(-9223372036854775808i64) == "i64")
+    assert(0xff_u8 == 255u8 and 0b1010_i8 == 10i8 and 1_000_000int == 1000000int and 7_u64 == 7u64)
+    assert(tostring(18446744073709551615u64) == "18446744073709551615")
+    assert(tostring(-9223372036854775808i64) == "-9223372036854775808")
+
+    -- a bigint literal, negated at runtime
+    assert(tostring(340282366920938463463374607431768211456int) == "340282366920938463463374607431768211456")
+    assert(tostring(-99999999999999999999int) == "-99999999999999999999")
+    assert(tostring(-9223372036854775808int) == "-9223372036854775808")
+    assert(-9223372036854775808int == id(-9223372036854775807int) - 1int)
+end
+
+-- `+`, `-` and `*` wrap sized integers and grow dynamically-sized ones
+do
+    assert(id(255u8) + 1u8 == 0u8 and id(0u8) - 1u8 == 255u8 and id(16u8) * 16u8 == 0u8)
+    assert(id(127i8) + 1i8 == -128i8 and id(-128i8) - 1i8 == 127i8)
+    assert(id(65535u16) + 1u16 == 0u16 and id(32767i16) + 1i16 == -32768i16)
+    assert(id(4294967295u32) + 1u32 == 0u32 and id(2147483647i32) + 1i32 == -2147483648i32)
+    assert(id(18446744073709551615u64) + 1u64 == 0u64 and id(9223372036854775807i64) + 1i64 == -9223372036854775808i64)
+    assert(id(3000000000u32) * 2u32 == 1705032704u32)
+
+    local big = id(9223372036854775807int) + 1int
+    assert(tostring(big) == "9223372036854775808" and typeof(big) == "int")
+    assert(big - 1int == 9223372036854775807int)
+    assert(tostring(id(4294967296int) * 4294967296int) == "18446744073709551616")
+    assert(tostring(id(-9223372036854775807int) - 2int) == "-9223372036854775809")
+end
+
+-- `/` truncates, `//` floors and `%` follows `//`, in every mode
+do
+    local function divisions(a, b)
+        return `{a / b} {a // b} {a % b}`
+    end
+
+    assert(divisions(id(7int), 2int) == "3 3 1")
+    assert(divisions(id(-7int), 2int) == "-3 -4 1")
+    assert(divisions(id(7int), -2int) == "-3 -4 -1")
+    assert(divisions(id(-7int), -2int) == "3 3 -1")
+    assert(divisions(id(7i8), -2i8) == "-3 -4 -1")
+    assert(divisions(id(-7i32), 2i32) == "-3 -4 1")
+    assert(divisions(id(-7i64), 2i64) == "-3 -4 1")
+    assert(divisions(id(250u8), 7u8) == "35 35 5")
+    assert(divisions(id(18446744073709551615u64), 2u64) == "9223372036854775807 9223372036854775807 1")
+    assert(id(18446744073709551615u64) % 10u64 == 5u64)
+
+    -- `a == (a // b) * b + a % b` holds in every mode
+    for _, pair in { { -7int, 3int }, { 7i16, -3i16 }, { -100i32, 7i32 }, { 200u8, 9u8 } } do
+        local a, b = pair[1], pair[2]
+        assert(a == (a // b) * b + a % b)
+    end
+
+    -- the smallest value of a signed mode over -1 wraps
+    assert(id(-128i8) / -1i8 == -128i8 and id(-128i8) // -1i8 == -128i8 and id(-128i8) % -1i8 == 0i8)
+    assert(id(-9223372036854775808i64) / -1i64 == -9223372036854775808i64)
+    assert(id(-9223372036854775808i64) % -1i64 == 0i64)
+
+    -- a dynamically-sized integer grows instead
+    assert(tostring(id(-9223372036854775808int) / -1int) == "9223372036854775808")
+    assert(tostring(id(-9223372036854775808int) // -1int) == "9223372036854775808")
+    assert(id(-9223372036854775808int) % -1int == 0int)
+
+    -- bigints
+    local big = 100000000000000000000000int
+    assert(tostring(big / 7int) == "14285714285714285714285")
+    assert(tostring(-big / 7int) == "-14285714285714285714285")
+    assert(tostring(-big // 7int) == "-14285714285714285714286")
+    assert(-big % 7int == 2int and big % -7int == -2int)
+    assert(big // big == 1int and big % big == 0int)
+end
+
+-- dividing by zero raises Error.DivisionByZero in every mode
+do
+    for _, zero in { 0int, 0u8, 0i8, 0u64, 0i64 } do
+        local err = raised(function()
+            local _ = id(zero) // zero
+        end)
+        assert(class.isinstance(err, Error.DivisionByZero) and tostring(err) == "attempt to divide by zero")
+        assert(class.isinstance(raised(function()
+            local _ = id(zero) / zero
+        end), Error.DivisionByZero))
+        assert(class.isinstance(raised(function()
+            local _ = id(zero) % zero
+        end), Error.DivisionByZero))
+    end
+    assert(class.isinstance(raised(function()
+        local _ = 100000000000000000000000int // id(0int)
+    end), Error.DivisionByZero))
+    assert(typeof(raised(function()
+        local _ = id(1int) / 0int
+    end)) == "Error.DivisionByZero")
+
+    local ok, message = pcall(function()
+        local _ = id(1int) // 0int
+    end)
+    assert(not ok and string.find(message, "^[^:]*:%d+: attempt to divide by zero$"))
+end
+
+-- unary minus wraps signed modes, grows `int` and raises on unsigned ones
+do
+    assert(-id(5i8) == -5i8 and -id(-128i8) == -128i8 and -id(-9223372036854775808i64) == -9223372036854775808i64)
+    assert(tostring(-id(-9223372036854775808int)) == "9223372036854775808")
+    assert(-(-id(100000000000000000000int)) == 100000000000000000000int)
+    assert(raisesmessage(function()
+        local _ = -id(5u8)
+    end, "attempt to negate a u8"))
+    assert(raisesmessage(function()
+        local _ = -id(0u64)
+    end, "attempt to negate a u64"))
+    assert(id(0u8) - 5u8 == 251u8)
+end
+
+-- `^` raises: integers use `pow`, `spow` or `cpow`
+assert(raisesmessage(function()
+    local _ = id(2int) ^ 3int
+end, "integers have no '^' operator"))
+
+-- mixed modes and numbers raise
+do
+    assert(raisesmessage(function()
+        local _ = id(1u8) + 1i8
+    end, "attempt to perform arithmetic (add) on u8 and i8"))
+    assert(raisesmessage(function()
+        local _ = id(7int) + 1.5
+    end, "attempt to perform arithmetic (add) on int and number"))
+    assert(raisesmessage(function()
+        local _ = id(7int) * 2
+    end, "attempt to perform arithmetic (mul) on int and number"))
+    assert(raisesmessage(function()
+        local _ = id(7u64) // 2u32
+    end, "attempt to perform arithmetic (idiv) on u64 and u32"))
+end
+
+-- `==` compares the mode too, and an integer never equals a number
+do
+    assert(7int ~= id(7u8) and 7int ~= id(7) and 7u8 ~= id(7i8))
+    assert(500u32 == id(500u32) and 5int == id(5int))
+    assert(not rawequal(7int, 7u8) and rawequal(7u8, id(7u8)))
+    local big = id(100000000000000000000int)
+    assert(big == 100000000000000000000int and big ~= 100000000000000000001int and big ~= 5int)
+end
+
+-- ordering integers of different modes, or with a number, raises Error.InvalidOperation
+do
+    assert(id(5int) <= 5int and id(4int) < 5int and id(7u8) >= 7u8 and id(255u8) > 0u8)
+    assert(id(-1i8) < 0i8 and id(18446744073709551615u64) > 0u64 and id(9223372036854775808u64) > 9223372036854775807u64)
+
+    -- an inline integer and a bigint compare by value
+    assert(id(5int) < 1180591620717411303424int and 1180591620717411303424int > id(5int))
+    assert(-1180591620717411303424int < id(-5int) and id(5int) <= 1180591620717411303424int)
+
+    local err = raised(function()
+        local _ = id(4int) < 5u8
+    end)
+    assert(class.isinstance(err, Error.InvalidOperation) and tostring(err) == "attempt to compare int < u8")
+    assert(err.operator == "lt" and err.left == 4int and err.right == 5u8)
+    assert(class.isinstance(raised(function()
+        local _ = id(5) >= 7u8
+    end), Error.InvalidOperation))
+    assert(class.isinstance(raised(function()
+        local _ = id(5i8) <= 7
+    end), Error.InvalidOperation))
+
+    -- `pcall` gets the message with the position, like any other runtime error
+    local ok, message = pcall(function()
+        local _ = id(4int) < 5u8
+    end)
+    assert(not ok and string.find(message, "^[^:]*:%d+: attempt to compare int < u8$"))
+end
+
+-- table keys of the same value in different modes don't collide
+do
+    local lookup = {
+        [5int] = "five",
+        [5u8] = "5 ascii characters definitely",
+    }
+    assert(lookup[5] == nil and lookup[id(5u8)] == "5 ascii characters definitely" and lookup[id(5int)] == "five")
+    assert(lookup[5i8] == nil)
+
+    local big = {}
+    big[id(100000000000000000000int)] = 1
+    assert(big[100000000000000000000int] == 1 and big[100000000000000000001int] == nil)
+
+    -- every key reads back after a rehash
+    local many = {}
+    for i = 1, 200 do
+        many[id(9223372036854775807int) + integer.cast(i)] = i
+        many[integer.cast(i, integer.u8)] = -i
+    end
+    for i = 1, 200 do
+        assert(many[9223372036854775807int + integer.cast(i)] == i and many[integer.cast(i, integer.u8)] == -i)
+    end
+
+    -- a weak table keeps bigints, like strings
+    local weak = setmetatable({}, { __mode = "k" })
+    weak[id(1180591620717411303424int)] = true
+    collectgarbage()
+    assert(weak[1180591620717411303424int] == true)
+end
+
+-- typeof, tostring and tonumber
+do
+    assert(typeof(id(9223372036854775807int) + 1int) == "int" and type(id(9223372036854775807int) + 1int) == "integer")
+    assert(tostring(id(200u8)) == "200" and tostring(id(-5i16)) == "-5")
+    assert(tonumber(id(5int)) == 5 and tonumber(id(255u8)) == 255 and tonumber(id(-7i64)) == -7)
+    assert(tonumber(id(9007199254740992int)) == 9007199254740992 and tonumber(id(9007199254740993int)) == nil)
+    assert(tonumber(id(18446744073709551615u64)) == nil and tonumber(id(9223372036854775808u64)) == 9223372036854775808)
+    assert(tonumber(id(1180591620717411303424int)) == 2 ^ 70 and tonumber(id(1180591620717411303425int)) == nil)
+end
+
+-- string.format
+do
+    assert(string.format("%q", 300u16) == "300u16" and string.format("%q", -5i8) == "-5i8")
+    assert(string.format("%q", 340282366920938463463374607431768211456int) == "340282366920938463463374607431768211456int")
+    assert(string.format("%d", 340282366920938463463374607431768211456int) == "340282366920938463463374607431768211456")
+    assert(string.format("%d %i", 18446744073709551615u64, -9223372036854775808i64) == "18446744073709551615 -9223372036854775808")
+    assert(string.format("%08x", 255u32) == "000000ff" and string.format("%x", -1i8) == "ff" and string.format("%X", -1i16) == "FFFF")
+    assert(string.format("%x", 18446744073709551615u64) == "ffffffffffffffff" and string.format("%x", -255int) == "-ff")
+    assert(string.format("%x", 340282366920938463463374607431768211456int) == "100000000000000000000000000000000")
+    assert(string.format("%o %#x %#o", 8u8, 255u8, 8u8) == "10 0xff 010")
+    assert(string.format("%5d|%-5d|%+d|% d|%.3d", 42int, 42int, 42int, 42int, 7int) == "   42|42   |+42| 42|007")
+    assert(string.format("%05d", -42i32) == "-0042")
+    assert(string.format("%s", 5u8) == "5" and `{5u8}` == "5")
+    -- `%*` and interpolation write a u64 past INT64_MAX as unsigned, through the fastcall and through a plain call
+    const big_u64 = 18446744073709551615u64
+    assert(string.format("%*", big_u64) == "18446744073709551615" and `{big_u64}` == "18446744073709551615")
+    assert(select(2, pcall(string.format, "%*", big_u64)) == "18446744073709551615")
+end
+
+return "OK"
