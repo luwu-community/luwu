@@ -7268,8 +7268,19 @@ TEST_CASE("LegacyBytecodeRefusesLuwuAdditions")
     std::string opcode = asLegacyBytecode(Luau::compile("class A x: number = 1 end local a = A() return a", options));
     CHECK(contains(getLoadError(opcode), "uses opcode"));
 
-    // a class shape, whatever its layout
-    std::string shape = asLegacyBytecode(Luau::compile("class A end return A", options));
+    // a class shape, whatever its layout. A compiled class also has a constructor using NEWOBJECT, which the loader
+    // refuses first, so this chunk holds the shape and nothing else.
+    Luau::BytecodeBuilder bcb;
+    uint32_t main = bcb.beginFunction(0, /* isvararg= */ true);
+    Luau::BytecodeBuilder::ClassShape classShape;
+    classShape.className = bcb.addConstantString(Luau::BytecodeBuilder::StringRef{"A", 1});
+    REQUIRE(bcb.addClassShape(classShape) >= 0);
+    bcb.emitABC(LOP_RETURN, 0, 1, 0);
+    bcb.endFunction(1, 0);
+    bcb.setMainFunction(main);
+    bcb.finalize();
+
+    std::string shape = asLegacyBytecode(bcb.getBytecode());
     CHECK(contains(getLoadError(shape), "contains classes"));
 }
 
