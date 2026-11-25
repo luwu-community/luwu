@@ -83,9 +83,6 @@ struct IrRegAllocX64
 
     uint32_t findInstructionWithFurthestNextUse(const std::array<uint32_t, 16>& regInstUsers) const;
 
-    bool isExtraSpillSlot_DEPRECATED(unsigned slot) const;
-    int getExtraSpillAddressOffset_DEPRECATED(unsigned slot) const;
-
     uint32_t getAllocToken() const
     {
         return allocActionCount;
@@ -101,6 +98,12 @@ struct IrRegAllocX64
     LoweringStats* stats = nullptr;
 
     uint32_t currInstIdx = ~0u;
+
+    // Set inside a ScopedSpills scope: a lazy restore location written there is only written on one path, so it stays lazy
+    bool keepLazyLocations = false;
+
+    // Set when allocation failed, so the function can't run natively
+    bool error = false;
 
     std::array<bool, 16> freeGprMap;
     std::array<uint32_t, 16> gprInstUsers;
@@ -152,6 +155,7 @@ struct ScopedSpills
 
     IrRegAllocX64& owner;
     unsigned startSpillId = 0;
+    bool outerKeepLazyLocations = false;
 };
 
 } // namespace X64
