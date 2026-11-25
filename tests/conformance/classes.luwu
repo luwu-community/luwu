@@ -206,7 +206,7 @@ expectfail("object get nonexistent field", "objects of class 'Point' do not have
     print(p.huh)
 end)
 
-expectfail("object assign method", "attempt to index object with 'zero'", function()
+expectfail("object assign static function", "objects of class 'Point' do not have a field named 'zero'", function()
     local p = Point({ x = 3, y = 4 })
     p.zero = "???"
 end)
