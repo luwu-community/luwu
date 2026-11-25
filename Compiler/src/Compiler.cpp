@@ -68,6 +68,7 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuTraits)
+LUAU_FASTFLAG(LuwuStringFormatFastcall)
 LUAU_FASTFLAGVARIABLE(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuStringExtensions)
 
@@ -9054,7 +9055,10 @@ struct Compiler
         bool targetTop = FFlag::LuauCompileStringInterpTargetTop && targetTemp && target == regTop - 1;
         uint8_t baseReg = targetTop ? allocReg(expr, regCount - 1) - 1 : allocReg(expr, regCount);
 
-        emitLoadK(baseReg, formatStringIndex);
+        // Luwu: with the string.format fastcall, the format string goes straight into the call's first argument, where
+        // FASTCALL reads it. Upstream loads it into the call's function register for NAMECALL to read `format` from.
+        uint8_t formatReg = FFlag::LuwuStringFormatFastcall ? uint8_t(baseReg + 1) : baseReg;
+        emitLoadK(formatReg, formatStringIndex);
 
         size_t skipped = 0;
         for (size_t index = 0; index < expr->expressions.size; ++index)
@@ -9073,7 +9077,13 @@ struct Compiler
         if (formatMethodIndex < 0)
             CompileError::raise(expr->location, "Exceeded constant limit; simplify the code to compile");
 
-        bytecode.emitABC(LOP_NAMECALL, baseReg, baseReg, uint8_t(BytecodeBuilder::getStringHash(formatMethod)));
+        // Luwu: the fastcall skips the NAMECALL and its aux word along with the CALL. When it falls back (a value with
+        // __tostring, a format that could raise, or an unsafe environment), the NAMECALL finds `format` through the string
+        // metatable as before, so the call and the frame it gets are unchanged.
+        if (FFlag::LuwuStringFormatFastcall)
+            bytecode.emitABC(LOP_FASTCALL, LBF_STRING_FORMAT, 0, 2);
+
+        bytecode.emitABC(LOP_NAMECALL, baseReg, formatReg, uint8_t(BytecodeBuilder::getStringHash(formatMethod)));
         bytecode.emitAux(formatMethodIndex);
         bytecode.emitABC(LOP_CALL, baseReg, uint8_t(expr->expressions.size + 2 - skippedSubExpr), 2);
         if (target != baseReg)
