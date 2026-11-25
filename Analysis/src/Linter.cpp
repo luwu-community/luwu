@@ -4723,6 +4723,14 @@ private:
                 "Hexadecimal number literal exceeded available precision and was truncated to 2^64"
             );
             break;
+        case ConstantNumberParseResult::OctOverflow:
+            emitWarning(
+                *context,
+                LintWarning::Code_IntegerParsing,
+                node->location,
+                "Octal number literal exceeded available precision and was truncated to 2^64"
+            );
+            break;
         case ConstantNumberParseResult::IntOverflow:
             emitWarning(*context, LintWarning::Code_IntegerParsing, node->location, "Integer number literal was clamped because it was out of range");
             break;

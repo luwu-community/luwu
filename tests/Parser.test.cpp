@@ -7,6 +7,7 @@
 #include "Luau/Ast.h"
 #include "Luau/Common.h"
 #include "ScopedFlags.h"
+#include "Typewriter.h"
 
 #include "doctest.h"
 
@@ -42,6 +43,8 @@ LUAU_FASTFLAG(LuwuDefaultArguments)
 LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuExternTypeGenericMethods)
 LUAU_FASTFLAG(LuwuGenericNominals)
+
+LUAU_FASTFLAG(LuwuOctalLiterals)
 
 // Clip with DebugLuauReportReturnTypeVariadicWithTypeSuffix
 extern bool luau_telemetry_parsed_return_type_variadic_with_type_suffix;
@@ -1097,6 +1100,75 @@ TEST_CASE_FIXTURE(Fixture, "integer_literal_suffixes_need_integers")
 
     matchParseError("return 7u8", "attempt to use disabled Luwu feature integers; enable via FFlag 'DebugLuwuIntegers'");
     matchParseError("return 7int", "attempt to use disabled Luwu feature integers; enable via FFlag 'DebugLuwuIntegers'");
+}
+
+// Luwu Octal Literals (rfcs/octal-literals.md)
+TEST_CASE_FIXTURE(Fixture, "parse_numbers_octal")
+{
+    ScopedFastFlag sff{FFlag::LuwuOctalLiterals, true};
+
+    AstStat* stat = parse("return 0o755, 0O17, 0o7_5_5, 0o_644, 0o0, 0o1777777777777777777777");
+    REQUIRE(stat != nullptr);
+
+    AstStatReturn* str = stat->as<AstStatBlock>()->body.data[0]->as<AstStatReturn>();
+    REQUIRE(str->list.size == 6);
+    CHECK_EQ(str->list.data[0]->as<AstExprConstantNumber>()->value, 493);
+    CHECK_EQ(str->list.data[1]->as<AstExprConstantNumber>()->value, 15);
+    CHECK_EQ(str->list.data[2]->as<AstExprConstantNumber>()->value, 493);
+    CHECK_EQ(str->list.data[3]->as<AstExprConstantNumber>()->value, 420);
+    CHECK_EQ(str->list.data[4]->as<AstExprConstantNumber>()->value, 0);
+    CHECK_EQ(str->list.data[5]->as<AstExprConstantNumber>()->value, double(ULLONG_MAX));
+}
+
+TEST_CASE_FIXTURE(Fixture, "parse_numbers_octal_error")
+{
+    ScopedFastFlag sff{FFlag::LuwuOctalLiterals, true};
+
+    matchParseError("return 0o8", "Malformed number");
+    matchParseError("return 0o79", "Malformed number");
+    matchParseError("return 0o", "Malformed number");
+    matchParseError("return 0o_", "Malformed number");
+    matchParseError("return 0o0o7", "Malformed number");
+    matchParseError("return 0o7e1", "Malformed number");
+}
+
+TEST_CASE_FIXTURE(Fixture, "parse_numbers_octal_flag_off")
+{
+    ScopedFastFlag sff{FFlag::LuwuOctalLiterals, false};
+
+    matchParseError("return 0o7", "Malformed number");
+    matchParseError("return 0O17", "Malformed number");
+}
+
+TEST_CASE_FIXTURE(Fixture, "parse_numbers_octal_in_a_luau_module")
+{
+    ScopedFastFlag sff{FFlag::LuwuOctalLiterals, true};
+
+    ParseOptions runtime;
+    runtime.language = Language::Luau;
+
+    ParseResult result = tryParse("return 0o755", runtime);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "attempt to use a Luwu-only feature in a Luau module: octal number literals");
+    CHECK_EQ(result.errors[0].getLocation(), Location{{0, 7}, {0, 12}});
+
+    // A malformed literal gets only the malformed number error
+    result = tryParse("return 0o8", runtime);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getMessage(), "Malformed number");
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "typing_octal_literals")
+{
+    ScopedFastFlag sff{FFlag::LuwuOctalLiterals, true};
+
+    const char* const after = R"(
+local unrelated = 1
+print(unrelated + 1)
+)";
+
+    checkTypewriting(*this, "", "local mode = 0o755", after);
+    checkTypewriting(*this, "", "local mode = 0o7_5_5 + 0O17", after);
 }
 
 TEST_CASE_FIXTURE(Fixture, "break_return_not_last_error")
