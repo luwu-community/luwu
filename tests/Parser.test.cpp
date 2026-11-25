@@ -6955,6 +6955,88 @@ end
     }
 }
 
+// Luwu: an extra `end` is reported on its own instead of closing the block around it early and failing the rest of the
+// file
+TEST_CASE_FIXTURE(Fixture, "an_extra_end_is_one_error")
+{
+    ParseResult result = tryParse(R"(
+local function a()
+    if x then
+        f()
+    end
+    end
+    g()
+end
+local function b()
+    h()
+end
+)");
+    REQUIRE(result.root);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getLocation(), Location(Position(5, 4), Position(5, 7)));
+    CHECK(result.errors[0].getMessage().find("This extra 'end' doesn't close a function or statement") != std::string::npos);
+    CHECK_EQ(result.root->body.size, 2);
+}
+
+// Luwu: an extra `end` in a class body, which the class would otherwise end at
+TEST_CASE_FIXTURE(Fixture, "an_extra_end_in_a_class_is_one_error")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    ParseResult result = tryParse(R"(
+class Size
+    public function bytes(n: number)
+        return n
+    end
+    end
+    public function kilobytes(n: number)
+        return n * 1024
+    end
+end
+)");
+    REQUIRE(result.root);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(5, 4));
+    REQUIRE_EQ(result.root->body.size, 1);
+    AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+}
+
+// Luwu: code without errors keeps its parse however it's indented, so an `end` indented like the code after it still
+// closes the function
+TEST_CASE_FIXTURE(Fixture, "a_misindented_end_in_valid_code_keeps_its_parse")
+{
+    ParseResult result = tryParse(R"(
+local function a()
+    f()
+    end
+    g()
+)");
+    REQUIRE(result.root);
+    CHECK(result.errors.empty());
+    CHECK_EQ(result.root->body.size, 2);
+}
+
+// Luwu: typing an extra `end` reports that one error while it's typed
+TEST_CASE_FIXTURE(Fixture, "typing_an_extra_end")
+{
+    for (bool autocompleteEnd : {true, false})
+    {
+        INFO("autocompleteEnd " << autocompleteEnd);
+        CHECK_EQ(
+            "",
+            typewrite(
+                *this,
+                "local function a(): number\n    local x = 1\n",
+                "    end",
+                "\n    return x\nend\nlocal unrelated = a()\nreturn unrelated + 1\n",
+                autocompleteEnd,
+                {"This extra 'end'"}
+            )
+        );
+    }
+}
+
 TEST_CASE_FIXTURE(Fixture, "extra_table_indexer_recovery")
 {
     try
