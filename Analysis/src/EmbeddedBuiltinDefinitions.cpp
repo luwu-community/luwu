@@ -1,5 +1,6 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 #include "Luau/BuiltinDefinitions.h"
+#include "Luau/LuwuFlags.h"
 
 LUAU_FASTFLAG(LuauIntegerLibrary)
 LUAU_FASTFLAG(LuauIntegerType2)
@@ -372,7 +373,16 @@ declare class: {
     isinstance: @checked (o: unknown, c: class) -> boolean,
     of: @checked (o: unknown) -> class?,
     name: @checked (o: class | object) -> string,
-    fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean)
+    fields: @checked (o: class | object) -> ({ [string]: unknown }, boolean),
+)CLASS_SRC";
+
+// Luwu: upstream Luau's name for `class.of`, for Luau modules with class compat (TypeChecker2 keeps each module to its
+// own language's members)
+static const char* kBuiltinDefinitionClassSrcClassof = R"CLASS_SRC(
+    classof: @checked (o: unknown) -> class?,
+)CLASS_SRC";
+
+static const char* kBuiltinDefinitionClassSrcClose = R"CLASS_SRC(
 }
 )CLASS_SRC";
 
@@ -426,6 +436,9 @@ std::string getBuiltinDefinitionSource()
     if (FFlag::LuwuClasses && FFlag::LuauAllowGlobalDeclarationToBeCalledClass)
     {
         result += FFlag::LuwuTraits ? kBuiltinDefinitionClassTraitsSrc : kBuiltinDefinitionClassSrc;
+        if (luauClassCompat())
+            result += kBuiltinDefinitionClassSrcClassof;
+        result += kBuiltinDefinitionClassSrcClose;
     }
 
     return result;
