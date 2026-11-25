@@ -16,6 +16,7 @@
 #include "Luau/Def.h"
 #include "Luau/DenseHash.h"
 #include "Luau/Instantiation2.h"
+#include "Luau/IntegerModes.h"
 #include "Luau/IterativeTypeVisitor.h"
 #include "Luau/ModuleResolver.h"
 #include "Luau/Normalize.h"
@@ -49,6 +50,7 @@ LUAU_FASTINTVARIABLE(LuauPrimitiveInferenceInTableLimit, 500)
 LUAU_FASTFLAGVARIABLE(LuauDisallowRedefiningBuiltinTypes)
 LUAU_FASTFLAG(LuauTypeFunctionStructuredErrors)
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAGVARIABLE(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier)
 LUAU_FLAGVERSION(LuauRemovePrimitiveTypeConstraintAndSubtypingUnifier, 2)
@@ -7043,8 +7045,8 @@ Inference ConstraintGenerator::check(const ScopePtr& scope, AstExpr* expr, std::
         result = check(scope, stringExpr, expectedType, forceSingleton);
     else if (expr->is<AstExprConstantNumber>())
         result = Inference{builtinTypes->numberType};
-    else if (expr->is<AstExprConstantInteger>())
-        result = Inference{builtinTypes->integerType};
+    else if (auto integer = expr->as<AstExprConstantInteger>())
+        result = Inference{integerLiteralType(integer)};
     else if (auto boolExpr = expr->as<AstExprConstantBool>())
         result = check(scope, boolExpr, expectedType, forceSingleton);
     else if (expr->is<AstExprConstantNil>())
@@ -8077,6 +8079,9 @@ std::tuple<TypeId, TypeId, RefinementId> ConstraintGenerator::checkBinary(
             discriminantTy = builtinTypes->numberType;
         else if (typeguard->type == "integer")
             discriminantTy = builtinTypes->integerType;
+        // Luwu Integers (rfcs/integers.md): `typeof` gives an integer's mode
+        else if (std::optional<IntegerMode> mode = integerModeNamed(typeguard->type); mode && typeguard->isTypeof && FFlag::DebugLuwuIntegers)
+            discriminantTy = builtinTypes->integerModeTypes[*mode];
         else if (typeguard->type == "boolean")
             discriminantTy = builtinTypes->booleanType;
         else if (typeguard->type == "thread")
@@ -9516,6 +9521,10 @@ TypeId ConstraintGenerator::resolveReferenceType(
         return builtinTypes->errorType;
     }
 
+    // Luwu Integers (rfcs/integers.md): `integer<T>` is an integer of mode `T`, while bare `integer` stays every mode
+    if (isIntegerWithMode(builtinTypes, *scope, ref))
+        return resolveIntegerType(scope, ty, ref);
+
     std::optional<TypeFun> alias;
 
     if (ref->prefix.has_value())
@@ -9602,6 +9611,36 @@ TypeId ConstraintGenerator::resolveReferenceType(
         genericType->polarity = (genericType->polarity & Polarity::Mixed) | polarity;
 
     return result;
+}
+
+TypeId ConstraintGenerator::resolveIntegerType(const ScopePtr& scope, AstType* ty, AstTypeReference* ref)
+{
+    if (ref->parameters.size != 1 || !ref->parameters.data[0].type)
+    {
+        reportError(ty->location, GenericError{"integer<T> requires exactly one type argument, a mode such as \"u8\" or integer.u8"});
+        module->astResolvedTypes[ty] = builtinTypes->errorType;
+        return builtinTypes->errorType;
+    }
+
+    // Outside a type-argument context for the same reason as `class<T>`: `integer.Mode<"u8">` has to be expanded
+    TypeId modeTy = follow(resolveType_(scope, ref->parameters.data[0].type, /*inTypeArguments*/ false));
+    bool modeKnownLater = get<BlockedType>(modeTy) || get<PendingExpansionType>(modeTy) || get<TypeFunctionInstanceType>(modeTy);
+    if (modeKnownLater)
+        return createTypeFunctionInstance(builtinTypes->typeFunctions->integerFunc, {modeTy}, {}, scope, ty->location);
+
+    std::optional<TypeId> integerTy = integerTypeWithMode(builtinTypes, *arena, modeTy);
+    if (!integerTy)
+    {
+        reportError(ty->location, GenericError{format("%s isn't an integer mode; write one such as \"u8\" or integer.u8", toString(modeTy).c_str())});
+        return builtinTypes->errorType;
+    }
+    return *integerTy;
+}
+
+TypeId ConstraintGenerator::integerLiteralType(AstExprConstantInteger* literal)
+{
+    bool knownMode = FFlag::DebugLuwuIntegers && literal->mode < kIntegerModeCount;
+    return knownMode ? builtinTypes->integerModeTypes[literal->mode] : builtinTypes->integerType;
 }
 
 namespace

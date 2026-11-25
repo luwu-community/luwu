@@ -11,6 +11,7 @@
 #include "lmem.h"
 #include "ludata.h"
 #include "lbuffer.h"
+#include "lbigint.h"
 #include "lclass.h"
 #include "lvector.h"
 
@@ -243,6 +244,11 @@ static void reallymarkobject(global_State* g, GCObject* o)
     case LUA_TSTRING:
     {
         gray2black(o); // strings are never gray
+        return;
+    }
+    case LUA_THEAPINTEGER:
+    {
+        gray2black(o); // Integers have no children, mark them black
         return;
     }
     case LUA_TUSERDATA:
@@ -692,6 +698,13 @@ static int isobjcleared(GCObject* o)
         return 0;
     }
 
+    // Luwu Integers (rfcs/integers.md): bigints are values too, marked the way strings are
+    if (o->gch.tt == LUA_THEAPINTEGER)
+    {
+        stringmark(&o->gch);
+        return 0;
+    }
+
     return iswhite(o);
 }
 
@@ -838,6 +851,9 @@ static void freeobj(lua_State* L, GCObject* o, lua_Page* page)
         break;
     case LUA_TOBJECT:
         luaR_freeobject(L, gco2object(o), page);
+        break;
+    case LUA_THEAPINTEGER:
+        luaZB_freeheapinteger(L, gco2integer(o), page);
         break;
     default:
         LUAU_ASSERT(0);
