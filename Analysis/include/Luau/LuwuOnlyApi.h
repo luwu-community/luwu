@@ -6,7 +6,7 @@
 namespace Luau
 {
 
-// Luwu: whether `library.member` is a member Luwu adds to a library upstream Luau also has (`table.drop`, `class.of`). A
+// Luwu: whether `library.member` is a member Luwu adds to a library upstream Luau also has (`table.discard`, `class.of`). A
 // Luau or Lua module can't use one: the LuwuOnlyApi lint reports it there, and autocomplete doesn't offer it. A string
 // method (`s:startswith`) is a member of `string`. Every Luwu-only API goes here when it's added.
 inline bool isLuwuOnlyMember(std::string_view library, std::string_view member)
@@ -15,7 +15,7 @@ inline bool isLuwuOnlyMember(std::string_view library, std::string_view member)
     if (library == "class")
         return member == "of" || member == "name" || member == "implements" || member == "fields";
     if (library == "table")
-        return member == "drop";
+        return member == "discard";
     if (library == "buffer")
         return member == "isfrozen";
     // Luwu String Extensions (rfcs/string-extensions.md)
