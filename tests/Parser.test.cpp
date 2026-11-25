@@ -2,6 +2,7 @@
 #include "Luau/Parser.h"
 
 #include "AstQueryDsl.h"
+#include "Typewriter.h"
 #include "Fixture.h"
 #include "Luau/Ast.h"
 #include "Luau/Common.h"
@@ -21,6 +22,7 @@ LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
 LUAU_FASTFLAG(DebugLuwuLuauClassCompat)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(DebugLuauNoInline)
+LUAU_FASTFLAG(DebugLuwuEncourageInline)
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
@@ -5695,6 +5697,88 @@ end
     }
 }
 
+// Luwu: an extra `end` is reported on its own instead of closing the block around it early and failing the rest of the
+// file
+TEST_CASE_FIXTURE(Fixture, "an_extra_end_is_one_error")
+{
+    ParseResult result = tryParse(R"(
+local function a()
+    if x then
+        f()
+    end
+    end
+    g()
+end
+local function b()
+    h()
+end
+)");
+    REQUIRE(result.root);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getLocation(), Location(Position(5, 4), Position(5, 7)));
+    CHECK(result.errors[0].getMessage().find("This extra 'end' doesn't close a function or statement") != std::string::npos);
+    CHECK_EQ(result.root->body.size, 2);
+}
+
+// Luwu: an extra `end` in a class body, which the class would otherwise end at
+TEST_CASE_FIXTURE(Fixture, "an_extra_end_in_a_class_is_one_error")
+{
+    ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
+
+    ParseResult result = tryParse(R"(
+class Size
+    public function bytes(n: number)
+        return n
+    end
+    end
+    public function kilobytes(n: number)
+        return n * 1024
+    end
+end
+)");
+    REQUIRE(result.root);
+    REQUIRE_EQ(result.errors.size(), 1);
+    CHECK_EQ(result.errors[0].getLocation().begin, Position(5, 4));
+    REQUIRE_EQ(result.root->body.size, 1);
+    AstStatClass* cls = result.root->body.data[0]->as<AstStatClass>();
+    REQUIRE(cls);
+}
+
+// Luwu: code without errors keeps its parse however it's indented, so an `end` indented like the code after it still
+// closes the function
+TEST_CASE_FIXTURE(Fixture, "a_misindented_end_in_valid_code_keeps_its_parse")
+{
+    ParseResult result = tryParse(R"(
+local function a()
+    f()
+    end
+    g()
+)");
+    REQUIRE(result.root);
+    CHECK(result.errors.empty());
+    CHECK_EQ(result.root->body.size, 2);
+}
+
+// Luwu: typing an extra `end` reports that one error while it's typed
+TEST_CASE_FIXTURE(Fixture, "typing_an_extra_end")
+{
+    for (bool autocompleteEnd : {true, false})
+    {
+        INFO("autocompleteEnd " << autocompleteEnd);
+        CHECK_EQ(
+            "",
+            typewrite(
+                *this,
+                "local function a(): number\n    local x = 1\n",
+                "    end",
+                "\n    return x\nend\nlocal unrelated = a()\nreturn unrelated + 1\n",
+                autocompleteEnd,
+                {"This extra 'end'"}
+            )
+        );
+    }
+}
+
 TEST_CASE_FIXTURE(Fixture, "extra_table_indexer_recovery")
 {
     try
@@ -6864,6 +6948,35 @@ local function hello(x, y)
 end)");
 
     checkFirstErrorForAttributes(result.errors, 1, Location(Position(1, 0), Position(1, 14)), "Invalid attribute '@debugnoinline'");
+}
+
+// Luwu: `@[inline(reason)]` takes one string constant, and needs DebugLuwuEncourageInline
+TEST_CASE_FIXTURE(Fixture, "inline_attribute_takes_a_reason")
+{
+    {
+        ScopedFastFlag encourageInline{FFlag::DebugLuwuEncourageInline, true};
+
+        ParseResult result = tryParse(R"(
+@[inline("a hot helper")]
+local function a() end
+@[inline]
+local function b() end
+@[inline(1)]
+local function c() end
+)");
+        REQUIRE_EQ(result.errors.size(), 2);
+        CHECK_EQ(result.errors[0].getLocation().begin, Position(3, 2));
+        CHECK(result.errors[0].getMessage().find("@inline needs one reason") != std::string::npos);
+        CHECK_EQ(result.errors[1].getLocation().begin, Position(5, 9));
+        CHECK(result.errors[1].getMessage().find("must be a string constant") != std::string::npos);
+    }
+
+    ParseResult withoutFlag = tryParse(R"(
+@[inline("a hot helper")]
+local function a() end
+)");
+    REQUIRE(!withoutFlag.errors.empty());
+    CHECK(withoutFlag.errors[0].getMessage().find("inline") != std::string::npos);
 }
 
 TEST_CASE_FIXTURE(Fixture, "empty_attribute_name_is_not_allowed")
