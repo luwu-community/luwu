@@ -512,8 +512,52 @@ void addGuardConditions(AstStatIf* guard, std::vector<Condition>& conditions)
     }
 }
 
+// Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the code after `x or return` runs only when `x` holds, and after
+// `x and continue` only when it fails. After `x and continue or break` it would have to do both.
+void addLeaveConditions(AstStatExpr* statement, std::vector<Condition>& conditions)
+{
+    AstExprBinary* guard = asLeaveGuard(statement->expr);
+    if (!guard)
+        return;
+
+    if (guard->op == AstExprBinary::And)
+    {
+        conditions.push_back({guard->left, false});
+        return;
+    }
+
+    if (AstExprBinary* left = asLeaveEitherWay(statement->expr))
+    {
+        conditions.push_back({left->left, false});
+        conditions.push_back({left->left, true});
+        return;
+    }
+
+    conditions.push_back({guard->left, true});
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): in an arm's value or block, the arm's condition holds and
+// the arms before it failed. A `when` chain only says that one of its clauses failed, so it adds nothing.
+void addMatchArmConditions(const AstArray<AstMatchArm>& arms, AstNode* child, std::vector<Condition>& conditions)
+{
+    std::vector<Condition> failed;
+    for (const AstMatchArm& arm : arms)
+    {
+        if (child == arm.value || child == arm.body)
+        {
+            conditions.insert(conditions.end(), failed.begin(), failed.end());
+            if (arm.condition)
+                conditions.push_back({arm.condition, true});
+            return;
+        }
+
+        if (arm.condition && arm.clauses.size == 0)
+            failed.push_back({arm.condition, false});
+    }
+}
+
 // The conditions that hold or fail at the end of `ancestry`: the branches around it, the left of an `and`/`or` it's on the
-// right of, and the guards that leave and the `assert`s before it in each block around it
+// right of, and the guards that leave, the `assert`s and the `or return` statements before it in each block around it
 std::vector<Condition> conditionsAt(const std::vector<AstNode*>& ancestry)
 {
     std::vector<Condition> conditions;
@@ -535,6 +579,14 @@ std::vector<Condition> conditionsAt(const std::vector<AstNode*>& ancestry)
                 conditions.push_back({ifElse->condition, true});
             else if (child == ifElse->falseExpr)
                 conditions.push_back({ifElse->condition, false});
+        }
+        else if (AstExprMatch* match = parent->as<AstExprMatch>())
+        {
+            addMatchArmConditions(match->arms, child, conditions);
+        }
+        else if (AstStatMatch* match = parent->as<AstStatMatch>())
+        {
+            addMatchArmConditions(match->arms, child, conditions);
         }
         else if (AstStatWhile* whileStatement = parent->as<AstStatWhile>(); whileStatement && child == whileStatement->body)
         {
@@ -558,6 +610,9 @@ std::vector<Condition> conditionsAt(const std::vector<AstNode*>& ancestry)
                     addGuardConditions(guard, conditions);
 
                 AstStatExpr* expression = statement->as<AstStatExpr>();
+                if (expression)
+                    addLeaveConditions(expression, conditions);
+
                 AstExprCall* call = expression ? expression->expr->as<AstExprCall>() : nullptr;
                 AstExprGlobal* callee = call ? call->func->as<AstExprGlobal>() : nullptr;
                 if (callee && callee->name == "assert" && call->args.size >= 1)

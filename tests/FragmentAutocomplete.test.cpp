@@ -18,6 +18,10 @@
 #include <memory>
 #include <optional>
 
+LUAU_FASTFLAG(DebugLuwuMatchExpressions)
+LUAU_FASTFLAG(LuwuDoExpr)
+LUAU_FASTFLAG(LuwuIfLocal)
+
 using namespace Luau;
 
 LUAU_FASTINT(LuauParseErrorLimit)
@@ -1768,6 +1772,68 @@ tbl. @1
             CHECK_EQ(1, acResults.entryMap.size());
             CHECK(acResults.entryMap.count("abc"));
             CHECK_EQ(AutocompleteContext::Property, acResults.context);
+        }
+    );
+}
+
+// Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a string in a pattern completes the tested singletons
+// through fragment autocomplete too, which is what luwu-lsp runs
+TEST_CASE_FIXTURE(FragmentAutocompleteFixture, "pattern_strings_complete_the_tested_singletons_in_fragments")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+    };
+
+    const std::string source = R"(
+type Unit = "KiB" | "MiB"
+local function g(unit: Unit)
+    return unit
+end
+)";
+    const std::string updated = R"(
+type Unit = "KiB" | "MiB"
+local function g(unit: Unit)
+    return unit is "@1"
+end
+)";
+
+    autocompleteFragmentInBothSolvers(
+        source,
+        updated,
+        '1',
+        [](FragmentAutocompleteStatusResult& fragment)
+        {
+            REQUIRE(fragment.result);
+            auto acResults = fragment.result->acResults;
+            CHECK_EQ(AutocompleteContext::String, acResults.context);
+            CHECK(acResults.entryMap.count("KiB"));
+            CHECK(acResults.entryMap.count("MiB"));
+        }
+    );
+
+    // a `case` arm still being typed, with the code after the match on the next line
+    const std::string updatedArm = R"(
+type Unit = "KiB" | "MiB"
+local function g(unit: Unit)
+    const label = match unit
+        case is "@1"
+    return unit
+end
+)";
+
+    autocompleteFragmentInBothSolvers(
+        source,
+        updatedArm,
+        '1',
+        [](FragmentAutocompleteStatusResult& fragment)
+        {
+            REQUIRE(fragment.result);
+            auto acResults = fragment.result->acResults;
+            CHECK_EQ(AutocompleteContext::String, acResults.context);
+            CHECK(acResults.entryMap.count("KiB"));
+            CHECK(acResults.entryMap.count("MiB"));
         }
     );
 }

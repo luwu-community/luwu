@@ -623,6 +623,13 @@ struct TableMutationTracker : AstVisitor
                 markEscaped(ifElse->trueExpr); // recurse through true branch
                 expr = ifElse->falseExpr;      // continue loop with false branch
             }
+            // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): any arm's value can be the result
+            else if (AstExprMatch* match = expr->as<AstExprMatch>())
+            {
+                for (const AstMatchArm& arm : match->arms)
+                    markEscaped(arm.value);
+                return;
+            }
             else if (AstExprBinary* bin = expr->as<AstExprBinary>())
             {
                 if (bin->op == AstExprBinary::And || bin->op == AstExprBinary::Or)
@@ -741,6 +748,12 @@ struct TableMutationTracker : AstVisitor
 
 struct ConstantVisitor : AstVisitor
 {
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the clauses a pattern makes are compiled like any other
+    bool visitsPatternClauses() const override
+    {
+        return true;
+    }
+
     DenseHashMap<AstExpr*, Constant>& constants;
     DenseHashMap<AstLocal*, Variable>& variables;
     DenseHashMap<AstLocal*, Constant>& locals;
@@ -1051,12 +1064,22 @@ struct ConstantVisitor : AstVisitor
         }
         else if (AstExprIfElse* expr = node->as<AstExprIfElse>())
         {
-            Constant cond = analyze(expr->condition);
-            Constant trueExpr = analyze(expr->trueExpr);
-            Constant falseExpr = analyze(expr->falseExpr);
+            // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain isn't folded, even when its first clause is constant
+            if (expr->clauses.size != 0)
+            {
+                analyzeIfClauses(expr->clauses);
+                analyze(expr->trueExpr);
+                analyze(expr->falseExpr);
+            }
+            else
+            {
+                Constant cond = analyze(expr->condition);
+                Constant trueExpr = analyze(expr->trueExpr);
+                Constant falseExpr = analyze(expr->falseExpr);
 
-            if (cond.type != Constant::Type_Unknown)
-                result = cond.isTruthful() ? trueExpr : falseExpr;
+                if (cond.type != Constant::Type_Unknown)
+                    result = cond.isTruthful() ? trueExpr : falseExpr;
+            }
         }
         else if (AstExprInterpString* expr = node->as<AstExprInterpString>())
         {
@@ -1075,6 +1098,50 @@ struct ConstantVisitor : AstVisitor
         else if (AstExprSelfClass* expr = node->as<AstExprSelfClass>())
         {
             analyze(expr->classOf);
+        }
+        else if (AstExprTableComprehension* expr = node->as<AstExprTableComprehension>())
+        {
+            // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): the loop's expressions are folded like any other,
+            // and the table is never a constant
+            expr->loop->visit(this);
+        }
+        else if (AstExprDo* expr = node->as<AstExprDo>())
+        {
+            // Luwu Do Expressions (rfcs/control-flow/do-expressions.md): the block's statements are folded like any other, and the
+            // expression itself is never a constant
+            expr->body->visit(this);
+        }
+        else if (AstExprMatch* expr = node->as<AstExprMatch>())
+        {
+            // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the parts are folded like any other, and the
+            // `match` itself is never a constant
+            if (expr->subject.declaration)
+                expr->subject.declaration->visit(this);
+            else
+                analyze(expr->subject.value);
+
+            for (const AstMatchArm& arm : expr->arms)
+            {
+                if (arm.clauses.size != 0)
+                    analyzeIfClauses(arm.clauses);
+                else if (arm.condition)
+                    analyze(arm.condition);
+
+                analyze(arm.value);
+            }
+        }
+        else if (AstExprMatchPattern* expr = node->as<AstExprMatchPattern>())
+        {
+            // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): the value and the operands are folded, so a
+            // literal operand is a constant to compare with, and the pattern itself is never a constant
+            if (expr->value)
+                analyze(expr->value);
+
+            for (const AstPatternAlternative& alternative : expr->alternatives)
+            {
+                if (alternative.operand)
+                    analyze(alternative.operand);
+            }
         }
         else
         {
@@ -1145,6 +1212,19 @@ struct ConstantVisitor : AstVisitor
                 v->constant = (value.type != Constant::Type_Unknown);
                 recordConstant(locals, local, value);
             }
+        }
+    }
+
+    // Luwu If Local (rfcs/control-flow/if-local.md): a `when` chain inside an expression. analyze() doesn't go through the
+    // visitor, so the declarations are visited here, which records their values the same as any `local`.
+    void analyzeIfClauses(const AstArray<AstIfClause>& clauses)
+    {
+        for (const AstIfClause& clause : clauses)
+        {
+            if (clause.declaration)
+                clause.declaration->visit(this);
+            else
+                analyze(clause.expr);
         }
     }
 
