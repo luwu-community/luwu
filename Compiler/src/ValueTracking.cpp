@@ -23,6 +23,12 @@ struct ValueVisitor : AssignmentVisitor
     {
     }
 
+    // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a local a pattern binds is tracked like any other
+    bool visitsPatternClauses() const override
+    {
+        return true;
+    }
+
     void assign(AstExpr* var) override
     {
         if (AstExprLocal* lv = var->as<AstExprLocal>())
