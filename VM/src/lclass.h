@@ -4,6 +4,7 @@
 
 #include "lmem.h"
 #include "lobject.h"
+#include "lstate.h"
 #include "lbytecode.h"
 #include "ltable.h"
 
@@ -13,6 +14,50 @@
 inline size_t luaR_objectsize(uint32_t nummembers)
 {
     return sizeof(LuauObject) + size_t(nummembers) * sizeof(TValue);
+}
+
+// Luwu bundles: a bundle's allocation, its values followed by its key (LuauBundleKey)
+inline size_t luaR_bundleallocsize(uint32_t size)
+{
+    return luaR_objectsize(size) + sizeof(LuauBundleKey);
+}
+
+// Luwu Native Classes (rfcs/native-classes.md): the allocation of an object with native data, its members followed by
+// a LuauNativeData header and `nativesize` bytes
+inline size_t luaR_nativeallocsize(uint32_t nummembers, uint32_t nativesize)
+{
+    return luaR_objectsize(nummembers) + sizeof(LuauNativeData) + nativesize;
+}
+
+// Luwu Native Classes (rfcs/native-classes.md): the header of the native data that follows `object`'s members, or NULL
+// when it has none
+inline LuauNativeData* luaR_nativedata(LuauObject* object)
+{
+    if (object->storagekind != LUAR_STORAGE_NATIVE)
+        return NULL;
+    return reinterpret_cast<LuauNativeData*>(luaR_members(object) + object->numberofmembers);
+}
+
+inline const LuauNativeData* luaR_nativedata(const LuauObject* object)
+{
+    return luaR_nativedata(const_cast<LuauObject*>(object));
+}
+
+// Luwu Native Classes (rfcs/native-classes.md): the embedder's bytes in `object`, or NULL when it has no native data
+inline void* luaR_objectdata(LuauObject* object)
+{
+    LuauNativeData* native = luaR_nativedata(object);
+    return native ? native + 1 : NULL;
+}
+
+// The size of `object`'s allocation, which a bundle's key or native data makes larger than its members need
+inline size_t luaR_objectallocsize(const LuauObject* object)
+{
+    if (object->storagekind == LUAR_STORAGE_BUNDLE)
+        return luaR_bundleallocsize(object->numberofmembers);
+    if (const LuauNativeData* native = luaR_nativedata(object))
+        return luaR_nativeallocsize(object->numberofmembers, native->size);
+    return luaR_objectsize(object->numberofmembers);
 }
 
 // LuauClass::memberflags entries use LBC_CLASSMEMBER_PRIVATE / LBC_CLASSMEMBER_CONST (see
@@ -83,6 +128,10 @@ LUAI_FUNC void luaR_applyobjectfields(lua_State* L, LuauClass* classdef, LuauObj
  */
 LUAI_FUNC void luaR_applyobjectfieldsslow(lua_State* L, LuauClass* classdef, LuauObject* object, const TValue* arg);
 
+// Luwu Classes (rfcs/classes): stores the fields `arg`, the POD constructor's argument, names into `object`. May run an
+// `__index` metamethod, so callers protect it like a call.
+LUAI_FUNC void luaR_applyobjectargument(lua_State* L, LuauClass* classdef, LuauObject* object, const TValue* arg);
+
 /**
  * The POD constructor for the C API (lua_newobject), where nothing it calls may yield: runs `classdef`'s
  * `__implements` (its trait fields) and `__defaults` if it has them, then applies the fields of
@@ -123,6 +172,15 @@ LUAI_FUNC bool luaR_isvminternalfunction(lua_State* L, const Closure* cl);
  */
 LUAI_FUNC bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl);
 
+// Luwu opaque values: the metafield that marks a table or userdata opaque when its value is truthy. The name isn't
+// final, so nothing else spells it.
+#define LUWU_OPAQUE_MARK "__opaque"
+
+// Luwu opaque values: whether `value` is opaque, a class or object of a class marked with lua_setclassopaque, or a table
+// or userdata whose metatable has a truthy LUWU_OPAQUE_MARK. An opaque value hides what it holds from error records and
+// reflection. Only error paths call this: it looks the metafield up by name.
+LUAI_FUNC bool luaR_isopaque(lua_State* L, const TValue* value);
+
 /**
  * Errors (via luaG_privateaccesserror) if the member at `offset` is private and `cl` is not one
  * of `classdef`'s own methods, or (via luaG_blockedinitaccesserror) if it is `__init`
@@ -144,6 +202,15 @@ LUAU_FORCEINLINE bool luaR_hasprivateconstructor(const LuauClass* classdef)
  * test luaR_hasprivateconstructor first.
  */
 LUAI_FUNC void luaR_checkprivateconstructor(lua_State* L, const LuauClass* classdef, const Closure* cl);
+
+// Luwu Classes (rfcs/classes): makes `fn`, a function the compiler built from the class declaration, what a call on the
+// class runs (LuauClass::constructor)
+LUAI_FUNC void luaR_setconstructor(lua_State* L, LuauClass* classdef, const TValue* fn);
+
+// Luwu Classes (rfcs/classes): prepares a call on the class in `func`, with its arguments up to `argtop`, to run the
+// class's constructor in its place. Raises for a private constructor called from outside the class, and for a class
+// without `__init` given more than one argument. Returns false for a class without a constructor.
+LUAI_FUNC bool luaR_prepareclasscall(lua_State* L, StkId func, StkId argtop);
 
 /**
  * Errors if the member at `offset` of `object` is const, unless the writer is the object's class's
@@ -242,7 +309,7 @@ LUAI_FUNC void luaR_addclassfield(lua_State* L, LuauClass* classdef, TString* na
 
 // Luwu Traits (rfcs/classes/traits.md): adds the metamethod `name` of the class or trait value itself to its metatable, as
 // the class statement runs (LBC_NEWCLASSMEMBER_VALUEMETAMETHOD): `tostring(Cat)` calls a class's `function __tostring(Self)`
-// with the class. The function is the class's code, for its `Self` check and private access.
+// with the class. A Lua function is the class's code, for its `Self` check and private access.
 LUAI_FUNC void luaR_addvaluemetamethod(lua_State* L, LuauClass* classdef, TString* name, const TValue* fn);
 
 /**
@@ -261,8 +328,154 @@ LUAI_FUNC const char* luaR_staticmemberkind(const LuauClass* classdef, TString* 
 
 LUAI_FUNC void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page);
 
+// Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits, which
+// place a member the way a class body's modifiers do. A name the language gives a meaning follows its entry in
+// Luau/ClassMemberNames.h: a metamethod goes on the objects, or with LBC_CLASSMEMBER_STATIC on the class value when the
+// registry allows it there (`__tostring`).
+struct luaR_NativeMember
+{
+    const char* name;
+    lua_CFunction method;
+    uint16_t flags;
+    // A method's frameless version for the interpreter, or NULL
+    luaR_FastMethod fast;
+};
+
 /**
- * Callback for creating objects. This is written as a Lua API function and expects the stack to be:
+ * Luwu builtin classes: builds a class from C++, the way the loader builds one from bytecode, and leaves it on the
+ * stack. `members` lists the fields first, in the order of their offsets, then the methods and metamethods, and the
+ * static methods (LBC_CLASSMEMBER_STATIC) last. `init` is the class's `__init`, called with the new object and the
+ * constructor's arguments; without one, the class constructs like a class without `__init`. Names must outlive the
+ * state: methods use them as their debug names.
+ */
+LUAI_FUNC LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_NativeMember* members, int count, lua_CFunction init);
+
+// Luwu builtin classes: a builtin class value's `__tostring`, which prints it like a primitive, by name and without an
+// address. Builtin libraries list it as a static member (luaR_NativeMember).
+LUAI_FUNC int luaR_builtinclasstostring(lua_State* L);
+
+/**
+ * Luwu Native Classes (rfcs/native-classes.md): gives every object of `classdef` constructed from now on `size` bytes of
+ * native data, zeroed, whose destructor is the one set for `tag` (lua_setobjectdtor). The destructor runs once, when the
+ * object is freed, whether or not its construction finished.
+ */
+LUAI_FUNC void luaR_setclassnativedata(LuauClass* classdef, uint32_t size, int tag);
+
+/**
+ * Luwu builtin classes: the object a C method of `classdef` was called on, its first argument. Raises the error a
+ * Luwu method's prologue raises (luaG_selfclasserror) when that isn't an object of `classdef`.
+ */
+LUAI_FUNC LuauObject* luaR_checknativeself(lua_State* L, const LuauClass* classdef, const char* method);
+
+/**
+ * Luwu collections: sets up a generic for loop over the object at `ra` when it's a builtin container, and returns
+ * false otherwise. The loop calls neither `__iter` nor anything per step: `ra` becomes a boolean, which FORGLOOP hands
+ * to luaR_collectionnext, and `ra + 1` the container. `ra + 2` is the loop's state:
+ *  - a `Vec` or `VecDeque` gets `ra` = true and the number of entries visited, as light userdata like a table loop's
+ *    index (luaR_storagenext);
+ *  - an `OrderedMap` gets `ra` = false and the previous key, nil at the start. `ra`'s extra field keeps that key's
+ *    position, so a step only looks the key up when the entry there changed.
+ */
+LUAI_FUNC bool luaR_collectionprep(lua_State* L, StkId ra);
+
+/**
+ * Luwu collections: one step of a loop luaR_collectionprep set up. Writes the next key and value to `ra + 3` and
+ * `ra + 4` and updates the state in `ra + 2`, or returns false at the end. It visits what `__iter` would, and raises the
+ * same errors.
+ */
+LUAI_FUNC bool luaR_collectionnext(lua_State* L, StkId ra);
+
+// Luwu collections: the storage block of a `Vec` or `VecDeque`, or NULL before its first value. Its `__init` sets the
+// object's storage kind and leaves the storage member nil. Native code reads light userdata there as a block.
+LUAU_FORCEINLINE LuauStorage* luaR_storage(LuauObject* object)
+{
+    if ((object->storagekind & LUAR_STORAGE_CONTAINER) == 0)
+        return NULL;
+
+    const TValue* member = &luaR_members(object)[LUAR_STORAGE_MEMBER];
+    return ttislightuserdata(member) ? static_cast<LuauStorage*>(pvalue(member)) : NULL;
+}
+
+LUAU_FORCEINLINE const LuauStorage* luaR_storage(const LuauObject* object)
+{
+    return luaR_storage(const_cast<LuauObject*>(object));
+}
+
+// Luwu collections: the size of a storage block with `capacity` slots
+LUAU_FORCEINLINE size_t luaR_storagesize(uint32_t capacity)
+{
+    return offsetof(LuauStorage, items) + size_t(capacity) * sizeof(TValue);
+}
+
+// The memory `object` holds: its allocation and its storage block (luaR_storage), if it has one
+LUAU_FORCEINLINE size_t luaR_objectmemory(const LuauObject* object)
+{
+    const LuauStorage* storage = luaR_storage(object);
+    return luaR_objectallocsize(object) + (storage ? luaR_storagesize(storage->capacity) : 0);
+}
+
+// Luwu bundles: whether `object` is a bundle
+LUAU_FORCEINLINE bool luaR_isbundle(const LuauObject* object)
+{
+    return object->storagekind == LUAR_STORAGE_BUNDLE;
+}
+
+// Luwu bundles: the key that follows a bundle's values
+LUAU_FORCEINLINE LuauBundleKey* luaR_bundlekey(LuauObject* object)
+{
+    LUAU_ASSERT(luaR_isbundle(object));
+    return reinterpret_cast<LuauBundleKey*>(luaR_members(object) + object->numberofmembers);
+}
+
+LUAU_FORCEINLINE const LuauBundleKey* luaR_bundlekey(const LuauObject* object)
+{
+    return luaR_bundlekey(const_cast<LuauObject*>(object));
+}
+
+// Luwu collections: the slot of the entry `offset` places from the front of a `Vec` or `VecDeque`
+LUAU_FORCEINLINE TValue* luaR_storageentry(LuauStorage* storage, uint32_t offset)
+{
+    LUAU_ASSERT(offset < storage->count);
+    return &storage->items[(storage->head + offset) & (storage->capacity - 1)];
+}
+
+// Luwu collections: one step of a loop over a `Vec` or `VecDeque`, the case of luaR_collectionnext that FORGLOOP runs
+// inline
+LUAU_FORCEINLINE bool luaR_storagenext(lua_State* L, LuauObject* container, StkId ra)
+{
+    LuauStorage* storage = luaR_storage(container);
+    uint32_t visited = uint32_t(reinterpret_cast<uintptr_t>(pvalue(ra + 2)));
+    if (!storage || visited >= storage->count)
+        return false;
+
+    // Like a table loop's index, so native code can update only the low 32 bits
+    setpvalue(ra + 2, reinterpret_cast<void*>(uintptr_t(visited + 1)), LU_TAG_ITERATOR);
+    setnvalue(ra + 3, double(visited + 1));
+    // note: a plain copy, since setobj2s needs lgc.h
+    *(ra + 4) = *luaR_storageentry(storage, visited);
+    return true;
+}
+
+// Luwu collections: the length `#` gives `object` without calling `__len`, or -1 when its class has no such length. A
+// `Vec` and a `VecDeque` read their storage block, an `OrderedMap` its length field (LuauClass::lengthfield).
+LUAU_FORCEINLINE double luaR_objectlength(const LuauObject* object)
+{
+    if (object->storagekind & LUAR_STORAGE_CONTAINER)
+    {
+        const LuauStorage* storage = luaR_storage(object);
+        return storage ? double(storage->count) : 0;
+    }
+    if (luaR_isbundle(object))
+        return double(object->numberofmembers);
+
+    uint32_t field = object->lclass->lengthfield;
+    return field == LUAR_NO_LENGTH_FIELD ? -1 : nvalue(&luaR_members(object)[field]);
+}
+
+/**
+ * The `__call` metamethod of every class, which constructs a class without a compiled constructor (one built from C)
+ * and calls a trait's `__create`. A class with a constructor never reaches it (luaR_prepareclasscall). This is
+ * written as a Lua API function and expects the stack to be:
  *
  *  [ BASE ]
  *  - A class value
@@ -298,7 +511,7 @@ LUAI_FUNC const TValue* luaR_traitcreate(lua_State* L, const LuauClass* trait);
  *  - raises when a member is provided twice, a final function is redefined, or an expectation isn't met by the
  *    finished class (presence, field or function, access specifier, `const`);
  *  - copies the traits' constant field defaults into the class's, and gives the class a copy of each trait's
- *    `__traitinit` for the fields that have to be computed per construction (luaR_newtraitinitrunner).
+ *    `__traitinit` for the fields that have to be computed per construction (luaR_nexttraitinit).
  * May call the traits' `__needs` functions.
  */
 LUAI_FUNC void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId listed, uint32_t n);
@@ -312,12 +525,13 @@ LUAI_FUNC void luaR_implementtraits(lua_State* L, LuauClass* classdef, StkId lis
 LUAI_FUNC void luaR_addcompiledtraitcopy(lua_State* L, LuauClass* classdef, const LuauClass* trait, TString* name, const TValue* copy);
 
 /**
- * Luwu Traits (rfcs/classes/traits.md): the C function LOP_INITTRAITS calls to compute the fields an object gets from its
- * class's traits that don't have a constant default (those are already in place, see luaR_newobject). Called with the
- * object and the class's `implements` arguments, it runs the class's copy of each trait's `__traitinit` in dependency
- * order, and each may yield. The state makes one (global_State::traitinitrunner).
+ * Luwu Traits (rfcs/classes/traits.md): one run of LOP_INITTRAITS, which computes the fields an object gets from its
+ * class's traits that don't have a constant default (those are already in place, see luaR_newobject). `state` holds how
+ * many initializers have run, then the object and the class's `nargs` `implements` arguments. Lays out the call of the
+ * class's copy of the next trait's `__traitinit` at `frame` and returns true, or, once every initializer has run, puts
+ * back the overridden constant fields and returns false.
  */
-LUAI_FUNC Closure* luaR_newtraitinitrunner(lua_State* L);
+LUAI_FUNC bool luaR_nexttraitinit(lua_State* L, StkId state, StkId frame, int nargs);
 
 /**
  * Luwu Traits (rfcs/classes/traits.md): records `value` as `classdef`'s qualified implementation of the member `name` of
@@ -347,6 +561,36 @@ LUAI_FUNC void luaR_setqualified(lua_State* L, const TValue* receiver, const TVa
 // Luwu Traits (rfcs/classes/traits.md): whether `classdef` implements `trait`, listed or implied through `needs`.
 LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait);
 
+// Luwu bundles: a bundle is a table key by its values. luaR_keyhash gives equal bundles equal hashes, and luaR_keyequal
+// compares their values raw (no `__eq`), nested bundles by their values too.
+LUAI_FUNC unsigned int luaR_keyhash(const LuauObject* bundle);
+LUAI_FUNC bool luaR_keyequal(const LuauObject* a, const LuauObject* b);
+
+// Luwu bundles: whether comparing `bundle` by value could take too long, past a weight limit. Such a bundle is only equal
+// to itself.
+LUAI_FUNC bool luaR_bundletooheavy(const LuauObject* bundle);
+
+/**
+ * Luwu bundles: a new bundle of `size` values, of the class for its size. Its values are unset: fill all of them, with
+ * nothing in between that could run the collector, then call luaR_sealbundle. Raises when `size` is past
+ * LUWU_BUNDLE_LIMIT or the bundle library isn't open. `what` names the operation in that error.
+ */
+LUAI_FUNC LuauObject* luaR_newbundleuninit(lua_State* L, int size, const char* what);
+// Luwu bundles: computes the key of a bundle luaR_newbundleuninit made, once its values are set
+LUAI_FUNC void luaR_sealbundle(LuauObject* bundle);
+// Luwu bundles: the hash a bundle holding the `n` values at `values` would get, for a lookup that doesn't build it. False
+// when that bundle would be too heavy to compare by value, so it would equal no key.
+LUAI_FUNC bool luaR_bundlekeyprobe(const TValue* values, uint32_t n, unsigned int* hash);
+// Luwu bundles: whether `bundle`, a table key, equals a bundle holding the `n` values at `values` whose hash is `hash`
+LUAI_FUNC bool luaR_bundlekeyequals(const LuauObject* bundle, unsigned int hash, const TValue* values, uint32_t n);
+
+// Luwu bundles: the number of values in the bundle `value`, or -1 when it isn't a bundle
+LUAI_FUNC int luaR_bundlesize(const TValue* value);
+// Luwu bundles: `bundle[key]` into `val`, a position by number. Raises for any other key or a position out of range.
+LUAI_FUNC void luaR_getbundleposition(lua_State* L, const LuauObject* bundle, const TValue* key, StkId val);
+// Luwu bundles: raises for an assignment to a bundle, naming `with` for a position
+LUAI_FUNC l_noret luaR_bundleassignerror(lua_State* L, const TValue* key);
+
 // A member's offset is cached in its instruction's 8-bit C operand (the slot the fast paths check). A
 // larger offset doesn't fit: it is never cached, and that member is looked up by name every time.
 #define LUAR_MAX_CACHED_MEMBER_SLOT 0xff
@@ -355,5 +599,5 @@ LUAI_FUNC bool luaR_implements(const LuauClass* classdef, const LuauClass* trait
 
 #define luaR_lookupmemberatoffset(object, offset) \
     (LUAU_ASSERT(luaR_checkoffsetinbounds(object, offset)), \
-     offset < (object)->lclass->numberofinstancemembers ? &(object)->members[offset] \
+     offset < (object)->lclass->numberofinstancemembers ? &luaR_members(object)[offset] \
                                                       : &(object)->lclass->staticmembers[offset - object->lclass->numberofinstancemembers])

@@ -279,6 +279,14 @@ static const char* declarationKind(TypeId t)
     return isTrait ? "trait" : "class";
 }
 
+// Luwu bundles: whether `t` is a bundle class instance
+static bool isBundleType(TypeId t)
+{
+    const ExternType* etv = get<ExternType>(follow(t));
+    const ExternType* declared = etv && etv->genericTemplate ? get<ExternType>(follow(*etv->genericTemplate)) : etv;
+    return declared && declared->printsAsBundle;
+}
+
 // Luwu Traits (rfcs/classes/traits.md): a trait's value where any class is expected (`class.isinstance(x, Trait)`), or a
 // class's value where any trait is: "Expected this to be a class, got trait 'Item'". Both are extern types, so the
 // ordinary message would print the bare declaration name against 'class'.
@@ -882,6 +890,26 @@ static TypeId unionIn(TypeId ty)
         found = follow(part);
     }
     return found;
+}
+
+// Luwu bundles: what changes a bundle's size, when a cast from one size of bundle to another was tried
+static std::optional<std::string> bundleCastHelp(const TypesAreUnrelated& e)
+{
+    const ExternType* left = get<ExternType>(follow(e.left));
+    const ExternType* right = get<ExternType>(follow(e.right));
+    std::optional<BundleShape> from = left ? bundleShape(left) : std::nullopt;
+    std::optional<BundleShape> to = right ? bundleShape(right) : std::nullopt;
+    bool sizesDiffer = from && to && !from->rest && !to->rest && from->head.size() != to->head.size();
+    if (!sizesDiffer)
+        return std::nullopt;
+
+    size_t given = from->head.size();
+    size_t wanted = to->head.size();
+    if (given > wanted)
+        return "A cast never changes a bundle's size: use ':sub(1, " + std::to_string(wanted) + ")' to keep the first " +
+               MismatchWording::countValues(wanted);
+    return "A cast never changes a bundle's size: use 'bundle.concat' to add the " + MismatchWording::countValues(wanted - given) +
+           " it's missing";
 }
 
 static std::optional<std::string> missingUnionPropertyHelp(const MissingUnionProperty& e)
@@ -1700,7 +1728,10 @@ struct ErrorConverter
 
     std::string operator()(const TypesAreUnrelated& e) const
     {
-        return "Cannot cast '" + toString(e.left) + "' into '" + toString(e.right) + "' because the types are unrelated";
+        std::string message = "Cannot cast '" + toString(e.left) + "' into '" + toString(e.right) + "' because the types are unrelated";
+        if (std::optional<std::string> help = bundleCastHelp(e))
+            message += "\n\n" + *help;
+        return message;
     }
 
     std::string operator()(const NormalizationTooComplex&) const
@@ -1936,6 +1967,9 @@ struct ErrorConverter
         case PropertyAccessViolation::CannotRead:
             return "Property " + stringKey + " of " + kind + " '" + toString(e.table) + "' is write-only";
         case PropertyAccessViolation::CannotWrite:
+            // Luwu bundles: a write to a position, which only a changed copy can do
+            if (isBundleType(e.table))
+                return "A bundle can't be changed; b:with(position, value) makes a copy with that position replaced";
             return "Property " + stringKey + " of " + kind + " '" + toString(e.table) + "' is read-only";
         }
 

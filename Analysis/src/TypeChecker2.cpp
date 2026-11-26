@@ -17,6 +17,7 @@
 #include "Luau/Instantiation.h"
 #include "Luau/Instantiation2.h"
 #include "Luau/MismatchExplanation.h"
+#include "Luau/MismatchWording.h"
 #include "Luau/RepeatedTypeNames.h"
 #include "Luau/Metamethods.h"
 #include "Luau/Normalize.h"
@@ -4054,8 +4055,12 @@ void TypeChecker2::visitCall(AstExprCall* call)
         {
             AstExpr* argExpr = call->args.data[idx];
 
+            // Luwu bundles: a bundle literal `.(a, b)` is a `bundle.pack` call, but always one value
+            const AstExprCall* argCall = argExpr->as<AstExprCall>();
+            bool spreads = !argCall || !isBundlePackCall(argCall);
+
             // The last argument might be an ordinary value, but it can also be an entire pack.
-            if (idx == call->args.size - 1)
+            if (idx == call->args.size - 1 && spreads)
             {
                 if (TypePackId* lastArgPack = module->astTypePacks.find(argExpr))
                 {
@@ -4347,6 +4352,163 @@ void TypeChecker2::visitCall(AstExprCall* call)
     }
 }
 
+namespace
+{
+
+// Luwu collections: the element type a Vec or VecDeque fixes from a value at runtime (setelementtype in
+// lcollectionslib.cpp): a type tag, or a class for an object. The names say it the way the runtime's errors do.
+struct ContainerElement
+{
+    std::string tag;
+    // The class's template for an object, null for any other value
+    const ExternType* cls = nullptr;
+    // "numbers", "'Player' objects", "bundles of 3 values"
+    std::string plural;
+    // "a number", "a 'Player' object", "a bundle of 2 values"
+    std::string single;
+};
+
+std::string withArticle(const std::string& text)
+{
+    bool vowel = !text.empty() && std::string("aeiouAEIOU").find(text[0]) != std::string::npos;
+    return (vowel ? "an " : "a ") + text;
+}
+
+// The element of a value whose runtime type is `tag`
+ContainerElement taggedElement(const std::string& tag)
+{
+    std::string plural = tag;
+    if (tag == "userdata")
+        plural += " values";
+    else if (tag.back() == 's')
+        plural += "es";
+    else
+        plural += "s";
+    return ContainerElement{tag, nullptr, plural, withArticle(tag)};
+}
+
+// The element a value of the object type `object` fixes: its class, named by size for a bundle
+std::optional<ContainerElement> objectElement(const ExternType* object)
+{
+    const ExternType* declared = object->genericTemplate ? get<ExternType>(follow(*object->genericTemplate)) : object;
+    if (!declared)
+        return std::nullopt;
+
+    std::string quoted = "'" + declared->name + "'";
+    if (!declared->printsAsBundle)
+        return ContainerElement{"object", declared, quoted + " objects", withArticle(quoted + " object")};
+
+    // Bundles past the fixed sizes share the class BigBundle at runtime, so any two of them fit together
+    if (object->instantiatedTypePackParams.empty())
+    {
+        std::string size = MismatchWording::countValues(object->instantiatedTypeParams.size());
+        return ContainerElement{"object", declared, "bundles of " + size, "a bundle of " + size};
+    }
+    auto [positions, rest] = flatten(object->instantiatedTypePackParams[0]);
+    std::string bigSize = "more than " + MismatchWording::countValues(kBundleFixedMax);
+    std::string single = rest ? "a bundle of " + bigSize : "a bundle of " + MismatchWording::countValues(positions.size());
+    return ContainerElement{"object", declared, "bundles of " + bigSize, single};
+}
+
+// The element a value of type `ty` fixes, or nullopt when the type doesn't pin one down (a union, `unknown`, a generic)
+std::optional<ContainerElement> containerElementOf(NotNull<BuiltinTypes> builtinTypes, TypeId ty)
+{
+    ty = follow(ty);
+    if (const SingletonType* singleton = get<SingletonType>(ty))
+        return taggedElement(get<BooleanSingleton>(singleton) ? "boolean" : "string");
+    if (get<FunctionType>(ty))
+        return taggedElement("function");
+    if (get<TableType>(ty) || get<MetatableType>(ty))
+        return taggedElement("table");
+    if (const PrimitiveType* primitive = get<PrimitiveType>(ty))
+    {
+        switch (primitive->type)
+        {
+        case PrimitiveType::Boolean:
+            return taggedElement("boolean");
+        case PrimitiveType::Number:
+            return taggedElement("number");
+        case PrimitiveType::Integer:
+            return taggedElement("integer");
+        case PrimitiveType::String:
+            return taggedElement("string");
+        case PrimitiveType::Thread:
+            return taggedElement("thread");
+        case PrimitiveType::Function:
+            return taggedElement("function");
+        case PrimitiveType::Table:
+            return taggedElement("table");
+        case PrimitiveType::Buffer:
+            return taggedElement("buffer");
+        default:
+            return std::nullopt;
+        }
+    }
+    if (const ExternType* externType = get<ExternType>(ty))
+    {
+        if (ty == builtinTypes->vectorType)
+            return taggedElement("vector");
+        // An instantiation of a generic class (`OrderedMap<string, number>`) is related to the class through its template
+        const ExternType* declared = externType->genericTemplate ? get<ExternType>(follow(*externType->genericTemplate)) : externType;
+        if (!declared || declared->traitInfo)
+            return std::nullopt;
+        if (declared->relation && declared->relation->get_if<Klass>())
+            return objectElement(externType);
+        if (!declared->relation)
+            return taggedElement("userdata");
+    }
+    return std::nullopt;
+}
+
+bool sameElement(const ContainerElement& a, const ContainerElement& b)
+{
+    return a.tag == b.tag && a.cls == b.cls;
+}
+
+
+} // namespace
+
+// Luwu collections: `Vec(...)` and `VecDeque(...)` fix their element type to their first value's and raise on a value of
+// another type. The solver infers the union of the arguments instead, so the mismatch is reported here.
+void TypeChecker2::checkContainerConstructor(AstExprCall* call)
+{
+    if (call->args.size < 2)
+        return;
+
+    std::optional<std::string> containerName =
+        fixedElementContainerName(module->internalTypes.get(), findInnermostScope(call->location), lookupType(call->func));
+    if (!containerName)
+        return;
+
+    std::optional<ContainerElement> fixed = containerElementOf(builtinTypes, lookupType(call->args.data[0]));
+    if (!fixed)
+        return;
+
+    // A call or `...` as the last argument can stand for any number of values, unless the call returns exactly one (as
+    // `bundle.pack` and a bundle literal `.(a, b)` do)
+    AstExpr* last = call->args.data[call->args.size - 1];
+    auto [lastValues, lastRest] = flatten(lookupPack(last));
+    bool lastIsOneValue = lastValues.size() == 1 && !lastRest;
+    bool lastSpreads = (last->is<AstExprCall>() && !lastIsOneValue) || last->is<AstExprVarargs>();
+    size_t checked = lastSpreads ? call->args.size - 1 : call->args.size;
+    for (size_t i = 1; i < checked; i++)
+    {
+        AstExpr* arg = call->args.data[i];
+        std::optional<ContainerElement> element = containerElementOf(builtinTypes, lookupType(arg));
+        if (!element || sameElement(*element, *fixed))
+            continue;
+
+        std::string message = format(
+            "This %s can only accept %s (the type of its first value), but you passed %s",
+            containerName->c_str(),
+            fixed->plural.c_str(),
+            element->single.c_str()
+        );
+        reportError(GenericError{std::move(message)}, arg->location);
+        return;
+    }
+}
+
 void TypeChecker2::visit(AstExprCall* call)
 {
     std::optional<InConditionalContext> flipper;
@@ -4383,6 +4545,7 @@ void TypeChecker2::visit(AstExprCall* call)
         return;
 
     visitCall(call);
+    checkContainerConstructor(call);
 }
 
 // Luwu Pattern Matching (rfcs/control-flow/pattern-matching.md): a pattern's operand for a message. A value `is` read
@@ -4861,7 +5024,7 @@ void TypeChecker2::visitExprName(
     std::string receiver;
     if (std::optional<std::string> name = separator ? bindingName(expr) : std::nullopt)
         receiver = *name + separator;
-    if (checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy, receiver))
+    if (checkIndexTypeFromType(leftType, propName, context, location, astIndexExprTy, receiver, separator == ':'))
     {
         reportUnreachableUse(expr, ImproperUse::Index);
         return;
@@ -4980,7 +5143,11 @@ void TypeChecker2::visit(AstExprIndexExpr* indexExpr, ValueContext context)
     else if (auto cls = get<ExternType>(exprType))
     {
         if (cls->indexer)
+        {
             testIsSubtype(indexType, cls->indexer->indexType, indexExpr->index->location);
+            if (context == ValueContext::LValue && cls->indexer->isReadOnly)
+                reportError(PropertyAccessViolation{exprType, "indexer", PropertyAccessViolation::CannotWrite}, indexExpr->location);
+        }
         else
         {
             // Luwu Traits (rfcs/classes/traits.md): `cat[Animal]` for `cat:Animal.species`
@@ -5939,6 +6106,12 @@ void TypeChecker2::checkLuwuNominalTypeComparison(AstExprBinary* expr)
     if (!kind || comparedName == kind)
         return;
 
+    // Luwu builtin classes: `typeof` names an object of a builtin class after its class ("bundle", "vec"), not "object"
+    bool builtinClassTypeof =
+        query->function == "typeof" && std::string_view(kind) == "object" && isBuiltinClassTypeofName(std::string(comparedName));
+    if (builtinClassTypeof)
+        return;
+
     bool comparesEqual = expr->op == AstExprBinary::Op::CompareEq;
     reportError(GenericError{luwuNominalTypeComparisonMessage(query->function, comparedName, queriedTy, kind, comparesEqual)}, expr->location);
 }
@@ -6027,18 +6200,26 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
     }
     if (auto it = kBinaryOpMetamethods.find(expr->op); it != kBinaryOpMetamethods.end())
     {
-        std::optional<TypeId> leftMt = getMetatable(leftType, builtinTypes);
-        std::optional<TypeId> rightMt = getMetatable(rightType, builtinTypes);
+        // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): each instantiation of a generic class holds a copy of
+        // its template's metatable, so `.(1, 2) < .(1, 3)` compares the template's
+        auto metatableOf = [builtinTypes = this->builtinTypes](TypeId ty)
+        {
+            const ExternType* externType = get<ExternType>(follow(ty));
+            return getMetatable(externType && externType->genericTemplate ? *externType->genericTemplate : ty, builtinTypes);
+        };
+
+        std::optional<TypeId> leftMt = metatableOf(leftType);
+        std::optional<TypeId> rightMt = metatableOf(rightType);
         bool matches = leftMt == rightMt;
 
 
         if (isEquality && !matches)
         {
-            auto testUnion = [&matches, builtinTypes = this->builtinTypes](const UnionType* utv, std::optional<TypeId> otherMt)
+            auto testUnion = [&matches, &metatableOf](const UnionType* utv, std::optional<TypeId> otherMt)
             {
                 for (TypeId option : utv)
                 {
-                    if (getMetatable(follow(option), builtinTypes) == otherMt)
+                    if (metatableOf(option) == otherMt)
                     {
                         matches = true;
                         break;
@@ -7199,6 +7380,12 @@ Reasonings TypeChecker2::explainReasonings(TypePackId subTp, TypePackId superTp,
     return explainReasonings_(subTp, superTp, location, r);
 }
 
+// Luwu: the message for an optional value used where its `none` isn't allowed
+static std::string mayBeNoneMessage(TypeId valueTy)
+{
+    return "this '" + toString(valueTy) + "' value is optional and may be 'none', use an if condition to check";
+}
+
 // True when the *only* reason `subTy` fails to be a subtype of `superTy` is that `subTy` is (or contains, as a
 // union member) `none` and `superTy` doesn't account for it. This happens when an optional value (`T | none`)
 // is used somewhere that expects a plain `T` without first being narrowed/checked.
@@ -8000,10 +8187,7 @@ void TypeChecker2::explainError(
 
     if (isUncheckedNoneMismatch(subTy, superTy, result, builtinTypes, subtyping->arena))
     {
-        reportError(
-            GenericError{"this '" + toString(superTy) + "' value is optional and may be 'none', use an if condition to check"},
-            location
-        );
+        reportError(GenericError{mayBeNoneMessage(superTy)}, location);
         return;
     }
 
@@ -8827,6 +9011,8 @@ PropertyTypes TypeChecker2::lookupProp(
     if (normValid)
         fetch(norm->nils);
     if (normValid)
+        fetch(norm->nones);
+    if (normValid)
         fetch(norm->numbers);
     if (normValid && !norm->strings.isNever())
         fetch(builtinTypes->stringType);
@@ -8915,13 +9101,35 @@ static std::optional<MissingUnionProperty> missingFromIntersectedUnion(TypeId ty
     return MissingUnionProperty{ty, std::move(missing), prop, showHelp};
 }
 
+// Luwu: `T` for an optional `T | none` whose `none` is the only member missing a key
+static std::optional<TypeId> withoutMissingNone(TypeId tableTy, const std::vector<TypeId>& missing, TypeArena& arena)
+{
+    const UnionType* options = get<UnionType>(follow(tableTy));
+    if (!options || !std::all_of(missing.begin(), missing.end(), isNone))
+        return std::nullopt;
+
+    std::vector<TypeId> rest;
+    for (TypeId option : options)
+    {
+        if (!isNone(option))
+            rest.push_back(option);
+    }
+
+    if (rest.empty())
+        return std::nullopt;
+    if (rest.size() == 1)
+        return rest[0];
+    return arena.addType(UnionType{std::move(rest)});
+}
+
 bool TypeChecker2::checkIndexTypeFromType(
     TypeId tableTy,
     const std::string& prop,
     ValueContext context,
     const Location& location,
     TypeId astIndexExprType,
-    const std::string& receiver
+    const std::string& receiver,
+    bool methodCall
 )
 {
     std::shared_ptr<const NormalizedType> norm = normalizer.normalize(tableTy);
@@ -8945,7 +9153,14 @@ bool TypeChecker2::checkIndexTypeFromType(
 
     if (propTypes.foundMissingProp())
     {
-        if (propTypes.foundOneProp())
+        std::optional<TypeId> withoutNone = withoutMissingNone(tableTy, propTypes.missingProp, *module->internalTypes);
+        if (propTypes.foundOneProp() && withoutNone)
+        {
+            // A method call's self argument reports the same mistake
+            if (!methodCall)
+                reportError(GenericError{mayBeNoneMessage(*withoutNone)}, location);
+        }
+        else if (propTypes.foundOneProp())
         {
             std::optional<MissingUnionProperty> fromUnion = missingFromIntersectedUnion(tableTy, prop, helpifier.enabled);
             MissingUnionProperty error = fromUnion.value_or(MissingUnionProperty{tableTy, propTypes.missingProp, prop, helpifier.enabled});

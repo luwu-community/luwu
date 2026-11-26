@@ -335,6 +335,7 @@ private:
     // The types of `call`'s arguments as written, without `self`.
     void appendArgumentTypes(TypePack& args, AstExprCall* call);
     void visitCall(AstExprCall* call);
+    void checkContainerConstructor(AstExprCall* call);
     void checkUnionMethodSelves(AstExprIndexName* indexExpr);
     // Luwu literal types: a value already checked where it was given (a literal parameter or local, a literal field read),
     // named for messages
@@ -449,13 +450,15 @@ private:
     // If the provided type does not have the named property, report an error.
     // Returns whether `tableTy` can't exist (a `never` the normalizer had to work out), for the caller to report.
     // `receiver` is how the indexed value is written before the property (`player.`), for a typo's message.
+    // `methodCall` is true for `x:m`, whose self argument is checked separately.
     bool checkIndexTypeFromType(
         TypeId tableTy,
         const std::string& prop,
         ValueContext context,
         const Location& location,
         TypeId astIndexExprType,
-        const std::string& receiver = ""
+        const std::string& receiver = "",
+        bool methodCall = false
     );
     // Luwu (helpful subtyping errors): reports `error` for a property `tableTy` doesn't have, or a typo when it has one
     // spelled almost the same.

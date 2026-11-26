@@ -1757,10 +1757,57 @@ static const TValue* findclassmember(lua_State* L, int idx, const char* memberna
     return luaH_getstr((*classdef)->memberstooffset, name);
 }
 
+void lua_setclassopaque(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    LuauClass* classdef = classofvalue(o);
+    if (!classdef)
+        luaG_runerror(L, "expected a class or object, got %s", luaT_objtypename(L, o));
+
+    classdef->isopaque = true;
+}
+
 int lua_istrait(lua_State* L, int idx)
 {
     const TValue* o = index2addr(L, idx);
     return ttisclass(o) && classvalue(o)->istrait;
+}
+
+void lua_packbundle(lua_State* L, int n)
+{
+    api_checknelems(L, n);
+    luaC_checkGC(L);
+    luaC_threadbarrier(L);
+
+    // A new object is white, so storing into it needs no barrier
+    LuauObject* bundle = luaR_newbundleuninit(L, n, "lua_packbundle");
+    TValue* members = luaR_members(bundle);
+    for (int i = 0; i < n; i++)
+        setobj(L, &members[i], L->top - n + i);
+    luaR_sealbundle(bundle);
+
+    L->top -= n;
+    setobjectvalue(L, L->top, bundle);
+    api_incr_top(L);
+}
+
+int lua_unpackbundle(lua_State* L, int idx)
+{
+    const TValue* value = index2addr(L, idx);
+    int size = luaR_bundlesize(value);
+    if (size < 0)
+        return -1;
+
+    // the bundle is on the heap, so growing the stack doesn't move it
+    const LuauObject* bundle = objectvalue(value);
+    lua_rawcheckstack(L, size);
+    luaC_threadbarrier(L);
+    for (int i = 0; i < size; i++)
+    {
+        setobj2s(L, L->top, &luaR_members(bundle)[i]);
+        api_incr_top(L);
+    }
+    return size;
 }
 
 void lua_newobject(lua_State* L, int idx)
@@ -1907,6 +1954,29 @@ int lua_classis(lua_State* L, int idx, int classidx)
 
     const TValue* o = index2addr(L, idx);
     return ttisobject(o) && objectvalue(o)->lclass == classvalue(cls);
+}
+
+void lua_setobjectdtor(lua_State* L, int tag, lua_Destructor dtor)
+{
+    api_check(L, unsigned(tag) < LUA_OTAG_LIMIT);
+    L->global->objectdtors[tag] = dtor;
+}
+
+lua_Destructor lua_getobjectdtor(lua_State* L, int tag)
+{
+    api_check(L, unsigned(tag) < LUA_OTAG_LIMIT);
+    return L->global->objectdtors[tag];
+}
+
+void* lua_toobjectdata(lua_State* L, int idx, int tag)
+{
+    const TValue* o = index2addr(L, idx);
+    if (!ttisobject(o))
+        return NULL;
+
+    LuauObject* object = objectvalue(o);
+    const LuauNativeData* native = luaR_nativedata(object);
+    return native && native->tag == tag ? luaR_objectdata(object) : NULL;
 }
 
 static const char* aux_upvalue(StkId fi, int n, TValue** val)

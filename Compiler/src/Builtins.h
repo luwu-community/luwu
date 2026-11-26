@@ -32,6 +32,7 @@ struct Builtin
     {
         return object == table && method == name;
     }
+
 };
 
 Builtin getBuiltin(AstExpr* node, const DenseHashMap<AstName, Global>& globals, const DenseHashMap<AstLocal*, Variable>& variables);

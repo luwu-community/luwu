@@ -22,6 +22,11 @@ LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(LuwuGenericNominals)
+LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
+LUAU_FASTFLAG(DebugLuwuBundles)
+LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuLiteralTypes)
 LUAU_FASTFLAG(LuwuDestructuring)
@@ -3634,6 +3639,62 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons")
     CHECK_EQ(ac.context, AutocompleteContext::String);
 }
 
+// Luwu bundles: a string in a bundle literal completes the singletons its position's expected type allows
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_string_singletons_in_bundle_literals")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    check(R"(
+        type ItemId = "torch" | "coal"
+        local one: bundle.Bundle2<ItemId, number> = bundle.pack("@1", 1)
+        local listed: { bundle.Bundle2<ItemId, number> } = { bundle.pack("@2", 1) }
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("torch"));
+    CHECK(ac.entryMap.count("coal"));
+    CHECK_EQ(ac.context, AutocompleteContext::String);
+
+    ac = autocomplete('2');
+    CHECK(ac.entryMap.count("torch"));
+    CHECK(ac.entryMap.count("coal"));
+}
+
+// Luwu bundles: a literal where a union of bundles goes completes the singletons of the bundles its other values fit
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_bundle_literals_against_unions_of_bundles")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    check(R"(
+        type Event = bundle.Bundle2<"join", number> | bundle.Bundle2<"leave", string> | bundle.Bundle2<"kick", string>
+        local any: Event = bundle.pack("@1", 1)
+        local named: Event = bundle.pack("@2", "spam")
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("join"));
+    CHECK(ac.entryMap.count("leave"));
+    CHECK(ac.entryMap.count("kick"));
+
+    ac = autocomplete('2');
+    CHECK(ac.entryMap.count("leave"));
+    CHECK(ac.entryMap.count("kick"));
+    CHECK(!ac.entryMap.count("join"));
+}
+
 TEST_CASE_FIXTURE(ACFixture, "autocomplete_string_singletons_in_trait_arguments")
 {
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
@@ -5661,6 +5722,35 @@ TEST_CASE_FIXTURE(ACFixture, "autocomplete_lint_names_in_attribute_comments")
     CHECK_EQ(ac.entryMap.count("LocalShadow"), 0);
     // directive names belong after `--!`, not here
     CHECK_EQ(ac.entryMap.count("strict"), 0);
+}
+
+// Luwu: a Luau or Lua module isn't offered a global only Luwu has, but a local of that name is still offered
+TEST_CASE_FIXTURE(ACBuiltinsFixture, "autocomplete_leaves_luwu_only_globals_out_of_luau_modules")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuGenericNominals, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+    };
+
+    check("local m = coll@1");
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("collections"), 1);
+
+    configResolver.defaultConfig.language = Language::Luau;
+    check("local m = coll@1");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("collections"), 0);
+    CHECK_EQ(ac.entryMap.count("table"), 1);
+
+    check(R"(
+        local collections = {}
+        local m = coll@1
+    )");
+    ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.count("collections"), 1);
 }
 
 // Luwu: inside `@[nolint(...)]` and `@[lint(...)]`, the lint names, without the ones the attribute already lists

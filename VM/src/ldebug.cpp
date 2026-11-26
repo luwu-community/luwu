@@ -311,16 +311,24 @@ l_noret luaG_ordererror(lua_State* L, const TValue* p1, const TValue* p2, TMS op
     luaG_runerror(L, "attempt to compare %s %s %s", t1, opname, t2);
 }
 
-l_noret luaG_indexerror(lua_State* L, const TValue* p1, const TValue* p2)
+// Luwu builtin classes: luaG_indexerror's message, shared with luaG_indexerroratlua
+static void formatindexerror(lua_State* L, char* result, size_t size, const TValue* p1, const TValue* p2)
 {
     const char* t1 = luaT_objtypename(L, p1);
     const char* t2 = luaT_objtypename(L, p2);
     const TString* key = ttisstring(p2) ? tsvalue(p2) : 0;
 
     if (key && key->len <= 64) // limit length to make sure we don't generate very long error messages for very long keys
-        luaG_runerror(L, "attempt to index %s with '%s'", t1, getstr(key));
+        snprintf(result, size, "attempt to index %s with '%s'", t1, getstr(key));
     else
-        luaG_runerror(L, "attempt to index %s with %s", t1, t2);
+        snprintf(result, size, "attempt to index %s with %s", t1, t2);
+}
+
+l_noret luaG_indexerror(lua_State* L, const TValue* p1, const TValue* p2)
+{
+    char result[LUA_BUFFERSIZE];
+    formatindexerror(L, result, sizeof(result), p1, p2);
+    luaG_runerror(L, "%s", result);
 }
 
 // Luwu Classes (rfcs/classes): a name the value does not have. The RFC's glossary splits the two
@@ -333,39 +341,45 @@ l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2
     if (!ttisstring(p2))
         luaG_runerrorL(L, "cannot index %s with a %s", luaT_objtypename(L, p1), luaT_objtypename(L, p2));
 
-    const char* key = getstr(tsvalue(p2));
-
-    // Luwu Traits (rfcs/classes/traits.md): a trait has no objects of its own to point at
-    if (ttisclass(p1) && classvalue(p1)->istrait)
-        luaG_runerrorL(L, "trait '%s' does not have a member named '%s'", getstr(classvalue(p1)->name), key);
-
     if (ttisclass(p1))
-        luaG_runerrorL(
-            L,
-            "class '%s' does not have a member named '%s'; did you mean to access a field of an object of this class instead?",
-            getstr(classvalue(p1)->name),
-            key
-        );
+        luaG_classmembererror(L, classvalue(p1), false, tsvalue(p2));
 
     if (ttisobject(p1))
-    {
-        const LuauClass* classdef = objectvalue(p1)->lclass;
+        luaG_classmembererror(L, objectvalue(p1)->lclass, true, tsvalue(p2));
 
+    luaG_runerrorL(L, "this %s does not have a field named '%s'", luaT_objtypename(L, p1), getstr(tsvalue(p2)));
+}
+
+l_noret luaG_classmembererror(lua_State* L, const LuauClass* classdef, bool onobject, const TString* key)
+{
+    const char* name = getstr(classdef->name);
+
+    if (onobject)
+    {
         // Luwu Traits (rfcs/classes/traits.md): the class has the member, but only for reads through the class value
-        const char* kind = luaR_staticmemberkind(classdef, tsvalue(p2));
+        const char* kind = luaR_staticmemberkind(classdef, const_cast<TString*>(key));
         if (kind)
             luaG_runerrorL(
                 L,
                 "objects of class '%s' can't reach its static %s '%s'; use it through the class, or declare it 'shared'",
-                getstr(classdef->name),
+                name,
                 kind,
-                key
+                getstr(key)
             );
 
-        luaG_runerrorL(L, "objects of class '%s' do not have a field or function named '%s'", getstr(classdef->name), key);
+        luaG_runerrorL(L, "objects of class '%s' do not have a field or function named '%s'", name, getstr(key));
     }
 
-    luaG_runerrorL(L, "this %s does not have a field named '%s'", luaT_objtypename(L, p1), key);
+    // Luwu Traits (rfcs/classes/traits.md): a trait has no objects of its own to point at
+    if (classdef->istrait)
+        luaG_runerrorL(L, "trait '%s' does not have a member named '%s'", name, getstr(key));
+
+    luaG_runerrorL(
+        L,
+        "class '%s' does not have a member named '%s'; did you mean to access a field of an object of this class instead?",
+        name,
+        getstr(key)
+    );
 }
 
 // Luwu Classes (rfcs/classes): `Cat.age` where `age` is one of Cat's *fields*. The class knows the
@@ -451,6 +465,25 @@ l_noret luaG_blockedinitaccesserror(lua_State* L, const TString* className)
 
 static void pusherrorat(lua_State* L, CallInfo* ci, const char* msg);
 
+l_noret luaG_runerroratlua(lua_State* L, const char* msg)
+{
+    CallInfo* ci = L->ci;
+    while (ci > L->base_ci && !isLua(ci))
+        ci--;
+
+    lua_rawcheckstack(L, 1);
+    pusherrorat(L, ci, msg);
+    luaD_throw(L, LUA_ERRRUN);
+}
+
+// Luwu builtin classes: luaG_indexerror for an `__index` written in C (`none`'s), at the Lua code that indexed
+l_noret luaG_indexerroratlua(lua_State* L, const TValue* p1, const TValue* p2)
+{
+    char result[LUA_BUFFERSIZE];
+    formatindexerror(L, result, sizeof(result), p1, p2);
+    luaG_runerroratlua(L, result);
+}
+
 // Luwu Classes (rfcs/classes): raised by construction, which may be running in the class's C
 // constructor (`pcall(C)`), so the location is the Lua code constructing rather than the running frame.
 l_noret luaG_privateconstructorerror(lua_State* L, const TString* className)
@@ -458,14 +491,7 @@ l_noret luaG_privateconstructorerror(lua_State* L, const TString* className)
     const char* t1 = getstr(className);
     char result[LUA_BUFFERSIZE];
     snprintf(result, sizeof(result), "the constructor of '%s' is private; '%s' can only be constructed inside %s's class scope", t1, t1, t1);
-
-    CallInfo* ci = L->ci;
-    while (ci > L->base_ci && !isLua(ci))
-        ci--;
-
-    lua_rawcheckstack(L, 1);
-    pusherrorat(L, ci, result);
-    luaD_throw(L, LUA_ERRRUN);
+    luaG_runerroratlua(L, result);
 }
 
 // Luwu Classes (rfcs/classes): raised by CHECKSELFCLASS when `self` isn't an object of the method's class.
@@ -500,21 +526,27 @@ l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* e
 {
     const char* expectedName = getstr(expected->name);
     const char* method = getstr(methodName);
+    char result[LUA_BUFFERSIZE];
 
     if (!ttisobject(self))
     {
         int specificIndexingSyntax = selfCall ? ':' : '.';
-        luaG_runerrorL(
-            L, "attempt to call method '%s%c%s' with 'self' of type '%s'", expectedName, specificIndexingSyntax, method, luaT_objtypename(L, self)
+        snprintf(
+            result,
+            sizeof(result),
+            "attempt to call method '%s%c%s' with 'self' of type '%s'",
+            expectedName,
+            specificIndexingSyntax,
+            method,
+            luaT_objtypename(L, self)
         );
     }
-
-    const char* actualName = getstr(objectvalue(self)->lclass->name);
-
-    if (selfCall)
+    else if (selfCall)
     {
-        luaG_runerrorL(
-            L,
+        const char* actualName = getstr(objectvalue(self)->lclass->name);
+        snprintf(
+            result,
+            sizeof(result),
             "attempt to call inlined method '%s:%s' on an object of class '%s'; this occurred because inlining optimizations are enabled "
             "and the passed 'self' did not match the expected type annotation '%s'",
             expectedName,
@@ -523,8 +555,14 @@ l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* e
             expectedName
         );
     }
+    else
+    {
+        const char* actualName = getstr(objectvalue(self)->lclass->name);
+        snprintf(result, sizeof(result), "attempt to call method '%s.%s' with 'self' of class '%s'", expectedName, method, actualName);
+    }
 
-    luaG_runerrorL(L, "attempt to call method '%s.%s' with 'self' of class '%s'", expectedName, method, actualName);
+    // A builtin class's C method checks `self` itself (luaR_checknativeself), so the location is the Lua code calling it
+    luaG_runerroratlua(L, result);
 }
 
 static void pusherrorat(lua_State* L, CallInfo* ci, const char* msg)

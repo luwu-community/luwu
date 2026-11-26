@@ -92,6 +92,7 @@ struct NativeContext
     bool (*forgLoopNodeIter)(lua_State* L, LuaTable* h, int index, TValue* ra) = nullptr;
     int (*forgLoopNonTableFallback)(lua_State* L, int insnA, int aux) = nullptr;
     bool (*forgLoopNonTableFallback_DEPRECATED)(lua_State* L, int insnA, int aux) = nullptr;
+    int (*invokeFastMethod)(lua_State* L, LuauObject* object, uint32_t pcpos, int ra, int nargs, int nresults) = nullptr;
     void (*forgPrepXnextFallback)(lua_State* L, TValue* ra, int pc) = nullptr;
     Closure* (*callProlog)(lua_State* L, TValue* ra, StkId argtop, int nresults) = nullptr;
     void (*callEpilogC)(lua_State* L, int nresults, int n) = nullptr;
@@ -114,6 +115,7 @@ struct NativeContext
     const Instruction* (*executeINITTRAITS)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executePRESIZETABLE)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeGETQUALIFIED)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
+    const Instruction* (*executeTABLEBUNDLE)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeSETQUALIFIED)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executeGETPOSITIONAL)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;
     const Instruction* (*executePUSH)(lua_State* L, const Instruction* pc, StkId base, TValue* k) = nullptr;

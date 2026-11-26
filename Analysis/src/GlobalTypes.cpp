@@ -2,6 +2,8 @@
 
 #include "Luau/GlobalTypes.h"
 
+#include "Luau/BuiltinDefinitions.h"
+
 LUAU_FASTFLAG(LuauIntegerType2)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuTraits)

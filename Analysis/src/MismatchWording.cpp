@@ -726,9 +726,26 @@ std::string swappedParametersHelp(const std::string& first, const std::string& s
     return helpifier("parameter order", {"The " + ordinal(i + 1) + " and " + ordinal(j + 1) + " parameters look like they're in the wrong order"});
 }
 
+std::string countValues(size_t count)
+{
+    return std::to_string(count) + (count == 1 ? " value" : " values");
+}
+
 std::string swappedReturnsHelp(size_t i, size_t j, const Helpifier& helpifier)
 {
     return helpifier("return order", {"The " + ordinal(i + 1) + " and " + ordinal(j + 1) + " return values look like they're in the wrong order"});
+}
+
+std::string bundleSizeSentence(size_t given, size_t expected)
+{
+    return "A bundle of " + countValues(given) + " is never a bundle of " + countValues(expected) + ".";
+}
+
+std::string bundleSizeHelp(size_t given, size_t expected, const Helpifier& helpifier)
+{
+    if (given > expected)
+        return helpifier("bundle size", {"Use ':sub(1, " + std::to_string(expected) + ")' to keep the first " + countValues(expected)});
+    return helpifier("bundle size", {"Add the " + countValues(expected - given) + " the bundle is missing"});
 }
 
 std::string misspelledStringHelp(const std::string& suggestion, const Helpifier& helpifier)

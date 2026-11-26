@@ -2292,6 +2292,18 @@ SubtypingResult Subtyping::isCovariantWith(
     return {false};
 }
 
+// Luwu Generic Nominals (rfcs/generics-on-extern-types.md): whether the pack `tp` holds an error type (`.(Nope, T...)`)
+static bool containsErrorType(TypePackId tp)
+{
+    auto [head, tail] = flatten(tp);
+    for (TypeId ty : head)
+    {
+        if (get<ErrorType>(follow(ty)))
+            return true;
+    }
+    return tail && get<ErrorTypePack>(follow(*tail));
+}
+
 SubtypingResult Subtyping::isCovariantWith(
     SubtypingEnvironment& env,
     const ExternType* subExternType,
@@ -2301,6 +2313,19 @@ SubtypingResult Subtyping::isCovariantWith(
 {
     if (isSubclass(subExternType, superExternType))
         return {true};
+
+    // Luwu bundles: a bundle's type is its positions, whichever class holds them, so a `BigBundle<number, string>` is a
+    // `.(number, string)`. Two bundles of one class compare their type arguments below. A mismatch has no reasonings,
+    // like one there: their paths lead into the positions, which the error explanation can't follow.
+    bool bundlesOfTwoClasses = isBundle(subExternType) && isBundle(superExternType) && subExternType->name != superExternType->name;
+    if (bundlesOfTwoClasses)
+    {
+        SubtypingResult positions =
+            isCovariantWith(env, bundlePositionPack(arena, subExternType), bundlePositionPack(arena, superExternType), scope);
+        if (positions.isSubtype || positions.isErrorSuppressing)
+            return positions;
+        return {false};
+    }
 
     // Luwu Generic Nominals (rfcs/generics-on-extern-types.md): `isSubclass` compares a generic nominal's type arguments with `sameNominalTypeArg`
     // (Type.cpp), which can only answer pointer identity or another nominal -- it lives in Type.cpp
@@ -2314,23 +2339,38 @@ SubtypingResult Subtyping::isCovariantWith(
         subExternType->definitionLocation == superExternType->definitionLocation &&
         subExternType->instantiatedTypeParams.size() == superExternType->instantiatedTypeParams.size() &&
         subExternType->instantiatedTypePackParams.size() == superExternType->instantiatedTypePackParams.size() &&
-        !subExternType->instantiatedTypeParams.empty())
+        (!subExternType->instantiatedTypeParams.empty() || !subExternType->instantiatedTypePackParams.empty()))
     {
         SubtypingResult result{true};
         bool anyUnsuppressedMismatch = false;
 
+        // Luwu bundles: a bundle can't be changed, so its positions are covariant: `.("torch", number)` is an
+        // `.(ItemId, number)`
+        const ExternType* declared = subExternType->genericTemplate ? get<ExternType>(follow(*subExternType->genericTemplate)) : nullptr;
+        bool covariant = declared && declared->printsAsBundle;
+
         for (size_t i = 0; i < subExternType->instantiatedTypeParams.size(); ++i)
         {
-            SubtypingResult argResult =
-                isInvariantWith(env, follow(subExternType->instantiatedTypeParams[i]), follow(superExternType->instantiatedTypeParams[i]), scope);
+            TypeId subArg = follow(subExternType->instantiatedTypeParams[i]);
+            TypeId superArg = follow(superExternType->instantiatedTypeParams[i]);
+            SubtypingResult argResult = covariant ? isCovariantWith(env, subArg, superArg, scope) : isInvariantWith(env, subArg, superArg, scope);
+            // An argument that's an error type was reported where it was written (`.(Nope)`). The normalizer, which
+            // suppresses an error type in a table's property, doesn't look into a nominal's arguments.
+            if (get<ErrorType>(superArg))
+                argResult.isErrorSuppressing = true;
             anyUnsuppressedMismatch |= !argResult.isSubtype && !argResult.isErrorSuppressing;
             result.andAlso(std::move(argResult));
         }
 
         for (size_t i = 0; i < subExternType->instantiatedTypePackParams.size(); ++i)
         {
-            if (follow(subExternType->instantiatedTypePackParams[i]) != follow(superExternType->instantiatedTypePackParams[i]))
-                return {false};
+            TypePackId subArg = follow(subExternType->instantiatedTypePackParams[i]);
+            TypePackId superArg = follow(superExternType->instantiatedTypePackParams[i]);
+            SubtypingResult argResult = covariant ? isCovariantWith(env, subArg, superArg, scope) : isInvariantWith(env, subArg, superArg, scope);
+            if (containsErrorType(superArg))
+                argResult.isErrorSuppressing = true;
+            anyUnsuppressedMismatch |= !argResult.isSubtype && !argResult.isErrorSuppressing;
+            result.andAlso(std::move(argResult));
         }
 
         // An argument that only mismatches `any` (`A<any>` against `A<string>`) fails with the error
