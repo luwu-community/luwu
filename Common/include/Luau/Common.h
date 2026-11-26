@@ -2,6 +2,7 @@
 #pragma once
 
 #include <string.h>
+#include <stdint.h>
 
 // Compiler codegen control macros
 #ifdef _MSC_VER
@@ -40,6 +41,52 @@
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 #define LUAU_BIG_ENDIAN
 #endif
+
+// Luwu Integers (rfcs/integers.md): the width and signedness of an integer. A dynamic integer grows into a heap integer
+// when it doesn't fit 64 bits, and a sized one wraps.
+enum IntegerMode : unsigned char
+{
+    IntegerMode_Dynamic = 0,
+    IntegerMode_I8,
+    IntegerMode_U8,
+    IntegerMode_I16,
+    IntegerMode_U16,
+    IntegerMode_I32,
+    IntegerMode_U32,
+    IntegerMode_I64,
+    IntegerMode_U64
+};
+
+// Luwu Integers (rfcs/integers.md): the number of modes
+constexpr int kIntegerModeCount = IntegerMode_U64 + 1;
+
+// Luwu Integers (rfcs/integers.md): whether `mode` holds no negative values
+inline bool isUnsignedIntegerMode(IntegerMode mode)
+{
+    return mode == IntegerMode_U8 || mode == IntegerMode_U16 || mode == IntegerMode_U32 || mode == IntegerMode_U64;
+}
+
+// Luwu Integers (rfcs/integers.md): `value` wrapped to the range of `mode`. A dynamic or 64-bit value is unchanged.
+inline int64_t wrapIntegerToMode(int64_t value, IntegerMode mode)
+{
+    switch (mode)
+    {
+    case IntegerMode_I8:
+        return int8_t(value);
+    case IntegerMode_U8:
+        return uint8_t(value);
+    case IntegerMode_I16:
+        return int16_t(value);
+    case IntegerMode_U16:
+        return uint16_t(value);
+    case IntegerMode_I32:
+        return int32_t(value);
+    case IntegerMode_U32:
+        return uint32_t(value);
+    default:
+        return value;
+    }
+}
 
 namespace Luau
 {

@@ -1,6 +1,7 @@
 // This file is part of the Luwu programming language and is licensed under MIT License; see LICENSE.txt for details
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lobject.h"
+#include "linteger.h"
 
 #include "lclass.h"
 #include "lstate.h"
@@ -47,7 +48,8 @@ int luaO_rawequalObj(const TValue* t1, const TValue* t2)
         case LUA_TNUMBER:
             return luai_numeq(nvalue(t1), nvalue(t2));
         case LUA_TINTEGER:
-            return luai_inteq(lvalue(t1), lvalue(t2));
+        case LUA_THEAPINTEGER:
+            return luaZ_equal(t1, t2);
         case LUA_TVECTOR:
             return luai_veceq(vvalue(t1), vvalue(t2));
         case LUA_TBOOLEAN:
@@ -73,7 +75,8 @@ int luaO_rawequalKey(const TKey* t1, const TValue* t2)
         case LUA_TNUMBER:
             return luai_numeq(nvalue(t1), nvalue(t2));
         case LUA_TINTEGER:
-            return luai_inteq(lvalue(t1), lvalue(t2));
+        case LUA_THEAPINTEGER:
+            return luaZ_equalkey(t1, t2);
         case LUA_TVECTOR:
             return luai_veceq(vvalue(t1), vvalue(t2));
         case LUA_TBOOLEAN:
