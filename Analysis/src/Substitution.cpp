@@ -166,6 +166,8 @@ static TypeId shallowClone(TypeId ty, TypeArena& dest, const TxnLog* log, bool t
             clone.implementedTraits = a.implementedTraits;
             clone.traitInfo = a.traitInfo;
             clone.traitIntersection = a.traitIntersection;
+            // Luwu: a class or trait a type function made is still the same one
+            clone.generatedKey = a.generatedKey;
             if (FFlag::LuwuGenericNominals)
             {
                 clone.hasUnresolvedGenerics = a.hasUnresolvedGenerics;

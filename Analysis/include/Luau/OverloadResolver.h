@@ -9,6 +9,9 @@
 #include "Luau/Subtyping.h"
 #include "Luau/TypeFwd.h"
 
+#include <set>
+#include <string>
+
 namespace Luau
 {
 
@@ -132,6 +135,8 @@ struct OverloadResolver
     NotNull<TypeCheckLimits> limits;
     Subtyping subtyping;
     Location callLoc;
+    // Luwu: see TypeFunctionContext::reportedApplications
+    std::set<std::string>* reportedTypeFunctionApplications = nullptr;
 
     // Given a (potentially overloaded) function and a set of arguments, test each overload.
     OverloadResolution resolveOverload(
