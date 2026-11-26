@@ -172,6 +172,9 @@ LUAI_FUNC bool luaR_isvminternalfunction(lua_State* L, const Closure* cl);
  */
 LUAI_FUNC bool luaR_closureownsprivateaccess(const LuauClass* classdef, const Closure* cl);
 
+// Luwu Classes (rfcs/classes): the closure of the Luwu code a VM-internal C function acts for, or NULL
+LUAI_FUNC const Closure* luaR_callinglua(lua_State* L);
+
 // Luwu opaque values: the metafield that marks a table or userdata opaque when its value is truthy. The name isn't
 // final, so nothing else spells it.
 #define LUWU_OPAQUE_MARK "__opaque"
