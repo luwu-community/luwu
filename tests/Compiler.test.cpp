@@ -35,6 +35,7 @@ LUAU_FASTFLAG(LuauIntegerFastcalls)
 LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuwuDeclareStatements)
+LUAU_FASTFLAG(LuwuStringFormatFastcall)
 LUAU_FASTFLAG(LuauExportValueSyntax)
 LUAU_FASTFLAG(LuwuExportedClassIsNilWorkaround)
 LUAU_FASTFLAG(LuwuNoinlineAttribute)
@@ -2137,6 +2138,8 @@ TEST_CASE("InterpStringWithNoExpressions")
 
 TEST_CASE("InterpStringZeroCost")
 {
+    // the call-based shape; InterpStringFormatFastcall has the fastcall's
+    ScopedFastFlag noFormatFastcall{FFlag::LuwuStringFormatFastcall, false};
     ScopedFastFlag luauCompileStringInterpTempReg{FFlag::LuauCompileStringInterpTargetTop, true};
 
     CHECK_EQ(
@@ -2151,8 +2154,34 @@ RETURN R0 0
     );
 }
 
+// Luwu: with the string.format fastcall, an interpolated string loads its format into the call's first argument, and the
+// fastcall skips the NAMECALL that finds `format` through the string metatable
+TEST_CASE("InterpStringFormatFastcall")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuauCompileStringInterpTargetTop, true},
+        {FFlag::LuwuStringFormatFastcall, true},
+    };
+
+    // the builtin's number depends on which builtins come before it
+    CHECK_EQ(
+        "\n" + compileFunction0(R"(local _ = `hello, {42}!`)"),
+        R"(
+LOADK R1 K0 ['hello, %*!']
+LOADN R2 42
+FASTCALL )" + std::to_string(LBF_STRING_FORMAT) +
+            R"( L0
+NAMECALL R0 R1 K1 ['format']
+CALL R0 2 1
+L0: RETURN R0 0
+)"
+    );
+}
+
 TEST_CASE("InterpStringRegisterCleanup")
 {
+    // the call-based shape; InterpStringFormatFastcall has the fastcall's
+    ScopedFastFlag noFormatFastcall{FFlag::LuwuStringFormatFastcall, false};
     CHECK_EQ(
         "\n" + compileFunction0(R"(
             local a, b, c = nil, "um", "uh oh"
@@ -2187,6 +2216,8 @@ TEST_CASE("InterpStringRegisterLimit")
 
 TEST_CASE("InterpStringConstFold")
 {
+    // the call-based shape; InterpStringFormatFastcall has the fastcall's
+    ScopedFastFlag noFormatFastcall{FFlag::LuwuStringFormatFastcall, false};
     ScopedFastFlag luauCompileStringInterpTempReg{FFlag::LuauCompileStringInterpTargetTop, true};
 
     CHECK_EQ(
@@ -11675,6 +11706,8 @@ L1: RETURN R0 0
 
 TEST_CASE("ConstStringFolding")
 {
+    // the call-based shape; InterpStringFormatFastcall has the fastcall's
+    ScopedFastFlag noFormatFastcall{FFlag::LuwuStringFormatFastcall, false};
     ScopedFastFlag emitCallFb{FFlag::LuauEmitCallFeedback, true};
     ScopedFastFlag luauCompileStringInterpTempReg{FFlag::LuauCompileStringInterpTargetTop, true};
 
@@ -14098,6 +14131,8 @@ RETURN R2 1
 
 TEST_CASE("ClassDeclWithAmbiguousGlobal")
 {
+    // the call-based shape; InterpStringFormatFastcall has the fastcall's
+    ScopedFastFlag noFormatFastcall{FFlag::LuwuStringFormatFastcall, false};
     ScopedFastFlag sffs[] = {
         {FFlag::LuauCompileStringInterpTargetTop, true},
         {FFlag::LuwuClasses, true},
