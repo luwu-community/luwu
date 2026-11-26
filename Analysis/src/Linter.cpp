@@ -5165,110 +5165,9 @@ private:
         return func && compilerKnowsReturnsOne(func, depth + 1);
     }
 
-    // The compiler's rule for a body that never runs off its end (its `alwaysTerminates`), without its constant folding
-    static bool alwaysLeaves(AstStat* node)
-    {
-        if (AstStatBlock* block = node->as<AstStatBlock>())
-        {
-            for (AstStat* stat : block->body)
-            {
-                if (alwaysLeaves(stat))
-                    return true;
-            }
-            return false;
-        }
-
-        if (node->is<AstStatReturn>() || node->is<AstStatBreak>() || node->is<AstStatContinue>())
-            return true;
-
-        if (AstStatIf* stat = node->as<AstStatIf>())
-            return stat->elsebody && alwaysLeaves(stat->thenbody) && alwaysLeaves(stat->elsebody);
-
-        return false;
-    }
-
-    // Roughly the compiler's inlining cost of a body: its statements and expressions, a loop's body three times. Nested
-    // functions aren't counted.
-    struct InlineCostCounter : AstVisitor
-    {
-        size_t cost = 0;
-        size_t loopDepth = 0;
-
-        size_t weight() const
-        {
-            size_t result = 1;
-            for (size_t i = 0; i < loopDepth; ++i)
-                result *= 3;
-            return result;
-        }
-
-        bool visit(AstExprFunction*) override
-        {
-            return false;
-        }
-
-        bool visit(AstExpr*) override
-        {
-            cost += weight();
-            return true;
-        }
-
-        bool visit(AstStat*) override
-        {
-            cost += weight();
-            return true;
-        }
-
-        bool visit(AstStatWhile* node) override
-        {
-            return visitLoop(node->condition, node->body);
-        }
-
-        bool visit(AstStatRepeat* node) override
-        {
-            return visitLoop(node->condition, node->body);
-        }
-
-        bool visit(AstStatFor* node) override
-        {
-            return visitLoop(nullptr, node->body);
-        }
-
-        bool visit(AstStatForIn* node) override
-        {
-            return visitLoop(nullptr, node->body);
-        }
-
-        bool visitLoop(AstExpr* condition, AstStat* body)
-        {
-            cost += weight();
-            ++loopDepth;
-            if (condition)
-                condition->visit(this);
-            body->visit(this);
-            --loopDepth;
-            return false;
-        }
-    };
-
-    // Past this rough cost (InlineCostCounter) the compiler won't inline a function however few calls it has, so
-    // parentheses wouldn't help
-    static constexpr size_t kInlineCostLimit = 75;
-
-    static bool cheapEnoughToInline(AstExprFunction* func)
-    {
-        InlineCostCounter counter;
-        func->body->visit(&counter);
-        return counter.cost <= kInlineCostLimit;
-    }
-
-    // The compiler's rule: the function never runs off its end, and every `return` in it has one value it knows is one
-    // value
+    // The compiler's rule: every `return` in the function has one value it knows is one value
     bool compilerKnowsReturnsOne(AstExprFunction* func, int depth)
     {
-        if (!alwaysLeaves(func->body))
-            return false;
-
         struct ReturnFinder : AstVisitor
         {
             LintOptimizationHint* pass = nullptr;
@@ -5315,10 +5214,8 @@ private:
         if (!hintApplies)
             return;
 
-        // A function calling itself is never inlined there, and a big one isn't inlined anywhere
         AstExprFunction* func = calleeFunction(call);
-        bool inlinable = func && !func->location.encloses(call->location) && cheapEnoughToInline(func);
-        bool needsParentheses = inlinable && typedToGiveOneValue(call) && !compilerKnowsReturnsOne(func, 0);
+        bool needsParentheses = func && typedToGiveOneValue(call) && !compilerKnowsReturnsOne(func, 0);
         if (!needsParentheses)
             return;
 
