@@ -26,6 +26,8 @@ struct SourceCode
 
     std::string source;
     Type type;
+    // Luwu object notation: a `.luwon` data file parses as Luwu restricted to the notation.
+    bool luwon = false;
 };
 
 struct ModuleInfo
