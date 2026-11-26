@@ -348,7 +348,22 @@ l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2
         );
 
     if (ttisobject(p1))
-        luaG_runerrorL(L, "objects of class '%s' do not have a field named '%s'", getstr(objectvalue(p1)->lclass->name), key);
+    {
+        const LuauClass* classdef = objectvalue(p1)->lclass;
+
+        // Luwu Traits (rfcs/classes/traits.md): the class has the member, but only for reads through the class value
+        const char* kind = luaR_staticmemberkind(classdef, tsvalue(p2));
+        if (kind)
+            luaG_runerrorL(
+                L,
+                "objects of class '%s' can't reach its static %s '%s'; use it through the class, or declare it 'shared'",
+                getstr(classdef->name),
+                kind,
+                key
+            );
+
+        luaG_runerrorL(L, "objects of class '%s' do not have a field or function named '%s'", getstr(classdef->name), key);
+    }
 
     luaG_runerrorL(L, "this %s does not have a field named '%s'", luaT_objtypename(L, p1), key);
 }
