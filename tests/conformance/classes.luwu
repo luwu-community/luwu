@@ -641,6 +641,47 @@ expectfail(
     end
 )
 
+-- An error reading or writing an object's members names the line of the access. Each access below comes right after a
+-- call, which saves its own position: an error raised without saving the access's would name the call's line.
+do
+    local function line_of_error(f)
+        local ok, message = pcall(f)
+        assert(not ok)
+        return tonumber(string.match(message, ":(%d+): "))
+    end
+
+    local p = Point {}
+    local user = UserWithInit("Taz", "Parekh", "126-222-1123")
+    local expected = 0
+    local accesses = {
+        function()
+            expected = debug.info(1, "l") + 1
+            return p.huh
+        end,
+        function()
+            expected = debug.info(1, "l") + 1
+            p.huh = 1
+        end,
+        function()
+            expected = debug.info(1, "l") + 1
+            return p:hmm()
+        end,
+        function()
+            expected = debug.info(1, "l") + 1
+            return user.ssn
+        end,
+        function()
+            expected = debug.info(1, "l") + 1
+            return Point.huh
+        end,
+    }
+    for i, access in accesses do
+        local line = line_of_error(access)
+        assert(line == expected, `access {i}: error names line {line}, expected {expected}`)
+    end
+    print("ok: member errors name the line of the access")
+end
+
 expectpass("class.fields returns all public fields and values for an instance with no private members", function()
     local p = Point { x = 1, y = 2 }
     local fields, complete = class.fields(p)
