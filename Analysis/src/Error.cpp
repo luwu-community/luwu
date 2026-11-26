@@ -24,7 +24,6 @@
 #include <unordered_set>
 
 LUAU_FASTINTVARIABLE(LuauIndentTypeMismatchMaxTypeLength, 10)
-LUAU_FASTFLAGVARIABLE(LuauTweakAccessViolationReporting)
 LUAU_FASTFLAGVARIABLE(LuauBetterMissingPropertiesTypeError)
 LUAU_FASTFLAG(LuauBetterPackAndVariadicMismatchErrors)
 LUAU_FASTFLAG(LuwuHelpfulSubtypingErrors)

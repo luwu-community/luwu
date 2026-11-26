@@ -1326,9 +1326,19 @@ static void analyzeBytecodeTypesPass(
 
                 applyBuiltinCall(LuauBuiltinFunction(bfid), bcType);
 
-                regTags[ra + 1] = bcType.a;
-                regTags[ra + 2] = bcType.b;
-                regTags[ra + 3] = bcType.c;
+                // Luwu: from upstream's LuauCodegenFastcallAnalysisLimit (0.747). Only the call's arguments are annotated
+                // (none for a variadic call, B = 0): three registers past `ra` can run off the end of `regTags`.
+                int nparams = LUAU_INSN_B(call) - 1;
+
+                if (nparams >= 1)
+                    regTags[ra + 1] = bcType.a;
+
+                if (nparams >= 2)
+                    regTags[ra + 2] = bcType.b;
+
+                if (nparams >= 3)
+                    regTags[ra + 3] = bcType.c;
+
                 regTags[ra] = bcType.result;
                 callResultTypes[i + skip + 1] = bcType.result;
 

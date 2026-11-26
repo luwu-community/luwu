@@ -138,6 +138,11 @@ inline bool hasSideEffects(IrCmd cmd)
     if (cmd == IrCmd::INVOKE_FASTCALL)
         return true;
 
+    // Luwu: from upstream's LuauCodegenCmpAnySideEffecting (0.745). A comparison can call `__eq` or `__lt`, or raise for
+    // values that can't be compared, so it runs even when nothing uses its result.
+    if (cmd == IrCmd::CMP_ANY)
+        return true;
+
     if (isPseudo(cmd))
         return false;
 
@@ -293,6 +298,10 @@ void propagateTagsFromPredecessors(
 
 // If optional part is not ignored, types like 'number?' will fail to convert
 std::optional<uint8_t> tryGetLuauTagForBcType(uint8_t bcType, bool ignoreOptionalPart);
+
+// Luwu: from upstream's LuauCodegenExitSyncUpdate (0.742). Whether a VM exit's stores write register `reg` with a value other than
+// instruction `instIdx`, which would overwrite that instruction's value if it is restored from `reg`
+bool exitStoreClobbers(const VmExitSyncInfo& sync, uint8_t reg, uint32_t instIdx);
 
 } // namespace CodeGen
 } // namespace Luau

@@ -13,7 +13,6 @@
 #include <string.h>
 
 LUAU_FASTFLAG(LuauCallFeedback)
-LUAU_FASTFLAG(LuauBackedgeHeapCheck)
 
 namespace Luau
 {
@@ -601,8 +600,7 @@ void IrBuilder::translateInst(LuauOpcode op, const Instruction* pc, int i)
 
             inst(IrCmd::INTERRUPT, constUint(i));
 
-            if (FFlag::LuauBackedgeHeapCheck)
-                inst(IrCmd::CHECK_GC);
+            inst(IrCmd::CHECK_GC);
 
             loadAndCheckTag(vmReg(ra), LUA_TNIL, fallback);
 
@@ -868,7 +866,9 @@ void IrBuilder::clone(std::vector<uint32_t> sourceIdxs, bool removeCurrentTermin
             IrInst clone = function.instructions[index];
 
             // Skip pseudo instructions to make clone more compact, but validate that they have no users
-            if (isPseudo(clone.cmd))
+            // Luwu: from upstream's LuauCodegenMarkUsed (0.745), MARK_DEAD and MARK_USED are kept: they mark register liveness
+            bool marksLiveness = clone.cmd == IrCmd::MARK_DEAD || clone.cmd == IrCmd::MARK_USED;
+            if (isPseudo(clone.cmd) && !marksLiveness)
             {
                 CODEGEN_ASSERT(clone.useCount == 0);
                 continue;

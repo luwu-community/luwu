@@ -216,18 +216,9 @@ private:
     // Luwu: when nothing else can make progress, lets a type function over a function's inferred return value (a
     // recursive call's result) reduce with what the function's other returns give. Returns true if it unblocked one.
     bool reduceRecursiveReturnsWithLowerBounds();
-
     // Luwu: the last step for an inferred return pack before its function is generalized.
     void finishInferredReturn(NotNull<const Constraint> constraint, TypeId functionTy);
     TypeId freshReturnSlot(Scope* scope);
-
-    // Clip with LuauRemoveConstraintSolverEmplace
-    template<typename T, typename... Args>
-    void DEPRECATED_emplace(NotNull<const Constraint> constraint, TypeId ty, Args&&... args);
-
-    // Clip with LuauRemoveConstraintSolverEmplace
-    template<typename T, typename... Args>
-    void DEPRECATED_emplace(NotNull<const Constraint> constraint, TypePackId tp, Args&&... args);
 
 public:
     /** Attempt to dispatch a constraint.  Returns true if it was successful. If
