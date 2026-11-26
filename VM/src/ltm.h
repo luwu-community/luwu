@@ -36,6 +36,10 @@ typedef enum
     TM_TYPE,
     TM_METATABLE,
 
+    // Luwu Push and Pop Operators (rfcs/push-pop-operators.md)
+    TM_PUSH,
+    TM_POP,
+
     TM_N // number of elements in the enum
 } TMS;
 // clang-format on
