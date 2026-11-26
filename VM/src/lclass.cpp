@@ -286,8 +286,7 @@ size_t luaR_classsize(const LuauClass* classdef)
            // ... plus the offsets of its positional members ...
            (classdef->positionalmembers ? classdef->numberofpositional * sizeof(uint32_t) : 0) +
            // ... plus a builtin class's fast methods.
-           (classdef->fastmethods ? classdef->numberofallmembers * sizeof(luaR_FastMethod) : 0) +
-           // ... plus the offsets of its positional members.
+           (classdef->fastmethods ? classdef->numberofallmembers * sizeof(luaR_FastMethod) : 0);
 }
 
 bool luaR_closureisinit(const LuauClass* classdef, const Closure* cl)
@@ -3600,6 +3599,24 @@ LuauClass* luaR_newnativeclass(lua_State* L, const char* name, const luaR_Native
     classdef->offsettomember[initslot] = initname;
     classdef->memberflags[initslot] = 0;
     setnvalue(luaH_setstr(L, classdef->memberstooffset, initname), double(initslot));
+
+    // Luwu Destructuring (rfcs/destructuring.md): fields flagged LBC_CLASSMEMBER_POSITIONAL are read by `.(a, b)`, in
+    // the order of their offsets
+    int numpositional = 0;
+    for (uint32_t idx = 0; idx < numfields; idx++)
+        numpositional += (members[idx].flags & LBC_CLASSMEMBER_POSITIONAL) != 0;
+
+    if (numpositional > 0)
+    {
+        luaR_newpositionalmembers(L, classdef, numpositional);
+
+        int position = 0;
+        for (uint32_t idx = 0; idx < numfields; idx++)
+        {
+            if (members[idx].flags & LBC_CLASSMEMBER_POSITIONAL)
+                classdef->positionalmembers[position++] = idx;
+        }
+    }
 
     luaR_sealclassshape(L, classdef);
 

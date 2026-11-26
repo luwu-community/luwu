@@ -765,6 +765,8 @@ struct PositionalDestructuring
     bool notObject = false;
     // An element of a positional pattern rather than `x.1`
     bool inPattern = false;
+    // Luwu bundles: the number of values of the bundle read past its end, whose type `className` is
+    std::optional<size_t> bundleSize;
 
     bool operator==(const PositionalDestructuring& rhs) const;
 };
