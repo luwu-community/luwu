@@ -21,6 +21,7 @@
 #include "Luau/MismatchWording.h"
 #include "Luau/RepeatedTypeNames.h"
 #include "Luau/Metamethods.h"
+#include "Luau/NeverReturns.h"
 #include "Luau/Normalize.h"
 #include "Luau/BuiltinTypeFunctions.h"
 #include "Luau/OverloadResolver.h"
@@ -794,7 +795,9 @@ const AstStat* TypeChecker2::getFallthrough(const AstStat* node)
 
     if (const AstStatExpr* stat = node->as<AstStatExpr>())
     {
-        if (AstExprCall* call = stat->expr->as<AstExprCall>(); call && isErrorCall(call))
+        // Luwu never-returning calls: a call to a function declared to return `never` ends the path too, not only one
+        // that raises. Upstream matches only `error(...)` and `assert(false)` by name.
+        if (AstExprCall* call = stat->expr->as<AstExprCall>(); call && callNeverReturns(call, &module->neverReturningCalls))
             return nullptr;
 
         return stat;

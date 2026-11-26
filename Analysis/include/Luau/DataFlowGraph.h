@@ -6,6 +6,7 @@
 #include "Luau/ControlFlow.h"
 #include "Luau/DenseHash.h"
 #include "Luau/Def.h"
+#include "Luau/NeverReturns.h"
 #include "Luau/NotNull.h"
 #include "Luau/Symbol.h"
 #include "Luau/TypedAllocator.h"
@@ -51,6 +52,10 @@ struct DataFlowGraph
 
     std::optional<Symbol> getSymbolFromDef(const Def* def) const;
 
+    // Luwu never-returning calls: whether a call statement ends its code path. The constraint generator asks this
+    // instead of `callNeverReturns` so that it decides every call the way the graph did.
+    bool callNeverReturns(const AstExprCall* call) const;
+
 private:
     DataFlowGraph(NotNull<DefArena> defArena, NotNull<RefinementKeyArena> keyArena);
 
@@ -72,6 +77,11 @@ private:
 
     DenseHashMap<const AstExpr*, const RefinementKey*> astRefinementKeys{nullptr};
     DenseHashMap<const AstLocal*, const RefinementKey*> ifBindingRefinementKeys{nullptr};
+
+    // Luwu never-returning calls: the calls found from declared types, owned by the module. Null when the graph was
+    // built without them, which leaves only `error` and `assert(false)`.
+    const NeverReturningCalls* neverReturningCalls = nullptr;
+
     friend struct DataFlowGraphBuilder;
 };
 
@@ -113,7 +123,8 @@ struct DataFlowGraphBuilder
         AstStatBlock* block,
         NotNull<DefArena> defArena,
         NotNull<RefinementKeyArena> keyArena,
-        NotNull<struct InternalErrorReporter> handle
+        NotNull<struct InternalErrorReporter> handle,
+        const NeverReturningCalls* neverReturningCalls = nullptr
     );
 
     static DataFlowGraph empty(NotNull<DefArena> defArena, NotNull<RefinementKeyArena> keyArena);
