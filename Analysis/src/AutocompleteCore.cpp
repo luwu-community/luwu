@@ -643,10 +643,16 @@ enum class PropIndexType
  * ... would never provide autocomplete options, even though `prop` is a
  * reasonable option, even in strict mode.
  */
-static bool isSkippableTypeInUnion(TypeId ty)
+// Luwu try expressions: `NotFound | unknown` completes NotFound's members
+static bool isWeakUnknown(TypeId ty, NotNull<BuiltinTypes> builtinTypes)
+{
+    return follow(ty) == builtinTypes->weakUnknownType;
+}
+
+static bool isSkippableTypeInUnion(TypeId ty, NotNull<BuiltinTypes> builtinTypes)
 {
     ty = follow(ty);
-    return isNil(ty) || is<ErrorType>(ty) || is<NeverType>(ty);
+    return isNil(ty) || is<ErrorType>(ty) || is<NeverType>(ty) || isWeakUnknown(ty, builtinTypes);
 }
 
 static void autocompleteProps(
@@ -881,7 +887,7 @@ static void autocompleteProps(
         auto iter = begin(u);
         auto endIter = end(u);
 
-        while (iter != endIter && isSkippableTypeInUnion(*iter))
+        while (iter != endIter && isSkippableTypeInUnion(*iter, builtinTypes))
             ++iter;
 
         if (iter == endIter)
@@ -908,7 +914,7 @@ static void autocompleteProps(
                     innerSeen.insert(ty);
             }
 
-            if (isSkippableTypeInUnion(*iter))
+            if (isSkippableTypeInUnion(*iter, builtinTypes))
             {
                 ++iter;
                 continue;

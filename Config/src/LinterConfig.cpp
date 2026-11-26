@@ -16,6 +16,8 @@ void LintOptions::setDefaults()
     warningMask.reset(LintWarning::Code_ConstLocal);
     // Luwu: many Luau style guides ask for the one-line `if not x then return end` that this flags
     warningMask.reset(LintWarning::Code_OneLineGuard);
+    // Luwu try expressions: `@[lint(UncaughtErrors)]` turns it on for the code that should handle every hinted error
+    warningMask.reset(LintWarning::Code_UncaughtErrors);
     // Luwu: the group's own check, for every `any` its parts don't report; the parts are on
     warningMask.reset(LintWarning::Code_Any);
 }

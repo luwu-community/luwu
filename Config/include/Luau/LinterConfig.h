@@ -119,6 +119,8 @@ struct LintWarning
         Code_StringOperations = 83,        // Luwu: a string library call that `""` makes pointless or wrong (`s:startswith("")`)
         Code_ConfusingGuard = 84,          // Luwu: `x and return`, a long or chained guard statement, or one returning several values
         Code_IsComparison = 85,            // Luwu: `x is "meow"`, a pattern with one value that reads better as `x == "meow"`
+        Code_UncaughtErrors = 86,          // Luwu: a call to a function with error hints outside a `try`. Off by default.
+        Code_ErrorStrings = 87,            // Luwu: `error("unreachable")` or `error("TODO")`, which `unreachable()` and `todo()` raise as variants
 
         Code__Count
     };
@@ -254,6 +256,8 @@ inline constexpr const char* kWarningNames[] = {
     "StringOperations",
     "ConfusingGuard",
     "IsComparison",
+    "UncaughtErrors",
+    "ErrorStrings",
 };
 // clang-format on
 

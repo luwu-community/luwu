@@ -14,6 +14,9 @@ LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(DebugLuwuBufferComparison)
+LUAU_FASTFLAG(LuwuNonePrimitive)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
+LUAU_FASTFLAG(LuwuGenericNominals)
 
 namespace Luau
 {
@@ -462,8 +465,8 @@ declare class: {
 )CLASS_SRC";
 
 // Luwu collections: the `collections` library's classes. The VM builds them in C++ (lcollectionslib.cpp); these are
-// their public members, which the Conformance test `CollectionsDeclarationsMatchTheVm` checks against the VM's classes.
-// The types are the library's exports, not globals (registerBuiltinGlobals).
+// their public members, which the Conformance test `BuiltinClassDeclarationsMatchTheVm` checks against the VM's
+// classes. The types are the library's exports, not globals (registerBuiltinGlobals).
 static const char* kBuiltinDefinitionCollectionsSrc = R"BUILTIN_SRC(
 class type OrderedMap<K, V>
     public function __init(self, ...: bundle.Bundle2<K, V> | {bundle.Bundle2<K, V>})
@@ -524,6 +527,192 @@ declare collections: {
     VecDeque: class<VecDeque>,
 }
 )BUILTIN_SRC";
+
+// Luwu try expressions: options and results, global classes the VM builds in C++ (lresultlib.cpp). These are their
+// public members, which the Conformance test `BuiltinClassDeclarationsMatchTheVm` checks against the VM's classes.
+// Capitalized names read as classes, and leave the common names `option`, `result`, `ok` and `err` to locals.
+static const char* kBuiltinDefinitionResultSrc = R"BUILTIN_SRC(
+class type Some<T>(public const value: T)
+    public function get(self): T
+    public function expect(self, message: string?): T
+    public function __eq(self, other: Some<T>): boolean
+    public function __tostring(self): string
+end
+
+class type Ok<T>(public const value: T)
+    public function ok(self): T
+    public function expect(self, message: string?): T
+    public function err(self): none
+    public function __eq(self, other: Ok<T>): boolean
+    public function __tostring(self): string
+end
+
+-- `module`, `line` and `traceback` say where the error was raised. A `try` expression fills them in.
+class type Err<E>(
+    public const error: E,
+    public const module: string?,
+    public const line: number?,
+    public const traceback: string?
+)
+    public function ok(self): none
+    public function expect(self, message: string?): never
+    public function err(self): E
+    public function __eq(self, other: Err<E>): boolean
+    public function __tostring(self): string
+end
+
+-- An empty option is `none` itself, which has `get` and `expect` (makeNoneMetatable). `None` is the same value.
+export type Option<T> = Some<T> | none
+export type Result<T, E> = Ok<T> | Err<E>
+
+declare Some: class<Some>
+declare Ok: class<Ok>
+declare Err: class<Err>
+declare None: none
+
+-- Luwu structured runtime errors: raise `Error.Unreachable` and `Error.Unimplemented` at the caller
+declare function unreachable(message: string, invariants: { [unknown]: unknown }?): never
+declare function todo(message: string?): never
+)BUILTIN_SRC";
+
+// Luwu structured runtime errors: the builtin error classes in the global `Error` (lresultlib.cpp), a definition file
+// of its own whose types are `Error.NotIndexable` and the others. The Conformance test
+// `BuiltinClassDeclarationsMatchTheVm` checks them against the VM's classes.
+static const char* const kBuiltinDefinitionErrorSrc = R"BUILTIN_SRC(
+class type Runtime(public const kind: string, public const message: string)
+    public function __tostring(self): string
+end
+
+class type NotIndexable(public const name: string?, public const kind: string?, public const indexed: unknown, public const index: unknown)
+    public function __tostring(self): string
+end
+
+class type InvalidKey(public const indexed: unknown, public const key: unknown)
+    public function __tostring(self): string
+end
+
+class type NotCallable(public const name: string?, public const kind: string?, public const called: unknown)
+    public function __tostring(self): string
+end
+
+class type InvalidOperation(public const operator: string, public const left: unknown, public const right: unknown)
+    public function __tostring(self): string
+end
+
+class type MissingMember(public const object: unknown, public const name: string)
+    public function __tostring(self): string
+end
+
+class type ReadOnly(public const target: unknown, public const name: string?)
+    public function __tostring(self): string
+end
+
+class type DivisionByZero
+    public function __tostring(self): string
+end
+
+class type NotYieldable
+    public function __tostring(self): string
+end
+
+class type StackOverflow
+    public function __tostring(self): string
+end
+
+class type InvalidArgument(public const value: unknown, public const message: string?, public const position: number?, public const functionname: string?)
+    public function __tostring(self): string
+end
+
+class type UnexpectedType(public const expected: string, public const value: unknown, public const position: number?, public const functionname: string?)
+    public function __tostring(self): string
+end
+
+class type AssertionFailed(public const message: string?)
+    public function __tostring(self): string
+end
+
+class type Overflow(public const value: unknown, public const info: unknown)
+    public function __tostring(self): string
+end
+
+class type Underflow(public const value: unknown, public const info: unknown)
+    public function __tostring(self): string
+end
+
+class type CannotBeParsed(public const text: unknown, public const message: string?)
+    public function __tostring(self): string
+end
+
+class type UnexpectedFloat(public const value: unknown)
+    public function __tostring(self): string
+end
+
+class type Unreachable(public const message: string, public const invariants: unknown)
+    public function __tostring(self): string
+end
+
+class type Unimplemented(public const message: string?)
+    public function __tostring(self): string
+end
+
+class type Unsupported(public const message: string?)
+    public function __tostring(self): string
+end
+
+class type NotFound(public const what: unknown, public const message: string?)
+    public function __tostring(self): string
+end
+
+class type AlreadyExists(public const what: unknown, public const message: string?)
+    public function __tostring(self): string
+end
+
+class type PermissionDenied(public const what: unknown, public const message: string?)
+    public function __tostring(self): string
+end
+
+class type OutOfRange(public const value: unknown, public const min: unknown, public const max: unknown)
+    public function __tostring(self): string
+end
+
+class type InvalidState(public const message: string?)
+    public function __tostring(self): string
+end
+
+class type TimedOut(public const message: string?)
+    public function __tostring(self): string
+end
+
+declare Error: {
+    read Runtime: class<Runtime>,
+    read NotIndexable: class<NotIndexable>,
+    read InvalidKey: class<InvalidKey>,
+    read NotCallable: class<NotCallable>,
+    read InvalidOperation: class<InvalidOperation>,
+    read MissingMember: class<MissingMember>,
+    read ReadOnly: class<ReadOnly>,
+    read DivisionByZero: class<DivisionByZero>,
+    read NotYieldable: class<NotYieldable>,
+    read StackOverflow: class<StackOverflow>,
+    read InvalidArgument: class<InvalidArgument>,
+    read UnexpectedType: class<UnexpectedType>,
+    read AssertionFailed: class<AssertionFailed>,
+    read Overflow: class<Overflow>,
+    read Underflow: class<Underflow>,
+    read CannotBeParsed: class<CannotBeParsed>,
+    read UnexpectedFloat: class<UnexpectedFloat>,
+    read Unreachable: class<Unreachable>,
+    read Unimplemented: class<Unimplemented>,
+    read Unsupported: class<Unsupported>,
+    read NotFound: class<NotFound>,
+    read AlreadyExists: class<AlreadyExists>,
+    read PermissionDenied: class<PermissionDenied>,
+    read OutOfRange: class<OutOfRange>,
+    read InvalidState: class<InvalidState>,
+    read TimedOut: class<TimedOut>,
+}
+)BUILTIN_SRC";
+
 
 std::string getBuiltinDefinitionSource()
 {
@@ -590,7 +779,21 @@ std::string getBuiltinDefinitionSource()
         result += kBuiltinDefinitionClassSrcClose;
     }
 
+    if (resultLibraryEnabled())
+        result += kBuiltinDefinitionResultSrc;
+
     return result;
+}
+
+std::string getErrorDefinitionSource()
+{
+    return kBuiltinDefinitionErrorSrc;
+}
+
+bool resultLibraryEnabled()
+{
+    return FFlag::LuwuClasses && FFlag::LuwuGenericNominals && FFlag::LuwuNonePrimitive && FFlag::LuwuDeclareStatements &&
+           FFlag::DebugLuwuTryExpressions;
 }
 
 // Luwu bundles: the `bundle` library's functions, and its classes (lcollectionslib.cpp): one per size up to 6, then

@@ -206,8 +206,97 @@ enum LuwuBuiltinClass
     LUWU_BUILTIN_ORDEREDMAP,
     LUWU_BUILTIN_VEC,
     LUWU_BUILTIN_VECDEQUE,
+    LUWU_BUILTIN_SOME,
+    LUWU_BUILTIN_OK,
+    LUWU_BUILTIN_ERR,
+    // Luwu structured runtime errors: the variants of the global `Error`, in the order of kErrorVariants in
+    // lresultlib.cpp. The VM raises the ones up to LUWU_BUILTIN_ERR_STACKOVERFLOW, the libraries the ones up to
+    // LUWU_BUILTIN_ERR_UNEXPECTEDFLOAT, and the rest are for user code.
+    LUWU_BUILTIN_ERR_RUNTIME,
+    LUWU_BUILTIN_ERR_NOTINDEXABLE,
+    LUWU_BUILTIN_ERR_INVALIDKEY,
+    LUWU_BUILTIN_ERR_NOTCALLABLE,
+    LUWU_BUILTIN_ERR_INVALIDOPERATION,
+    LUWU_BUILTIN_ERR_MISSINGMEMBER,
+    LUWU_BUILTIN_ERR_READONLY,
+    LUWU_BUILTIN_ERR_DIVISIONBYZERO,
+    LUWU_BUILTIN_ERR_NOTYIELDABLE,
+    LUWU_BUILTIN_ERR_STACKOVERFLOW,
+    LUWU_BUILTIN_ERR_INVALIDARGUMENT,
+    LUWU_BUILTIN_ERR_UNEXPECTEDTYPE,
+    LUWU_BUILTIN_ERR_ASSERTIONFAILED,
+    LUWU_BUILTIN_ERR_OVERFLOW,
+    LUWU_BUILTIN_ERR_UNDERFLOW,
+    LUWU_BUILTIN_ERR_CANNOTBEPARSED,
+    LUWU_BUILTIN_ERR_UNEXPECTEDFLOAT,
+    LUWU_BUILTIN_ERR_UNREACHABLE,
+    LUWU_BUILTIN_ERR_UNIMPLEMENTED,
+    LUWU_BUILTIN_ERR_UNSUPPORTED,
+    LUWU_BUILTIN_ERR_NOTFOUND,
+    LUWU_BUILTIN_ERR_ALREADYEXISTS,
+    LUWU_BUILTIN_ERR_PERMISSIONDENIED,
+    LUWU_BUILTIN_ERR_OUTOFRANGE,
+    LUWU_BUILTIN_ERR_INVALIDSTATE,
+    LUWU_BUILTIN_ERR_TIMEDOUT,
 
     LUWU_BUILTIN__COUNT
+};
+
+#define LUWU_BUILTIN_ERR_FIRST LUWU_BUILTIN_ERR_RUNTIME
+#define LUWU_BUILTIN_ERR_LAST LUWU_BUILTIN_ERR_TIMEDOUT
+
+// Luwu structured runtime errors: the `kind` of an `Error.Runtime`, the errors that have no variant of their own yet.
+// Their names are kRuntimeKindNames in lresultlib.cpp.
+enum LuwuRuntimeKind
+{
+    LUWU_RUNTIME_OTHER,
+    LUWU_RUNTIME_TYPE,
+    LUWU_RUNTIME_MEMBER,
+    LUWU_RUNTIME_LIBRARY,
+
+    LUWU_RUNTIME__COUNT
+};
+
+// Luwu structured runtime errors: how the value a NotIndexable or NotCallable error is about was reached, read from the
+// bytecode that loaded it. Their names are kNameKindNames in lresultlib.cpp.
+enum LuwuNameKind
+{
+    LUWU_NAME_NONE,
+    LUWU_NAME_LOCAL,
+    LUWU_NAME_GLOBAL,
+    LUWU_NAME_FIELD,
+    LUWU_NAME_UPVALUE,
+    LUWU_NAME_METHOD,
+};
+
+// Luwu structured runtime errors: the most positions a variant raised through the error record has
+#define LUWU_ERROR_MAXFIELDS 4
+
+// Luwu structured runtime errors: an error the VM or a library raised, recorded instead of formatted. The raise site
+// fills it and throws a sentinel (luaG_iserrorrecord). The catch decides what the error becomes: `pcall` and the other
+// protected calls format a message (luaG_pusherrorrecord), and `try` builds the variant (luaR_newerrorvariant). There's
+// one per global state: at most one recorded error is in flight, from its raise to the first catch, and no Luwu code
+// runs in between. Its values are GC roots.
+struct LuwuErrorRecord
+{
+    // whether an error is recorded
+    bool active;
+    // the variant, a LUWU_BUILTIN_ERR_* class
+    uint8_t variant;
+    // what the variant's positions don't say (see luaR_fillerrorsubkind): a Runtime's LuwuRuntimeKind, the LuwuNameKind
+    // of a NotIndexable or a NotCallable, an InvalidOperation's TMS, and which message a few others give
+    uint8_t subkind;
+    // the number of positions in `fields`
+    uint8_t count;
+    // the variant's positions. Those that `subkind` gives are written from it once the error is caught.
+    TValue fields[LUWU_ERROR_MAXFIELDS];
+    // the type names of fields that hold opaque values, NULL for the others
+    TString* opaquetypes[LUWU_ERROR_MAXFIELDS];
+    // the chunk the error was raised in, NULL when it wasn't raised by Luwu code
+    TString* source;
+    int line;
+    // what `coroutine.wrap` adds in front of the message, NULL for nothing
+    TString* prefix;
 };
 
 typedef struct global_State
@@ -247,6 +336,8 @@ typedef struct global_State
     // Luwu builtin classes: each builtin class once its library has built it, NULL until then. A GC root, so a class
     // lives as long as the state even when no library table holds it. Native methods check `self` against these.
     struct LuauClass* builtinclasses[LUWU_BUILTIN__COUNT];
+    LuwuErrorRecord errorrecord; // Luwu structured runtime errors: the error in flight, see LuwuErrorRecord
+    LuaTable* opaqueplaceholder; // Luwu opaque values: what an error record holds in place of an opaque value
     TString* tmname[TM_N]; // array with tag-method names
 
     TValue pseudotemp; // storage for temporary values used in pseudo2addr
