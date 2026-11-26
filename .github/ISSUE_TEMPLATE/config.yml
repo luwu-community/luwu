@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Security vulnerability
+    url: https://github.com/luwu-community/luwu/security/advisories/new
+    about: Report memory safety vulnerabilities privately here, never in a public issue.
   - name: Questions
     url: https://discord.gg/3MJ37CFNWh
     about: Please join the Luwu Discord server if you have questions or need help.
