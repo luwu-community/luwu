@@ -7996,6 +7996,20 @@ TEST_CASE("ClassesInterpreterMemberSlotCacheSkipsWideOffsets")
     CHECK(LUAU_INSN_C(*farCallInsn) == farCallHint);
 }
 
+// Luwu: luau_setfflagpreset names presets by string; FlagPresets.test.cpp tests what each one turns on
+TEST_CASE("FlagPresetsByName")
+{
+    std::vector<std::pair<Luau::FValue<bool>*, bool>> saved;
+    for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next)
+        saved.push_back({flag, flag->value});
+
+    CHECK(luau_setfflagpreset("fixes") > 0);
+    CHECK_EQ(luau_setfflagpreset("everything"), -1);
+
+    for (const auto& [flag, value] : saved)
+        flag->value = value;
+}
+
 TEST_SUITE_END();
 
 // Luwu bundles: an embedder packs and unpacks bundles with no Lua frame

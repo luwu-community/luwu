@@ -7,6 +7,7 @@ target_sources(Luwu.Common PRIVATE
     Common/include/Luau/ClassMemberNames.h
     Common/include/Luau/DenseHash.h
     Common/include/Luau/ExperimentalFlags.h
+    Common/include/Luau/FlagPresets.h
     Common/include/Luau/HashUtil.h
     Common/include/Luau/LuwuFlags.h
     Common/include/Luau/InsertionOrderedMap.h
@@ -19,6 +20,7 @@ target_sources(Luwu.Common PRIVATE
 
     Common/src/BytecodeWire.cpp
     Common/src/ClassMemberNames.cpp
+    Common/src/FlagPresets.cpp
     Common/src/LuwuFlags.cpp
     Common/src/StringUtils.cpp
     Common/src/TimeTrace.cpp
@@ -593,6 +595,7 @@ if(TARGET Luwu.UnitTest)
         tests/Fixture.cpp
         tests/Fixture.h
         tests/FragmentAutocomplete.test.cpp
+        tests/FlagPresets.test.cpp
         tests/Frontend.test.cpp
         tests/Generalization.test.cpp
         tests/InsertionOrderedMap.test.cpp
