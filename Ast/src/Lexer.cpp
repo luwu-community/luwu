@@ -119,6 +119,9 @@ std::string Lexeme::toString() const
     case ConcatAssign:
         return "'..='";
 
+    case Push:
+        return "'<+'";
+
     case RawString:
     case QuotedString:
         return data ? format("\"%.*s\"", length, data) : "string";
@@ -864,6 +867,12 @@ Lexeme Lexer::readNext()
         {
             consume();
             return Lexeme(Location(start, 2), Lexeme::LessEqual);
+        }
+        // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): Luau has no unary `+`, so `<+` is never valid Luau
+        else if (peekch() == '+')
+        {
+            consume();
+            return Lexeme(Location(start, 2), Lexeme::Push);
         }
         else
             return Lexeme(Location(start, 1), '<');

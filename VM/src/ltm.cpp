@@ -69,6 +69,9 @@ const char* const luaT_eventname[] = {
     "__concat",
     "__type",
     "__metatable",
+
+    "__push",
+    "__pop",
 };
 // clang-format on
 
