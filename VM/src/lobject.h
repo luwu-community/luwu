@@ -383,6 +383,14 @@ struct FeedbackVectorSlot
 ** Function Prototypes
 */
 // clang-format off
+// Luwu table presizing: what one NEWTABLE instruction learned about the tables it makes
+typedef struct TableSite
+{
+    uint32_t pc;           // the NEWTABLE instruction's index in its proto's code
+    int arrayhint;         // the array size the next table here starts with
+    struct LuaTable* last; // the last table made here, weak: the GC clears it when that table dies (cleartablesites)
+} TableSite;
+
 typedef struct Proto
 {
     CommonHeader;
@@ -440,6 +448,12 @@ typedef struct Proto
     int linedefined;
     int bytecodeid;
     int sizetypeinfo;
+
+    // Luwu table presizing: one TableSite per NEWTABLE instruction, in code order. Made when the proto is loaded.
+    int sizetablesites;
+    uint8_t tablesiteslisted; // whether this proto is on global_State::sitedprotos this GC cycle
+    TableSite* tablesites;
+    struct Proto* nextsited; // next proto on global_State::sitedprotos
 
     FeedbackVectorSlot* feedbackvec;
     uint32_t feedbackvecsize;
