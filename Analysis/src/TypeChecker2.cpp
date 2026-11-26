@@ -16,6 +16,7 @@
 #include "Luau/Error.h"
 #include "Luau/Instantiation.h"
 #include "Luau/Instantiation2.h"
+#include "Luau/IntegerModes.h"
 #include "Luau/MismatchExplanation.h"
 #include "Luau/MismatchWording.h"
 #include "Luau/RepeatedTypeNames.h"
@@ -68,6 +69,7 @@ LUAU_FASTFLAGVARIABLE(LuauBetterPackAndVariadicMismatchErrors)
 LUAU_FASTFLAGVARIABLE(LuwuHelpfulSubtypingErrors)
 
 LUAU_FASTFLAG(LuwuClasses)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuwuDefaultArguments)
 
 namespace Luau
@@ -3461,7 +3463,8 @@ void TypeChecker2::visit(AstExprConstantNumber* expr)
 void TypeChecker2::visit(AstExprConstantInteger* expr)
 {
 #if defined(LUAU_ENABLE_ASSERT)
-    const TypeId bestType = builtinTypes->integerType;
+    bool knownMode = FFlag::DebugLuwuIntegers && expr->mode < kIntegerModeCount;
+    const TypeId bestType = knownMode ? builtinTypes->integerModeTypes[expr->mode] : builtinTypes->integerType;
     const TypeId inferredType = lookupType(expr);
     NotNull<Scope> scope{findInnermostScope(expr->location)};
 
@@ -6046,7 +6049,13 @@ void TypeChecker2::visit(AstExprUnary* expr)
     }
     else if (expr->op == AstExprUnary::Op::Minus)
     {
-        testIsSubtype(operandType, builtinTypes->numberType, expr->location);
+        // Luwu Integers (rfcs/integers.md): a signed integer can be negated too. Upstream's integers have no operators.
+        TypeId integerType = collapseIntegerUnion(builtinTypes, *module->internalTypes, operandType);
+        bool integerOperand = FFlag::DebugLuwuIntegers && isInteger(integerType);
+        if (!integerOperand)
+            testIsSubtype(operandType, builtinTypes->numberType, expr->location);
+        else if (std::optional<std::string> error = integerNegationError(integerType, getIdentifierOfBaseVar(expr->expr)))
+            reportError(GenericError{std::move(*error)}, expr->location);
     }
     else if (expr->op == AstExprUnary::Op::Not)
     {
@@ -6477,10 +6486,23 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
     case AstExprBinary::Op::FloorDiv:
     case AstExprBinary::Op::Pow:
     case AstExprBinary::Op::Mod:
+    {
+        // Luwu Integers (rfcs/integers.md): arithmetic on integers of one mode gives that mode. Upstream's integers have no
+        // operators.
+        TypeId leftInteger = collapseIntegerUnion(builtinTypes, *module->internalTypes, leftType);
+        TypeId rightInteger = collapseIntegerUnion(builtinTypes, *module->internalTypes, rightType);
+        if (FFlag::DebugLuwuIntegers && isIntegerArithmetic(leftInteger, rightInteger))
+        {
+            if (std::optional<std::string> error = integerOperandsError(expr->op, leftInteger, rightInteger))
+                reportError(GenericError{std::move(*error)}, expr->location);
+            return integerArithmeticResult(builtinTypes, *module->internalTypes, leftInteger, rightInteger);
+        }
+
         testIsSubtype(leftType, builtinTypes->numberType, expr->left->location);
         testIsSubtype(rightType, builtinTypes->numberType, expr->right->location);
 
         return builtinTypes->numberType;
+    }
     case AstExprBinary::Op::Concat:
     {
         const TypeId numberOrString = module->internalTypes->addType(UnionType{{builtinTypes->numberType, builtinTypes->stringType}});
@@ -6511,6 +6533,13 @@ TypeId TypeChecker2::visit(AstExprBinary* expr, AstNode* overrideKey)
         if (subtyping->isSubtype(leftType, builtinTypes->stringType, scope).isSubtype)
         {
             testIsSubtype(rightType, builtinTypes->stringType, expr->right->location);
+            return builtinTypes->booleanType;
+        }
+
+        // Luwu Integers (rfcs/integers.md): integers are ordered. Upstream's integers have no operators.
+        if (FFlag::DebugLuwuIntegers && subtyping->isSubtype(leftType, builtinTypes->integerType, scope).isSubtype)
+        {
+            testIsSubtype(rightType, builtinTypes->integerType, expr->right->location);
             return builtinTypes->booleanType;
         }
 
@@ -6818,12 +6847,15 @@ void TypeChecker2::visit(AstTypeReference* ty)
     }
 
     // Luwu Traits (rfcs/classes/traits.md): `trait<T>` is resolved by ConstraintGenerator (resolveReferenceType), which
-    // reports a misuse; there is no `trait` alias to check it against
+    // reports a misuse; there is no `trait` alias to check it against. Luwu Integers (rfcs/integers.md): neither is there
+    // for `integer<T>`, whose `integer` alias has no parameters.
     // Luwu literal types: `literal<B>` is resolved by ConstraintGenerator (resolveReferenceType), which also reports a
     // misuse; there is no `literal` alias to check it against
     bool isLiteralParameter = scope && isLiteralTypeReference(*scope, ty);
-    bool isTraitValue = FFlag::LuwuTraits && !ty->prefix.has_value() && ty->name == "trait" && ty->hasParameterList;
-    if (isLiteralParameter || isTraitValue)
+    bool namesTrait = FFlag::LuwuTraits && !ty->prefix.has_value() && ty->name == "trait" && ty->hasParameterList;
+    Scope* referenceScope = findInnermostScope(ty->location);
+    bool namesIntegerWithMode = referenceScope && isIntegerWithMode(builtinTypes, *referenceScope, ty);
+    if (isLiteralParameter || namesTrait || namesIntegerWithMode)
     {
         // Unresolved when `literal<B>` is misused outside a parameter, which ConstraintGenerator reported
         AstType* base = isLiteralParameter && ty->parameters.size == 1 ? ty->parameters.data[0].type : nullptr;

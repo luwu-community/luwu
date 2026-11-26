@@ -30,8 +30,7 @@ LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
 LUAU_FASTFLAG(DebugLuwuPoperators)
-LUAU_FASTFLAG(LuauIntegerType2)
-LUAU_FASTFLAG(LuauIntegerFastcalls)
+LUAU_FASTFLAG(DebugLuwuIntegers)
 LUAU_FASTFLAG(LuauIntegerBufferFastcalls)
 LUAU_FASTFLAG(LuauCompileStringInterpTargetTop)
 LUAU_FASTFLAG(LuwuDeclareStatements)
@@ -14256,13 +14255,13 @@ TEST_CASE("ClassDeclHoistingForwardWriteProducesError")
 
 TEST_CASE("IntegerType")
 {
-    if (!FFlag::LuauIntegerType2)
+    if (!FFlag::DebugLuwuIntegers)
         return;
 
-    // i suffix
+    // int suffix
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 123i
+local a = 123int
 return a
 )"),
         R"(
@@ -14274,7 +14273,7 @@ RETURN R0 1
     // separators
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 1_000_000i
+local a = 1_000_000int
 return a
 )"),
         R"(
@@ -14286,7 +14285,7 @@ RETURN R0 1
     // hex
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 0xABABi
+local a = 0xABABint
 return a
 )"),
         R"(
@@ -14298,7 +14297,7 @@ RETURN R0 1
     // binary
     CHECK_EQ(
         "\n" + compileFunction0(R"(
-local a = 0b100101i
+local a = 0b100101int
 return a
 )"),
         R"(
@@ -14309,8 +14308,8 @@ RETURN R0 1
 
     // Has to be exactly representable; overflow is a parse error
 
-    std::string source1 = "local a = 9999999999999999999999999i";
-    std::string source2 = "local a = 2.37i";
+    std::string source1 = "local a = 9999999999999999999999999u64";
+    std::string source2 = "local a = 2.37int";
 
     std::string bc1 = Luau::compile(source1);
     std::string bc2 = Luau::compile(source2);
@@ -14322,11 +14321,11 @@ RETURN R0 1
 
 TEST_CASE("IntegerBcb")
 {
-    ScopedFastFlag luauInteger{FFlag::LuauIntegerType2, true};
+    ScopedFastFlag integers{FFlag::DebugLuwuIntegers, true};
 
     const char* source = R"(
 function foo()
-local a = 123i
+local a = 123int
 return a
 end)";
 
@@ -15061,46 +15060,7 @@ RETURN R0 1
     );
 }
 
-TEST_CASE("BufferIntegerFastcall")
-{
-    ScopedFastFlag luauIntegerFastcalls{FFlag::LuauIntegerFastcalls, true};
-    ScopedFastFlag luauIntegerBufferFastcalls{FFlag::LuauIntegerBufferFastcalls, true};
 
-    CHECK_EQ(
-        "\n" + compileFunction0(R"(
-local b = buffer.create(16)
-return buffer.readinteger(b, 0)
-)"),
-        R"(
-GETIMPORT R0 2 [buffer.create]
-LOADN R1 16
-CALL R0 1 1
-FASTCALL2K 131 R0 K3 L0 [0]
-MOVE R2 R0
-LOADK R3 K3 [0]
-GETIMPORT R1 5 [buffer.readinteger]
-CALL R1 2 -1
-L0: RETURN R1 -1
-)"
-    );
-
-    CHECK_EQ(
-        "\n" + compileFunction0(R"(
-local b, v = ...
-buffer.writeinteger(b, 0, v)
-)"),
-        R"(
-GETVARARGS R0 2
-LOADN R4 0
-FASTCALL3 132 R0 R4 R1 L0
-MOVE R3 R0
-MOVE R5 R1
-GETIMPORT R2 2 [buffer.writeinteger]
-CALL R2 3 0
-L0: RETURN R0 0
-)"
-    );
-}
 
 // Luwu: exports are always const (`export x = 5`); upstream's `export local` is an error, so its reassignment case is gone
 TEST_CASE("ExportBytecode")
@@ -15201,8 +15161,9 @@ TEST_CASE("LBCConstantRegressionTest")
     CHECK_EQ(LBC_CONSTANT_INTEGER, 9);
     CHECK_EQ(LBC_CONSTANT_CLASS_SHAPE, 10);
     CHECK_EQ(LBC_CONSTANT_VECTORD, 11);
+    CHECK_EQ(LBC_CONSTANT_INTEGER_HEAP, 12);
 
-    CHECK_EQ(LBC_CONSTANT__COUNT, 12);
+    CHECK_EQ(LBC_CONSTANT__COUNT, 13);
 }
 
 TEST_CASE("ExportClass")

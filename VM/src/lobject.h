@@ -66,7 +66,7 @@ typedef struct lua_TValue
 #define ttisnil(o) (ttype(o) == LUA_TNIL)
 #define ttissymnone(o) (ttype(o) == LUA_TSYMNONE)
 #define ttisnumber(o) (ttype(o) == LUA_TNUMBER)
-#define ttisinteger(o) (ttype(o) == LUA_TINTEGER)
+#define ttisinteger(o) (ttype(o) == LUA_TINTEGER || ttype(o) == LUA_THEAPINTEGER)
 #define ttisstring(o) (ttype(o) == LUA_TSTRING)
 #define ttistable(o) (ttype(o) == LUA_TTABLE)
 #define ttisfunction(o) (ttype(o) == LUA_TFUNCTION)
@@ -128,6 +128,7 @@ typedef struct lua_TValue
         TValue* i_o = (obj); \
         i_o->value.l = (x); \
         i_o->tt = LUA_TINTEGER; \
+        i_o->extra[0] = 0; \
     }
 
 #if LUA_VECTOR_DOUBLE == 1
@@ -351,6 +352,32 @@ typedef struct LuauBuffer
     alignas(8) char inline_data[1];
 } Buffer;
 
+// Luwu Integers (rfcs/integers.md): a dynamically-sized integer that doesn't fit in 64 bits, as a sign and the 64-bit
+// digits of its absolute value, lowest first, without zero digits at the top
+typedef struct HeapInteger
+{
+    CommonHeader;
+    bool isNegative;
+    uint32_t size;
+    uint32_t capacity;
+    uint64_t* digits;
+} HeapInteger;
+
+// Luwu Integers (rfcs/integers.md): an inline integer, `value` already in the range of `mode`
+inline void setintegersmi(TValue* obj, int64_t value, IntegerMode mode)
+{
+    obj->value.l = value;
+    obj->tt = LUA_TINTEGER;
+    obj->extra[0] = mode;
+}
+
+inline void setintegerheap(TValue* obj, HeapInteger* heap, IntegerMode mode)
+{
+    obj->value.gc = (GCObject*)heap;
+    obj->tt = LUA_THEAPINTEGER;
+    obj->extra[0] = mode;
+}
+
 typedef struct LuauVector
 {
     CommonHeader;
@@ -573,8 +600,8 @@ typedef struct TKey
 {
     ::Value value;
     int extra[LUA_EXTRA_SIZE];
-    unsigned tt : 4;
-    int next : 28; // for chaining
+    unsigned tt : 5;
+    int next : 27; // for chaining
 } TKey;
 
 typedef struct LuaNode
@@ -914,10 +941,11 @@ typedef struct LuauStorage
     uint32_t capacity;
     // A ring's front slot; always 0 for a `Vec`, so the ring's formula finds a `Vec`'s entries too
     uint32_t head;
-    // The type the first value fixed (see lcollectionslib.cpp): the tag every entry has, or LUAR_STORAGE_ENUM when the
-    // entries are the values of a builtin enum. Entries tagged LUA_TOBJECT are objects of `elementclass`.
+    // The type the first value fixed (see lcollectionslib.cpp): the tag every entry has, LUAR_STORAGE_ENUM when the
+    // entries are the values of a builtin enum, or LUAR_STORAGE_INTEGER for integers. Entries tagged LUA_TOBJECT are
+    // objects of `elementclass`.
     uint8_t elementtag;
-    // The builtin enum when `elementtag` is LUAR_STORAGE_ENUM
+    // The builtin enum when `elementtag` is LUAR_STORAGE_ENUM, and the IntegerMode when it's LUAR_STORAGE_INTEGER
     uint8_t elementenum;
     uint16_t padding;
     struct LuauClass* elementclass;
@@ -926,6 +954,10 @@ typedef struct LuauStorage
 
 // Luwu try expressions: LuauStorage::elementtag for a builtin enum, which no value's tag matches
 #define LUAR_STORAGE_ENUM 0xff
+
+// Luwu Integers (rfcs/integers.md): LuauStorage::elementtag for integers of one mode, which no value's tag matches, so
+// native code's tag check sends every integer to the C method, which checks the mode too
+#define LUAR_STORAGE_INTEGER 0xfe
 
 // Luwu collections: the member of a builtin container that points to its LuauStorage
 #define LUAR_STORAGE_MEMBER 0

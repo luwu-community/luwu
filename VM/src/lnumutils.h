@@ -5,6 +5,33 @@
 #include <math.h>
 #include <cstdint>
 
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
+
+// x*y => 128-bit product (lo+hi)
+inline uint64_t mul128(uint64_t x, uint64_t y, uint64_t* hi)
+{
+#if defined(_MSC_VER) && defined(_M_X64)
+    return _umul128(x, y, hi);
+#elif defined(__SIZEOF_INT128__)
+    unsigned __int128 r = x;
+    r *= y;
+    *hi = uint64_t(r >> 64);
+    return uint64_t(r);
+#else
+    uint32_t x0 = uint32_t(x), x1 = uint32_t(x >> 32);
+    uint32_t y0 = uint32_t(y), y1 = uint32_t(y >> 32);
+    uint64_t p11 = uint64_t(x1) * y1, p01 = uint64_t(x0) * y1;
+    uint64_t p10 = uint64_t(x1) * y0, p00 = uint64_t(x0) * y0;
+    uint64_t mid = p10 + (p00 >> 32) + uint32_t(p01);
+    uint64_t r0 = (mid << 32) | uint32_t(p00);
+    uint64_t r1 = p11 + (mid >> 32) + (p01 >> 32);
+    *hi = r1;
+    return r0;
+#endif
+}
+
 #define luai_numadd(a, b) ((a) + (b))
 #define luai_numsub(a, b) ((a) - (b))
 #define luai_nummul(a, b) ((a) * (b))
@@ -134,3 +161,66 @@ LUAI_FUNC char* luai_fixed2str(char* buf, double n, int precision);
 
 #define luai_str2num(s, p) strtod((s), (p))
 #define luai_str2long(s, p, base) strtoll((s), (p), base)
+
+// Signed 64-bit operations
+inline bool luau_add_overflow(int64_t a, int64_t b, int64_t* res) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_add_overflow(a, b, res);
+#elif defined(_MSC_VER) && _MSC_VER >= 1937 && defined(_M_X64)
+    return _add_overflow_i64(0, a, b, res);
+#else
+    // wraps through unsigned, since signed overflow is undefined
+    *res = int64_t(uint64_t(a) + uint64_t(b));
+    return (b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b);
+#endif
+}
+
+inline bool luau_sub_overflow(int64_t a, int64_t b, int64_t* res) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_sub_overflow(a, b, res);
+#elif defined(_MSC_VER) && _MSC_VER >= 1937 && defined(_M_X64)
+    return _sub_overflow_i64(0, a, b, res);
+#else
+    *res = int64_t(uint64_t(a) - uint64_t(b));
+    return (b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b);
+#endif
+}
+
+inline bool luau_mul_overflow(int64_t a, int64_t b, int64_t* res) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_mul_overflow(a, b, res);
+#elif defined(_MSC_VER) && _MSC_VER >= 1937 && defined(_M_X64)
+    return _mul_overflow_i64(a, b, res);
+#else
+    // the bounds checks read only a and b, since a signed product that overflows is undefined
+    *res = int64_t(uint64_t(a) * uint64_t(b));
+    if (a > 0)
+        return b > 0 ? a > INT64_MAX / b : b < INT64_MIN / a;
+    if (b > 0)
+        return a < INT64_MIN / b;
+    return a != 0 && b < INT64_MAX / a;
+#endif
+}
+
+// Unsigned 64-bit operations (used by bigint)
+inline bool luau_add_overflow(uint64_t a, uint64_t b, uint64_t* res) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_add_overflow(a, b, res);
+#elif defined(_MSC_VER) && defined(_M_X64)
+    return _addcarry_u64(0, a, b, res) != 0;
+#else
+    *res = a + b;
+    return *res < a;
+#endif
+}
+
+inline bool luau_sub_overflow(uint64_t a, uint64_t b, uint64_t* res) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_sub_overflow(a, b, res);
+#elif defined(_MSC_VER) && defined(_M_X64)
+    return _subborrow_u64(0, a, b, res) != 0;
+#else
+    *res = a - b;
+    return a < b;
+#endif
+}
