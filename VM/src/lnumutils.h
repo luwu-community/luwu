@@ -166,10 +166,11 @@ LUAI_FUNC char* luai_fixed2str(char* buf, double n, int precision);
 inline bool luau_add_overflow(int64_t a, int64_t b, int64_t* res) {
 #if defined(__GNUC__) || defined(__clang__)
     return __builtin_add_overflow(a, b, res);
-#elif defined(_MSC_VER) && _MSC_VER >= 1937
+#elif defined(_MSC_VER) && _MSC_VER >= 1937 && defined(_M_X64)
     return _add_overflow_i64(0, a, b, res);
 #else
-    *res = a + b;
+    // wraps through unsigned, since signed overflow is undefined
+    *res = int64_t(uint64_t(a) + uint64_t(b));
     return (b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b);
 #endif
 }
@@ -177,10 +178,10 @@ inline bool luau_add_overflow(int64_t a, int64_t b, int64_t* res) {
 inline bool luau_sub_overflow(int64_t a, int64_t b, int64_t* res) {
 #if defined(__GNUC__) || defined(__clang__)
     return __builtin_sub_overflow(a, b, res);
-#elif defined(_MSC_VER) && _MSC_VER >= 1937
+#elif defined(_MSC_VER) && _MSC_VER >= 1937 && defined(_M_X64)
     return _sub_overflow_i64(0, a, b, res);
 #else
-    *res = a - b;
+    *res = int64_t(uint64_t(a) - uint64_t(b));
     return (b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b);
 #endif
 }
@@ -188,14 +189,16 @@ inline bool luau_sub_overflow(int64_t a, int64_t b, int64_t* res) {
 inline bool luau_mul_overflow(int64_t a, int64_t b, int64_t* res) {
 #if defined(__GNUC__) || defined(__clang__)
     return __builtin_mul_overflow(a, b, res);
-#elif defined(_MSC_VER) && _MSC_VER >= 1937
+#elif defined(_MSC_VER) && _MSC_VER >= 1937 && defined(_M_X64)
     return _mul_overflow_i64(a, b, res);
 #else
-    *res = a * b;
-    if (a == 0 || b == 0) return false;
-    if (a == -1 && b == INT64_MIN) return true;
-    if (b == -1 && a == INT64_MIN) return true;
-    return *res / b != a;
+    // the bounds checks read only a and b, since a signed product that overflows is undefined
+    *res = int64_t(uint64_t(a) * uint64_t(b));
+    if (a > 0)
+        return b > 0 ? a > INT64_MAX / b : b < INT64_MIN / a;
+    if (b > 0)
+        return a < INT64_MIN / b;
+    return a != 0 && b < INT64_MAX / a;
 #endif
 }
 
