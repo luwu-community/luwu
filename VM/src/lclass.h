@@ -337,6 +337,10 @@ LUAI_FUNC void luaR_setclassfield(lua_State* L, LuauClass* classdef, const TValu
 // Luwu Traits (rfcs/classes/traits.md): raised by a write through an object to a field on its class value
 LUAI_FUNC l_noret luaR_sharedfieldwriteerror(lua_State* L, const LuauObject* object, const TValue* key);
 
+// Luwu Traits (rfcs/classes/traits.md): "function" or "field" when `name` is a public member of `classdef` that only the
+// class value can read (`static`, or a function without `self`), and NULL otherwise
+LUAI_FUNC const char* luaR_staticmemberkind(const LuauClass* classdef, TString* name);
+
 LUAI_FUNC void luaR_freeclass(lua_State* L, LuauClass* classdef, lua_Page* page);
 
 // Luwu builtin classes: a member of a class built in C++. A field has no `method`; `flags` are LBC_CLASSMEMBER_* bits, which

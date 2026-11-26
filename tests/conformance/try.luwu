@@ -175,10 +175,10 @@ do
     assert(string.find(bad.error, "kept", 1, true) and bad.line ~= nil and bad.traceback ~= nil)
 
     const wrongvalue = try bad.value
-    assert(tostring(wrongvalue.error) == "objects of class 'Err' do not have a field named 'value'")
+    assert(tostring(wrongvalue.error) == "objects of class 'Err' do not have a field or function named 'value'")
     const wronglines = try good.line
     assert(class.isinstance(wronglines.error, Error.MissingMember) and wronglines.error.name == "line")
-    assert(tostring(wronglines.error) == "objects of class 'Ok' do not have a field named 'line'")
+    assert(tostring(wronglines.error) == "objects of class 'Ok' do not have a field or function named 'line'")
 
     -- `ok`, `err` and `expect` answer like the object's methods
     const okvalue = good:ok()

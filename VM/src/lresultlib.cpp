@@ -506,10 +506,22 @@ static void addmissingmembermessage(luaL_Strbuf* b, lua_State* L, const VariantF
         onobject = true;
     }
 
+    // Luwu Traits (rfcs/classes/traits.md): the class has the member, but only for reads through the class value
+    const char* statickind = onobject ? luaR_staticmemberkind(classdef, tsvalue(fields.at(1))) : NULL;
+
     if (!classdef)
         snprintf(text, sizeof(text), "this %s does not have a field named '%s'", fields.type(L, 0), name);
+    else if (onobject && statickind)
+        snprintf(
+            text,
+            sizeof(text),
+            "objects of class '%s' can't reach its static %s '%s'; use it through the class, or declare it 'shared'",
+            getstr(classdef->name),
+            statickind,
+            name
+        );
     else if (onobject)
-        snprintf(text, sizeof(text), "objects of class '%s' do not have a field named '%s'", getstr(classdef->name), name);
+        snprintf(text, sizeof(text), "objects of class '%s' do not have a field or function named '%s'", getstr(classdef->name), name);
     // Luwu Traits (rfcs/classes/traits.md): a trait has no objects of its own to point at
     else if (classdef->istrait)
         snprintf(text, sizeof(text), "trait '%s' does not have a member named '%s'", getstr(classdef->name), name);

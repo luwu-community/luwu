@@ -46,7 +46,7 @@ do
     end, "a bundle can't be changed; b:with(1, value) makes a copy with that position replaced")
     raises(function()
         range.first = 2
-    end, "do not have a field named 'first'")
+    end, "do not have a field or function named 'first'")
     raises(function()
         print(range[3])
     end, "position 3 is out of range 1 to 2")
