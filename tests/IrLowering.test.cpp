@@ -5621,7 +5621,7 @@ end
     CHECK_EQ(
         "\n" + getCodegenAssembly(source),
         R"(
-; function foo($arg0, $arg1, $arg2) line 2
+; function foo(zero, b1, b2) line 2
 bb_0:
   CHECK_TAG R0, tnumber, exit(entry)
   CHECK_TAG R1, tbuffer, exit(entry)

@@ -89,6 +89,7 @@ LUAU_FASTFLAG(LuwuTraits)
 LUAU_FASTFLAG(LuwuIfLocal)
 LUAU_FASTFLAG(LuwuDoExpr)
 LUAU_FASTFLAG(LuwuTableComprehensions)
+LUAU_FASTFLAG(DebugLuwuPoperators)
 LUAU_FASTFLAG(LuwuTableFunctionFields)
 LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuauAllowGlobalDeclarationToBeCalledClass)
@@ -110,7 +111,7 @@ LUAU_FASTFLAG(DebugLuwuBundles)
 LUAU_FASTFLAG(LuwuDeclareStatements)
 LUAU_FASTFLAG(LuwuBufferIsFrozen)
 LUAU_FASTFLAG(DebugLuwuBufferComparison)
-LUAU_FASTFLAG(LuwuBufferBatched)
+LUAU_FASTFLAG(DebugLuwuBufferBatched)
 LUAU_FASTFLAG(LuauDirectFieldGet)
 LUAU_FASTFLAG(LuwuPcallMulti)
 
@@ -1297,7 +1298,7 @@ TEST_CASE("Buffers")
 // Luwu Batched Buffer Read/Write (rfcs/buffer-batched.md)
 TEST_CASE("BufferBatched")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, true};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, true};
 
     runConformance(
         "buffer_batched.luwu",
@@ -1311,7 +1312,7 @@ TEST_CASE("BufferBatched")
 // the whole library addition disappears with the flag off, so an embedder that turns it off gets upstream shapes
 TEST_CASE("BufferBatchedFlagDisabled")
 {
-    ScopedFastFlag bufferBatched{FFlag::LuwuBufferBatched, false};
+    ScopedFastFlag bufferBatched{FFlag::DebugLuwuBufferBatched, false};
 
     StateRef globalState(luaL_newstate(), lua_close);
     lua_State* L = globalState.get();
@@ -3235,7 +3236,7 @@ TEST_CASE("ApiPcallMulti")
     CHECK_EQ(std::string(lua_tostring(L, -2)), "traceback2");
     CHECK_EQ(std::string(lua_tostring(L, -1)), "test error");
     lua_pop(L, 3); // pop results
-
+    
     // Test multiple returns where we pass nresults = LUA_MULTRET
     lua_getglobal(L, "errorfunc");
     status = lua_pcallmulti(L, 0, LUA_MULTRET, handler_idx);
@@ -5067,6 +5068,25 @@ TEST_CASE("Collections")
     runConformance("collections.luwu");
 }
 
+// Luwu try expressions: `try e case ...`, which needs match expressions and destructuring's patterns
+TEST_CASE("TryExpressionsWithCaseArms")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuDestructuring, true},
+    };
+
+    runConformance("try_match.luwu");
+    runConformance("try_match_registers.luwu");
+}
+
 TEST_CASE("TryExpressions")
 {
     ScopedFastFlag sffs[] = {
@@ -5096,6 +5116,36 @@ TEST_CASE("Integers")
 
     runConformance("integers.luwu");
     runConformance("integer_library.luwu");
+}
+
+// Luwu try expressions: ranges around `do` expressions, which can write locals before they raise and leave the range
+// early
+TEST_CASE("TryExpressionsWithDoExpressions")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::LuwuTableComprehensions, true},
+    };
+
+    runConformance("try_do.luwu");
+}
+
+// Luwu try expressions: results bound by `if const` and the other `when` chains, which are kept in registers
+TEST_CASE("TryExpressionsInWhenChains")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDeclareStatements, true},
+        {FFlag::DebugLuwuTryExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    runConformance("try_when.luwu");
 }
 
 TEST_CASE("OptionAndResult")
@@ -7518,10 +7568,27 @@ TEST_CASE("Destructuring")
     runConformance("destructuring.luwu");
 }
 
+TEST_CASE("CollectionsUnfolding")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::LuwuClasses, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::LuwuDoExpr, true},
+        {FFlag::DebugLuwuBundles, true},
+        {FFlag::DebugLuwuBuiltinClasses, true},
+        {FFlag::LuwuNonePrimitive, true},
+        {FFlag::DebugLuwuMatchExpressions, true},
+        {FFlag::LuwuIfLocal, true},
+    };
+
+    runConformance("collections_unfolding.luwu");
+}
+
 TEST_CASE("IfLocal")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
         {FFlag::LuwuNonePrimitive, true},
     };
 
@@ -7533,6 +7600,7 @@ TEST_CASE("LoopWhenChains")
 {
     ScopedFastFlag sffs[] = {
         {FFlag::LuwuIfLocal, true},
+        {FFlag::LuwuDestructuring, true},
         {FFlag::LuwuTableComprehensions, true},
         {FFlag::LuwuDoExpr, true},
     };
@@ -7572,9 +7640,21 @@ TEST_CASE("MatchExpressions")
         {FFlag::LuwuClasses, true},
         {FFlag::LuwuTraits, true},
         {FFlag::LuwuNonePrimitive, true},
+        {FFlag::LuwuDestructuring, true},
+        {FFlag::DebugLuwuBundles, true},
     };
 
     runConformance("match.luwu");
+}
+
+TEST_CASE("PushPopOperators")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuwuPoperators, true},
+        {FFlag::LuwuClasses, true},
+    };
+
+    runConformance("push_pop.luwu");
 }
 
 TEST_CASE("TableFunctionFields")
