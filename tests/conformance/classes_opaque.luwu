@@ -1,0 +1,69 @@
+--!nocheck
+-- Luwu opaque values: a class marked opaque (`markopaque`, lua_setclassopaque from the test's setup) can't be reflected
+-- on, and reading one of its private members from outside raises the error a missing member gives. No `@native`
+-- functions, so the --codegen run compiles every function here natively, including the reads that go through native
+-- code's member authorization.
+
+class Vault(
+    private secret: string,
+    public label: string
+)
+    public function reveal(self)
+        return self.secret
+    end
+end
+
+class Plain(
+    private secret: string,
+    public label: string
+)
+end
+
+markopaque(Vault)
+
+-- the message without its `file:line:` prefix, with `name` written as KEY
+local function shape(message: string, name: string): string
+    local text = string.gsub(string.gsub(message, "^[^:]*:%d+: ", ""), `'{name}'`, "'KEY'")
+    return text
+end
+
+local function read(object, name)
+    return object[name]
+end
+
+local function readsecret(object)
+    return object.secret
+end
+
+local function readmissing(object)
+    return object.missing
+end
+
+local vault = Vault("hidden", "front door")
+
+-- several times, so native code and the interpreter's slot caches have learned the member's slot
+for _ = 1, 3 do
+    local _, secreterror = pcall(readsecret, vault)
+    local _, missingerror = pcall(readmissing, vault)
+    assert(shape(secreterror, "secret") == shape(missingerror, "missing"))
+    assert(string.find(missingerror, "objects of class 'Vault' do not have a field or function named 'missing'", 1, true))
+
+    local _, byname = pcall(read, vault, "secret")
+    assert(shape(byname, "secret") == shape(missingerror, "missing"))
+end
+
+-- the class's own methods still read it
+assert(vault:reveal() == "hidden")
+assert(vault.label == "front door")
+
+-- a class that isn't marked still says the member is private
+local _, plainerror = pcall(readsecret, Plain("hidden", "back door"))
+assert(string.find(plainerror, "'secret' is a private member of 'Plain'", 1, true))
+
+-- reflection raises on the class and on its objects
+local fieldsok, fieldserror = pcall(class.fields, Vault)
+assert(not fieldsok and string.find(fieldserror, "can't list the fields of class 'Vault': it's opaque", 1, true))
+assert(not pcall(class.fields, vault))
+assert(pcall(class.fields, Plain))
+
+return "OK"

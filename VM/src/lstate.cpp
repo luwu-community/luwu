@@ -76,7 +76,6 @@ static void f_luaopen(lua_State* L, void* ud)
     sethvalue(L, registry(L), luaH_new(L, 0, 2)); // registry
     luaS_resize(L, LUA_MINSTRTABSIZE);            // initial size of string table
     luaT_init(L);
-    g->traitinitrunner = luaR_newtraitinitrunner(L);
     if (FFlag::LuauGcTraceUdata)
     {
         LuaTable* wt = weakenvalues(L, luaH_new(L, 0, 0)); // weakregistry
@@ -215,7 +214,8 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
     g->frealloc = f;
     g->ud = ud;
     g->mainthread = L;
-    g->traitinitrunner = NULL;
+    for (int i = 0; i < LUWU_BUILTIN__COUNT; i++)
+        g->builtinclasses[i] = NULL;
     g->uvhead.u.open.prev = &g->uvhead;
     g->uvhead.u.open.next = &g->uvhead;
     g->GCthreshold = 0; // mark it as unfinished state
@@ -269,6 +269,9 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
         g->udatamark[i] = NULL;
         g->udatamt[i] = NULL;
     }
+
+    for (i = 0; i < LUA_OTAG_LIMIT; i++)
+        g->objectdtors[i] = NULL;
 
     for (i = 0; i < UTAG_INTERNAL_LIMIT; i++)
     {

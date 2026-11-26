@@ -30,11 +30,17 @@ LUAI_FUNC void luaV_gettablefor(lua_State* L, const TValue* t, TValue* key, StkI
 // Luwu Destructuring (rfcs/destructuring.md): LOP_GETPOSITIONAL's work, element `position` (from 0) of a positional pattern
 LUAI_FUNC void luaV_getpositional(lua_State* L, const TValue* t, int position, StkId val);
 LUAI_FUNC void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val);
+// Luwu bundles: `t[key]` and `t[key] = val` for the bundle key holding the `n` values at `values`, building the bundle
+// only for a metamethod, a table that isn't plain, or a new key
+LUAI_FUNC void luaV_gettablebundle(lua_State* L, StkId t, StkId values, int n, StkId val);
+LUAI_FUNC void luaV_settablebundle(lua_State* L, StkId t, StkId values, int n, StkId val);
 LUAI_FUNC void luaV_concat(lua_State* L, int total, int last);
 LUAI_FUNC void luaV_getimport(lua_State* L, LuaTable* env, TValue* k, StkId res, uint32_t id, bool propagatenil);
 LUAI_FUNC void luaV_prepareFORN(lua_State* L, StkId plimit, StkId pstep, StkId pinit);
 LUAI_FUNC void luaV_callTM(lua_State* L, int nparams, int res);
-LUAI_FUNC void luaV_tryfuncTM(lua_State* L, StkId func);
+// Prepares a call on a value that isn't a function: its `__call` metamethod, or a class's constructor. Returns how many
+// slots the arguments moved up.
+LUAI_FUNC int luaV_tryfuncTM(lua_State* L, StkId func, StkId argtop);
 // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): LOP_PRESIZETABLE's work, for the interpreter and native code
 LUAI_FUNC void luaV_presizetable(lua_State* L, LuaTable* t, const TValue* rb, int form);
 // Luwu Push and Pop Operators (rfcs/push-pop-operators.md): LOP_PUSH's and LOP_POP's work, for the interpreter and native

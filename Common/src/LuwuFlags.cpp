@@ -53,6 +53,15 @@ bool luauClassCompat()
 // startswith, endswith and contains fastcalls.
 LUAU_FASTFLAGVARIABLE(LuwuStringExtensions)
 
+// Luwu builtin classes: standard library classes written in C++, in the VM and in Analysis's builtin definitions. So far
+// that's the `collections` library (`OrderedMap`, `Vec`, `VecDeque`). A prototype whose API can still change. Needs
+// LuwuClasses.
+LUAU_FASTFLAGVARIABLE(DebugLuwuBuiltinClasses)
+
+// Luwu bundles: the `bundle` library, its classes, and the compiler's fastcalls and unfolding for it. A prototype whose
+// API can still change. Needs LuwuClasses.
+LUAU_FASTFLAGVARIABLE(DebugLuwuBundles)
+
 // Luwu: the `@[inline(reason)]` attribute. The compiler weighs a marked function by a third of its size at its call sites,
 // and a call it still can't inline is a compile error at the call. In progress, so a Debug flag.
 LUAU_FASTFLAGVARIABLE(DebugLuwuEncourageInline)

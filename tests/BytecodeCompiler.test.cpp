@@ -1139,30 +1139,35 @@ TEST_CASE_FIXTURE(BytecodeCompilerFixture, "classes_declaration_roundtrips")
     ScopedFastFlag luwuClasses{FFlag::LuwuClasses, true};
 
     // the module: class shapes (with a constant default) and NEWCLASSMEMBER
-    auto fn = buildBytecode(kClassConstructionSource, 0, 3);
+    auto fn = buildBytecode(kClassConstructionSource, 0, 6);
     REQUIRE(fn);
     REQUIRE_EQ(verifyUseConsistency(*fn), true);
 
     int members = 0;
+    int constructors = 0;
     for (BcOp op : fn->blockOp(fn->entryBlock).ops)
     {
         BcInst& insn = fn->instOp(op);
         if (insn.op != LOP_NEWCLASSMEMBER)
             continue;
 
-        // the class, the method's closure and its name
+        // the class, the function's closure, and the member's name or the constructor's form
         REQUIRE_EQ(insn.ops.size(), 3);
         CHECK_EQ(fn->instOp(insn.ops[0]).op, LOP_LOADKX);
         CHECK_EQ(fn->instOp(insn.ops[1]).op, LOP_NEWCLOSURE);
-        CHECK_EQ(insn.ops[2].kind, BcOpKind::VmConst);
-        members++;
+
+        if (insn.ops[2].kind == BcOpKind::Imm)
+            constructors++;
+        else
+            members++;
     }
     CHECK_EQ(members, 2);
+    CHECK_EQ(constructors, 3);
 
     // checkRoundtrip serializes into an empty builder, where the module's child closures don't exist
     for (int optLevel = 0; optLevel <= 2; optLevel++)
     {
-        auto bytecode = getFunctionBytecode(kClassConstructionSource, optLevel, 3);
+        auto bytecode = getFunctionBytecode(kClassConstructionSource, optLevel, 6);
         REQUIRE(bytecode);
         std::vector<std::string_view> table;
         for (std::string& str : bytecode->second)
@@ -1171,7 +1176,7 @@ TEST_CASE_FIXTURE(BytecodeCompilerFixture, "classes_declaration_roundtrips")
         REQUIRE(module);
 
         BytecodeBuilder bcb;
-        for (int child = 0; child < 3; child++)
+        for (int child = 0; child < 6; child++)
         {
             bcb.beginFunction(0);
             bcb.emitABC(LOP_RETURN, 0, 1, 0);
