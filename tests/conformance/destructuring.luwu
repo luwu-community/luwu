@@ -72,7 +72,7 @@ do
         const .{nope} = Cat("Taz", 12)
         return nope
     end)
-    assert(not ok and string.find(err, "do not have a field named 'nope'", 1, true))
+    assert(not ok and string.find(err, "objects of class 'Cat' do not have a field", 1, true) and string.find(err, "named 'nope'", 1, true))
 end
 
 -- const bindings stay const
