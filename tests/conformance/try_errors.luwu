@@ -153,7 +153,22 @@ do
         return cat.bark
     end)
     assert(class.isinstance(e, Error.MissingMember) and e.object == cat and e.name == "bark")
-    assert(tostring(e) == "objects of class 'Cat' do not have a field named 'bark'")
+    assert(tostring(e) == "objects of class 'Cat' do not have a field or function named 'bark'")
+end
+
+-- a static function read through an object is named, with how to reach it
+class Litter
+    function size()
+        return 3
+    end
+end
+
+do
+    local e = caught(function()
+        return Litter():size()
+    end)
+    assert(class.isinstance(e, Error.MissingMember) and e.name == "size")
+    assert(tostring(e) == "objects of class 'Litter' can't reach its static function 'size'; use it through the class, or declare it 'shared'")
 end
 
 -- the libraries' argument checks and `assert`
