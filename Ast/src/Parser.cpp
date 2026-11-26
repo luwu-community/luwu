@@ -5,6 +5,7 @@
 #include "Luau/ClassMemberNames.h"
 #include "Luau/Common.h"
 #include "Luau/LuwuFlags.h"
+#include "Luau/LuwonSyntax.h"
 #include "Luau/StringUtils.h"
 #include "Luau/TimeTrace.h"
 
@@ -656,6 +657,9 @@ ParseResult Parser::parseOnce(
 
 ParseResult Parser::finishParse(Parser& p, AstStatBlock* root, const char* buffer, size_t bufferSize)
 {
+    if (p.options.luwon)
+        checkLuwonSyntax(root, p.parseErrors);
+
     size_t lines = p.lexer.current().location.end.line + (bufferSize > 0 && buffer[bufferSize - 1] != '\n');
 
     return ParseResult{root, lines, std::move(p.hotcomments), std::move(p.parseErrors), std::move(p.commentLocations), std::move(p.cstNodeMap)};
