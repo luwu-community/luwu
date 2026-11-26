@@ -196,22 +196,22 @@ expectpass("object pcall method", function()
     assert(msg:match("Not a pythagorean triple!"), `Message was: {msg}`)
 end)
 
-expectfail("object assign nonexistent field", "objects of class 'Point' do not have a field named 'huh'", function()
+expectfail("object assign nonexistent field", "objects of class 'Point' do not have a field or function named 'huh'", function()
     local p = Point({ x = 3, y = 4 })
     p.huh = "???"
 end)
 
-expectfail("object get nonexistent field", "objects of class 'Point' do not have a field named 'huh'", function()
+expectfail("object get nonexistent field", "objects of class 'Point' do not have a field or function named 'huh'", function()
     local p = Point {}
     print(p.huh)
 end)
 
-expectfail("object assign static function", "objects of class 'Point' do not have a field named 'zero'", function()
+expectfail("object assign static function", "objects of class 'Point' can't reach its static function 'zero'; use it through the class, or declare it 'shared'", function()
     local p = Point({ x = 3, y = 4 })
     p.zero = "???"
 end)
 
-expectfail("object call missing method", "objects of class 'Point' do not have a field named 'hmm'", function()
+expectfail("object call missing method", "objects of class 'Point' do not have a field or function named 'hmm'", function()
     local p = Point {}
     print(p:hmm())
 end)

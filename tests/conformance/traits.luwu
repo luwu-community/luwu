@@ -1147,7 +1147,7 @@ do
     assert(l:Encoder:plain() == "plain")
 
     -- scoped functions aren't members of the class
-    expectfail("scoped method", "do not have a field named 'write'", function()
+    expectfail("scoped method", "do not have a field or function named 'write'", function()
         return l.write
     end)
     expectfail("scoped static", "does not have a member named 'encode'", function()
@@ -1358,12 +1358,24 @@ do
     end
 
     raises(function() taz.species = "dog" end, "Breed.species is shared between all objects of its class and cannot be mutated through this object; mutate it through class 'Breed' instead")
-    raises(function() return taz.count end, "objects of class 'Breed' do not have a field named 'count'")
-    raises(function() return taz.make end, "objects of class 'Breed' do not have a field named 'make'")
-    raises(function() return taz:describe() end, "objects of class 'Breed' do not have a field named 'describe'")
-    raises(function() taz.count = 3 end, "objects of class 'Breed' do not have a field named 'count'")
+    raises(function() return taz.count end, "objects of class 'Breed' can't reach its static field 'count'; use it through the class, or declare it 'shared'")
+    raises(function() return taz.make end, "objects of class 'Breed' can't reach its static function 'make'; use it through the class, or declare it 'shared'")
+    raises(function() return taz:describe() end, "objects of class 'Breed' can't reach its static function 'describe'; use it through the class, or declare it 'shared'")
+    raises(function() taz.count = 3 end, "objects of class 'Breed' can't reach its static field 'count'; use it through the class, or declare it 'shared'")
     raises(function() Breed.MAX = 3 end, "'MAX' is a const field of class 'Breed' and can't be assigned")
     raises(function() Breed.meow = 3 end, "with 'meow'")
+end
+
+-- a private static function isn't named to code outside its class
+class Safe
+    private function combination()
+        return 1234
+    end
+end
+
+do
+    local ok, err = pcall(function() return Safe():combination() end)
+    assert(not ok and string.find(err, "objects of class 'Safe' do not have a field or function named 'combination'", 1, true), err)
 end
 
 trait Enrolled
@@ -1891,7 +1903,7 @@ do
 
     raises(function() return Clicker.click() end, "attempt to call class method 'Clicker.click' with 'Self' of type 'nil'; call it on the class: 'Clicker:click()'")
     raises(function() return Clicker.click(Shelf) end, "attempt to call class method 'Clicker.click' with 'Self' of class 'Shelf'")
-    raises(function() return Clicker():click() end, "objects of class 'Clicker' do not have a field named 'click'")
+    raises(function() return Clicker():click() end, "objects of class 'Clicker' can't reach its static function 'click'; use it through the class, or declare it 'shared'")
     raises(function() return Catalog:register() end, "'Catalog.register' expects a class implementing 'Catalog', got trait")
     raises(function() return Catalog.register(Clicker) end, "'Catalog.register' expects a class implementing 'Catalog', got class")
     raises(function() return Shelf.register(Drawer) end, "attempt to call class method 'Shelf.register' with 'Self' of class 'Drawer'")

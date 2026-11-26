@@ -1794,6 +1794,21 @@ static bool luaR_isstaticat(const LuauClass* c, uint32_t off)
     return off >= c->numberofinstancemembers && (c->memberflags[off] & LBC_CLASSMEMBER_STATIC) != 0;
 }
 
+const char* luaR_staticmemberkind(const LuauClass* classdef, TString* name)
+{
+    const TValue* offset = luaR_classvalueoffset(classdef, name);
+    if (ttisnil(offset))
+        return NULL;
+
+    // a private member's name stays out of errors raised outside its class
+    uint32_t off = uint32_t(nvalue(offset));
+    bool publicstatic = luaR_isstaticat(classdef, off) && (classdef->memberflags[off] & LBC_CLASSMEMBER_PRIVATE) == 0;
+    if (!publicstatic)
+        return NULL;
+
+    return (classdef->memberflags[off] & LBC_CLASSMEMBER_CLASSFIELD) ? "field" : "function";
+}
+
 // The offset of `trait`'s member `name`, which it has: the one the trait value reads when `classvalue` is set, the one
 // objects read otherwise. They differ when a static member shares its name with an object field (LuauClass::staticshadows).
 static uint32_t luaR_traitmemberoffset(const LuauClass* trait, TString* name, bool classvalue)
