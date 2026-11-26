@@ -1,0 +1,567 @@
+--[=[
+    A usability target for the `ast` library, not a test that runs yet: the codemod seal would use to move its code to
+    the 0.9 `fs` API. It's written against the API sketched in AST.CLAUDE.md. When the library exists, this file should
+    run unchanged (or the API gets fixed until it does), and its output on the cases at the bottom is the test.
+
+    The migration:
+
+    - `fs.readfile(p)` becomes `fs.file.read(p)`.
+    - `fs.file.try_read(p)` becomes `try fs.file.read(p)`, with its two-value handling turned into `Ok`/`Err`.
+    - `fs.path.join(base, ...)` becomes `base / ...` when `base` is already a `Path`. A join of plain strings stays,
+      since it returns a `Path` in 0.9.
+    - `fs.dir.cwd()` becomes `fs.path.cwd()` when its entry is only used in ways a `Path` also supports. `cwd:join(...)`
+      becomes `cwd / ...`, wrapped in `tostring` when the result is used as a string, and `cwd:list(...)` stays as it
+      is, since a `Path` has `list` too.
+    - `fs.listdir(p, ...)` becomes `p:list(...)` when `p` is a `Path`, and `fs.dir.list(p, ...)` otherwise.
+    - A recursive listing (`fs.listdir(p, true, filter)`, `entry:list(true, filter)`) becomes `fs.filter` with a glob,
+      when its filter is missing or only keeps one file extension: `fs.filter(fs.glob("p/**/*.luwu"))`, or
+      `fs.filter(p:glob("**/*.luwu"))` for a `Path`. Any other
+      filter is left for a person, who may want `fs.glob(...):exclude(.(...))` or a filter function taking `Path`s.
+    - `fs.makedir(p, { create_missing = true })` becomes `fs.dir.ensure(p)`.
+
+    Calls it can't rewrite safely are listed for a person to finish.
+]=]
+const env = require("@std/env")
+const fs = require("@std/fs")
+
+--[=[
+    The `expect` message for code built with `ast.expr` or `ast.stat`. Embedding only puts existing nodes into valid
+    code, so a parse failure there is a bug in this script.
+]=]
+const BUILT = "code built around embedded nodes parses"
+
+--- One planned swap: `new` goes in `old`'s place.
+class Swap(
+    public old: ast.Node,
+    public new: ast.Node
+) end
+
+--[=[
+    The edits to make, collected before any is made. `ast` edits change the tree at once, and the checks below read
+    the code as written: rewriting `const cwd = fs.dir.cwd()` first would hide that `cwd:join(...)` joins onto a
+    `fs.dir.cwd()` entry.
+]=]
+class Plan
+    private swaps: { Swap } = {}
+    private removals: { ast.Node } = {}
+
+    --- Puts `new` in `old`'s place once the plan is applied.
+    public function swap(self, old: ast.Node, new: ast.Node)
+        table.insert(self.swaps, Swap(old, new))
+    end
+
+    --- Removes `node` once the plan is applied.
+    public function remove(self, node: ast.Node)
+        table.insert(self.removals, node)
+    end
+
+    public function apply(self)
+        for _, swap in self.swaps do
+            swap.old:swap(swap.new)
+        end
+        for _, node in self.removals do
+            node:remove()
+        end
+    end
+end
+
+--- Whether `binding` is assigned anywhere after its declaration.
+const function reassigned(binding: ast.Binding): boolean
+    return #binding:assignments() > 0
+end
+
+--- Whether `value` is the call `require("@std/fs")`.
+const function requires_fs(value: ast.Expr): boolean
+    if
+        value is ast.Call { callee is ast.Identifier { name is "require", builtin is true } }
+        when const path = value.args:get(1)
+        when path is ast.String { value is "@std/fs" }
+    then
+        return true
+    end
+    return false
+end
+
+--[=[
+    Whether `expr` is seal's `fs`: a binding declared as `require("@std/fs")` that's never reassigned. The `fs` global
+    from `seal eval` counts too, unless the file assigns to it.
+]=]
+const function is_fs(expr: ast.Expr): boolean
+    return false if expr is not ast.Identifier
+
+    const binding = expr.binding or return expr.name == "fs" and #expr:assignments() == 0
+    return false if reassigned(binding)
+
+    const value = binding:initializer() or return false
+    return requires_fs(value)
+end
+
+--[=[
+    The member a callee names under `fs` (`"path.join"` for `fs.path.join`) and the `fs` node it starts from, or nil
+    when the callee isn't on seal's `fs`. Rewrites reuse the `fs` node so an aliased `fs` keeps its name.
+]=]
+const function fs_member(callee: ast.Expr): (string?, ast.Expr?)
+    local names: { string } = {}
+    local current = callee
+    while current is ast.Property do
+        table.insert(names, 1, current.name)
+        current = current.object
+    end
+
+    return nil if not is_fs(current)
+    return table.concat(names, "."), current
+end
+
+--- The value a never-reassigned local was declared with, or nil for anything else.
+const function local_value(expr: ast.Expr): ast.Expr?
+    if
+        expr is ast.Identifier
+        when const binding = expr.binding
+        when not reassigned(binding)
+    then
+        return binding:initializer()
+    end
+    return nil
+end
+
+--- Whether `expr` is a local holding `fs.dir.cwd()`.
+const function is_cwd_entry(expr: ast.Expr): boolean
+    const value = local_value(expr) or return false
+    return value is ast.Call and fs_member(value.callee) == "dir.cwd"
+end
+
+--[=[
+    Whether `expr` is a `Path` in 0.9: `fs.path.cwd()`, `fs.path.join(...)` (which returns a `Path` from 0.9 on), a `/`
+    whose left side is a `Path`, `cwd:join(...)` on a `fs.dir.cwd()` entry (rewritten to `/`), or a never-reassigned
+    local holding one of those. It reads the code as written, before any rewrite.
+]=]
+const function is_path(expr: ast.Expr): boolean
+    if expr is ast.Call then
+        const member = fs_member(expr.callee)
+        return member == "path.cwd" or member == "path.join"
+    end
+    if expr is ast.MethodCall then
+        return expr.method == "join" and is_cwd_entry(expr.object)
+    end
+    if expr is ast.Binary { op is "div", left } then
+        return is_path(left)
+    end
+
+    const value = local_value(expr) or return false
+    return is_path(value)
+end
+
+--- Whether `use` sits where a `Path` works as well as a string: an `fs` argument, an interpolation, or the left of `/`.
+const function takes_pathlike(use: ast.Identifier): boolean
+    const parent = use:parent()
+    if parent is ast.Call then
+        return fs_member(parent.callee) ~= nil
+    end
+    if parent is ast.Binary { op is "div", left } then
+        return left == use
+    end
+    return parent is ast.InterpString
+end
+
+--- Whether `binding` is ever used as a string rather than a `Pathlike` (`..`, `==`, another library's argument).
+const function used_as_string(binding: ast.Binding): boolean
+    for _, use in binding:uses() do
+        if not takes_pathlike(use) then
+            return true
+        end
+    end
+    return false
+end
+
+--- The `DirectoryEntry` methods a 0.9 `Path` also has. `join` is rewritten to `/`; the rest keep their calls.
+const PATH_METHODS = {
+    join = true,
+    list = true,
+}
+
+--[=[
+    Whether `use` of a directory entry still works once it's a `Path`: calling one of `PATH_METHODS` on it, or passing it
+    where a `Pathlike` goes.
+]=]
+const function works_as_path(use: ast.Identifier): boolean
+    const parent = use:parent()
+    if parent is ast.MethodCall and parent.object == use then
+        return PATH_METHODS[parent.method] == true
+    end
+    return takes_pathlike(use)
+end
+
+--[=[
+    Whether a `fs.dir.cwd()` call's result is used as a `DirectoryEntry` in a way a `Path` doesn't support (a method
+    `Path` lacks, an argument to something outside `fs`). Such a call has to stay a `DirectoryEntry`.
+]=]
+const function used_as_directory(call: ast.Call): boolean
+    const declaration = call:parent()
+    return true if declaration is not ast.LocalDeclaration
+
+    for _, use in declaration.bindings:at(1):uses() do
+        if not works_as_path(use) then
+            return true
+        end
+    end
+    return false
+end
+
+--- Whether `expr` reads `binding`.
+const function refers_to(expr: ast.Expr, binding: ast.Binding): boolean
+    return expr is ast.Identifier and expr.binding == binding
+end
+
+--- The extension in a suffix like `".luwu"`, or nil when the suffix isn't just a dot and a name.
+const function extension_of(suffix: string): string?
+    return string.match(suffix, "^%.(%w+)$")
+end
+
+--- Whether `expr` takes the end of `binding`'s value: `string.sub(path, -5)` or `path:sub(-5)`.
+const function ends_of(expr: ast.Expr, binding: ast.Binding): boolean
+    if expr is ast.MethodCall then
+        return expr.method == "sub" and refers_to(expr.object, binding)
+    end
+    if
+        expr is ast.Call
+        when expr.callee:dotted() == "string.sub"
+        when const subject = expr.args:get(1)
+    then
+        return refers_to(subject, binding)
+    end
+    return false
+end
+
+--[=[
+    The extension `test` checks `binding`'s value ends with, or nil for any other test. It knows
+    `path:endswith(".luwu")` and `string.sub(path, -5) == ".luwu"` (or `path:sub(-5)`).
+]=]
+const function suffix_test(test: ast.Expr, binding: ast.Binding): string?
+    if
+        test is ast.MethodCall
+        when test.method == "endswith"
+        when refers_to(test.object, binding)
+        when const suffix = test.args:get(1)
+        when suffix is ast.String
+    then
+        return extension_of(suffix.value)
+    end
+    if
+        test is ast.Binary { op is "eq", left, right }
+        when right is ast.String
+        when ends_of(left, binding)
+    then
+        return extension_of(right.value)
+    end
+    return nil
+end
+
+--- The one file extension a hand-rolled listing filter keeps, or nil when `filter` does anything else.
+const function filtered_extension(filter: ast.Expr): string?
+    return nil if filter is not ast.Function
+
+    const param = filter.params:get(1) or return nil
+    const statements = filter.body:children()
+    const only_returns = #statements == 1 and statements:at(1) is ast.Return
+    return nil if not only_returns
+
+    const tested = statements:at(1).values:get(1) or return nil
+    return suffix_test(tested, param.binding)
+end
+
+--[=[
+    `fs.filter(...)` for a recursive listing of `dir`, or nil when `filter` does more than keep one extension. A string
+    literal `dir` goes into `fs.glob` as written, a `Path` globs from itself (`dir:glob(...)`), and any other value is
+    made a `Path` first.
+]=]
+const function recursive_listing(root: ast.Expr, dir: ast.Expr, filter: ast.Expr?): ast.Expr?
+    local files = "*"
+    if filter then
+        const extension = filtered_extension(filter) or return nil
+        files = `*.{extension}`
+    end
+
+    const glob =
+        if dir is ast.String then
+            `{root}.glob({string.format("%q", `{dir.value}/**/{files}`)})`
+        elseif is_path(dir) or is_cwd_entry(dir) then
+            `{dir}:glob("**/{files}")`
+        else
+            `{root}.path({dir}):glob("**/{files}")`
+    return ast.expr(`{root}.filter({glob})`):expect(BUILT)
+end
+
+--- `base / a / b` for each of `args` from `first` on.
+const function divide(base: ast.Expr, args: ast.NodeList<ast.Expr>, first: number): ast.Expr
+    local joined = base
+    for i = first, #args do
+        joined = ast.expr(`{joined} / {args:at(i)}`):expect(BUILT)
+    end
+    return joined
+end
+
+--- The arguments of `call` after the first, as a list for a new node.
+const function rest_of(args: ast.NodeList<ast.Expr>): { ast.Expr }
+    return { for i = 2, #args give args:at(i) }
+end
+
+--[=[
+    `path` in place of the string `call` gave before, wrapped in `tostring` when the local `call` is assigned to is used
+    as a string somewhere.
+]=]
+const function path_or_string(call: ast.Expr, path: ast.Expr): ast.Expr
+    const declaration = call:parent()
+    if declaration is ast.LocalDeclaration and used_as_string(declaration.bindings:at(1)) then
+        return ast.expr(`tostring({path})`):expect(BUILT)
+    end
+    return path
+end
+
+--- Whether `options` is exactly `{ create_missing = true }`.
+const function creates_missing(options: ast.Expr?): boolean
+    return false if options is not ast.Table
+    return false if #options.items ~= 1
+
+    const item = options.items:at(1)
+    const key = item.key
+    const value = item.value
+    return
+        key is ast.String
+        and key.value == "create_missing"
+        and value is ast.Boolean
+        and value.value == true
+end
+
+--[=[
+    Plans the rewrite of the one `try_read` shape that's safe to change, and returns false for every other shape:
+
+    ```luwu
+    local text, result = fs.file.try_read(p)
+    if not text then
+        ...
+        return
+    end
+    ```
+
+    becomes
+
+    ```luwu
+    const text = match try fs.file.read(p)
+        case is Ok(text) then text
+        case is Err(result) then do
+            ...
+            return
+    ```
+]=]
+const function rewrite_try_read(plan: Plan, call: ast.Call, root: ast.Expr): boolean
+    const declaration = call:parent()
+    const is_two_value_local =
+        declaration is ast.LocalDeclaration
+        and #declaration.bindings == 2
+        and #declaration.values == 1
+    return false if not is_two_value_local
+
+    const guard = declaration:next() or return false
+    const value = declaration.bindings:at(1)
+    const result = declaration.bindings:at(2)
+    const guards_the_value =
+        guard is ast.IfStat
+        and guard.elseifs == nil
+        and guard.elsebody == nil
+        and guard.conditions:at(1):source() == `not {value.name}`
+    return false if not guards_the_value
+
+    -- the error arm becomes a `do` expression, which has to leave: the old guard's body must end in a return or similar
+    const statements = guard.body:children()
+    const leaves = statements:get(#statements) is ast.Exit
+    return false if not leaves
+
+    const rewritten = ast.stat(table.concat({
+        `const {value.name} = match try {root}.file.read({call.args:at(1)})`,
+        `    case is Ok({value.name}) then {value.name}`,
+        `    case is Err({result.name}) then do {guard.body}`,
+    }, "\n")):expect(BUILT)
+    plan:swap(declaration, rewritten)
+    plan:remove(guard)
+    return true
+end
+
+--[=[
+    The name `doc` gives seal's `fs`, as an expression to build calls on, or nil when `doc` never requires it into a
+    local of its own.
+]=]
+const function fs_root(doc: ast.Document): ast.Expr?
+    const binding = doc:requires("@std/fs")[1] or return nil
+    return ast.expr(binding.name):expect(BUILT)
+end
+
+--[=[
+    Plans every edit for `doc`. Nothing changes while planning, so every check here reads the code as written.
+    `unhandled` collects the calls left for a person.
+]=]
+const function migrate(doc: ast.Document, plan: Plan, unhandled: { string })
+    for _, call in doc:find(ast.Call) do
+        const member, root = fs_member(call.callee)
+        continue if not member or not root
+
+        match member
+        case is "readfile" then
+            plan:swap(call.callee, ast.expr(`{root}.file.read`):expect(BUILT))
+        case is "file.try_read" then
+            if not rewrite_try_read(plan, call, root) then
+                table.insert(unhandled, tostring(call))
+            end
+        case is "path.join" when #call.args >= 2 and is_path(call.args:at(1)) then
+            plan:swap(call, divide(call.args:at(1), call.args, 2))
+        case is "dir.cwd" when not used_as_directory(call) then
+            plan:swap(call.callee, ast.expr(`{root}.path.cwd`):expect(BUILT))
+        case is "listdir" when #call.args >= 1 then
+            const target = call.args:at(1)
+            const recursive = call.args:get(2)
+            if recursive is ast.Boolean and recursive.value then
+                const listing = recursive_listing(root, target, call.args:get(3))
+                if listing then
+                    plan:swap(call, listing)
+                else
+                    table.insert(unhandled, tostring(call))
+                end
+                continue
+            end
+
+            const rest = rest_of(call.args)
+            const listed =
+                if is_path(target) then
+                    ast.MethodCall { object = target, method = "list", args = rest }
+                else
+                    ast.Call {
+                        callee = ast.expr(`{root}.dir.list`):expect(BUILT),
+                        args = call.args,
+                    }
+            plan:swap(call, listed)
+        case is "makedir" when creates_missing(call.args:get(2)) then
+            plan:swap(call, ast.expr(`{root}.dir.ensure({call.args:at(1)})`):expect(BUILT))
+        else
+        end
+    end
+
+    for _, method in doc:find(ast.MethodCall) do
+        const recursive = method.args:get(1)
+        const is_recursive_list =
+            method.method == "list"
+            and (is_cwd_entry(method.object) or is_path(method.object))
+            and recursive is ast.Boolean
+            and recursive.value
+        if is_recursive_list then
+            const root = fs_root(doc)
+            const listing = if root then recursive_listing(root, method.object, method.args:get(2)) else nil
+            if listing then
+                plan:swap(method, listing)
+            else
+                table.insert(unhandled, tostring(method))
+            end
+            continue
+        end
+
+        const is_cwd_join = method.method == "join" and is_cwd_entry(method.object)
+        continue if not is_cwd_join
+
+        const declaration = method.object.binding:parent()
+        if used_as_directory(declaration.values:at(1)) then
+            table.insert(unhandled, tostring(method))
+            continue
+        end
+
+        plan:swap(method, path_or_string(method, divide(method.object, method.args, 1)))
+    end
+end
+
+const unhandled: { string } = {}
+
+for _, path in env.args do
+    match ast.parse(fs.readfile(path))
+    case is Err(broken) then
+        print(`skipped {path}: {#broken.errors} syntax errors`)
+    case is Ok(doc) then
+        const plan = Plan()
+        migrate(doc, plan, unhandled)
+        plan:apply()
+        fs.writefile(path, doc:source())
+    end
+end
+
+for _, call in unhandled do
+    print(`finish by hand: {call}`)
+end
+
+--[=[
+    Cases, input then expected output:
+
+    ```luwu
+    const fs = require("@std/fs")
+    const cwd = fs.path.cwd()
+    const temp = fs.path.join(cwd, "temp")
+    const logs = fs.path.join(temp, "logs")
+    const name = fs.path.join("a", "b")
+    ```
+
+    ```luwu
+    const fs = require("@std/fs")
+    const cwd = fs.path.cwd()
+    const temp = cwd / "temp"
+    const logs = temp / "logs"
+    const name = fs.path.join("a", "b")
+    ```
+
+    ```luwu
+    const fs = require("@std/fs")
+    const cwd = fs.dir.cwd()
+    const temp = cwd:join("temp")
+    const cache = cwd:join("cache")
+    fs.writefile(temp, "x")
+    print("cache at " .. cache)
+    for _, entry in cwd:list() do
+        print(entry)
+    end
+    for _, file in fs.listdir(temp, true) do
+        print(file)
+    end
+    for _, file in fs.listdir("./tests") do
+        print(file)
+    end
+    const sources = fs.listdir("./src", true, function(path: string)
+        return path:endswith(".luwu")
+    end)
+    const everything = cwd:list(true)
+    const odd = fs.listdir("./src", true, function(path: string)
+        return path:endswith(".luwu") and not path:find("ignore")
+    end)
+    ```
+
+    ```luwu
+    const fs = require("@std/fs")
+    const cwd = fs.path.cwd()
+    const temp = cwd / "temp"
+    const cache = tostring(cwd / "cache")
+    fs.writefile(temp, "x")
+    print("cache at " .. cache)
+    for _, entry in cwd:list() do
+        print(entry)
+    end
+    for _, file in temp:list(true) do
+        print(file)
+    end
+    for _, file in fs.dir.list("./tests") do
+        print(file)
+    end
+    const sources = fs.filter(fs.glob("./src/**/*.luwu"))
+    const everything = fs.filter(cwd:glob("**/*"))
+    const odd = fs.listdir("./src", true, function(path: string)
+        return path:endswith(".luwu") and not path:find("ignore")
+    end)
+    ```
+
+    `odd` is listed for a person to finish: its filter does more than keep one extension.
+
+    Left alone: `fs` reassigned anywhere, `fs` from another module, `fs.dir.cwd()` whose entry is used in a way a `Path` doesn't support, and every
+    `try_read` that isn't a two-value local guarded by `if not value then ... return end`.
+]=]
