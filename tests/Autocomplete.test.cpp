@@ -22,6 +22,7 @@ LUAU_FASTINT(LuauTypeInferRecursionLimit)
 LUAU_FASTFLAG(DebugLuwuMatchExpressions)
 LUAU_FASTFLAG(LuwuClasses)
 LUAU_FASTFLAG(LuwuDestructuring)
+LUAU_FASTFLAG(DebugLuwuTryExpressions)
 LUAU_FASTFLAG(LuwuGenericNominals)
 LUAU_FASTFLAG(DebugLuwuBuiltinClasses)
 LUAU_FASTFLAG(DebugLuwuBundles)
@@ -222,6 +223,44 @@ TEST_CASE_FIXTURE(ACFixture, "empty_program")
     CHECK(ac.entryMap.count("table"));
     CHECK(ac.entryMap.count("math"));
     CHECK_EQ(ac.context, AutocompleteContext::Statement);
+}
+
+// Luwu try expressions: `X | unknown` completes X's members
+TEST_CASE_FIXTURE(ACFixture, "weakunknown_completes_the_rest_of_its_union")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    check(R"(
+        type NotFound = { kind: "NotFound", path: string }
+        function handle(e: NotFound | unknown)
+            e.  @1
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK_EQ(ac.entryMap.size(), 2);
+    CHECK(ac.entryMap.count("kind"));
+    CHECK(ac.entryMap.count("path"));
+}
+
+// Luwu try expressions: `error("` in a function with a `! E` hint completes the strings the hint names
+TEST_CASE_FIXTURE(ACFixture, "error_completes_the_annotated_hint")
+{
+    ScopedFastFlag sff{FFlag::DebugLuwuTryExpressions, true};
+
+    check(R"(
+        local function count(n: number): true ! "NaN" | "negative"
+            if n < 0 then
+                error("@1")
+            end
+            return true
+        end
+    )");
+
+    auto ac = autocomplete('1');
+    CHECK(ac.entryMap.count("NaN"));
+    CHECK(ac.entryMap.count("negative"));
+    CHECK_EQ(ac.context, AutocompleteContext::String);
 }
 
 TEST_CASE_FIXTURE(ACFixture, "local_initializer")

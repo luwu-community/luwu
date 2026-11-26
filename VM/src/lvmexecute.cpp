@@ -140,9 +140,9 @@ LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
         VM_DISPATCH_OP(LOP_NEWCLASSMEMBER), VM_DISPATCH_OP(LOP_CALLFB), VM_DISPATCH_OP(LOP_CMPPROTO), VM_DISPATCH_OP(LOP_CHECKSELFCLASS), \
         VM_DISPATCH_OP(LOP_JUMPXISA), VM_DISPATCH_OP(LOP_NEWOBJECT), \
         VM_DISPATCH_OP(LOP_GETOBJECTMEMBER), VM_DISPATCH_OP(LOP_SETOBJECTMEMBER), VM_DISPATCH_OP(LOP_INITTRAITS), VM_DISPATCH_OP(LOP_PRESIZETABLE), \
-        VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_GETQUALIFIED), VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE), \
-        VM_DISPATCH_OP(LOP_JUMPXTYPE), VM_DISPATCH_OP(LOP_JUMPXMATCH), VM_DISPATCH_OP(LOP_SETQUALIFIED), VM_DISPATCH_OP(LOP_GETPOSITIONAL), \
-        VM_DISPATCH_OP(LOP_PUSH), VM_DISPATCH_OP(LOP_POP),
+        VM_DISPATCH_OP(LOP_APPENDTABLE), VM_DISPATCH_OP(LOP_WRAPRESULT), VM_DISPATCH_OP(LOP_RESULTGET), VM_DISPATCH_OP(LOP_GETQUALIFIED), \
+        VM_DISPATCH_OP(LOP_GETTABLEBUNDLE), VM_DISPATCH_OP(LOP_SETTABLEBUNDLE), VM_DISPATCH_OP(LOP_JUMPXTYPE), VM_DISPATCH_OP(LOP_JUMPXMATCH), \
+        VM_DISPATCH_OP(LOP_SETQUALIFIED), VM_DISPATCH_OP(LOP_GETPOSITIONAL), VM_DISPATCH_OP(LOP_PUSH), VM_DISPATCH_OP(LOP_POP),
 
 #if defined(__GNUC__) || defined(__clang__)
 #define VM_USE_CGOTO 1
@@ -876,7 +876,10 @@ reentry:
                             }
                             const uint32_t offsetnum = uint32_t(nvalue(offset));
                             if (offsetnum >= inst->lclass->numberofinstancemembers && (inst->lclass->memberflags[offsetnum] & LBC_CLASSMEMBER_CLASSFIELD))
+                            {
+                                VM_PROTECT_PC();
                                 luaR_sharedfieldwriteerror(L, inst, kv);
+                            }
                             if (offsetnum >= inst->lclass->numberofinstancemembers)
                             {
                                 VM_PROTECT_PC();
@@ -4250,6 +4253,38 @@ reentry:
                 VM_NEXT();
             }
 
+            VM_CASE(LOP_WRAPRESULT)
+            {
+                // Luwu try expressions: the value of a `try` expression, or the error its protected range caught
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+
+                VM_PROTECT_PC(); // raises when the result library isn't open, and allocates
+                luaR_wrapresult(L, ra, LUAU_INSN_B(insn) == LBC_WRAPRESULT_ERR);
+                VM_PROTECT(luaC_checkGC(L));
+                VM_NEXT();
+            }
+
+            VM_CASE(LOP_RESULTGET)
+            {
+                // Luwu try expressions: `r:ok()` or `r:err()` of a result kept in registers
+                Instruction insn = *pc++;
+                StkId ra = VM_REG(LUAU_INSN_A(insn));
+                StkId rb = VM_REG(LUAU_INSN_B(insn));
+
+                bool isOk = !l_isfalse(rb + LBC_TRYRESULT_OKFLAG);
+                bool wantsOk = LUAU_INSN_C(insn) == LBC_RESULTGET_OK;
+                if (isOk == wantsOk)
+                {
+                    setobj2s(L, ra, rb);
+                }
+                else
+                {
+                    setsymnonevalue(ra);
+                }
+                VM_NEXT();
+            }
+
             VM_CASE(LOP_PRESIZETABLE)
             {
                 // Luwu Table Comprehensions (rfcs/control-flow/table-comprehensions.md): sizes or trims the table a comprehension builds
@@ -4487,12 +4522,18 @@ reentry:
 exit:;
 }
 
-void luau_execute(lua_State* L)
+static void executeloop(lua_State* L)
 {
     if (L->singlestep)
         luau_execute<true>(L);
     else
         luau_execute<false>(L);
+}
+
+void luau_execute(lua_State* L)
+{
+    // Luwu try expressions: the catch for errors raised in protected ranges
+    luaD_executetry(L, executeloop);
 }
 
 void luau_finishop(lua_State* L)

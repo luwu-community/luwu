@@ -10,7 +10,11 @@
 #include "lbytecode.h"
 #include "lvm.h"
 #include "lclass.h"
+#include "lstring.h"
+#include "ltable.h"
+#include "lualib.h"
 
+#include <limits.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -268,67 +272,576 @@ static const char* getfuncname(Closure* cl)
     return nullptr;
 }
 
+/*
+** Luwu structured runtime errors: the VM and the libraries record an error (global_State::errorrecord) and throw a
+** sentinel in its place. Nothing is formatted at the raise. The first catch turns the record into what its catcher
+** gets: a message for `pcall` and the other protected calls (luaG_pusherrorrecord), or a variant object for `try`
+** (luaR_newerrorvariant).
+*/
+
+void luaG_clearerrorrecord(global_State* g)
+{
+    LuwuErrorRecord& record = g->errorrecord;
+    record.active = false;
+    record.variant = 0;
+    record.subkind = 0;
+    record.count = 0;
+    for (int i = 0; i < LUWU_ERROR_MAXFIELDS; i++)
+    {
+        setnilvalue(&record.fields[i]);
+        record.opaquetypes[i] = NULL;
+    }
+    record.source = NULL;
+    record.line = 0;
+    record.prefix = NULL;
+}
+
+bool luaG_iserrorrecord(lua_State* L, const TValue* value)
+{
+    LuwuErrorRecord* record = &L->global->errorrecord;
+    return record->active && ttislightuserdata(value) && pvalue(value) == record;
+}
+
+// Starts recording an error of `variant` raised by the code running in `ci`. Only a Lua frame gives it a position.
+static LuwuErrorRecord& beginerrorrecord(lua_State* L, LuwuBuiltinClass variant, CallInfo* ci)
+{
+    global_State* g = L->global;
+    luaG_clearerrorrecord(g);
+
+    LuwuErrorRecord& record = g->errorrecord;
+    record.variant = uint8_t(variant);
+    if (ci && isLua(ci))
+    {
+        record.source = getluaproto(ci)->source;
+        record.line = currentline(L, ci);
+    }
+    return record;
+}
+
+// Luwu opaque values: the shared frozen table an error record holds in place of an opaque value, made the first time
+// one is recorded
+static LuaTable* opaqueplaceholder(lua_State* L)
+{
+    global_State* g = L->global;
+    if (!g->opaqueplaceholder)
+    {
+        LuaTable* placeholder = luaH_new(L, 0, 0);
+        placeholder->readonly = true;
+        g->opaqueplaceholder = placeholder;
+    }
+    return g->opaqueplaceholder;
+}
+
+// Adds the next position of the error being recorded. Luwu opaque values: an opaque value is recorded as the placeholder,
+// with its type name kept for the message. A class stays itself: it's what names an opaque object's missing members.
+static void adderrorfield(lua_State* L, LuwuErrorRecord& record, const TValue* value)
+{
+    LUAU_ASSERT(record.count < LUWU_ERROR_MAXFIELDS);
+    TValue* field = &record.fields[record.count];
+    if (!ttisclass(value) && luaR_isopaque(L, value))
+    {
+        record.opaquetypes[record.count] = luaS_new(L, luaT_objtypename(L, value));
+        sethvalue(L, field, opaqueplaceholder(L));
+    }
+    else
+    {
+        setobj(L, field, value);
+    }
+    record.count++;
+}
+
+// Sets `o` to `s`, or to nil when `s` is NULL
+static void setoptionalstring(lua_State* L, TValue* o, TString* s)
+{
+    if (s)
+    {
+        setsvalue(L, o, s);
+    }
+    else
+    {
+        setnilvalue(o);
+    }
+}
+
+// Sets `o` to `value`, or to nil when `value` is NULL
+static void setoptionalobj(lua_State* L, TValue* o, const TValue* value)
+{
+    if (value)
+    {
+        setobj(L, o, value);
+    }
+    else
+    {
+        setnilvalue(o);
+    }
+}
+
+// Pushes `s`, or nil when it's NULL
+static void pushoptionalstring(lua_State* L, TString* s)
+{
+    setoptionalstring(L, L->top, s);
+    L->top++;
+}
+
+// Throws the error being recorded
+static l_noret throwerrorrecord(lua_State* L)
+{
+    LuwuErrorRecord& record = L->global->errorrecord;
+    lua_rawcheckstack(L, 1);
+    record.active = true;
+    setpvalue(L->top, &record, 0);
+    L->top++;
+    luaD_throw(L, LUA_ERRRUN);
+}
+
+// The nearest frame of Luwu code, which a C function raises on behalf of
+static CallInfo* nearestluaframe(lua_State* L)
+{
+    CallInfo* ci = L->ci;
+    while (ci > L->base_ci && !isLua(ci))
+        ci--;
+    return ci;
+}
+
+// Raises an `Error.Runtime` of `kind` with `message` at the code running in `ci`
+static l_noret raiseruntime(lua_State* L, CallInfo* ci, LuwuRuntimeKind kind, TString* message)
+{
+    LuwuErrorRecord& record = beginerrorrecord(L, LUWU_BUILTIN_ERR_RUNTIME, ci);
+    record.subkind = uint8_t(kind);
+
+    // the `kind` position is written from `subkind` at the catch
+    adderrorfield(L, record, luaO_nilobject);
+    TValue text;
+    setsvalue(L, &text, message);
+    adderrorfield(L, record, &text);
+    throwerrorrecord(L);
+}
+
+static LUA_PRINTF_ATTR(3, 4) l_noret runtimeerror(lua_State* L, LuwuRuntimeKind kind, const char* fmt, ...)
+{
+    va_list argp;
+    va_start(argp, fmt);
+    char result[LUA_BUFFERSIZE];
+    vsnprintf(result, sizeof(result), fmt, argp);
+    va_end(argp);
+
+    raiseruntime(L, L->ci, kind, luaS_new(L, result));
+}
+
+// The frame whose position a raise reports (LuwuErrorAt), or NULL for none
+static CallInfo* errorframe(lua_State* L, LuwuErrorAt at)
+{
+    switch (at)
+    {
+    case LUWU_ERRORAT_RUNNING:
+        return L->ci;
+    case LUWU_ERRORAT_NEARESTLUA:
+        return nearestluaframe(L);
+    case LUWU_ERRORAT_CALLER:
+    {
+        // luaL_where's rule: the caller's position, when it's Luwu code that has one
+        CallInfo* caller = L->ci > L->base_ci ? L->ci - 1 : NULL;
+        bool positioned = caller && caller > L->base_ci && isLua(caller) && currentline(L, caller) > 0;
+        return positioned ? caller : NULL;
+    }
+    }
+
+    LUAU_ASSERT(!"unknown error position");
+    return NULL;
+}
+
+l_noret luaG_runerrorcallerv(lua_State* L, LuwuRuntimeKind kind, const char* fmt, va_list args)
+{
+    lua_rawcheckstack(L, 1);
+    luaO_pushvfstring(L, fmt, args);
+    TString* message = tsvalue(L->top - 1);
+    L->top--;
+
+    raiseruntime(L, errorframe(L, LUWU_ERRORAT_CALLER), kind, message);
+}
+
+l_noret luaG_raiseerror(lua_State* L, LuwuBuiltinClass variant, uint8_t subkind, LuwuErrorAt at, const TValue* fields, int count)
+{
+    LUAU_ASSERT(variant >= LUWU_BUILTIN_ERR_FIRST && variant <= LUWU_BUILTIN_ERR_LAST);
+    LuwuErrorRecord& record = beginerrorrecord(L, variant, errorframe(L, at));
+    record.subkind = subkind;
+    for (int i = 0; i < count; i++)
+        adderrorfield(L, record, &fields[i]);
+    throwerrorrecord(L);
+}
+
+/*
+** Luwu structured runtime errors: names for the values NotIndexable and NotCallable errors are about, read from the
+** bytecode that loaded them, like Lua 5.4's getobjname
+*/
+
+// The opcode of the instruction at `pc`, looking through a breakpoint
+static LuauOpcode opcodeat(const Proto* p, int pc)
+{
+    uint8_t op = uint8_t(LUAU_INSN_OP(p->code[pc]));
+    if (op == LOP_BREAK && p->debuginsn)
+        op = p->debuginsn[pc];
+    return LuauOpcode(op);
+}
+
+// Whether the instruction at `pc` can write register `reg`. Anything this doesn't know writes nothing is taken to write
+// every register from its A up, so an unknown instruction only loses a name.
+static bool writesregister(const Proto* p, int pc, int reg)
+{
+    uint32_t insn = p->code[pc];
+    int a = LUAU_INSN_A(insn);
+
+    switch (opcodeat(p, pc))
+    {
+    case LOP_NOP:
+    case LOP_BREAK:
+    case LOP_SETGLOBAL:
+    case LOP_SETUPVAL:
+    case LOP_CLOSEUPVALS:
+    case LOP_SETTABLE:
+    case LOP_SETTABLEKS:
+    case LOP_SETTABLEN:
+    case LOP_RETURN:
+    case LOP_JUMP:
+    case LOP_JUMPBACK:
+    case LOP_JUMPIF:
+    case LOP_JUMPIFNOT:
+    case LOP_JUMPIFEQ:
+    case LOP_JUMPIFLE:
+    case LOP_JUMPIFLT:
+    case LOP_JUMPIFNOTEQ:
+    case LOP_JUMPIFNOTLE:
+    case LOP_JUMPIFNOTLT:
+    case LOP_JUMPX:
+    case LOP_JUMPXEQKNIL:
+    case LOP_JUMPXEQKB:
+    case LOP_JUMPXEQKN:
+    case LOP_JUMPXEQKS:
+    case LOP_SETLIST:
+    case LOP_FASTCALL:
+    case LOP_FASTCALL1:
+    case LOP_FASTCALL2:
+    case LOP_FASTCALL2K:
+    case LOP_FASTCALL3:
+    case LOP_PREPVARARGS:
+    case LOP_COVERAGE:
+    case LOP_CAPTURE:
+    case LOP_SETUDATAKS:
+        return false;
+
+    case LOP_LOADNIL:
+    case LOP_LOADB:
+    case LOP_LOADN:
+    case LOP_LOADK:
+    case LOP_LOADKX:
+    case LOP_MOVE:
+    case LOP_GETGLOBAL:
+    case LOP_GETUPVAL:
+    case LOP_GETIMPORT:
+    case LOP_GETTABLE:
+    case LOP_GETTABLEKS:
+    case LOP_GETTABLEN:
+    case LOP_NEWCLOSURE:
+    case LOP_DUPCLOSURE:
+    case LOP_ADD:
+    case LOP_SUB:
+    case LOP_MUL:
+    case LOP_DIV:
+    case LOP_IDIV:
+    case LOP_MOD:
+    case LOP_POW:
+    case LOP_ADDK:
+    case LOP_SUBK:
+    case LOP_MULK:
+    case LOP_DIVK:
+    case LOP_IDIVK:
+    case LOP_MODK:
+    case LOP_POWK:
+    case LOP_SUBRK:
+    case LOP_DIVRK:
+    case LOP_AND:
+    case LOP_OR:
+    case LOP_ANDK:
+    case LOP_ORK:
+    case LOP_CONCAT:
+    case LOP_NOT:
+    case LOP_MINUS:
+    case LOP_LENGTH:
+    case LOP_NEWTABLE:
+    case LOP_DUPTABLE:
+    case LOP_GETUDATAKS:
+        return a == reg;
+
+    case LOP_NAMECALL:
+        return reg == a || reg == a + 1;
+
+    default:
+        return reg >= a;
+    }
+}
+
+// The last instruction before `lastpc` that wrote register `reg`, or -1 when there's none or a jump could skip it
+static int findsetreg(const Proto* p, int lastpc, int reg)
+{
+    int setreg = -1;
+    int jumptarget = 0;
+    for (int pc = 0; pc < lastpc;)
+    {
+        LuauOpcode op = opcodeat(p, pc);
+        uint32_t insn = (p->code[pc] & ~0xffu) | uint32_t(op);
+
+        int target = Luau::getJumpTarget(insn, uint32_t(pc));
+        if (target > pc && target <= lastpc && target > jumptarget)
+            jumptarget = target;
+
+        if (writesregister(p, pc, reg))
+            setreg = pc < jumptarget ? -1 : pc;
+
+        pc += Luau::getOpLength(op);
+    }
+    return setreg;
+}
+
+// The string constant `index` of `p`, or NULL
+static TString* stringconstant(const Proto* p, uint32_t index)
+{
+    if (index >= uint32_t(p->sizek) || !ttisstring(&p->k[index]))
+        return NULL;
+    return tsvalue(&p->k[index]);
+}
+
+// The first word of the instruction that the word at `pc` belongs to. A frame's saved pc can point at an instruction's
+// auxiliary word.
+static int instructionstart(const Proto* p, int pc)
+{
+    int start = 0;
+    while (start < pc)
+    {
+        int next = start + Luau::getOpLength(opcodeat(p, start));
+        if (next > pc)
+            break;
+        start = next;
+    }
+    return start;
+}
+
+// The name of the value in register `reg` at `pc`, and in `kind` how it was reached; NULL when it can't be named
+static TString* getobjname(const Proto* p, int pc, int reg, LuwuNameKind* kind)
+{
+    if (const LocVar* local = luaF_findlocal(p, reg, pc))
+    {
+        *kind = LUWU_NAME_LOCAL;
+        return local->varname;
+    }
+
+    int setpc = findsetreg(p, pc, reg);
+    if (setpc < 0)
+        return NULL;
+
+    uint32_t insn = p->code[setpc];
+    uint32_t aux = setpc + 1 < p->sizecode ? p->code[setpc + 1] : 0;
+    switch (opcodeat(p, setpc))
+    {
+    case LOP_MOVE:
+    {
+        int source = LUAU_INSN_B(insn);
+        return source < reg ? getobjname(p, setpc, source, kind) : NULL;
+    }
+    case LOP_GETGLOBAL:
+        *kind = LUWU_NAME_GLOBAL;
+        return stringconstant(p, aux);
+    case LOP_GETIMPORT:
+    {
+        // an import id holds its path's length and up to three constant indices, 10 bits each
+        int length = int(aux >> 30);
+        uint32_t last = length == 1 ? (aux >> 20) & 1023 : length == 2 ? (aux >> 10) & 1023 : aux & 1023;
+        *kind = length == 1 ? LUWU_NAME_GLOBAL : LUWU_NAME_FIELD;
+        return stringconstant(p, last);
+    }
+    case LOP_GETTABLEKS:
+        *kind = LUWU_NAME_FIELD;
+        return stringconstant(p, aux);
+    case LOP_NAMECALL:
+        if (reg != LUAU_INSN_A(insn))
+            return NULL;
+        *kind = LUWU_NAME_METHOD;
+        return stringconstant(p, aux);
+    case LOP_GETUPVAL:
+    {
+        int upvalue = LUAU_INSN_B(insn);
+        if (!p->upvalues || upvalue >= p->sizeupvalues)
+            return NULL;
+        *kind = LUWU_NAME_UPVALUE;
+        return p->upvalues[upvalue];
+    }
+    default:
+        return NULL;
+    }
+}
+
+// Raises a NotIndexable or NotCallable error about `value`, named when it's a register of the running Luwu code
+static l_noret raisenamederror(lua_State* L, LuwuBuiltinClass variant, const TValue* value, const TValue* index)
+{
+    TString* name = NULL;
+    LuwuNameKind kind = LUWU_NAME_NONE;
+    CallInfo* ci = L->ci;
+    if (isLua(ci) && value >= ci->base && value < ci->top)
+    {
+        const Proto* p = getluaproto(ci);
+        name = getobjname(p, instructionstart(p, currentpc(L, ci)), int(value - ci->base), &kind);
+    }
+
+    TValue fields[4];
+    setoptionalstring(L, &fields[0], name);
+    // the kind is written from the subkind at the catch
+    setnilvalue(&fields[1]);
+    setobj(L, &fields[2], value);
+    int count = 3;
+    if (index)
+    {
+        setobj(L, &fields[3], index);
+        count = 4;
+    }
+
+    luaG_raiseerror(L, variant, uint8_t(name ? kind : LUWU_NAME_NONE), LUWU_ERRORAT_RUNNING, fields, count);
+}
+
+void luaG_prefixerrorrecord(lua_State* L)
+{
+    LuwuErrorRecord& record = L->global->errorrecord;
+    LUAU_ASSERT(record.active);
+
+    // a coroutine wrapped in another adds its position in front of the inner one's, as for an error that's a string
+    luaL_where(L, 1);
+    if (record.prefix)
+    {
+        setsvalue(L, L->top, record.prefix);
+        L->top++;
+        lua_concat(L, 2);
+    }
+    record.prefix = tsvalue(L->top - 1);
+    L->top--;
+}
+
+// Formats the recorded error's message (luaG_replaceerrorrecord) and pushes it. Formatting can run Luwu code through
+// `__tostring`, which can raise, so the record's values move onto the stack first and the record is cleared.
+static void pusherrorrecord(lua_State* L, void* ud)
+{
+    global_State* g = L->global;
+    luaR_fillerrorsubkind(L, g->errorrecord);
+    LuwuErrorRecord record = g->errorrecord;
+
+    // the record's values, then the room the C API calls formatting makes have
+    lua_rawcheckstack(L, 2 * LUWU_ERROR_MAXFIELDS + 2 + LUA_MINSTACK);
+    for (int i = 0; i < LUWU_ERROR_MAXFIELDS; i++)
+    {
+        setobj2s(L, L->top, &record.fields[i]);
+        L->top++;
+        pushoptionalstring(L, record.opaquetypes[i]);
+    }
+    pushoptionalstring(L, record.prefix);
+    pushoptionalstring(L, record.source);
+    luaG_clearerrorrecord(g);
+
+    luaL_Strbuf b;
+    luaL_buffinit(L, &b);
+    if (record.prefix)
+        luaL_addlstring(&b, getstr(record.prefix), record.prefix->len);
+    if (record.source)
+    {
+        char chunkbuf[LUA_IDSIZE];
+        const char* chunkid = luaO_chunkid(chunkbuf, sizeof(chunkbuf), getstr(record.source), record.source->len);
+        char line[32];
+        snprintf(line, sizeof(line), ":%d: ", record.line);
+        luaL_addstring(&b, chunkid);
+        luaL_addstring(&b, line);
+    }
+    luaR_adderrorrecord(&b, record);
+    luaL_pushresult(&b);
+}
+
+int luaG_replaceerrorrecord(lua_State* L, StkId slot)
+{
+    LUAU_ASSERT(luaG_iserrorrecord(L, slot));
+    ptrdiff_t saved = savestack(L, slot);
+    int status = luaD_rawrunprotectedrecorded(L, pusherrorrecord, NULL);
+    luaG_clearerrorrecord(L->global);
+
+    slot = restorestack(L, saved);
+    if (status != LUA_OK)
+    {
+        // an error raised while formatting is an error in error handling, as in an `xpcall` handler
+        status = status == LUA_ERRMEM ? LUA_ERRMEM : LUA_ERRERR;
+        luaD_seterrorobj(L, status, slot);
+        return status;
+    }
+
+    setobj2s(L, slot, L->top - 1);
+    L->top = slot + 1;
+    return LUA_ERRRUN;
+}
+
+// Raises an InvalidOperation for operator `op` applied to `left` and, for a binary operator, `right`
+static l_noret operationerror(lua_State* L, TMS op, const TValue* left, const TValue* right)
+{
+    TValue fields[3];
+    // the operator is written from the subkind at the catch
+    setnilvalue(&fields[0]);
+    setobj(L, &fields[1], left);
+    int count = 2;
+    if (right)
+    {
+        setobj(L, &fields[2], right);
+        count = 3;
+    }
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_INVALIDOPERATION, uint8_t(op), LUWU_ERRORAT_RUNNING, fields, count);
+}
+
 l_noret luaG_typeerrorL(lua_State* L, const TValue* o, const char* op)
 {
+    if (strcmp(op, "call") == 0)
+        raisenamederror(L, LUWU_BUILTIN_ERR_NOTCALLABLE, o, NULL);
+    if (strcmp(op, "get length of") == 0)
+        operationerror(L, TM_LEN, o, NULL);
+
     const char* t = luaT_objtypename(L, o);
 
-    luaG_runerror(L, "attempt to %s a %s value", op, t);
+    runtimeerror(L, LUWU_RUNTIME_TYPE, "attempt to %s a %s value", op, t);
 }
 
 l_noret luaG_forerrorL(lua_State* L, const TValue* o, const char* what)
 {
     const char* t = luaT_objtypename(L, o);
 
-    luaG_runerror(L, "invalid 'for' %s (number expected, got %s)", what, t);
+    runtimeerror(L, LUWU_RUNTIME_TYPE, "invalid 'for' %s (number expected, got %s)", what, t);
 }
 
 l_noret luaG_concaterror(lua_State* L, StkId p1, StkId p2)
 {
-    const char* t1 = luaT_objtypename(L, p1);
-    const char* t2 = luaT_objtypename(L, p2);
-
-    luaG_runerror(L, "attempt to concatenate %s with %s", t1, t2);
+    operationerror(L, TM_CONCAT, p1, p2);
 }
 
 l_noret luaG_aritherror(lua_State* L, const TValue* p1, const TValue* p2, TMS op)
 {
-    const char* t1 = luaT_objtypename(L, p1);
-    const char* t2 = luaT_objtypename(L, p2);
-    const char* opname = luaT_eventname[op] + 2; // skip __ from metamethod name
-
-    if (t1 == t2)
-        luaG_runerror(L, "attempt to perform arithmetic (%s) on %s", opname, t1);
-    else
-        luaG_runerror(L, "attempt to perform arithmetic (%s) on %s and %s", opname, t1, t2);
+    operationerror(L, op, p1, p2);
 }
 
 l_noret luaG_ordererror(lua_State* L, const TValue* p1, const TValue* p2, TMS op)
 {
-    const char* t1 = luaT_objtypename(L, p1);
-    const char* t2 = luaT_objtypename(L, p2);
-    const char* opname = (op == TM_LT) ? "<" : (op == TM_LE) ? "<=" : "==";
-
-    luaG_runerror(L, "attempt to compare %s %s %s", t1, opname, t2);
-}
-
-// Luwu builtin classes: luaG_indexerror's message, shared with luaG_indexerroratlua
-static void formatindexerror(lua_State* L, char* result, size_t size, const TValue* p1, const TValue* p2)
-{
-    const char* t1 = luaT_objtypename(L, p1);
-    const char* t2 = luaT_objtypename(L, p2);
-    const TString* key = ttisstring(p2) ? tsvalue(p2) : 0;
-
-    if (key && key->len <= 64) // limit length to make sure we don't generate very long error messages for very long keys
-        snprintf(result, size, "attempt to index %s with '%s'", t1, getstr(key));
-    else
-        snprintf(result, size, "attempt to index %s with %s", t1, t2);
+    operationerror(L, op, p1, p2);
 }
 
 l_noret luaG_indexerror(lua_State* L, const TValue* p1, const TValue* p2)
 {
-    char result[LUA_BUFFERSIZE];
-    formatindexerror(L, result, sizeof(result), p1, p2);
-    luaG_runerror(L, "%s", result);
+    raisenamederror(L, LUWU_BUILTIN_ERR_NOTINDEXABLE, p1, p2);
+}
+
+l_noret luaG_invalidkeyerror(lua_State* L, const TValue* indexed, const TValue* key)
+{
+    TValue fields[2];
+    setobj(L, &fields[0], indexed);
+    setobj(L, &fields[1], key);
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_INVALIDKEY, 0, LUWU_ERRORAT_RUNNING, fields, 2);
 }
 
 // Luwu Classes (rfcs/classes): a name the value does not have. The RFC's glossary splits the two
@@ -339,47 +852,26 @@ l_noret luaG_indexerror(lua_State* L, const TValue* p1, const TValue* p2)
 l_noret luaG_missingmembererror(lua_State* L, const TValue* p1, const TValue* p2)
 {
     if (!ttisstring(p2))
-        luaG_runerrorL(L, "cannot index %s with a %s", luaT_objtypename(L, p1), luaT_objtypename(L, p2));
+        runtimeerror(L, LUWU_RUNTIME_MEMBER, "cannot index %s with a %s", luaT_objtypename(L, p1), luaT_objtypename(L, p2));
 
-    if (ttisclass(p1))
-        luaG_classmembererror(L, classvalue(p1), false, tsvalue(p2));
-
-    if (ttisobject(p1))
+    // Luwu opaque values: an opaque class's objects stay out of the error, which names their class instead. A private
+    // member of one raises the same error (luaR_checkprivateaccess).
+    if (ttisobject(p1) && objectvalue(p1)->lclass->isopaque)
         luaG_classmembererror(L, objectvalue(p1)->lclass, true, tsvalue(p2));
 
-    luaG_runerrorL(L, "this %s does not have a field named '%s'", luaT_objtypename(L, p1), getstr(tsvalue(p2)));
+    TValue fields[2];
+    setobj(L, &fields[0], p1);
+    setobj(L, &fields[1], p2);
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_MISSINGMEMBER, 0, LUWU_ERRORAT_RUNNING, fields, 2);
 }
 
 l_noret luaG_classmembererror(lua_State* L, const LuauClass* classdef, bool onobject, const TString* key)
 {
-    const char* name = getstr(classdef->name);
-
-    if (onobject)
-    {
-        // Luwu Traits (rfcs/classes/traits.md): the class has the member, but only for reads through the class value
-        const char* kind = luaR_staticmemberkind(classdef, const_cast<TString*>(key));
-        if (kind)
-            luaG_runerrorL(
-                L,
-                "objects of class '%s' can't reach its static %s '%s'; use it through the class, or declare it 'shared'",
-                name,
-                kind,
-                getstr(key)
-            );
-
-        luaG_runerrorL(L, "objects of class '%s' do not have a field or function named '%s'", name, getstr(key));
-    }
-
-    // Luwu Traits (rfcs/classes/traits.md): a trait has no objects of its own to point at
-    if (classdef->istrait)
-        luaG_runerrorL(L, "trait '%s' does not have a member named '%s'", name, getstr(key));
-
-    luaG_runerrorL(
-        L,
-        "class '%s' does not have a member named '%s'; did you mean to access a field of an object of this class instead?",
-        name,
-        getstr(key)
-    );
+    // the class stands for one of its objects with subkind 1 (luaR_adderrorrecord's MissingMember message)
+    TValue fields[2];
+    setclassvalue(L, &fields[0], const_cast<LuauClass*>(classdef));
+    setsvalue(L, &fields[1], const_cast<TString*>(key));
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_MISSINGMEMBER, uint8_t(onobject ? 1 : 0), LUWU_ERRORAT_RUNNING, fields, 2);
 }
 
 // Luwu Classes (rfcs/classes): `Cat.age` where `age` is one of Cat's *fields*. The class knows the
@@ -391,15 +883,17 @@ l_noret luaG_instancefieldonclasserror(lua_State* L, const TValue* p1, const TVa
 
     // Luwu Traits (rfcs/classes/traits.md): a trait's fields only exist in the objects of implementing classes
     if (classvalue(p1)->istrait)
-        luaG_runerrorL(
+        runtimeerror(
             L,
+            LUWU_RUNTIME_MEMBER,
             "cannot read field '%s' of trait '%s': fields exist only on objects",
             getstr(tsvalue(p2)),
             className
         );
 
-    luaG_runerrorL(
+    runtimeerror(
         L,
+        LUWU_RUNTIME_MEMBER,
         "'%s' is a field of objects of class '%s', not a member of the class itself; did you mean to access it on an object of '%s' instead?",
         getstr(tsvalue(p2)),
         className,
@@ -411,7 +905,7 @@ l_noret luaG_methoderror(lua_State* L, const TValue* p1, const TString* p2)
 {
     const char* t1 = luaT_objtypename(L, p1);
 
-    luaG_runerror(L, "attempt to call missing method '%s' of %s", getstr(p2), t1);
+    runtimeerror(L, LUWU_RUNTIME_MEMBER, "attempt to call missing method '%s' of %s", getstr(p2), t1);
 }
 
 // Luwu Destructuring (rfcs/destructuring.md): a positional pattern `.(a, b)` on an object without that position
@@ -432,58 +926,105 @@ l_noret luaG_positionalerror(lua_State* L, const LuauClass* classdef, int positi
     );
 }
 
-l_noret luaG_readonlyerror(lua_State* L)
+l_noret luaG_readonlyerror(lua_State* L, const TValue* target)
 {
-    luaG_runerror(L, "attempt to modify a readonly table");
+    TValue fields[1];
+    setoptionalobj(L, &fields[0], target);
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_READONLY, 0, LUWU_ERRORAT_RUNNING, fields, 1);
 }
 
 l_noret luaG_privateaccesserror(lua_State* L, const TValue* p2, const TString* className)
 {
     const char* t1 = getstr(className);
-    luaG_runerrorL(L, "'%s' is a private member of '%s', it cannot be accessed outside %s's class scope", getstr(tsvalue(p2)), t1, t1);
+    runtimeerror(L, LUWU_RUNTIME_MEMBER, "'%s' is a private member of '%s', it cannot be accessed outside %s's class scope", getstr(tsvalue(p2)), t1, t1);
 }
 
-l_noret luaG_constassignerror(lua_State* L, const TValue* p2, const TString* className)
+// Raises a ReadOnly error for a write to const field `key` of `object`. Subkind 1 is a write from outside the class's
+// `__init`, 2 one from `__init` to another object (luaR_adderrorrecord's ReadOnly message).
+static l_noret constassignerror(lua_State* L, const TValue* object, const TValue* key, uint8_t subkind)
 {
-    const char* t1 = getstr(className);
-    luaG_runerrorL(L, "'%s' is a const member of '%s' and cannot be assigned outside %s's '__init' constructor", getstr(tsvalue(p2)), t1, t1);
+    TValue fields[2];
+    setobj(L, &fields[0], object);
+    setobj(L, &fields[1], key);
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_READONLY, subkind, LUWU_ERRORAT_RUNNING, fields, 2);
 }
 
-l_noret luaG_constassignnotselferror(lua_State* L, const TValue* p2, const TString* className)
+l_noret luaG_constassignerror(lua_State* L, const TValue* object, const TValue* key)
 {
-    const char* t1 = getstr(className);
-    luaG_runerrorL(
-        L, "'%s' is a const member of '%s'; %s's '__init' can only assign it on the object it is constructing", getstr(tsvalue(p2)), t1, t1
-    );
+    constassignerror(L, object, key, 1);
+}
+
+l_noret luaG_constassignnotselferror(lua_State* L, const TValue* object, const TValue* key)
+{
+    constassignerror(L, object, key, 2);
+}
+
+l_noret luaG_stackoverflowerror(lua_State* L, bool cstack)
+{
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_STACKOVERFLOW, uint8_t(cstack ? 1 : 0), LUWU_ERRORAT_RUNNING, NULL, 0);
+}
+
+l_noret luaG_notyieldableerror(lua_State* L)
+{
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_NOTYIELDABLE, 0, LUWU_ERRORAT_RUNNING, NULL, 0);
+}
+
+l_noret luaG_argumenterror(lua_State* L, int narg, const char* fname, const char* extramsg)
+{
+    TValue fields[4];
+    const TValue* value = luaA_toobject(L, narg);
+    setoptionalobj(L, &fields[0], value);
+    setsvalue(L, &fields[1], luaS_new(L, extramsg));
+    setnvalue(&fields[2], narg);
+    setoptionalstring(L, &fields[3], fname ? luaS_new(L, fname) : NULL);
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_INVALIDARGUMENT, 0, LUWU_ERRORAT_CALLER, fields, 4);
+}
+
+l_noret luaG_unexpectedtypeerror(lua_State* L, int narg, const char* fname, const char* tname)
+{
+    TValue fields[4];
+    setsvalue(L, &fields[0], luaS_new(L, tname));
+    // a missing argument is `none`, which tells it from a nil one
+    const TValue* value = luaA_toobject(L, narg);
+    if (value)
+    {
+        setobj(L, &fields[1], value);
+    }
+    else
+    {
+        setsymnonevalue(&fields[1]);
+    }
+    setnvalue(&fields[2], narg);
+    setoptionalstring(L, &fields[3], fname ? luaS_new(L, fname) : NULL);
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_UNEXPECTEDTYPE, 0, LUWU_ERRORAT_CALLER, fields, 4);
+}
+
+l_noret luaG_assertionerror(lua_State* L, const TValue* message)
+{
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_ASSERTIONFAILED, 0, LUWU_ERRORAT_CALLER, message, 1);
 }
 
 l_noret luaG_blockedinitaccesserror(lua_State* L, const TString* className)
 {
     const char* t1 = getstr(className);
-    luaG_runerrorL(L, "'__init' of '%s' cannot be accessed or called explicitly; construct a new object with %s(...) instead", t1, t1);
+    runtimeerror(L, LUWU_RUNTIME_MEMBER, "'__init' of '%s' cannot be accessed or called explicitly; construct a new object with %s(...) instead", t1, t1);
 }
 
-static void pusherrorat(lua_State* L, CallInfo* ci, const char* msg);
-
-l_noret luaG_runerroratlua(lua_State* L, const char* msg)
+l_noret luaG_runerroratlua(lua_State* L, LuwuRuntimeKind kind, const char* msg)
 {
-    CallInfo* ci = L->ci;
-    while (ci > L->base_ci && !isLua(ci))
-        ci--;
-
-    lua_rawcheckstack(L, 1);
-    pusherrorat(L, ci, msg);
-    luaD_throw(L, LUA_ERRRUN);
+    raiseruntime(L, nearestluaframe(L), kind, luaS_new(L, msg));
 }
 
 // Luwu builtin classes: luaG_indexerror for an `__index` written in C (`none`'s), at the Lua code that indexed
 l_noret luaG_indexerroratlua(lua_State* L, const TValue* p1, const TValue* p2)
 {
-    char result[LUA_BUFFERSIZE];
-    formatindexerror(L, result, sizeof(result), p1, p2);
-    luaG_runerroratlua(L, result);
+    TValue fields[4];
+    setnilvalue(&fields[0]);
+    setnilvalue(&fields[1]);
+    setobj(L, &fields[2], p1);
+    setobj(L, &fields[3], p2);
+    luaG_raiseerror(L, LUWU_BUILTIN_ERR_NOTINDEXABLE, LUWU_NAME_NONE, LUWU_ERRORAT_NEARESTLUA, fields, 4);
 }
-
 // Luwu Classes (rfcs/classes): raised by construction, which may be running in the class's C
 // constructor (`pcall(C)`), so the location is the Lua code constructing rather than the running frame.
 l_noret luaG_privateconstructorerror(lua_State* L, const TString* className)
@@ -491,7 +1032,7 @@ l_noret luaG_privateconstructorerror(lua_State* L, const TString* className)
     const char* t1 = getstr(className);
     char result[LUA_BUFFERSIZE];
     snprintf(result, sizeof(result), "the constructor of '%s' is private; '%s' can only be constructed inside %s's class scope", t1, t1, t1);
-    luaG_runerroratlua(L, result);
+    luaG_runerroratlua(L, LUWU_RUNTIME_MEMBER, result);
 }
 
 // Luwu Classes (rfcs/classes): raised by CHECKSELFCLASS when `self` isn't an object of the method's class.
@@ -562,7 +1103,7 @@ l_noret luaG_selfclasserror(lua_State* L, const TValue* self, const LuauClass* e
     }
 
     // A builtin class's C method checks `self` itself (luaR_checknativeself), so the location is the Lua code calling it
-    luaG_runerroratlua(L, result);
+    luaG_runerroratlua(L, LUWU_RUNTIME_MEMBER, result);
 }
 
 static void pusherrorat(lua_State* L, CallInfo* ci, const char* msg)
@@ -594,10 +1135,7 @@ l_noret luaG_runerrorL(lua_State* L, const char* fmt, ...)
     vsnprintf(result, sizeof(result), fmt, argp);
     va_end(argp);
 
-    lua_rawcheckstack(L, 1);
-
-    pusherror(L, result);
-    luaD_throw(L, LUA_ERRRUN);
+    raiseruntime(L, L->ci, LUWU_RUNTIME_OTHER, luaS_new(L, result));
 }
 
 void luaG_pusherror(lua_State* L, const char* error)
@@ -886,51 +1424,74 @@ static size_t append(char* buf, size_t bufsize, size_t offset, const char* data)
     return offset + copy;
 }
 
-const char* lua_debugtrace(lua_State* L)
+// Luwu try expressions: lua_debugtrace's lines for the top `levels` frames, so a `try` expression's traceback stops at
+// the frame that caught the error
+static size_t appendtrace(lua_State* L, char* buf, size_t bufsize, int levels)
 {
-    static char buf[4096];
-
     const int limit1 = 10;
     const int limit2 = 10;
 
     int depth = int(L->ci - L->base_ci);
+    if (depth > levels)
+        depth = levels;
     size_t offset = 0;
 
     lua_Debug ar;
-    for (int level = 0; lua_getinfo(L, level, "sln", &ar); ++level)
+    for (int level = 0; level < levels && lua_getinfo(L, level, "sln", &ar); ++level)
     {
         if (ar.source)
-            offset = append(buf, sizeof(buf), offset, ar.short_src);
+            offset = append(buf, bufsize, offset, ar.short_src);
 
         if (ar.currentline > 0)
         {
             char line[32];
             snprintf(line, sizeof(line), ":%d", ar.currentline);
 
-            offset = append(buf, sizeof(buf), offset, line);
+            offset = append(buf, bufsize, offset, line);
         }
 
         if (ar.name)
         {
-            offset = append(buf, sizeof(buf), offset, " function ");
-            offset = append(buf, sizeof(buf), offset, ar.name);
+            offset = append(buf, bufsize, offset, " function ");
+            offset = append(buf, bufsize, offset, ar.name);
         }
 
-        offset = append(buf, sizeof(buf), offset, "\n");
+        offset = append(buf, bufsize, offset, "\n");
 
         if (depth > limit1 + limit2 && level == limit1 - 1)
         {
             char skip[32];
             snprintf(skip, sizeof(skip), "... (+%d frames)\n", int(depth - limit1 - limit2));
 
-            offset = append(buf, sizeof(buf), offset, skip);
+            offset = append(buf, bufsize, offset, skip);
 
             level = depth - limit2 - 1;
         }
     }
 
+    return offset;
+}
+
+const char* lua_debugtrace(lua_State* L)
+{
+    static char buf[4096];
+
+    size_t offset = appendtrace(L, buf, sizeof(buf), INT_MAX);
+
     LUAU_ASSERT(offset < sizeof(buf));
     buf[offset] = '\0';
 
     return buf;
+}
+
+TString* luaG_traceback(lua_State* L, int levels)
+{
+    char buf[4096];
+    size_t offset = appendtrace(L, buf, sizeof(buf), levels);
+
+    // without the last line's newline
+    if (offset > 0 && buf[offset - 1] == '\n')
+        offset--;
+
+    return luaS_newlstr(L, buf, offset);
 }
