@@ -154,7 +154,7 @@ TEST_CASE("DataCFunctionGetsItsDataAndArgumentCount")
     // from Luau code, and through a C function that calls it
     const char* source = "local a, n = f(1, 2) local b, m = pcall(f) return a + n, b, m";
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(source, strlen(source), nullptr, &bytecodeSize);
     REQUIRE(luau_load(L, "=test", bytecode, bytecodeSize, 0) == 0);
     free(bytecode);
     lua_call(L, 0, 3);

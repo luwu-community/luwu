@@ -426,7 +426,7 @@ TEST_CASE("SharedAllocation")
     )";
 
     size_t bytecodeSize = 0;
-    std::unique_ptr<char[], void (*)(void*)> bytecode{luau_compile(source.data(), source.size(), nullptr, &bytecodeSize), free};
+    std::unique_ptr<char[], void (*)(void*)> bytecode{luwu_compile(source.data(), source.size(), nullptr, &bytecodeSize), free};
     const int loadResult1 = luau_load(L1.get(), "=Functions", bytecode.get(), bytecodeSize, 0);
     const int loadResult2 = luau_load(L2.get(), "=Functions", bytecode.get(), bytecodeSize, 0);
     REQUIRE(loadResult1 == 0);
