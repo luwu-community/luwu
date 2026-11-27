@@ -21,7 +21,7 @@ static void test_buffer_free_cb(lua_State* L, void* data, size_t sz, void* userd
 static int dostring(lua_State* L, const char* code)
 {
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(code, strlen(code), NULL, &bytecodeSize);
+    char* bytecode = luwu_compile(code, strlen(code), NULL, &bytecodeSize);
     if (!bytecode) return -1;
     int result = luau_load(L, "chunk", bytecode, bytecodeSize, 0);
     free(bytecode);
@@ -35,7 +35,7 @@ static int dostring(lua_State* L, const char* code)
 static int dostring_ncg(lua_State* L, const char* code)
 {
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(code, strlen(code), NULL, &bytecodeSize);
+    char* bytecode = luwu_compile(code, strlen(code), NULL, &bytecodeSize);
     if (!bytecode) return -1;
     int result = luau_load(L, "chunk", bytecode, bytecodeSize, 0);
     free(bytecode);
