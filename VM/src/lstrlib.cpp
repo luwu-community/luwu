@@ -3,8 +3,10 @@
 #include "lualib.h"
 
 #include "lstring.h"
+#include "lnumutils.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -963,6 +965,16 @@ static void addInt64Format(char form[MAX_FORMAT], char formatIndicator, size_t f
     form[formatItemSize + 3] = 0;
 }
 
+// Luwu: string.format writes a plain `%.Nf` (luai_fixed2str) or `%d` (luai_int2str) itself. Upstream calls snprintf for
+// every number, which is most of the cost: about 145 ns of a 200 ns `string.format("%.2f", x)`.
+
+// The precision N of a format item that is exactly `%.Nf`, or -1
+static int plainFixedPrecision(const char* form, size_t formatItemSize)
+{
+    bool plain = formatItemSize == 3 && form[1] == '.' && isdigit(uchar(form[2]));
+    return plain ? form[2] - '0' : -1;
+}
+
 static int str_format(lua_State* L)
 {
     int top = lua_gettop(L);
@@ -1007,6 +1019,12 @@ static int str_format(lua_State* L)
             case 'i':
             {
                 long long value = lua_isinteger64(L, arg) ? luaL_checkinteger64(L, arg) : (int64_t)luaL_checknumber(L, arg);
+                if (formatItemSize == 1)
+                {
+                    char* end = luai_int2str(buff, value);
+                    luaL_addlstring(&b, buff, end - buff);
+                    continue; // skip the 'luaL_addlstring' at the end
+                }
                 addInt64Format(form, formatIndicator, formatItemSize);
                 snprintf(buff, sizeof(buff), form, value);
                 break;
@@ -1030,9 +1048,23 @@ static int str_format(lua_State* L)
                 snprintf(buff, sizeof(buff), form, v);
                 break;
             }
+            case 'f':
+            {
+                double value = luaL_checknumber(L, arg);
+                int precision = plainFixedPrecision(form, formatItemSize);
+                char* end = nullptr;
+                if (precision >= 0)
+                    end = luai_fixed2str(buff, value, precision);
+                if (end)
+                {
+                    luaL_addlstring(&b, buff, end - buff);
+                    continue; // skip the 'luaL_addlstring' at the end
+                }
+                snprintf(buff, sizeof(buff), form, value);
+                break;
+            }
             case 'e':
             case 'E':
-            case 'f':
             case 'g':
             case 'G':
             {

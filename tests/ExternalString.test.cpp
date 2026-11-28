@@ -26,7 +26,7 @@ static void test_string_free_delete_cb(lua_State* L, const char* data, size_t sz
 static int dostring(lua_State* L, const char* code)
 {
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(code, strlen(code), NULL, &bytecodeSize);
+    char* bytecode = luwu_compile(code, strlen(code), NULL, &bytecodeSize);
     if (!bytecode) return -1;
     int result = luau_load(L, "chunk", bytecode, bytecodeSize, 0);
     free(bytecode);

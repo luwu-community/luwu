@@ -156,7 +156,7 @@ public:
     }
 
     Luau::CompileOptions compilationOptions = {};
-    lua_CompileOptions compilationOptionsC = {};
+    luwu_CompileOptions compilationOptionsC = {};
 
     Luau::CodeGen::AssemblyOptions assemblyOptions = {};
 
@@ -259,7 +259,7 @@ public:
         assemblyOptions.includeIrTypes = includeIrTypes;
 
         size_t bytecodeSize = 0;
-        char* bytecode = luau_compile(source, strlen(source), &compilationOptionsC, &bytecodeSize);
+        char* bytecode = luwu_compile(source, strlen(source), &compilationOptionsC, &bytecodeSize);
         REQUIRE(bytecode);
 
         std::unique_ptr<lua_State, void (*)(lua_State*)> globalState(luaL_newstate(), lua_close);
