@@ -10,6 +10,7 @@
 #endif
 
 typedef struct lua_CompileOptions lua_CompileOptions;
+typedef struct luwu_CompileOptions luwu_CompileOptions;
 typedef void* lua_CompileConstant;
 
 // return a type identifier for a global library member
@@ -50,10 +51,6 @@ struct lua_CompileOptions
     // alternative vector type name for type tables, in addition to default type 'vector'
     const char* vectorType;
 
-    // 0 - 32-bit float vector components
-    // 1 - 64-bit double vector components
-    int vectorPrecision;
-
     // null-terminated array of globals that are mutable; disables the import optimization for fields accessed through these
     const char* const* mutableGlobals;
 
@@ -68,13 +65,45 @@ struct lua_CompileOptions
 
     // null-terminated array of library functions that should not be compiled into a built-in fastcall ("name" "lib.name")
     const char* const* disabledBuiltins;
-
-    // Luwu: the language the source is written in, a lua_Language. Luwu syntax in Luau or Lua source is a compile error,
-    // even when its FFlag is on. Zero is Luwu. Upstream has no such option.
-    int language;
 };
 
-// Luwu: the language a module is written in (lua_CompileOptions::language)
+// Luwu: the options luwu_compile takes. The fields up to `disabledBuiltins` mean what they mean in lua_CompileOptions;
+// the rest are Luwu's, and new options are only ever added at the end. Fill the struct with
+// luwu_init_compile_options before setting fields, so the options a program doesn't set get Luwu's defaults.
+//
+// Upstream's luau_compile takes lua_CompileOptions exactly as upstream Luau 0.730 lays it out and always compiles Luau,
+// so an embedder written against upstream keeps working. luwu_compile is the entry point for Luwu code.
+struct luwu_CompileOptions
+{
+    int optimizationLevel; // default=1
+    int debugLevel;        // default=1
+    // Luwu: 1 by default (upstream's default is 0), so native code gets type information for every module
+    int typeInfoLevel;
+    int coverageLevel; // default=0
+
+    const char* vectorLib;
+    const char* vectorCtor;
+    const char* vectorType;
+
+    const char* const* mutableGlobals;
+    const char* const* userdataTypes;
+
+    const char* const* librariesWithKnownMembers;
+    lua_LibraryMemberTypeCallback libraryMemberTypeCb;
+    lua_LibraryMemberConstantCallback libraryMemberConstantCb;
+
+    const char* const* disabledBuiltins;
+
+    // 0 - 32-bit float vector components
+    // 1 - 64-bit double vector components
+    int vectorPrecision; // default=0
+
+    // the language the source is written in, a lua_Language. Luwu syntax in Luau or Lua source is a compile error,
+    // even when its FFlag is on.
+    int language; // default=LUA_LANGUAGE_LUWU
+};
+
+// Luwu: the language a module is written in (luwu_CompileOptions::language)
 enum lua_Language
 {
     LUA_LANGUAGE_LUWU = 0,
@@ -83,7 +112,15 @@ enum lua_Language
 };
 
 // compile source to bytecode; when source compilation fails, the resulting bytecode contains the encoded error. use free() to destroy
+// Luwu: the source is always Luau, as in upstream; use luwu_compile for Luwu code
 LUACODE_API char* luau_compile(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize);
+
+// Luwu: fills `options` with Luwu's defaults (see luwu_CompileOptions)
+LUACODE_API void luwu_init_compile_options(luwu_CompileOptions* options);
+
+// Luwu: compile source to bytecode like luau_compile, with Luwu's options. Null options use luwu_init_compile_options's
+// defaults, which compile Luwu.
+LUACODE_API char* luwu_compile(const char* source, size_t size, const luwu_CompileOptions* options, size_t* outsize);
 
 // when libraryMemberConstantCb is called, these methods can be used to set a value of the opaque lua_CompileConstant struct
 // vector component 'w' is not visible to VM runtime configured with LUA_VECTOR_SIZE == 3, but can affect constant folding during compilation

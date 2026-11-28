@@ -71,7 +71,7 @@ static void setupState(lua_State* L)
 static std::string runCode(lua_State* L, const std::string& source)
 {
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source.data(), source.length(), nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(source.data(), source.length(), nullptr, &bytecodeSize);
     int result = luau_load(L, "=stdin", bytecode, bytecodeSize, 0);
     free(bytecode);
 
