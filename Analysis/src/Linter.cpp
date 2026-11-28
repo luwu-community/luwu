@@ -4,6 +4,7 @@
 #include "Luau/AstQuery.h"
 #include "Luau/LinterConfig.h"
 #include "Luau/Module.h"
+#include "Luau/NeverReturns.h"
 #include "Luau/ParseResult.h"
 #include "Luau/PrettyPrinter.h"
 #include "Luau/Scope.h"
@@ -67,6 +68,12 @@ struct LintContext
             return std::nullopt;
 
         return *it;
+    }
+
+    // Luwu never-returning calls: the calls the module's checker found declared to return `never`, if there is a module
+    const NeverReturningCalls* neverReturningCalls() const
+    {
+        return module ? &module->neverReturningCalls : nullptr;
     }
 };
 
@@ -1246,6 +1253,8 @@ private:
         Continue,
         Break,
         Return,
+        // Luwu never-returning calls: a call to a function declared to return `never`, other than `error` and `assert`
+        NeverReturns,
         Error,
     };
 
@@ -1254,16 +1263,19 @@ private:
         switch (status)
         {
         case Continue:
-            return "continue";
+            return "always continues";
 
         case Break:
-            return "break";
+            return "always breaks";
 
         case Return:
-            return "return";
+            return "always returns";
+
+        case NeverReturns:
+            return "never returns";
 
         case Error:
-            return "error";
+            return "always errors";
 
         default:
             return "unknown";
@@ -1287,14 +1299,16 @@ private:
                     AstStat* next = stat->body.data[i + 1];
 
                     // silence the warning for common pattern of Error (coming from error()) + Return
-                    if (step == Error && si->is<AstStatExpr>() && next->is<AstStatReturn>() && i + 2 == stat->body.size)
-                        return Error;
+                    // Luwu never-returning calls: a call that never returns followed by `return` is silenced the same way.
+                    bool neverReturningCall = step == Error || step == NeverReturns;
+                    if (neverReturningCall && si->is<AstStatExpr>() && next->is<AstStatReturn>() && i + 2 == stat->body.size)
+                        return step;
 
                     emitWarning(
                         *context,
                         LintWarning::Code_UnreachableCode,
                         next->location,
-                        "Unreachable code (previous statement always %ss)",
+                        "Unreachable code (previous statement %s)",
                         getReason(step)
                     );
                     return step;
@@ -1337,8 +1351,12 @@ private:
         else if (AstStatExpr* stat = node->as<AstStatExpr>())
         {
             if (AstExprCall* call = stat->expr->as<AstExprCall>())
+            {
                 if (doesCallError(call))
                     return Error;
+                if (callNeverReturns(call, context->neverReturningCalls()))
+                    return NeverReturns;
+            }
 
             return Unknown;
         }
@@ -1641,7 +1659,7 @@ private:
 
     bool visit(AstExprFunction* node) override
     {
-        const AstStat* bodyf = getFallthrough(node->body);
+        const AstStat* bodyf = getFallthrough(node->body, context->neverReturningCalls());
         AstStat* vret = getValueReturn(node->body);
 
         if (bodyf && vret)

@@ -57,7 +57,6 @@ LUAU_FASTFLAG(DebugLuauCyclicRequireTypeInference)
 namespace Luau
 {
 
-bool doesCallError(const AstExprCall* call);        // TypeInfer.cpp
 const AstStat* getFallthrough(const AstStat* node); // TypeInfer.cpp
 
 static bool isValidClassMetamethod(const Name& name)
@@ -1735,7 +1734,7 @@ ControlFlow ConstraintGenerator::visit(const ScopePtr& scope, AstStat* stat)
     {
         checkPack(scope, e->expr);
 
-        if (auto call = e->expr->as<AstExprCall>(); call && doesCallError(call))
+        if (auto call = e->expr->as<AstExprCall>(); call && dfg->callNeverReturns(call))
             return ControlFlow::Throws;
 
         return ControlFlow::None;

@@ -2977,4 +2977,73 @@ return f, ok
     CHECK_EQ(warnings[5].location.begin.line, 11);
 }
 
+// Luwu never-returning calls: a call to a function declared to return `never` makes the code after it unreachable
+TEST_CASE_FIXTURE(BuiltinsFixture, "UnreachableCodeAfterNeverReturningCall")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    loadDefinition(R"(
+        declare function exit(code: number): never
+        declare function maybe(code: number): number
+        declare process: { exit: (code: number?) -> never }
+    )");
+
+    LintResult result = lint(R"(
+local function die(message: string): never
+    error(message)
+end
+
+local function viaGlobal()
+    exit(1)
+    print("after exit")
+end
+
+local function viaField()
+    process.exit(1)
+    print("after process.exit")
+end
+
+local function viaLocal()
+    die("no")
+    print("after die")
+end
+
+local function mayReturn()
+    maybe(1)
+    print("after maybe")
+end
+
+return { viaGlobal, viaField, viaLocal, mayReturn }
+)");
+
+    REQUIRE(3 == result.warnings.size());
+    CHECK_EQ(result.warnings[0].location.begin.line, 7);
+    CHECK_EQ(result.warnings[0].text, "Unreachable code (previous statement never returns)");
+    CHECK_EQ(result.warnings[1].location.begin.line, 12);
+    CHECK_EQ(result.warnings[2].location.begin.line, 17);
+}
+
+TEST_CASE_FIXTURE(Fixture, "UnreachableCodeNeverReturningCallReturnSilent")
+{
+    ScopedFastFlag sff{FFlag::DebugLuauForceOldSolver, false};
+
+    loadDefinition(R"(
+        declare function exit(code: number): never
+    )");
+
+    LintResult result = lint(R"(
+function foo1(a)
+    if a then
+        exit(1)
+        return 'z'
+    end
+    return 'y'
+end
+
+return foo1
+)");
+
+    REQUIRE(0 == result.warnings.size());
+}
+
 TEST_SUITE_END();
