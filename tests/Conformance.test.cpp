@@ -124,9 +124,9 @@ static std::string findConformanceSourceDir()
 }
 #endif
 
-static lua_CompileOptions defaultOptions()
+static luwu_CompileOptions defaultOptions()
 {
-    lua_CompileOptions copts = {};
+    luwu_CompileOptions copts = {};
     copts.optimizationLevel = optimizationLevel;
     copts.debugLevel = 1;
     copts.typeInfoLevel = 1;
@@ -177,7 +177,7 @@ static int lua_loadstring(lua_State* L)
     lua_setsafeenv(L, LUA_ENVIRONINDEX, false);
 
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(s, l, nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(s, l, nullptr, &bytecodeSize);
     int result = luau_load(L, chunkname, bytecode, bytecodeSize, 0);
     free(bytecode);
 
@@ -276,7 +276,7 @@ static StateRef runConformance(
     void (*setup)(lua_State* L) = nullptr,
     bool (*yield)(lua_State* L) = nullptr,
     lua_State* initialLuaState = nullptr,
-    lua_CompileOptions* options = nullptr,
+    luwu_CompileOptions* options = nullptr,
     bool skipCodegen = false,
     Luau::CodeGen::CompilationOptions* codegenOptions = nullptr
 )
@@ -366,10 +366,10 @@ static StateRef runConformance(
     std::string chunkname = "=" + std::string(name);
 
     // note: luau_compile supports nullptr options, but we need to customize our defaults to improve test coverage
-    lua_CompileOptions opts = options ? *options : defaultOptions();
+    luwu_CompileOptions opts = options ? *options : defaultOptions();
 
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source.data(), source.size(), &opts, &bytecodeSize);
+    char* bytecode = luwu_compile(source.data(), source.size(), &opts, &bytecodeSize);
     int result = luau_load(L, chunkname.c_str(), bytecode, bytecodeSize, 0);
     free(bytecode);
 
@@ -1941,7 +1941,7 @@ TEST_CASE("CYield")
 
 TEST_CASE("Vector")
 {
-    lua_CompileOptions copts = defaultOptions();
+    luwu_CompileOptions copts = defaultOptions();
     Luau::CodeGen::CompilationOptions nativeOpts = defaultCodegenOptions();
 
     SUBCASE("NoIrHooks")
@@ -1997,7 +1997,7 @@ TEST_CASE("Vector")
 
 TEST_CASE("VectorLibrary")
 {
-    lua_CompileOptions copts = defaultOptions();
+    luwu_CompileOptions copts = defaultOptions();
 
     SUBCASE("O0")
     {
@@ -2166,7 +2166,7 @@ TEST_CASE("Debugger")
     interruptedthread = nullptr;
     stephits = 0;
 
-    lua_CompileOptions copts = defaultOptions();
+    luwu_CompileOptions copts = defaultOptions();
     copts.debugLevel = 2;
 
     runConformance(
@@ -2414,7 +2414,7 @@ fib(5)
         luaL_sandboxthread(L);
 
         size_t bytecodeSize = 0;
-        char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+        char* bytecode = luwu_compile(source.data(), source.size(), nullptr, &bytecodeSize);
         int result = luau_load(L, "=InterruptErrorInspection", bytecode, bytecodeSize, 0);
         free(bytecode);
 
@@ -2453,7 +2453,7 @@ fib(5)
 
 TEST_CASE("NDebugGetUpValue")
 {
-    lua_CompileOptions copts = defaultOptions();
+    luwu_CompileOptions copts = defaultOptions();
     copts.debugLevel = 0;
     // Don't optimize away any upvalues
     copts.optimizationLevel = 0;
@@ -3414,7 +3414,7 @@ TEST_CASE("TagMethodError")
 
 TEST_CASE("Coverage")
 {
-    lua_CompileOptions copts = defaultOptions();
+    luwu_CompileOptions copts = defaultOptions();
     copts.optimizationLevel = 1; // disable inlining to get fixed expected hit results
     copts.coverageLevel = 2;
 
@@ -3610,7 +3610,7 @@ return f
 
 TEST_CASE("Interrupt")
 {
-    lua_CompileOptions copts = defaultOptions();
+    luwu_CompileOptions copts = defaultOptions();
     copts.optimizationLevel = 1; // disable loop unrolling to get fixed expected hit results
 
     static int index;
@@ -4433,7 +4433,7 @@ TEST_CASE("Native")
     if (!codegen || !luau_codegen_supported())
         return;
 
-    lua_CompileOptions copts = defaultOptions();
+    luwu_CompileOptions copts = defaultOptions();
 
     SUBCASE("Checked")
     {
@@ -4485,7 +4485,7 @@ TEST_CASE("Native")
 
 TEST_CASE("NativeIntegerSpills")
 {
-    lua_CompileOptions copts = defaultOptions();
+    luwu_CompileOptions copts = defaultOptions();
 
     SUBCASE("O0")
     {
@@ -4521,7 +4521,7 @@ TEST_CASE("NativeTypeAnnotations")
 
 TEST_CASE("NativeUserdata")
 {
-    lua_CompileOptions copts = defaultOptions();
+    luwu_CompileOptions copts = defaultOptions();
     Luau::CodeGen::CompilationOptions nativeOpts = defaultCodegenOptions();
 
     static const char* kUserdataCompileTypes[] = {"vec2", "color", "mat3", "vertex", nullptr};
@@ -4722,7 +4722,7 @@ TEST_CASE("ClassesInlining")
 
     // Method inlining only runs at O2, and the conformance default is O1 -- at O1 every case in this
     // file passes vacuously. See tests/conformance/classes_inlining.luwu.
-    lua_CompileOptions copts = defaultOptions();
+    luwu_CompileOptions copts = defaultOptions();
     copts.optimizationLevel = 2;
 
     // The trusted receiver tier (a declared parameter, local or field type) only inlines when the compiler may act
@@ -4773,7 +4773,7 @@ static void runClassesFixesConformance(const char* name)
     for (int level = 0; level <= 2; ++level)
     {
         CAPTURE(level);
-        lua_CompileOptions copts = defaultOptions();
+        luwu_CompileOptions copts = defaultOptions();
         copts.optimizationLevel = level;
         runConformance(name, nullptr, nullptr, nullptr, &copts);
     }
@@ -4851,6 +4851,52 @@ std::string classesCApiProtected(lua_State* L, std::function<void(lua_State*)> f
 
 } // namespace
 
+// Luwu: luau_compile takes upstream 0.730's options and compiles Luau, so Luwu syntax is an error there. luwu_compile
+// compiles Luwu by default.
+TEST_CASE("LuauCompileCompilesLuauAndLuwuCompileCompilesLuwu")
+{
+    ScopedFastFlag sff{FFlag::LuwuClasses, true};
+
+    const char* source = "class Point(public x: number) end\nreturn Point(1).x";
+
+    StateRef globalState(luaL_newstate(), lua_close);
+    lua_State* L = globalState.get();
+
+    size_t bytecodeSize = 0;
+    lua_CompileOptions luauOptions = {};
+    luauOptions.optimizationLevel = 1;
+    luauOptions.debugLevel = 1;
+    char* bytecode = luau_compile(source, strlen(source), &luauOptions, &bytecodeSize);
+    CHECK(luau_load(L, "=luau", bytecode, bytecodeSize, 0) != 0);
+    free(bytecode);
+    lua_pop(L, 1);
+
+    bytecode = luwu_compile(source, strlen(source), nullptr, &bytecodeSize);
+    REQUIRE(luau_load(L, "=luwu", bytecode, bytecodeSize, 0) == 0);
+    free(bytecode);
+    REQUIRE(lua_pcall(L, 0, 1, 0) == LUA_OK);
+    CHECK_EQ(lua_tonumber(L, -1), 1);
+}
+
+// upstream 0.730's lua_CompileOptions, field for field: an embedder built against its header passes this many bytes
+struct UpstreamCompileOptions
+{
+    int optimizationLevel;
+    int debugLevel;
+    int typeInfoLevel;
+    int coverageLevel;
+    const char* vectorLib;
+    const char* vectorCtor;
+    const char* vectorType;
+    const char* const* mutableGlobals;
+    const char* const* userdataTypes;
+    const char* const* librariesWithKnownMembers;
+    lua_LibraryMemberTypeCallback libraryMemberTypeCb;
+    lua_LibraryMemberConstantCallback libraryMemberConstantCb;
+    const char* const* disabledBuiltins;
+};
+static_assert(sizeof(lua_CompileOptions) == sizeof(UpstreamCompileOptions), "lua_CompileOptions must keep upstream 0.730's layout");
+
 TEST_CASE("ClassesCApi")
 {
     ScopedFastFlag sffs[] = {
@@ -4908,7 +4954,7 @@ Yielder_ = Yielder
 )";
 
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(source, strlen(source), nullptr, &bytecodeSize);
     int loadResult = luau_load(L, "=ClassesCApi", bytecode, bytecodeSize, 0);
     free(bytecode);
     REQUIRE(loadResult == 0);
@@ -5435,7 +5481,7 @@ Yielder_ = Yielder
         oomSource += "    public function get(self) return self.f0 end\n    public function __tostring(self) return self.f1 end\nend\n";
 
         size_t oomBytecodeSize = 0;
-        char* oomBytecode = luau_compile(oomSource.data(), oomSource.size(), nullptr, &oomBytecodeSize);
+        char* oomBytecode = luwu_compile(oomSource.data(), oomSource.size(), nullptr, &oomBytecodeSize);
 
 #ifdef _WIN32
         FILE* devNull = fopen("NUL", "w");
@@ -5537,7 +5583,7 @@ Yielder_ = Yielder
         auto load = [&](const char* chunk)
         {
             size_t size = 0;
-            char* bytecode = luau_compile(chunk, strlen(chunk), nullptr, &size);
+            char* bytecode = luwu_compile(chunk, strlen(chunk), nullptr, &size);
             REQUIRE(luau_load(QL, "=ClassesCApiDebugName", bytecode, size, 0) == 0);
             free(bytecode);
         };
@@ -5717,10 +5763,10 @@ end
 counter = Counter { a = 1, b = 2 }
 )";
 
-    lua_CompileOptions compileOptions = {};
+    luwu_CompileOptions compileOptions = {};
     compileOptions.optimizationLevel = 2;
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source, strlen(source), &compileOptions, &bytecodeSize);
+    char* bytecode = luwu_compile(source, strlen(source), &compileOptions, &bytecodeSize);
     int loadResult = luau_load(L, "=ClassesNativeNamecallLearnsMemberSlot", bytecode, bytecodeSize, 0);
     free(bytecode);
     REQUIRE(loadResult == 0);
@@ -5804,7 +5850,7 @@ TEST_CASE("HugeFunction")
     luaL_sandboxthread(L);
 
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(source.data(), source.size(), nullptr, &bytecodeSize);
     int result = luau_load(L, "=HugeFunction", bytecode, bytecodeSize, 0);
     free(bytecode);
 
@@ -5861,7 +5907,7 @@ TEST_CASE("HugeFunctionLoadFailure")
     };
 
     size_t bytecodeSize = 0;
-    char* const bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+    char* const bytecode = luwu_compile(source.data(), source.size(), nullptr, &bytecodeSize);
 
     for (largeAllocationToFail = 0; largeAllocationToFail != expectedTotalLargeAllocations; ++largeAllocationToFail)
     {
@@ -5923,7 +5969,7 @@ TEST_CASE("HugeConstantTable")
     luaL_sandboxthread(L);
 
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(source.data(), source.size(), nullptr, &bytecodeSize);
     int result = luau_load(L, "=HugeConstantTable", bytecode, bytecodeSize, 0);
     free(bytecode);
 
@@ -5970,7 +6016,7 @@ TEST_CASE("LargeNestedClosure")
     luaL_sandboxthread(L);
 
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(source.data(), source.size(), nullptr, &bytecodeSize);
     int result = luau_load(L, "=LargeNestedClosure", bytecode, bytecodeSize, 0);
     free(bytecode);
 
@@ -6027,7 +6073,7 @@ TEST_CASE("IrInstructionLimit")
     luaL_sandboxthread(L);
 
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(source.data(), source.size(), nullptr, &bytecodeSize);
     int result = luau_load(L, "=HugeFunction", bytecode, bytecodeSize, 0);
     free(bytecode);
 
@@ -6160,7 +6206,7 @@ TEST_CASE("NativeAttribute")
     luaL_sandboxthread(L);
 
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(source.data(), source.size(), nullptr, &bytecodeSize);
     int result = luau_load(L, "=Code", bytecode, bytecodeSize, 0);
     free(bytecode);
 
@@ -6199,7 +6245,7 @@ TEST_CASE("CodegenNopPaddingDeterministicOff")
         luau_codegen_create(L);
 
         size_t bytecodeSize = 0;
-        char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+        char* bytecode = luwu_compile(source, strlen(source), nullptr, &bytecodeSize);
         int result = luau_load(L, "=test", bytecode, bytecodeSize, 0);
         free(bytecode);
         REQUIRE(result == 0);
@@ -6240,7 +6286,7 @@ TEST_CASE("CodegenRandomizeCodeSizeNonDecreasing")
         luau_codegen_create(L);
 
         size_t bytecodeSize = 0;
-        char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+        char* bytecode = luwu_compile(source, strlen(source), nullptr, &bytecodeSize);
         int result = luau_load(L, "=test", bytecode, bytecodeSize, 0);
         free(bytecode);
         REQUIRE(result == 0);
@@ -6275,7 +6321,7 @@ TEST_CASE("CodegenRandomizeFunctionalCorrectness")
     luaL_sandboxthread(L);
 
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(source, strlen(source), nullptr, &bytecodeSize);
     int loadResult = luau_load(L, "=test", bytecode, bytecodeSize, 0);
     free(bytecode);
     REQUIRE(loadResult == 0);
@@ -6368,7 +6414,7 @@ TEST_CASE("UserThreadStateChange")
     lua_setthreadstatechangecb(T, test_statechange);
 
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source, strlen(source), nullptr, &bytecodeSize);
+    char* bytecode = luwu_compile(source, strlen(source), nullptr, &bytecodeSize);
     REQUIRE(luau_load(T, "=test", bytecode, bytecodeSize, 0) == 0);
     free(bytecode);
 
@@ -6392,7 +6438,7 @@ TEST_CASE("UserThreadStateChange")
     )";
     lua_State* T2 = lua_newthread(L);
     lua_setthreadstatechangecb(T2, test_statechange);
-    char* bytecode2 = luau_compile(source2, strlen(source2), nullptr, &bytecodeSize);
+    char* bytecode2 = luwu_compile(source2, strlen(source2), nullptr, &bytecodeSize);
     REQUIRE(luau_load(T2, "=test2", bytecode2, bytecodeSize, 0) == 0);
     free(bytecode2);
 
@@ -6550,10 +6596,10 @@ TEST_CASE("ClassesNativeMemberSlotCacheSkipsWideOffsets")
     luaL_openlibs(L);
     luau_codegen_create(L);
 
-    lua_CompileOptions compileOptions = {};
+    luwu_CompileOptions compileOptions = {};
     compileOptions.optimizationLevel = 2;
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source.data(), source.size(), &compileOptions, &bytecodeSize);
+    char* bytecode = luwu_compile(source.data(), source.size(), &compileOptions, &bytecodeSize);
     int loadResult = luau_load(L, "=ClassesNativeMemberSlotCacheSkipsWideOffsets", bytecode, bytecodeSize, 0);
     free(bytecode);
     REQUIRE(loadResult == 0);
@@ -6626,10 +6672,10 @@ TEST_CASE("ClassesInterpreterMemberSlotCacheSkipsWideOffsets")
     lua_State* L = globalState.get();
     luaL_openlibs(L);
 
-    lua_CompileOptions compileOptions = {};
+    luwu_CompileOptions compileOptions = {};
     compileOptions.optimizationLevel = 1;
     size_t bytecodeSize = 0;
-    char* bytecode = luau_compile(source.data(), source.size(), &compileOptions, &bytecodeSize);
+    char* bytecode = luwu_compile(source.data(), source.size(), &compileOptions, &bytecodeSize);
     int loadResult = luau_load(L, "=ClassesInterpreterMemberSlotCacheSkipsWideOffsets", bytecode, bytecodeSize, 0);
     free(bytecode);
     REQUIRE(loadResult == 0);
