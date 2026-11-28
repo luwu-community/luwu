@@ -4832,8 +4832,8 @@ ConstraintGenerator::FunctionSignature ConstraintGenerator::checkFunctionSignatu
     }
 
 
-    bool hasExplicitSelf;
-    bool hasSelf;
+    bool hasExplicitSelf = false;
+    bool hasSelf = false;
 
     if (FFlag::LuwuClasses)
     {

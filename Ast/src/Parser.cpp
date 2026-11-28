@@ -3783,7 +3783,7 @@ AstTypePack* Parser::parseReturnType()
 
 std::pair<CstExprConstantString::QuoteStyle, unsigned int> Parser::extractStringDetails()
 {
-    CstExprConstantString::QuoteStyle style;
+    CstExprConstantString::QuoteStyle style = CstExprConstantString::QuoteStyle::QuotedDouble;
     unsigned int blockDepth = 0;
 
     switch (lexer.current().type)
@@ -3876,7 +3876,7 @@ AstType* Parser::parseTableType(bool inDeclarationContext)
 
             if ((lexer.current().type == Lexeme::RawString || lexer.current().type == Lexeme::QuotedString) && lexer.lookahead().type == ']')
             {
-                CstExprConstantString::QuoteStyle style;
+                CstExprConstantString::QuoteStyle style = CstExprConstantString::QuoteStyle::QuotedDouble;
                 unsigned int blockDepth = 0;
                 if (options.storeCstData)
                     std::tie(style, blockDepth) = extractStringDetails();
@@ -4387,7 +4387,7 @@ AstTypeOrPack Parser::parseSimpleType(bool allowPack, bool inDeclarationContext)
     }
     else if (lexer.current().type == Lexeme::RawString || lexer.current().type == Lexeme::QuotedString)
     {
-        CstExprConstantString::QuoteStyle style;
+        CstExprConstantString::QuoteStyle style = CstExprConstantString::QuoteStyle::QuotedDouble;
         unsigned int blockDepth = 0;
         if (options.storeCstData)
             std::tie(style, blockDepth) = extractStringDetails();
@@ -5956,7 +5956,7 @@ AstExpr* Parser::parseString()
 {
     Location location = lexer.current().location;
 
-    AstExprConstantString::QuoteStyle style;
+    AstExprConstantString::QuoteStyle style = AstExprConstantString::QuoteStyle::QuotedSimple;
     switch (lexer.current().type)
     {
     case Lexeme::QuotedString:
@@ -5970,8 +5970,8 @@ AstExpr* Parser::parseString()
         LUAU_ASSERT(false && "Invalid string type");
     }
 
-    CstExprConstantString::QuoteStyle fullStyle;
-    unsigned int blockDepth;
+    CstExprConstantString::QuoteStyle fullStyle = CstExprConstantString::QuoteStyle::QuotedDouble;
+    unsigned int blockDepth = 0;
     if (options.storeCstData)
         std::tie(fullStyle, blockDepth) = extractStringDetails();
 
