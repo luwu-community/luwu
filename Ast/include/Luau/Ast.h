@@ -355,6 +355,8 @@ enum class ConstantNumberParseResult
     Malformed,
     BinOverflow,
     HexOverflow,
+    // Luwu Octal Literals (rfcs/octal-literals.md): an octal literal past 2^64
+    OctOverflow,
     IntOverflow,
 };
 
