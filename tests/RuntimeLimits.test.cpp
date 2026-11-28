@@ -36,6 +36,13 @@ struct LimitFixture : BuiltinsFixture
 #endif
 };
 
+// These limits catch a solver that hangs. The Windows CI runner's Debug build passed 4 seconds on fuzzer_oom_unions.
+#if defined(_NOOPT) || defined(_DEBUG)
+constexpr double kHangTimeout = 30.0;
+#else
+constexpr double kHangTimeout = 4.0;
+#endif
+
 template<typename T>
 bool hasError(const CheckResult& result, T* = nullptr)
 {
@@ -511,7 +518,7 @@ static constexpr bool kSkipUnificationIterationLimitTest = false;
 
 TEST_CASE_FIXTURE(
     BuiltinsFixture,
-    "unification_runs_a_limited_number_of_iterations_before_stopping_subtyping" * doctest::timeout(4.0) *
+    "unification_runs_a_limited_number_of_iterations_before_stopping_subtyping" * doctest::timeout(kHangTimeout) *
         doctest::skip(kSkipUnificationIterationLimitTest)
 )
 {
@@ -539,7 +546,7 @@ TEST_CASE_FIXTURE(
 
 #if defined(_MSC_VER) || defined(__APPLE__)
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "native_stack_guard_prevents_stack_overflows" * doctest::timeout(4.0))
+TEST_CASE_FIXTURE(BuiltinsFixture, "native_stack_guard_prevents_stack_overflows" * doctest::timeout(kHangTimeout))
 {
     ScopedFastFlag sff[] = {
         {FFlag::DebugLuauForceOldSolver, false},
@@ -611,7 +618,7 @@ end
     )"));
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "fuzzer_stepwise_normalization_works" * doctest::timeout(4.0))
+TEST_CASE_FIXTURE(BuiltinsFixture, "fuzzer_stepwise_normalization_works" * doctest::timeout(kHangTimeout))
 {
     LUAU_REQUIRE_ERRORS(check(R"(
         _ = if _ then {n0=# _,[_]=_,``,[function(l0,l0,l0)
@@ -622,7 +629,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "fuzzer_stepwise_normalization_works" * docte
     )"));
 }
 
-TEST_CASE_FIXTURE(BuiltinsFixture, "fuzzer_oom_unions" * doctest::timeout(4.0))
+TEST_CASE_FIXTURE(BuiltinsFixture, "fuzzer_oom_unions" * doctest::timeout(kHangTimeout))
 {
     LUAU_REQUIRE_ERRORS(check(R"(
         local _ = true,l0
